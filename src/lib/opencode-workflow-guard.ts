@@ -1200,7 +1200,12 @@ function statusForTool(
     ...(status.repair ? { repair: status.repair } : {}),
     satisfiedOperations: status.satisfiedOperations,
     missingOperations: status.missingOperations,
-    ...(unavailableCause ? { firstUnavailableCause: unavailableCause } : {}),
+    // Mode has no path back to 'protected', but 'unavailable' -> 'disabled'
+    // is reachable via attested control. Emit only while still unavailable
+    // so the field doesn't outlive the state it describes.
+    ...(unavailableCause && status.state === 'unavailable'
+      ? { firstUnavailableCause: unavailableCause }
+      : {}),
   })
 }
 
@@ -1478,17 +1483,10 @@ function createSessionRuntime(
   const consumedQuestionTargets = new Set<TransitionTarget>()
   let firstUnavailableCause: GuardUnavailableCause | undefined
 
-  // Records the first seeding failure in this SessionRuntime. markUnavailable()
-  // is terminal today, so a second failure is unreachable; the `if` guard is
-  // just belt-and-suspenders.
-  function recordUnavailableCause(cause: GuardUnavailableCause): void {
-    if (firstUnavailableCause) return
-    firstUnavailableCause = cause
-  }
-
   // Single choke point for every `guard.startUnit()` call. The reset below is
-  // currently unreachable (mode has no path back from 'unavailable'); it's
-  // here so the diagnostic stays correct if mode recovery is ever added.
+  // currently unreachable: mode has no path back to 'protected' ('disabled'
+  // is reachable but startUnit rejects there too). Here so the diagnostic
+  // stays correct if mode recovery is ever added.
   function startFreshUnit(
     input: unknown,
     policy?: RuntimeUnitPolicy,
@@ -2326,9 +2324,18 @@ function createSessionRuntime(
     options.runtimeRequiredOperations ?? [],
   )
 
-  function markUnavailable(): void {
+  // `cause` is only recorded if THIS call is the one that actually flips
+  // mode to 'unavailable' (setMode returns 'changed', not 'unchanged') and
+  // no cause is stored yet. This binds the diagnostic to the real transition
+  // instead of to whichever concurrent caller finished computing a cause
+  // first, so a failure suspended mid-seed can never overwrite (or follow)
+  // an unrelated cause that already won the race.
+  function markUnavailable(cause?: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
-    guard.setMode({ mode: 'unavailable' })
+    const result = guard.setMode({ mode: 'unavailable' })
+    if (cause && result.status === 'changed' && !firstUnavailableCause) {
+      firstUnavailableCause = cause
+    }
   }
 
   function bindCall(
@@ -3075,87 +3082,88 @@ function createSessionRuntime(
     }
   }
 
+  // Returns the cause on failure instead of writing it directly: the caller
+  // must pass it to markUnavailable(cause), which is the only place that
+  // commits it, atomically with the mode transition. Never write
+  // firstUnavailableCause from here — see markUnavailable().
   async function seedRemoteScopes(
     operations: readonly ReceiptOperation[],
-  ): Promise<boolean> {
+  ): Promise<GuardUnavailableCause | undefined> {
     const remoteOperations = operations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return true
+    if (remoteOperations.length === 0) return undefined
     const remoteSnapshot = options.observer?.remoteSnapshot
     if (!remoteSnapshot || !options.observer) {
-      recordUnavailableCause({
+      return {
         site: 'seed-remote-scopes',
         kind: 'observer-not-configured',
         timedOut: false,
-      })
-      return false
+      }
     }
     let local: OperationObserverResult
     try {
       local = await options.observer.snapshot()
     } catch {
-      recordUnavailableCause({
+      return {
         site: 'seed-remote-scopes',
         kind: 'local-snapshot-error',
         timedOut: false,
-      })
-      return false
+      }
     }
     if (local.status === 'unavailable') {
-      recordUnavailableCause({
+      return {
         site: 'seed-remote-scopes',
         kind: 'local-snapshot-unavailable',
         reasonCode: local.reasonCode,
         timedOut: local.reasonCode === 'command-timeout',
-      })
-      return false
-    }
-    for (const operation of remoteOperations) {
-      if (!(await seedRemoteScope(remoteSnapshot, operation, local.snapshot))) {
-        return false
       }
     }
-    return true
+    for (const operation of remoteOperations) {
+      const cause = await seedRemoteScope(
+        remoteSnapshot,
+        operation,
+        local.snapshot,
+      )
+      if (cause) return cause
+    }
+    return undefined
   }
 
   async function seedRemoteScope(
     reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
     operation: RemoteOperation,
     local: OperationObserverSnapshot,
-  ): Promise<boolean> {
+  ): Promise<GuardUnavailableCause | undefined> {
     const result = await readRemoteScope(reader, operation, 'before')
     if (!result) {
-      recordUnavailableCause({
+      return {
         site: 'seed-remote-scope',
         kind: 'remote-scope-unreadable',
         operation,
         timedOut: false,
-      })
-      return false
+      }
     }
     if (result.status === 'missing-resource') {
       const allowed =
         operation === 'pr-creation' ||
         operation === 'check-readback' ||
         operation === 'review-readback'
-      if (!allowed) {
-        recordUnavailableCause({
-          site: 'seed-remote-scope',
-          kind: 'remote-scope-missing-resource',
-          operation,
-          timedOut: false,
-        })
-      }
       return allowed
+        ? undefined
+        : {
+            site: 'seed-remote-scope',
+            kind: 'remote-scope-missing-resource',
+            operation,
+            timedOut: false,
+          }
     }
     if (result.status !== 'available') {
-      recordUnavailableCause({
+      return {
         site: 'seed-remote-scope',
         kind: 'remote-scope-unavailable',
         operation,
         reasonCode: result.reasonCode,
         timedOut: result.reasonCode === 'command-timeout',
-      })
-      return false
+      }
     }
     const observed = guard.observeReadback(
       remoteReadbackInput(
@@ -3167,16 +3175,15 @@ function createSessionRuntime(
       ),
     )
     if (observed.status === 'rejected') {
-      recordUnavailableCause({
+      return {
         site: 'seed-remote-scope',
         kind: 'remote-readback-rejected',
         operation,
         reasonCode: observed.reasonCode,
         timedOut: false,
-      })
-      return false
+      }
     }
-    return true
+    return undefined
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host skill completion preserves ordering and marker projection
@@ -3249,9 +3256,10 @@ function createSessionRuntime(
       const status = guard.status()
       if (!status.unit || status.unit.status === 'completed') {
         startFreshUnit({}, runtimePolicy)
-        if (!(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))) {
-          markUnavailable()
-        }
+        const cause = await seedRemoteScopes(
+          runtimePolicy.requiredOperations ?? [],
+        )
+        if (cause) markUnavailable(cause)
       }
     }
   }
@@ -3285,11 +3293,11 @@ function createSessionRuntime(
     ) {
       markUnavailable()
     }
-    if (
-      result.status === 'started' &&
-      !(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))
-    ) {
-      markUnavailable()
+    if (result.status === 'started') {
+      const cause = await seedRemoteScopes(
+        runtimePolicy.requiredOperations ?? [],
+      )
+      if (cause) markUnavailable(cause)
     }
     if (result.status === 'started') {
       const startedStatus = guard.status()

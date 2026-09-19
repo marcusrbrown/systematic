@@ -4310,6 +4310,446 @@ describe('OpenCode workflow guard adapter', () => {
         ['aggregate', 'protocolVersion', 'sources'].sort(),
       )
     })
+
+    test('the diagnostic is emitted only while state is unavailable, not after unavailable -> disabled', async () => {
+      const adapter = pushSeedingFailureAdapter()
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+      const before = JSON.parse(
+        expectToolOutput(
+          await getTool(adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        ).output,
+      )
+      expect(before.firstUnavailableCause).toBeDefined()
+
+      const control = await getTool(
+        adapter,
+        'systematic_workflow_control',
+      ).execute({ mode: 'disabled' }, toolContext())
+      expect(expectToolOutput(control).output).toContain('question-attestation')
+      const questionOutput = { args: {} as Record<string, unknown> }
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'question', sessionID: SESSION_A, callID: 'disable-question' },
+        questionOutput,
+      )
+      await observeQuestionEvent(adapter, 'question.asked', {
+        id: 'disable-request',
+        sessionID: SESSION_A,
+        questions: [],
+        tool: { callID: 'disable-question' },
+      })
+      await observeQuestionEvent(adapter, 'question.replied', {
+        sessionID: SESSION_A,
+        requestID: 'disable-request',
+        answers: [['confirm']],
+      })
+      const disabled = await getTool(
+        adapter,
+        'systematic_workflow_control',
+      ).execute({ mode: 'disabled' }, toolContext())
+      expect(expectToolOutput(disabled).output).toContain('disabled')
+      expect(status(adapter).state).toBe('disabled')
+
+      const after = JSON.parse(
+        expectToolOutput(
+          await getTool(adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        ).output,
+      )
+      expect(after.firstUnavailableCause).toBeUndefined()
+    })
+
+    test('a competing markUnavailable() while seeding is suspended wins the race; the resumed seeding failure must not become the recorded cause', async () => {
+      function deferredResult<T>(): {
+        promise: Promise<T>
+        resolve: (value: T) => void
+      } {
+        let resolve!: (value: T) => void
+        const promise = new Promise<T>((res) => {
+          resolve = res
+        })
+        return { promise, resolve }
+      }
+
+      const pushBefore = deferredResult<OperationObserverRemoteResult>()
+      const controllableObserver: OpencodeOperationObserver = {
+        targetDigest: OPERATION_SCOPE.workspaceIdentity,
+        validateRegisteredWorktree: (candidateDirectory) => ({
+          status: 'ok',
+          targetRoot: candidateDirectory,
+          gitDir: path.join(candidateDirectory, '.git'),
+          commonDir: path.join(candidateDirectory, '.git'),
+        }),
+        async snapshot() {
+          return { status: 'available', snapshot: operationSnapshot() }
+        },
+        async remoteSnapshot(operation, phase) {
+          if (operation === 'push' && phase === 'before')
+            return pushBefore.promise
+          return { status: 'unavailable', reasonCode: 'remote-missing-field' }
+        },
+      }
+      const adapter = createAdapter('observe', false, controllableObserver, [
+        'push',
+      ])
+
+      // Start unit 1's activation. Its seeding suspends inside
+      // seedRemoteScope, awaiting the controlled push:before promise.
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'race-skill',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      const activation = adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'race-skill',
+          args: { name: 'ce:work' },
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      // While unit 1's seeding is still suspended, a wholly unrelated
+      // markUnavailable() (bindCall conflict, no cause) wins the transition.
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'race-conflict',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'race-conflict',
+        },
+        { args: {} },
+      )
+      expect(status(adapter).state).toBe('unavailable')
+
+      // Now resume the suspended seeding into a failure.
+      pushBefore.resolve({
+        status: 'unavailable',
+        reasonCode: 'remote-missing-field',
+      })
+      await activation
+
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+    })
+
+    test('table: every GuardUnavailableCauseKind reports the correct site, operation, and reasonCode', async () => {
+      interface CauseCase {
+        readonly name: string
+        readonly observer: OpencodeOperationObserver
+        readonly expected: {
+          readonly site: 'seed-remote-scopes' | 'seed-remote-scope'
+          readonly kind: string
+          readonly operation?: 'push'
+          readonly reasonCode?: string
+          readonly timedOut: boolean
+        }
+      }
+
+      const validateRegisteredWorktree = (candidateDirectory: string) => ({
+        status: 'ok' as const,
+        targetRoot: candidateDirectory,
+        gitDir: path.join(candidateDirectory, '.git'),
+        commonDir: path.join(candidateDirectory, '.git'),
+      })
+
+      const cases: readonly CauseCase[] = [
+        {
+          name: 'observer-not-configured',
+          observer: {
+            targetDigest: OPERATION_SCOPE.workspaceIdentity,
+            validateRegisteredWorktree,
+            async snapshot() {
+              return { status: 'available', snapshot: operationSnapshot() }
+            },
+            // remoteSnapshot intentionally omitted.
+          },
+          expected: {
+            site: 'seed-remote-scopes',
+            kind: 'observer-not-configured',
+            timedOut: false,
+          },
+        },
+        {
+          name: 'local-snapshot-error',
+          observer: {
+            targetDigest: OPERATION_SCOPE.workspaceIdentity,
+            validateRegisteredWorktree,
+            async snapshot(): Promise<never> {
+              throw new Error('snapshot failed')
+            },
+            async remoteSnapshot() {
+              return {
+                status: 'unavailable',
+                reasonCode: 'remote-missing-field',
+              }
+            },
+          },
+          expected: {
+            site: 'seed-remote-scopes',
+            kind: 'local-snapshot-error',
+            timedOut: false,
+          },
+        },
+        {
+          name: 'local-snapshot-unavailable, non-timeout reasonCode',
+          observer: {
+            targetDigest: OPERATION_SCOPE.workspaceIdentity,
+            validateRegisteredWorktree,
+            async snapshot() {
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+            async remoteSnapshot() {
+              return {
+                status: 'unavailable',
+                reasonCode: 'remote-missing-field',
+              }
+            },
+          },
+          expected: {
+            site: 'seed-remote-scopes',
+            kind: 'local-snapshot-unavailable',
+            reasonCode: 'target-unavailable',
+            timedOut: false,
+          },
+        },
+        {
+          name: 'local-snapshot-unavailable, command-timeout',
+          observer: {
+            targetDigest: OPERATION_SCOPE.workspaceIdentity,
+            validateRegisteredWorktree,
+            async snapshot() {
+              return { status: 'unavailable', reasonCode: 'command-timeout' }
+            },
+            async remoteSnapshot() {
+              return {
+                status: 'unavailable',
+                reasonCode: 'remote-missing-field',
+              }
+            },
+          },
+          expected: {
+            site: 'seed-remote-scopes',
+            kind: 'local-snapshot-unavailable',
+            reasonCode: 'command-timeout',
+            timedOut: true,
+          },
+        },
+        {
+          name: 'remote-scope-unreadable',
+          observer: {
+            targetDigest: OPERATION_SCOPE.workspaceIdentity,
+            validateRegisteredWorktree,
+            async snapshot() {
+              return { status: 'available', snapshot: operationSnapshot() }
+            },
+            async remoteSnapshot(): Promise<never> {
+              throw new Error('remote read failed')
+            },
+          },
+          expected: {
+            site: 'seed-remote-scope',
+            kind: 'remote-scope-unreadable',
+            operation: 'push',
+            timedOut: false,
+          },
+        },
+        {
+          name: 'remote-scope-missing-resource',
+          observer: sequenceObserver([operationSnapshot()], {
+            'push:before': [{ status: 'missing-resource' }],
+          }),
+          expected: {
+            site: 'seed-remote-scope',
+            kind: 'remote-scope-missing-resource',
+            operation: 'push',
+            timedOut: false,
+          },
+        },
+        {
+          name: 'remote-scope-unavailable, non-timeout reasonCode',
+          observer: sequenceObserver([operationSnapshot()], {
+            'push:before': [
+              { status: 'unavailable', reasonCode: 'remote-missing-field' },
+            ],
+          }),
+          expected: {
+            site: 'seed-remote-scope',
+            kind: 'remote-scope-unavailable',
+            operation: 'push',
+            reasonCode: 'remote-missing-field',
+            timedOut: false,
+          },
+        },
+        {
+          name: 'remote-scope-unavailable, command-timeout',
+          observer: sequenceObserver([operationSnapshot()], {
+            'push:before': [
+              { status: 'unavailable', reasonCode: 'command-timeout' },
+            ],
+          }),
+          expected: {
+            site: 'seed-remote-scope',
+            kind: 'remote-scope-unavailable',
+            operation: 'push',
+            reasonCode: 'command-timeout',
+            timedOut: true,
+          },
+        },
+        {
+          name: 'remote-readback-rejected',
+          observer: sequenceObserver([operationSnapshot()], {
+            'push:before': [
+              {
+                status: 'available',
+                snapshot: {
+                  resourceIdentity: '',
+                  resourceRevisionIdentity: 'e'.repeat(64),
+                },
+              },
+            ],
+          }),
+          expected: {
+            site: 'seed-remote-scope',
+            kind: 'remote-readback-rejected',
+            operation: 'push',
+            reasonCode: 'invalid-receipt',
+            timedOut: false,
+          },
+        },
+      ]
+
+      for (const causeCase of cases) {
+        const adapter = createAdapter('observe', false, causeCase.observer, [
+          'push',
+        ])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).toBe('unavailable')
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext())
+        const parsed = JSON.parse(expectToolOutput(result).output)
+        expect(parsed.firstUnavailableCause, causeCase.name).toEqual(
+          causeCase.expected,
+        )
+      }
+    })
+
+    test('seeding triggered through the explicit systematic_workflow_start path attributes its own failure', async () => {
+      const observer = sequenceObserver(
+        [
+          operationSnapshot(),
+          operationSnapshot(),
+          operationSnapshot(),
+          operationSnapshot(),
+        ],
+        {
+          'push:before': [
+            remoteAvailable('d'.repeat(64), 'e'.repeat(64)),
+            remoteAvailable('d'.repeat(64), 'e'.repeat(64)),
+            { status: 'unavailable', reasonCode: 'remote-missing-field' },
+          ],
+          'push:after': [remoteAvailable('d'.repeat(64), 'f'.repeat(64))],
+        },
+      )
+      const adapter = createAdapter('observe', false, observer, ['push'])
+
+      // Unit 1: created (and seeded successfully) by skill activation, then
+      // fully satisfied and completed — freeing the epoch for a genuinely
+      // new unit.
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'git push origin main' },
+        { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+        'explicit-start-push',
+      )
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      expect(status(adapter).missingOperations).toEqual([])
+      await completeUnit(adapter, 'explicit-start-complete-unit1')
+      expect(status(adapter).unit?.status).toBe('completed')
+      const firstUnitId = status(adapter).unit?.unitId
+
+      // Unit 2: started via the explicit systematic_workflow_start path
+      // (finishStart), not skill activation. Its own seeding fails.
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'explicit-start-unit2',
+        },
+        { args: {} },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'explicit-start-unit2',
+          args: {},
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+
+      expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+      expect(status(adapter).state).toBe('unavailable')
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'seed-remote-scope',
+        kind: 'remote-scope-unavailable',
+        operation: 'push',
+        reasonCode: 'remote-missing-field',
+        timedOut: false,
+      })
+    })
+
+    test('a cause recorded in one session does not appear in another session status', async () => {
+      const adapter = pushSeedingFailureAdapter()
+      const otherSessionID = 'session-isolation-other'
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter, SESSION_A).state).toBe('unavailable')
+
+      const otherResult = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext(otherSessionID))
+      const otherParsed = JSON.parse(expectToolOutput(otherResult).output)
+      // An untouched session reports state 'unavailable'/reasonCode
+      // 'no-active-epoch' (nothing has happened yet) — distinct from the
+      // mode-level 'guard-unavailable' session A hit. Assert on the
+      // mode-level reasonCode and the cause itself, not on `state`.
+      expect(otherParsed.reasonCode).not.toBe('guard-unavailable')
+      expect(otherParsed.firstUnavailableCause).toBeUndefined()
+    })
   })
 
   test('before-only operation is abandoned at the next status boundary', async () => {
