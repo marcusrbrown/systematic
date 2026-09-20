@@ -125,9 +125,10 @@ Prefer an explicit check when:
 - The chain is assembled in more than one place, or by callers you do not control.
 - The non-locality would not be discoverable by a reader of either site.
 
-Note the asymmetry this leaves behind. Only the `user` branch is field-additive;
-`custom` still whole-replaces, so the same trap case reproduces with a custom overlay
-against a project bundle. That is pre-existing behavior for user-defined profiles,
+Note the asymmetry this leaves behind. `resolveOverlayEntryValue` field-merges for
+the `profile-bundle` pseudo-source, for `project` trust (via `preserveSecurityFields`),
+and — new here — for `user`. `custom` is the one tier that still whole-replaces, so
+the same trap case reproduces with a custom overlay against a project bundle. That is pre-existing behavior for user-defined profiles,
 and it is pinned as a known asymmetry rather than silently tolerated
 (`tests/unit/config.test.ts`, the `KNOWN ASYMMETRY` test). When a pattern applies to
 some tiers and not others, document which.

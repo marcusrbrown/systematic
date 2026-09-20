@@ -177,8 +177,9 @@ function trustAny<T extends z.ZodType>(schema: T): T {
 
 /**
  * Tag an overlay field as "project-or-higher" — only user-level or
- * custom-level config sources may set this field. Mirrors the
- * `SECURITY_OVERLAY_FIELDS` set in `src/lib/config.ts`.
+ * custom-level config sources may set this field. The tagged set is kept in
+ * agreement with `SECURITY_OVERLAY_FIELDS` below by the regression tests in
+ * tests/unit/config-schema.test.ts.
  */
 function trustProtected<T extends z.ZodType>(schema: T): T {
   return schema.meta({ trust: 'project-or-higher' }) as T
@@ -475,8 +476,8 @@ export const PiSubagentsSchema = z
  * Fields in PiSubagentsAgentOverlaySchema/PiSubagentsCategoryOverlaySchema that
  * require a project-or-higher trust source. Project config cannot grant
  * `thinking`, `tools`, or `skills` to an exported persona; `max_turns` is
- * trust-any. Mirrors the hand-coded `PI_SUBAGENTS_PROTECTED_FIELDS` set in
- * `src/lib/config.ts`.
+ * trust-any. This is the single definition. `src/lib/config.ts` imports it
+ * rather than keeping a copy.
  */
 export const PI_SUBAGENTS_PROTECTED_FIELDS: readonly string[] = [
   'thinking',
@@ -737,7 +738,8 @@ export function validateConfig(input: unknown): ValidationResult {
  * assert that this list agrees with every field tagged `.meta({ trust:
  * 'project-or-higher' })` in AgentOverlaySchema — preventing silent drift.
  *
- * Matches the hand-coded `SECURITY_OVERLAY_FIELDS` set in `src/lib/config.ts`.
+ * This is the single definition. `src/lib/config.ts` imports it rather than
+ * keeping a copy.
  */
 export const SECURITY_OVERLAY_FIELDS = [
   'model',
