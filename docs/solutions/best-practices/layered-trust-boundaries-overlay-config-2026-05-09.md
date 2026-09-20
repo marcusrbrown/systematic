@@ -122,9 +122,11 @@ function mergeOverlayMaps(sources) {
 
 ### After (PR #344 — security-field guard)
 
-The actual implementation in `src/lib/config.ts` rejects security fields at
-load time when the source trust level is `'project'`, then preserves any
-higher-trust security fields when project config replaces the same key:
+The implementation PR #344 shipped in `src/lib/config.ts` rejected security
+fields at load time when the source trust level was `'project'`, then preserved
+any higher-trust security fields when project config replaced the same key. The
+code below is that original implementation — see the update note after the
+invariants for what changed since:
 
 ```ts
 const SECURITY_OVERLAY_FIELDS = new Set([
@@ -206,14 +208,43 @@ function mergeOverlayMap(
 
 The two invariants this teaches:
 
-1. Project config may not set security fields. The throw at load time names
-   both the source file and the config key path.
+1. Project config may not set security fields. The diagnostic names both the
+   source file and the config key path.
 2. Project same-key replacement may not erase higher-trust security fields.
    When the project source replaces an existing entry, security fields from
    the previous (higher-trust) source are preserved into the new value.
 
 User and `OPENCODE_CONFIG_DIR` (custom) config can still own those fields
 freely.
+
+> **Updated 2026-09-20.** Both invariants still hold. Three mechanism details
+> have changed since PR #344, and the code and test blocks above are a
+> historical snapshot rather than current source:
+>
+> - **The field set grew to six.** `SECURITY_OVERLAY_FIELDS`
+>   (`src/lib/config-schema.ts:744`) is now `model`, `variant`, `skills`,
+>   `permission`, `opencode`, `pi` — the two harness blocks were added when
+>   per-harness routing landed, because they carry routing just as `model` does.
+> - **The guard strips instead of throwing.** `rejectProjectSecurityOverlay` no
+>   longer exists. `stripProjectSecurityOverlayFields` (`src/lib/config.ts:1064`)
+>   removes the offending field before schema validation and emits a bounded
+>   warning naming the file and key path. Invariant 1 is unchanged — the field
+>   still cannot take effect — but a committed project config with a stray
+>   `model` no longer fails every teammate's plugin init (issue #992, v3.18.9).
+>   The test above, which asserts `toThrow`, describes the old behavior.
+> - **There is now an opt-in path for routing specifically.** A user may set
+>   `allow_project_profiles`, after which a project config may define `profiles`
+>   bundles that contribute routing. This does not weaken invariant 1: bundles
+>   are a separate, routing-only surface (`ProfileOverlaySchema` is strict and
+>   structurally cannot carry `permission` or `skills`), they are advisory
+>   (they fill only what the user left unset and can never override a user
+>   value), and the opt-in is itself protected and resolved from user and custom
+>   config only — a repository cannot grant it to itself. See
+>   [`merge-chain-position-as-a-structural-guarantee-2026-09-20.md`](./merge-chain-position-as-a-structural-guarantee-2026-09-20.md).
+>
+> The lever this document identifies — committed-config-as-repo-artifact — is
+> what the opt-in is designed around: the permission is granted per person, in
+> config the repository cannot write.
 
 ### Test scenario that names the boundary
 
