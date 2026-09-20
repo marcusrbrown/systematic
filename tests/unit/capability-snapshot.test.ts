@@ -509,4 +509,61 @@ describe('capability snapshot contract', () => {
       /from ['"]node:fs['"]|writeFile|mkdir|rmSync|unlink/,
     )
   })
+
+  // `config-protected-fields.ts` exists for exactly one reason: it has no
+  // imports of its own, so THIS file can consume
+  // `CONFIG_PROTECTED_FIELD_PATHS` without acquiring `jsonc-parser` (or any
+  // of `config.ts`'s other transitive dependencies) as a side effect. That
+  // protects the same property the test immediately above checks directly:
+  // `capability-snapshot.ts` is a pure, read-only serializer, and it stays
+  // one only if nothing it imports drags in runtime collectors or
+  // filesystem access. An import added to `config-protected-fields.ts`
+  // breaks that transitively and silently -- the build still succeeds and
+  // every existing test still passes, because nothing asserts on the shape
+  // of the dependency graph.
+  //
+  // Deliberately NOT claimed here: that a violation crashes the bundled
+  // Claude Code validator. It does not -- that entry's closure
+  // (`src/ce-review-validator.ts`) never reaches `capability-snapshot.ts`
+  // at all, and `src/cli.ts`, its only importer, already imports
+  // `./lib/config.js` directly. Stating a specific downstream crash that
+  // cannot actually happen would invite a future reader to verify it,
+  // find it false, and delete this guard for the wrong reason.
+  //
+  // This reads the source from disk rather than the module's runtime
+  // exports, which would never observe an added-but-unused import.
+  test('config-protected-fields.ts stays import-free (keeps capability-snapshot.ts a pure serializer with no transitive dependency graph)', () => {
+    const source = readFileSync(
+      new URL('../../src/lib/config-protected-fields.ts', import.meta.url),
+      'utf8',
+    )
+    // Strip comments first: the module's own doc comment discusses "import"
+    // in prose ("must import nothing, ever"), which would false-positive a
+    // naive substring or word-boundary check against the comment text
+    // itself rather than actual import syntax.
+    const withoutComments = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '')
+
+    const forbidden: Array<{ label: string; pattern: RegExp }> = [
+      {
+        label: 'a static `import ... from` statement',
+        pattern: /^\s*import\b/m,
+      },
+      { label: "a bare `import 'x'` statement", pattern: /^\s*import\s*['"]/m },
+      { label: 'a dynamic `import(...)` call', pattern: /\bimport\s*\(/ },
+      { label: 'a `require(...)` call', pattern: /\brequire\s*\(/ },
+    ]
+
+    for (const { label, pattern } of forbidden) {
+      expect(
+        pattern.test(withoutComments),
+        `config-protected-fields.ts contains ${label}. This module must stay ` +
+          'import-free: capability-snapshot.ts consumes it and is a pure, ' +
+          'read-only serializer, so an import here transitively gives that ' +
+          'file a dependency graph it is asserted not to have. Nothing else ' +
+          'catches this -- the build succeeds and every other test passes.',
+      ).toBe(false)
+    }
+  })
 })

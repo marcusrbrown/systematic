@@ -121,7 +121,38 @@ Any config source may set the top-level `profile` selector to choose among the u
 { "profile": "work" }
 ```
 
-Only `profile` (the selector) is project-settable. `profiles` (the map of bundle definitions) is trust-protected exactly like `model`, `variant`, `permission`, and `skills` — a project may choose among the profiles you've defined, but it cannot define new ones or see into ones you haven't shared. A `profiles` map set in project config is ignored with a warning. Both your user config and `$OPENCODE_CONFIG_DIR` config ("custom" config) may define a `profiles` map; a name is looked up in custom's map first, then user's, so a bundle defined only in custom config is still selectable by any source.
+Only `profile` (the selector) is project-settable by default. `profiles` (the map of bundle definitions) is trust-protected exactly like `model`, `variant`, `permission`, and `skills` — a project may choose among the profiles you've defined, but it cannot define new ones or see into ones you haven't shared, unless you opt in (see below). A `profiles` map set in project config is ignored with a warning unless the opt-in is on. Both your user config and `$OPENCODE_CONFIG_DIR` config ("custom" config) may define a `profiles` map; a name is looked up in custom's map first, then user's, so a bundle defined only in custom config is still selectable by any source.
+
+### Opting a repository into defining its own profiles
+
+Setting `allow_project_profiles: true` in your **user** (or `$OPENCODE_CONFIG_DIR`) config lets a project `systematic.json` define its own `profiles` map and have it consulted for bundle content — useful when a repository wants to ship routing recommendations (e.g. "use this cheaper model for this repo's review agents") without you hand-copying them into your own config.
+
+```jsonc
+// ~/.config/opencode/systematic.json
+{ "allow_project_profiles": true }
+```
+
+```jsonc
+// .opencode/systematic.json (project config, once you've opted in)
+{
+  "profile": "ci-cheap",
+  "profiles": {
+    "ci-cheap": {
+      "agents": { "correctness-reviewer": { "model": "anthropic/claude-haiku" } }
+    }
+  }
+}
+```
+
+`allow_project_profiles` is **user-owned only** — exactly like `profiles` itself and `workflow_guard`, a project config can never set this field; doing so is stripped before the project config is even parsed and produces the same "ignored" warning as any other project-trust field. A project cannot grant itself a permission it does not already have. The opt-in is resolved from your user and `$OPENCODE_CONFIG_DIR` config only, before the project config is loaded, so setting it in the SAME file as a `profiles` map does not work either — both are stripped together, as if neither had been written.
+
+A project-defined bundle is **advisory**, not authoritative: it supplies routing only where your own config is silent for that field, and can never override a value you set — not even partially. If you set `agents.correctness-reviewer.model` yourself, a project bundle that also sets it has no effect on that agent's model at all; the project's value never applies and never appears anywhere in the resolved config. This is enforced structurally by where the project bundle sits in the merge chain (before your base config, not after) combined with field-by-field merging — not by a policy check that a future change could accidentally bypass. A repository whose entire suggested profile is already covered by your own config is a normal, silent no-op: `systematic config show` shows you exactly which fields, if any, actually came from the project (see the [model profiles guide](/systematic/guides/model-profiles/#checking-active-routing)).
+
+A project-defined profile name can never shadow one you or `$OPENCODE_CONFIG_DIR` config already **defined**: bundle lookup checks custom, then user, then project **last**. If your `personal` profile and a repository's `personal` profile both exist, yours always wins the name. This protects a name you have defined content for — it does not protect a name you have only **referenced**. If your own `profile` default names a bundle you never defined (or typoed), that name is still looked up through the same custom-then-user-then-project order, so an opted-in repository's own `profiles` entry of that same name is consulted and can supply content for it; the usual "not defined in `profiles`" warning does not fire, because the name IS defined — by the repository, not by you.
+
+Because `assertAllProfileBundlesAreValid` validates every bundle in every source that may define one — including, once opted in, every bundle in a project's `profiles` map — a malformed bundle anywhere in that map can fail the entire config load (and therefore plugin init) even if nobody ever selects it. This applies to a bundle you clone from a repository just as much as one you write yourself: opting in makes your config load depend on content you did not author.
+
+The repository still decides which of its own (or your) profiles is active for itself, via its project config's `profile` selector — same as today, opt-in or not. That is the point of a project selecting a profile, not a gap: a repository choosing to route itself through the `work` profile you already defined is exactly what `profile` selection is for. If you disagree with a repository's selection for your own session, `SYSTEMATIC_PROFILE=<name>` in your shell environment outranks every config source's `profile` value, including the project's — set it to override, or to a nonexistent name to fall back to your own default.
 
 `profile` is **tri-state**: leaving it unset means "no opinion, let a lower-priority source decide"; setting it to a name selects that bundle; setting it to `null` explicitly means "base configuration, no profile" and wins outright over a weaker source's name — this is how a repository can opt out of your default profile rather than merely failing to set one. The strongest source that sets `profile` at all wins: custom config, then project config, then user config.
 
@@ -145,7 +176,7 @@ Switching which profile is active never changes an agent's visibility, permissio
 }
 ```
 
-Resolution precedence, evaluated independently for `model` and for the harness's qualifier (`variant` on OpenCode, `thinking` on Pi): **agent block > agent flat > category block > category flat**. Merge order across sources is **user base → selected profile → project → custom**, with each later source overriding the same field at the same level.
+Resolution precedence, evaluated independently for `model` and for the harness's qualifier (`variant` on OpenCode, `thinking` on Pi): **agent block > agent flat > category block > category flat**. Merge order across sources is **user base → selected profile → project → custom**, with each later source overriding the same field at the same level — **when the active profile came from your user or `$OPENCODE_CONFIG_DIR` config.** When the active profile is a project-defined bundle (the opt-in above), it merges *before* user base instead, so your base config overrides it field by field rather than the other way around; see the opt-in section above for what that means in practice.
 
 `model: null` is a value, not an absence — it means "inherit from the parent session" and beats a lower layer's explicit model at the same precedence level. But it obeys the *same* precedence as any other value: a block's `null` beats a flat explicit model at the same level, not the other way around. Concretely, a profile that sets `agents.x.model: null` does **not** undo a base config's `agents.x.opencode.model` — the block is more specific than the flat field it's trying to override, so OpenCode keeps the block's model. To restore inheritance on OpenCode specifically, set `agents.x.opencode.model: null`. When `model: null` wins at layer L on OpenCode, any `variant` is dropped too — inheriting the parent's model means inheriting its variant as well; there is no "inherited model, explicit variant" combination.
 
@@ -585,7 +616,7 @@ If stripping trust-protected fields from a project-config entry leaves it empty,
 
 ## profiles
 
-Named routing-only overlay bundles, selectable by name via the profile field. Only valid in user config or OPENCODE_CONFIG_DIR config — a project config may select a profile but may not define this field.
+Named routing-only overlay bundles, selectable by name via the profile field. Valid in user config and OPENCODE_CONFIG_DIR config. A project config may always select a profile, but may only define this field when the user sets allow_project_profiles; a project-defined bundle is advisory and fills only routing the user has not set.
 
 **Type:** `object`
 **Default:** `{}`
@@ -822,6 +853,23 @@ Register skills discovered from user/project skill directories (OpenCode config 
 
 **Type:** `boolean`
 **Default:** `true`
+**Examples:**
+
+```json
+true
+```
+
+```json
+false
+```
+
+
+## allow_project_profiles
+
+Allow a repository's project config to define its own `profiles` map. User-owned only — only valid in user config or OPENCODE_CONFIG_DIR config; a project config setting this field has it ignored (a project cannot grant itself a permission it does not already have). Defaults to false.
+
+**Type:** `boolean`
+**Default:** `false`
 **Examples:**
 
 ```json

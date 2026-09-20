@@ -1,3 +1,10 @@
+// The only import this module ever takes: `config-protected-fields.ts` is
+// itself dependency-free, so this cannot pull in `jsonc-parser` or any of
+// `config.ts`'s other transitive dependencies. Sharing the list here
+// instead of hand-duplicating it is what closes the drift this module once
+// suffered silently -- see that module's doc comment for the incident.
+import { CONFIG_PROTECTED_FIELD_PATHS } from './config-protected-fields.js'
+
 const CAPABILITY_SNAPSHOT_SCHEMA_VERSION = 'cli-capabilities.v1' as const
 const CAPABILITY_SNAPSHOT_COMMAND = 'systematic capabilities' as const
 
@@ -20,23 +27,6 @@ const CONFIG_AUTHORITY_FIELD_PATHS = [
   'skills_as_commands',
   'workflow_guard.debug',
   'workflow_guard.mode',
-] as const
-
-const CONFIG_PROTECTED_FIELD_PATHS = [
-  'workflow_guard',
-  'profiles',
-  'agents.*.model',
-  'agents.*.permission',
-  'agents.*.skills',
-  'agents.*.variant',
-  'agents.*.opencode',
-  'agents.*.pi',
-  'categories.*.model',
-  'categories.*.permission',
-  'categories.*.skills',
-  'categories.*.variant',
-  'categories.*.opencode',
-  'categories.*.pi',
 ] as const
 
 const CONFIG_SOURCE_ERROR_CODES = [

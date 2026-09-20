@@ -111,6 +111,7 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.categories).toEqual({})
       expect(result.data.profiles).toEqual({})
       expect(result.data.skills_as_commands).toBe(true)
+      expect(result.data.allow_project_profiles).toBe(false)
       expect(result.data.workflow_guard).toEqual({
         mode: 'observe',
         debug: false,
@@ -123,6 +124,7 @@ describe('SystematicConfigSchema', () => {
       // default) since it was omitted from the input.
       expect(Object.keys(result.data).sort()).toEqual([
         'agents',
+        'allow_project_profiles',
         'bootstrap',
         'categories',
         'disabled_agents',
@@ -228,6 +230,36 @@ describe('SystematicConfigSchema', () => {
         skills_as_commands: 'yes',
       })
       expect(result.success).toBe(false)
+    })
+  })
+
+  describe('allow_project_profiles', () => {
+    test('defaults to false when omitted', () => {
+      const result = SystematicConfigSchema.safeParse({})
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.allow_project_profiles).toBe(false)
+      }
+    })
+
+    test('accepts explicit true', () => {
+      const result = SystematicConfigSchema.safeParse({
+        allow_project_profiles: true,
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.allow_project_profiles).toBe(true)
+      }
+    })
+
+    test('rejects non-boolean value', () => {
+      const result = SystematicConfigSchema.safeParse({
+        allow_project_profiles: 'yes',
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues[0]?.path).toEqual(['allow_project_profiles'])
+      }
     })
   })
 
@@ -1509,6 +1541,7 @@ describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
       },
       pi_subagents: { categories: {}, agents: {} },
       skills_as_commands: true,
+      allow_project_profiles: false,
     })
     expect(Object.hasOwn(result.data, 'profile')).toBe(false)
   })
@@ -1528,6 +1561,7 @@ describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
       workflow_guard: { mode: 'observe', debug: false },
       pi_subagents: { categories: {}, agents: {} },
       skills_as_commands: true,
+      allow_project_profiles: false,
     })
   })
 

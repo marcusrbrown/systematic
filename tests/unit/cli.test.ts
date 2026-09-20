@@ -334,6 +334,43 @@ describe('cli capabilities', () => {
     }
   })
 
+  // Regression for the exact failure mode the `activeProfileSourcePath`
+  // placement constraint exists to prevent: `capability-snapshot.ts` runs
+  // loader metadata through a hardcoded-allowlist `assertAllowedKeys` gate
+  // that THROWS on any unknown key, and `runCapabilities` swallows that
+  // throw into a cause-less "Capabilities diagnostic unavailable" (exit 1).
+  // `activeProfileSourcePath` lives on `SourceAwareConfigResult`, never on
+  // the `ConfigObservationMetadata` that reaches the snapshot builder, so a
+  // real active profile (which populates the field) must not trip this.
+  it("exits 0 with the config-show `activeProfileSourcePath` field present in the loaded config (an active profile does not trip capability-snapshot's allowlist gate)", () => {
+    const cwd = mkTempCwd()
+    const home = path.join(cwd, 'home')
+    try {
+      const userConfigDir = path.join(home, '.config/opencode')
+      fs.mkdirSync(userConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(userConfigDir, 'systematic.json'),
+        JSON.stringify({
+          profile: 'fast',
+          profiles: {
+            fast: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/haiku' },
+              },
+            },
+          },
+        }),
+      )
+
+      const result = runCli(['capabilities'], cwd, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).not.toContain('Capabilities diagnostic unavailable')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('documents read-only standalone observation and non-runtime scope in help', () => {
     const cwd = mkTempCwd()
     try {
@@ -627,6 +664,187 @@ describe('cli config show', () => {
     }
   })
 
+  // ---------------------------------------------------------------------
+  // `Defined in:` -- which file's `profiles` map actually defined the
+  // active bundle's content, distinct from `Selected by:` (which reports
+  // only the source KIND that supplied the winning `profile` selector).
+  // ---------------------------------------------------------------------
+
+  it('a user-defined active profile prints "Defined in:" naming the user config file', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        profile: 'fast',
+        profiles: {
+          fast: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+          },
+        },
+      })
+      const expectedPath = path.join(home, '.config/opencode/systematic.json')
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Active profile: fast')
+      expect(result.stdout).toContain(`Defined in:     ${expectedPath}`)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a profile defined only in OPENCODE_CONFIG_DIR prints "Defined in:" naming the custom config file', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    const custom = path.join(root, 'custom')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      fs.mkdirSync(custom, { recursive: true })
+      const customConfigPath = path.join(custom, 'systematic.json')
+      fs.writeFileSync(
+        customConfigPath,
+        JSON.stringify({
+          profile: 'fast',
+          profiles: {
+            fast: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/custom-model' },
+              },
+            },
+          },
+        }),
+      )
+
+      const result = runCli(['config', 'show'], project, {
+        HOME: home,
+        OPENCODE_CONFIG_DIR: custom,
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Selected by:    custom')
+      expect(result.stdout).toContain(`Defined in:     ${customConfigPath}`)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('with the opt-in on, a project-defined active profile prints "Defined in:" naming the project config file', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, { allow_project_profiles: true })
+      writeProjectConfig(project, {
+        profile: 'proj',
+        profiles: {
+          proj: {
+            agents: {
+              'correctness-reviewer': { model: 'anthropic/project-model' },
+            },
+          },
+        },
+      })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Active profile: proj')
+      expect(result.stdout).toContain('Selected by:    project')
+      // Built from the printed `Project config:` line rather than the
+      // test's own `project` variable -- on macOS the spawned CLI's
+      // `process.cwd()` (which `getConfigPaths` derives the project path
+      // from) resolves through `/var` -> `/private/var`, while the test's
+      // own `project` path does not, so reconstructing the expected path
+      // independently would compare a resolved path to an unresolved one.
+      const projectConfigLine = result.stdout
+        .split('\n')
+        .find((line) => line.startsWith('  Project config:'))
+      expect(projectConfigLine).toBeDefined()
+      const expectedPath = (projectConfigLine as string)
+        .replace('  Project config: ', '')
+        .trim()
+      expect(result.stdout).toContain(`Defined in:     ${expectedPath}`)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('no active profile: the "Defined in:" line is absent, not printed empty', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        agents: { 'correctness-reviewer': { model: 'anthropic/base-model' } },
+      })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Active profile: none')
+      expect(result.stdout).not.toContain('Defined in:')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a symlinked config directory: "Defined in:" matches the Configuration locations block above it, not the resolved symlink target', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      const realConfigDir = path.join(home, '.config', 'real-opencode')
+      fs.mkdirSync(realConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(realConfigDir, 'systematic.json'),
+        JSON.stringify({
+          profile: 'fast',
+          profiles: {
+            fast: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/haiku' },
+              },
+            },
+          },
+        }),
+      )
+      fs.symlinkSync(
+        realConfigDir,
+        path.join(home, '.config', 'opencode'),
+        'dir',
+      )
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      const userConfigLine = result.stdout
+        .split('\n')
+        .find((line) => line.startsWith('  User config:'))
+      expect(userConfigLine).toBeDefined()
+      const printedUserConfigPath = (userConfigLine as string)
+        .replace('  User config:    ', '')
+        .trim()
+      // The symlinked (non-canonical) form, not `fs.realpathSync`'s resolved
+      // target -- otherwise `Defined in:` would disagree with the
+      // `Configuration locations` block a few lines above it.
+      expect(printedUserConfigPath).toContain('.config/opencode/')
+      expect(printedUserConfigPath).not.toContain('real-opencode')
+      expect(result.stdout).toContain(
+        `Defined in:     ${printedUserConfigPath}`,
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('SYSTEMATIC_PROFILE reports environment as the selector source in prose and --json', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
@@ -731,14 +949,280 @@ describe('cli config show', () => {
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('correctness-reviewer (review):')
       expect(result.stdout).toContain(
-        'opencode: model=anthropic/base-model (agent/flat), variant=v2 (agent/block)',
+        'opencode: model=anthropic/base-model (agent/flat, user), variant=v2 (agent/block, user)',
       )
       expect(result.stdout).toContain(
-        'pi: model=anthropic/base-model (agent/flat), thinking=high (agent/block)',
+        'pi: model=anthropic/base-model (agent/flat, user), thinking=high (agent/block, user)',
       )
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  // ---------------------------------------------------------------------
+  // Per-target advisory-merge attribution -- the routing table's origin
+  // suffix (e.g. `agent/flat, project-profile`) is the only way to tell
+  // "the project bundle applied something" apart from "the project bundle
+  // got fully absorbed by user config", since both otherwise resolve to
+  // the exact same model/qualifier values with no visible difference.
+  // ---------------------------------------------------------------------
+
+  describe('advisory-merge origin attribution', () => {
+    it('a target filled by the project bundle reports a project-profile source', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, { allow_project_profiles: true })
+        writeProjectConfig(project, {
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/project-model' },
+              },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain('Active profile: proj')
+        expect(result.stdout).toContain(
+          'opencode: model=anthropic/project-model (agent/flat, project-profile)',
+        )
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('a target the user set over a project bundle reports a user source', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': { model: 'anthropic/user-model' },
+          },
+        })
+        writeProjectConfig(project, {
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/project-model' },
+              },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+        // Only the RESOLVED section (not the raw project-config dump
+        // printed above it, which legitimately echoes the project's own
+        // file content) must never surface the losing project value.
+        const resolvedSection = result.stdout.split(
+          '\nResolved configuration:',
+        )[1]
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(
+          'opencode: model=anthropic/user-model (agent/flat, user)',
+        )
+        expect(resolvedSection).toBeDefined()
+        // The project value doesn't just lose -- it appears nowhere in the
+        // resolved output at all.
+        expect(resolvedSection).not.toContain('anthropic/project-model')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    // This is the state that is otherwise indistinguishable from the
+    // bundle not existing: an active project profile IS selected (visible
+    // via `Active profile:`/`Defined in:`), but every routing field it
+    // could have supplied reads `user`, never `project-profile`, because
+    // user config already covered every target it touches.
+    it('full absorption: an active project bundle exists, every target reports a user source', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': {
+              opencode: { model: 'anthropic/user-opencode', variant: 'v-user' },
+              pi: { model: 'anthropic/user-pi', thinking: 'high' },
+            },
+          },
+        })
+        writeProjectConfig(project, {
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: {
+                    model: 'anthropic/project-opencode',
+                    variant: 'v-project',
+                  },
+                  pi: { model: 'anthropic/project-pi' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+        // Only the RESOLVED section (not the raw project-config dump
+        // printed above it) must never surface an absorbed project value.
+        const resolvedSection = result.stdout.split(
+          '\nResolved configuration:',
+        )[1]
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain('Active profile: proj')
+        expect(result.stdout).toContain(
+          'opencode: model=anthropic/user-opencode (agent/block, user), variant=v-user (agent/block, user)',
+        )
+        expect(result.stdout).toContain(
+          'pi: model=anthropic/user-pi (agent/block, user), thinking=high (agent/block, user)',
+        )
+        expect(resolvedSection).toBeDefined()
+        expect(resolvedSection).not.toContain('project-profile')
+        expect(resolvedSection).not.toContain('project-opencode')
+        expect(resolvedSection).not.toContain('project-pi')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('partial application: one agent row reports a user-sourced qualifier and a project-sourced model at the same time', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': { opencode: { variant: 'v-user' } },
+          },
+        })
+        writeProjectConfig(project, {
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: { model: 'anthropic/project-model' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(
+          'opencode: model=anthropic/project-model (agent/block, project-profile), variant=v-user (agent/block, user)',
+        )
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('a user-sourced active profile reports a profile source distinct from user base', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          profile: 'fast',
+          agents: {
+            'correctness-reviewer': { opencode: { variant: 'v-base' } },
+          },
+          profiles: {
+            fast: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: { model: 'anthropic/profile-model' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain('Active profile: fast')
+        expect(result.stdout).toContain(
+          'opencode: model=anthropic/profile-model (agent/block, user-profile), variant=v-base (agent/block, user)',
+        )
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('--json source kinds agree with the prose table for the same load', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, { allow_project_profiles: true })
+        writeProjectConfig(project, {
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/project-model' },
+              },
+            },
+          },
+        })
+
+        const prose = runCli(['config', 'show'], project, { HOME: home })
+        const json = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+        })
+
+        expect(prose.exitCode).toBe(0)
+        expect(json.exitCode).toBe(0)
+        expect(prose.stdout).toContain(
+          'opencode: model=anthropic/project-model (agent/flat, project-profile)',
+        )
+
+        const parsed = JSON.parse(json.stdout) as Record<string, unknown>
+        const routing = parsed.routing as Array<Record<string, unknown>>
+        const entry = routing.find(
+          (r) =>
+            (r.target as Record<string, unknown>).agentKey ===
+            'correctness-reviewer',
+        )
+        expect(entry).toBeDefined()
+        const opencode = (entry as Record<string, unknown>).opencode as Record<
+          string,
+          unknown
+        >
+        const source = opencode.source as Record<string, unknown>
+        const modelSource = source.model as Record<string, unknown>
+        expect(modelSource.origin).toBe('project-profile')
+        expect(modelSource.level).toBe('agent')
+        expect(modelSource.form).toBe('flat')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
   })
 
   it('prints one line when no profiles and no overlays are defined', () => {
@@ -895,6 +1379,64 @@ describe('cli config show', () => {
   })
 
   describe('--json', () => {
+    it('carries activeProfileSourcePath and stays within the file-paths-only contract', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      const envCanary = 'ENV-CANARY-DO-NOT-LEAK-json-5f1c'
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          profile: 'fast',
+          profiles: {
+            fast: {
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/haiku' },
+              },
+            },
+          },
+        })
+        const expectedPath = path.join(home, '.config/opencode/systematic.json')
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+          MY_SECRET_TOKEN: envCanary,
+        })
+
+        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        expect(parsed.activeProfileSourcePath).toBe(expectedPath)
+        // File-paths-only contract: no env values, no raw file content.
+        expect(result.stdout).not.toContain(envCanary)
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('activeProfileSourcePath is null when no profile is active', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          agents: {
+            'correctness-reviewer': { model: 'anthropic/base-model' },
+          },
+        })
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+        })
+
+        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        expect(parsed.activeProfileSourcePath).toBeNull()
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
     // Both the prose routing table and the --json routing array must
     // exclude a disabled agent.
     it('a disabled agent is excluded from the --json routing array', () => {
@@ -949,6 +1491,7 @@ describe('cli config show', () => {
         const parsed = JSON.parse(result.stdout) as Record<string, unknown>
         expect(Object.keys(parsed).sort()).toEqual([
           'activeProfile',
+          'activeProfileSourcePath',
           'locations',
           'profileFallback',
           'profileSelectorSource',

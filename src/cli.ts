@@ -570,15 +570,36 @@ function formatRoutingQualifier(qualifier: string | undefined): string {
   return qualifier === undefined ? '(none)' : qualifier
 }
 
+/**
+ * `level`/`form` describe SHAPE provenance (agent vs category, block vs
+ * flat); `origin` (when known -- see `RoutingFieldSource.origin`'s doc
+ * comment) appends FILE provenance, distinguishing `'project-profile'`
+ * (an advisory, project-sourced active profile bundle) from `'user'`,
+ * `'custom'`, `'user-profile'`, and `'custom-profile'`. This is the
+ * `config show` surface that makes a fully-absorbed advisory bundle
+ * (every target reads `user`, never `project-profile`, even though a
+ * project profile is active) distinguishable from the bundle not existing
+ * at all -- the whole reason this attribution is tracked.
+ */
 function formatRoutingSource(source: RoutingFieldSource | undefined): string {
-  return source === undefined ? '(n/a)' : `${source.level}/${source.form}`
+  if (source === undefined) return '(n/a)'
+  return source.origin === undefined
+    ? `${source.level}/${source.form}`
+    : `${source.level}/${source.form}, ${source.origin}`
 }
 
-function printProfileSummary(metadata: LoaderConfigObservationMetadata): void {
+function printProfileSummary(loaded: SourceAwareConfigResult): void {
+  const metadata = loaded.metadata
   const activeLabel = metadata.activeProfile ?? 'none'
   const selectedByLabel = metadata.profileSelectorSource ?? '(none)'
   console.log(`  Active profile: ${activeLabel}`)
   console.log(`  Selected by:    ${selectedByLabel}`)
+  // Absent (not printed empty) when no profile is active -- mirrors
+  // `activeProfileSourcePath` being `null` in that case, and `Fallback:`'s
+  // existing conditional-print pattern just below.
+  if (loaded.activeProfileSourcePath !== null) {
+    console.log(`  Defined in:     ${loaded.activeProfileSourcePath}`)
+  }
 
   if (metadata.profileFallback) {
     const usedLabel = metadata.profileFallback.usedDefault
@@ -685,7 +706,7 @@ function printResolvedSection(): boolean {
     return true
   }
 
-  printProfileSummary(metadata)
+  printProfileSummary(loaded)
   console.log('')
   console.log('  Routing:')
   printRoutingTable(loaded)
@@ -722,6 +743,8 @@ interface ConfigShowJsonSuccess {
   readonly locations: ConfigShowJsonLocations
   readonly activeProfile: string | null
   readonly profileSelectorSource: LoaderConfigObservationMetadata['profileSelectorSource']
+  /** The (non-canonical) path of the file that defined the active profile's bundle, or `null` when no profile is active. See `SourceAwareConfigResult.activeProfileSourcePath`'s doc comment for why this is file-paths-only, same as the rest of `locations`. */
+  readonly activeProfileSourcePath: string | null
   readonly profileFallback: LoaderConfigObservationMetadata['profileFallback']
   readonly routing: ReadonlyArray<{
     readonly target: { readonly agentKey: string; readonly category: string }
@@ -801,6 +824,7 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
     locations,
     activeProfile: loaded.metadata.activeProfile,
     profileSelectorSource: loaded.metadata.profileSelectorSource,
+    activeProfileSourcePath: loaded.activeProfileSourcePath,
     profileFallback: loaded.metadata.profileFallback,
     routing,
   }

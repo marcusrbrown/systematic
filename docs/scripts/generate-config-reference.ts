@@ -47,6 +47,7 @@ const TOP_LEVEL_KEYS = [
   'workflow_guard',
   'pi_subagents',
   'skills_as_commands',
+  'allow_project_profiles',
 ] as const
 
 /**
