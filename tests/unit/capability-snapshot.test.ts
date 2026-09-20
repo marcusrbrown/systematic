@@ -513,16 +513,26 @@ describe('capability snapshot contract', () => {
   // `config-protected-fields.ts` exists for exactly one reason: it has no
   // imports of its own, so THIS file can consume
   // `CONFIG_PROTECTED_FIELD_PATHS` without acquiring `jsonc-parser` (or any
-  // of `config.ts`'s other transitive dependencies) as a side effect. If a
-  // future edit adds an import to that module, this file's own
-  // import-freeness invariant (checked immediately above) breaks silently
-  // -- and the failure mode is NOT a build error. It surfaces at RUNTIME in
-  // the bundled Claude Code validator entry, which has no `jsonc-parser` in
-  // its dependency closure and simply crashes when it hits the import. This
-  // test reads the source file from disk (not its runtime exports, which
-  // would never observe an added-but-unused import) so a stray import is
-  // caught here, in CI, rather than in that validator at someone's laptop.
-  test('config-protected-fields.ts stays import-free (capability-snapshot.ts depends on this to avoid a transitive jsonc-parser dependency)', () => {
+  // of `config.ts`'s other transitive dependencies) as a side effect. That
+  // protects the same property the test immediately above checks directly:
+  // `capability-snapshot.ts` is a pure, read-only serializer, and it stays
+  // one only if nothing it imports drags in runtime collectors or
+  // filesystem access. An import added to `config-protected-fields.ts`
+  // breaks that transitively and silently -- the build still succeeds and
+  // every existing test still passes, because nothing asserts on the shape
+  // of the dependency graph.
+  //
+  // Deliberately NOT claimed here: that a violation crashes the bundled
+  // Claude Code validator. It does not -- that entry's closure
+  // (`src/ce-review-validator.ts`) never reaches `capability-snapshot.ts`
+  // at all, and `src/cli.ts`, its only importer, already imports
+  // `./lib/config.js` directly. Stating a specific downstream crash that
+  // cannot actually happen would invite a future reader to verify it,
+  // find it false, and delete this guard for the wrong reason.
+  //
+  // This reads the source from disk rather than the module's runtime
+  // exports, which would never observe an added-but-unused import.
+  test('config-protected-fields.ts stays import-free (keeps capability-snapshot.ts a pure serializer with no transitive dependency graph)', () => {
     const source = readFileSync(
       new URL('../../src/lib/config-protected-fields.ts', import.meta.url),
       'utf8',
@@ -549,9 +559,10 @@ describe('capability snapshot contract', () => {
       expect(
         pattern.test(withoutComments),
         `config-protected-fields.ts contains ${label}. This module must stay ` +
-          'import-free: capability-snapshot.ts depends on that to avoid a ' +
-          'transitive jsonc-parser dependency, and a violation here fails at ' +
-          'RUNTIME in the bundled Claude Code validator, not at build time.',
+          'import-free: capability-snapshot.ts consumes it and is a pure, ' +
+          'read-only serializer, so an import here transitively gives that ' +
+          'file a dependency graph it is asserted not to have. Nothing else ' +
+          'catches this -- the build succeeds and every other test passes.',
       ).toBe(false)
     }
   })
