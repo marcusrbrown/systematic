@@ -509,4 +509,50 @@ describe('capability snapshot contract', () => {
       /from ['"]node:fs['"]|writeFile|mkdir|rmSync|unlink/,
     )
   })
+
+  // `config-protected-fields.ts` exists for exactly one reason: it has no
+  // imports of its own, so THIS file can consume
+  // `CONFIG_PROTECTED_FIELD_PATHS` without acquiring `jsonc-parser` (or any
+  // of `config.ts`'s other transitive dependencies) as a side effect. If a
+  // future edit adds an import to that module, this file's own
+  // import-freeness invariant (checked immediately above) breaks silently
+  // -- and the failure mode is NOT a build error. It surfaces at RUNTIME in
+  // the bundled Claude Code validator entry, which has no `jsonc-parser` in
+  // its dependency closure and simply crashes when it hits the import. This
+  // test reads the source file from disk (not its runtime exports, which
+  // would never observe an added-but-unused import) so a stray import is
+  // caught here, in CI, rather than in that validator at someone's laptop.
+  test('config-protected-fields.ts stays import-free (capability-snapshot.ts depends on this to avoid a transitive jsonc-parser dependency)', () => {
+    const source = readFileSync(
+      new URL('../../src/lib/config-protected-fields.ts', import.meta.url),
+      'utf8',
+    )
+    // Strip comments first: the module's own doc comment discusses "import"
+    // in prose ("must import nothing, ever"), which would false-positive a
+    // naive substring or word-boundary check against the comment text
+    // itself rather than actual import syntax.
+    const withoutComments = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '')
+
+    const forbidden: Array<{ label: string; pattern: RegExp }> = [
+      {
+        label: 'a static `import ... from` statement',
+        pattern: /^\s*import\b/m,
+      },
+      { label: "a bare `import 'x'` statement", pattern: /^\s*import\s*['"]/m },
+      { label: 'a dynamic `import(...)` call', pattern: /\bimport\s*\(/ },
+      { label: 'a `require(...)` call', pattern: /\brequire\s*\(/ },
+    ]
+
+    for (const { label, pattern } of forbidden) {
+      expect(
+        pattern.test(withoutComments),
+        `config-protected-fields.ts contains ${label}. This module must stay ` +
+          'import-free: capability-snapshot.ts depends on that to avoid a ' +
+          'transitive jsonc-parser dependency, and a violation here fails at ' +
+          'RUNTIME in the bundled Claude Code validator, not at build time.',
+      ).toBe(false)
+    }
+  })
 })

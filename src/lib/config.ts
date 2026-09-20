@@ -212,8 +212,10 @@ export interface SourceAwareConfigResult {
    * `ConfigObservationMetadata` would silently break `systematic
    * capabilities` (`runCapabilities` catches the throw and prints
    * "Capabilities diagnostic unavailable", naming no cause) exactly the way
-   * the duplicated `CONFIG_PROTECTED_FIELD_PATHS` literal already did once
-   * before (see that file's `allow_project_profiles` addition). Consumers
+   * a hand-duplicated `CONFIG_PROTECTED_FIELD_PATHS` literal in
+   * `capability-snapshot.ts` once silently did, before that duplication was
+   * removed in favor of the shared `config-protected-fields.ts` module (see
+   * that module's doc comment for the incident record). Consumers
    * (`systematic config show`) read `loaded.activeProfileSourcePath`
    * directly, never `loaded.metadata.activeProfileSourcePath`. Uses `path`
    * (matching `getConfigPaths`/`Configuration locations`'s non-canonical

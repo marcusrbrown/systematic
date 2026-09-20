@@ -4211,6 +4211,55 @@ describe('config', () => {
           'not-a-real-category',
         )
       })
+
+      // PINNING A KNOWN, DOCUMENTED DESIGN PROPERTY -- not endorsing it as
+      // desirable, just confirming it behaves the way ARCHITECTURE.md and
+      // both user-facing docs now say it does. Anti-shadowing (custom, then
+      // user, then project last) protects a name the user has DEFINED
+      // content for. It does not protect a name the user has only
+      // REFERENCED via their own `profile` default: `trustedDefaultProfileName`
+      // returns that raw string, and the SAME lookup order
+      // (`lookupProfileBundle`) is used to resolve it. If the user's
+      // declared default names a bundle they never actually defined (a typo,
+      // or simply never got around to it), an opted-in project's `profiles`
+      // entry of that exact name is still consulted and can supply content
+      // for it -- and because the name genuinely resolves (just not to
+      // anything the user wrote), the usual "is not defined in `profiles`"
+      // warning never fires. This is the one behavior in this feature where
+      // a user-facing warning silently disappears as a side effect of the
+      // opt-in.
+      test('KNOWN DESIGN PROPERTY: a user-referenced-but-undefined profile name resolves via an opted-in project bundle, and the missing-name warning does not fire', () => {
+        // User declares "fast" as their default but never defines it --
+        // note there is no `profiles` key here at all.
+        writeUserConfig({ allow_project_profiles: true, profile: 'fast' })
+        // Project does not set its own `profile` selector, so the user's
+        // "fast" selection is what's being looked up -- this is not the
+        // project overriding anything.
+        const projectConfigPath = writeProjectConfig({
+          profiles: {
+            fast: {
+              agents: { 'correctness-reviewer': { model: 'a/repo-fast' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        // The bundle resolves at all, from the project source.
+        expect(result.metadata.activeProfile).toBe('fast')
+        expect(result.metadata.profileSelectorSource).toBe('user')
+        expect(result.metadata.profileFallback).toBeNull()
+        expect(result.activeProfileSourcePath).toBe(projectConfigPath)
+        // Its value applies advisory-style: nothing else sets this agent's
+        // model, so the project bundle's value wins.
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/repo-fast',
+        )
+        // The "not defined in `profiles`" warning that fires for a genuinely
+        // missing name (see the sibling test above) does NOT fire here --
+        // the name IS defined, just not by the user.
+        expect(warnings).toEqual([])
+      })
     })
 
     // `bundleSource` attribution is now observable through the public
