@@ -18,6 +18,8 @@ import type {
   OverlayConfig,
   OverlayConfigMap,
   PiSubagentsOverlayMap,
+  RoutingFieldOrigins,
+  RoutingValueOrigin,
   SourcedOverlayConfig,
   SourcedOverlayConfigMap,
 } from './config.js'
@@ -43,10 +45,22 @@ export interface RoutingTarget {
  * `form` is `'legacy-pi-subagents'` only for a `pi` harness qualifier
  * resolved from the deprecated `pi_subagents.<agents|categories>.<key>.thinking`
  * location (R5) — `model` and `variant` never resolve from there.
+ *
+ * `level`/`form` are SHAPE provenance -- which key shape won (agent vs
+ * category, block vs flat) -- not FILE provenance. `origin` is the FILE
+ * provenance: which trust level/profile-bundle actually contributed the
+ * winning value, read from `SourcedOverlayConfig.origins` at the same leaf
+ * `level`/`form` identify (see `config.ts`'s `RoutingFieldOrigins` for how
+ * that's tracked through the merge). `undefined` for a legacy-pi-subagents
+ * source (that map isn't merge-tracked for origins -- profile bundles
+ * can't set `pi_subagents` fields at all) or when the caller supplied
+ * overlays via `toSourcedOverlayMap`'s placeholder adapter, which carries
+ * no real origins.
  */
 export interface RoutingFieldSource {
   readonly level: 'agent' | 'category'
   readonly form: 'block' | 'flat' | 'legacy-pi-subagents'
+  readonly origin?: RoutingValueOrigin
 }
 
 export interface RoutingResolution {
@@ -144,19 +158,21 @@ export function toSourcedPiSubagentsOverlays(
 }
 
 /**
- * Look up an agent's merged overlay value by bare key first, then by the
- * qualified `category/key` alias — mirrors the bare/qualified alias
- * resolution `resolveAgentOverlaySet`/`validateExactAgentOverlays` perform
- * against the bundled inventory, applied here directly to the raw merged
- * overlay map (this module has no inventory dependency).
+ * Look up an agent's merged overlay ENTRY (value + origins) by bare key
+ * first, then by the qualified `category/key` alias — mirrors the
+ * bare/qualified alias resolution `resolveAgentOverlaySet`/
+ * `validateExactAgentOverlays` perform against the bundled inventory,
+ * applied here directly to the raw merged overlay map (this module has no
+ * inventory dependency). Returns the whole entry, not just `.value`, so
+ * callers can also read `.origins` for file-provenance attribution.
  */
-function lookupAgentOverlay(
+function lookupAgentOverlayEntry(
   overlays: SourcedOverlayConfigMap,
   target: RoutingTarget,
-): OverlayConfig | undefined {
+): SourcedOverlayConfig | undefined {
   return (
-    getOverlayValue(overlays.agents, target.agentKey) ??
-    getOverlayValue(overlays.agents, `${target.category}/${target.agentKey}`)
+    overlays.agents[target.agentKey] ??
+    overlays.agents[`${target.category}/${target.agentKey}`]
   )
 }
 
@@ -234,11 +250,15 @@ function resolveField(candidates: readonly FieldCandidate[]): {
  * versa), so this is called once per harness with that harness's block.
  * Used for the `pi` harness only — `opencode` uses
  * `resolveOpencodeModelAndVariant`, which couples model and variant
- * resolution together (see that function's doc comment for why).
+ * resolution together (see that function's doc comment for why). The
+ * block leaf is hardcoded to `piModel` (not parameterized by `harness`)
+ * since this function is only ever called with `harness: 'pi'`.
  */
 function resolveModel(
   agentOverlay: OverlayConfig | undefined,
+  agentOrigins: RoutingFieldOrigins | undefined,
   categoryOverlay: OverlayConfig | undefined,
+  categoryOrigins: RoutingFieldOrigins | undefined,
   harness: Harness,
 ): {
   value: string | null | undefined
@@ -247,19 +267,27 @@ function resolveModel(
   const { value, source } = resolveField([
     {
       value: readBlockField(agentOverlay, harness, 'model'),
-      source: { level: 'agent', form: 'block' },
+      source: { level: 'agent', form: 'block', origin: agentOrigins?.piModel },
     },
     {
       value: readFlatField(agentOverlay, 'model'),
-      source: { level: 'agent', form: 'flat' },
+      source: { level: 'agent', form: 'flat', origin: agentOrigins?.model },
     },
     {
       value: readBlockField(categoryOverlay, harness, 'model'),
-      source: { level: 'category', form: 'block' },
+      source: {
+        level: 'category',
+        form: 'block',
+        origin: categoryOrigins?.piModel,
+      },
     },
     {
       value: readFlatField(categoryOverlay, 'model'),
-      source: { level: 'category', form: 'flat' },
+      source: {
+        level: 'category',
+        form: 'flat',
+        origin: categoryOrigins?.model,
+      },
     },
   ])
   const narrowedValue = narrowModelValue(value)
@@ -295,6 +323,25 @@ function readOpencodeLayerField(
 }
 
 /**
+ * The origins-lookup counterpart to `readOpencodeLayerField`: which file
+ * contributed the value `readOpencodeLayerField` would read for the same
+ * `layer`/`field`. Mirrors that function's level/form branching exactly so
+ * the origin read always lines up with the value read it describes.
+ */
+function readOpencodeLayerOrigin(
+  agentOrigins: RoutingFieldOrigins | undefined,
+  categoryOrigins: RoutingFieldOrigins | undefined,
+  layer: RoutingFieldSource,
+  field: 'model' | 'variant',
+): RoutingValueOrigin | undefined {
+  const origins = layer.level === 'agent' ? agentOrigins : categoryOrigins
+  if (field === 'model') {
+    return layer.form === 'block' ? origins?.opencodeModel : origins?.model
+  }
+  return layer.form === 'block' ? origins?.opencodeVariant : origins?.variant
+}
+
+/**
  * Resolve OpenCode's `model` and `variant` TOGETHER -- resolving `variant`
  * fully independently of `model` would let a less-specific layer's stale
  * `variant` leak past a more-specific layer's `model`, and would make a
@@ -327,7 +374,9 @@ function readOpencodeLayerField(
  */
 function resolveOpencodeModelAndVariant(
   agentOverlay: OverlayConfig | undefined,
+  agentOrigins: RoutingFieldOrigins | undefined,
   categoryOverlay: OverlayConfig | undefined,
+  categoryOrigins: RoutingFieldOrigins | undefined,
 ): {
   model: string | null | undefined
   modelSource: RoutingFieldSource | undefined
@@ -354,9 +403,18 @@ function resolveOpencodeModelAndVariant(
         )
   const model = narrowModelValue(rawModel)
   const hasModel = model !== undefined
-  const modelSource = hasModel
-    ? OPENCODE_MODEL_VARIANT_LAYERS[modelLayerIndex]
-    : undefined
+  const modelSource: RoutingFieldSource | undefined =
+    hasModel && modelLayer !== undefined
+      ? {
+          ...modelLayer,
+          origin: readOpencodeLayerOrigin(
+            agentOrigins,
+            categoryOrigins,
+            modelLayer,
+            'model',
+          ),
+        }
+      : undefined
 
   let qualifier: string | undefined
   let qualifierSource: RoutingFieldSource | undefined
@@ -374,7 +432,15 @@ function resolveOpencodeModelAndVariant(
       )
       if (narrowed !== undefined) {
         qualifier = narrowed
-        qualifierSource = layer
+        qualifierSource = {
+          ...layer,
+          origin: readOpencodeLayerOrigin(
+            agentOrigins,
+            categoryOrigins,
+            layer,
+            'variant',
+          ),
+        }
         break
       }
     }
@@ -396,7 +462,9 @@ function resolveOpencodeModelAndVariant(
  */
 function resolvePiThinking(
   agentOverlay: OverlayConfig | undefined,
+  agentOrigins: RoutingFieldOrigins | undefined,
   categoryOverlay: OverlayConfig | undefined,
+  categoryOrigins: RoutingFieldOrigins | undefined,
   piSubagentsOverlays: SourcedOverlayConfigMap,
   target: RoutingTarget,
 ): {
@@ -407,11 +475,19 @@ function resolvePiThinking(
   const blockResolution = resolveField([
     {
       value: readBlockField(agentOverlay, 'pi', 'thinking'),
-      source: { level: 'agent', form: 'block' },
+      source: {
+        level: 'agent',
+        form: 'block',
+        origin: agentOrigins?.piThinking,
+      },
     },
     {
       value: readBlockField(categoryOverlay, 'pi', 'thinking'),
-      source: { level: 'category', form: 'block' },
+      source: {
+        level: 'category',
+        form: 'block',
+        origin: categoryOrigins?.piThinking,
+      },
     },
   ])
 
@@ -460,13 +536,19 @@ function resolvePiThinking(
  */
 export function resolveRouting(input: ResolveRoutingInput): RoutingResolution {
   const { overlays, piSubagentsOverlays, target, harness } = input
-  const agentOverlay = lookupAgentOverlay(overlays, target)
-  const categoryOverlay = getOverlayValue(overlays.categories, target.category)
+  const agentEntry = lookupAgentOverlayEntry(overlays, target)
+  const categoryEntry = overlays.categories[target.category]
+  const agentOverlay = agentEntry?.value
+  const categoryOverlay = categoryEntry?.value
+  const agentOrigins = agentEntry?.origins
+  const categoryOrigins = categoryEntry?.origins
 
   if (harness === 'opencode') {
     const resolution = resolveOpencodeModelAndVariant(
       agentOverlay,
+      agentOrigins,
       categoryOverlay,
+      categoryOrigins,
     )
     return {
       model: resolution.model,
@@ -487,10 +569,18 @@ export function resolveRouting(input: ResolveRoutingInput): RoutingResolution {
   // `pi_subagents.thinking` and how `resolvePersonaRouting` already applies
   // `thinkingLevel` at dispatch time regardless of where `model` came from.
   // There is no model/qualifier coupling to enforce here.
-  const modelResolution = resolveModel(agentOverlay, categoryOverlay, harness)
+  const modelResolution = resolveModel(
+    agentOverlay,
+    agentOrigins,
+    categoryOverlay,
+    categoryOrigins,
+    harness,
+  )
   const qualifierResolution = resolvePiThinking(
     agentOverlay,
+    agentOrigins,
     categoryOverlay,
+    categoryOrigins,
     piSubagentsOverlays,
     target,
   )

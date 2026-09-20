@@ -61,6 +61,7 @@ Coarse module pipeline, roughly in dependency order:
 Config loading
   src/lib/config.ts          — loadConfig: JSONC loading, 3-source merge (env > project > user)
   src/lib/config-schema.ts   — SystematicConfigSchema (Zod), validateConfig, SECURITY_OVERLAY_FIELDS
+  src/lib/config-protected-fields.ts — CONFIG_PROTECTED_FIELD_PATHS: dependency-free (imports nothing), shared verbatim by config.ts and capability-snapshot.ts so the two never drift
 
 Asset discovery
   src/lib/walk-dir.ts        — walkDir: recursive directory walker (foundation for all discovery)
@@ -119,7 +120,7 @@ Review artifact contract
   src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers
   src/lib/review-return-validator.ts     — bounded stdin validator for one raw persona return (validate-review-return)
   src/lib/review-pipeline-contract.ts    — review-pipeline.v1 strict Zod contracts for the full synthesis-pipeline envelope family (screen, prepare, adjudication, merge, validator-lifecycle-result, plan-assessment, finalize), composed from review-artifact-schema.ts
-  src/lib/review-pipeline.ts             — pure screenReviewReturn (binds a raw persona return to the expected reviewer), prepareReviewCandidates (confidence-gates admitted findings, then groups them into candidate pairs via normalizeRepoRelativePath, never merging), validateAdjudication (checks a model's merge/decline decisions form a valid partition over the prepared candidate set, rejecting outright rather than repairing; computes no merged-finding fields), deriveMergedFindingFields (derives one merged finding's severity/submitters/confidence/agreement-credit/pre_existing/fingerprint/route from its contributing survivors plus the model's decision fields for that group, using ROUTE_REFUSAL_TABLE/isRouteTransitionAllowed to refuse a widening route rather than deriving its own ordering), and applyReviewAdjudication (the top-level merge phase: validates the partition via validateAdjudication, derives every merged group's and every declined/passthrough singleton's fields via deriveMergedFindingFields with no partial output on any rejection, computes the purely mechanical P0/P1-or-requires_verification validator request set, sorts by severity/confidence/path/line/fingerprint, and parses the assembled result through MergeOutputSchema); reconcileValidatorResults (finalize-phase validator-lifecycle reconciliation: classifies each merged finding validated/filtered/uncertain against its ValidatorLifecycleResultSchema outcome, whole-payload rejecting a missing, duplicate, or unrequested result); finalizeReviewDispositions (derives every admitted input's final disposition -- suppressed/filtered/merged/surviving, sourced only from confidence_dispositions and the reconciled filtered_input_ids -- the weighted disposition counts where a rejected payload contributes one weighted count rather than one row per finding, the pre-existing/new finding split mirroring deriveMergedFindingFields's all-inputs pre_existing rule, and the mutually exclusive, collectively exhaustive fixer/residual/report_only action queues partitioned by each finding's owner); and deriveRiskCoverage (for each already-identified lost risk-critical persona, derives whether a different persona's validated, on-surface reconciled finding covers the lost persona's recorded selection surface -- cross-persona ownership resolved via surviving_findings, surfaces compared through normalizeRepoRelativePath, findings disproven by a false validation excluded, and a validation-band finding eligible only after an explicit true result, with a deterministic lowest-finding_id citation among multiple eligible findings; never identifies which personas are risk-critical or lost); and routePlanAssessment (routes the model's plan-assessment results into two output channels: an explicit_unmet_requirement becomes residual actionable work and gates the verdict, an inferred_gap becomes advisory-only output and never gates alone; PlanAssessmentResult deliberately has no persona or input-ID field, so a plan-assessment result can never carry a persona input identifier or enter the reviewer findings collection); and runReviewPipeline (composes reconcileValidatorResults, finalizeReviewDispositions, deriveRiskCoverage, and routePlanAssessment in order and derives the run's verdict from their already-computed output -- never re-deriving anything those four steps compute, aborting with no partial output on a reconcileValidatorResults rejection, and surfacing each of the three independent blocking conditions -- an explicit unmet plan requirement, unsatisfied risk-critical coverage for a lost persona, and a degraded validator lifecycle -- as its own distinguishable VerdictBlockingReason entry rather than one collapsed boolean or string); deriveFinalizeContext (re-verifies every cross-phase join the finalize input claims -- dispatch-record set equality, exact validator request set, one merged finding per prepared input, carried file match, confidence dispositions resolving to screened findings, no citation of an unavailable reviewer, provenance ownership -- and re-runs deriveMergedFindingFields as a verifier over every carried survivor, rejecting outright on any mismatch rather than trusting the input); buildInputLedger, buildReviewCoverage, and projectSynthesizedFindings (pure per-input, per-coverage-row, and per-synthesized-finding projections consumed only by finalizeReview); and finalizeReview (the top-level finalize phase: composes deriveFinalizeContext with runReviewPipeline and the three projections above, returning `{kind: 'writing', artifact, report}` after parsing through ReviewArtifactSchema, or `{kind: 'report_only', ...report}` when parent_run_metadata.mode is report-only); none depend on the process environment
+  src/lib/review-pipeline.ts             — pure screenReviewReturn (binds a raw persona return to the expected reviewer), prepareReviewCandidates (confidence-gates admitted findings, then groups them into candidate pairs via normalizeRepoRelativePath, never merging), validateAdjudication (checks a model's merge/decline decisions form a valid partition over the prepared candidate set, rejecting outright rather than repairing; computes no merged-finding fields), deriveMergedFindingFields (derives one merged finding's severity/submitters/confidence/agreement-credit/pre_existing/fingerprint/route from its contributing survivors plus the model's decision fields for that group, using ROUTE_REFUSAL_TABLE/isRouteTransitionAllowed to refuse a widening route rather than deriving its own ordering, and reporting route_differs_from_meet so assembly carries a wire-visible route_narrowing_reason only for a genuine narrowing, never merely because the model supplied a proposed_route), and applyReviewAdjudication (the top-level merge phase: validates the partition via validateAdjudication, derives every merged group's and every declined/passthrough singleton's fields via deriveMergedFindingFields with no partial output on any rejection, computes the purely mechanical P0/P1-or-requires_verification validator request set, sorts by severity/confidence/path/line/fingerprint, and parses the assembled result through MergeOutputSchema); reconcileValidatorResults (finalize-phase validator-lifecycle reconciliation: classifies each merged finding validated/filtered/uncertain against its ValidatorLifecycleResultSchema outcome, whole-payload rejecting a missing, duplicate, or unrequested result); finalizeReviewDispositions (derives every admitted input's final disposition -- suppressed/filtered/merged/surviving, sourced only from confidence_dispositions and the reconciled filtered_input_ids -- the weighted disposition counts where a rejected payload contributes one weighted count rather than one row per finding, the pre-existing/new finding split mirroring deriveMergedFindingFields's all-inputs pre_existing rule, and the mutually exclusive, collectively exhaustive fixer/residual/report_only action queues partitioned by each finding's owner); and deriveRiskCoverage (for each already-identified lost risk-critical persona, derives whether a different persona's validated, on-surface reconciled finding covers the lost persona's recorded selection surface -- cross-persona ownership resolved via surviving_findings, surfaces compared through normalizeRepoRelativePath, findings disproven by a false validation excluded, and a validation-band finding eligible only after an explicit true result, with a deterministic lowest-finding_id citation among multiple eligible findings; never identifies which personas are risk-critical or lost); and routePlanAssessment (routes the model's plan-assessment results into two output channels: an explicit_unmet_requirement becomes residual actionable work and gates the verdict, an inferred_gap becomes advisory-only output and never gates alone; PlanAssessmentResult deliberately has no persona or input-ID field, so a plan-assessment result can never carry a persona input identifier or enter the reviewer findings collection); and runReviewPipeline (composes reconcileValidatorResults, finalizeReviewDispositions, deriveRiskCoverage, and routePlanAssessment in order and derives the run's verdict from their already-computed output -- never re-deriving anything those four steps compute, aborting with no partial output on a reconcileValidatorResults rejection, and surfacing each of the three independent blocking conditions -- an explicit unmet plan requirement, unsatisfied risk-critical coverage for a lost persona, and a degraded validator lifecycle -- as its own distinguishable VerdictBlockingReason entry rather than one collapsed boolean or string); deriveFinalizeContext (re-verifies every cross-phase join the finalize input claims -- dispatch-record set equality, exact validator request set, one merged finding per prepared input, carried file match, confidence dispositions resolving to screened findings, no citation of an unavailable reviewer, provenance ownership, carried route_narrowing_reason agreement with the route's actual divergence from the contributing meet -- and re-runs deriveMergedFindingFields as a verifier over every carried survivor, rejecting outright on any mismatch rather than trusting the input); buildInputLedger, buildReviewCoverage, and projectSynthesizedFindings (pure per-input, per-coverage-row, and per-synthesized-finding projections consumed only by finalizeReview); and finalizeReview (the top-level finalize phase: composes deriveFinalizeContext with runReviewPipeline and the three projections above, returning `{kind: 'writing', artifact, report}` after parsing through ReviewArtifactSchema, or `{kind: 'report_only', ...report}` when parent_run_metadata.mode is report-only); none depend on the process environment
   src/ce-review-validator.ts             — skill-local Node shim dispatching `return`/`artifact`/`screen`/`prepare`/`merge`/`finalize` (the latter four call screenReviewReturn/prepareReviewCandidates/applyReviewAdjudication/finalizeReview); `screen` takes `--reviewer`/`--harness` flags and a raw return on stdin, while `prepare`/`merge`/`finalize` take no flags and share one strict-JSON stdin runner bounded by AGGREGATE_STDIN_BYTE_CAP; bundled to skills/ce-review/scripts/validate-review.mjs
 
 ```
@@ -222,7 +223,14 @@ version is not evidence for another.
 phantom `systematic:*` references, dispatch identifier integrity issues, frontmatter/model
 contract violations, banned CC/CEP patterns, and stale `docs/plans/` status. Ignoring fenced code
 blocks, it flags plans marked `status: active` with at least one ticked checkbox and no unticked
-checkboxes. It does not inspect deliverables or verify that work shipped. Must pass before any release.
+checkboxes. It does not inspect deliverables or verify that work shipped. `checkSolutionSchema`
+additionally validates every `docs/solutions/**` frontmatter against
+`skills/ce-compound/references/schema.yaml`. The enum vocabularies (`problem_type`, `component`,
+`severity`, bug-track `root_cause`/`resolution_type`) and the `date` pattern are read from that
+schema file at runtime, so changing a vocabulary there takes effect without editing the gate. The
+required-field list is hardcoded in the gate, and schema constraints such as array maximums and
+optional-field patterns are not enforced — changing either still requires a matching validator
+change. Must pass before any release.
 
 **Receipt-backed workflow guard** (`src/lib/workflow-guard.ts` plus the OpenCode adapter in
 `src/lib/opencode-workflow-guard.ts`, `opencode-operation-observer.ts`, and `receipt-classifier.ts`
@@ -230,8 +238,13 @@ checkboxes. It does not inspect deliverables or verify that work shipped. Must p
 `tool.execute.before` / `tool.execute.after` / `event` hooks, classifies them into operations
 (implementation, verification, commit, push, pr-creation, check-readback, review-readback),
 validates each claim against observed workspace state, and mints integrity-checked receipts. A
-guarded transition that lacks its required receipts is rejected. OpenCode only — `src/pi.ts`
-registers no guard, and the Claude Code bundle ships no runtime.
+guarded transition that lacks its required receipts is rejected. When remote-scope seeding fails and
+flips mode to `unavailable`, the runtime binds a bounded `GuardUnavailableCause` (site, failure kind,
+operation, reason code) to that specific transition — never to whichever concurrent caller finished
+computing a cause first — and surfaces it only as `firstUnavailableCause` on
+`systematic_workflow_status` tool output while the state remains `unavailable`; it never appears on a
+receipt envelope, marker envelope, or anything covered by an integrity digest. OpenCode only —
+`src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
@@ -303,8 +316,7 @@ sources; bootstrap config shallow-merges.
 `ProfileOverlaySchema` in `src/lib/config-schema.ts`) — a top-level `profile` key selects a named
 entry from a `profiles` map (routing-only `agents`/`categories` overlays) defined in
 `$OPENCODE_CONFIG_DIR` or user config. The selected bundle enters the overlay merge as a fourth
-chain entry between user base and project (`user base → active profile → project → custom`, later
-wins); every other merge in `loadConfigWithSources` keeps the three-source chain above. Only a
+chain entry; every other merge in `loadConfigWithSources` keeps the three-source chain above. Only a
 **custom** overlay can override a profile-supplied routing choice. A **project** overlay cannot:
 protected overlay fields (`SECURITY_OVERLAY_FIELDS` — model, variant, skills, permission, opencode,
 pi; includes routing) are stripped from a project-trust source before schema validation, not merely
@@ -321,10 +333,85 @@ custom source loads successfully, both trust passes still run in normal preceden
 resulting diagnostic states the file's fields apply as custom. If the custom source fails to load,
 report-mode falls back to the project strip warnings instead. `preserveSecurityFields` carries a
 previously-trusted value's protected fields forward across a project overlay on the same key.
-`profiles` is in `PROJECT_PROTECTED_FIELDS` (`src/lib/config.ts`) alongside `workflow_guard` — a
-top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS` above: a project
-`systematic.json` may select a profile, but a `profiles` map it defines is ignored with a warning,
-not merged.
+
+One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserAndCustomSources`
+(below) loads user and custom fully, ahead of project, so the opt-in can be resolved before the
+project source is parsed. When the project and custom paths alias to the same canonical file AND that
+file is malformed (JSONC parse failure or schema-invalid), the custom-trust pass now throws first,
+naming custom as the failing source — before this feature's reordering, the project-trust pass loaded
+first and would have thrown with project attribution instead. No test asserting a specific outcome for
+that combination broke; this is a real, observable change in which trust level a thrown diagnostic
+names for an aliased-and-malformed file, not a claim that the reorder has zero effect on
+exception-path behavior.
+`workflow_guard` and `allow_project_profiles` are in `PROJECT_ALWAYS_PROTECTED_FIELDS`
+(`src/lib/config.ts`) — a top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS`
+above, and unconditional: no project source can ever set either field, regardless of anything else
+that project source contains. `profiles` is deliberately NOT in that always-protected set; whether a
+project `systematic.json` may define its own `profiles` map depends on the opt-in below.
+
+**Opt-in project-defined profiles** (`allow_project_profiles`, `src/lib/config.ts`
+`stripProjectProtectedFields`/`collectProjectProtectedFields`/`lookupProfileBundle`/
+`buildOverlaySources`/`resolveOverlayEntryValue`) — when `allow_project_profiles` is `true`, a
+repository's own project `systematic.json` may define a `profiles` map and have it consulted for
+bundle content, subject to two structural constraints:
+
+- **The opt-in cannot grant itself.** `allow_project_profiles` is unconditionally stripped from a
+  project source before that source is parsed (it lives in `PROJECT_ALWAYS_PROTECTED_FIELDS`, never
+  in the conditional `profiles` gate) and its effective value is resolved from custom and user
+  config only (`custom ?? user ?? false`). Because `loadConfigWithSources` loads user and custom
+  fully — and resolves this value — before the project source is ever loaded, the resolved opt-in is
+  already known at the moment `stripProjectProtectedFields` decides whether to strip that project
+  source's own `profiles` map. A project source setting `allow_project_profiles: true` alongside a
+  `profiles` map in the same file has both fields stripped exactly as if the opt-in were never
+  mentioned — self-authorization is unreachable, not merely rejected by a runtime check.
+- **A project-defined bundle name can never shadow a name a user or custom source *defined*.**
+  `lookupProfileBundle` consults custom, then user, then — only when the opt-in resolved `true` —
+  project, in that fixed order; a name collision always resolves to the custom or user definition.
+  This does NOT extend to a name a user or custom source only *referenced* via `profile` (its
+  top-level selector) without ever defining a matching `profiles` entry: `trustedDefaultProfileName`
+  returns the user's own `profile` string as the fallback candidate, and that name is looked up
+  through the SAME custom-then-user-then-project order as any other selection. If the user's
+  `profile` names a bundle absent (or typoed) from every user/custom `profiles` map, an opted-in
+  project's `profiles` entry of that exact name is still consulted and can supply content for it —
+  the missing-name warning does not fire, because the name resolves, just not to anything the user
+  wrote. Every profile bundle from every source that may define one (custom, user, and — under the
+  opt-in — project) is validated by `assertAllProfileBundlesAreValid` regardless of whether it is
+  currently selected, matching the existing user/custom validate-always behavior: a malformed bundle
+  in a shared repository is a repository bug that surfaces for everyone, not only whoever happens to
+  select it — including, under the opt-in, a repository whose project bundle nobody in the loading
+  session ever selects.
+
+A project-sourced active bundle's chain position depends on that provenance and differs from a
+user/custom-sourced one: `buildOverlaySources` inserts a user- or custom-sourced bundle after user
+base (`[userSource, profileEntry, project, custom]`, unchanged from the paragraph above — the bundle
+is authoritative and overrides user base) but inserts a **project-sourced** bundle *before* user base
+(`[profileEntry, userSource, project, custom]`). This positioning is what makes a project-sourced
+bundle **advisory** rather than authoritative: user base's own merge step
+(`resolveOverlayEntryValue`'s `source.trust === 'user'` branch, reachable only in this ordering) then
+sees the bundle's contribution as `previous` and field-merges its own overlay over it via
+`mergeProfileOverlayValue` — the same field-additive traversal (including one level into the
+`opencode`/`pi` blocks) a normal profile already uses to merge over user base, just with the
+winning side reversed. The result: a field the user's own config sets always wins, and a field only
+the project bundle sets survives untouched — including a project-set `opencode.model` alongside a
+user-set `opencode.variant` on the same agent, which whole-entry replacement would otherwise have
+erased (leaving a qualifier with no model, which `assertRoutingInvariants` rejects). The advisory
+guarantee described here follows from this chain-position-plus-field-additive-merge combination as
+implemented; it is not enforced by any separate check, so a future change to either the chain
+position or the merge function itself could silently break it without any test failing that isn't
+directly exercising this behavior.
+
+Because an advisory bundle can be fully absorbed by user config (every field it would supply is
+already set by the user), routing that resolves the same values with or without an active project
+bundle is expected, ordinary output — not a bug. `resolveRouting` (`src/lib/routing-resolver.ts`)
+and `config show` (`src/cli.ts`) carry a per-field `origin` alongside the existing `level`/`form`
+shape provenance (`user`/`custom`/`user-profile`/`custom-profile`/`project-profile`) precisely so
+this state is distinguishable from output alone: every target reading `user`-origin while a project
+profile is active means the bundle is present and fully absorbed, not inert or misconfigured.
+Origin is tracked per merge step in `SourcedOverlayConfig.origins` (`RoutingFieldOrigins`, six
+routing-relevant leaves only — flat `model`/`variant` and the four `opencode`/`pi` block fields),
+updated in lockstep with the merged value itself rather than derived afterward from the overlay
+entry's `sourcePath` — `sourcePath` is last-writer-wins across the whole entry and would misattribute
+a field whose value survived from an earlier merge step than whichever source touched that key last.
 
 **Host-contract gate** (`.github/workflows/main.yaml` `host-contract` job,
 `scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`) — runs `tests/integration` against

@@ -44,9 +44,11 @@ Profiles live in your user config. Each entry under `profiles` carries `agents` 
 `$OPENCODE_CONFIG_DIR/systematic.json` may also define `profiles`. When both define the same name, that file's definition is used.
 :::
 
+A repository's own project config may **also** define `profiles`, but only if you've opted in with `allow_project_profiles: true` in your user (or `$OPENCODE_CONFIG_DIR`) config — see [Letting a repository suggest its own profiles](#letting-a-repository-suggest-its-own-profiles) below. Without the opt-in, a project-defined `profiles` map is ignored with a warning, same as always.
+
 ## Selecting a Profile per Project
 
-A repository selects a profile in its project config. Project config can only select a profile you already defined; a `profiles` map there is ignored with a warning.
+A repository selects a profile in its project config. Project config can only select a profile you already defined; a `profiles` map there is ignored with a warning, unless you've opted in (below).
 
 ```json title=".opencode/systematic.json"
 { "profile": "work" }
@@ -59,6 +61,42 @@ To make a repository ignore your default profile and run on base configuration, 
 ```
 
 The strongest source that sets `profile` wins: `$OPENCODE_CONFIG_DIR` config, then project config, then user config. The full resolution and merge rules are in the [configuration reference](/systematic/reference/configuration/#profiles-and-per-harness-routing).
+
+A repository choosing which of your profiles it runs under is the feature working as intended, not a gap — that's what per-project selection is for. If you disagree with a repository's choice for your own session, set `SYSTEMATIC_PROFILE` in your shell:
+
+```bash
+SYSTEMATIC_PROFILE=personal opencode
+```
+
+`SYSTEMATIC_PROFILE` outranks every config source's `profile` value, including `$OPENCODE_CONFIG_DIR`. It selects only — it can never supply a profile's content, so it introduces no new trust surface. An empty or whitespace-only value is treated as unset. A name that matches nothing follows the same missing-name fallback as a bad selector from any other source (see [Troubleshooting](#troubleshooting)), with a warning naming `SYSTEMATIC_PROFILE` as the source. `systematic config show` reports `environment` as `profileSelectorSource` when it wins, so an override from your shell is never mistaken for something a config file set.
+
+## Letting a Repository Suggest Its Own Profiles
+
+Set `allow_project_profiles: true` in your user (or `$OPENCODE_CONFIG_DIR`) config to let a repository's own project `systematic.json` define a `profiles` map and have it actually consulted:
+
+```jsonc title="~/.config/opencode/systematic.json"
+{ "allow_project_profiles": true }
+```
+
+```jsonc title=".opencode/systematic.json (once you've opted in)"
+{
+  "profile": "ci-cheap",
+  "profiles": {
+    "ci-cheap": {
+      "agents": { "correctness-reviewer": { "model": "anthropic/claude-haiku" } }
+    }
+  }
+}
+```
+
+Three properties hold regardless of anything a project config writes:
+
+- **The opt-in is user-owned only.** `allow_project_profiles` behaves exactly like `profiles` and `workflow_guard`: a project config can never set it. A project setting it (even alongside its own `profiles` map, in the same file) has both stripped before the file is even parsed — self-authorization doesn't work, it's simply never reached.
+- **A project-defined bundle is advisory.** It supplies routing only where your own config is silent for that specific field, and can never override a value you set — not even partially, not even one field of a block where you set a sibling field. If you already set `agents.correctness-reviewer.model` yourself, a project bundle that also sets it changes nothing for that agent; the project's value never applies and never appears in the resolved config. A repository whose entire suggested profile is already covered by your own config is a normal, silent no-op — see [Checking Active Routing](#checking-active-routing) for how to see that for certain rather than assume it.
+- **A project-defined name can never shadow one you already *defined*.** Bundle lookup checks custom, then user, then project last. If your `personal` profile and a repository's `personal` profile both exist, yours always wins. This does NOT protect a name you have only *referenced* — if your own `profile` default names a bundle you never actually defined (or typoed), an opted-in repository's `profiles` entry of that same name is still consulted and can supply its content, silently, with no "not defined" warning.
+- **A malformed project bundle can hard-fail your config load even if you never select it.** Every bundle in every source that may define one — including, once opted in, a project's `profiles` map — is validated up front, selected or not. A typo in a bundle nobody uses still fails `loadConfig` (and therefore plugin init) for everyone. This is a deliberate design choice (matching how user- and custom-defined bundles already behave), but it means enabling the opt-in makes your config load depend on repository content you did not write.
+
+The repository still picks which profile — its own, or yours — is active for itself via `profile`, same as [above](#selecting-a-profile-per-project); `SYSTEMATIC_PROFILE` still overrides that selection for your own session. Full mechanics (chain position, field-additive merge) are in the [configuration reference](/systematic/reference/configuration/#opting-a-repository-into-defining-its-own-profiles).
 
 ## Per-Harness Overrides
 
@@ -108,13 +146,29 @@ A legacy field still works and prints one deprecation warning naming the exact p
 
 ## Checking Active Routing
 
-If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, any fallback, and the resolved routing for every overlaid agent. `--json` gives the same routing data as one object. Plain `config show` also prints the full contents of the user and project config files, while `--json` reports only their paths — keep that in mind before pasting either into an issue:
+If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, which file actually defined its content (`Defined in:`), any fallback, and the resolved routing for every overlaid agent — including, per field, which source contributed the value (`origin`, below). `--json` gives the same data as one object. Plain `config show` also prints the full contents of the user and project config files, while `--json` reports only their paths — keep that in mind before pasting either into an issue:
 
 ```bash
-systematic config show --json
+systematic config show
 ```
 
-With the `work` profile above selected by a repository:
+With an opted-in project-defined `ci-cheap` profile selected by a repository, and nothing in your own config touching that agent:
+
+```text title="systematic config show (Resolved configuration excerpt)"
+Resolved configuration:
+  Active profile: ci-cheap
+  Selected by:    project
+  Defined in:     /path/to/repo/.opencode/systematic.json
+
+  Routing:
+  correctness-reviewer (review):
+    opencode: model=anthropic/claude-haiku (agent/flat, project-profile), variant=(none) ((n/a))
+    pi: model=anthropic/claude-haiku (agent/flat, project-profile), thinking=(none) ((n/a))
+```
+
+`Defined in:` names the file that actually defined the active profile's content — not just which source *selected* it (`Selected by:`). It's absent (not printed empty) when no profile is active. The routing table's trailing tag after `level/form` (`project-profile` above) is the same per-field attribution `--json` carries under `source.model.origin`/`source.qualifier.origin`: `user`, `custom`, `user-profile`, `custom-profile`, or `project-profile` — `user`/`custom` mean your own base config set that specific field directly; `*-profile` means the active profile bundle set it, split by which file defined the bundle.
+
+This is how you tell a project-defined profile that changed nothing apart from what it was allowed to from one that changed everything it could: if every field reads `user`/`custom` while a project profile is active, the bundle was fully absorbed by your own config (a normal, silent no-op — see [Letting a Repository Suggest Its Own Profiles](#letting-a-repository-suggest-its-own-profiles)); if some fields read `*-profile` and others read `user`/`custom` on the same row, it partially applied; if every field reads `*-profile`, it applied in full. Without this, "the bundle did nothing" and "the bundle isn't active" print identically.
 
 ```json title="systematic config show --json (trimmed)"
 {
@@ -123,26 +177,23 @@ With the `work` profile above selected by a repository:
     "project": "/path/to/repo/.opencode/systematic.json",
     "custom": null
   },
-  "activeProfile": "work",
+  "activeProfile": "ci-cheap",
   "profileSelectorSource": "project",
+  "activeProfileSourcePath": "/path/to/repo/.opencode/systematic.json",
   "profileFallback": null,
   "routing": [
     {
       "target": { "agentKey": "correctness-reviewer", "category": "review" },
       "opencode": {
-        "model": "openai/gpt-6-astra",
-        "qualifier": "high",
+        "model": "anthropic/claude-haiku",
         "source": {
-          "model": { "level": "agent", "form": "flat" },
-          "qualifier": { "level": "agent", "form": "block" }
+          "model": { "level": "agent", "form": "flat", "origin": "project-profile" }
         }
       },
       "pi": {
-        "model": "openai/gpt-6-astra",
-        "qualifier": "high",
+        "model": "anthropic/claude-haiku",
         "source": {
-          "model": { "level": "agent", "form": "flat" },
-          "qualifier": { "level": "agent", "form": "block" }
+          "model": { "level": "agent", "form": "flat", "origin": "project-profile" }
         }
       }
     }
@@ -150,7 +201,9 @@ With the `work` profile above selected by a repository:
 }
 ```
 
-`source` tells you which layer supplied each value: `level` is `agent` or `category`, `form` is `block`, `flat`, or `legacy-pi-subagents`.
+(`qualifier` and `source.qualifier` are omitted here, not `null` — neither harness has a qualifier set in this example, and `JSON.stringify` drops an `undefined` field entirely rather than serializing it.)
+
+`source` tells you which layer supplied each value: `level` is `agent` or `category`, `form` is `block`, `flat`, or `legacy-pi-subagents`, and `origin` (new) is the file-provenance tag described above — absent when not known (a qualifier that never resolved, or a legacy `pi_subagents`-sourced value, which isn't origin-tracked since a profile bundle can't set it).
 
 Both forms exit `1` when the configuration fails to load, and `0` otherwise, so a script can branch on the exit status rather than parsing the output. Plain `config show` reports the failure on stderr — naming the file and the reason it was rejected — so redirect with `2>&1` before copying the output into an issue. `--json` keeps its envelope on stdout with the same reason under `error`.
 
@@ -160,3 +213,5 @@ Both forms exit `1` when the configuration fails to load, and `0` otherwise, so 
 - **Config fails to load naming an agent and `opencode`.** An OpenCode `variant` resolved with no `model` at any layer for that agent. Add a model at the same layer or a less specific one, or remove the variant.
 - **Config fails to load naming `profiles.<name>.agents.<key>` or `profiles.<name>.categories.<key>`.** A profile contains an agent or category key that is not a bundled name. Every profile is validated at load, selected or not, so the typo has to be fixed even in a profile you never use.
 - **A profile changed routing but nothing else.** By design: profile entries carry only `model`, `variant`, `temperature`, `top_p`, `opencode`, and `pi`. Fields such as `mode`, `permission`, `disable`, `hidden`, `steps`, and `color` come from your base config and survive any profile switch.
+- **A project-defined profile is active but routing looks unchanged.** Check `config show`'s per-field `origin`. If every field reads `user`/`custom`, your own config already covers everything the bundle would have supplied — that's the advisory guarantee working, not a bug.
+- **A project's `profiles` map is ignored even though I expected it to apply.** `allow_project_profiles` must be set in your user or `$OPENCODE_CONFIG_DIR` config, not the project's — a project setting it has no effect (see [Letting a Repository Suggest Its Own Profiles](#letting-a-repository-suggest-its-own-profiles)).

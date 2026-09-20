@@ -13,6 +13,10 @@ import {
   BUNDLED_SKILL_NAMES,
 } from './bundled-names.js'
 import {
+  CONFIG_PROTECTED_FIELD_PATHS,
+  type ConfigProtectedFieldPath,
+} from './config-protected-fields.js'
+import {
   PI_SUBAGENTS_PROTECTED_FIELDS,
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
@@ -41,10 +45,70 @@ export type OverlayConfig = Record<string, unknown>
 
 export type OverlayConfigMap = Record<string, OverlayConfig>
 
+/**
+ * Which FILE-level source contributed the winning value for one routing
+ * field -- distinct from `RoutingFieldSource.level`/`.form` in
+ * `routing-resolver.ts`, which describe SHAPE provenance (agent vs
+ * category, block vs flat), not file provenance. Reuses `ConfigSourceKind`
+ * for the non-profile cases (a plain agents/categories overlay entry from
+ * that trust level) and adds the three profile-bundle variants, since a
+ * bundle's own trust level (which file defined `profiles.<name>`) is a
+ * genuinely different fact from an ordinary same-trust overlay -- most
+ * importantly, `'project-profile'` is the only origin an advisory
+ * (project-sourced) bundle can ever produce, and is exactly the tag
+ * `config show` needs to make "the project bundle applied something"
+ * distinguishable from "the project bundle got fully absorbed by user
+ * config" (every field's origin reads `'user'`, never `'project-profile'`).
+ */
+export type RoutingValueOrigin =
+  | ConfigSourceKind
+  | 'user-profile'
+  | 'custom-profile'
+  | 'project-profile'
+
+/**
+ * Per-leaf file-provenance for the exact set of fields
+ * `routing-resolver.ts` ever reads off a merged agent/category overlay
+ * value: the two flat fields (`model`, `variant`) and the four
+ * harness-block fields (`opencode.model`, `opencode.variant`, `pi.model`,
+ * `pi.thinking`). Deliberately NOT a generic recursive mirror of
+ * `OverlayConfig`'s shape -- routing is the only consumer, and a generic
+ * tree would have to track every overlay field (`mode`, `color`, `steps`,
+ * `hidden`, `disable`, `skills`, `permission`, ...) for no benefit, since
+ * none of those ever feed routing resolution.
+ *
+ * A leaf is `undefined` when no source in the merge chain has ever set
+ * that field as an OWN property for this key -- distinct from the field
+ * being unresolved at the routing layer (which can also happen when a
+ * lower-precedence layer, e.g. category, is shadowed by a higher one, e.g.
+ * agent, that DOES have an origin here).
+ */
+export interface RoutingFieldOrigins {
+  readonly model?: RoutingValueOrigin
+  readonly variant?: RoutingValueOrigin
+  readonly opencodeModel?: RoutingValueOrigin
+  readonly opencodeVariant?: RoutingValueOrigin
+  readonly piModel?: RoutingValueOrigin
+  readonly piThinking?: RoutingValueOrigin
+}
+
 export interface SourcedOverlayConfig {
   value: OverlayConfig
   sourcePath: string
   keyPath: string
+  /**
+   * Per-routing-field file provenance for `value`, updated in lockstep
+   * with `value` at every merge step (see `resolveOverlayEntryOrigin`) --
+   * attached to the value that actually won, never derived after the fact
+   * from `sourcePath` (which is last-writer-wins across the WHOLE entry,
+   * not per field; see that field's doc comment for the trap this avoids).
+   * Optional and possibly `{}` for overlay maps this file's merge doesn't
+   * populate origins for (`pi_subagents`, and `routing-resolver.ts`'s
+   * `toSourcedOverlayMap` placeholder adapter for already-flattened
+   * inputs) -- routing resolution treats a missing leaf as "no known
+   * origin", never as an error.
+   */
+  origins?: RoutingFieldOrigins
 }
 
 export interface SourcedOverlayConfigMap {
@@ -60,22 +124,7 @@ export const CONFIG_AUTHORITY_FIELD_PATHS = [
   'workflow_guard.mode',
 ] as const
 
-export const CONFIG_PROTECTED_FIELD_PATHS = [
-  'workflow_guard',
-  'profiles',
-  'agents.*.model',
-  'agents.*.permission',
-  'agents.*.skills',
-  'agents.*.variant',
-  'agents.*.opencode',
-  'agents.*.pi',
-  'categories.*.model',
-  'categories.*.permission',
-  'categories.*.skills',
-  'categories.*.variant',
-  'categories.*.opencode',
-  'categories.*.pi',
-] as const
+export { CONFIG_PROTECTED_FIELD_PATHS, type ConfigProtectedFieldPath }
 
 export type ConfigSourceKind = 'custom' | 'project' | 'user'
 export type ConfigSourcePresence = 'absent' | 'invalid' | 'present'
@@ -86,8 +135,6 @@ export type ConfigSourceErrorCode =
   | 'source-invalid'
 export type ConfigAuthorityFieldPath =
   (typeof CONFIG_AUTHORITY_FIELD_PATHS)[number]
-export type ConfigProtectedFieldPath =
-  (typeof CONFIG_PROTECTED_FIELD_PATHS)[number]
 
 export interface ConfigSourceMetadata {
   readonly errorCode?: ConfigSourceErrorCode
@@ -110,12 +157,14 @@ export interface ConfigProtectedFieldMetadata {
  * The source kind that supplied the winning `profile` selector value, or
  * `null` when no source set `profile` at all (case 1 of the selection table
  * in plan 2026-09-04-002-feat-model-config-profiles, Unit 2). This names
- * whichever source's value won the `custom ?? project ?? user` selector
- * lookup -- including when that value turned out to name a missing bundle
- * and the loader fell back to the user's own default (see
- * {@link ConfigObservationMetadata.profileFallback}).
+ * whichever source's value won the `SYSTEMATIC_PROFILE ?? custom ?? project
+ * ?? user` selector lookup -- including when that value turned out to name
+ * a missing bundle and the loader fell back to the user's own default (see
+ * {@link ConfigObservationMetadata.profileFallback}). `'environment'` is
+ * distinct from `ConfigSourceKind` deliberately: it names an env var
+ * override, never a config file, and must never be mistaken for one.
  */
-export type ProfileSelectorSource = ConfigSourceKind | null
+export type ProfileSelectorSource = ConfigSourceKind | 'environment' | null
 
 /**
  * Present when the winning `profile` selector named a bundle absent from
@@ -151,6 +200,30 @@ export interface SourceAwareConfigResult {
    * the post-merge qualifier check, without recomputing it.
    */
   piSubagentsOverlays: SourcedOverlayConfigMap
+  /**
+   * The (non-canonical) `path` of the file that defined the active
+   * profile's bundle content -- `profileSelection.bundleSource.path`,
+   * verbatim -- or `null` when no profile is active. Deliberately lives
+   * here and NOT on `ConfigObservationMetadata`: `capability-snapshot.ts`
+   * runs loader metadata through `assertAllowedKeys`, a hardcoded-allowlist
+   * gate that THROWS on any unknown key (see its doc comment), and only
+   * `.metadata` -- never the rest of `SourceAwareConfigResult` -- is an
+   * input to the capability snapshot. Adding a field to
+   * `ConfigObservationMetadata` would silently break `systematic
+   * capabilities` (`runCapabilities` catches the throw and prints
+   * "Capabilities diagnostic unavailable", naming no cause) exactly the way
+   * a hand-duplicated `CONFIG_PROTECTED_FIELD_PATHS` literal in
+   * `capability-snapshot.ts` once silently did, before that duplication was
+   * removed in favor of the shared `config-protected-fields.ts` module (see
+   * that module's doc comment for the incident record). Consumers
+   * (`systematic config show`) read `loaded.activeProfileSourcePath`
+   * directly, never `loaded.metadata.activeProfileSourcePath`. Uses `path`
+   * (matching `getConfigPaths`/`Configuration locations`'s non-canonical
+   * values), not `canonicalPath` -- printing the canonical path would
+   * disagree with the `Configuration locations` block a few lines above it
+   * for a symlinked config directory.
+   */
+  activeProfileSourcePath: string | null
 }
 
 export interface PiSubagentsOverlayMap {
@@ -168,6 +241,7 @@ export interface SystematicConfig {
   categories?: OverlayConfigMap
   pi_subagents?: PiSubagentsOverlayMap
   skills_as_commands: boolean
+  allow_project_profiles: boolean
 }
 
 export const DEFAULT_CONFIG: SystematicConfig = {
@@ -185,6 +259,7 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   categories: {},
   pi_subagents: { categories: {}, agents: {} },
   skills_as_commands: true,
+  allow_project_profiles: false,
 }
 
 interface RawWorkflowGuardConfig {
@@ -270,6 +345,18 @@ interface ProfileBundleConfigSource extends ConfigSourceBase {
    * the top level.
    */
   readonly profileName: string
+  /**
+   * The trust level of the FILE that defined this bundle's `profiles.<name>`
+   * entry -- `profileSelection.bundleSource.trust`, carried onto the
+   * pseudo-source itself so `originForSource` can tag a routing field's
+   * origin as `'user-profile'`/`'custom-profile'`/`'project-profile'`
+   * without threading `profileSelection` separately through the merge
+   * functions. Distinct from this pseudo-source having no `trust` field of
+   * its own (see this interface's doc comment) -- `bundleTrust` names
+   * where the bundle's CONTENT came from, not a trust level this
+   * pseudo-source itself holds for stripping/preservation purposes.
+   */
+  readonly bundleTrust: ConfigSourceKind
 }
 
 type ConfigSource = FileConfigSource | ProfileBundleConfigSource
@@ -298,7 +385,16 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
   Record<SecurityOverlayField, ConfigProtectedFieldPath>
 >
 
-const PROJECT_PROTECTED_FIELDS = new Set(['workflow_guard', 'profiles'])
+// `workflow_guard` and `allow_project_profiles` are unconditionally
+// project-protected. `profiles` is deliberately NOT in this set -- it is
+// conditionally protected on the effective `allow_project_profiles` opt-in
+// (see `stripProjectProtectedFields`/`collectProjectProtectedFields`). A
+// project can never grant itself that opt-in, since `allow_project_profiles`
+// itself is always stripped regardless of its value.
+const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set([
+  'workflow_guard',
+  'allow_project_profiles',
+])
 
 /** Max rendered length (including a truncation ellipsis) for untrusted text interpolated into a diagnostic message. */
 const MAX_DIAGNOSTIC_TEXT = 200
@@ -725,11 +821,18 @@ function throwTopLevelConfigSchemaError(
   })
 }
 
+/**
+ * @param allowProjectProfiles The effective (custom ?? user) opt-in,
+ * resolved by the caller before this source is loaded -- only consulted
+ * when `trust === 'project'`; pass `false` for user/custom loads where it
+ * is ignored.
+ */
 function loadConfigSource(
   filePath: string,
   trust: ConfigSourceKind,
   invalidSource: 'throw' | 'report',
   warningSink: (message: string) => void,
+  allowProjectProfiles: boolean,
 ): { metadata: ConfigSourceMetadata; source: FileConfigSource | null } {
   try {
     const rawConfig = loadJsoncFile(filePath)
@@ -740,9 +843,15 @@ function loadConfigSource(
       }
     }
 
-    const protectedFields = collectProjectProtectedFields(rawConfig, trust)
+    const protectedFields = collectProjectProtectedFields(
+      rawConfig,
+      trust,
+      allowProjectProfiles,
+    )
     const topLevelStripped =
-      trust === 'project' ? stripProjectProtectedFields(rawConfig) : rawConfig
+      trust === 'project'
+        ? stripProjectProtectedFields(rawConfig, allowProjectProfiles)
+        : rawConfig
     // Security-overlay fields are stripped here, pre-validation -- see `stripProjectSecurityOverlayFields`.
     const config =
       trust === 'project'
@@ -814,9 +923,43 @@ function resolveConfigSourcePath(filePath: string): string {
   }
 }
 
+/**
+ * Warn once when a top-level protected field (`profiles`,
+ * `allow_project_profiles`) was present on a project-trust source and has
+ * already been stripped -- extracted from `loadConfigWithSources` to keep
+ * its cognitive complexity down; each call site supplies only the field
+ * name and message body (with `%PATH%` standing in for the sanitized
+ * source path, substituted here so every caller shares one sanitization
+ * call site).
+ */
+function emitTopLevelProtectedFieldWarning(
+  projectSource: FileConfigSource | null,
+  fieldPath: ConfigProtectedFieldPath,
+  messageTemplate: string,
+  sink: (message: string) => void,
+): void {
+  if (
+    !projectSource?.protectedFields.some(
+      (field) => field.fieldPath === fieldPath,
+    )
+  ) {
+    return
+  }
+  const safePath = sanitizeDiagnosticText(projectSource.path)
+  sink(`[systematic] ${messageTemplate.replace('%PATH%', safePath)}`)
+}
+
+/**
+ * @param allowProjectProfiles The effective (already-resolved custom ??
+ * user) opt-in value. Gates whether a project-set `profiles` is reported as
+ * blocked -- `workflow_guard` and `allow_project_profiles` itself are
+ * always blocked regardless of this value (see
+ * `PROJECT_ALWAYS_PROTECTED_FIELDS`).
+ */
 function collectProjectProtectedFields(
   rawConfig: RawSystematicConfig,
   trust: ConfigSourceKind,
+  allowProjectProfiles: boolean,
 ): readonly ConfigProtectedFieldMetadata[] {
   if (trust !== 'project') return []
 
@@ -830,10 +973,19 @@ function collectProjectProtectedFields(
           },
         ]
       : []),
-    ...(Object.hasOwn(rawConfig, 'profiles')
+    ...(!allowProjectProfiles && Object.hasOwn(rawConfig, 'profiles')
       ? [
           {
             fieldPath: 'profiles' as const,
+            outcome: 'blocked' as const,
+            sourceKind: 'project' as const,
+          },
+        ]
+      : []),
+    ...(Object.hasOwn(rawConfig, 'allow_project_profiles')
+      ? [
+          {
+            fieldPath: 'allow_project_profiles' as const,
             outcome: 'blocked' as const,
             sourceKind: 'project' as const,
           },
@@ -867,12 +1019,23 @@ function collectProtectedOverlayValue(
     }))
 }
 
+/**
+ * `workflow_guard` and `allow_project_profiles` are stripped unconditionally.
+ * `profiles` is stripped only when `allowProjectProfiles` is false (the
+ * resolved custom ?? user opt-in) -- when true, `profiles` survives intact
+ * into the parsed project source for `SystematicConfigSchema.safeParse` to
+ * validate normally, same as it does for a user/custom source.
+ */
 function stripProjectProtectedFields(
   rawConfig: RawSystematicConfig,
+  allowProjectProfiles: boolean,
 ): RawSystematicConfig {
   const config = { ...rawConfig }
-  for (const field of PROJECT_PROTECTED_FIELDS) {
+  for (const field of PROJECT_ALWAYS_PROTECTED_FIELDS) {
     delete (config as Record<string, unknown>)[field]
+  }
+  if (!allowProjectProfiles) {
+    delete (config as Record<string, unknown>).profiles
   }
   return config
 }
@@ -979,8 +1142,19 @@ interface ProfileSelectionInput {
   readonly userConfig: RawSystematicConfig | undefined
   readonly userSource: FileConfigSource | null
   readonly projectConfig: RawSystematicConfig | undefined
+  readonly projectSource: FileConfigSource | null
   readonly customConfig: RawSystematicConfig | undefined
   readonly customSource: FileConfigSource | null
+  /**
+   * The resolved (custom ?? user) `allow_project_profiles` opt-in. Gates
+   * whether `lookupProfileBundle` consults `projectSource.config.profiles`
+   * at all -- redundant with the fact that `profiles` is already stripped
+   * from `projectSource.config` when this is `false` (so the map would be
+   * `undefined` anyway), but kept explicit so the anti-shadowing intent
+   * reads directly at the lookup site rather than depending on stripping
+   * having already happened upstream.
+   */
+  readonly allowProjectProfiles: boolean
   readonly warningSink: (message: string) => void
 }
 
@@ -990,12 +1164,15 @@ interface ProfileSelectionResult {
   readonly profileFallback: ProfileFallbackMetadata | null
   readonly bundle: RawProfileBundle | null
   /**
-   * The file that actually defined `bundle` -- custom or user, whichever
+   * The file that actually defined `bundle` -- custom, user, or (only
+   * under the `allow_project_profiles` opt-in) project, whichever
    * `lookupProfileBundle` found it in. `null` exactly when `bundle` is
    * `null`. Used to build `profileEntry`'s `canonicalPath`/`path` so a
    * profile defined only in custom config (with no user config file at
    * all) is attributed to the right file instead of silently defaulting
-   * to a nonexistent user source.
+   * to a nonexistent user source -- and, for a project-sourced bundle, to
+   * attribute `config show` provenance to the project config file even
+   * though (this slice) it never enters the merge chain.
    */
   readonly bundleSource: FileConfigSource | null
 }
@@ -1010,19 +1187,26 @@ const NO_PROFILE_SELECTION: ProfileSelectionResult = {
 
 /**
  * Resolve the winning `profile` selector value across sources, strongest
- * first: custom, then project, then user. A source's `profile` is
- * considered "set" as soon as it is not `undefined` -- an explicit `null`
- * counts as set and wins outright (it means "base configuration",
+ * first: `SYSTEMATIC_PROFILE` env var, then custom, then project, then
+ * user. The env var outranks every config source, including custom --
+ * selection only, it can never supply bundle content. A source's `profile`
+ * is considered "set" as soon as it is not `undefined` -- an explicit
+ * `null` counts as set and wins outright (it means "base configuration",
  * intentionally, and must not fall through to a weaker source's name). Only
  * a truly absent field (the source doesn't have `profile` at all, or the
- * source itself doesn't exist) falls through to the next candidate.
+ * source itself doesn't exist) falls through to the next candidate. The env
+ * var follows the same `?.trim()` pattern as `OPENCODE_CONFIG_DIR`
+ * (line ~2253): a blank or whitespace-only value is treated as unset.
  *
  * Returns `null` when no source set `profile` at all (selection table case 1).
  */
 function resolveProfileSelector(input: ProfileSelectionInput): {
   value: string | null
-  source: ConfigSourceKind
+  source: ConfigSourceKind | 'environment'
 } | null {
+  const envProfile = process.env.SYSTEMATIC_PROFILE?.trim()
+  if (envProfile) return { value: envProfile, source: 'environment' }
+
   const candidates: readonly [ConfigSourceKind, string | null | undefined][] = [
     ['custom', input.customConfig?.profile],
     ['project', input.projectConfig?.profile],
@@ -1035,15 +1219,19 @@ function resolveProfileSelector(input: ProfileSelectionInput): {
 }
 
 /**
- * Look up a named profile bundle across the two sources that are actually
- * allowed to define `profiles`: custom (OPENCODE_CONFIG_DIR), then user.
- * Custom wins on a name collision -- it is the strongest trust level, and
- * there is no security reason to exclude it. Returns the FILE that defined
- * it alongside the bundle -- required so `profileEntry`'s
- * `canonicalPath`/`path` point at whichever file actually defined the
- * active bundle, not unconditionally at the user file (a profile defined
- * only in custom config, with no user config file at all, must still
- * resolve and apply).
+ * Look up a named profile bundle across custom (OPENCODE_CONFIG_DIR), then
+ * user, then -- only when the `allow_project_profiles` opt-in is on --
+ * project, in that order. Custom wins on a name collision with user -- it
+ * is the strongest trust level, and there is no security reason to exclude
+ * it. Project is checked LAST and only conditionally: this ordering is the
+ * entire anti-shadowing mechanism for the opt-in feature -- a user (or
+ * custom) bundle of the same name always wins over a project-defined one,
+ * so a repository can never silently override a name the user already
+ * trusts. Returns the FILE that defined it alongside the bundle --
+ * required so `profileEntry`'s `canonicalPath`/`path` point at whichever
+ * file actually defined the active bundle, not unconditionally at the user
+ * file (a profile defined only in custom config, with no user config file
+ * at all, must still resolve and apply).
  */
 function lookupProfileBundle(
   input: ProfileSelectionInput,
@@ -1059,6 +1247,12 @@ function lookupProfileBundle(
     const bundle = input.userSource.config.profiles?.[name]
     if (bundle !== undefined) {
       return { bundle, definingSource: input.userSource }
+    }
+  }
+  if (input.allowProjectProfiles && input.projectSource) {
+    const bundle = input.projectSource.config.profiles?.[name]
+    if (bundle !== undefined) {
+      return { bundle, definingSource: input.projectSource }
     }
   }
   return undefined
@@ -1087,15 +1281,29 @@ function trustedDefaultProfileName(
 }
 
 /**
+ * Human-readable label for a selector source used in diagnostic warnings.
+ * The three config kinds read as `"<kind> config"`; the environment reads
+ * as the variable name itself (`SYSTEMATIC_PROFILE`), never `"environment
+ * config"` -- there is no config file to name, and conflating the two
+ * would contradict `ProfileSelectorSource`'s doc comment distinguishing an
+ * env override from a config source.
+ */
+function selectorSourceLabel(source: ConfigSourceKind | 'environment'): string {
+  return source === 'environment' ? 'SYSTEMATIC_PROFILE' : `${source} config`
+}
+
+/**
  * Resolve which named profile bundle (if any) is active for this load,
  * implementing the selection table from plan
  * 2026-09-04-002-feat-model-config-profiles (Unit 2). The named bundle is
- * looked up across custom and user `profiles` maps (`lookupProfileBundle`)
- * -- project's `profiles` is stripped before this ever runs (see
- * `PROJECT_PROTECTED_FIELDS`), so it is never a lookup source, but a
- * custom OR user source's `profiles` map is equally eligible regardless of
- * which source supplied the winning selector name. Emits at most one
- * warning per call through `warningSink`.
+ * looked up across custom, user, and (only when `allow_project_profiles`
+ * is on) project `profiles` maps, in that order (`lookupProfileBundle`) --
+ * a custom OR user source's `profiles` map is equally eligible regardless
+ * of which source supplied the winning selector name; a project source's
+ * map is eligible only as the last resort, and only under the opt-in (see
+ * `lookupProfileBundle`'s doc comment for why that ordering is the
+ * anti-shadowing mechanism). Emits at most one warning per call through
+ * `warningSink`.
  */
 function resolveActiveProfile(
   input: ProfileSelectionInput,
@@ -1139,7 +1347,7 @@ function resolveActiveProfile(
 
   if (fallbackLookup !== undefined && trustedDefault !== undefined) {
     input.warningSink(
-      `[systematic] profile "${sanitizeDiagnosticText(requested)}" (selected by ${selection.source} config) is not defined in \`profiles\`; falling back to your default profile "${sanitizeDiagnosticText(trustedDefault)}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
+      `[systematic] profile "${sanitizeDiagnosticText(requested)}" (selected by ${selectorSourceLabel(selection.source)}) is not defined in \`profiles\`; falling back to your default profile "${sanitizeDiagnosticText(trustedDefault)}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
     )
     return {
       activeProfile: trustedDefault,
@@ -1153,7 +1361,7 @@ function resolveActiveProfile(
   const sourceNote =
     selection.source === 'user'
       ? ''
-      : ` (selected by ${selection.source} config)`
+      : ` (selected by ${selectorSourceLabel(selection.source)})`
   const alsoMissingNote =
     trustedDefault !== undefined && trustedDefault !== requested
       ? ` Your default profile "${sanitizeDiagnosticText(trustedDefault)}" is also not defined in \`profiles\`.`
@@ -1323,6 +1531,84 @@ function buildAliasSuccessNotice(input: {
   }
 }
 
+/**
+ * Load the `user` and `custom` (`OPENCODE_CONFIG_DIR`) sources and resolve
+ * the effective `allow_project_profiles` opt-in (custom ?? user ??
+ * default) from them -- extracted from `loadConfigWithSources` to keep its
+ * cognitive complexity down. Neither trust level ever writes to
+ * `warningSink` today (project trust is the only one that strips/warns
+ * inside `loadConfigSource`), so loading them ahead of the project source
+ * -- which the opt-in resolution requires -- does not reorder any
+ * observable WARNING and leaves the project-pass-only alias-buffering
+ * machinery in `loadConfigWithSources` untouched. It does change ONE other
+ * thing: under `invalidSource: 'throw'`, when the project and custom paths
+ * alias to the same canonical file and that file is malformed, the
+ * custom-trust pass now loads (and throws) before the project-trust pass
+ * would have, so the thrown diagnostic names custom as the failing source
+ * instead of project. Nothing pinned relies on the old ordering, but this
+ * is a real behavior change, not a no-op reorder -- see ARCHITECTURE.md's
+ * "Named model profiles" section for the full explanation.
+ */
+function loadUserAndCustomSources(
+  paths: ReturnType<typeof getConfigPaths>,
+  invalidSource: 'throw' | 'report',
+  warningSink: (message: string) => void,
+): {
+  user: { metadata: ConfigSourceMetadata; source: FileConfigSource | null }
+  custom: { metadata: ConfigSourceMetadata; source: FileConfigSource | null }
+  allowProjectProfiles: boolean
+} {
+  const user = loadConfigSource(
+    paths.userConfig,
+    'user',
+    invalidSource,
+    warningSink,
+    false,
+  )
+  const custom = paths.customConfig
+    ? loadConfigSource(
+        paths.customConfig,
+        'custom',
+        invalidSource,
+        warningSink,
+        false,
+      )
+    : {
+        metadata: { kind: 'custom' as const, presence: 'absent' as const },
+        source: null,
+      }
+  const allowProjectProfiles =
+    custom.source?.config.allow_project_profiles ??
+    user.source?.config.allow_project_profiles ??
+    DEFAULT_CONFIG.allow_project_profiles
+  return { user, custom, allowProjectProfiles }
+}
+
+/**
+ * Build the four-entry overlay-merge chain, ordering the active profile
+ * bundle by provenance -- extracted from `loadConfigWithSources` to keep
+ * its cognitive complexity down. This ordering IS the advisory-merge
+ * guarantee's structural half (see the doc comment at the call site for
+ * the full explanation): a user/custom-sourced bundle sits at its
+ * historical position (authoritative over user base); a project-sourced
+ * bundle sits first (merely advisory -- user base's own merge step then
+ * field-merges over it instead of replacing it, see the
+ * `source.trust === 'user'` branch of `resolveOverlayEntryValue`).
+ */
+function buildOverlaySources(
+  profileEntry: ProfileBundleConfigSource | null,
+  bundleSourceTrust: ConfigSourceKind | undefined,
+  userSource: FileConfigSource | null,
+  projectSource: FileConfigSource | null,
+  customSource: FileConfigSource | null,
+): ConfigSource[] {
+  const ordered =
+    profileEntry !== null && bundleSourceTrust === 'project'
+      ? [profileEntry, userSource, projectSource, customSource]
+      : [userSource, profileEntry, projectSource, customSource]
+  return ordered.filter((source): source is ConfigSource => source !== null)
+}
+
 export function loadConfigWithSources(
   projectDir: string,
   options?: LoadConfigOptions,
@@ -1353,48 +1639,54 @@ export function loadConfigWithSources(
   // past the budget.
   const boundedProjectStrip = createBoundedStripWarningSink(projectStrip.sink)
 
-  const user = loadConfigSource(
-    paths.userConfig,
-    'user',
+  // `user` and `custom` are loaded BEFORE `project` (custom outranks user,
+  // both outrank project) specifically so the effective `allow_project_profiles`
+  // opt-in is known ahead of the project parse -- the project pass needs it
+  // to decide whether to strip `profiles`. Extracted into
+  // `loadUserAndCustomSources` to keep this function's cognitive complexity
+  // under Biome's cap; see that function's doc comment for why hoisting the
+  // loads is safe for the alias-buffering machinery below.
+  const { user, custom, allowProjectProfiles } = loadUserAndCustomSources(
+    paths,
     invalidSource,
     warningSink,
   )
+  const userSource = user.source
+  const customSource = custom.source
+
   const project = includeProject
     ? loadConfigSource(
         paths.projectConfig,
         'project',
         invalidSource,
         boundedProjectStrip.sink,
+        allowProjectProfiles,
       )
     : {
         metadata: { kind: 'project' as const, presence: 'absent' as const },
         source: null,
       }
-  const custom = paths.customConfig
-    ? loadConfigSource(paths.customConfig, 'custom', invalidSource, warningSink)
-    : {
-        metadata: { kind: 'custom' as const, presence: 'absent' as const },
-        source: null,
-      }
-  const userSource = user.source
   const projectSource = project.source
-  const customSource = custom.source
 
-  // `profiles` is protected and already stripped from `projectSource.config`
-  // -- warn once so a project author isn't left wondering why their bundles
-  // never applied. Routed through `boundedProjectStrip.sink`, not
-  // `warningSink` directly, so it shares the same 20-detail cap as the
-  // overlay-field strip warnings and so aliasing can buffer/suppress it
-  // like those (see `emitAliasFailureDiagnostics`/`buildAliasSuccessNotice`).
-  if (
-    projectSource?.protectedFields.some(
-      (field) => field.fieldPath === 'profiles',
-    )
-  ) {
-    boundedProjectStrip.sink(
-      `[systematic] \`profiles\` in project config (${sanitizeDiagnosticText(projectSource.path)}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. Its bundles are not selectable even if this project also sets \`profile\`.`,
-    )
-  }
+  // `profiles` and `allow_project_profiles` are protected top-level fields,
+  // already stripped from `projectSource.config` -- warn once each so a
+  // project author isn't left wondering why the field they set never took
+  // effect. Routed through `boundedProjectStrip.sink`, not `warningSink`
+  // directly, so both share the same 20-detail cap as the overlay-field
+  // strip warnings and so aliasing can buffer/suppress them like those (see
+  // `emitAliasFailureDiagnostics`/`buildAliasSuccessNotice`).
+  emitTopLevelProtectedFieldWarning(
+    projectSource,
+    'profiles',
+    `\`profiles\` in project config (%PATH%) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. Its bundles are not selectable even if this project also sets \`profile\`.`,
+    boundedProjectStrip.sink,
+  )
+  emitTopLevelProtectedFieldWarning(
+    projectSource,
+    'allow_project_profiles',
+    `\`allow_project_profiles\` in project config (%PATH%) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+    boundedProjectStrip.sink,
+  )
 
   const suppressedStripCount = boundedProjectStrip.suppressedCount()
   if (suppressedStripCount > 0) {
@@ -1430,21 +1722,24 @@ export function loadConfigWithSources(
 
   const warned = new Set<string>()
 
-  assertAllProfileBundlesAreValid(userConfig, customConfig)
+  assertAllProfileBundlesAreValid(userConfig, customConfig, projectConfig)
 
   const profileSelection = resolveActiveProfile({
     userConfig,
     userSource,
     projectConfig,
+    projectSource,
     customConfig,
     customSource,
+    allowProjectProfiles,
     warningSink,
   })
 
-  // The active profile bundle is inserted as a fourth chain entry between
-  // user base and project (plan KTD: "Profile selection is a load-time step
-  // between stripping and merging"). It may be defined in either the user
-  // config file or the custom (OPENCODE_CONFIG_DIR) config file, so its
+  // The active profile bundle is inserted as a fourth chain entry (plan
+  // KTD: "Profile selection is a load-time step between stripping and
+  // merging"). It may be defined in the user config file, the custom
+  // (OPENCODE_CONFIG_DIR) config file, or -- under the
+  // `allow_project_profiles` opt-in -- the project config file, so its
   // sourcePath/canonicalPath mirror `profileSelection.bundleSource` -- the
   // file `lookupProfileBundle` actually found it in -- not unconditionally
   // the user file (a profile defined only in custom config, with no user
@@ -1458,7 +1753,10 @@ export function loadConfigWithSources(
   // silently dropped for lack of a defining file to attribute it to; and
   // on `activeProfile` narrowing to `string` so `profileName` never needs
   // a fallback value -- both are guaranteed together whenever `bundle` is
-  // set (see `resolveActiveProfile`).
+  // set (see `resolveActiveProfile`). Its CHAIN POSITION depends on
+  // provenance -- see `overlaySources` below -- a user/custom-sourced
+  // bundle is authoritative over user base (today's behavior, unchanged);
+  // a project-sourced bundle is merely advisory.
   const profileEntry: ProfileBundleConfigSource | null =
     profileSelection.bundle &&
     profileSelection.bundleSource &&
@@ -1473,22 +1771,28 @@ export function loadConfigWithSources(
           },
           protectedFields: [],
           profileName: profileSelection.activeProfile,
+          bundleTrust: profileSelection.bundleSource.trust,
         }
       : null
 
-  // Overlay merging uses the four-entry chain (user base -> active profile ->
-  // project -> custom); every other merge in this function (pi_subagents,
-  // disabled_*, bootstrap, workflow_guard, skills_as_commands, and the
-  // observation metadata below) uses the original three-entry `sources`,
-  // since a profile bundle carries no fields outside agents/categories and
-  // must not be double-counted as a second 'user' entry in per-trust-kind
-  // metadata (authorities, source dedup).
-  const overlaySources = [
-    userSource,
+  // Overlay merging uses the four-entry chain; every other merge in this
+  // function (pi_subagents, disabled_*, bootstrap, workflow_guard,
+  // skills_as_commands, and the observation metadata below) uses the
+  // original three-entry `sources`, since a profile bundle carries no
+  // fields outside agents/categories and must not be double-counted as a
+  // second 'user' entry in per-trust-kind metadata (authorities, source
+  // dedup).
+  //
+  // Chain position is provenance-dependent -- see `buildOverlaySources`'s
+  // doc comment for the full explanation; this IS the advisory-merge
+  // guarantee, expressed structurally rather than as a removable check.
+  const overlaySources = buildOverlaySources(
     profileEntry,
+    profileSelection.bundleSource?.trust,
+    userSource,
     projectSource,
     customSource,
-  ].filter((source): source is ConfigSource => source !== null)
+  )
 
   const mergedOverlays = mergeOverlaySources(overlaySources)
   const mergedPiSubagentsOverlays = mergePiSubagentsOverlaySources(sources)
@@ -1581,6 +1885,13 @@ export function loadConfigWithSources(
       projectConfig?.skills_as_commands ??
       userConfig?.skills_as_commands ??
       DEFAULT_CONFIG.skills_as_commands,
+    // `allow_project_profiles` is protected (stripped from `projectConfig`
+    // before this point, same as `workflow_guard`) so only user/custom are
+    // consulted here -- mirrors the `workflow_guard` merge above.
+    allow_project_profiles:
+      customConfig?.allow_project_profiles ??
+      userConfig?.allow_project_profiles ??
+      DEFAULT_CONFIG.allow_project_profiles,
   }
 
   // Drop removed names from the effective config and warn about each one.
@@ -1645,6 +1956,7 @@ export function loadConfigWithSources(
     }),
     overlays,
     piSubagentsOverlays: mergedPiSubagentsOverlays,
+    activeProfileSourcePath: profileSelection.bundleSource?.path ?? null,
   }
 }
 
@@ -1884,19 +2196,26 @@ function assertProfileBundleCategoryKeysAreBundledCategories(
 
 /**
  * Validate every profile bundle defined in every source that may define
- * `profiles` (custom and user -- project's `profiles` is stripped before
- * this ever runs), regardless of whether that bundle is currently
- * selected. A typo in an unselected profile's category key must fail
- * config load exactly like a typo in the top-level `categories` overlay
- * does, rather than staying silent until some later repository happens to
- * select it. (Agent-key typos are already caught by schema parsing --
- * see `createProfileBundleSchema`'s doc comment.)
+ * `profiles` (custom, user, and project), regardless of whether that
+ * bundle is currently selected. A typo in an unselected profile's category
+ * key must fail config load exactly like a typo in the top-level
+ * `categories` overlay does, rather than staying silent until some later
+ * repository happens to select it -- this applies equally to a project
+ * bundle: a malformed bundle in a shared repository is a repository bug
+ * that should surface for everyone, not just whoever happens to select it.
+ * (Agent-key typos are already caught by schema parsing -- see
+ * `createProfileBundleSchema`'s doc comment.) `projectConfig` naturally
+ * only contributes bundles when `allow_project_profiles` is on -- `profiles`
+ * is stripped from it otherwise (see `stripProjectProtectedFields`), so
+ * `projectConfig?.profiles` is `undefined` in the opt-in-off case and this
+ * loop needs no separate opt-in check of its own.
  */
 function assertAllProfileBundlesAreValid(
   userConfig: RawSystematicConfig | undefined,
   customConfig: RawSystematicConfig | undefined,
+  projectConfig: RawSystematicConfig | undefined,
 ): void {
-  for (const config of [userConfig, customConfig]) {
+  for (const config of [userConfig, customConfig, projectConfig]) {
     for (const [profileName, bundle] of Object.entries(
       config?.profiles ?? {},
     )) {
@@ -1995,13 +2314,99 @@ function mergeOverlayMap(
     // Project-trust security fields were already stripped pre-validation -- see `stripProjectSecurityOverlayFields`.
     const previous = target[key]
     const nextValue = resolveOverlayEntryValue(previous?.value, value, source)
+    const nextOrigins = resolveOverlayEntryOrigin(
+      previous?.origins,
+      value,
+      source,
+    )
 
     target[key] = {
       value: nextValue,
       sourcePath: source.path,
       keyPath,
+      origins: nextOrigins,
     }
   }
+}
+
+/**
+ * The `RoutingValueOrigin` tag for whichever file contributed a value at
+ * this merge step -- `ConfigSourceKind` verbatim for an ordinary
+ * agents/categories overlay entry, or the bundle-trust-qualified
+ * `*-profile` variant for the profile-bundle pseudo-source (see
+ * `RoutingValueOrigin`'s doc comment).
+ */
+function originForSource(source: ConfigSource): RoutingValueOrigin {
+  if (source.kind === 'profile-bundle') {
+    return `${source.bundleTrust}-profile` as const
+  }
+  return source.trust
+}
+
+/**
+ * Build a `RoutingFieldOrigins` fragment from the raw (pre-merge) overlay
+ * fragment a single source contributed at this key -- one leaf per routing
+ * field the fragment sets as an OWN property, tagged with `tag`. A field
+ * absent from `fragment` (including a whole missing `opencode`/`pi` block)
+ * produces no leaf at all, so spreading this over a `previous` origins
+ * fragment (see `resolveOverlayEntryOrigin`) never clobbers an inherited
+ * leaf with an accidental `undefined`.
+ */
+function routingOriginsFromOwnFields(
+  fragment: OverlayConfig,
+  tag: RoutingValueOrigin,
+): RoutingFieldOrigins {
+  const origins: {
+    -readonly [K in keyof RoutingFieldOrigins]?: RoutingValueOrigin
+  } = {}
+  if (Object.hasOwn(fragment, 'model')) origins.model = tag
+  if (Object.hasOwn(fragment, 'variant')) origins.variant = tag
+  const opencodeBlock = fragment.opencode
+  if (isRecord(opencodeBlock)) {
+    if (Object.hasOwn(opencodeBlock, 'model')) origins.opencodeModel = tag
+    if (Object.hasOwn(opencodeBlock, 'variant')) origins.opencodeVariant = tag
+  }
+  const piBlock = fragment.pi
+  if (isRecord(piBlock)) {
+    if (Object.hasOwn(piBlock, 'model')) origins.piModel = tag
+    if (Object.hasOwn(piBlock, 'thinking')) origins.piThinking = tag
+  }
+  return origins
+}
+
+/**
+ * The origins-tracking counterpart to `resolveOverlayEntryValue` -- same
+ * per-key policy switch, kept in lockstep so a routing field's recorded
+ * origin is always attached to the value that actually won, never derived
+ * after the fact from `sourcePath` (see `SourcedOverlayConfig.origins`'s
+ * doc comment for the trap this avoids).
+ *
+ * The three VALUE-level preserving strategies
+ * (`mergeProfileOverlayValue` for a profile-bundle source or a user
+ * overlay merging over an advisory project bundle; `preserveSecurityFields`
+ * for a project-trust source) differ from each other in general -- but for
+ * ONLY the six routing leaves this type tracks, all three reduce to the
+ * same rule: a leaf `own` sets wins, a leaf `own` doesn't set inherits
+ * `previous`. (`preserveSecurityFields`'s project-trust case is exactly
+ * this already, since `own` is always empty there -- a project-trust
+ * fragment can never own-set `model`/`variant`/`opencode`/`pi`, already
+ * stripped pre-validation.) Only an ordinary custom/user full-replace
+ * (`resolveOverlayEntryValue`'s final `return next`) starts fresh from
+ * `own` alone, matching that strategy discarding every field `next`
+ * doesn't restate.
+ */
+function resolveOverlayEntryOrigin(
+  previous: RoutingFieldOrigins | undefined,
+  fragment: OverlayConfig,
+  source: ConfigSource,
+): RoutingFieldOrigins {
+  const own = routingOriginsFromOwnFields(fragment, originForSource(source))
+  if (!previous) return own
+  const preserves =
+    source.kind === 'profile-bundle' ||
+    source.trust === 'project' ||
+    source.trust === 'user'
+  return preserves ? { ...previous, ...own } : own
 }
 
 /**
@@ -2022,10 +2427,21 @@ function resolveOverlayEntryValue(
     return mergeProfileOverlayValue(previous, next)
   }
   if (source.trust === 'project') return preserveSecurityFields(previous, next)
-  // An ordinary user or custom same-key overlay fully replaces the previous
-  // value. Only the project trust level (above) and the profile-bundle
-  // pseudo-source (mergeProfileOverlayValue) merge field-by-field instead
-  // of replacing.
+  // `previous` is only ever non-empty here when `source` is the user
+  // source AND an advisory (project-sourced) profile bundle was placed
+  // ahead of it in `overlaySources` -- `userSource` is unconditionally the
+  // FIRST chain entry in every other case (normal/no active profile,
+  // user/custom-sourced active profile), so this branch is unreachable
+  // then and `!previous` already returned above. This IS the advisory
+  // merge: user's own overlay must win every field it sets while still
+  // picking up whatever the project bundle filled in, so it reuses the
+  // exact same field-additive `mergeProfileOverlayValue` a normal profile
+  // uses over user base -- not a second, parallel traversal.
+  if (source.trust === 'user') return mergeProfileOverlayValue(previous, next)
+  // An ordinary custom same-key overlay fully replaces the previous value.
+  // Only the project trust level, the user-over-advisory-bundle case
+  // (above), and the profile-bundle pseudo-source (mergeProfileOverlayValue)
+  // merge field-by-field instead of replacing.
   return next
 }
 
