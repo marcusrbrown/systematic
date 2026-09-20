@@ -222,7 +222,7 @@ freely.
 > historical snapshot rather than current source:
 >
 > - **The field set grew to six.** `SECURITY_OVERLAY_FIELDS`
->   (`src/lib/config-schema.ts:742`) is now `model`, `variant`, `skills`,
+>   (`src/lib/config-schema.ts:744`) is now `model`, `variant`, `skills`,
 >   `permission`, `opencode`, `pi` — the two harness blocks were added when
 >   per-harness routing landed, because they carry routing just as `model` does.
 > - **The guard strips instead of throwing.** `rejectProjectSecurityOverlay` no
