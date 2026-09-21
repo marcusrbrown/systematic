@@ -72,8 +72,9 @@ The qualified form is load-bearing on two axes:
   silent runtime dispatch failure — the precise failure class that
   `reconciliation-sync-reference-integrity` documents.
 - **Corpus convention.** Qualified IDs are the persona-reference style across the
-  bundle: `document-review/SKILL.md:105-114`, `resolve-pr-feedback/SKILL.md:144-157`,
-  `ce-compound/SKILL.md:464-477`, `ce-review/SKILL.md:108-118`. Neutralizing only
+  bundle: `skills/document-review/SKILL.md:105-114`,
+  `skills/resolve-pr-feedback/SKILL.md:144-157`,
+  `skills/ce-compound/SKILL.md:464-477`, `skills/ce-review/SKILL.md:108-118`. Neutralizing only
   four skills would make them inconsistent with every other skill.
 
 The cost signal is the lesson: a full brainstorm → 5-persona document-review →
