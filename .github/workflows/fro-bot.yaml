@@ -630,7 +630,7 @@ jobs:
           GH_TOKEN: ${{ secrets.FRO_BOT_PAT }}
         run: |
           pr_number="${{ github.event.issue.number }}"
-          is_fork=$(gh api "repos/${{ github.repository }}/pulls/${pr_number}" --jq '.head.repo.fork // "unknown"')
+          is_fork=$(gh api "repos/${{ github.repository }}/pulls/${pr_number}" --jq 'if .head.repo.fork == null then "unknown" else (.head.repo.fork | tostring) end')
           if [ "$is_fork" != "false" ]; then
             echo "::error::Refusing to check out fork PR head from comment trigger (PR #${pr_number}, fork=${is_fork})."
             exit 1
