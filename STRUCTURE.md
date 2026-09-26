@@ -53,6 +53,8 @@ subdirectory of core modules.
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
+- `src/lib/config-protected-fields.ts` — `CONFIG_PROTECTED_FIELD_PATHS`, dependency-free list shared
+  by `config.ts` and `capability-snapshot.ts`
 - `src/lib/config-handler.ts` — `createConfigHandler`: merges bundled assets into OpenCode config
 - `src/lib/skill-tool.ts` — `createSkillTool`: `systematic_skill` tool factory
 - `src/lib/skill-loader.ts` — `loadSkill`: content loading + XML wrapping
