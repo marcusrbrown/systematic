@@ -4,7 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ToolResult } from '@opencode-ai/plugin'
 import { buildCatalogEntries } from '../../src/lib/skill-catalog.ts'
-import { createSkillTool } from '../../src/lib/skill-tool.ts'
+import {
+  createSkillOutputStore,
+  createSkillTool,
+  restoreSkillOutput,
+} from '../../src/lib/skill-tool.ts'
 
 const mockContext = {
   ask: async () => {},
@@ -598,6 +602,90 @@ disable-model-invocation: true
     })
   })
 
+  describe('execute with arguments', () => {
+    test('substitutes $ARGUMENTS in the skill body when arguments is supplied', async () => {
+      const skillDir = path.join(testDir, 'arg-skill')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: arg-skill
+description: Skill accepting arguments
+---
+# Arg Skill
+
+Target: $ARGUMENTS`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'arg-skill', arguments: 'the-thing' },
+        mockContext,
+      )
+
+      expect(result).toContain('Target: the-thing')
+      expect(result).not.toContain('$ARGUMENTS')
+    })
+
+    test('omitting arguments leaves placeholders literal, matching the native skill tool', async () => {
+      const skillDir = path.join(testDir, 'arg-skill-omitted')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: arg-skill-omitted
+description: Skill accepting arguments
+---
+# Arg Skill Omitted
+
+Target: [$ARGUMENTS]`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'arg-skill-omitted' },
+        mockContext,
+      )
+
+      expect(result).toContain('Target: [$ARGUMENTS]')
+    })
+
+    test('an explicit empty arguments string substitutes empty', async () => {
+      const skillDir = path.join(testDir, 'arg-skill-empty')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: arg-skill-empty
+description: Skill accepting arguments
+---
+# Arg Skill Empty
+
+Target: [$ARGUMENTS]`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'arg-skill-empty', arguments: '' },
+        mockContext,
+      )
+
+      expect(result).toContain('Target: []')
+    })
+  })
+
   describe('deprecated skill frontmatter', () => {
     test('a skill with a deprecated: block gets no special handling — field is ignored', async () => {
       const skillDir = path.join(testDir, 'old-skill')
@@ -633,5 +721,320 @@ deprecated:
 
       warnSpy.mockRestore()
     })
+  })
+})
+
+describe('createSkillTool with outputStore', () => {
+  let testDir: string
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-skill-output-test-'),
+    )
+    const skillDir = path.join(testDir, 'output-test')
+    fs.mkdirSync(skillDir)
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      `---
+name: output-test
+description: Skill for output store testing
+---
+# Output Test Skill`,
+    )
+  })
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  test('stores the exact returned output keyed by sessionID and callID', async () => {
+    const outputStore = createSkillOutputStore()
+    const tool = createSkillTool({
+      bundledSkillsDir: testDir,
+      disabledSkills: [],
+      outputStore,
+    })
+
+    const context = {
+      sessionID: 's',
+      callID: 'c',
+      ask: async () => {},
+      metadata: () => {},
+    } as never
+
+    const result = expectStringToolResult(
+      await tool.execute({ name: 'output-test' }, context),
+    )
+
+    expect(outputStore.take('s', 'c')).toBe(result)
+  })
+
+  test('stores nothing when ask rejects', async () => {
+    const outputStore = createSkillOutputStore()
+    const tool = createSkillTool({
+      bundledSkillsDir: testDir,
+      disabledSkills: [],
+      outputStore,
+    })
+
+    const context = {
+      sessionID: 's',
+      callID: 'c',
+      ask: async () => {
+        throw new Error('denied')
+      },
+      metadata: () => {},
+    } as never
+
+    await expect(
+      tool.execute({ name: 'output-test' }, context),
+    ).rejects.toThrow('denied')
+
+    expect(outputStore.take('s', 'c')).toBeUndefined()
+  })
+
+  test('stores nothing and does not throw when the context has no callID', async () => {
+    const outputStore = createSkillOutputStore()
+    const tool = createSkillTool({
+      bundledSkillsDir: testDir,
+      disabledSkills: [],
+      outputStore,
+    })
+
+    const context = {
+      sessionID: 's',
+      ask: async () => {},
+      metadata: () => {},
+    } as never
+
+    const result = await tool.execute({ name: 'output-test' }, context)
+
+    expect(result).toBeTruthy()
+    expect(outputStore.take('s', 'anything')).toBeUndefined()
+  })
+})
+
+describe('createSkillOutputStore', () => {
+  test('evicts the oldest entry once maxEntries is exceeded', () => {
+    const store = createSkillOutputStore({ maxEntries: 32 })
+    for (let i = 0; i < 32; i++) {
+      store.put('s', `c${i}`, `full-${i}`)
+    }
+    store.put('s', 'c32', 'full-32') // 33rd put evicts the oldest (c0)
+
+    expect(store.take('s', 'c0')).toBeUndefined()
+    expect(store.take('s', 'c1')).toBe('full-1')
+    expect(store.take('s', 'c32')).toBe('full-32')
+  })
+
+  test('does not return an expired entry', () => {
+    let currentTime = 0
+    const store = createSkillOutputStore({
+      ttlMs: 1000,
+      now: () => currentTime,
+    })
+    store.put('s', 'c', 'full-text')
+    currentTime = 2000 // past ttlMs
+
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+})
+
+describe('restoreSkillOutput', () => {
+  test('restores full output when truncated and the preview matches', () => {
+    const store = createSkillOutputStore()
+    const full = `head-content-${'x'.repeat(60_000)}`
+    store.put('s', 'c', full)
+
+    const preview = full.slice(0, 100)
+    const output = {
+      output: `${preview}\n\n...500 lines truncated...\n\nRe-run with a narrower scope.`,
+      metadata: { truncated: true, outputPath: '/tmp/x', marker: 'keep' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe(full)
+    expect(output.metadata.truncated).toBe(false)
+    expect(output.metadata).not.toHaveProperty('outputPath')
+    expect(output.metadata.marker).toBe('keep')
+  })
+
+  test('leaves output unchanged and still deletes the entry when metadata.truncated is not true', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output = {
+      output: 'preview text',
+      metadata: { truncated: false },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe('preview text')
+    expect(output.metadata.truncated).toBe(false)
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('leaves output unchanged and still deletes the entry when the user set an explicit output limit', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output = {
+      output: 'preview\n\n...10 lines truncated...\n\nhint',
+      metadata: { truncated: true, outputPath: '/tmp/x' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: true },
+    )
+
+    expect(output.output).toBe('preview\n\n...10 lines truncated...\n\nhint')
+    expect(output.metadata.truncated).toBe(true)
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('leaves output unchanged when the stored full text does not start with the preview', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'completely different full text')
+
+    const output = {
+      output: 'preview-that-does-not-match\n\n...10 lines truncated...\n\nhint',
+      metadata: { truncated: true, outputPath: '/tmp/x' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toContain('preview-that-does-not-match')
+    expect(output.metadata.truncated).toBe(true)
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('ignores input for a different tool and does not consume the stored entry', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output = {
+      output: 'preview\n\n...10 lines truncated...\n\nhint',
+      metadata: { truncated: true, outputPath: '/tmp/x' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'other_tool', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe('preview\n\n...10 lines truncated...\n\nhint')
+    expect(output.metadata.truncated).toBe(true)
+    // Entry NOT consumed: still retrievable.
+    expect(store.take('s', 'c')).toBe('full-text')
+  })
+
+  test('restores two callIDs within the same session independently', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c1', 'full-text-one')
+    store.put('s', 'c2', 'full-text-two')
+
+    const output1 = {
+      output: '\n\n...5 lines truncated...\n\nhint-one',
+      metadata: { truncated: true, outputPath: '/tmp/1' },
+    }
+    const output2 = {
+      output: '\n\n...5 lines truncated...\n\nhint-two',
+      metadata: { truncated: true, outputPath: '/tmp/2' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c1' },
+      output1,
+      { userOutputLimitSet: false },
+    )
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c2' },
+      output2,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output1.output).toBe('full-text-one')
+    expect(output2.output).toBe('full-text-two')
+  })
+
+  test('does not throw and still consumes the entry when output is not a record', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    expect(() =>
+      restoreSkillOutput(
+        store,
+        { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+        'not-a-record-output',
+        { userOutputLimitSet: false },
+      ),
+    ).not.toThrow()
+
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('leaves output unchanged and still deletes the entry when metadata is missing', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output: { output: string; metadata?: unknown } = {
+      output: 'preview\n\n...10 lines truncated...\n\nhint',
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe('preview\n\n...10 lines truncated...\n\nhint')
+    expect(output.metadata).toBeUndefined()
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('leaves output unchanged and still deletes the entry when output.output is not a string', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output = {
+      output: 12345,
+      metadata: { truncated: true, outputPath: '/tmp/x' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe(12345)
+    expect(output.metadata.truncated).toBe(true)
+    expect(store.take('s', 'c')).toBeUndefined()
   })
 })

@@ -3278,6 +3278,72 @@ describe('OpenCode workflow guard adapter', () => {
     })
   }
 
+  test('activates from a guarded skill with a 60 KB tool output and merges progression markers', async () => {
+    const adapter = createAdapter('observe')
+    const output: RecordedToolOutput = {
+      title: 'Loaded skill',
+      output: 'x'.repeat(60 * 1024),
+      metadata: { hostMetadata: 'preserved' },
+    }
+
+    await observeSkill(
+      adapter,
+      'systematic_skill',
+      'ce:work',
+      'large-output-skill',
+      SESSION_A,
+      output,
+    )
+
+    expect(status(adapter).epoch?.family).toBe('work')
+    expect(output.metadata.hostMetadata).toBe('preserved')
+    const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    expect(Array.isArray(marker)).toBe(true)
+    expect(marker).toHaveLength(2)
+    expect(marker).toEqual([
+      expect.objectContaining({ control: 'progression', target: 'epoch' }),
+      expect.objectContaining({ control: 'progression', target: 'unit' }),
+    ])
+  })
+
+  test('activates from a guarded skill with a ~51 KB truncated tool output', async () => {
+    const adapter = createAdapter('observe')
+
+    await observeSkill(
+      adapter,
+      'systematic_skill',
+      'ce:work',
+      'truncated-output-skill',
+      SESSION_A,
+      {
+        title: 'Loaded skill',
+        output: 'x'.repeat(51 * 1024),
+        metadata: { truncated: true, outputPath: '/tmp/x' },
+      },
+    )
+
+    expect(status(adapter).epoch?.family).toBe('work')
+  })
+
+  test('does not activate a guarded skill when a 60 KB tool output reports metadata.status error', async () => {
+    const adapter = createAdapter('observe')
+
+    await observeSkill(
+      adapter,
+      'systematic_skill',
+      'ce:work',
+      'large-error-output-skill',
+      SESSION_A,
+      {
+        title: 'error',
+        output: 'x'.repeat(60 * 1024),
+        metadata: { status: 'error' },
+      },
+    )
+
+    expect(status(adapter).epoch).toBeNull()
+  })
+
   test('canonicalizes relative-before and absolute-after apply_patch paths into one implementation receipt', async () => {
     const cleanup = prepareApplyPatchTargetDirectory()
     try {
@@ -3953,17 +4019,33 @@ describe('OpenCode workflow guard adapter', () => {
     expect(ledger(adapter).listReceipts()).toHaveLength(2)
   })
 
-  test('rejects host results beyond the bounded output limit', async () => {
-    const adapter = createAdapter()
-    await observeSkill(
-      adapter,
-      'systematic_skill',
-      'ce:work',
-      'overlong-host-result',
-      SESSION_A,
-      { title: '', output: 'x'.repeat(32_769), metadata: {} },
+  // Regression: `finishSkill` (host tool 'systematic_skill'/'skill') now
+  // accepts host output beyond MAX_HOST_OUTPUT_LENGTH -- see the guarded
+  // skill activation tests above -- but every other completion path
+  // (operation results, unit/epoch starts and completes) must keep
+  // rejecting oversized host output exactly as before.
+  test('rejects operation host results beyond the bounded output limit', async () => {
+    const observations: ReceiptOperationObservation[] = []
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+      [],
+      observations,
     )
-    expect(status(adapter).epoch).toBeNull()
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      adapter,
+      'write',
+      { filePath: 'overlong.txt', content: 'changed' },
+      { title: '', output: 'x'.repeat(32_769), metadata: {} },
+      'overlong-host-result',
+    )
+    expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    expect(status(adapter).state).toBe('unavailable')
   })
 
   test('changed git commit mints commit evidence while unchanged HEAD does not', async () => {

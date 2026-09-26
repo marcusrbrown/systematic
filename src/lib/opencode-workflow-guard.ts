@@ -467,15 +467,24 @@ function parseHostAfter(input: unknown): HostToolAfter | undefined {
   return { ...before, args: input.args }
 }
 
-function parseHostOutput(output: unknown): HostOutput | undefined {
+interface ParseHostOutputOptions {
+  /** Upper bound on `output.output` length; defaults to `MAX_HOST_OUTPUT_LENGTH`. */
+  readonly maxOutputLength?: number
+}
+
+function parseHostOutput(
+  output: unknown,
+  options?: ParseHostOutputOptions,
+): HostOutput | undefined {
   if (!isRecord(output)) return undefined
   const title = output.title === undefined ? '' : output.title
   const result = output.output === undefined ? '' : output.output
+  const maxOutputLength = options?.maxOutputLength ?? MAX_HOST_OUTPUT_LENGTH
   if (
     typeof title !== 'string' ||
     title.length > MAX_STATUS_LENGTH ||
     typeof result !== 'string' ||
-    result.length > MAX_HOST_OUTPUT_LENGTH ||
+    result.length > maxOutputLength ||
     !('metadata' in output)
   ) {
     return undefined
@@ -1188,6 +1197,17 @@ function remoteReadbackInput(
 
 function isSuccessfulAfter(output: unknown): output is HostOutput {
   return parseHostOutput(output) !== undefined
+}
+
+/**
+ * `isSuccessfulAfter` without the output length cap: skill bodies routinely
+ * exceed it, and skill completion needs only the success signal.
+ */
+function isSuccessfulSkillAfter(output: unknown): output is HostOutput {
+  return (
+    parseHostOutput(output, { maxOutputLength: Number.POSITIVE_INFINITY }) !==
+    undefined
+  )
 }
 
 function statusForTool(
@@ -3205,7 +3225,7 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    if (!isSuccessfulAfter(output)) return
+    if (!isSuccessfulSkillAfter(output)) return
     completedSkillCalls.set(callDigest, pending.skill)
     await activateCompletedSkill(pending.skill)
     const status = guard.status()

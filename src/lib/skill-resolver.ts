@@ -88,14 +88,69 @@ export function buildSkillToolParameterHint(
   return `The name of the skill from available_skills${hint}`
 }
 
+/** Mirrors OpenCode's command argument tokenizer: bracketed image refs, quoted segments, and runs of non-space non-quote characters; edge quotes stripped. */
+function parsePositionalArgs(raw: string): string[] {
+  const matches = raw.match(/(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi)
+  if (!matches) return []
+  return matches.map((token) => token.replace(/^["']|["']$/g, ''))
+}
+
+/**
+ * Text-only substitution matching OpenCode's `SessionPrompt.command`:
+ * positional `$N` first (the highest `$N` takes the remaining arguments,
+ * missing positions are empty), then `$ARGUMENTS` as the raw string. With no
+ * placeholders, non-blank arguments are appended after a blank line.
+ */
+export function substituteSkillArguments(body: string, raw: string): string {
+  const placeholderNumbers = [...body.matchAll(/\$(\d+)/g)].map((m) =>
+    Number(m[1]),
+  )
+  const hasPositional = placeholderNumbers.length > 0
+  const hasArguments = body.includes('$ARGUMENTS')
+
+  let result = body
+
+  if (hasPositional) {
+    const last = Math.max(...placeholderNumbers)
+    const args = parsePositionalArgs(raw)
+    result = result.replace(/\$(\d+)/g, (_match, numStr: string) => {
+      const n = Number(numStr)
+      if (n - 1 >= args.length) return ''
+      if (n === last) return args.slice(n - 1).join(' ')
+      return args[n - 1] ?? ''
+    })
+  }
+
+  result = result.replaceAll('$ARGUMENTS', raw)
+
+  if (!hasPositional && !hasArguments && raw.trim().length > 0) {
+    result = `${result}\n\n${raw}`
+  }
+
+  return result
+}
+
 /**
  * Builds the exact `<skill_content>`-wrapped output shared by every harness.
+ *
+ * When `argument` is `undefined`, the output is byte-identical to calling
+ * this without argument support at all (Pi's caller in src/pi.ts relies on
+ * this). When `argument` is a string (including an empty string), it is
+ * substituted into the trimmed body via {@link substituteSkillArguments}
+ * before wrapping — the wrapper lines themselves are never substituted.
  */
-export function buildSkillContentOutput(matchedSkill: LoadedSkill): {
+export function buildSkillContentOutput(
+  matchedSkill: LoadedSkill,
+  argument?: string,
+): {
   output: string
   dir: string
 } {
-  const body = extractSkillBody(matchedSkill.wrappedTemplate)
+  const trimmedBody = extractSkillBody(matchedSkill.wrappedTemplate).trim()
+  const body =
+    argument === undefined
+      ? trimmedBody
+      : substituteSkillArguments(trimmedBody, argument)
   const dir = path.dirname(matchedSkill.skillFile)
   const base = pathToFileURL(dir).href
   const files = discoverSkillFiles(dir)
@@ -104,7 +159,7 @@ export function buildSkillContentOutput(matchedSkill: LoadedSkill): {
     `<skill_content name="${matchedSkill.prefixedName}">`,
     `# Skill: ${matchedSkill.prefixedName}`,
     '',
-    body.trim(),
+    body,
     '',
     `Base directory for this skill: ${base}`,
     'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
