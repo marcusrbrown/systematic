@@ -41,6 +41,12 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
           return cachedParameterHint
         })(),
       ),
+      arguments: z
+        .string()
+        .optional()
+        .describe(
+          'Raw argument text the user explicitly supplied for this skill, substituted for $ARGUMENTS and $1..$N. Omit when the user supplied none; never infer it.',
+        ),
       // Double-cast is required, not stylistic: the SDK types its args
       // against its own bundled zod, whose Zod types are nominally
       // incompatible with this package's zod (v4-vs-v1 internal version
@@ -49,7 +55,10 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       // structurally. Revisit if the SDK contract gains real behavior
       // (guarded by the no-runtime-import artifact test in package-exports).
     } as unknown as ToolDefinition['args'],
-    async execute(args: { name: string }, context): Promise<string> {
+    async execute(
+      args: { name: string; arguments?: string },
+      context,
+    ): Promise<string> {
       const requestedName = args.name
 
       const matchedSkill = resolveSkill(
@@ -57,7 +66,10 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
         requestedName,
       )
 
-      const { output, dir } = buildSkillContentOutput(matchedSkill)
+      const { output, dir } = buildSkillContentOutput(
+        matchedSkill,
+        args.arguments,
+      )
 
       await context.ask({
         permission: 'skill',

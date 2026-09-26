@@ -89,13 +89,88 @@ export function buildSkillToolParameterHint(
 }
 
 /**
- * Builds the exact `<skill_content>`-wrapped output shared by every harness.
+ * Parses positional arguments from a raw argument string using OpenCode
+ * v1.18.32 native slash-command semantics: whitespace-separated, with
+ * quoted segments (`"..."` or `'...'`) treated as a single argument with
+ * the surrounding quotes stripped.
  */
-export function buildSkillContentOutput(matchedSkill: LoadedSkill): {
+function parsePositionalArgs(raw: string): string[] {
+  const args: string[] = []
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let match = pattern.exec(raw)
+  while (match !== null) {
+    const [, doubleQuoted, singleQuoted, bare] = match
+    args.push(doubleQuoted ?? singleQuoted ?? bare ?? '')
+    match = pattern.exec(raw)
+  }
+  return args
+}
+
+/**
+ * Substitutes `$1`, `$2`, ... and `$ARGUMENTS` placeholders into a skill
+ * body, mirroring OpenCode's `SessionPrompt.command` native slash-command
+ * argument semantics (v1.18.32). Text-only substitution — never executes
+ * anything.
+ *
+ * 1. Parse positional args from `raw` (see {@link parsePositionalArgs}).
+ * 2. Replace each `$N` (regex `\$(\d+)`): if `N - 1 >= args.length` → "";
+ *    if `N` is the highest placeholder number found in the body → the
+ *    remaining args from position `N` joined with a space; otherwise the
+ *    single arg at position `N`.
+ * 3. Replace every `$ARGUMENTS` with the raw argument string.
+ * 4. If the body had neither positional placeholders nor `$ARGUMENTS`, and
+ *    `raw.trim()` is non-empty, append `"\n\n" + raw` to the body.
+ */
+export function substituteSkillArguments(body: string, raw: string): string {
+  const placeholderNumbers = [...body.matchAll(/\$(\d+)/g)].map((m) =>
+    Number(m[1]),
+  )
+  const hasPositional = placeholderNumbers.length > 0
+  const hasArguments = body.includes('$ARGUMENTS')
+
+  let result = body
+
+  if (hasPositional) {
+    const last = Math.max(...placeholderNumbers)
+    const args = parsePositionalArgs(raw)
+    result = result.replace(/\$(\d+)/g, (_match, numStr: string) => {
+      const n = Number(numStr)
+      if (n - 1 >= args.length) return ''
+      if (n === last) return args.slice(n - 1).join(' ')
+      return args[n - 1] ?? ''
+    })
+  }
+
+  result = result.replaceAll('$ARGUMENTS', raw)
+
+  if (!hasPositional && !hasArguments && raw.trim().length > 0) {
+    result = `${result}\n\n${raw}`
+  }
+
+  return result
+}
+
+/**
+ * Builds the exact `<skill_content>`-wrapped output shared by every harness.
+ *
+ * When `argument` is `undefined`, the output is byte-identical to calling
+ * this without argument support at all (Pi's caller in src/pi.ts relies on
+ * this). When `argument` is a string (including an empty string), it is
+ * substituted into the trimmed body via {@link substituteSkillArguments}
+ * before wrapping — the wrapper lines themselves are never substituted.
+ */
+export function buildSkillContentOutput(
+  matchedSkill: LoadedSkill,
+  argument?: string,
+): {
   output: string
   dir: string
 } {
-  const body = extractSkillBody(matchedSkill.wrappedTemplate)
+  const trimmedBody = extractSkillBody(matchedSkill.wrappedTemplate).trim()
+  const body =
+    argument === undefined
+      ? trimmedBody
+      : substituteSkillArguments(trimmedBody, argument)
   const dir = path.dirname(matchedSkill.skillFile)
   const base = pathToFileURL(dir).href
   const files = discoverSkillFiles(dir)
@@ -104,7 +179,7 @@ export function buildSkillContentOutput(matchedSkill: LoadedSkill): {
     `<skill_content name="${matchedSkill.prefixedName}">`,
     `# Skill: ${matchedSkill.prefixedName}`,
     '',
-    body.trim(),
+    body,
     '',
     `Base directory for this skill: ${base}`,
     'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',

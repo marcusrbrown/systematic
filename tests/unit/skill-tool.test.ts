@@ -598,6 +598,90 @@ disable-model-invocation: true
     })
   })
 
+  describe('execute with arguments', () => {
+    test('substitutes $ARGUMENTS in the skill body when arguments is supplied', async () => {
+      const skillDir = path.join(testDir, 'arg-skill')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: arg-skill
+description: Skill accepting arguments
+---
+# Arg Skill
+
+Target: $ARGUMENTS`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'arg-skill', arguments: 'the-thing' },
+        mockContext,
+      )
+
+      expect(result).toContain('Target: the-thing')
+      expect(result).not.toContain('$ARGUMENTS')
+    })
+
+    test('omitting arguments leaves placeholders literal, matching the native skill tool', async () => {
+      const skillDir = path.join(testDir, 'arg-skill-omitted')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: arg-skill-omitted
+description: Skill accepting arguments
+---
+# Arg Skill Omitted
+
+Target: [$ARGUMENTS]`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'arg-skill-omitted' },
+        mockContext,
+      )
+
+      expect(result).toContain('Target: [$ARGUMENTS]')
+    })
+
+    test('an explicit empty arguments string substitutes empty', async () => {
+      const skillDir = path.join(testDir, 'arg-skill-empty')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: arg-skill-empty
+description: Skill accepting arguments
+---
+# Arg Skill Empty
+
+Target: [$ARGUMENTS]`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'arg-skill-empty', arguments: '' },
+        mockContext,
+      )
+
+      expect(result).toContain('Target: []')
+    })
+  })
+
   describe('deprecated skill frontmatter', () => {
     test('a skill with a deprecated: block gets no special handling — field is ignored', async () => {
       const skillDir = path.join(testDir, 'old-skill')
