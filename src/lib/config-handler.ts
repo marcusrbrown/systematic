@@ -554,48 +554,20 @@ function collectSkillsAsCommands(
 /**
  * Convert a discovered (non-bundled) skill into a `config.command` entry.
  *
- * Model-invocable skills get a one-line shim instructing the agent to load
- * the skill via OpenCode's native `skill` tool, with the argument string
- * wrapped as data (never concatenated into instruction text). Command-only
- * skills (`disable-model-invocation: true`) get the raw SKILL.md body
- * inlined instead — the sole R3 exception (R6).
- *
- * R6 honesty limit: Systematic cannot unregister a skill from OpenCode's own
- * model-facing skill tool/catalog — there is no API to hide a discovered
- * skill from the model. This function only controls the *command* surface
- * (`/skill-name`); the skill remains loadable by the model via the `skill`
- * tool regardless of `disable-model-invocation`. Do not attempt to mutate
- * OpenCode's skill registry or permissions here to compensate.
+ * Every discovered skill's command inlines its full body via
+ * `wrapSkillTemplate`. The resulting template goes through OpenCode's native
+ * command processing (argument substitution and `!`-backtick snippet
+ * execution) — the same handling OpenCode's own skill command gets when
+ * Systematic doesn't shadow it.
  */
 function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
   const description = skill.description || `${skill.name} skill`
 
-  if (skill.frontmatter.disableModelInvocation === true) {
-    // Body was read once at discovery time (DiscoveredSkill.body); no re-read.
-    return {
-      template: wrapSkillTemplate(skill.skillPath, skill.body),
-      description,
-    }
-  }
-
+  // Body was read once at discovery time (DiscoveredSkill.body); no re-read.
   return {
-    template: buildDiscoveredSkillShimTemplate(skill.name),
+    template: wrapSkillTemplate(skill.skillPath, skill.body),
     description,
   }
-}
-
-/**
- * Model-invocable shim template instructing the agent to load a discovered
- * skill via OpenCode's native `skill` tool. The argument string is wrapped as
- * data (`$ARGUMENTS` inside `<user-request>`), never concatenated into
- * instruction text.
- */
-function buildDiscoveredSkillShimTemplate(skillName: string): string {
-  return `Load the "${skillName}" skill using the skill tool, then follow its instructions to address this request:
-
-<user-request>
-$ARGUMENTS
-</user-request>`
 }
 
 /**

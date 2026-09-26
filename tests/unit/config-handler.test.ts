@@ -1934,7 +1934,7 @@ Discovered body for ${name}.`,
         )
       }
 
-      test('model-invocable discovered skill becomes a shim command', async () => {
+      test('model-invocable discovered skill inlines its full body', async () => {
         writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo', {
           description: 'A discovered skill',
         })
@@ -1952,8 +1952,15 @@ Discovered body for ${name}.`,
         const command = config.command?.foo
         expect(command).toBeDefined()
         expect(command?.description).toBe('A discovered skill')
-        expect(command?.template).toContain('skill tool')
+        expect(command?.template).toContain('<skill-instruction>')
+        expect(command?.template).toContain('Base directory for this skill:')
+        expect(command?.template).toContain('Discovered body for foo')
         expect(command?.template).toContain('<user-request>\n$ARGUMENTS')
+        expect(command?.template).not.toContain('Load the "')
+        expect(Object.keys(command ?? {}).sort()).toEqual([
+          'description',
+          'template',
+        ])
       })
 
       test('command-only discovered skill (disable-model-invocation) inlines the body', async () => {
