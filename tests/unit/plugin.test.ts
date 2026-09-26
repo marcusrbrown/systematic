@@ -868,3 +868,238 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(elapsedMs).toBeLessThan(1000)
   })
 })
+
+describe('skill tool output restoration wiring', () => {
+  interface SkillExecuteContext {
+    sessionID: string
+    callID: string
+    ask: (input: unknown) => Promise<void>
+    metadata: (input: unknown) => void
+  }
+
+  interface RestorationTestHooks {
+    tool: {
+      systematic_skill: {
+        execute: (
+          args: { name: string; arguments?: string },
+          context: SkillExecuteContext,
+        ) => Promise<unknown>
+      }
+    }
+    config: (input: unknown) => Promise<void>
+    'tool.execute.after': (input: unknown, output: unknown) => Promise<void>
+  }
+
+  const makeInput = (tempDir: string) => ({
+    client: {
+      app: {
+        log: async () => {},
+      },
+    },
+    directory: tempDir,
+  })
+
+  async function loadHooks(tempDir: string): Promise<RestorationTestHooks> {
+    const pluginPath = path.join(SRC_DIR, 'index.ts')
+    const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+      default: (
+        args: ReturnType<typeof makeInput>,
+      ) => Promise<RestorationTestHooks>
+    }
+    return pluginModule.default(makeInput(tempDir))
+  }
+
+  function asString(result: unknown): string {
+    if (typeof result !== 'string') {
+      throw new Error('Expected the skill tool to return a string result')
+    }
+    return result
+  }
+
+  test('tool.execute.after restores the full skill output for a truncated result', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-restore-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const hooks = await loadHooks(tempDir)
+
+      const context: SkillExecuteContext = {
+        sessionID: 'restore-session',
+        callID: 'restore-call',
+        ask: async () => {},
+        metadata: () => {},
+      }
+
+      const fullResult = asString(
+        await hooks.tool.systematic_skill.execute({ name: 'ce:work' }, context),
+      )
+
+      const preview = fullResult.slice(0, 200)
+      const output = {
+        output: `${preview}\n\n...123 bytes truncated...\n\nRe-run with a narrower scope.`,
+        metadata: { truncated: true, outputPath: '/tmp/x' },
+      }
+
+      await hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: 'restore-session',
+          callID: 'restore-call',
+          args: { name: 'ce:work' },
+        },
+        output,
+      )
+
+      expect(output.output).toBe(fullResult)
+      expect(output.metadata.truncated).toBe(false)
+      expect(output.metadata).not.toHaveProperty('outputPath')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a user-set tool_output.max_bytes config suppresses restoration', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-restore-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const hooks = await loadHooks(tempDir)
+      await hooks.config({ tool_output: { max_bytes: 1000 } })
+
+      const context: SkillExecuteContext = {
+        sessionID: 's',
+        callID: 'c',
+        ask: async () => {},
+        metadata: () => {},
+      }
+      const fullResult = asString(
+        await hooks.tool.systematic_skill.execute({ name: 'ce:work' }, context),
+      )
+      const output = {
+        output: `${fullResult.slice(0, 50)}\n\n...5 bytes truncated...\n\nhint`,
+        metadata: { truncated: true, outputPath: '/tmp/x' },
+      }
+
+      await hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: 's',
+          callID: 'c',
+          args: { name: 'ce:work' },
+        },
+        output,
+      )
+
+      expect(output.output).not.toBe(fullResult)
+      expect(output.metadata.truncated).toBe(true)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a user-set tool_output.max_lines config suppresses restoration', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-restore-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const hooks = await loadHooks(tempDir)
+      await hooks.config({ tool_output: { max_lines: 10 } })
+
+      const context: SkillExecuteContext = {
+        sessionID: 's',
+        callID: 'c',
+        ask: async () => {},
+        metadata: () => {},
+      }
+      const fullResult = asString(
+        await hooks.tool.systematic_skill.execute({ name: 'ce:work' }, context),
+      )
+      const output = {
+        output: `${fullResult.slice(0, 50)}\n\n...5 lines truncated...\n\nhint`,
+        metadata: { truncated: true, outputPath: '/tmp/x' },
+      }
+
+      await hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: 's',
+          callID: 'c',
+          args: { name: 'ce:work' },
+        },
+        output,
+      )
+
+      expect(output.output).not.toBe(fullResult)
+      expect(output.metadata.truncated).toBe(true)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('an empty tool_output config object still allows restoration', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-restore-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const hooks = await loadHooks(tempDir)
+      await hooks.config({ tool_output: {} })
+
+      const context: SkillExecuteContext = {
+        sessionID: 's',
+        callID: 'c',
+        ask: async () => {},
+        metadata: () => {},
+      }
+      const fullResult = asString(
+        await hooks.tool.systematic_skill.execute({ name: 'ce:work' }, context),
+      )
+      const output = {
+        output: `${fullResult.slice(0, 50)}\n\n...5 bytes truncated...\n\nhint`,
+        metadata: { truncated: true, outputPath: '/tmp/x' },
+      }
+
+      await hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: 's',
+          callID: 'c',
+          args: { name: 'ce:work' },
+        },
+        output,
+      )
+
+      expect(output.output).toBe(fullResult)
+      expect(output.metadata.truncated).toBe(false)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('the wrapped config hook still applies the real bundled agent and command mutations', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-restore-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const hooks = await loadHooks(tempDir)
+      const config: Record<string, unknown> = {}
+      await hooks.config(config)
+
+      const agent = config.agent
+      const command = config.command
+      expect(
+        Object.keys(agent && typeof agent === 'object' ? agent : {}).length,
+      ).toBeGreaterThan(0)
+      expect(
+        Object.keys(command && typeof command === 'object' ? command : {})
+          .length,
+      ).toBeGreaterThan(0)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+})

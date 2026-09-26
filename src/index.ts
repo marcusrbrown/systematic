@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { Hooks, Plugin, PluginInput } from '@opencode-ai/plugin'
+import type { Config, Hooks, Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   applyBootstrapContent,
   getBootstrapContent,
@@ -20,7 +20,12 @@ import {
   isWorkflowGuardBlockedError,
 } from './lib/opencode-workflow-guard.js'
 import { createReceiptClassifier } from './lib/receipt-classifier.js'
-import { createSkillTool } from './lib/skill-tool.js'
+import {
+  createSkillOutputStore,
+  createSkillTool,
+  restoreSkillOutput,
+} from './lib/skill-tool.js'
+import { isRecord } from './lib/validation.js'
 
 // Keep this local because OpenCode's plugin loader requires a default export
 // only. The content-integrity gate reads this typed inventory instead of
@@ -69,6 +74,8 @@ const initializePlugin = async ({
   worktree,
 }: PluginInput) => {
   let hasLoggedInit = false
+  let userOutputLimitSet = false
+  const skillOutputStore = createSkillOutputStore()
   const config = loadConfig(directory)
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
   // stable across requests. Custom bootstrap file edits take effect on restart.
@@ -159,12 +166,25 @@ const initializePlugin = async ({
   })
 
   const hooks: RegisteredPluginHooks = {
-    config: configHandler,
+    config: async (incomingConfig: Config): Promise<void> => {
+      // Host doesn't type tool_output in Config yet; check defensively.
+      const configUnknown: unknown = incomingConfig
+      if (
+        isRecord(configUnknown) &&
+        isRecord(configUnknown.tool_output) &&
+        (configUnknown.tool_output.max_lines !== undefined ||
+          configUnknown.tool_output.max_bytes !== undefined)
+      ) {
+        userOutputLimitSet = true
+      }
+      return configHandler(incomingConfig)
+    },
 
     tool: {
       systematic_skill: createSkillTool({
         bundledSkillsDir,
         disabledSkills: config.disabled_skills,
+        outputStore: skillOutputStore,
       }),
       ...workflowGuard.tools,
     },
@@ -182,6 +202,13 @@ const initializePlugin = async ({
         await workflowGuard.hooks['tool.execute.after'](input, output)
       } catch {
         // Adapter after hooks are fail-closed and never block the host.
+      }
+      try {
+        restoreSkillOutput(skillOutputStore, input, output, {
+          userOutputLimitSet,
+        })
+      } catch {
+        // Output restoration is best-effort and never blocks the host.
       }
     },
 
