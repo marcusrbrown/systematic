@@ -23,7 +23,8 @@ these hooks:
 - **`tool.execute.before`** — workflow-guard observation of pending operations. Blocks execution by
   rethrowing a guard error when a guarded transition is unsatisfied.
 - **`tool.execute.after`** — workflow-guard observation of completed operations, feeding receipt
-  classification. Fail-closed; never blocks the host.
+  classification; then restores the full `systematic_skill` output when OpenCode truncated it,
+  unless the user set `tool_output` limits. Fail-closed; never blocks the host.
 - **`event`** — workflow-guard observation of host events, including skill loads that activate an
   epoch. Fail-closed; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
