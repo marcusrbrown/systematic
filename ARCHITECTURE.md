@@ -316,7 +316,11 @@ sources; bootstrap config shallow-merges.
 **Named model profiles** (`src/lib/config.ts` `resolveActiveProfile`/`resolveProfileSelector`,
 `ProfileOverlaySchema` in `src/lib/config-schema.ts`) — a top-level `profile` key selects a named
 entry from a `profiles` map (routing-only `agents`/`categories` overlays) defined in
-`$OPENCODE_CONFIG_DIR` or user config. The selected bundle enters the overlay merge as a fourth
+`$OPENCODE_CONFIG_DIR` or user config. `resolveProfileSelector` picks the winning selector strongest
+first: a non-blank `SYSTEMATIC_PROFILE` env var, then custom, then project, then user `profile`. The
+env var selects only — it never supplies bundle content — and a blank or whitespace-only value counts
+as unset. An explicit `profile: null` in a source counts as set and wins (base configuration) rather
+than falling through to a weaker source. The selected bundle enters the overlay merge as a fourth
 chain entry; every other merge in `loadConfigWithSources` keeps the three-source chain above. Only a
 **custom** overlay can override a profile-supplied routing choice. A **project** overlay cannot:
 protected overlay fields (`SECURITY_OVERLAY_FIELDS` — model, variant, skills, permission, opencode,
