@@ -1,7 +1,7 @@
 ---
 title: Complete OpenCode skill delivery
 type: feat
-status: active
+status: completed
 date: 2026-09-25
 origin: docs/brainstorms/2026-09-25-skill-delivery-requirements.md
 ---
@@ -307,7 +307,7 @@ sequenceDiagram
 **Verification:**
 - Unit suites pass. `tests/unit/pi.test.ts` passes unchanged.
 
-- [ ] **Unit 4: Capture and restore full tool output**
+- [x] **Unit 4: Capture and restore full tool output**
 
 **Goal:** The model receives the complete `systematic_skill` output past the host's default truncation, unless the user has set a limit.
 
@@ -341,7 +341,7 @@ sequenceDiagram
 **Verification:**
 - Unit suites pass. `src/index.ts` still has only a default export.
 
-- [ ] **Unit 5: Inline full body for discovered-skill slash commands**
+- [x] **Unit 5: Inline full body for discovered-skill slash commands**
 
 **Goal:** Model-invocable discovered skills' commands carry their full body instead of the shim.
 
@@ -366,7 +366,7 @@ sequenceDiagram
 **Verification:**
 - Unit suite passes. The command set for a fixture tree is identical apart from the template content.
 
-- [ ] **Unit 6: Real-host delivery and regression coverage**
+- [x] **Unit 6: Real-host delivery and regression coverage**
 
 **Goal:** Prove end-to-end delivery at the model boundary on the pinned host.
 
@@ -395,7 +395,7 @@ sequenceDiagram
 **Verification:**
 - The integration suites pass locally against the pinned OpenCode version. The host-contract guard lists the new files. No spawned `opencode` processes are left behind.
 
-- [ ] **Unit 7: Documentation**
+- [x] **Unit 7: Documentation**
 
 **Goal:** Document the new tool argument, the restoration behavior and how to opt out, and discovered-command inlining.
 
