@@ -24,19 +24,15 @@ When the same skill name exists in more than one location, the winner follows Op
 
 ## How a command is built
 
-Each discovered skill becomes a `config.command` entry named after the skill (`/git-release`, `/deploy`, and so on). The command instructs the agent to load the skill through OpenCode's native `skill` tool and act on whatever arguments you pass:
+Each discovered skill becomes a `config.command` entry named after the skill (`/git-release`, `/deploy`, and so on). The command includes the full skill text, not a pointer to it:
 
 ```
 /git-release v2.4.0
 ```
 
-Arguments after the command name are forwarded to the skill as a request. Because the command loads the skill through the `skill` tool, any skill permissions you have configured still apply.
+OpenCode processes the command the same way it processes its own commands: it substitutes any arguments you typed into the skill text, and it runs any `` !`command` `` snippets the skill contains, before the model ever sees the result. Only install skills you trust — a skill's command can run shell snippets on your machine as part of being invoked.
 
-### Command-only skills
-
-A skill with `disable-model-invocation: true` in its frontmatter is a manual workflow — you invoke it, the model does not load it on its own. For these, Systematic inlines the skill body directly into the command instead of routing through the `skill` tool.
-
-There is one honest limitation here: OpenCode has no mechanism for a plugin to hide a skill from the model's own `skill` tool. Systematic controls the `/command` surface, but a command-only skill remains loadable by the model through OpenCode's skill tool regardless. The `disable-model-invocation` flag shapes the command; it is not a hard guarantee that the model can never reach the skill.
+A skill with `disable-model-invocation: true` in its frontmatter is a manual workflow — you invoke it, the model does not load it on its own. There is one honest limitation here: OpenCode has no mechanism for a plugin to hide a skill from the model's own `skill` tool. Systematic controls the `/command` surface, but a command-only skill remains loadable by the model through OpenCode's skill tool regardless. The `disable-model-invocation` flag shapes the command; it is not a hard guarantee that the model can never reach the skill.
 
 ## Trust model
 

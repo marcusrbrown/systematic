@@ -42,6 +42,10 @@ The `config` hook is responsible for discovery and merging. It recursively walks
 ### 2. `tool` Hook
 The plugin registers a custom tool called `systematic_skill`. This tool is used by the AI to load the full content of bundled skills on demand. While OpenCode has a native `skill` tool, `systematic_skill` provides optimized access to the plugin's bundled content.
 
+`systematic_skill` takes an optional `arguments` string. If the skill text contains `$ARGUMENTS`, that gets replaced with the whole string. If it contains `$1`, `$2`, and so on, those get replaced with positional values (quoted text counts as one value, and the highest-numbered placeholder takes the rest of the string) — the same rules OpenCode uses for its own slash commands. If the skill has none of these placeholders, the argument text is appended after the skill body instead. Leaving `arguments` out entirely leaves any placeholders in the skill text untouched. This is text substitution only — it never executes anything.
+
+OpenCode truncates plugin tool output at 2,000 lines or 50 KB by default. Systematic restores the full skill text after that cut so large skills still arrive complete. If your own config sets `tool_output.max_lines` or `tool_output.max_bytes`, Systematic honors your limit and skips the restore. One caveat: if you enable OpenCode's `compaction.prune` setting, a `systematic_skill` result can still be cleared later in a long conversation — OpenCode only protects its own built-in `skill` tool from pruning.
+
 ### 3. `system.transform` Hook
 This hook allows Systematic to inject a "bootstrap" instruction into the AI's system prompt at the start of every conversation. This instruction (from the `using-systematic` skill) teaches the AI how to:
 - Discover available workflows.
