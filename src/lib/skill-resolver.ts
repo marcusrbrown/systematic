@@ -88,12 +88,7 @@ export function buildSkillToolParameterHint(
   return `The name of the skill from available_skills${hint}`
 }
 
-/**
- * Parses positional arguments from a raw argument string using OpenCode
- * v1.18.32 native slash-command semantics: whitespace-separated, with
- * quoted segments (`"..."` or `'...'`) treated as a single argument with
- * the surrounding quotes stripped.
- */
+/** Splits on whitespace; a quoted segment is one argument with its quotes removed. */
 function parsePositionalArgs(raw: string): string[] {
   const args: string[] = []
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
@@ -107,19 +102,10 @@ function parsePositionalArgs(raw: string): string[] {
 }
 
 /**
- * Substitutes `$1`, `$2`, ... and `$ARGUMENTS` placeholders into a skill
- * body, mirroring OpenCode's `SessionPrompt.command` native slash-command
- * argument semantics (v1.18.32). Text-only substitution — never executes
- * anything.
- *
- * 1. Parse positional args from `raw` (see {@link parsePositionalArgs}).
- * 2. Replace each `$N` (regex `\$(\d+)`): if `N - 1 >= args.length` → "";
- *    if `N` is the highest placeholder number found in the body → the
- *    remaining args from position `N` joined with a space; otherwise the
- *    single arg at position `N`.
- * 3. Replace every `$ARGUMENTS` with the raw argument string.
- * 4. If the body had neither positional placeholders nor `$ARGUMENTS`, and
- *    `raw.trim()` is non-empty, append `"\n\n" + raw` to the body.
+ * Text-only substitution matching OpenCode's `SessionPrompt.command`:
+ * positional `$N` first (the highest `$N` takes the remaining arguments,
+ * missing positions are empty), then `$ARGUMENTS` as the raw string. With no
+ * placeholders, non-blank arguments are appended after a blank line.
  */
 export function substituteSkillArguments(body: string, raw: string): string {
   const placeholderNumbers = [...body.matchAll(/\$(\d+)/g)].map((m) =>

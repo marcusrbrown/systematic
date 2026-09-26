@@ -188,7 +188,7 @@ Run with: $ARGUMENTS`,
   })
 })
 
-describe('substituteSkillArguments (OpenCode v1.18.32 native slash-command semantics)', () => {
+describe('substituteSkillArguments (OpenCode native slash-command semantics)', () => {
   test('$ARGUMENTS is replaced verbatim with the raw argument string', () => {
     const body = 'Do this: $ARGUMENTS'
     expect(substituteSkillArguments(body, 'fix the bug')).toBe(
