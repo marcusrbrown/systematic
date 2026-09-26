@@ -27,7 +27,7 @@ Carried from the origin document:
 - R1. `systematic_skill` keeps its bundled-only lookup and delivers the complete body at the boundary the model sees, except where R10 applies.
 - R2. Every Systematic-registered slash command, bundled or discovered, inlines the complete body. No pointer shim.
 - R3. End-to-end full delivery is mandatory. A host limit does not satisfy R1 or R2, except as refined by R10.
-- R4. `systematic_skill` gains an optional raw-string argument. Omitted or empty means empty; the value is never inferred.
+- R4. `systematic_skill` gains an optional raw-string argument. When omitted, the body's placeholders stay literal, matching OpenCode's native `skill` tool and Pi. An explicit empty string substitutes empty. The value is never inferred. (Changed during implementation: bundled skills refer to `$ARGUMENTS` by name in their prose, and substituting empty broke those instructions.)
 - R5. Both paths substitute `$ARGUMENTS` and positional placeholders with native OpenCode semantics.
 - R6. The tool performs text substitution only. It never executes snippets.
 - R7. Slash commands keep native OpenCode template processing unchanged.
@@ -157,7 +157,7 @@ Added during planning (user-confirmed):
   - `$ARGUMENTS` becomes the raw string;
   - with no placeholders and a non-blank argument, the argument is appended after a blank line.
 
-  The tool substitutes only the skill body, not the wrapper lines. It always substitutes when called from OpenCode (omitted means empty). Pi passes no argument and gets byte-identical output.
+  The tool substitutes only the skill body, not the wrapper lines, and only when `arguments` is present. With `arguments` omitted, the tool's output is byte-identical to Pi's.
 - **Argument text is data on the tool path:** the tool's substituted output is a tool result sent to the model. It never passes through command-template processing, so `!`-backtick text inside `arguments` is never executed. On the slash-command path, snippets that arrive through arguments are native OpenCode behavior (R7), and Unit 1 characterizes them.
 - **Positional-placeholder hygiene in bundled skills:** `ce-review`'s awk snippet uses `$1`/`$2`, which native substitution (already applied by `/ce:review` today) blanks out. Rewrite it as awk `$(1)`/`$(2)`, which does not match the placeholder pattern. Add a unit test that fails if any bundled skill body contains a `$<digit>` token. This plan makes the tool apply positional substitution to every bundled skill, and `/skill` commands already do. A future `$1` in any shell example would silently corrupt both paths, so the check is a guard on the new behavior, not a general lint rule.
 - **Guard fix is narrow:** skill completion checks success using host status and structure, without the output length cap. Other `isSuccessfulAfter` callers and `MAX_HOST_OUTPUT_LENGTH` stay as they are.
@@ -209,7 +209,7 @@ sequenceDiagram
 
 ## Implementation Units
 
-- [ ] **Unit 1: Real-host probe for native command snippet execution**
+- [x] **Unit 1: Real-host probe for native command snippet execution**
 
 **Goal:** Record, before discovered-skill inlining, whether and how OpenCode runs `!`-backtick snippets from an inlined command template, including snippets that come from arguments.
 
@@ -236,11 +236,20 @@ sequenceDiagram
 - Integration: the same skill invoked through today's shim (before Unit 5) → no sentinel. This is the baseline.
 - Integration: the same skill invoked through OpenCode's own native command for it, if one exists → record the same observations for comparison with native behavior.
 
+**Findings (OpenCode v1.18.32, `tests/integration/skill-command-probe.test.ts`):**
+- OpenCode's own command for a discovered skill (`source: "skill"`) inlines the raw body. Its `!` snippets run before the model sees the text.
+- Systematic's current shim shadows that command: OpenCode skips native registration for any name already claimed. So today's shim hides the body, and the body snippet does not run.
+- Snippets supplied as arguments run even through today's shim, because the shim contains `$ARGUMENTS` and substitution happens before the snippet scan.
+- `disable-model-invocation: true` skills, which Systematic already inlines, run body snippets too.
+- No permission request was raised in any case, even under a deny-all ruleset. Command-template snippets have no permission gate at this version.
+- Every directory Systematic scans for skills, OpenCode also scans. OpenCode additionally scans `skills.paths` and `skills.urls`.
+- Gate result: neither escalation condition holds. Inlining restores exactly what OpenCode itself does without Systematic, and no Systematic-only directory exists. Unit 5 proceeds.
+
 **Verification:**
 - Findings are recorded under this unit. If execution happens without a permission request for body or argument snippets, stop and escalate the decision before Unit 5.
 - The probe run reaps every spawned `opencode` process by baseline diff, never with a blanket kill.
 
-- [ ] **Unit 2: Guard skill activation independent of output size**
+- [x] **Unit 2: Guard skill activation independent of output size**
 
 **Goal:** Loading a skill larger than 32 KB activates its guarded epoch.
 
@@ -264,7 +273,7 @@ sequenceDiagram
 **Verification:**
 - The guard's unit suite passes, and a large-skill activation is observable in unit tests.
 
-- [ ] **Unit 3: Argument parameter and native substitution**
+- [x] **Unit 3: Argument parameter and native substitution**
 
 **Goal:** `systematic_skill` accepts an optional `arguments` string and substitutes it into the skill body with native command semantics.
 
@@ -277,7 +286,7 @@ sequenceDiagram
 - Test: `tests/unit/skill-tool.test.ts`, `tests/unit/skill-resolver.test.ts` (create if absent), `tests/unit/pi.test.ts`
 
 **Approach:**
-- Substitution is a pure function over the body. `buildSkillContentOutput` takes an optional argument. When the argument is `undefined`, no substitution runs; this keeps Pi's output unchanged. The OpenCode tool passes `args.arguments ?? ''`.
+- Substitution is a pure function over the body. `buildSkillContentOutput` takes an optional argument. When the argument is `undefined`, no substitution runs. The OpenCode tool passes `args.arguments` through unchanged, so an omitted argument leaves placeholders literal.
 - The parameter description tells the model to pass only text the user explicitly supplied.
 - Rewrite the `ce-review` awk placeholders to `$(1)`/`$(2)`. Add a test that no bundled skill body contains a `$<digit>` token.
 - No snippet execution anywhere in this path.
@@ -288,8 +297,8 @@ sequenceDiagram
 **Test scenarios:**
 - Happy path: body with `$ARGUMENTS`, argument `fix the thing` → substituted verbatim.
 - Happy path: body with `$1 $2`, argument `a "b c" d` → `a` and `b c d`.
-- Edge case: argument omitted → `$ARGUMENTS` and `$1` become empty.
-- Edge case: empty string → same as omitted.
+- Edge case: argument omitted → placeholders stay literal.
+- Edge case: explicit empty string → `$ARGUMENTS` and `$1` become empty.
 - Edge case: no placeholders, non-blank argument → appended after a blank line. Whitespace-only → not appended.
 - Edge case: argument containing `!` plus backticks → substituted as literal text, and nothing executes.
 - Regression: Pi call without an argument → byte-identical to the pre-change output.
@@ -378,7 +387,7 @@ sequenceDiagram
 - Integration: tool call for `ce-review` → its final line reaches the provider.
 - Integration: host started with a user `tool_output.max_bytes` → the provider sees the host's truncated preview (R10).
 - Integration: host started with a user `tool_output.max_lines` → the provider sees the host's truncated preview (R10).
-- Integration: tool call with `arguments` → substituted text reaches the provider. Omitted → empty substitution.
+- Integration: tool call with `arguments` → substituted text reaches the provider. Omitted → placeholders stay literal.
 - Integration: slash command for a bundled skill and a discovered skill with a body above the limit → the tail sentinel reaches the provider, and arguments are substituted.
 - Integration: loading a guarded skill over 32 KB → the epoch activates, observed through `systematic_workflow_status`.
 - Regression: the `tests/integration/pi.test.ts` and `tests/integration/claude-code.test.ts` suites pass unchanged.
