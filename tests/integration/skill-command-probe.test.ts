@@ -1,14 +1,17 @@
 // CHARACTERIZATION test against the real pinned OpenCode host: records how
-// OpenCode v1.18.32 handles `!`-backtick shell snippets embedded in a
-// discovered skill's slash-command template, and whether Systematic's own
+// the pinned OpenCode host version (`EXACT_OPENCODE_VERSION`, exported by
+// ./fixtures/receipt-workflow-host.ts) handles `!`-backtick shell snippets
+// embedded in a discovered skill's slash-command template, and whether
+// Systematic's own
 // command registration for that skill shadows OpenCode's native
 // `source: "skill"` command. This test does not assert a *desired*
 // behavior -- it pins the *observed* behavior so a future OpenCode host
 // bump that changes it fails loudly here instead of silently.
 //
-// Mechanism, verified directly from OpenCode v1.18.32 source
-// (https://github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/session/prompt.ts,
-// `SessionPrompt.command`):
+// Mechanism, verified directly from the pinned OpenCode host version's source
+// (packages/opencode/src/session/prompt.ts, `SessionPrompt.command`; the
+// exact tag lives in `EXACT_OPENCODE_VERSION` -- re-verify against that tag's
+// source if this pin moves):
 //   1. Numbered placeholders (`$1`, `$2`, ...) are substituted from a
 //      shell-tokenized `input.arguments` first.
 //   2. `$ARGUMENTS` is then substituted with the RAW, untokenized
@@ -24,10 +27,11 @@
 //      ruleset denies everything, which this test proves by creating every
 //      probe session with `[{ permission: '*', pattern: '*', action: 'deny' }]`.
 //   5. Command registration order
-//      (https://github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/command/index.ts):
+//      (packages/opencode/src/command/index.ts, same pinned version as above):
 //      built-ins, then `cfg.command` entries (source "command" -- this is
-//      where Systematic's own `config` hook writes discovered-skill shims,
-//      see src/lib/config-handler.ts's `collectDiscoveredSkillsAsCommands`),
+//      where Systematic's own `config` hook writes discovered-skill
+//      commands, see src/lib/config-handler.ts's
+//      `collectDiscoveredSkillsAsCommands`),
 //      then MCP prompts, then `for (const item of skill.all()) { if
 //      (commands[item.name]) continue; ... source: "skill" }`. A discovered
 //      skill only gets OpenCode's native raw-body-inlined command when NO
@@ -39,14 +43,14 @@
 // one root BOTH Systematic's `discoverSkills` (src/lib/discovered-skills.ts,
 // via its `opencodeConfigDirOverride` param, itself read from
 // `process.env.OPENCODE_CONFIG_DIR`) and OpenCode's native skill discovery
-// (https://github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/skill/index.ts,
+// (packages/opencode/src/skill/index.ts, same pinned version as above,
 // `config.directories()` scanned with pattern `{skill,skills}/**/SKILL.md`)
 // scan identically, because both read the very same `OPENCODE_CONFIG_DIR`
 // env var this fixture already sets (`buildIsolatedOpencodeEnv`).
 //
-// Root-directory comparison (Systematic's `discoverSkills` vs OpenCode
-// v1.18.32's native `Skill.discoverSkills`, both verified directly from
-// source at the URLs above):
+// Root-directory comparison (Systematic's `discoverSkills` vs OpenCode's
+// native `Skill.discoverSkills` at the pinned host version, both verified
+// directly from source at the paths above):
 //   Both scan, in the same relative order:
 //     - `<home>/.claude/skills/**/SKILL.md` (global, external)
 //     - `<home>/.agents/skills/**/SKILL.md` (global, external)
@@ -68,9 +72,9 @@
 //       the same recursive way.
 //   Practical consequence: a skill reachable ONLY through `skills.paths` or
 //   `skills.urls` is invisible to Systematic's own `discoverSkills`, so
-//   Systematic never registers a shim command for it -- OpenCode's native
+//   Systematic never registers a command for it -- OpenCode's native
 //   `source: "skill"` command (raw body inlined, `!`-snippets live) is the
-//   ONLY reachable command for such a skill, with no shim in front of it.
+//   ONLY reachable command for such a skill, with nothing in front of it.
 //
 // Process hygiene: this file is invoked directly, never through the full
 // suite, per the exact `pgrep`/`bun test`/`comm` sequence documented in the
@@ -312,12 +316,21 @@ describe.skipIf(!isOpencodeAvailable())(
         const skillRoot = path.join(fixture.configDir, 'skill')
         const bodySentinelPath = path.join(fixture.tempRoot, 'body-sentinel')
         const argSentinelPath = path.join(fixture.tempRoot, 'arg-sentinel')
-        const nativeSentinelPath = path.join(fixture.tempRoot, 'native-sentinel')
-        const inlineSentinelPath = path.join(fixture.tempRoot, 'inline-sentinel')
+        const nativeSentinelPath = path.join(
+          fixture.tempRoot,
+          'native-sentinel',
+        )
+        const inlineSentinelPath = path.join(
+          fixture.tempRoot,
+          'inline-sentinel',
+        )
 
         // Scenario A & C fixture: default model-invocable discovered skill.
-        // Systematic registers a one-line shim for this (buildDiscoveredSkillShimTemplate)
-        // that never includes the skill body, only a literal `$ARGUMENTS` placeholder.
+        // Systematic now inlines this skill's full body via
+        // `loadDiscoveredSkillAsCommand`/`wrapSkillTemplate` (the old
+        // one-line, body-less shim is gone), so this fixture's own
+        // embedded `!`-snippet and `$ARGUMENTS` line are both part of the
+        // assembled command template OpenCode processes.
         fs.mkdirSync(path.join(skillRoot, 'probe-snippet'), { recursive: true })
         fs.writeFileSync(
           path.join(skillRoot, 'probe-snippet', 'SKILL.md'),
@@ -328,7 +341,7 @@ describe.skipIf(!isOpencodeAvailable())(
             '---',
             'Probe snippet skill body.',
             '',
-            '!`touch ' + bodySentinelPath + '`',
+            `!\`touch ${bodySentinelPath}\``,
             '',
             '$ARGUMENTS',
             '',
@@ -352,13 +365,16 @@ describe.skipIf(!isOpencodeAvailable())(
             '---',
             'Probe native skill body.',
             '',
-            '!`touch ' + nativeSentinelPath + '`',
+            `!\`touch ${nativeSentinelPath}\``,
             '',
           ].join('\n'),
         )
 
-        // Scenario D fixture: `disable-model-invocation: true` already makes
-        // Systematic inline the raw body via wrapSkillTemplate today.
+        // Scenario D fixture: `disable-model-invocation: true`. Now
+        // behaviorally equivalent to scenario A's command template --
+        // every discovered skill's command inlines its raw body via
+        // `wrapSkillTemplate` unconditionally today -- kept as a separate
+        // fixture to prove that equivalence rather than assume it.
         fs.mkdirSync(path.join(skillRoot, 'probe-inline'), { recursive: true })
         fs.writeFileSync(
           path.join(skillRoot, 'probe-inline', 'SKILL.md'),
@@ -370,7 +386,7 @@ describe.skipIf(!isOpencodeAvailable())(
             '---',
             'Probe inline skill body.',
             '',
-            '!`touch ' + inlineSentinelPath + '`',
+            `!\`touch ${inlineSentinelPath}\``,
             '',
           ].join('\n'),
         )
@@ -469,13 +485,18 @@ describe.skipIf(!isOpencodeAvailable())(
           // registered as "command" too, not "skill".
           expect(probeInlineCommand.source).toBe('command')
 
-          // --- Scenario A: today's Systematic shim, no arguments ---
+          // --- Scenario A: current Systematic behavior for a default
+          // model-invocable discovered skill, no arguments. The shim is
+          // gone -- `loadDiscoveredSkillAsCommand` now inlines the full
+          // body via `wrapSkillTemplate` for every discovered skill
+          // (unconditionally, not only `disable-model-invocation: true`
+          // ones), so this fixture's own embedded `!`-snippet runs as part
+          // of command assembly even with no arguments supplied. ---
           const scenarioA = await runCommand('probe-snippet', '')
           const scenarioASentinel = fs.existsSync(bodySentinelPath)
-          expect(scenarioASentinel).toBe(false)
-          expect(scenarioA.text).toContain(
-            'Load the "probe-snippet" skill using the skill tool',
-          )
+          expect(scenarioASentinel).toBe(true)
+          expect(scenarioA.text).toContain('Probe snippet skill body.')
+          expect(scenarioA.text).toContain('Base directory for this skill:')
           expect(scenarioA.text).not.toContain('touch')
 
           // --- Scenario B: OpenCode's native command for a name Systematic
@@ -487,17 +508,22 @@ describe.skipIf(!isOpencodeAvailable())(
           expect(scenarioB.text).toContain('Base directory for this skill:')
           expect(scenarioB.text).not.toContain('touch')
 
-          // --- Scenario C: same shim as A, but the argument string itself
-          // carries a `!`-snippet, injected into the template through the
-          // shim's own literal `$ARGUMENTS` placeholder ---
-          const argSnippet = '!`touch ' + argSentinelPath + '`'
+          // --- Scenario C: same inlined-body command as A, but the
+          // argument string itself also carries a `!`-snippet, injected
+          // into the assembled template through the `wrapSkillTemplate`
+          // wrapper's own literal `$ARGUMENTS` placeholder (and this
+          // fixture's own body-level `$ARGUMENTS` line, via `replaceAll`).
+          // `bodySentinelPath` was already touched by scenario A above and
+          // stays touched (inlining re-runs the body's own snippet on every
+          // invocation; `touch` is idempotent), so this checks it is still
+          // present rather than newly absent. ---
+          const argSnippet = `!\`touch ${argSentinelPath}\``
           const scenarioC = await runCommand('probe-snippet', argSnippet)
           const scenarioCArgSentinel = fs.existsSync(argSentinelPath)
-          const scenarioCBodySentinelStillAbsent = !fs.existsSync(
-            bodySentinelPath,
-          )
+          const scenarioCBodySentinelStillPresent =
+            fs.existsSync(bodySentinelPath)
           expect(scenarioCArgSentinel).toBe(true)
-          expect(scenarioCBodySentinelStillAbsent).toBe(true)
+          expect(scenarioCBodySentinelStillPresent).toBe(true)
           // The snippet's own stdout (empty, for `touch`) replaces the
           // literal `!`...`` text before the model ever sees it -- so the
           // executed command leaves no visible trace in the transcript.
@@ -532,7 +558,7 @@ describe.skipIf(!isOpencodeAvailable())(
                   'probe-inline': probeInlineCommand.source,
                 },
                 scenarioA: {
-                  description: 'Systematic shim, no arguments',
+                  description: 'Systematic inlined-body command, no arguments',
                   sentinelCreated: scenarioASentinel,
                   permissionEventRaised: false,
                   providerText: scenarioA.text,
@@ -546,15 +572,15 @@ describe.skipIf(!isOpencodeAvailable())(
                 },
                 scenarioC: {
                   description:
-                    'Systematic shim, argument string carries the snippet',
+                    'Systematic inlined-body command, argument string carries the snippet',
                   argSentinelCreated: scenarioCArgSentinel,
-                  bodySentinelStillAbsent: scenarioCBodySentinelStillAbsent,
+                  bodySentinelStillPresent: scenarioCBodySentinelStillPresent,
                   permissionEventRaised: false,
                   providerText: scenarioC.text,
                 },
                 scenarioD: {
                   description:
-                    'disable-model-invocation raw-body inlining (existing behavior)',
+                    'disable-model-invocation raw-body inlining (now behaviorally equivalent to scenario A)',
                   sentinelCreated: scenarioDSentinel,
                   permissionEventRaised: false,
                   providerText: scenarioD.text,
