@@ -980,4 +980,61 @@ describe('restoreSkillOutput', () => {
     expect(output1.output).toBe('full-text-one')
     expect(output2.output).toBe('full-text-two')
   })
+
+  test('does not throw and still consumes the entry when output is not a record', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    expect(() =>
+      restoreSkillOutput(
+        store,
+        { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+        'not-a-record-output',
+        { userOutputLimitSet: false },
+      ),
+    ).not.toThrow()
+
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('leaves output unchanged and still deletes the entry when metadata is missing', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output: { output: string; metadata?: unknown } = {
+      output: 'preview\n\n...10 lines truncated...\n\nhint',
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe('preview\n\n...10 lines truncated...\n\nhint')
+    expect(output.metadata).toBeUndefined()
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
+
+  test('leaves output unchanged and still deletes the entry when output.output is not a string', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    const output = {
+      output: 12345,
+      metadata: { truncated: true, outputPath: '/tmp/x' },
+    }
+
+    restoreSkillOutput(
+      store,
+      { tool: 'systematic_skill', sessionID: 's', callID: 'c' },
+      output,
+      { userOutputLimitSet: false },
+    )
+
+    expect(output.output).toBe(12345)
+    expect(output.metadata.truncated).toBe(true)
+    expect(store.take('s', 'c')).toBeUndefined()
+  })
 })

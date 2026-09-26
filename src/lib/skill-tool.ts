@@ -133,7 +133,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
         .string()
         .optional()
         .describe(
-          'Raw argument text the user explicitly supplied for this skill, substituted for $ARGUMENTS and $1..$N. Omit when the user supplied none; never infer it.',
+          'Raw argument text the user explicitly supplied for this skill, substituted for $ARGUMENTS and $1..$N. Omit to leave those placeholders as written; an explicit empty string substitutes them with nothing. Only pass text the user explicitly supplied; never infer it.',
         ),
       // Double-cast is required, not stylistic: the SDK types its args
       // against its own bundled zod, whose Zod types are nominally

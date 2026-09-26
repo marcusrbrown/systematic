@@ -167,16 +167,13 @@ const initializePlugin = async ({
 
   const hooks: RegisteredPluginHooks = {
     config: async (incomingConfig: Config): Promise<void> => {
-      // Host doesn't type tool_output in Config yet; check defensively.
+      // Host doesn't type tool_output in Config yet; recompute on every call.
       const configUnknown: unknown = incomingConfig
-      if (
+      userOutputLimitSet =
         isRecord(configUnknown) &&
         isRecord(configUnknown.tool_output) &&
         (configUnknown.tool_output.max_lines !== undefined ||
           configUnknown.tool_output.max_bytes !== undefined)
-      ) {
-        userOutputLimitSet = true
-      }
       return configHandler(incomingConfig)
     },
 

@@ -49,7 +49,7 @@ Added during planning (user-confirmed):
 
 ### Deferred to Separate Tasks
 
-- Compaction pruning: OpenCode's opt-in `compaction.prune` can later clear a restored `systematic_skill` result. It protects only the tool literally named `skill`, and there is no exemption mechanism. File an issue.
+- Compaction pruning: OpenCode's opt-in `compaction.prune` can later clear a restored `systematic_skill` result. It protects only the tool literally named `skill`, and there is no exemption mechanism. Tracked in [#1028](https://github.com/marcusrbrown/systematic/issues/1028).
 
 ## Context & Research
 

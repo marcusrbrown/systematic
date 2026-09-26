@@ -88,17 +88,11 @@ export function buildSkillToolParameterHint(
   return `The name of the skill from available_skills${hint}`
 }
 
-/** Splits on whitespace; a quoted segment is one argument with its quotes removed. */
+/** Mirrors OpenCode's command argument tokenizer: bracketed image refs, quoted segments, and runs of non-space non-quote characters; edge quotes stripped. */
 function parsePositionalArgs(raw: string): string[] {
-  const args: string[] = []
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
-  let match = pattern.exec(raw)
-  while (match !== null) {
-    const [, doubleQuoted, singleQuoted, bare] = match
-    args.push(doubleQuoted ?? singleQuoted ?? bare ?? '')
-    match = pattern.exec(raw)
-  }
-  return args
+  const matches = raw.match(/(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi)
+  if (!matches) return []
+  return matches.map((token) => token.replace(/^["']|["']$/g, ''))
 }
 
 /**

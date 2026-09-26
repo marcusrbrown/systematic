@@ -209,6 +209,18 @@ describe('substituteSkillArguments (OpenCode native slash-command semantics)', (
     expect(substituteSkillArguments(body, "x 'y z'")).toBe('x y z')
   })
 
+  test('an unquoted token directly followed by a quoted segment splits into two arguments', () => {
+    // Mirrors OpenCode's native tokenizer: bare runs stop at a quote
+    // character instead of swallowing it, so `foo"bar"` is two tokens.
+    const body = '$1 $2'
+    expect(substituteSkillArguments(body, 'foo"bar"')).toBe('foo bar')
+  })
+
+  test('a bracketed image reference is captured as a single argument with its brackets intact', () => {
+    const body = '$1 / $2'
+    expect(substituteSkillArguments(body, '[Image 1] x')).toBe('[Image 1] / x')
+  })
+
   test('omitted (empty string) argument leaves positional placeholders empty', () => {
     const body = 'before [$1] middle [$2] after'
     expect(substituteSkillArguments(body, '')).toBe('before [] middle [] after')

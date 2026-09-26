@@ -999,6 +999,50 @@ describe('skill tool output restoration wiring', () => {
     }
   })
 
+  test('a later config call without an output limit re-enables restoration', async () => {
+    // userOutputLimitSet must be recomputed on every config call, not just
+    // ever flipped on: a subsequent reload without tool_output limits must
+    // restore truncated output again.
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-restore-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const hooks = await loadHooks(tempDir)
+      await hooks.config({ tool_output: { max_bytes: 1000 } })
+      await hooks.config({})
+
+      const context: SkillExecuteContext = {
+        sessionID: 's',
+        callID: 'c',
+        ask: async () => {},
+        metadata: () => {},
+      }
+      const fullResult = asString(
+        await hooks.tool.systematic_skill.execute({ name: 'ce:work' }, context),
+      )
+      const output = {
+        output: `${fullResult.slice(0, 50)}\n\n...5 bytes truncated...\n\nhint`,
+        metadata: { truncated: true, outputPath: '/tmp/x' },
+      }
+
+      await hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: 's',
+          callID: 'c',
+          args: { name: 'ce:work' },
+        },
+        output,
+      )
+
+      expect(output.output).toBe(fullResult)
+      expect(output.metadata.truncated).toBe(false)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('a user-set tool_output.max_lines config suppresses restoration', async () => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-restore-'),
