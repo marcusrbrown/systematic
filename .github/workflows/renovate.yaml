@@ -31,10 +31,12 @@ permissions:
 
 jobs:
   renovate:
-    # Only run Renovate if this isn't a bot edit (issue or pull request) or if the workflow run is successful
+    # Edits require a non-bot actor; pushes and dispatches always run;
+    # workflow_run requires a successful Main run.
     if: >
       (github.event.action == 'edited' && !contains(github.actor, '[bot]')) ||
-      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+      (github.event.action != 'edited' && github.event_name != 'workflow_run') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     name: Renovate
     secrets:
       APPLICATION_ID: ${{ secrets.APPLICATION_ID }}
