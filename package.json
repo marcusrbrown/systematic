@@ -118,7 +118,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "js-yaml": "^4.3.1",
+    "js-yaml": "^4.3.2",
     "jsonc-parser": "^3.3.0",
     "tree-sitter-bash": "0.25.1",
     "web-tree-sitter": "0.27.0",
