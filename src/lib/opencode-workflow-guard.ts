@@ -1827,28 +1827,38 @@ function createSessionRuntime(
     })
   }
 
-  function publishUnavailable(): void {
-    ledger = createReceiptLedger({
+  function mintLedger(): ReceiptLedger {
+    return createReceiptLedger({
       capabilityFlags: ['workflow-guard'],
       registrationIdentity: options.registrationIdentity,
       sessionSalt: options.sessionSalt
         ? new Uint8Array(options.sessionSalt)
         : randomBytes(32),
     })
+  }
+
+  // The empty-history path re-runs on every host event while its history stays
+  // unmatched. Each run used to mint a freshly salted ledger, and the ledger's
+  // registration digest is the marker's `source`, so the system-prompt marker
+  // changed on every request and busted the provider prompt cache. The ledger
+  // holds no recovered state on that path, so one per session runtime is enough;
+  // the salt stays random per process, only its reuse changes.
+  let emptyHistoryLedger: ReceiptLedger | undefined
+  function emptyHistoryLedgerForRetry(): ReceiptLedger {
+    emptyHistoryLedger ??= mintLedger()
+    return emptyHistoryLedger
+  }
+
+  function publishUnavailable(reusableLedger?: ReceiptLedger): void {
+    ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
     if (options.config.mode !== 'disabled')
       guard.setMode({ mode: 'unavailable' })
     initialized = true
   }
 
-  function publishFresh(): void {
-    ledger = createReceiptLedger({
-      capabilityFlags: ['workflow-guard'],
-      registrationIdentity: options.registrationIdentity,
-      sessionSalt: options.sessionSalt
-        ? new Uint8Array(options.sessionSalt)
-        : randomBytes(32),
-    })
+  function publishFresh(reusableLedger?: ReceiptLedger): void {
+    ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
     initialized = true
   }
@@ -2046,11 +2056,12 @@ function createSessionRuntime(
     parts: ReadonlyArray<unknown>,
     allowFresh: boolean,
   ): void {
+    const reusableLedger = emptyHistoryLedgerForRetry()
     if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
-      publishFresh()
+      publishFresh(reusableLedger)
     } else {
       retryableEmptyHistory = true
-      publishUnavailable()
+      publishUnavailable(reusableLedger)
     }
   }
 
@@ -4139,6 +4150,9 @@ function createSessionRuntime(
     if (!isRecord(input) || !boundedString(input.sessionID, 256)) return
     await recoverFromHost(input.sessionID, false)
     abandonPending()
+    // A disabled guard has nothing to attest, and the marker would only add
+    // per-session text to the cacheable system-prompt prefix.
+    if (options.config.mode === 'disabled') return
     if (!isRecord(output) || !Array.isArray(output.system)) return
     const existingSystem = output.system.filter(
       (entry): entry is string => typeof entry === 'string',
