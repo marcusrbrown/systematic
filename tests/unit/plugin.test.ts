@@ -429,6 +429,17 @@ describe('per-invocation plugin registration', () => {
       path.join(os.tmpdir(), 'systematic-per-init-'),
     )
     fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    // The marker is only emitted while the guard is enabled. Pin the mode through
+    // the custom config source so a user config that disables the guard cannot
+    // leak into this test.
+    const customConfigDir = path.join(tempDir, 'custom-config')
+    fs.mkdirSync(customConfigDir)
+    fs.writeFileSync(
+      path.join(customConfigDir, 'systematic.json'),
+      JSON.stringify({ workflow_guard: { mode: 'protected' } }),
+    )
+    const priorConfigDir = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = customConfigDir
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
@@ -465,6 +476,8 @@ describe('per-invocation plugin registration', () => {
       const marker = JSON.parse(markerBody) as { sources: unknown[] }
       expect(marker.sources).toHaveLength(2)
     } finally {
+      if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
