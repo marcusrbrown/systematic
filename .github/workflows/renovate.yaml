@@ -31,15 +31,17 @@ permissions:
 
 jobs:
   renovate:
-    # Only run Renovate if this isn't a bot edit (issue or pull request) or if the workflow run is successful
+    # Edits require a non-bot actor; pushes and dispatches always run;
+    # workflow_run requires a successful Main run.
     if: >
       (github.event.action == 'edited' && !contains(github.actor, '[bot]')) ||
-      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+      (github.event.action != 'edited' && github.event_name != 'workflow_run') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     name: Renovate
     secrets:
       APPLICATION_ID: ${{ secrets.APPLICATION_ID }}
       APPLICATION_PRIVATE_KEY: ${{ secrets.APPLICATION_PRIVATE_KEY }}
-    uses: bfra-me/.github/.github/workflows/renovate.yaml@55859d58bf2922cecdde2a079f8ba8a1c2615566 # v4.34.0
+    uses: bfra-me/.github/.github/workflows/renovate.yaml@6522e7232b5f31bca9b7856ea2d737d34307f470 # v4.35.0
     with:
       log-level: ${{ inputs.log-level || (github.event_name == 'pull_request' || github.ref_name != github.event.repository.default_branch) && 'debug' || 'info' }}
       print-config: ${{ inputs.print-config || false }}
