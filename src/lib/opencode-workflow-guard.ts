@@ -1837,12 +1837,8 @@ function createSessionRuntime(
     })
   }
 
-  // The empty-history path re-runs on every host event while its history stays
-  // unmatched. Each run used to mint a freshly salted ledger, and the ledger's
-  // registration digest is the marker's `source`, so the system-prompt marker
-  // changed on every request and busted the provider prompt cache. The ledger
-  // holds no recovered state on that path, so one per session runtime is enough;
-  // the salt stays random per process, only its reuse changes.
+  // The empty-history retry runs on every host event; reuse one ledger so the
+  // marker's `source` (its registration digest) stays stable across requests.
   let emptyHistoryLedger: ReceiptLedger | undefined
   function emptyHistoryLedgerForRetry(): ReceiptLedger {
     emptyHistoryLedger ??= mintLedger()
@@ -4150,8 +4146,7 @@ function createSessionRuntime(
     if (!isRecord(input) || !boundedString(input.sessionID, 256)) return
     await recoverFromHost(input.sessionID, false)
     abandonPending()
-    // A disabled guard has nothing to attest, and the marker would only add
-    // per-session text to the cacheable system-prompt prefix.
+    // A disabled guard has nothing to attest; keep the marker out of the prompt.
     if (options.config.mode === 'disabled') return
     if (!isRecord(output) || !Array.isArray(output.system)) return
     const existingSystem = output.system.filter(
