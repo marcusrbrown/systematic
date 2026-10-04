@@ -3133,6 +3133,96 @@ describe('OpenCode workflow guard adapter', () => {
     expect(document.aggregate.statusDigest).toBe(worst.statusDigest)
   })
 
+  test('disabled mode appends no guard marker to the system prompt', async () => {
+    const adapter = createAdapter('disabled')
+    const output = { system: ['base'] }
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      output,
+    )
+    expect(output.system).toEqual(['base'])
+    expect(output.system.join('\n')).not.toContain('SYSTEMATIC_WORKFLOW_GUARD')
+
+    const empty = { system: [] as string[] }
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      empty,
+    )
+    expect(empty.system).toEqual([])
+  })
+
+  test('guard marker text stays identical across transforms and hook events', async () => {
+    const adapter = createAdapter('protected')
+    const renders: string[] = []
+    for (let pass = 0; pass < 4; pass += 1) {
+      await adapter.hooks.event({
+        event: {
+          type: 'message.updated',
+          properties: { sessionID: SESSION_A },
+        },
+      })
+      const output = { system: ['base'] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        output,
+      )
+      renders.push(output.system.join('\n'))
+    }
+    expect(renders[0]).toContain('SYSTEMATIC_WORKFLOW_GUARD')
+    expect(new Set(renders).size).toBe(1)
+  })
+
+  test('guard marker text stays identical when history has workflow tool parts but no matching receipt markers', async () => {
+    // A resumed session: earlier (previous-process) history holds a
+    // systematic_workflow_* tool call, but no receipt marker agrees with this
+    // process's registration. That is the retryable empty-history path; it must
+    // keep one ledger instead of minting a freshly salted one on every event,
+    // which would change the marker (a system-prompt prefix) on every request.
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'protected', debug: false },
+      workspaceIdentity: 'workspace-a',
+      hostReadback: {
+        readSessionParts: async () => [
+          {
+            info: {},
+            parts: [
+              {
+                type: 'tool',
+                tool: 'systematic_workflow_control',
+                state: { status: 'completed', metadata: {} },
+              },
+            ],
+          },
+        ],
+        listChildren: async () => [],
+      },
+    })
+    const renders: string[] = []
+    for (let pass = 0; pass < 5; pass += 1) {
+      // Alternate allowFresh=true hooks (events, tool hooks) with the
+      // allowFresh=false system transform, as a live request does.
+      await adapter.hooks.event({
+        event: {
+          type: 'message.updated',
+          properties: { sessionID: SESSION_A },
+        },
+      })
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'read', sessionID: SESSION_A, callID: `read-${pass}` },
+        { args: {} },
+      )
+      const output = { system: ['base'] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        output,
+      )
+      renders.push(output.system.join('\n'))
+    }
+    expect(renders[0]).toContain('SYSTEMATIC_WORKFLOW_GUARD')
+    expect(renders[0]).toContain('guard-unavailable')
+    expect(new Set(renders).size).toBe(1)
+  })
+
   test('fails closed on bounded marker overflow while retaining the current source', async () => {
     const adapter = createAdapter()
     const sources = Array.from({ length: 9 }, (_, index) => ({
