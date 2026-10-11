@@ -260,6 +260,7 @@ interface SessionRuntime {
   status(): WorkflowStatus
   readStatus(): WorkflowStatus
   unavailableCause(): GuardUnavailableCause | undefined
+  seedDeferrals(): readonly SeedDeferral[]
   refreshReadback(): Promise<void>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
@@ -312,8 +313,21 @@ interface PendingOperation {
   registeredWorktreeIdentity: string
   observer: OpencodeOperationObserver
   before: OperationObserverSnapshot
+  /** Epoch and unit active when the before-hook began, before any await. */
+  initiator?: OperationInitiator
   remoteOperation?: RemoteOperation
   remoteBefore?: OperationObserverRemoteResult
+}
+
+/**
+ * Identifies the declaration an operation began under. The IDs alone cannot:
+ * a redeclaration of a pristine active unit keeps both while resetting its
+ * deferrals, so `generation` counts every successful unit start.
+ */
+interface OperationInitiator {
+  readonly epochId: string
+  readonly unitId: string
+  readonly generation: number
 }
 
 interface OperationObserverRegistration {
@@ -426,7 +440,6 @@ type GuardUnavailableCauseKind =
   | 'local-snapshot-error'
   | 'local-snapshot-unavailable'
   | 'remote-scope-unreadable'
-  | 'remote-scope-missing-resource'
   | 'remote-scope-unavailable'
   | 'remote-readback-rejected'
   | 'history-read-failed'
@@ -435,6 +448,29 @@ type GuardUnavailableCauseKind =
   | 'recovery-rejected'
   | 'markerless-guard-history'
   | 'observer-readback-failed'
+
+// A remote operation whose activation seeding was deferred instead of
+// failing the session. Status-only, enum-only, and bound to the unit that
+// recorded it; never carried in markers, receipts, tool metadata, or digests.
+type SeedDeferralReason = 'command-timeout' | 'missing-resource'
+
+interface SeedDeferral {
+  readonly operation: RemoteOperation
+  readonly reasonCode: SeedDeferralReason
+}
+
+// A recorded deferral plus the observer and target the seed read from. Only a
+// before-read from that same observer and target may bind the baseline.
+interface DeferredSeed extends SeedDeferral {
+  readonly observer: OpencodeOperationObserver
+  readonly targetIdentity: string
+}
+
+type RemoteSeedOutcome =
+  | { readonly kind: 'seeded' }
+  | { readonly kind: 'tolerated' }
+  | { readonly kind: 'deferred'; readonly reasonCode: SeedDeferralReason }
+  | { readonly kind: 'fatal'; readonly cause: GuardUnavailableCause }
 
 interface GuardUnavailableCause {
   readonly site:
@@ -1268,6 +1304,7 @@ function isSuccessfulSkillAfter(output: unknown): output is HostOutput {
 function statusForTool(
   status: WorkflowStatus,
   unavailableCause?: GuardUnavailableCause,
+  seedDeferrals: readonly SeedDeferral[] = [],
 ): string {
   return JSON.stringify({
     state: status.state,
@@ -1281,6 +1318,9 @@ function statusForTool(
     ...(unavailableCause && status.state === 'unavailable'
       ? { firstUnavailableCause: unavailableCause }
       : {}),
+    // Operations whose activation seeding was deferred for the current unit;
+    // shown in any state.
+    ...(seedDeferrals.length > 0 ? { seedDeferrals } : {}),
   })
 }
 
@@ -1561,6 +1601,14 @@ function createSessionRuntime(
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
   let firstUnavailableCause: GuardUnavailableCause | undefined
+  // Deferred activation seedings, keyed by the unit that recorded them and
+  // cleared at every unit start. Runtime-only; never persisted.
+  let seedDeferralRecord:
+    | { readonly unitId: string; readonly entries: DeferredSeed[] }
+    | undefined
+  // Incremented on every successful unit start or declaration (see
+  // `startFreshUnit`); operations capture it to prove they are still current.
+  let unitStartGeneration = 0
 
   // Single choke point for every `guard.startUnit()` call. The reset below is
   // currently unreachable: mode has no path back to 'protected' ('disabled'
@@ -1571,7 +1619,11 @@ function createSessionRuntime(
     policy?: RuntimeUnitPolicy,
   ): StartUnitResult {
     const result = guard.startUnit(input, policy)
-    if (result.status === 'started') firstUnavailableCause = undefined
+    if (result.status === 'started') {
+      unitStartGeneration += 1
+      firstUnavailableCause = undefined
+      seedDeferralRecord = undefined
+    }
     return result
   }
 
@@ -3164,10 +3216,16 @@ function createSessionRuntime(
     const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return { operation: classification.category }
     try {
-      return {
-        operation: classification.category,
-        before: await remoteSnapshot(classification.category, 'before'),
+      let before = await remoteSnapshot(classification.category, 'before')
+      // A deferred operation gets one immediate retry on a probe timeout.
+      if (
+        before.status === 'unavailable' &&
+        before.reasonCode === 'command-timeout' &&
+        deferredSeedFor(classification.category)
+      ) {
+        before = await remoteSnapshot(classification.category, 'before')
       }
+      return { operation: classification.category, before }
     } catch {
       return { operation: classification.category }
     }
@@ -3179,6 +3237,9 @@ function createSessionRuntime(
     args: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
+    // Captured before the first await: the unit can change while the
+    // snapshot and remote probes are in flight.
+    const initiator = currentInitiator()
     const { parentTargetRoot, sessionLocation } = effectiveTargetContext()
     const fingerprint = argsFingerprint(
       ledger,
@@ -3261,6 +3322,14 @@ function createSessionRuntime(
       observer: operationObserver,
     })
     const remote = await remoteIntentForOperation(host, args, operationObserver)
+    if (remote) {
+      bindDeferredBaseline(
+        remote.operation,
+        remote.before,
+        operationObserver,
+        initiator,
+      )
+    }
     pendingOperations.set(callDigest, {
       callID: host.callID,
       tool: host.tool,
@@ -3270,6 +3339,7 @@ function createSessionRuntime(
       registeredWorktreeIdentity: registeredIdentity,
       observer: operationObserver,
       before: result.snapshot,
+      ...(initiator ? { initiator } : {}),
       ...(remote
         ? { remoteOperation: remote.operation, remoteBefore: remote.before }
         : {}),
@@ -3438,53 +3508,205 @@ function createSessionRuntime(
         timedOut: local.reasonCode === 'command-timeout',
       }
     }
-    for (const operation of remoteOperations) {
-      const cause = await seedRemoteScope(
-        remoteSnapshot,
-        operation,
-        local.snapshot,
-      )
-      if (cause) return cause
+    return seedEachRemoteScope(remoteOperations, remoteSnapshot, local.snapshot)
+  }
+
+  // Continues past deferrals; only a fatal outcome stops seeding.
+  async function seedEachRemoteScope(
+    operations: readonly RemoteOperation[],
+    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+    local: OperationObserverSnapshot,
+  ): Promise<GuardUnavailableCause | undefined> {
+    for (const operation of operations) {
+      const outcome = await seedRemoteScope(reader, operation, local)
+      if (outcome.kind === 'fatal') return outcome.cause
+      if (outcome.kind === 'deferred') {
+        recordSeedDeferral(operation, outcome.reasonCode)
+      }
     }
     return undefined
+  }
+
+  // A deferral is recorded only when the core has no baseline for the
+  // operation yet (neither declared on the unit nor propagated from PR
+  // creation): with a baseline there is nothing left to defer.
+  function recordSeedDeferral(
+    operation: RemoteOperation,
+    reasonCode: SeedDeferralReason,
+  ): void {
+    if (guard.hasResourceBaseline(operation)) return
+    const observer = options.observer
+    if (!observer) return
+    seedDeferralEntries(true).push({
+      operation,
+      reasonCode,
+      observer,
+      targetIdentity: observer.targetDigest,
+    })
+  }
+
+  // The active unit's deferral entries. A record left by another unit is
+  // never returned; with `reset` it is replaced by an empty one for the
+  // active unit. With no active unit nothing is recorded: the returned array
+  // is a throwaway.
+  function seedDeferralEntries(reset = false): DeferredSeed[] {
+    const unitId = guard.status().unit?.unitId
+    if (!unitId) return []
+    if (seedDeferralRecord?.unitId === unitId) return seedDeferralRecord.entries
+    if (!reset) return []
+    seedDeferralRecord = { unitId, entries: [] }
+    return seedDeferralRecord.entries
+  }
+
+  function deferredSeedFor(
+    operation: RemoteOperation,
+  ): DeferredSeed | undefined {
+    return seedDeferralEntries().find((entry) => entry.operation === operation)
+  }
+
+  function clearSeedDeferral(operation: RemoteOperation): void {
+    if (!seedDeferralRecord) return
+    const index = seedDeferralRecord.entries.findIndex(
+      (entry) => entry.operation === operation,
+    )
+    if (index !== -1) seedDeferralRecord.entries.splice(index, 1)
+  }
+
+  // Binds a deferred baseline from the operation's own before-read, and only
+  // from the observer and target the seed used. The readback names its
+  // operation and carries the resource identity (plus revision for push)
+  // only: no repository or worktree identities, and no PR-scope propagation.
+  // The one exception is a `missing-resource` before-read for pr-creation,
+  // which clears the deferral without binding because creation seeds its
+  // baseline from the after-read. For every other operation, including
+  // push, check-readback, and review-readback, anything that does not bind
+  // leaves the deferral in place; nothing here marks the session unavailable
+  // (the receipt fails closed instead).
+  function bindDeferredBaseline(
+    operation: RemoteOperation,
+    before: OperationObserverRemoteResult | undefined,
+    observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
+  ): void {
+    // A read that began under another unit (or none) must not satisfy the
+    // deferral of the unit that is active now.
+    if (!initiator || !isCurrentInitiator(initiator)) return
+    const deferred = deferredSeedFor(operation)
+    if (!deferred) return
+    // A baseline established since the deferral was recorded (for example
+    // propagated from a PR-creation self-seed) makes it obsolete. Never
+    // overwrite it; admission compares the operation against it.
+    if (guard.hasResourceBaseline(operation)) {
+      clearSeedDeferral(operation)
+      return
+    }
+    if (!before || !sameSeedObserver(deferred, observer)) return
+    bindFromBeforeRead(operation, before)
+  }
+
+  function bindFromBeforeRead(
+    operation: RemoteOperation,
+    before: OperationObserverRemoteResult,
+  ): void {
+    if (before.status === 'missing-resource') {
+      if (operation === 'pr-creation') clearSeedDeferral(operation)
+      return
+    }
+    if (before.status !== 'available') return
+    const observed = guard.observeReadback(
+      deferredBaselineReadback(operation, before.snapshot),
+    )
+    if (observed.status !== 'rejected') clearSeedDeferral(operation)
+  }
+
+  function currentInitiator(): OperationInitiator | undefined {
+    const current = guard.status()
+    return current.epoch && current.unit
+      ? {
+          epochId: current.epoch.epochId,
+          unitId: current.unit.unitId,
+          generation: unitStartGeneration,
+        }
+      : undefined
+  }
+
+  function isCurrentInitiator(initiator: OperationInitiator): boolean {
+    const current = currentInitiator()
+    return (
+      current !== undefined &&
+      current.epochId === initiator.epochId &&
+      current.unitId === initiator.unitId &&
+      current.generation === initiator.generation
+    )
+  }
+
+  function sameSeedObserver(
+    deferred: DeferredSeed,
+    observer: OpencodeOperationObserver,
+  ): boolean {
+    return (
+      observer === deferred.observer &&
+      observer.targetDigest === deferred.targetIdentity
+    )
+  }
+
+  function deferredBaselineReadback(
+    operation: RemoteOperation,
+    snapshot: OperationObserverRemoteSnapshot,
+  ): Record<string, unknown> {
+    return {
+      operation,
+      workspaceIdentity: options.workspaceIdentity,
+      resourceIdentity: snapshot.resourceIdentity,
+      ...(operation === 'push'
+        ? { resourceRevisionIdentity: snapshot.resourceRevisionIdentity }
+        : {}),
+      ...(operation === 'pr-creation' ? { propagate: false } : {}),
+    }
+  }
+
+  function currentSeedDeferrals(): readonly SeedDeferral[] {
+    return seedDeferralEntries().map(({ operation, reasonCode }) => ({
+      operation,
+      reasonCode,
+    }))
+  }
+
+  function fatalSeed(cause: GuardUnavailableCause): RemoteSeedOutcome {
+    return { kind: 'fatal', cause }
   }
 
   async function seedRemoteScope(
     reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
     operation: RemoteOperation,
     local: OperationObserverSnapshot,
-  ): Promise<GuardUnavailableCause | undefined> {
+  ): Promise<RemoteSeedOutcome> {
     const result = await readRemoteScope(reader, operation, 'before')
     if (!result) {
-      return {
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-scope-unreadable',
         operation,
         timedOut: false,
-      }
+      })
     }
     if (result.status === 'missing-resource') {
-      const allowed =
-        operation === 'pr-creation' ||
-        operation === 'check-readback' ||
-        operation === 'review-readback'
-      return allowed
-        ? undefined
-        : {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-missing-resource',
-            operation,
-            timedOut: false,
-          }
+      if (operation === 'push') {
+        return { kind: 'deferred', reasonCode: 'missing-resource' }
+      }
+      return { kind: 'tolerated' }
     }
     if (result.status !== 'available') {
-      return {
+      if (result.reasonCode === 'command-timeout') {
+        return { kind: 'deferred', reasonCode: 'command-timeout' }
+      }
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-scope-unavailable',
         operation,
         reasonCode: result.reasonCode,
-        timedOut: result.reasonCode === 'command-timeout',
-      }
+        timedOut: false,
+      })
     }
     const observed = guard.observeReadback(
       remoteReadbackInput(
@@ -3496,15 +3718,15 @@ function createSessionRuntime(
       ),
     )
     if (observed.status === 'rejected') {
-      return {
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-readback-rejected',
         operation,
         reasonCode: observed.reasonCode,
         timedOut: false,
-      }
+      })
     }
-    return undefined
+    return { kind: 'seeded' }
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host skill completion preserves ordering and marker projection
@@ -4133,8 +4355,9 @@ function createSessionRuntime(
       tool: host.tool,
       ...(command ? { command } : {}),
       context: {
-        epochId: current.epoch.epochId,
-        unitId: current.unit.unitId,
+        // The unit the operation began under, not whichever is current now.
+        epochId: pending.initiator?.epochId ?? current.epoch.epochId,
+        unitId: pending.initiator?.unitId ?? current.unit.unitId,
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: pending.before.repositoryRevisionDigest,
         worktreeIdentity: pending.before.worktreeRevisionDigest,
@@ -4147,7 +4370,9 @@ function createSessionRuntime(
               resourceRevisionIdentity:
                 pending.remoteBefore.snapshot.resourceRevisionIdentity,
             }
-          : operation === 'pr-creation' && remoteAfter
+          : operation === 'pr-creation' &&
+              remoteAfter &&
+              pending.remoteBefore?.status === 'missing-resource'
             ? { resourceIdentity: remoteAfter.resourceIdentity }
             : {}),
       },
@@ -4224,6 +4449,25 @@ function createSessionRuntime(
     }
   }
 
+  // True while the unit the operation began under is still the current
+  // declaration. An operation with no captured initiator (it began before any
+  // unit existed) is not tied to one.
+  function ownsOperation(pending: PendingOperation): boolean {
+    return !pending.initiator || isCurrentInitiator(pending.initiator)
+  }
+
+  // Ownership is revalidated after every await in the pipeline below and
+  // before any self-seed or admission: the unit can complete and a successor
+  // (or a redeclaration) can start while an after-read is in flight. A lost
+  // operation mints nothing, seeds nothing, and propagates nothing.
+  function sealLostOperation(
+    callDigest: string,
+    pending: PendingOperation,
+  ): OperationCompletionResult {
+    sealOperation(callDigest, pending, true)
+    return { status: 'ignored' }
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
   async function completeOperationObservation(
     callDigest: string,
@@ -4231,12 +4475,14 @@ function createSessionRuntime(
     pending: PendingOperation,
     output: unknown,
   ): Promise<OperationCompletionResult> {
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
     }
     const afterSnapshot = await captureAfterOperation(pending)
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     if (!afterSnapshot) {
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
@@ -4253,6 +4499,7 @@ function createSessionRuntime(
       return { status: 'ignored' }
     }
     const classification = await classifyLocalObservation(observation)
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     if (classification.status !== 'ready') {
       sealOperation(callDigest, pending, true)
       return { status: classification.status }
@@ -4263,6 +4510,9 @@ function createSessionRuntime(
         finalObservation.operation,
         pending.observer,
       )
+      if (!ownsOperation(pending)) {
+        return sealLostOperation(callDigest, pending)
+      }
       if (!remoteAfter) {
         sealOperation(callDigest, pending, true)
         return { status: 'unavailable' }
@@ -4283,7 +4533,7 @@ function createSessionRuntime(
       finalObservation = rebuilt
       if (
         finalObservation.operation === 'pr-creation' &&
-        pending.remoteBefore?.status !== 'available'
+        pending.remoteBefore?.status === 'missing-resource'
       ) {
         const seeded = guard.observeReadback({
           operation: 'pr-creation',
@@ -4301,6 +4551,9 @@ function createSessionRuntime(
         }
       }
     }
+    // No await separates the last ownership check from the admission call
+    // below, whose synchronous prefix reads the guard state.
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)
@@ -4474,6 +4727,7 @@ function createSessionRuntime(
     },
     readStatus,
     unavailableCause: () => firstUnavailableCause,
+    seedDeferrals: currentSeedDeferrals,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
@@ -4636,7 +4890,11 @@ export function createOpencodeWorkflowGuard(
         return {
           title: 'Workflow guard status',
           output: statusToolSchema.safeParse(input).success
-            ? statusForTool(runtime.readStatus(), runtime.unavailableCause())
+            ? statusForTool(
+                runtime.readStatus(),
+                runtime.unavailableCause(),
+                runtime.seedDeferrals(),
+              )
             : unavailableToolResult(),
         }
       },

@@ -4972,6 +4972,1534 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(unavailable).state).toBe('unavailable')
   })
 
+  describe('remote seeding deferrals', () => {
+    const D = 'd'.repeat(64)
+    const E = 'e'.repeat(64)
+    const TIMEOUT = {
+      status: 'unavailable' as const,
+      reasonCode: 'command-timeout' as const,
+    }
+    const prAvailable = remoteAvailable(D, E, {
+      pullRequest: { identity: D, state: 'open' },
+    })
+    const checkAvailable = remoteAvailable(D, E, {
+      pullRequest: { identity: D, state: 'open' },
+      checkState: 'pending',
+    })
+
+    function deferralAdapter(
+      mode: 'observe' | 'protected',
+      required: readonly ReceiptOperation[],
+      remote: Record<string, readonly OperationObserverRemoteResult[]>,
+    ): OpencodeWorkflowGuard {
+      return createAdapter(
+        mode,
+        false,
+        sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          remote,
+        ),
+        required,
+      )
+    }
+
+    async function statusParsed(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      return JSON.parse(expectToolOutput(result).output)
+    }
+
+    test.each([
+      { mode: 'observe', reason: 'command-timeout', result: TIMEOUT },
+      {
+        mode: 'protected',
+        reason: 'command-timeout',
+        result: TIMEOUT,
+      },
+      {
+        mode: 'observe',
+        reason: 'missing-resource',
+        result: { status: 'missing-resource' as const },
+      },
+      {
+        mode: 'protected',
+        reason: 'missing-resource',
+        result: { status: 'missing-resource' as const },
+      },
+    ] as const)(
+      'b/c/k: a push $reason defers only push; the session stays active ($mode)',
+      async ({ mode, reason, result }) => {
+        const adapter = deferralAdapter(mode, ['push', 'check-readback'], {
+          'push:before': [result],
+          'check-readback:before': [checkAvailable],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const current = status(adapter)
+        expect(current.state).not.toBe('unavailable')
+        expect(current.epoch).not.toBeNull()
+        expect(current.unit?.status).toBe('active')
+        expect(current.missingOperations).toContain('push')
+        const parsed = await statusParsed(adapter)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: reason },
+        ])
+      },
+    )
+
+    test.each(['check-readback', 'review-readback'] as const)(
+      'd: a %s seeding timeout defers that operation while the others seed',
+      async (operation) => {
+        const adapter = deferralAdapter('observe', ['push', operation], {
+          'push:before': [remoteAvailable(D, E)],
+          [`${operation}:before`]: [TIMEOUT],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        const parsed = await statusParsed(adapter)
+        expect(parsed.seedDeferrals).toEqual([
+          { operation, reasonCode: 'command-timeout' },
+        ])
+      },
+    )
+
+    test('e: a local snapshot timeout at seeding is still fatal', async () => {
+      const base = sequenceObserver([operationSnapshot()], {
+        'push:before': [remoteAvailable(D, E)],
+      })
+      const adapter = createAdapter(
+        'observe',
+        false,
+        { ...base, snapshot: async () => TIMEOUT },
+        ['push'],
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-timeout',
+        timedOut: true,
+      })
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('f: a deferred operation that is never performed leaves completion blocked on missing evidence', async () => {
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      expect(status(adapter).missingOperations).toEqual(['push'])
+      expect(
+        adapter.prepareTransition(SESSION_A, {
+          callId: 'deferred-complete',
+          target: 'unit',
+        }),
+      ).toMatchObject({ status: 'waiting', reasonCode: 'missing-evidence' })
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
+    test('g: a check timeout after pr-creation seeded records no check deferral', async () => {
+      const adapter = deferralAdapter(
+        'observe',
+        ['pr-creation', 'check-readback'],
+        {
+          'pr-creation:before': [prAvailable],
+          'check-readback:before': [TIMEOUT],
+        },
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('h: a timeout for an operation whose resource the unit declared records no deferral', async () => {
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [remoteAvailable(D, E), remoteAvailable(D, E), TIMEOUT],
+        'push:after': [remoteAvailable(D, 'f'.repeat(64))],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'git push origin main' },
+        { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+        'declared-push',
+      )
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      await completeUnit(adapter, 'declared-complete-unit1')
+      expect(status(adapter).unit?.status).toBe('completed')
+      const firstUnitId = status(adapter).unit?.unitId
+
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'declared-start',
+        },
+        { args: startArgs },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'declared-start',
+          args: startArgs,
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('i: a deferral is cleared when the next unit start runs', async () => {
+      // A deferred operation cannot reach a completed first unit: its receipt
+      // is admitted only after its own before-read binds a baseline, and that
+      // clears the deferral. So the next start is a re-declaration on the
+      // still-pristine unit; it runs through the same start path that clears
+      // the deferral before seeding.
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT, remoteAvailable(D, E)],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'command-timeout' },
+      ])
+      const unitId = status(adapter).unit?.unitId
+
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'next-unit-start',
+        },
+        { args: startArgs },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'next-unit-start',
+          args: startArgs,
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      expect(status(adapter).unit?.unitId).toBe(unitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+    })
+
+    describe('binding a deferred baseline at the operation before-hook', () => {
+      const FRESH = 'f'.repeat(64)
+
+      function counted(
+        base: OpencodeOperationObserver,
+        counts: Record<string, number>,
+      ): OpencodeOperationObserver {
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        return {
+          ...base,
+          remoteSnapshot: async (operation, phase) => {
+            const key = `${operation}:${phase}`
+            counts[key] = (counts[key] ?? 0) + 1
+            return reader.call(base, operation, phase)
+          },
+        }
+      }
+
+      function pushAdapter(
+        remote: Record<string, readonly OperationObserverRemoteResult[]>,
+        counts: Record<string, number> = {},
+        required: readonly ReceiptOperation[] = ['push'],
+      ): OpencodeWorkflowGuard {
+        return createAdapter(
+          'observe',
+          false,
+          counted(
+            sequenceObserver(
+              [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+              remote,
+            ),
+            counts,
+          ),
+          required,
+        )
+      }
+
+      async function pushOperation(
+        adapter: OpencodeWorkflowGuard,
+        callID = 'bind-push',
+      ): Promise<void> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          callID,
+        )
+      }
+
+      function operations(adapter: OpencodeWorkflowGuard): string[] {
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+      }
+
+      test('a: an available before-read binds the deferred push baseline and the push receipt is admitted', async () => {
+        const adapter = pushAdapter({
+          'push:before': [TIMEOUT, remoteAvailable(D, E)],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        await pushOperation(adapter)
+        expect(operations(adapter)).toContain('push')
+        expect(status(adapter).missingOperations).toEqual([])
+        expect(status(adapter).satisfiedOperations).toEqual(
+          expect.arrayContaining(['implementation', 'verification', 'push']),
+        )
+        expect(status(adapter).state).toBe('protected')
+        expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+      })
+
+      test('b: a before-read that times out once is retried once and then binds', async () => {
+        const counts: Record<string, number> = {}
+        const adapter = pushAdapter(
+          {
+            'push:before': [TIMEOUT, TIMEOUT, remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+          counts,
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(counts['push:before']).toBe(3)
+        expect(operations(adapter)).toContain('push')
+        expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+      })
+
+      test('c: two before-read timeouts bind nothing; the push runs unadmitted and the session stays up', async () => {
+        const counts: Record<string, number> = {}
+        const adapter = pushAdapter(
+          {
+            'push:before': [TIMEOUT, TIMEOUT, TIMEOUT, remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+          counts,
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await pushOperation(adapter)
+        expect(counts['push:before']).toBe(3)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(status(adapter).missingOperations).toEqual(['push'])
+        expect(status(adapter)).toMatchObject({
+          state: 'rejected',
+          reasonCode: 'resource-mismatch',
+        })
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('d: a push before-read of missing-resource binds nothing and keeps the deferral', async () => {
+        const adapter = pushAdapter({
+          'push:before': [TIMEOUT, { status: 'missing-resource' }],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('e: a deferred pr-creation whose before-read is missing-resource clears the deferral and creation is admitted', async () => {
+        const adapter = pushAdapter(
+          {
+            'pr-creation:before': [TIMEOUT, { status: 'missing-resource' }],
+            'pr-creation:after': [prAvailable],
+          },
+          {},
+          ['pr-creation'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'pr-creation', reasonCode: 'command-timeout' },
+        ])
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'bind-pr' },
+          { args: { command: 'gh pr create --title t --body b' } },
+        )
+        expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'bind-pr',
+            args: { command: 'gh pr create --title t --body b' },
+          },
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+        )
+        expect(operations(adapter)).toContain('pr-creation')
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test('f: a before-read from a different registered worktree observer does not bind', async () => {
+        const fixture = createTargetDerivationFixture()
+        try {
+          expect(
+            runTargetFixtureGit(fixture.linkedRoot, [
+              'branch',
+              '--set-upstream-to=master',
+              'linked',
+            ]).status === 0 ||
+              runTargetFixtureGit(fixture.linkedRoot, [
+                'branch',
+                '--set-upstream-to=main',
+                'linked',
+              ]).status === 0,
+          ).toBe(true)
+          const linkedRemote = await createOpencodeOperationObserver({
+            targetDirectory: fixture.linkedRoot,
+          }).remoteSnapshot?.('push', 'before')
+          // The other worktree's observer would bind if the identity check
+          // were missing.
+          expect(linkedRemote?.status).toBe('available')
+
+          const adapter = pushAdapter({
+            'push:before': [TIMEOUT],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: SESSION_A, callID: 'other-worktree' },
+            {
+              args: {
+                command: 'git push origin linked',
+                workdir: fixture.linkedRoot,
+              },
+            },
+          )
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+            { operation: 'push', reasonCode: 'command-timeout' },
+          ])
+        } finally {
+          fixture.cleanup()
+        }
+      })
+
+      test('g: a push binding names its operation and leaves the pr-creation and check baselines alone', async () => {
+        const PR = '1'.repeat(64)
+        const adapter = pushAdapter(
+          {
+            'push:before': [TIMEOUT, remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [
+              remoteAvailable(PR, E, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'pr-creation:after': [
+              remoteAvailable(PR, FRESH, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'check-readback:before': [
+              remoteAvailable(PR, E, {
+                pullRequest: { identity: PR, state: 'open' },
+                checkState: 'pending',
+              }),
+            ],
+            'check-readback:after': [
+              remoteAvailable(PR, FRESH, {
+                pullRequest: { identity: PR, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+          },
+          {},
+          ['push', 'pr-creation', 'check-readback'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).toContain('push')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr create --title t --body b' },
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'g-pr',
+        )
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr checks 42' },
+          { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+          'g-checks',
+        )
+        // A global (unnamed) binding would have rewritten the pr-creation and
+        // check baselines to the push resource and rejected these receipts.
+        expect(operations(adapter)).toEqual(
+          expect.arrayContaining(['push', 'pr-creation', 'check-readback']),
+        )
+      })
+
+      test('h: a pr-creation binding leaves the check baseline unset and its deferral in place', async () => {
+        const PR = '1'.repeat(64)
+        const adapter = pushAdapter(
+          {
+            'pr-creation:before': [
+              TIMEOUT,
+              remoteAvailable(PR, E, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'pr-creation:after': [
+              remoteAvailable(PR, FRESH, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'check-readback:before': [TIMEOUT, TIMEOUT, TIMEOUT],
+          },
+          {},
+          ['pr-creation', 'check-readback'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'pr-creation', reasonCode: 'command-timeout' },
+          { operation: 'check-readback', reasonCode: 'command-timeout' },
+        ])
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'h-pr' },
+          { args: { command: 'gh pr create --title t --body b' } },
+        )
+        // pr-creation is bound and cleared; check was not propagated to, so
+        // its deferral is still in place.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'check-readback', reasonCode: 'command-timeout' },
+        ])
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'h-pr',
+            args: { command: 'gh pr create --title t --body b' },
+          },
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+        )
+        expect(operations(adapter)).toContain('pr-creation')
+      })
+
+      test('m: an available before-read that observeReadback rejects binds nothing and keeps the deferral', async () => {
+        const adapter = pushAdapter({
+          'push:before': [
+            TIMEOUT,
+            {
+              status: 'available',
+              snapshot: {
+                resourceIdentity: '',
+                resourceRevisionIdentity: E,
+              },
+            },
+          ],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      describe.each([
+        [
+          'check-readback',
+          'gh pr checks 42',
+          'checkState',
+          'completed-success',
+        ],
+        [
+          'review-readback',
+          'gh pr view 42 --json reviewDecision',
+          'reviewDecision',
+          'approved',
+        ],
+      ] as const)(
+        '%s deferral on a missing-resource before-read',
+        (operation, command, field, finalValue) => {
+          const PR = '1'.repeat(64)
+          const pullRequest = { identity: PR, state: 'open' as const }
+          const pendingValue = field === 'checkState' ? 'pending' : 'required'
+          const before = remoteAvailable(PR, E, {
+            pullRequest,
+            [field]: pendingValue,
+          })
+          const after = remoteAvailable(PR, FRESH, {
+            pullRequest,
+            [field]: finalValue,
+          })
+
+          function adapterFor(
+            beforeReads: readonly OperationObserverRemoteResult[],
+          ): OpencodeWorkflowGuard {
+            return pushAdapter(
+              {
+                [`${operation}:before`]: [TIMEOUT, ...beforeReads],
+                [`${operation}:after`]: [after],
+              },
+              {},
+              [operation],
+            )
+          }
+
+          function runOperation(
+            adapter: OpencodeWorkflowGuard,
+            callID: string,
+          ): Promise<void> {
+            return observeOperationTool(
+              adapter,
+              'bash',
+              { command },
+              { title: operation, output: 'ok', metadata: { exit: 0 } },
+              callID,
+            )
+          }
+
+          test('a missing-resource before-read keeps the deferral and admits nothing', async () => {
+            const adapter = adapterFor([{ status: 'missing-resource' }])
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            await runOperation(adapter, 'missing-before')
+            expect(operations(adapter)).not.toContain(operation)
+            expect(status(adapter).state).not.toBe('unavailable')
+            expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+              { operation, reasonCode: 'command-timeout' },
+            ])
+          })
+
+          test('a later available before-read from the same observer binds it and the receipt is admitted', async () => {
+            const adapter = adapterFor([{ status: 'missing-resource' }, before])
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            await runOperation(adapter, 'missing-before')
+            expect(operations(adapter)).not.toContain(operation)
+            await runOperation(adapter, 'available-before')
+            expect(operations(adapter)).toContain(operation)
+            expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+            expect(status(adapter).state).not.toBe('unavailable')
+          })
+        },
+      )
+
+      test('l: a push before-hook that runs while the push seed is in flight binds nothing', async () => {
+        let releaseSeed: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        const base = sequenceObserver([operationSnapshot()], {
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 1) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseSeed = resolve
+                    },
+                  )
+                }
+                return Promise.resolve(remoteAvailable(D, E))
+              }
+              return Promise.resolve({
+                status: 'unavailable',
+                reasonCode: 'remote-missing-field',
+              })
+            },
+          },
+          ['push'],
+        )
+        const skillDone = observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        // The seed read is suspended; the unit exists but nothing is deferred.
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'in-flight-push' },
+          { args: { command: 'git push origin main' } },
+        )
+        releaseSeed(TIMEOUT)
+        await skillDone
+        expect(pushBeforeReads).toBe(2)
+        // Had the in-flight before-hook bound a baseline, the seed's timeout
+        // would have recorded no deferral.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('n: a before-read suspended across unit completion and the next unit start cannot bind or mint evidence for the new unit', async () => {
+        // Push P's before-read samples revision E and is held. Another push
+        // advances the remote and completes unit 1. Unit 2 starts with a
+        // timed-out (deferred) push seed. Releasing P's old read must neither
+        // bind unit 2's deferral with that unit-1 era revision nor let P's
+        // up-to-date push count as a mutation for unit 2.
+        let releaseStale: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        // The held read (the second push before-read, stale push P) bypasses
+        // the sequence, so the base serves: unit-1 seed, unit-1 push Q, then
+        // the unit-2 seed (timeout).
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [
+              remoteAvailable(D, E),
+              remoteAvailable(D, E),
+              TIMEOUT,
+            ],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 2) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseStale = resolve
+                    },
+                  )
+                }
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+        const staleCommand = { command: 'git push origin HEAD' }
+        const staleBefore = adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-push' },
+          { args: staleCommand },
+        )
+        for (let tick = 0; tick < 50 && pushBeforeReads < 2; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(pushBeforeReads).toBe(2)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'stale-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        const firstUnitId = status(adapter).unit?.unitId
+
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'stale-start-unit2',
+          },
+          { args: {} },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'stale-start-unit2',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        const pushReceiptsBefore = operations(adapter).filter(
+          (operation) => operation === 'push',
+        ).length
+
+        releaseStale(remoteAvailable(D, E))
+        await staleBefore
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-push',
+            args: staleCommand,
+          },
+          { title: 'push', output: 'up-to-date', metadata: { exit: 0 } },
+        )
+
+        expect(
+          operations(adapter).filter((operation) => operation === 'push'),
+        ).toHaveLength(pushReceiptsBefore)
+        expect(status(adapter).missingOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        // The stale read bound nothing, so unit 2's deferral is untouched.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('o: a before-read suspended across a same-ID active-unit redeclaration cannot bind the replacement deferral or mint evidence', async () => {
+        // The unit keeps both IDs through a successful redeclaration, but the
+        // start resets and reseeds the deferrals. P's read of revision E
+        // predates that declaration and must not bind the replacement.
+        let releaseStale: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        // The held read (the second push before-read, stale push P) bypasses
+        // the sequence, so the base serves the initial seed and then the
+        // redeclaration seed, both timing out.
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [TIMEOUT, TIMEOUT],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 2) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseStale = resolve
+                    },
+                  )
+                }
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        const unitId = status(adapter).unit?.unitId
+
+        const staleCommand = { command: 'git push origin HEAD' }
+        const staleBefore = adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-push' },
+          { args: staleCommand },
+        )
+        for (let tick = 0; tick < 50 && pushBeforeReads < 2; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(pushBeforeReads).toBe(2)
+
+        const startArgs = { expected_operations: ['pr-creation'] }
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'redeclare-start',
+          },
+          { args: startArgs },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'redeclare-start',
+            args: startArgs,
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(pushBeforeReads).toBe(3)
+        expect(status(adapter).unit?.unitId).toBe(unitId)
+        expect(status(adapter).unit?.requiredOperations).toContain(
+          'pr-creation',
+        )
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+
+        releaseStale(remoteAvailable(D, E))
+        await staleBefore
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-push',
+            args: staleCommand,
+          },
+          { title: 'push', output: 'up-to-date', metadata: { exit: 0 } },
+        )
+
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).missingOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+    })
+
+    describe('after-hook ownership across a unit change', () => {
+      const FRESH = 'f'.repeat(64)
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const MISSING = { status: 'missing-resource' as const }
+      type HoldPoint = 'local-after' | 'remote-after'
+
+      interface HeldAfter {
+        readonly adapter: OpencodeWorkflowGuard
+        arm(point: HoldPoint): void
+        hasHeld(): boolean
+        release(): void
+      }
+
+      function heldAfterAdapter(): HeldAfter {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+            'check-readback:before': [checkAvailable],
+            'check-readback:after': [
+              remoteAvailable(D, FRESH, {
+                pullRequest: { identity: D, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+          },
+        )
+        let armed: HoldPoint | undefined
+        let held = false
+        let release: () => void = () => {}
+        const gate = (): Promise<void> | undefined => {
+          held = true
+          armed = undefined
+          return new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            snapshot: async () => {
+              if (armed === 'local-after') await gate()
+              return base.snapshot()
+            },
+            remoteSnapshot: async (operation, phase) => {
+              if (armed === 'remote-after' && phase === 'after') await gate()
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        return {
+          adapter,
+          arm: (point) => {
+            armed = point
+          },
+          hasHeld: () => held,
+          release: () => release(),
+        }
+      }
+
+      async function untilHeld(held: HeldAfter): Promise<void> {
+        for (let tick = 0; tick < 50 && !held.hasHeld(); tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(held.hasHeld()).toBe(true)
+      }
+
+      // Unit 2 also requires pr-creation and check-readback, so a leaked
+      // self-seed, propagation, or receipt would be admitted rather than
+      // rejected as not required.
+      async function startSuccessorUnit(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<void> {
+        const args = { expected_operations: ['pr-creation', 'check-readback'] }
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'ownership-start-unit2',
+          },
+          { args },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'ownership-start-unit2',
+            args,
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+      }
+
+      // Runs `staleCommand` to completion of its before-hook in unit 1,
+      // suspends its after-hook at `point`, completes unit 1 with another
+      // push, starts unit 2, then releases the suspended after-hook.
+      async function runAcrossUnitChange(
+        held: HeldAfter,
+        point: HoldPoint,
+        staleCommand: Record<string, unknown>,
+      ): Promise<void> {
+        const { adapter } = held
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const firstUnitId = status(adapter).unit?.unitId
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-after' },
+          { args: staleCommand },
+        )
+        held.arm(point)
+        const staleAfter = adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-after',
+            args: staleCommand,
+          },
+          { title: 'op', output: 'ok', metadata: { exit: 0 } },
+        )
+        await untilHeld(held)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'ownership-unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'ownership-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        await startSuccessorUnit(adapter)
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+
+        held.release()
+        await staleAfter
+      }
+
+      function operationsOf(adapter: OpencodeWorkflowGuard): string[] {
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+      }
+
+      test.each([
+        ['captureAfterOperation', 'local-after'],
+        ['captureRemoteAfter', 'remote-after'],
+      ] as const)(
+        'a push whose after-hook is suspended in %s cannot mint evidence for the successor unit',
+        async (_name, point) => {
+          const held = heldAfterAdapter()
+          await runAcrossUnitChange(held, point, {
+            command: 'git push origin HEAD',
+          })
+          const { adapter } = held
+          // Only unit 1's own push (the completing one) holds a receipt.
+          expect(
+            operationsOf(adapter).filter((operation) => operation === 'push'),
+          ).toHaveLength(1)
+          expect(status(adapter).missingOperations).toContain('push')
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
+
+      test.each([
+        ['captureAfterOperation', 'local-after'],
+        ['captureRemoteAfter', 'remote-after'],
+      ] as const)(
+        'a pr-creation whose after-hook is suspended in %s neither self-seeds nor propagates into the successor unit',
+        async (_name, point) => {
+          const held = heldAfterAdapter()
+          await runAcrossUnitChange(held, point, PR_CREATE)
+          const { adapter } = held
+          expect(operationsOf(adapter)).not.toContain('pr-creation')
+          // A self-seed would have set the successor unit's pr-creation
+          // baseline and propagated it to check; the same PR would then be
+          // admitted. Without a baseline it is a resource-mismatch.
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command: 'gh pr checks 42' },
+            { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+            'ownership-probe-check',
+          )
+          expect(operationsOf(adapter)).not.toContain('check-readback')
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
+
+      test('a push whose held classifier rejects after the unit changed neither disables the successor nor mints evidence', async () => {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const classifier = createReceiptClassifier()
+        const realClassify = classifier.classifyOperation
+        if (!realClassify) throw new Error('classifier implements it')
+        let armed = false
+        let held = false
+        let rejectHeld: (reason: Error) => void = () => {}
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          observer: base,
+          runtimeRequiredOperations: ['push'],
+          classifier: {
+            ...classifier,
+            classifyOperation: (input: unknown) => {
+              if (!armed) return realClassify(input)
+              armed = false
+              held = true
+              return new Promise((_resolve, reject) => {
+                rejectHeld = reject
+              })
+            },
+          },
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const firstUnitId = status(adapter).unit?.unitId
+        const staleCommand = { command: 'git push origin HEAD' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-classify' },
+          { args: staleCommand },
+        )
+        armed = true
+        const staleAfter = adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-classify',
+            args: staleCommand,
+          },
+          { title: 'op', output: 'ok', metadata: { exit: 0 } },
+        )
+        for (let tick = 0; tick < 50 && !held; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(held).toBe(true)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'classify-unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'classify-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        await startSuccessorUnit(adapter)
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+        expect(status(adapter).missingOperations).toContain('push')
+
+        rejectHeld(new Error('classifier failed'))
+        await staleAfter
+
+        expect(status(adapter).state).not.toBe('unavailable')
+        // Only unit 1's own completing push holds a push receipt.
+        expect(
+          operationsOf(adapter).filter((operation) => operation === 'push'),
+        ).toHaveLength(1)
+        expect(status(adapter).missingOperations).toContain('push')
+      })
+    })
+
+    describe.each([
+      [
+        'check-readback',
+        'gh pr checks 42',
+        'checkState',
+        'pending',
+        'completed-success',
+      ],
+      [
+        'review-readback',
+        'gh pr view 42 --json reviewDecision',
+        'reviewDecision',
+        'required',
+        'approved',
+      ],
+    ] as const)(
+      'lingering %s deferral after a pr-creation self-seed propagated the baseline',
+      (operation, command, field, pendingValue, finalValue) => {
+        const FRESH = 'f'.repeat(64)
+        const PR_A = D
+        const PR_B = '2'.repeat(64)
+
+        function pullRequestRead(
+          identity: string,
+          revision: string,
+          value: string,
+        ): OperationObserverRemoteResult {
+          return remoteAvailable(identity, revision, {
+            pullRequest: { identity, state: 'open' },
+            [field]: value,
+          })
+        }
+
+        // Every seed times out; the pr-creation operation's own before-read
+        // is missing-resource, so creation self-seeds PR A from the after-read
+        // and propagates it to check and review while their deferrals remain.
+        function adapterAfterSelfSeed(
+          operationBefore: OperationObserverRemoteResult,
+        ): OpencodeWorkflowGuard {
+          const base = sequenceObserver(
+            [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+            {
+              'pr-creation:before': [TIMEOUT, { status: 'missing-resource' }],
+              'pr-creation:after': [prAvailable],
+              [`${operation}:before`]: [TIMEOUT, operationBefore],
+              [`${operation}:after`]: [
+                pullRequestRead(
+                  operationBefore.status === 'available'
+                    ? operationBefore.snapshot.resourceIdentity
+                    : PR_A,
+                  FRESH,
+                  finalValue,
+                ),
+              ],
+            },
+          )
+          return createAdapter('observe', false, base, [
+            'pr-creation',
+            operation,
+          ])
+        }
+
+        async function createPullRequestA(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command: 'gh pr create --title t --body b' },
+            { title: 'pr', output: 'created', metadata: { exit: 0 } },
+            'lingering-pr',
+          )
+        }
+
+        function operationReceipts(adapter: OpencodeWorkflowGuard): number {
+          return ledger(adapter)
+            .listReceipts()
+            .filter((receipt) => receipt.canonical.operation === operation)
+            .length
+        }
+
+        test('a different PR cannot overwrite the propagated baseline or mint evidence', async () => {
+          const adapter = adapterAfterSelfSeed(
+            pullRequestRead(PR_B, E, pendingValue),
+          )
+          await createPullRequestA(adapter)
+          expect(
+            ledger(adapter)
+              .listReceipts()
+              .map((receipt) => receipt.canonical.operation),
+          ).toContain('pr-creation')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+            { operation, reasonCode: 'command-timeout' },
+          ])
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command },
+            { title: operation, output: 'ok', metadata: { exit: 0 } },
+            'lingering-other-pr',
+          )
+          expect(operationReceipts(adapter)).toBe(0)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter)).toMatchObject({
+            state: 'rejected',
+            reasonCode: 'resource-mismatch',
+          })
+          // The deferral was obsolete once the baseline existed.
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+
+        test('the same PR is still admitted and the obsolete deferral is cleared', async () => {
+          const adapter = adapterAfterSelfSeed(
+            pullRequestRead(PR_A, E, pendingValue),
+          )
+          await createPullRequestA(adapter)
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command },
+            { title: operation, output: 'ok', metadata: { exit: 0 } },
+            'lingering-same-pr',
+          )
+          expect(operationReceipts(adapter)).toBe(1)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+      },
+    )
+
+    describe('pr-creation after-read self-seed', () => {
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const MISSING = { status: 'missing-resource' as const }
+      const UNREADABLE = {
+        status: 'unavailable' as const,
+        reasonCode: 'remote-missing-field' as const,
+      }
+
+      // Seeding reads pr-creation:before first (missing-resource, tolerated);
+      // the operation's own before-hook read is the second call.
+      function prAdapter(
+        hookBefore: OperationObserverRemoteResult | 'throw',
+      ): OpencodeWorkflowGuard {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+            // Seeding tolerates a missing check/review resource, so neither
+            // has a baseline until pr-creation propagates one.
+            'check-readback:before': [MISSING, checkAvailable],
+            'check-readback:after': [
+              remoteAvailable(D, 'f'.repeat(64), {
+                pullRequest: { identity: D, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+            'review-readback:before': [
+              MISSING,
+              remoteAvailable(D, E, {
+                pullRequest: { identity: D, state: 'open' },
+                reviewDecision: 'required',
+              }),
+            ],
+            'review-readback:after': [
+              remoteAvailable(D, 'f'.repeat(64), {
+                pullRequest: { identity: D, state: 'open' },
+                reviewDecision: 'approved',
+              }),
+            ],
+          },
+        )
+        let beforeReads = 0
+        return createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: async (operation, phase) => {
+              const isHookRead =
+                operation === 'pr-creation' &&
+                phase === 'before' &&
+                ++beforeReads >= 2
+              if (!isHookRead)
+                return base.remoteSnapshot?.(operation, phase) ?? UNREADABLE
+              if (hookBefore === 'throw') throw new Error('probe failed')
+              return hookBefore
+            },
+          },
+          ['pr-creation', 'check-readback', 'review-readback'],
+        )
+      }
+
+      // The guard exposes no baseline accessor through the adapter, so probe
+      // the downstream baselines behaviorally: with no baseline a check or
+      // review before-read for any PR is a resource-mismatch and mints
+      // nothing; with the PR propagated from creation it is admitted.
+      async function admittedDownstream(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<string[]> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr checks 42' },
+          { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+          'probe-check',
+        )
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr view 42 --json reviewDecision' },
+          { title: 'review', output: 'ok', metadata: { exit: 0 } },
+          'probe-review',
+        )
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+          .filter(
+            (operation) =>
+              operation === 'check-readback' || operation === 'review-readback',
+          )
+          .sort()
+      }
+
+      function prReceipts(adapter: OpencodeWorkflowGuard): number {
+        return ledger(adapter)
+          .listReceipts()
+          .filter((receipt) => receipt.canonical.operation === 'pr-creation')
+          .length
+      }
+
+      test.each([
+        ['a: unavailable/command-timeout', TIMEOUT],
+        [
+          'b: another unavailable reason',
+          { status: 'unavailable', reasonCode: 'remote-missing-field' },
+        ],
+        ['c: a before-read that throws', 'throw'],
+      ] as const)(
+        '%s never seeds from the after-read and is not admitted',
+        async (_name, hookBefore) => {
+          const adapter = prAdapter(hookBefore)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await observeOperationTool(
+            adapter,
+            'bash',
+            PR_CREATE,
+            { title: 'pr', output: 'created', metadata: { exit: 0 } },
+            'pr-self-seed',
+          )
+          expect(prReceipts(adapter)).toBe(0)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter).missingOperations).toContain('pr-creation')
+          // No self-seed happened, so nothing was propagated downstream.
+          expect(await admittedDownstream(adapter)).toEqual([])
+        },
+      )
+
+      test('d: a missing-resource before-read still seeds from the after-read and mints', async () => {
+        const adapter = prAdapter(MISSING)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'pr-self-seed',
+        )
+        expect(prReceipts(adapter)).toBe(1)
+        expect(status(adapter).state).not.toBe('unavailable')
+        // Positive control: the self-seed set the pr-creation baseline and
+        // propagated it, so the same PR is admitted downstream.
+        expect(await admittedDownstream(adapter)).toEqual([
+          'check-readback',
+          'review-readback',
+        ])
+      })
+
+      test('e: a PR present before, with an unchanged head after, is a no-op', async () => {
+        const adapter = prAdapter(prAvailable)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'exists', metadata: { exit: 1 } },
+          'pr-self-seed',
+        )
+        expect(prReceipts(adapter)).toBe(0)
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(await admittedDownstream(adapter)).toEqual([])
+      })
+    })
+
+    test('j: the deferral list never enters markers, receipts, tool metadata, or digests', async () => {
+      const deferred = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT],
+      })
+      const skillOutput = { title: 'Loaded skill', output: 'ok', metadata: {} }
+      await observeSkill(
+        deferred,
+        'systematic_skill',
+        'ce:work',
+        'deferral-skill',
+        SESSION_A,
+        skillOutput,
+      )
+      const statusResult = expectToolOutput(
+        await getTool(deferred, 'systematic_workflow_status').execute(
+          {},
+          toolContext(),
+        ),
+      )
+      expect(JSON.parse(statusResult.output).seedDeferrals).toBeDefined()
+      const transformed = { system: ['base'] }
+      await deferred.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        transformed,
+      )
+      const everything = JSON.stringify([
+        skillOutput,
+        statusResult.metadata,
+        transformed.system,
+        ledger(deferred).listReceipts(),
+        status(deferred),
+      ])
+      expect(everything).not.toContain('seedDeferrals')
+      expect(everything).not.toContain('command-timeout')
+    })
+  })
+
   describe('guard-unavailable first-cause diagnostic (seedRemoteScopes)', () => {
     // sequenceObserver's default remoteResults is `{}`: any operation/phase
     // key not supplied resolves to `{status:'unavailable', reasonCode:
@@ -5237,7 +6765,7 @@ describe('OpenCode workflow guard adapter', () => {
     })
 
     test('table: every GuardUnavailableCauseKind reports the correct site, operation, and reasonCode', async () => {
-      interface CauseCase {
+      interface UnavailableCase {
         readonly name: string
         readonly observer: OpencodeOperationObserver
         readonly expected: {
@@ -5248,6 +6776,15 @@ describe('OpenCode workflow guard adapter', () => {
           readonly timedOut: boolean
         }
       }
+      interface DeferredCase {
+        readonly name: string
+        readonly observer: OpencodeOperationObserver
+        readonly deferred: {
+          readonly operation: 'push'
+          readonly reasonCode: 'command-timeout' | 'missing-resource'
+        }
+      }
+      type CauseCase = UnavailableCase | DeferredCase
 
       const validateRegisteredWorktree = (candidateDirectory: string) => ({
         status: 'ok' as const,
@@ -5358,16 +6895,11 @@ describe('OpenCode workflow guard adapter', () => {
           },
         },
         {
-          name: 'remote-scope-missing-resource',
+          name: 'push missing-resource defers the operation',
           observer: sequenceObserver([operationSnapshot()], {
             'push:before': [{ status: 'missing-resource' }],
           }),
-          expected: {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-missing-resource',
-            operation: 'push',
-            timedOut: false,
-          },
+          deferred: { operation: 'push', reasonCode: 'missing-resource' },
         },
         {
           name: 'remote-scope-unavailable, non-timeout reasonCode',
@@ -5385,19 +6917,13 @@ describe('OpenCode workflow guard adapter', () => {
           },
         },
         {
-          name: 'remote-scope-unavailable, command-timeout',
+          name: 'remote command-timeout defers the operation',
           observer: sequenceObserver([operationSnapshot()], {
             'push:before': [
               { status: 'unavailable', reasonCode: 'command-timeout' },
             ],
           }),
-          expected: {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-unavailable',
-            operation: 'push',
-            reasonCode: 'command-timeout',
-            timedOut: true,
-          },
+          deferred: { operation: 'push', reasonCode: 'command-timeout' },
         },
         {
           name: 'remote-readback-rejected',
@@ -5427,12 +6953,20 @@ describe('OpenCode workflow guard adapter', () => {
           'push',
         ])
         await observeSkill(adapter, 'systematic_skill', 'ce:work')
-        expect(status(adapter).state).toBe('unavailable')
         const result = await getTool(
           adapter,
           'systematic_workflow_status',
         ).execute({}, toolContext())
         const parsed = JSON.parse(expectToolOutput(result).output)
+        if ('deferred' in causeCase) {
+          expect(status(adapter).state, causeCase.name).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause, causeCase.name).toBeUndefined()
+          expect(parsed.seedDeferrals, causeCase.name).toEqual([
+            causeCase.deferred,
+          ])
+          continue
+        }
+        expect(status(adapter).state, causeCase.name).toBe('unavailable')
         expect(parsed.firstUnavailableCause, causeCase.name).toEqual(
           causeCase.expected,
         )

@@ -208,6 +208,12 @@ export interface WorkflowGuard {
   ): Promise<EvidenceObservationResult>
   observeReadback(input: unknown): ReadbackObservationResult
   currentOperationContext(): CurrentOperationContext
+  /**
+   * Read-only: whether the active unit already has a resource baseline for
+   * `operation` (declared on the unit, seeded, or propagated from PR
+   * creation). False when there is no active unit.
+   */
+  hasResourceBaseline(operation: ReceiptOperation): boolean
   status(): WorkflowStatus
   prepareTransition(input: unknown): TransitionPrepareResult
   finalizeTransition(input: unknown): TransitionFinalizeResult
@@ -252,6 +258,11 @@ interface ParsedReadback {
   pullRequest?: ReceiptOperationAfter['pullRequest']
   checkState?: ReceiptOperationAfter['checkState']
   reviewDecision?: ReceiptOperationAfter['reviewDecision']
+  /**
+   * `false` keeps a pr-creation readback from propagating its resource to
+   * undeclared check/review baselines. Absent means the default behavior.
+   */
+  propagate?: boolean
 }
 
 interface OperationState {
@@ -819,10 +830,12 @@ function parseReadback(input: unknown): ParsedReadback | undefined {
         'pullRequest',
         'checkState',
         'reviewDecision',
+        'propagate',
       ]),
     ) ||
     !isBoundedString(input.workspaceIdentity) ||
-    (input.operation !== undefined && !isOperation(input.operation))
+    (input.operation !== undefined && !isOperation(input.operation)) ||
+    (input.propagate !== undefined && typeof input.propagate !== 'boolean')
   ) {
     return undefined
   }
@@ -849,6 +862,7 @@ function parseReadback(input: unknown): ParsedReadback | undefined {
     pullRequest: after.pullRequest,
     checkState: after.checkState,
     reviewDecision: after.reviewDecision,
+    ...(input.propagate === undefined ? {} : { propagate: input.propagate }),
   }
 }
 
@@ -1572,7 +1586,11 @@ export function createWorkflowGuard(
       : currentResourceIdentities.get(readback.operation)
     const changed = readback.resourceIdentity !== expected
     currentResourceIdentities.set(readback.operation, readback.resourceIdentity)
-    if (readback.operation === 'pr-creation' && unit) {
+    if (
+      readback.operation === 'pr-creation' &&
+      unit &&
+      readback.propagate !== false
+    ) {
       propagatePullRequestScope(unit, readback.resourceIdentity)
     }
     return changed
@@ -3606,6 +3624,12 @@ export function createWorkflowGuard(
 
     currentOperationContext(): CurrentOperationContext {
       return currentOperationContext()
+    },
+
+    hasResourceBaseline(operation: ReceiptOperation): boolean {
+      return epoch?.unit
+        ? currentResource(epoch.unit, operation) !== undefined
+        : false
     },
 
     status(): WorkflowStatus {
