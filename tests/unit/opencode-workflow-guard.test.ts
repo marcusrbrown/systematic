@@ -2210,7 +2210,7 @@ describe('OpenCode workflow guard adapter', () => {
     expect(rejectedOutput.output).toContain('no-active-epoch')
     expect(rejectedOutput.metadata).toMatchObject({
       protocolVersion: expect.any(Number),
-      state: 'unavailable',
+      state: 'inactive',
       workflowGuard: {
         status: 'rejected',
         reasonCode: 'no-active-epoch',
@@ -2991,7 +2991,10 @@ describe('OpenCode workflow guard adapter', () => {
     expect((firstPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length).toBe(
       1,
     )
-    expect(firstPass).toContain('unavailable')
+    // The epoch-less second adapter is `inactive`; the active first adapter is
+    // `waiting`, which outranks it in the aggregate.
+    expect(firstPass).toContain('"state":"inactive"')
+    expect(firstPass).toContain('"aggregate":{"state":"waiting"')
 
     await first.hooks['experimental.chat.system.transform'](
       { sessionID: 'session-1' },
@@ -3001,7 +3004,8 @@ describe('OpenCode workflow guard adapter', () => {
     expect(
       (secondPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length,
     ).toBe(1)
-    expect(secondPass).toContain('unavailable')
+    expect(secondPass).toContain('"state":"inactive"')
+    expect(secondPass).toContain('"aggregate":{"state":"waiting"')
   })
 
   test('round-trips operation-target-mismatch in prior guard marker sources', async () => {
@@ -3038,6 +3042,138 @@ describe('OpenCode workflow guard adapter', () => {
       sources: Array<{ source: string; reasonCode: string }>
     }
     expect(document.sources).toContainEqual(priorSource)
+  })
+
+  describe('inactive guard state', () => {
+    interface MarkerDoc {
+      sources: Array<{ source: string; state: string; reasonCode: string }>
+      aggregate: { state: string; reasonCode: string }
+    }
+
+    function priorMarker(sources: readonly object[]): string {
+      return `<SYSTEMATIC_WORKFLOW_GUARD>${JSON.stringify({
+        protocolVersion: 2,
+        sources,
+        aggregate: sources[0],
+      })}</SYSTEMATIC_WORKFLOW_GUARD>`
+    }
+
+    function readMarker(system: readonly string[]): MarkerDoc {
+      const body = system
+        .join('\n')
+        .match(
+          /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
+        )?.[1]
+      if (!body) throw new Error('guard marker missing')
+      return JSON.parse(body) as MarkerDoc
+    }
+
+    const inactiveSource = {
+      source: 'prior-inactive',
+      state: 'inactive',
+      reasonCode: 'no-active-epoch',
+      enforcement: 'protected',
+      statusDigest: 'prior-inactive-digest',
+    }
+
+    test('a fresh session reports inactive / no-active-epoch in protected and observe mode', () => {
+      for (const mode of ['protected', 'observe'] as const) {
+        const adapter = createAdapter(mode)
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+        })
+      }
+    })
+
+    test('activation from inactive creates an epoch and projects waiting / missing-evidence', async () => {
+      const adapter = createAdapter('protected')
+      expect(status(adapter).state).toBe('inactive')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter)).toMatchObject({
+        state: 'waiting',
+        reasonCode: 'missing-evidence',
+      })
+      expect(status(adapter).epoch).not.toBeNull()
+    })
+
+    test('disabled mode never projects inactive', () => {
+      const adapter = createAdapter('disabled')
+      expect(status(adapter).state).toBe('disabled')
+      expect(status(adapter).state).not.toBe('inactive')
+    })
+
+    test('marker aggregate: inactive alone aggregates to inactive', async () => {
+      const adapter = createAdapter('protected')
+      const output = { system: ['base', priorMarker([inactiveSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        output,
+      )
+      const document = readMarker(output.system)
+      expect(document.sources).toContainEqual(inactiveSource)
+      expect(document.aggregate).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+    })
+
+    for (const blocking of [
+      { state: 'waiting', reasonCode: 'missing-evidence' },
+      { state: 'rejected', reasonCode: 'operation-target-mismatch' },
+      { state: 'unavailable', reasonCode: 'guard-unavailable' },
+    ] as const) {
+      test(`marker aggregate: inactive mixed with ${blocking.state} aggregates to ${blocking.state}`, async () => {
+        const adapter = createAdapter('protected')
+        const blockingSource = {
+          source: `prior-${blocking.state}`,
+          ...blocking,
+          enforcement: 'protected',
+          statusDigest: `prior-${blocking.state}-digest`,
+        }
+        const output = {
+          system: ['base', priorMarker([inactiveSource, blockingSource])],
+        }
+        await adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          output,
+        )
+        const document = readMarker(output.system)
+        expect(document.sources.map((source) => source.state)).toContain(
+          'inactive',
+        )
+        expect(document.aggregate).toMatchObject(blocking)
+      })
+    }
+
+    test('a marker source with state inactive parses and an unknown state is rejected', async () => {
+      const adapter = createAdapter('protected')
+      const accepted = { system: ['base', priorMarker([inactiveSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        accepted,
+      )
+      expect(readMarker(accepted.system).sources).toContainEqual(inactiveSource)
+      expect(readMarker(accepted.system).aggregate.reasonCode).not.toBe(
+        'guard-unavailable',
+      )
+
+      const unknownSource = { ...inactiveSource, state: 'dormant' }
+      const rejected = { system: ['base', priorMarker([unknownSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        rejected,
+      )
+      const document = readMarker(rejected.system)
+      expect(document.sources.map((source) => source.state)).not.toContain(
+        'dormant',
+      )
+      expect(document.aggregate).toMatchObject({
+        state: 'unavailable',
+        reasonCode: 'guard-unavailable',
+      })
+    })
   })
 
   test('recovers a persisted legacy (v1) guard marker under v2 parsing', async () => {
@@ -3125,11 +3261,9 @@ describe('OpenCode workflow guard adapter', () => {
     expect(document.sources.some((source) => source.debug !== undefined)).toBe(
       true,
     )
-    const worst = document.sources.find(
-      (source) => source.state === 'unavailable',
-    )
-    if (!worst) throw new Error('expected an unavailable source')
-    expect(document.aggregate.state).toBe('unavailable')
+    const worst = document.sources.find((source) => source.state === 'waiting')
+    if (!worst) throw new Error('expected a waiting source')
+    expect(document.aggregate.state).toBe('waiting')
     expect(document.aggregate.statusDigest).toBe(worst.statusDigest)
   })
 
@@ -4919,7 +5053,7 @@ describe('OpenCode workflow guard adapter', () => {
         'systematic_workflow_status',
       ).execute({}, toolContext(otherSessionID))
       const otherParsed = JSON.parse(expectToolOutput(otherResult).output)
-      // An untouched session reports state 'unavailable'/reasonCode
+      // An untouched session reports state 'inactive'/reasonCode
       // 'no-active-epoch' (nothing has happened yet) — distinct from the
       // mode-level 'guard-unavailable' session A hit. Assert on the
       // mode-level reasonCode and the cause itself, not on `state`.
@@ -5939,7 +6073,7 @@ describe('OpenCode workflow guard adapter', () => {
       // This is effectively the foreign-only case: after filtering there are no own markers.
       // The guard should treat this as a fresh start (allowFresh path in initializeSession),
       // NOT as guard-unavailable. A fresh guard without an active epoch has state
-      // 'unavailable' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
+      // 'inactive' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
       const ownIdentity = 'empty-after-filter-reg'
       const ownSalt = new Uint8Array(32).fill(55)
       const foreignIdentity = 'unrelated-foreign-reg'
@@ -5981,10 +6115,11 @@ describe('OpenCode workflow guard adapter', () => {
         toolContext(SESSION_A),
       )
 
-      // A fresh guard (no epoch activated yet) has state 'unavailable' / 'no-active-epoch'.
+      // A fresh guard (no epoch activated yet) has state 'inactive' / 'no-active-epoch'.
       // The key invariant: it must NOT be 'guard-unavailable' (which publishUnavailable sets).
       const s = restored.status(SESSION_A)
       expect(s.reasonCode).not.toBe('guard-unavailable')
+      expect(s.state).toBe('inactive')
       expect(s.reasonCode).toBe('no-active-epoch')
     })
 
@@ -6226,6 +6361,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       const s = adapter.status(SESSION_A)
       // Foreign-only → publishFresh → no-active-epoch (NOT guard-unavailable).
+      expect(s.state).toBe('inactive')
       expect(s.reasonCode).toBe('no-active-epoch')
       expect(s.epoch).toBeNull()
     })

@@ -1242,13 +1242,15 @@ interface ToolResultContent {
 }
 
 function markerStatusRank(state: WorkflowStatus['state']): number {
-  return {
+  const ranks = {
     disabled: 0,
-    protected: 1,
-    waiting: 2,
-    rejected: 3,
-    unavailable: 4,
-  }[state]
+    inactive: 1,
+    protected: 2,
+    waiting: 3,
+    rejected: 4,
+    unavailable: 5,
+  } satisfies Record<WorkflowStatus['state'], number>
+  return ranks[state]
 }
 
 function isWorkflowState(value: unknown): value is WorkflowStatus['state'] {
@@ -1257,7 +1259,8 @@ function isWorkflowState(value: unknown): value is WorkflowStatus['state'] {
     value === 'waiting' ||
     value === 'rejected' ||
     value === 'disabled' ||
-    value === 'unavailable'
+    value === 'unavailable' ||
+    value === 'inactive'
   )
 }
 
