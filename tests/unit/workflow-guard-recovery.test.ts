@@ -376,7 +376,7 @@ describe('workflow guard recovery', () => {
     const guard = createGuard(fixture.ledger)
     expect(
       guard.prepareTransition({ callId: 'pending', target: 'unit' }),
-    ).toMatchObject({ status: 'unavailable' })
+    ).toMatchObject({ status: 'rejected', reasonCode: 'no-active-epoch' })
     const before = guard.status()
 
     expect(
