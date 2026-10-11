@@ -6492,6 +6492,262 @@ describe('OpenCode workflow guard adapter', () => {
       expect(s.reasonCode).toBe('no-active-epoch')
       expect(s.epoch).toBeNull()
     })
+
+    describe('initialization and observer-readback unavailable causes', () => {
+      const OWN_IDENTITY = 'cause-own-registration'
+      const OWN_SALT = new Uint8Array(32).fill(71)
+      const GUARD_HISTORY_PARTS: readonly unknown[] = [
+        {
+          info: {},
+          parts: [
+            {
+              type: 'tool',
+              tool: 'systematic_workflow_control',
+              state: { status: 'completed', metadata: {} },
+            },
+          ],
+        },
+      ]
+
+      function adapterWithHistory(
+        readSessionParts: () => Promise<readonly unknown[]>,
+        workspaceIdentity = 'workspace',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode: 'protected', debug: false },
+          workspaceIdentity,
+          registrationIdentity: OWN_IDENTITY,
+          sessionSalt: OWN_SALT,
+          hostReadback: { readSessionParts, listChildren: async () => [] },
+        })
+      }
+
+      async function statusJson(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      async function expectCause(
+        adapter: OpencodeWorkflowGuard,
+        site: string,
+        kind: string,
+      ): Promise<void> {
+        const parsed = await statusJson(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site,
+          kind,
+          timedOut: false,
+        })
+      }
+
+      test('history read failure records history-read-failed', async () => {
+        const adapter = adapterWithHistory(async () => {
+          throw new Error('read failed')
+        })
+        await expectCause(adapter, 'initialize-session', 'history-read-failed')
+      })
+
+      test('markerless guard history records markerless-guard-history and keeps it across unavailable retries', async () => {
+        const adapter = adapterWithHistory(async () => GUARD_HISTORY_PARTS)
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('ambiguous markers record markers-ambiguous', async () => {
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+        )
+        await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
+      })
+
+      test('a corrupted own marker records markers-malformed-or-incompatible', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        const corrupted = {
+          ...(ownMarkers[0] as Record<string, unknown>),
+          integrity: 'a'.repeat(64),
+        }
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers([corrupted, ...ownMarkers.slice(1)]),
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markers-malformed-or-incompatible',
+        )
+      })
+
+      test('own markers that fail to reconstruct record recovery-rejected', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        // Unit start and receipt without the epoch start: valid markers that
+        // cannot be folded into a coherent guard state.
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers(ownMarkers.slice(1)),
+        )
+        await expectCause(adapter, 'initialize-session', 'recovery-rejected')
+      })
+
+      test('an observer readback failure during an active epoch records observer-readback-failed', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let failing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () =>
+            failing
+              ? { status: 'unavailable', reasonCode: 'target-unavailable' }
+              : base.snapshot(),
+        }
+        const adapter = createAdapter('observe', false, observer)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        failing = true
+        await expectCause(
+          adapter,
+          'refresh-readback',
+          'observer-readback-failed',
+        )
+      })
+
+      test('a later successful fresh initialization clears a stale cause and a cause-less transition does not resurface it', async () => {
+        let historyPresent = true
+        const adapter = adapterWithHistory(async () =>
+          historyPresent ? GUARD_HISTORY_PARTS : [],
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+
+        historyPresent = false
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'read', sessionID: SESSION_A, callID: 'fresh-retry' },
+          { args: {} },
+        )
+        const fresh = await statusJson(adapter)
+        expect(fresh.state).toBe('inactive')
+        expect(fresh.firstUnavailableCause).toBeUndefined()
+
+        // A cause-less markUnavailable(): reusing a callID across call kinds.
+        for (const tool of ['systematic_skill', 'systematic_workflow_start']) {
+          await adapter.hooks['tool.execute.before'](
+            { tool, sessionID: SESSION_A, callID: 'reused-call' },
+            { args: tool === 'systematic_skill' ? { name: 'ce:work' } : {} },
+          )
+        }
+        const after = await statusJson(adapter)
+        expect(after.state).toBe('unavailable')
+        expect(after.firstUnavailableCause).toBeUndefined()
+      })
+
+      test('a successful restoration clears a stale cause', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        let mode: 'history' | 'markers' = 'history'
+        const adapter = adapterWithHistory(
+          async () =>
+            mode === 'history' ? GUARD_HISTORY_PARTS : wrapMarkers(ownMarkers),
+          'workspace-a',
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+        mode = 'markers'
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'read', sessionID: SESSION_A, callID: 'restore-retry' },
+          { args: {} },
+        )
+        const restored = await statusJson(adapter)
+        expect(restored.state).not.toBe('unavailable')
+        expect(restored.firstUnavailableCause).toBeUndefined()
+      })
+
+      test('causes never enter markers, tool metadata, receipts, or digests', async () => {
+        const markerSource = async (
+          readSessionParts: () => Promise<readonly unknown[]>,
+        ) => {
+          const adapter = adapterWithHistory(readSessionParts)
+          const skillOutput = {
+            title: 'Loaded skill',
+            output: 'ok',
+            metadata: {},
+          }
+          await observeSkill(
+            adapter,
+            'systematic_skill',
+            'ce:work',
+            'cause-skill',
+            SESSION_A,
+            skillOutput,
+          )
+          const output = { system: ['base'] }
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            output,
+          )
+          const parsed = await statusJson(adapter)
+          expect(parsed.firstUnavailableCause).toBeDefined()
+          const serialized = [
+            JSON.stringify(skillOutput),
+            output.system.join('\n'),
+            JSON.stringify(adapter.status(SESSION_A)),
+            JSON.stringify(adapter.ledger(SESSION_A)?.listReceipts() ?? []),
+          ].join('\n')
+          for (const forbidden of [
+            'firstUnavailableCause',
+            'initialize-session',
+            'history-read-failed',
+            'markerless-guard-history',
+            'observer-readback-failed',
+          ]) {
+            expect(serialized).not.toContain(forbidden)
+          }
+          return output.system.join('\n')
+        }
+
+        const withReadFailure = await markerSource(async () => {
+          throw new Error('read failed')
+        })
+        const withMarkerlessHistory = await markerSource(
+          async () => GUARD_HISTORY_PARTS,
+        )
+        // Same pinned registration + same state/reason: digests and markers are
+        // identical regardless of which cause was recorded.
+        expect(withReadFailure).toBe(withMarkerlessHistory)
+      })
+    })
   })
 
   describe('dual-registration rollupForegroundTask recovery (fix/workflow-guard-dual-registration-recovery)', () => {

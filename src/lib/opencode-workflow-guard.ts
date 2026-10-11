@@ -395,8 +395,10 @@ interface MarkerDocument {
   }
 }
 
-// Bounded first-cause diagnostic for a `seedRemoteScopes`/`seedRemoteScope`
-// failure that led to `markUnavailable()`. Side-channel only: surfaced on
+// Bounded first-cause diagnostic for a failure that led to the guard going
+// `unavailable`: a `seedRemoteScopes`/`seedRemoteScope` failure, a session
+// initialization/recovery failure, or an observer readback failure.
+// Enum-only: no call IDs, tool names, paths, or free text. Side-channel only: surfaced on
 // `systematic_workflow_status` tool output (see `statusForTool`), never on a
 // receipt envelope, marker envelope, or anything covered by an integrity
 // digest. Never carries raw command output, paths, or tokens.
@@ -408,14 +410,43 @@ type GuardUnavailableCauseKind =
   | 'remote-scope-missing-resource'
   | 'remote-scope-unavailable'
   | 'remote-readback-rejected'
+  | 'history-read-failed'
+  | 'markers-malformed-or-incompatible'
+  | 'markers-ambiguous'
+  | 'recovery-rejected'
+  | 'markerless-guard-history'
+  | 'observer-readback-failed'
 
 interface GuardUnavailableCause {
-  readonly site: 'seed-remote-scopes' | 'seed-remote-scope'
+  readonly site:
+    | 'seed-remote-scopes'
+    | 'seed-remote-scope'
+    | 'initialize-session'
+    | 'refresh-readback'
   readonly kind: GuardUnavailableCauseKind
   readonly operation?: RemoteOperation
   readonly reasonCode?: OperationObserverReasonCode | WorkflowReasonCode
   readonly timedOut: boolean
 }
+
+function initializationCause(
+  kind: Extract<
+    GuardUnavailableCauseKind,
+    | 'history-read-failed'
+    | 'markers-malformed-or-incompatible'
+    | 'markers-ambiguous'
+    | 'recovery-rejected'
+    | 'markerless-guard-history'
+  >,
+): GuardUnavailableCause {
+  return { site: 'initialize-session', kind, timedOut: false }
+}
+
+const OBSERVER_READBACK_FAILED_CAUSE: GuardUnavailableCause = Object.freeze({
+  site: 'refresh-readback',
+  kind: 'observer-readback-failed',
+  timedOut: false,
+})
 
 const startToolShape = {
   expected_operations: z
@@ -1524,6 +1555,20 @@ function createSessionRuntime(
     return result
   }
 
+  // Shared first-cause-wins recorder: the cause is stored only when THIS call
+  // flips `target`'s mode to 'unavailable' and none is stored yet. Both
+  // `markUnavailable` and `publishUnavailable` commit through here so the
+  // runtime and initialization paths cannot disagree.
+  function recordUnavailable(
+    target: WorkflowGuard,
+    cause?: GuardUnavailableCause,
+  ): void {
+    const result = target.setMode({ mode: 'unavailable' })
+    if (cause && result.status === 'changed' && !firstUnavailableCause) {
+      firstUnavailableCause = cause
+    }
+  }
+
   function effectiveTargetContext(): {
     parentTargetRoot: string
     sessionLocation: string
@@ -1853,17 +1898,25 @@ function createSessionRuntime(
     return emptyHistoryLedger
   }
 
-  function publishUnavailable(reusableLedger?: ReceiptLedger): void {
+  // `cause` is undefined only for the deferred-fresh case (no guard history
+  // yet, fresh publication not allowed on this pass), which is a pending
+  // state rather than a failure. Retries keep the first recorded cause.
+  function publishUnavailable(
+    cause: GuardUnavailableCause | undefined,
+    reusableLedger?: ReceiptLedger,
+  ): void {
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
-    if (options.config.mode !== 'disabled')
-      guard.setMode({ mode: 'unavailable' })
+    if (options.config.mode !== 'disabled') {
+      recordUnavailable(guard, cause)
+    }
     initialized = true
   }
 
   function publishFresh(reusableLedger?: ReceiptLedger): void {
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
+    firstUnavailableCause = undefined
     initialized = true
   }
 
@@ -1951,10 +2004,15 @@ function createSessionRuntime(
     return undefined
   }
 
-  function recoverPersistedMarkers(markers: readonly unknown[]): boolean {
+  // Returns undefined on success, otherwise the cause of the failure.
+  function recoverPersistedMarkers(
+    markers: readonly unknown[],
+  ): GuardUnavailableCause | undefined {
     // Callers must pass pre-filtered (own-registration) markers.
     const seed = extractReceiptReadbackSeed(markers)
-    if (seed.status !== 'ready') return false
+    if (seed.status !== 'ready') {
+      return initializationCause('markers-malformed-or-incompatible')
+    }
     let recoveredLedger: ReceiptLedger
     try {
       recoveredLedger = createReceiptLedger({
@@ -1963,14 +2021,14 @@ function createSessionRuntime(
         sessionSalt: seed.sessionSalt,
       })
     } catch {
-      return false
+      return initializationCause('markers-malformed-or-incompatible')
     }
     if (!seedAgrees(recoveredLedger, seed)) {
-      return false
+      return initializationCause('markers-malformed-or-incompatible')
     }
     const recovered = recoveredLedger.recoverReadback(markers)
     if (recovered.status === 'rejected') {
-      return false
+      return initializationCause('recovery-rejected')
     }
     const recoveredGuard = createGuard(recoveredLedger)
     const restored = recoveredGuard.restore({
@@ -1982,12 +2040,13 @@ function createSessionRuntime(
       },
     })
     if (restored.status === 'rejected') {
-      return false
+      return initializationCause('recovery-rejected')
     }
     ledger = recoveredLedger
     guard = recoveredGuard
+    firstUnavailableCause = undefined
     initialized = true
-    return true
+    return undefined
   }
 
   type OwnMarkersClassification =
@@ -2061,11 +2120,17 @@ function createSessionRuntime(
     allowFresh: boolean,
   ): void {
     const reusableLedger = emptyHistoryLedgerForRetry()
-    if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
+    const hasGuardHistory = parts.some((part) => containsGuardHistory(part))
+    if (allowFresh && !hasGuardHistory) {
       publishFresh(reusableLedger)
     } else {
       retryableEmptyHistory = true
-      publishUnavailable(reusableLedger)
+      publishUnavailable(
+        hasGuardHistory
+          ? initializationCause('markerless-guard-history')
+          : undefined,
+        reusableLedger,
+      )
     }
   }
 
@@ -2082,7 +2147,7 @@ function createSessionRuntime(
     try {
       parts = await reader(sessionID)
     } catch {
-      publishUnavailable()
+      publishUnavailable(initializationCause('history-read-failed'))
       return
     }
     const classification = classifyMarkersFromParts(parts)
@@ -2090,7 +2155,7 @@ function createSessionRuntime(
       // Cannot determine whether markers include corrupted own state → fail closed.
       // Do NOT use retryableEmptyHistory here; this is a corruption signal, not a
       // transient empty-history state.
-      publishUnavailable()
+      publishUnavailable(initializationCause('markers-ambiguous'))
       return
     }
     if (classification.kind === 'foreign-empty') {
@@ -2101,7 +2166,8 @@ function createSessionRuntime(
       return
     }
     // kind === 'own': recover from filtered own markers.
-    if (!recoverPersistedMarkers(classification.markers)) publishUnavailable()
+    const failure = recoverPersistedMarkers(classification.markers)
+    if (failure) publishUnavailable(failure)
   }
 
   async function recoverFromHost(
@@ -2367,10 +2433,7 @@ function createSessionRuntime(
   // an unrelated cause that already won the race.
   function markUnavailable(cause?: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
-    const result = guard.setMode({ mode: 'unavailable' })
-    if (cause && result.status === 'changed' && !firstUnavailableCause) {
-      firstUnavailableCause = cause
-    }
+    recordUnavailable(guard, cause)
   }
 
   function bindCall(
@@ -2460,21 +2523,21 @@ function createSessionRuntime(
     if (!options.observer) return
     const effective = effectiveOperationObserver()
     if (!effective) {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
       return
     }
     let result: OperationObserverResult
     try {
       result = await effective.observer.snapshot()
     } catch {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
       return
     }
     if (
       result.status === 'unavailable' ||
       result.snapshot.targetDigest !== effective.targetIdentity
     ) {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
       return
     }
     const observed = guard.observeReadback({
@@ -2490,7 +2553,7 @@ function createSessionRuntime(
         observed.reasonCode === 'workspace-mismatch') ||
       !(await refreshRemoteReadbacks(effective.observer, result.snapshot))
     ) {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
     }
   }
 
