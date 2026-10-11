@@ -17,9 +17,10 @@ these hooks:
 
 - **`config`** — discovers bundled agents, skills, and commands, then merges them into the OpenCode
   config. Existing user config wins; Systematic fills in what's missing.
-- **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand,
-  alongside the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`,
-  `_control`).
+- **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand
+  (an optional `arguments` string is text-substituted into `$ARGUMENTS`/`$N` placeholders via
+  `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist), alongside
+  the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`, `_control`).
 - **`tool.execute.before`** — workflow-guard observation of pending operations. Blocks execution by
   rethrowing a guard error when a guarded transition is unsatisfied.
 - **`tool.execute.after`** — workflow-guard observation of completed operations, feeding receipt
