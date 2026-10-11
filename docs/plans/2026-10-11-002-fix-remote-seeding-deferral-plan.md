@@ -1,7 +1,7 @@
 ---
 title: "fix: Keep a transient remote probe failure from disabling the workflow guard"
 type: fix
-status: active
+status: completed
 date: 2026-10-11
 ---
 
@@ -263,7 +263,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 
 ## Implementation Units
 
-- [ ] **Unit 1: Per-operation seeding deferral**
+- [x] **Unit 1: Per-operation seeding deferral**
 
 **Goal:** A remote seeding timeout, or a push with no upstream, defers that one operation instead of disabling the session.
 
@@ -300,7 +300,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 
 **Verification:** `markUnavailable` is never called for a remote seeding timeout or push `missing-resource`.
 
-- [ ] **Unit 2: Before-read binding with retry**
+- [x] **Unit 2: Before-read binding with retry**
 
 **Goal:** The operation's own available before-read binds a deferred baseline, and nothing else does.
 
@@ -335,7 +335,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 
 **Verification:** a deferred operation is admitted only after an available before-read from its own target.
 
-- [ ] **Unit 3: Narrow the PR-creation self-seed**
+- [x] **Unit 3: Narrow the PR-creation self-seed**
 
 **Goal:** A timed-out or failed before-read can't admit a PR-creation receipt.
 
@@ -358,7 +358,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 
 **Verification:** only a `missing-resource` before can seed PR creation from its after-read.
 
-- [ ] **Unit 4: Dogfood diagnostic**
+- [x] **Unit 4: Dogfood diagnostic**
 
 **Goal:** A future push flake records its own cause.
 
@@ -379,7 +379,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 
 **Verification:** the dogfood suite is green on the pinned host, and no `opencode` processes are left over.
 
-- [ ] **Unit 5: Architecture notes**
+- [x] **Unit 5: Architecture notes**
 
 **Goal:** The guard paragraph describes seeding deferral and its limits.
 
