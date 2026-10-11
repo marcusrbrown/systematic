@@ -5784,6 +5784,309 @@ describe('OpenCode workflow guard adapter', () => {
           { operation: 'push', reasonCode: 'command-timeout' },
         ])
       })
+
+      test('o: a before-read suspended across a same-ID active-unit redeclaration cannot bind the replacement deferral or mint evidence', async () => {
+        // The unit keeps both IDs through a successful redeclaration, but the
+        // start resets and reseeds the deferrals. P's read of revision E
+        // predates that declaration and must not bind the replacement.
+        let releaseStale: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        // The held read (the second push before-read, stale push P) bypasses
+        // the sequence, so the base serves the initial seed and then the
+        // redeclaration seed, both timing out.
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [TIMEOUT, TIMEOUT],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 2) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseStale = resolve
+                    },
+                  )
+                }
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        const unitId = status(adapter).unit?.unitId
+
+        const staleCommand = { command: 'git push origin HEAD' }
+        const staleBefore = adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-push' },
+          { args: staleCommand },
+        )
+        for (let tick = 0; tick < 50 && pushBeforeReads < 2; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(pushBeforeReads).toBe(2)
+
+        const startArgs = { expected_operations: ['pr-creation'] }
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'redeclare-start',
+          },
+          { args: startArgs },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'redeclare-start',
+            args: startArgs,
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(pushBeforeReads).toBe(3)
+        expect(status(adapter).unit?.unitId).toBe(unitId)
+        expect(status(adapter).unit?.requiredOperations).toContain(
+          'pr-creation',
+        )
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+
+        releaseStale(remoteAvailable(D, E))
+        await staleBefore
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-push',
+            args: staleCommand,
+          },
+          { title: 'push', output: 'up-to-date', metadata: { exit: 0 } },
+        )
+
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).missingOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+    })
+
+    describe('after-hook ownership across a unit change', () => {
+      const FRESH = 'f'.repeat(64)
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const MISSING = { status: 'missing-resource' as const }
+      type HoldPoint = 'local-after' | 'remote-after'
+
+      interface HeldAfter {
+        readonly adapter: OpencodeWorkflowGuard
+        arm(point: HoldPoint): void
+        hasHeld(): boolean
+        release(): void
+      }
+
+      function heldAfterAdapter(): HeldAfter {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+            'check-readback:before': [checkAvailable],
+            'check-readback:after': [
+              remoteAvailable(D, FRESH, {
+                pullRequest: { identity: D, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+          },
+        )
+        let armed: HoldPoint | undefined
+        let held = false
+        let release: () => void = () => {}
+        const gate = (): Promise<void> | undefined => {
+          held = true
+          armed = undefined
+          return new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            snapshot: async () => {
+              if (armed === 'local-after') await gate()
+              return base.snapshot()
+            },
+            remoteSnapshot: async (operation, phase) => {
+              if (armed === 'remote-after' && phase === 'after') await gate()
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        return {
+          adapter,
+          arm: (point) => {
+            armed = point
+          },
+          hasHeld: () => held,
+          release: () => release(),
+        }
+      }
+
+      async function untilHeld(held: HeldAfter): Promise<void> {
+        for (let tick = 0; tick < 50 && !held.hasHeld(); tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(held.hasHeld()).toBe(true)
+      }
+
+      // Unit 2 also requires pr-creation and check-readback, so a leaked
+      // self-seed, propagation, or receipt would be admitted rather than
+      // rejected as not required.
+      async function startSuccessorUnit(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<void> {
+        const args = { expected_operations: ['pr-creation', 'check-readback'] }
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'ownership-start-unit2',
+          },
+          { args },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'ownership-start-unit2',
+            args,
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+      }
+
+      // Runs `staleCommand` to completion of its before-hook in unit 1,
+      // suspends its after-hook at `point`, completes unit 1 with another
+      // push, starts unit 2, then releases the suspended after-hook.
+      async function runAcrossUnitChange(
+        held: HeldAfter,
+        point: HoldPoint,
+        staleCommand: Record<string, unknown>,
+      ): Promise<void> {
+        const { adapter } = held
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const firstUnitId = status(adapter).unit?.unitId
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-after' },
+          { args: staleCommand },
+        )
+        held.arm(point)
+        const staleAfter = adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-after',
+            args: staleCommand,
+          },
+          { title: 'op', output: 'ok', metadata: { exit: 0 } },
+        )
+        await untilHeld(held)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'ownership-unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'ownership-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        await startSuccessorUnit(adapter)
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+
+        held.release()
+        await staleAfter
+      }
+
+      function operationsOf(adapter: OpencodeWorkflowGuard): string[] {
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+      }
+
+      test.each([
+        ['captureAfterOperation', 'local-after'],
+        ['captureRemoteAfter', 'remote-after'],
+      ] as const)(
+        'a push whose after-hook is suspended in %s cannot mint evidence for the successor unit',
+        async (_name, point) => {
+          const held = heldAfterAdapter()
+          await runAcrossUnitChange(held, point, {
+            command: 'git push origin HEAD',
+          })
+          const { adapter } = held
+          // Only unit 1's own push (the completing one) holds a receipt.
+          expect(
+            operationsOf(adapter).filter((operation) => operation === 'push'),
+          ).toHaveLength(1)
+          expect(status(adapter).missingOperations).toContain('push')
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
+
+      test.each([
+        ['captureAfterOperation', 'local-after'],
+        ['captureRemoteAfter', 'remote-after'],
+      ] as const)(
+        'a pr-creation whose after-hook is suspended in %s neither self-seeds nor propagates into the successor unit',
+        async (_name, point) => {
+          const held = heldAfterAdapter()
+          await runAcrossUnitChange(held, point, PR_CREATE)
+          const { adapter } = held
+          expect(operationsOf(adapter)).not.toContain('pr-creation')
+          // A self-seed would have set the successor unit's pr-creation
+          // baseline and propagated it to check; the same PR would then be
+          // admitted. Without a baseline it is a resource-mismatch.
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command: 'gh pr checks 42' },
+            { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+            'ownership-probe-check',
+          )
+          expect(operationsOf(adapter)).not.toContain('check-readback')
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
     })
 
     describe.each([

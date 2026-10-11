@@ -319,9 +319,15 @@ interface PendingOperation {
   remoteBefore?: OperationObserverRemoteResult
 }
 
+/**
+ * Identifies the declaration an operation began under. The IDs alone cannot:
+ * a redeclaration of a pristine active unit keeps both while resetting its
+ * deferrals, so `generation` counts every successful unit start.
+ */
 interface OperationInitiator {
   readonly epochId: string
   readonly unitId: string
+  readonly generation: number
 }
 
 interface OperationObserverRegistration {
@@ -1600,6 +1606,9 @@ function createSessionRuntime(
   let seedDeferralRecord:
     | { readonly unitId: string; readonly entries: DeferredSeed[] }
     | undefined
+  // Incremented on every successful unit start or declaration (see
+  // `startFreshUnit`); operations capture it to prove they are still current.
+  let unitStartGeneration = 0
 
   // Single choke point for every `guard.startUnit()` call. The reset below is
   // currently unreachable: mode has no path back to 'protected' ('disabled'
@@ -1611,6 +1620,7 @@ function createSessionRuntime(
   ): StartUnitResult {
     const result = guard.startUnit(input, policy)
     if (result.status === 'started') {
+      unitStartGeneration += 1
       firstUnavailableCause = undefined
       seedDeferralRecord = undefined
     }
@@ -3612,7 +3622,11 @@ function createSessionRuntime(
   function currentInitiator(): OperationInitiator | undefined {
     const current = guard.status()
     return current.epoch && current.unit
-      ? { epochId: current.epoch.epochId, unitId: current.unit.unitId }
+      ? {
+          epochId: current.epoch.epochId,
+          unitId: current.unit.unitId,
+          generation: unitStartGeneration,
+        }
       : undefined
   }
 
@@ -3621,7 +3635,8 @@ function createSessionRuntime(
     return (
       current !== undefined &&
       current.epochId === initiator.epochId &&
-      current.unitId === initiator.unitId
+      current.unitId === initiator.unitId &&
+      current.generation === initiator.generation
     )
   }
 
@@ -4340,8 +4355,9 @@ function createSessionRuntime(
       tool: host.tool,
       ...(command ? { command } : {}),
       context: {
-        epochId: current.epoch.epochId,
-        unitId: current.unit.unitId,
+        // The unit the operation began under, not whichever is current now.
+        epochId: pending.initiator?.epochId ?? current.epoch.epochId,
+        unitId: pending.initiator?.unitId ?? current.unit.unitId,
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: pending.before.repositoryRevisionDigest,
         worktreeIdentity: pending.before.worktreeRevisionDigest,
@@ -4433,6 +4449,25 @@ function createSessionRuntime(
     }
   }
 
+  // True while the unit the operation began under is still the current
+  // declaration. An operation with no captured initiator (it began before any
+  // unit existed) is not tied to one.
+  function ownsOperation(pending: PendingOperation): boolean {
+    return !pending.initiator || isCurrentInitiator(pending.initiator)
+  }
+
+  // Ownership is revalidated after every await in the pipeline below and
+  // before any self-seed or admission: the unit can complete and a successor
+  // (or a redeclaration) can start while an after-read is in flight. A lost
+  // operation mints nothing, seeds nothing, and propagates nothing.
+  function sealLostOperation(
+    callDigest: string,
+    pending: PendingOperation,
+  ): OperationCompletionResult {
+    sealOperation(callDigest, pending, true)
+    return { status: 'ignored' }
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
   async function completeOperationObservation(
     callDigest: string,
@@ -4440,18 +4475,14 @@ function createSessionRuntime(
     pending: PendingOperation,
     output: unknown,
   ): Promise<OperationCompletionResult> {
-    // An operation that began under a unit that is no longer current carries
-    // that unit's evidence; it cannot mint receipts for the current one.
-    if (pending.initiator && !isCurrentInitiator(pending.initiator)) {
-      sealOperation(callDigest, pending, true)
-      return { status: 'ignored' }
-    }
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
     }
     const afterSnapshot = await captureAfterOperation(pending)
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     if (!afterSnapshot) {
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
@@ -4468,6 +4499,7 @@ function createSessionRuntime(
       return { status: 'ignored' }
     }
     const classification = await classifyLocalObservation(observation)
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     if (classification.status !== 'ready') {
       sealOperation(callDigest, pending, true)
       return { status: classification.status }
@@ -4478,6 +4510,9 @@ function createSessionRuntime(
         finalObservation.operation,
         pending.observer,
       )
+      if (!ownsOperation(pending)) {
+        return sealLostOperation(callDigest, pending)
+      }
       if (!remoteAfter) {
         sealOperation(callDigest, pending, true)
         return { status: 'unavailable' }
@@ -4516,6 +4551,9 @@ function createSessionRuntime(
         }
       }
     }
+    // No await separates the last ownership check from the admission call
+    // below, whose synchronous prefix reads the guard state.
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)
