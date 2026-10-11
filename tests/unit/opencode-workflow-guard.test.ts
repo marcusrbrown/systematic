@@ -7481,23 +7481,29 @@ describe('OpenCode workflow guard adapter', () => {
         })
       })
 
-      describe('current-call exemption on first initialization', () => {
+      describe('current-turn exemption on first initialization', () => {
         type MutationTool =
           | 'systematic_workflow_start'
           | 'systematic_workflow_complete'
           | 'systematic_workflow_control'
 
+        // The injected runtime clock: messages created at or after this
+        // instant belong to this process's lifetime.
+        const RUNTIME_START = 1_000
+        const CALL = 'call_0'
+
         function adapterFor(
           mode: 'protected' | 'observe',
-          parts: readonly unknown[],
+          readSessionParts: () => Promise<readonly unknown[]>,
         ): OpencodeWorkflowGuard {
           return createOpencodeWorkflowGuard({
             config: { mode, debug: false },
             workspaceIdentity: 'workspace',
             registrationIdentity: OWN_IDENTITY,
             sessionSalt: OWN_SALT,
+            now: () => RUNTIME_START,
             hostReadback: {
-              readSessionParts: async () => parts,
+              readSessionParts,
               listChildren: async () => [],
             },
           })
@@ -7511,20 +7517,56 @@ describe('OpenCode workflow guard adapter', () => {
           return { type: 'tool', tool, callID, state }
         }
 
-        function history(
+        let messageSequence = 0
+        function message(
+          role: string,
+          time: Record<string, unknown> | undefined,
           ...parts: Record<string, unknown>[]
-        ): readonly unknown[] {
-          return [{ info: {}, parts }]
+        ): Record<string, unknown> {
+          messageSequence += 1
+          return {
+            info: {
+              id: `msg_${messageSequence}`,
+              sessionID: SESSION_A,
+              role,
+              ...(time ? { time } : {}),
+            },
+            parts,
+          }
         }
 
-        const CALL = 'call_current'
+        function turn(
+          ...parts: Record<string, unknown>[]
+        ): Record<string, unknown> {
+          return message('assistant', { created: 2_000 }, ...parts)
+        }
 
-        async function firstBefore(
+        // First read (transform) is empty; every later read is `confirming`.
+        function transformThen(
+          confirming: readonly unknown[],
+        ): () => Promise<readonly unknown[]> {
+          let reads = 0
+          return async () => {
+            reads += 1
+            return reads === 1 ? [] : confirming
+          }
+        }
+
+        async function transformPass(
           adapter: OpencodeWorkflowGuard,
-          tool: MutationTool,
+        ): Promise<void> {
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+        }
+
+        function beforeHook(
+          adapter: OpencodeWorkflowGuard,
+          tool: string,
           callID = CALL,
         ): Promise<void> {
-          await adapter.hooks['tool.execute.before'](
+          return adapter.hooks['tool.execute.before'](
             { tool, sessionID: SESSION_A, callID },
             {
               args:
@@ -7545,23 +7587,32 @@ describe('OpenCode workflow guard adapter', () => {
           )
         }
 
-        test('a: the current running start part does not poison first initialization; the start is rejected no-active-epoch', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('systematic_workflow_start', CALL, {
-                status: 'running',
-              }),
-            ),
-          )
+        const mutationTools: ReadonlyArray<{
+          tool: MutationTool
+          modes: ReadonlyArray<'protected' | 'observe'>
+        }> = [
+          { tool: 'systematic_workflow_start', modes: ['protected'] },
+          {
+            tool: 'systematic_workflow_complete',
+            modes: ['protected', 'observe'],
+          },
+          { tool: 'systematic_workflow_control', modes: ['protected'] },
+        ]
+
+        async function expectNoEpochRejection(
+          adapter: OpencodeWorkflowGuard,
+          tool: MutationTool,
+        ): Promise<void> {
           const output = { title: 'pending', output: 'pending', metadata: {} }
-          await firstBefore(adapter, 'systematic_workflow_start')
           await adapter.hooks['tool.execute.after'](
             {
-              tool: 'systematic_workflow_start',
+              tool,
               sessionID: SESSION_A,
               callID: CALL,
-              args: {},
+              args:
+                tool === 'systematic_workflow_complete'
+                  ? { target: 'unit' }
+                  : {},
             },
             output,
           )
@@ -7571,169 +7622,265 @@ describe('OpenCode workflow guard adapter', () => {
               reasonCode: 'no-active-epoch',
             },
           })
+        }
+
+        async function runCurrentTurnCase(
+          tool: MutationTool,
+          mode: 'protected' | 'observe',
+          transformFirst: boolean,
+        ): Promise<void> {
+          const history = [
+            message('user', { created: 1_900 }),
+            turn(hostPart(tool, CALL, { status: 'running' })),
+          ]
+          const adapter = adapterFor(
+            mode,
+            transformFirst ? transformThen(history) : async () => history,
+          )
+          if (transformFirst) await transformPass(adapter)
+          await beforeHook(adapter, tool)
+          expect(status(adapter).state).toBe('inactive')
+          if (tool !== 'systematic_workflow_control') {
+            await expectNoEpochRejection(adapter, tool)
+          }
           expect(status(adapter)).toMatchObject({
             state: 'inactive',
             reasonCode: 'no-active-epoch',
           })
           expect((await statusJson(adapter)).state).toBe('inactive')
-        })
-
-        for (const mode of ['protected', 'observe'] as const) {
-          test(`b: the current running complete part does not poison first initialization; the completion is rejected no-active-epoch (${mode})`, async () => {
-            const adapter = adapterFor(
-              mode,
-              history(
-                hostPart('systematic_workflow_complete', CALL, {
-                  status: 'running',
-                }),
-              ),
-            )
-            const output = { title: 'pending', output: 'pending', metadata: {} }
-            await firstBefore(adapter, 'systematic_workflow_complete')
-            await adapter.hooks['tool.execute.after'](
-              {
-                tool: 'systematic_workflow_complete',
-                sessionID: SESSION_A,
-                callID: CALL,
-                args: { target: 'unit' },
-              },
-              output,
-            )
-            expect(output.metadata).toMatchObject({
-              workflowGuard: {
-                status: 'rejected',
-                reasonCode: 'no-active-epoch',
-              },
-            })
-            expect(status(adapter).state).toBe('inactive')
-          })
         }
 
-        test('c: control before-hooks go through the same recovery path, so the current running control part is exempt', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('systematic_workflow_control', CALL, {
-                status: 'running',
-              }),
-            ),
-          )
-          await firstBefore(adapter, 'systematic_workflow_control')
-          expect((await statusJson(adapter)).state).toBe('inactive')
-        })
+        const currentTurnCases = mutationTools.flatMap(({ tool, modes }) =>
+          modes.flatMap((mode) =>
+            [true, false].map((transformFirst) => ({
+              tool,
+              mode,
+              transformFirst,
+            })),
+          ),
+        )
+        test.each(currentTurnCases)(
+          'a: the current-turn running $tool part does not poison initialization ($mode, transformFirst=$transformFirst)',
+          (c) => runCurrentTurnCase(c.tool, c.mode, c.transformFirst),
+        )
 
-        test('d: a duplicate callID anywhere in history keeps the part non-exempt', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('systematic_workflow_start', CALL, {
-                status: 'completed',
-                metadata: {},
-              }),
-              hostPart('systematic_workflow_start', CALL, {
-                status: 'running',
-              }),
-            ),
-          )
-          await firstBefore(adapter, 'systematic_workflow_start')
-          await expectClosed(adapter)
-        })
-
-        test('d: a non-guard part reusing the callID also keeps the part non-exempt', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('read', CALL, { status: 'completed' }),
-              hostPart('systematic_workflow_start', CALL, {
-                status: 'running',
-              }),
-            ),
-          )
-          await firstBefore(adapter, 'systematic_workflow_start')
-          await expectClosed(adapter)
-        })
-
-        test('e: a current-tool mismatch keeps the part non-exempt', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('systematic_workflow_complete', CALL, {
-                status: 'running',
-              }),
-            ),
-          )
-          await firstBefore(adapter, 'systematic_workflow_start')
-          await expectClosed(adapter)
-        })
-
-        test('f: a prior-process running start with a different callID stays closed', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('systematic_workflow_start', 'call_prior', {
-                status: 'running',
-              }),
-            ),
-          )
-          await firstBefore(adapter, 'systematic_workflow_start')
-          await expectClosed(adapter)
-        })
-
-        test('f: a running start with no current-call identity (non-mutation hook) stays closed', async () => {
-          const adapter = adapterFor(
-            'protected',
-            history(
-              hostPart('systematic_workflow_start', CALL, {
-                status: 'running',
-              }),
-            ),
-          )
-          await adapter.hooks['tool.execute.before'](
-            { tool: 'read', sessionID: SESSION_A, callID: CALL },
-            { args: {} },
-          )
-          await expectClosed(adapter)
-        })
-
-        for (const exempt of ['pending', 'running'] as const) {
-          test(`g: a ${exempt} current-call part is accepted`, async () => {
-            const adapter = adapterFor(
-              'protected',
-              history(
+        test.each(['pending', 'running'])(
+          'a: a %s current-turn part is accepted',
+          async (exempt) => {
+            const adapter = adapterFor('protected', async () => [
+              turn(
                 hostPart('systematic_workflow_start', CALL, { status: exempt }),
               ),
-            )
-            await firstBefore(adapter, 'systematic_workflow_start')
+            ])
+            await beforeHook(adapter, 'systematic_workflow_start')
             expect((await statusJson(adapter)).state).toBe('inactive')
-          })
-        }
+          },
+        )
 
-        for (const closed of ['completed', 'error'] as const) {
-          test(`g: a ${closed} part with the current callID stays closed`, async () => {
-            const adapter = adapterFor(
-              'protected',
-              history(
-                hostPart('systematic_workflow_start', CALL, {
-                  status: closed,
-                  metadata: {},
-                }),
-              ),
-            )
-            await firstBefore(adapter, 'systematic_workflow_start')
-            await expectClosed(adapter)
-          })
-        }
+        test('b (P1-a): an old running start whose callID is reused by a new call is not exempt and no epoch is minted over it', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 1_500 },
+              hostPart('systematic_workflow_start', 'call_0', {
+                status: 'running',
+              }),
+            ),
+            message('user', { created: 1_800 }),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start', 'call_0')
+          await expectClosed(adapter)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).epoch).toBeNull()
+          expect(status(adapter).state).toBe('unavailable')
+        })
 
-        test('markers stay authoritative: an ambiguous marker plus the current running part is still closed', async () => {
-          const adapter = adapterFor('protected', [
-            ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
-            ...history(
+        test('c: an unfinished assistant turn created before the runtime started is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 500 },
               hostPart('systematic_workflow_start', CALL, {
                 status: 'running',
               }),
             ),
           ])
-          await firstBefore(adapter, 'systematic_workflow_start')
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        async function raceStatusAndStart(statusFirst: boolean): Promise<void> {
+          let reads = 0
+          const history = [
+            turn(
+              hostPart('systematic_workflow_status', 'call_status', {
+                status: 'running',
+              }),
+              hostPart('systematic_workflow_start', 'call_start', {
+                status: 'running',
+              }),
+            ),
+          ]
+          const adapter = adapterFor('protected', async () => {
+            reads += 1
+            return reads === 1 ? [] : history
+          })
+          await transformPass(adapter)
+          const statusCall = () =>
+            beforeHook(adapter, 'systematic_workflow_status', 'call_status')
+          const startCall = () =>
+            beforeHook(adapter, 'systematic_workflow_start', 'call_start')
+          await Promise.all(
+            statusFirst
+              ? [statusCall(), startCall()]
+              : [startCall(), statusCall()],
+          )
+          expect(reads).toBe(2)
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+        }
+
+        test.each([true, false])(
+          'd (P1-b): status and start before-hooks racing the confirming read both end inactive (statusFirst=%s)',
+          raceStatusAndStart,
+        )
+
+        test('e: a completed newest assistant message is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 2_000, completed: 2_500 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('e: a newest user message is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'user',
+              { created: 2_000 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        const malformedInfo: ReadonlyArray<{
+          name: string
+          history: readonly unknown[]
+        }> = [
+          {
+            name: 'missing info.time',
+            history: [
+              message(
+                'assistant',
+                undefined,
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+          {
+            name: 'non-numeric info.time.created',
+            history: [
+              message(
+                'assistant',
+                { created: 'now' },
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+          {
+            name: 'missing info',
+            history: [
+              {
+                parts: [
+                  hostPart('systematic_workflow_start', CALL, {
+                    status: 'running',
+                  }),
+                ],
+              },
+            ],
+          },
+          {
+            name: 'two messages sharing the newest created time',
+            history: [
+              message('user', { created: 2_000 }),
+              turn(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+        ]
+        test.each(malformedInfo)(
+          'e: $name is not the current turn',
+          async (entry) => {
+            const adapter = adapterFor('protected', async () => entry.history)
+            await beforeHook(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          },
+        )
+
+        test.each(['completed', 'error'])(
+          'e: a %s current-turn part is never exempt through this rule',
+          async (closedState) => {
+            const adapter = adapterFor('protected', async () => [
+              turn(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: closedState,
+                  metadata: {},
+                }),
+              ),
+            ])
+            await beforeHook(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          },
+        )
+
+        test('e: a non-current-turn running part next to a current-turn one keeps history closed', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 1_500, completed: 1_600 },
+              hostPart('systematic_workflow_start', 'call_prior', {
+                status: 'running',
+              }),
+            ),
+            turn(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('f: an ambiguous marker plus a current-turn running part is still markers-ambiguous', async () => {
+          const adapter = adapterFor('protected', async () => [
+            ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+            turn(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
           await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
         })
       })

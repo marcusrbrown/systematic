@@ -199,6 +199,8 @@ export interface OpencodeWorkflowGuardOptions {
   readonly sessionSalt?: Uint8Array
   readonly targetDirectory?: string
   readonly sessionLocation?: string
+  /** Injectable clock (epoch milliseconds); defaults to `Date.now`. */
+  readonly now?: () => number
 }
 
 export interface OpencodeWorkflowChildSession {
@@ -266,26 +268,6 @@ interface SessionRuntime {
   markUnavailable(): void
   metadata(): Record<string, unknown>
   recover(sessionID: string, allowFresh?: boolean): Promise<void>
-}
-
-// Identity of the guard mutation call whose before-hook is running.
-interface CurrentCall {
-  readonly tool:
-    | 'systematic_workflow_start'
-    | 'systematic_workflow_complete'
-    | 'systematic_workflow_control'
-  readonly callID: string
-}
-
-function currentMutationCall(host: {
-  tool: string
-  callID: string
-}): CurrentCall | undefined {
-  return host.tool === 'systematic_workflow_start' ||
-    host.tool === 'systematic_workflow_complete' ||
-    host.tool === 'systematic_workflow_control'
-    ? { tool: host.tool, callID: host.callID }
-    : undefined
 }
 
 interface HostToolBefore {
@@ -1551,6 +1533,7 @@ function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
   operationObservers: OperationObserverRegistry,
   recoveredOperationContexts: RecoveredOperationRegistry,
+  runtimeStartedAt: number,
 ): SessionRuntime {
   let ledger!: ReceiptLedger
   let guard!: WorkflowGuard
@@ -1890,60 +1873,92 @@ function createSessionRuntime(
     )
   }
 
-  // Counts every part in the history carrying `callID`, across all tools and
-  // states. Used to prove a pending/running guard part is the ONLY holder of
-  // the current call's identity.
-  function countCallID(value: unknown, callID: string): number {
-    if (!isRecord(value)) return 0
-    const own = value.callID === callID ? 1 : 0
-    if (!Array.isArray(value.parts)) return own
+  // Chronology is established from `info.time.created`, not array position:
+  // the newest message is the one with the greatest created time. Any entry
+  // without a finite created time, or a tie for the newest, means the newest
+  // message cannot be identified and nothing is exempt.
+  function newestMessage(
+    history: ReadonlyArray<unknown>,
+  ): Record<string, unknown> | undefined {
+    let newest: Record<string, unknown> | undefined
+    let newestCreated = Number.NEGATIVE_INFINITY
+    let tied = false
+    for (const entry of history) {
+      const created = messageCreated(entry)
+      if (!isRecord(entry) || created === undefined) return undefined
+      if (created > newestCreated) {
+        newest = entry
+        newestCreated = created
+        tied = false
+      } else if (created === newestCreated) {
+        tied = true
+      }
+    }
+    return tied ? undefined : newest
+  }
+
+  function messageInfo(entry: unknown): Record<string, unknown> | undefined {
+    return isRecord(entry) && isRecord(entry.info) ? entry.info : undefined
+  }
+
+  function messageCreated(entry: unknown): number | undefined {
+    const info = messageInfo(entry)
+    const time = info && isRecord(info.time) ? info.time : undefined
+    return typeof time?.created === 'number' && Number.isFinite(time.created)
+      ? time.created
+      : undefined
+  }
+
+  // The current turn is the newest message, provided it is an unfinished
+  // assistant message created during this process's lifetime.
+  function isCurrentTurn(message: Record<string, unknown>): boolean {
+    const info = messageInfo(message)
+    const time = info && isRecord(info.time) ? info.time : undefined
+    const created = messageCreated(message)
     return (
-      own +
-      value.parts.reduce<number>(
-        (total, part) => total + countCallID(part, callID),
-        0,
-      )
+      info?.role === 'assistant' &&
+      (time?.completed === undefined || time.completed === null) &&
+      created !== undefined &&
+      created >= runtimeStartedAt
     )
   }
 
-  // The in-flight guard mutation call now being prepared, accepted as an
-  // exemption only when positively and uniquely identified in the history.
-  function uniqueCurrentCall(
-    parts: ReadonlyArray<unknown>,
-    currentCall: CurrentCall | undefined,
-  ): CurrentCall | undefined {
-    if (!currentCall) return undefined
-    const holders = parts.reduce<number>(
-      (total, part) => total + countCallID(part, currentCall.callID),
-      0,
-    )
-    return holders === 1 ? currentCall : undefined
-  }
-
-  function isCurrentCallPart(
-    part: Record<string, unknown>,
-    currentCall: CurrentCall | undefined,
-  ): boolean {
-    return (
-      currentCall !== undefined &&
-      part.tool === currentCall.tool &&
-      part.callID === currentCall.callID &&
-      isRecord(part.state) &&
-      (part.state.status === 'pending' || part.state.status === 'running')
-    )
+  // Pending/running guard mutation parts of the current turn, by identity.
+  // These belong to the call now executing, whose host part is persisted
+  // before its before-hook runs; they carry no evidence yet.
+  function currentTurnExemptParts(
+    history: ReadonlyArray<unknown>,
+  ): ReadonlySet<unknown> {
+    const exempt = new Set<unknown>()
+    const newest = newestMessage(history)
+    if (!newest || !isCurrentTurn(newest) || !Array.isArray(newest.parts)) {
+      return exempt
+    }
+    for (const part of newest.parts) {
+      if (
+        isRecord(part) &&
+        (part.tool === 'systematic_workflow_start' ||
+          part.tool === 'systematic_workflow_complete' ||
+          part.tool === 'systematic_workflow_control') &&
+        isRecord(part.state) &&
+        (part.state.status === 'pending' || part.state.status === 'running')
+      ) {
+        exempt.add(part)
+      }
+    }
+    return exempt
   }
 
   // Guard-owned parts that carry no evidence and never mutate guard state:
   // status reads (any state), COMPLETED start/complete calls the guard
-  // itself rejected with `no-active-epoch`, and the uniquely identified
-  // pending/running part of the call now being prepared. Everything else
-  // stays history.
+  // itself rejected with `no-active-epoch`, and the pending/running guard
+  // mutation parts of the current turn. Everything else stays history.
   function isExemptGuardPart(
     part: Record<string, unknown>,
-    currentCall: CurrentCall | undefined,
+    currentTurn: ReadonlySet<unknown>,
   ): boolean {
     if (part.tool === 'systematic_workflow_status') return true
-    if (isCurrentCallPart(part, currentCall)) return true
+    if (currentTurn.has(part)) return true
     if (
       part.tool !== 'systematic_workflow_start' &&
       part.tool !== 'systematic_workflow_complete'
@@ -1959,7 +1974,7 @@ function createSessionRuntime(
 
   function containsGuardHistory(
     value: unknown,
-    currentCall: CurrentCall | undefined,
+    currentTurn: ReadonlySet<unknown>,
   ): boolean {
     if (!isRecord(value)) return false
     if (
@@ -1968,11 +1983,11 @@ function createSessionRuntime(
       value.tool === 'systematic_workflow_complete' ||
       value.tool === 'systematic_workflow_control'
     ) {
-      return !isExemptGuardPart(value, currentCall)
+      return !isExemptGuardPart(value, currentTurn)
     }
     return (
       Array.isArray(value.parts) &&
-      value.parts.some((part) => containsGuardHistory(part, currentCall))
+      value.parts.some((part) => containsGuardHistory(part, currentTurn))
     )
   }
 
@@ -2240,11 +2255,10 @@ function createSessionRuntime(
   function publishEmptyMarkers(
     parts: ReadonlyArray<unknown>,
     allowFresh: boolean,
-    currentCall: CurrentCall | undefined,
   ): void {
     const reusableLedger = emptyHistoryLedgerForRetry()
-    const exemptCall = uniqueCurrentCall(parts, currentCall)
-    if (parts.some((part) => containsGuardHistory(part, exemptCall))) {
+    const currentTurn = currentTurnExemptParts(parts)
+    if (parts.some((part) => containsGuardHistory(part, currentTurn))) {
       // Evidence-bearing guard history without markers can never become
       // recoverable, so this unavailable is final (not retryable).
       publishUnavailable(
@@ -2269,7 +2283,6 @@ function createSessionRuntime(
   async function initializeSession(
     sessionID: string,
     allowFresh: boolean,
-    currentCall: CurrentCall | undefined,
   ): Promise<void> {
     const reader =
       options.hostReadback?.readSessionPartsStrict ??
@@ -2297,7 +2310,7 @@ function createSessionRuntime(
       // No own markers: either no history at all, or all markers are provably
       // foreign (dual-registration, other registrations only). Use the normal
       // empty-history path (publishFresh or publishUnavailable based on history check).
-      publishEmptyMarkers(parts, allowFresh, currentCall)
+      publishEmptyMarkers(parts, allowFresh)
       return
     }
     // kind === 'own': recover from filtered own markers.
@@ -2305,13 +2318,9 @@ function createSessionRuntime(
     if (failure) publishUnavailable(failure)
   }
 
-  // `currentCall` is passed only by the before-hook of a guard mutation tool;
-  // every other caller omits it. It is consulted only if THIS call is the one
-  // that starts the (re-)initialization.
   async function recoverFromHost(
     sessionID: string,
     allowFresh = true,
-    currentCall?: CurrentCall,
   ): Promise<void> {
     // Waiter protocol: no hook proceeds while an initialization is in flight.
     // After awaiting promise P a waiter re-checks that P is still the current
@@ -2329,7 +2338,7 @@ function createSessionRuntime(
     }
     if (reinitialize) initialized = false
     retryableEmptyHistory = false
-    const next = initializeSession(sessionID, allowFresh, currentCall)
+    const next = initializeSession(sessionID, allowFresh)
     initializationPromise = next
     await next
   }
@@ -3380,9 +3389,7 @@ function createSessionRuntime(
     try {
       const host = parseHostBefore(input)
       if (!host || !isRecord(output)) return
-      // Recorded before recovery runs so a first initialization triggered by
-      // this very call can recognize its own in-flight host part.
-      await recoverFromHost(host.sessionID, true, currentMutationCall(host))
+      await recoverFromHost(host.sessionID)
       if (host.tool === 'question') interceptQuestion(host, output)
       await prepareHostCall(host, output.args)
     } catch (error) {
@@ -4577,6 +4584,10 @@ export function createOpencodeWorkflowGuard(
   const sessions = new Map<string, SessionRuntime>()
   const operationObservers: OperationObserverRegistry = new Map()
   const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
+  // Captured once per guard instance (the process's registration), not per
+  // lazily created session runtime, so a turn the host created before the
+  // first hook for a session ran still counts as this process's turn.
+  const runtimeStartedAt = (options.now ?? Date.now)()
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
@@ -4589,6 +4600,7 @@ export function createOpencodeWorkflowGuard(
       },
       operationObservers,
       recoveredOperationContexts,
+      runtimeStartedAt,
     )
     sessions.set(sessionID, runtime)
     return runtime
