@@ -2386,6 +2386,245 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
+  describe('status path isolation', () => {
+    interface HostOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    function freshOutput(): HostOutput {
+      return { title: 'pending', output: 'pending', metadata: {} }
+    }
+
+    async function statusTool(adapter: OpencodeWorkflowGuard): Promise<void> {
+      await getTool(adapter, 'systematic_workflow_status').execute(
+        {},
+        toolContext(SESSION_A),
+      )
+    }
+
+    async function transformPass(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<void> {
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+    }
+
+    function startBefore(adapter: OpencodeWorkflowGuard, callID: string) {
+      return adapter.hooks['tool.execute.before'](
+        { tool: 'systematic_workflow_start', sessionID: SESSION_A, callID },
+        { args: {} },
+      )
+    }
+
+    async function startAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<HostOutput> {
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID,
+          args: {},
+        },
+        output,
+      )
+      return output
+    }
+
+    async function completeFirstUnit(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<void> {
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'complete-first-unit',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        freshOutput(),
+      )
+      expect(status(adapter).unit?.status).toBe('completed')
+    }
+
+    test('a: a status call between a sibling start before- and after-hook does not discard the start', async () => {
+      const adapter = createAdapter('observe')
+      await completeFirstUnit(adapter)
+      const ledgerBefore = ledger(adapter)
+
+      await Promise.all([
+        startBefore(adapter, 'batch-start'),
+        adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_status',
+            sessionID: SESSION_A,
+            callID: 'batch-status',
+          },
+          { args: {} },
+        ),
+      ])
+      await statusTool(adapter)
+      const output = await startAfter(adapter, 'batch-start')
+
+      expect(output.metadata).toMatchObject({
+        workflowGuard: { status: 'started' },
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+      expect(ledger(adapter)).toBe(ledgerBefore)
+    })
+
+    test('b: a status call between a sibling guarded skill before- and after-hook does not lose the activation', async () => {
+      const adapter = createAdapter('observe')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'batch-skill',
+      }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await statusTool(adapter)
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        { title: 'Loaded skill', output: 'skill result', metadata: {} },
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+      expect(status(adapter)).toMatchObject({
+        state: 'waiting',
+        reasonCode: 'missing-evidence',
+      })
+    })
+
+    test('c: a status call between a sibling complete before- and after-hook does not lose or poison the completion', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'batch-complete',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      await statusTool(adapter)
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        output,
+      )
+      expect(output.metadata).toMatchObject({
+        workflowGuard: { status: 'completed', target: 'unit' },
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('completed')
+    })
+
+    test('d: a before-hook that never gets an after-hook keeps its pending entry across status calls; the next transform clears it', async () => {
+      const adapter = createAdapter('observe')
+      await completeFirstUnit(adapter)
+
+      await startBefore(adapter, 'orphan-start')
+      await statusTool(adapter)
+      await statusTool(adapter)
+      // Status left the entry alone, so a late after-hook still completes it.
+      expect(
+        (await startAfter(adapter, 'orphan-start')).metadata,
+      ).toMatchObject({ workflowGuard: { status: 'started' } })
+
+      const second = createAdapter('observe')
+      await completeFirstUnit(second)
+      await startBefore(second, 'orphan-start')
+      await transformPass(second)
+      await startAfter(second, 'orphan-start')
+      expect(status(second).state).toBe('unavailable')
+    })
+
+    describe('observer readback without an epoch', () => {
+      function countingObserver(behavior: 'unavailable' | 'throws'): {
+        observer: OpencodeOperationObserver
+        calls: () => number
+      } {
+        const base = sequenceObserver([operationSnapshot()])
+        let calls = 0
+        return {
+          observer: {
+            ...base,
+            snapshot: async () => {
+              calls += 1
+              if (behavior === 'throws') throw new Error('observer exploded')
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+          },
+          calls: () => calls,
+        }
+      }
+
+      for (const behavior of ['unavailable', 'throws'] as const) {
+        test(`e: status in an inactive session with a ${behavior} observer stays inactive and never reads the observer`, async () => {
+          const { observer, calls } = countingObserver(behavior)
+          const adapter = createAdapter('observe', false, observer)
+          await statusTool(adapter)
+          await statusTool(adapter)
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect(calls()).toBe(0)
+        })
+      }
+
+      test('e: status in an inactive session with no observer stays inactive', async () => {
+        const adapter = createAdapter('observe')
+        await statusTool(adapter)
+        expect(status(adapter).state).toBe('inactive')
+      })
+
+      for (const behavior of ['unavailable', 'throws'] as const) {
+        test(`f: status during an active epoch with a ${behavior} observer still goes unavailable with the observer-readback-failed cause`, async () => {
+          const base = sequenceObserver([operationSnapshot()])
+          let failing = false
+          const observer: OpencodeOperationObserver = {
+            ...base,
+            snapshot: async () => {
+              if (!failing) return base.snapshot()
+              if (behavior === 'throws') throw new Error('observer exploded')
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+          }
+          const adapter = createAdapter('observe', false, observer)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).state).not.toBe('unavailable')
+          failing = true
+          const result = await getTool(
+            adapter,
+            'systematic_workflow_status',
+          ).execute({}, toolContext(SESSION_A))
+          const parsed = JSON.parse(expectToolOutput(result).output)
+          expect(parsed.state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toEqual({
+            site: 'refresh-readback',
+            kind: 'observer-readback-failed',
+            timedOut: false,
+          })
+        })
+      }
+    })
+  })
+
   test('partial registration finalization fails closed and remains replay-idempotent', async () => {
     const first = createAdapter('observe')
     const second = createAdapter('observe')
@@ -5189,7 +5428,7 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
-  test('before-only operation is abandoned at the next status boundary', async () => {
+  test('before-only operation is abandoned at the next request boundary (transform), not by a status call', async () => {
     const adapter = createAdapter(
       'observe',
       false,
@@ -5203,9 +5442,14 @@ describe('OpenCode workflow guard adapter', () => {
       { tool: 'write', sessionID: SESSION_A, callID: 'before-only' },
       { args: { filePath: 'pending.ts', content: 'pending' } },
     )
+    // A status call is a sibling tool call and must not discard the entry.
     await getTool(adapter, 'systematic_workflow_status').execute(
       {},
       toolContext(),
+    )
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      { system: ['base'] },
     )
     await adapter.hooks['tool.execute.after'](
       {

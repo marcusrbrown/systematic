@@ -2622,8 +2622,9 @@ function createSessionRuntime(
     }
   }
 
+  // A status read must not touch sibling calls' pending work: pending
+  // entries are only cleared at the request boundary (the transform).
   function readStatus(): WorkflowStatus {
-    abandonPending()
     return guard.status()
   }
 
@@ -2667,9 +2668,14 @@ function createSessionRuntime(
     }
   }
 
+  // Without an epoch there is nothing to protect with observer readback:
+  // skip every observer read, identity update, and unavailable transition.
+  function observerReadbackApplies(): boolean {
+    return options.observer !== undefined && guard.status().epoch !== null
+  }
+
   async function refreshReadback(): Promise<void> {
-    abandonPending()
-    if (!options.observer) return
+    if (!observerReadbackApplies()) return
     const effective = effectiveOperationObserver()
     if (!effective) {
       markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
