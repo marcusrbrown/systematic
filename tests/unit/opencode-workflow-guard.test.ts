@@ -6087,6 +6087,85 @@ describe('OpenCode workflow guard adapter', () => {
           expect(status(adapter).state).not.toBe('unavailable')
         },
       )
+
+      test('a push whose held classifier rejects after the unit changed neither disables the successor nor mints evidence', async () => {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const classifier = createReceiptClassifier()
+        const realClassify = classifier.classifyOperation
+        if (!realClassify) throw new Error('classifier implements it')
+        let armed = false
+        let held = false
+        let rejectHeld: (reason: Error) => void = () => {}
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          observer: base,
+          runtimeRequiredOperations: ['push'],
+          classifier: {
+            ...classifier,
+            classifyOperation: (input: unknown) => {
+              if (!armed) return realClassify(input)
+              armed = false
+              held = true
+              return new Promise((_resolve, reject) => {
+                rejectHeld = reject
+              })
+            },
+          },
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const firstUnitId = status(adapter).unit?.unitId
+        const staleCommand = { command: 'git push origin HEAD' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-classify' },
+          { args: staleCommand },
+        )
+        armed = true
+        const staleAfter = adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-classify',
+            args: staleCommand,
+          },
+          { title: 'op', output: 'ok', metadata: { exit: 0 } },
+        )
+        for (let tick = 0; tick < 50 && !held; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(held).toBe(true)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'classify-unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'classify-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        await startSuccessorUnit(adapter)
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+        expect(status(adapter).missingOperations).toContain('push')
+
+        rejectHeld(new Error('classifier failed'))
+        await staleAfter
+
+        expect(status(adapter).state).not.toBe('unavailable')
+        // Only unit 1's own completing push holds a push receipt.
+        expect(
+          operationsOf(adapter).filter((operation) => operation === 'push'),
+        ).toHaveLength(1)
+        expect(status(adapter).missingOperations).toContain('push')
+      })
     })
 
     describe.each([
