@@ -266,6 +266,23 @@ function markerKinds(messages: unknown[]): string[] {
   })
 }
 
+/**
+ * `systematic_workflow_status` reports `firstUnavailableCause` only in its
+ * JSON tool output (not metadata). Surface it so a flaking scenario's log
+ * records why the guard went unavailable.
+ */
+function firstUnavailableCause(output: unknown): unknown {
+  if (typeof output !== 'string') return undefined
+  try {
+    const parsed: unknown = JSON.parse(output)
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>).firstUnavailableCause
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function resultSummary(messages: unknown[]): Array<Record<string, unknown>> {
   return toolParts(messages).map((part) => {
     const state = part.state
@@ -288,6 +305,10 @@ function resultSummary(messages: unknown[]): Array<Record<string, unknown>> {
       error: value.error,
       workflowGuardStatus: workflowGuard?.status,
       workflowGuardReasonCode: workflowGuard?.reasonCode,
+      firstUnavailableCause:
+        part.tool === 'systematic_workflow_status'
+          ? firstUnavailableCause(value.output)
+          : undefined,
       exit: metadata?.exit,
     }
   })
@@ -663,6 +684,18 @@ describe.skipIf(!isOpencodeAvailable())('focused real-host dogfood', () => {
       )
 
       const push = observe.find((entry) => entry.scenario === 'push')
+      // Records the cause in the log if this scenario flakes (issue #1005).
+      const pushStatusDiagnostic = push?.results.find(
+        (r) => r.callID === 'push-status',
+      )
+      console.log(
+        'PUSH_STATUS_DIAGNOSTIC',
+        JSON.stringify({
+          state: pushStatusDiagnostic?.state,
+          reasonCode: pushStatusDiagnostic?.reasonCode,
+          firstUnavailableCause: pushStatusDiagnostic?.firstUnavailableCause,
+        }),
+      )
       expect(
         push?.markerKinds.filter((kind) => kind === 'mint').length,
       ).toBeGreaterThanOrEqual(4)
