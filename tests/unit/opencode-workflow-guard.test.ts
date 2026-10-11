@@ -7237,6 +7237,263 @@ describe('OpenCode workflow guard adapter', () => {
         })
       })
 
+      describe('current-call exemption on first initialization', () => {
+        type MutationTool =
+          | 'systematic_workflow_start'
+          | 'systematic_workflow_complete'
+          | 'systematic_workflow_control'
+
+        function adapterFor(
+          mode: 'protected' | 'observe',
+          parts: readonly unknown[],
+        ): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: {
+              readSessionParts: async () => parts,
+              listChildren: async () => [],
+            },
+          })
+        }
+
+        function hostPart(
+          tool: string,
+          callID: string,
+          state: Record<string, unknown>,
+        ): Record<string, unknown> {
+          return { type: 'tool', tool, callID, state }
+        }
+
+        function history(
+          ...parts: Record<string, unknown>[]
+        ): readonly unknown[] {
+          return [{ info: {}, parts }]
+        }
+
+        const CALL = 'call_current'
+
+        async function firstBefore(
+          adapter: OpencodeWorkflowGuard,
+          tool: MutationTool,
+          callID = CALL,
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool, sessionID: SESSION_A, callID },
+            {
+              args:
+                tool === 'systematic_workflow_complete'
+                  ? { target: 'unit' }
+                  : {},
+            },
+          )
+        }
+
+        async function expectClosed(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+        }
+
+        test('a: the current running start part does not poison first initialization; the start is rejected no-active-epoch', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          )
+          const output = { title: 'pending', output: 'pending', metadata: {} }
+          await firstBefore(adapter, 'systematic_workflow_start')
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool: 'systematic_workflow_start',
+              sessionID: SESSION_A,
+              callID: CALL,
+              args: {},
+            },
+            output,
+          )
+          expect(output.metadata).toMatchObject({
+            workflowGuard: {
+              status: 'rejected',
+              reasonCode: 'no-active-epoch',
+            },
+          })
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect((await statusJson(adapter)).state).toBe('inactive')
+        })
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`b: the current running complete part does not poison first initialization; the completion is rejected no-active-epoch (${mode})`, async () => {
+            const adapter = adapterFor(
+              mode,
+              history(
+                hostPart('systematic_workflow_complete', CALL, {
+                  status: 'running',
+                }),
+              ),
+            )
+            const output = { title: 'pending', output: 'pending', metadata: {} }
+            await firstBefore(adapter, 'systematic_workflow_complete')
+            await adapter.hooks['tool.execute.after'](
+              {
+                tool: 'systematic_workflow_complete',
+                sessionID: SESSION_A,
+                callID: CALL,
+                args: { target: 'unit' },
+              },
+              output,
+            )
+            expect(output.metadata).toMatchObject({
+              workflowGuard: {
+                status: 'rejected',
+                reasonCode: 'no-active-epoch',
+              },
+            })
+            expect(status(adapter).state).toBe('inactive')
+          })
+        }
+
+        test('c: control before-hooks go through the same recovery path, so the current running control part is exempt', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('systematic_workflow_control', CALL, {
+                status: 'running',
+              }),
+            ),
+          )
+          await firstBefore(adapter, 'systematic_workflow_control')
+          expect((await statusJson(adapter)).state).toBe('inactive')
+        })
+
+        test('d: a duplicate callID anywhere in history keeps the part non-exempt', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'completed',
+                metadata: {},
+              }),
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          )
+          await firstBefore(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('d: a non-guard part reusing the callID also keeps the part non-exempt', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('read', CALL, { status: 'completed' }),
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          )
+          await firstBefore(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('e: a current-tool mismatch keeps the part non-exempt', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('systematic_workflow_complete', CALL, {
+                status: 'running',
+              }),
+            ),
+          )
+          await firstBefore(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('f: a prior-process running start with a different callID stays closed', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('systematic_workflow_start', 'call_prior', {
+                status: 'running',
+              }),
+            ),
+          )
+          await firstBefore(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('f: a running start with no current-call identity (non-mutation hook) stays closed', async () => {
+          const adapter = adapterFor(
+            'protected',
+            history(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          )
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID: CALL },
+            { args: {} },
+          )
+          await expectClosed(adapter)
+        })
+
+        for (const exempt of ['pending', 'running'] as const) {
+          test(`g: a ${exempt} current-call part is accepted`, async () => {
+            const adapter = adapterFor(
+              'protected',
+              history(
+                hostPart('systematic_workflow_start', CALL, { status: exempt }),
+              ),
+            )
+            await firstBefore(adapter, 'systematic_workflow_start')
+            expect((await statusJson(adapter)).state).toBe('inactive')
+          })
+        }
+
+        for (const closed of ['completed', 'error'] as const) {
+          test(`g: a ${closed} part with the current callID stays closed`, async () => {
+            const adapter = adapterFor(
+              'protected',
+              history(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: closed,
+                  metadata: {},
+                }),
+              ),
+            )
+            await firstBefore(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          })
+        }
+
+        test('markers stay authoritative: an ambiguous marker plus the current running part is still closed', async () => {
+          const adapter = adapterFor('protected', [
+            ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+            ...history(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await firstBefore(adapter, 'systematic_workflow_start')
+          await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
+        })
+      })
+
       describe('strict own-history read versus lenient child-rollup read', () => {
         function adapterWithReaders(readers: {
           lenient: (sessionID: string) => Promise<readonly unknown[]>
