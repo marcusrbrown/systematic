@@ -250,11 +250,19 @@ finished computing a cause first — and surfaces it only as `firstUnavailableCa
 receipt envelope, marker envelope, or anything covered by an integrity digest. At initialization the
 session's own status calls, guard-owned `no-active-epoch` rejections, and an in-flight guard call in
 the current, unfinished assistant turn do not count as unrecoverable history; any other markerless
-guard history fails closed. Known limits: a dual registration running an older build rejects the
-`inactive` marker state and fails closed until both upgrade; if host history loses every marker, a
-previously activated session cannot be told apart from a fresh one; and in-flight guard calls from a
-turn that began before this runtime started fail closed. OpenCode only — `src/pi.ts` registers no
-guard, and the Claude Code bundle ships no runtime.
+guard history fails closed. At activation, a remote probe timeout, or a push `missing-resource`,
+defers that one operation instead of making the guard unavailable; deferrals are listed on status
+output as an enum-only `seedDeferrals` list and never appear in receipts, markers, or digests. A
+deferred operation is admitted only after its own before-read is available (retried once on a
+timeout) from the same observer and target as the seed, and PR creation seeds its baseline from the
+after-read only when its before-read reported `missing-resource`. Known limits: a dual registration
+running an older build rejects the `inactive` marker state and fails closed until both upgrade; if
+host history loses every marker, a previously activated session cannot be told apart from a fresh
+one; in-flight guard calls from a turn that began before this runtime started fail closed;
+`missing-resource` cannot distinguish absence from some `gh` or `git` failures, and a first push to
+a branch with no upstream defers but cannot mint a receipt (#1081); and readback failures after an
+operation is satisfied still make the guard unavailable (#1080). OpenCode only — `src/pi.ts`
+registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
