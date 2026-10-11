@@ -6747,6 +6747,119 @@ describe('OpenCode workflow guard adapter', () => {
         // identical regardless of which cause was recorded.
         expect(withReadFailure).toBe(withMarkerlessHistory)
       })
+
+      describe('strict own-history read versus lenient child-rollup read', () => {
+        function adapterWithReaders(readers: {
+          lenient: (sessionID: string) => Promise<readonly unknown[]>
+          strict?: (sessionID: string) => Promise<readonly unknown[]>
+        }): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode: 'observe', debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: {
+              readSessionParts: readers.lenient,
+              ...(readers.strict
+                ? { readSessionPartsStrict: readers.strict }
+                : {}),
+              listChildren: async (sessionID) =>
+                sessionID === SESSION_A
+                  ? [{ sessionId: 'child-session', parentID: SESSION_A }]
+                  : [],
+            },
+          })
+        }
+
+        async function fireTask(adapter: OpencodeWorkflowGuard): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'task', sessionID: SESSION_A, callID: 'strict-task' },
+            { args: {} },
+          )
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool: 'task',
+              sessionID: SESSION_A,
+              callID: 'strict-task',
+              args: {},
+            },
+            {
+              title: 'task result',
+              output: 'done',
+              metadata: { sessionId: 'child-session' },
+            },
+          )
+        }
+
+        test('a thrown strict read is unavailable / history-read-failed even when the lenient read would return []', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => {
+              throw new Error('strict read failed')
+            },
+          })
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'history-read-failed',
+          )
+          expect(adapter.status(SESSION_A).state).toBe('unavailable')
+        })
+
+        test('a successful empty strict read is inactive, not unavailable', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => [],
+          })
+          const parsed = await statusJson(adapter)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        })
+
+        test('initialization uses the strict read and never the lenient one', async () => {
+          const lenientCalls: string[] = []
+          const adapter = adapterWithReaders({
+            lenient: async (sessionID) => {
+              lenientCalls.push(sessionID)
+              return []
+            },
+            strict: async () => [],
+          })
+          await statusJson(adapter)
+          expect(lenientCalls).toEqual([])
+        })
+
+        test('a child rollup read returning no parts rolls up nothing and leaves the parent unchanged', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => [],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          const before = status(adapter)
+          await fireTask(adapter)
+          const after = status(adapter)
+          expect(after.state).toBe(before.state)
+          expect(after.state).not.toBe('unavailable')
+          expect(after.epoch?.epochId).toBe(before.epoch?.epochId)
+          expect(adapter.ledger(SESSION_A)?.listReceipts() ?? []).toEqual([])
+        })
+
+        test('a thrown child rollup read still marks the parent unavailable', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async (sessionID) => {
+              if (sessionID === 'child-session') {
+                throw new Error('child read failed')
+              }
+              return []
+            },
+            strict: async () => [],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).state).not.toBe('unavailable')
+          await fireTask(adapter)
+          expect(status(adapter).state).toBe('unavailable')
+        })
+      })
     })
   })
 

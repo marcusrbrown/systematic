@@ -130,16 +130,36 @@ const initializePlugin = async ({
         path: { id: string }
         query?: { directory?: string }
       }) => Promise<{ data?: unknown }>
+      type SessionMessagesResponse = { data?: unknown; error?: unknown }
+      const readMessages = async (
+        sessionID: string,
+      ): Promise<SessionMessagesResponse> => {
+        const messages = client.session.messages.bind(
+          client.session,
+        ) as unknown as (input: {
+          path: { id: string }
+          query?: { directory?: string }
+        }) => Promise<SessionMessagesResponse>
+        return messages({ path: { id: sessionID }, query: { directory } })
+      }
       return {
+        // Lenient: child-rollup reads. SDK error or non-array data -> [].
         readSessionParts: async (sessionID) => {
-          const messages = client.session.messages.bind(
-            client.session,
-          ) as unknown as SessionReadMethod
-          const response = await messages({
-            path: { id: sessionID },
-            query: { directory },
-          })
+          const response = await readMessages(sessionID)
           return Array.isArray(response.data) ? response.data : []
+        },
+        // Strict: initialization/recovery reads of the session's own history.
+        // An SDK error or non-array data throws instead of looking like an
+        // empty history.
+        readSessionPartsStrict: async (sessionID) => {
+          const response = await readMessages(sessionID)
+          if (response.error !== undefined && response.error !== null) {
+            throw new Error('session history read failed')
+          }
+          if (!Array.isArray(response.data)) {
+            throw new Error('session history read returned malformed data')
+          }
+          return response.data
         },
         listChildren: async (sessionID) => {
           const children = client.session.children.bind(

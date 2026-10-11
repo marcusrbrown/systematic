@@ -1160,3 +1160,163 @@ describe('skill tool output restoration wiring', () => {
     }
   })
 })
+
+describe('workflow guard host history readback wiring', () => {
+  interface MessagesResponse {
+    data?: unknown
+    error?: unknown
+  }
+
+  interface WiringHooks {
+    tool: {
+      systematic_workflow_status: {
+        execute: (args: object, context: object) => Promise<unknown>
+      }
+    }
+    'tool.execute.before': (input: unknown, output: unknown) => Promise<void>
+    'tool.execute.after': (input: unknown, output: unknown) => Promise<void>
+  }
+
+  const PARENT = 'wiring-parent'
+  const CHILD = 'wiring-child'
+
+  async function withPlugin(
+    messages: (sessionID: string) => MessagesResponse,
+    run: (hooks: WiringHooks) => Promise<void>,
+  ): Promise<void> {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-wiring-'))
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    const customConfigDir = path.join(tempDir, 'custom-config')
+    fs.mkdirSync(customConfigDir)
+    fs.writeFileSync(
+      path.join(customConfigDir, 'systematic.json'),
+      JSON.stringify({ workflow_guard: { mode: 'protected' } }),
+    )
+    // The observer needs a real git worktree to produce a readback snapshot.
+    for (const args of [
+      ['init', '--quiet'],
+      ['config', 'user.email', 'wiring@example.invalid'],
+      ['config', 'user.name', 'Wiring Test'],
+      ['commit', '--quiet', '--allow-empty', '-m', 'initial'],
+    ]) {
+      const git = Bun.spawnSync(['git', ...args], { cwd: tempDir })
+      if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed`)
+    }
+    const priorConfigDir = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = customConfigDir
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: object) => Promise<WiringHooks>
+      }
+      const hooks = await pluginModule.default({
+        client: {
+          app: { log: async () => {} },
+          session: {
+            messages: async (input: { path: { id: string } }) =>
+              messages(input.path.id),
+            children: async (input: { path: { id: string } }) => ({
+              data:
+                input.path.id === PARENT
+                  ? [{ id: CHILD, parentID: PARENT }]
+                  : [],
+            }),
+          },
+        },
+        directory: tempDir,
+      })
+      await run(hooks)
+    } finally {
+      if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  async function readStatus(
+    hooks: WiringHooks,
+  ): Promise<Record<string, unknown>> {
+    const result = await hooks.tool.systematic_workflow_status.execute(
+      {},
+      {
+        sessionID: PARENT,
+        messageID: 'wiring-message',
+        agent: 'systematic',
+        directory: process.cwd(),
+        worktree: process.cwd(),
+        abort: new AbortController().signal,
+        metadata: () => {},
+        ask: async () => {},
+      },
+    )
+    const text =
+      typeof result === 'string'
+        ? result
+        : (result as { output: string }).output
+    return JSON.parse(text)
+  }
+
+  const failedReads: ReadonlyArray<{
+    name: string
+    response: MessagesResponse
+  }> = [
+    {
+      name: 'an SDK error',
+      response: { data: undefined, error: { name: 'UnknownError' } },
+    },
+    { name: 'non-array data', response: { data: { not: 'an array' } } },
+    { name: 'missing data', response: {} },
+  ]
+
+  for (const failed of failedReads) {
+    test(`initialization treats ${failed.name} as a failed read: unavailable / history-read-failed, never inactive`, async () => {
+      await withPlugin(
+        () => failed.response,
+        async (hooks) => {
+          const parsed = await readStatus(hooks)
+          expect(parsed.state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toEqual({
+            site: 'initialize-session',
+            kind: 'history-read-failed',
+            timedOut: false,
+          })
+        },
+      )
+    })
+  }
+
+  test('a successful empty history read initializes as inactive', async () => {
+    await withPlugin(
+      () => ({ data: [] }),
+      async (hooks) => {
+        const parsed = await readStatus(hooks)
+        expect(parsed.state).toBe('inactive')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      },
+    )
+  })
+
+  for (const failed of failedReads) {
+    test(`the lenient child-rollup read treats ${failed.name} as no parts and leaves the parent untouched`, async () => {
+      await withPlugin(
+        (sessionID) => (sessionID === CHILD ? failed.response : { data: [] }),
+        async (hooks) => {
+          expect((await readStatus(hooks)).state).toBe('inactive')
+          const input = { tool: 'task', sessionID: PARENT, callID: 'task-1' }
+          await hooks['tool.execute.before'](input, { args: {} })
+          await hooks['tool.execute.after'](
+            { ...input, args: {} },
+            {
+              title: 'task result',
+              output: 'done',
+              metadata: { sessionId: CHILD },
+            },
+          )
+          const parsed = await readStatus(hooks)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        },
+      )
+    })
+  }
+})

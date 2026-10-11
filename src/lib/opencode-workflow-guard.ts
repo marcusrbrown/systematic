@@ -207,7 +207,21 @@ export interface OpencodeWorkflowChildSession {
 }
 
 export interface OpencodeWorkflowHostReadback {
+  /**
+   * Lenient read, used for child-session rollup: a host error or malformed
+   * payload may be reported as `[]` (nothing to roll up), and only a thrown
+   * read marks the parent unavailable.
+   */
   readSessionParts(sessionID: string): Promise<ReadonlyArray<unknown>>
+  /**
+   * Strict read of the session's OWN history, used for initialization and
+   * recovery. Must throw on a host error or malformed payload so a failed read
+   * can never be mistaken for empty history. Optional only so injected readers
+   * need no mass edits; when absent, initialization falls back to
+   * `readSessionParts`, which then carries the same obligation to throw on
+   * failure.
+   */
+  readSessionPartsStrict?(sessionID: string): Promise<ReadonlyArray<unknown>>
   listChildren(
     sessionID: string,
   ): Promise<ReadonlyArray<OpencodeWorkflowChildSession>>
@@ -2138,7 +2152,9 @@ function createSessionRuntime(
     sessionID: string,
     allowFresh: boolean,
   ): Promise<void> {
-    const reader = options.hostReadback?.readSessionParts
+    const reader =
+      options.hostReadback?.readSessionPartsStrict ??
+      options.hostReadback?.readSessionParts
     if (!reader) {
       publishFresh()
       return
