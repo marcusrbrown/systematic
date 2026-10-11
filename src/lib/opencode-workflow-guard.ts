@@ -313,8 +313,15 @@ interface PendingOperation {
   registeredWorktreeIdentity: string
   observer: OpencodeOperationObserver
   before: OperationObserverSnapshot
+  /** Epoch and unit active when the before-hook began, before any await. */
+  initiator?: OperationInitiator
   remoteOperation?: RemoteOperation
   remoteBefore?: OperationObserverRemoteResult
+}
+
+interface OperationInitiator {
+  readonly epochId: string
+  readonly unitId: string
 }
 
 interface OperationObserverRegistration {
@@ -3220,6 +3227,9 @@ function createSessionRuntime(
     args: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
+    // Captured before the first await: the unit can change while the
+    // snapshot and remote probes are in flight.
+    const initiator = currentInitiator()
     const { parentTargetRoot, sessionLocation } = effectiveTargetContext()
     const fingerprint = argsFingerprint(
       ledger,
@@ -3303,7 +3313,12 @@ function createSessionRuntime(
     })
     const remote = await remoteIntentForOperation(host, args, operationObserver)
     if (remote) {
-      bindDeferredBaseline(remote.operation, remote.before, operationObserver)
+      bindDeferredBaseline(
+        remote.operation,
+        remote.before,
+        operationObserver,
+        initiator,
+      )
     }
     pendingOperations.set(callDigest, {
       callID: host.callID,
@@ -3314,6 +3329,7 @@ function createSessionRuntime(
       registeredWorktreeIdentity: registeredIdentity,
       observer: operationObserver,
       before: result.snapshot,
+      ...(initiator ? { initiator } : {}),
       ...(remote
         ? { remoteOperation: remote.operation, remoteBefore: remote.before }
         : {}),
@@ -3560,9 +3576,28 @@ function createSessionRuntime(
     operation: RemoteOperation,
     before: OperationObserverRemoteResult | undefined,
     observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
   ): void {
+    // A read that began under another unit (or none) must not satisfy the
+    // deferral of the unit that is active now.
+    if (!initiator || !isCurrentInitiator(initiator)) return
     const deferred = deferredSeedFor(operation)
-    if (!deferred || !before || !sameSeedObserver(deferred, observer)) return
+    if (!deferred) return
+    // A baseline established since the deferral was recorded (for example
+    // propagated from a PR-creation self-seed) makes it obsolete. Never
+    // overwrite it; admission compares the operation against it.
+    if (guard.hasResourceBaseline(operation)) {
+      clearSeedDeferral(operation)
+      return
+    }
+    if (!before || !sameSeedObserver(deferred, observer)) return
+    bindFromBeforeRead(operation, before)
+  }
+
+  function bindFromBeforeRead(
+    operation: RemoteOperation,
+    before: OperationObserverRemoteResult,
+  ): void {
     if (before.status === 'missing-resource') {
       if (operation === 'pr-creation') clearSeedDeferral(operation)
       return
@@ -3572,6 +3607,22 @@ function createSessionRuntime(
       deferredBaselineReadback(operation, before.snapshot),
     )
     if (observed.status !== 'rejected') clearSeedDeferral(operation)
+  }
+
+  function currentInitiator(): OperationInitiator | undefined {
+    const current = guard.status()
+    return current.epoch && current.unit
+      ? { epochId: current.epoch.epochId, unitId: current.unit.unitId }
+      : undefined
+  }
+
+  function isCurrentInitiator(initiator: OperationInitiator): boolean {
+    const current = currentInitiator()
+    return (
+      current !== undefined &&
+      current.epochId === initiator.epochId &&
+      current.unitId === initiator.unitId
+    )
   }
 
   function sameSeedObserver(
@@ -4389,6 +4440,12 @@ function createSessionRuntime(
     pending: PendingOperation,
     output: unknown,
   ): Promise<OperationCompletionResult> {
+    // An operation that began under a unit that is no longer current carries
+    // that unit's evidence; it cannot mint receipts for the current one.
+    if (pending.initiator && !isCurrentInitiator(pending.initiator)) {
+      sealOperation(callDigest, pending, true)
+      return { status: 'ignored' }
+    }
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)

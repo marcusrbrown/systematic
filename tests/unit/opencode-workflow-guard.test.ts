@@ -5664,7 +5664,258 @@ describe('OpenCode workflow guard adapter', () => {
           { operation: 'push', reasonCode: 'command-timeout' },
         ])
       })
+
+      test('n: a before-read suspended across unit completion and the next unit start cannot bind or mint evidence for the new unit', async () => {
+        // Push P's before-read samples revision E and is held. Another push
+        // advances the remote and completes unit 1. Unit 2 starts with a
+        // timed-out (deferred) push seed. Releasing P's old read must neither
+        // bind unit 2's deferral with that unit-1 era revision nor let P's
+        // up-to-date push count as a mutation for unit 2.
+        let releaseStale: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        // The held read (the second push before-read, stale push P) bypasses
+        // the sequence, so the base serves: unit-1 seed, unit-1 push Q, then
+        // the unit-2 seed (timeout).
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [
+              remoteAvailable(D, E),
+              remoteAvailable(D, E),
+              TIMEOUT,
+            ],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 2) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseStale = resolve
+                    },
+                  )
+                }
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+        const staleCommand = { command: 'git push origin HEAD' }
+        const staleBefore = adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-push' },
+          { args: staleCommand },
+        )
+        for (let tick = 0; tick < 50 && pushBeforeReads < 2; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(pushBeforeReads).toBe(2)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'stale-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        const firstUnitId = status(adapter).unit?.unitId
+
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'stale-start-unit2',
+          },
+          { args: {} },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'stale-start-unit2',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        const pushReceiptsBefore = operations(adapter).filter(
+          (operation) => operation === 'push',
+        ).length
+
+        releaseStale(remoteAvailable(D, E))
+        await staleBefore
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-push',
+            args: staleCommand,
+          },
+          { title: 'push', output: 'up-to-date', metadata: { exit: 0 } },
+        )
+
+        expect(
+          operations(adapter).filter((operation) => operation === 'push'),
+        ).toHaveLength(pushReceiptsBefore)
+        expect(status(adapter).missingOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        // The stale read bound nothing, so unit 2's deferral is untouched.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
     })
+
+    describe.each([
+      [
+        'check-readback',
+        'gh pr checks 42',
+        'checkState',
+        'pending',
+        'completed-success',
+      ],
+      [
+        'review-readback',
+        'gh pr view 42 --json reviewDecision',
+        'reviewDecision',
+        'required',
+        'approved',
+      ],
+    ] as const)(
+      'lingering %s deferral after a pr-creation self-seed propagated the baseline',
+      (operation, command, field, pendingValue, finalValue) => {
+        const FRESH = 'f'.repeat(64)
+        const PR_A = D
+        const PR_B = '2'.repeat(64)
+
+        function pullRequestRead(
+          identity: string,
+          revision: string,
+          value: string,
+        ): OperationObserverRemoteResult {
+          return remoteAvailable(identity, revision, {
+            pullRequest: { identity, state: 'open' },
+            [field]: value,
+          })
+        }
+
+        // Every seed times out; the pr-creation operation's own before-read
+        // is missing-resource, so creation self-seeds PR A from the after-read
+        // and propagates it to check and review while their deferrals remain.
+        function adapterAfterSelfSeed(
+          operationBefore: OperationObserverRemoteResult,
+        ): OpencodeWorkflowGuard {
+          const base = sequenceObserver(
+            [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+            {
+              'pr-creation:before': [TIMEOUT, { status: 'missing-resource' }],
+              'pr-creation:after': [prAvailable],
+              [`${operation}:before`]: [TIMEOUT, operationBefore],
+              [`${operation}:after`]: [
+                pullRequestRead(
+                  operationBefore.status === 'available'
+                    ? operationBefore.snapshot.resourceIdentity
+                    : PR_A,
+                  FRESH,
+                  finalValue,
+                ),
+              ],
+            },
+          )
+          return createAdapter('observe', false, base, [
+            'pr-creation',
+            operation,
+          ])
+        }
+
+        async function createPullRequestA(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command: 'gh pr create --title t --body b' },
+            { title: 'pr', output: 'created', metadata: { exit: 0 } },
+            'lingering-pr',
+          )
+        }
+
+        function operationReceipts(adapter: OpencodeWorkflowGuard): number {
+          return ledger(adapter)
+            .listReceipts()
+            .filter((receipt) => receipt.canonical.operation === operation)
+            .length
+        }
+
+        test('a different PR cannot overwrite the propagated baseline or mint evidence', async () => {
+          const adapter = adapterAfterSelfSeed(
+            pullRequestRead(PR_B, E, pendingValue),
+          )
+          await createPullRequestA(adapter)
+          expect(
+            ledger(adapter)
+              .listReceipts()
+              .map((receipt) => receipt.canonical.operation),
+          ).toContain('pr-creation')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+            { operation, reasonCode: 'command-timeout' },
+          ])
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command },
+            { title: operation, output: 'ok', metadata: { exit: 0 } },
+            'lingering-other-pr',
+          )
+          expect(operationReceipts(adapter)).toBe(0)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter)).toMatchObject({
+            state: 'rejected',
+            reasonCode: 'resource-mismatch',
+          })
+          // The deferral was obsolete once the baseline existed.
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+
+        test('the same PR is still admitted and the obsolete deferral is cleared', async () => {
+          const adapter = adapterAfterSelfSeed(
+            pullRequestRead(PR_A, E, pendingValue),
+          )
+          await createPullRequestA(adapter)
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command },
+            { title: operation, output: 'ok', metadata: { exit: 0 } },
+            'lingering-same-pr',
+          )
+          expect(operationReceipts(adapter)).toBe(1)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+      },
+    )
 
     describe('pr-creation after-read self-seed', () => {
       const PR_CREATE = { command: 'gh pr create --title t --body b' }
@@ -5684,6 +5935,28 @@ describe('OpenCode workflow guard adapter', () => {
           {
             'pr-creation:before': [MISSING],
             'pr-creation:after': [prAvailable],
+            // Seeding tolerates a missing check/review resource, so neither
+            // has a baseline until pr-creation propagates one.
+            'check-readback:before': [MISSING, checkAvailable],
+            'check-readback:after': [
+              remoteAvailable(D, 'f'.repeat(64), {
+                pullRequest: { identity: D, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+            'review-readback:before': [
+              MISSING,
+              remoteAvailable(D, E, {
+                pullRequest: { identity: D, state: 'open' },
+                reviewDecision: 'required',
+              }),
+            ],
+            'review-readback:after': [
+              remoteAvailable(D, 'f'.repeat(64), {
+                pullRequest: { identity: D, state: 'open' },
+                reviewDecision: 'approved',
+              }),
+            ],
           },
         )
         let beforeReads = 0
@@ -5703,8 +5976,39 @@ describe('OpenCode workflow guard adapter', () => {
               return hookBefore
             },
           },
-          ['pr-creation'],
+          ['pr-creation', 'check-readback', 'review-readback'],
         )
+      }
+
+      // The guard exposes no baseline accessor through the adapter, so probe
+      // the downstream baselines behaviorally: with no baseline a check or
+      // review before-read for any PR is a resource-mismatch and mints
+      // nothing; with the PR propagated from creation it is admitted.
+      async function admittedDownstream(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<string[]> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr checks 42' },
+          { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+          'probe-check',
+        )
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr view 42 --json reviewDecision' },
+          { title: 'review', output: 'ok', metadata: { exit: 0 } },
+          'probe-review',
+        )
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+          .filter(
+            (operation) =>
+              operation === 'check-readback' || operation === 'review-readback',
+          )
+          .sort()
       }
 
       function prReceipts(adapter: OpencodeWorkflowGuard): number {
@@ -5736,6 +6040,8 @@ describe('OpenCode workflow guard adapter', () => {
           expect(prReceipts(adapter)).toBe(0)
           expect(status(adapter).state).not.toBe('unavailable')
           expect(status(adapter).missingOperations).toContain('pr-creation')
+          // No self-seed happened, so nothing was propagated downstream.
+          expect(await admittedDownstream(adapter)).toEqual([])
         },
       )
 
@@ -5751,6 +6057,12 @@ describe('OpenCode workflow guard adapter', () => {
         )
         expect(prReceipts(adapter)).toBe(1)
         expect(status(adapter).state).not.toBe('unavailable')
+        // Positive control: the self-seed set the pr-creation baseline and
+        // propagated it, so the same PR is admitted downstream.
+        expect(await admittedDownstream(adapter)).toEqual([
+          'check-readback',
+          'review-readback',
+        ])
       })
 
       test('e: a PR present before, with an unchanged head after, is a no-op', async () => {
@@ -5765,6 +6077,7 @@ describe('OpenCode workflow guard adapter', () => {
         )
         expect(prReceipts(adapter)).toBe(0)
         expect(status(adapter).state).not.toBe('unavailable')
+        expect(await admittedDownstream(adapter)).toEqual([])
       })
     })
 
