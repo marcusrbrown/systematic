@@ -360,6 +360,23 @@ function callsFor(name: string, index: number): ToolCall[] {
       },
     ]
   }
+  if (name === 'status-first') {
+    // First guard call of the session is a status read (no epoch yet), then a
+    // guarded skill activates the epoch, then status is read again.
+    return [
+      {
+        id: 'status-first-before',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+      skill,
+      {
+        id: 'status-first-after',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+    ]
+  }
   if (name === 'no-op') {
     return [
       { ...skill, id: 'noop-skill' },
@@ -522,6 +539,33 @@ describe.skipIf(!isOpencodeAvailable())('focused real-host dogfood', () => {
     await stopAllOpencodeHosts()
     cleanupPackedTarball()
   })
+
+  test(
+    'reports inactive / no-active-epoch for a status-first session, then waiting / missing-evidence after activation',
+    async () => {
+      const statusFirst = await runScenario('observe', 'status-first', 20)
+      const before = statusFirst.results.find(
+        (r) =>
+          r.callID === 'status-first-before' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(before).toBeDefined()
+      expect(before?.status).toBe('completed')
+      expect(before?.state).toBe('inactive')
+      expect(before?.reasonCode).toBe('no-active-epoch')
+
+      const after = statusFirst.results.find(
+        (r) =>
+          r.callID === 'status-first-after' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(after).toBeDefined()
+      expect(after?.status).toBe('completed')
+      expect(after?.state).toBe('waiting')
+      expect(after?.reasonCode).toBe('missing-evidence')
+    },
+    TIMEOUT_MS * 4,
+  )
 
   test(
     'proves decisive shipping flows in isolated observe/protected hosts',
