@@ -4305,7 +4305,9 @@ function createSessionRuntime(
               resourceRevisionIdentity:
                 pending.remoteBefore.snapshot.resourceRevisionIdentity,
             }
-          : operation === 'pr-creation' && remoteAfter
+          : operation === 'pr-creation' &&
+              remoteAfter &&
+              pending.remoteBefore?.status === 'missing-resource'
             ? { resourceIdentity: remoteAfter.resourceIdentity }
             : {}),
       },
@@ -4441,7 +4443,7 @@ function createSessionRuntime(
       finalObservation = rebuilt
       if (
         finalObservation.operation === 'pr-creation' &&
-        pending.remoteBefore?.status !== 'available'
+        pending.remoteBefore?.status === 'missing-resource'
       ) {
         const seeded = guard.observeReadback({
           operation: 'pr-creation',

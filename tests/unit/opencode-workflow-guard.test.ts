@@ -5166,50 +5166,40 @@ describe('OpenCode workflow guard adapter', () => {
       expect(parsed.seedDeferrals).toBeUndefined()
     })
 
-    test('i: a deferral from unit 1 is not present after the next unit starts', async () => {
-      // pr-creation's receipt can self-seed from the after-read, so unit 1
-      // completes while its seeding deferral (before-reads never bound it) is
-      // still recorded. Unit 2 must start without it.
-      const adapter = deferralAdapter('observe', ['pr-creation'], {
-        'pr-creation:before': [TIMEOUT, TIMEOUT, TIMEOUT, prAvailable],
-        'pr-creation:after': [prAvailable],
+    test('i: a deferral is cleared when the next unit start runs', async () => {
+      // A deferred operation cannot reach a completed first unit: its receipt
+      // is admitted only after its own before-read binds a baseline, and that
+      // clears the deferral. So the next start is a re-declaration on the
+      // still-pristine unit; it runs through the same start path that clears
+      // the deferral before seeding.
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT, remoteAvailable(D, E)],
       })
       await observeSkill(adapter, 'systematic_skill', 'ce:work')
       expect((await statusParsed(adapter)).seedDeferrals).toEqual([
-        { operation: 'pr-creation', reasonCode: 'command-timeout' },
+        { operation: 'push', reasonCode: 'command-timeout' },
       ])
-      await observeOperationTool(
-        adapter,
-        'bash',
-        { command: 'gh pr create --title t --body b' },
-        { title: 'pr', output: 'created', metadata: { exit: 0 } },
-        'unit1-pr',
-      )
-      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
-      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
-      await completeUnit(adapter, 'unit1-complete')
-      expect(status(adapter).unit?.status).toBe('completed')
-      const firstUnitId = status(adapter).unit?.unitId
+      const unitId = status(adapter).unit?.unitId
 
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
       await adapter.hooks['tool.execute.before'](
         {
           tool: 'systematic_workflow_start',
           sessionID: SESSION_A,
-          callID: 'unit2-start',
+          callID: 'next-unit-start',
         },
-        { args: {} },
+        { args: startArgs },
       )
       await adapter.hooks['tool.execute.after'](
         {
           tool: 'systematic_workflow_start',
           sessionID: SESSION_A,
-          callID: 'unit2-start',
-          args: {},
+          callID: 'next-unit-start',
+          args: startArgs,
         },
         { title: 'x', output: 'y', metadata: {} },
       )
-      expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
-      expect(status(adapter).unit?.status).toBe('active')
+      expect(status(adapter).unit?.unitId).toBe(unitId)
       expect(status(adapter).state).not.toBe('unavailable')
       expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
     })
@@ -5572,6 +5562,108 @@ describe('OpenCode workflow guard adapter', () => {
         expect((await statusParsed(adapter)).seedDeferrals).toEqual([
           { operation: 'push', reasonCode: 'command-timeout' },
         ])
+      })
+    })
+
+    describe('pr-creation after-read self-seed', () => {
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const MISSING = { status: 'missing-resource' as const }
+      const UNREADABLE = {
+        status: 'unavailable' as const,
+        reasonCode: 'remote-missing-field' as const,
+      }
+
+      // Seeding reads pr-creation:before first (missing-resource, tolerated);
+      // the operation's own before-hook read is the second call.
+      function prAdapter(
+        hookBefore: OperationObserverRemoteResult | 'throw',
+      ): OpencodeWorkflowGuard {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+          },
+        )
+        let beforeReads = 0
+        return createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: async (operation, phase) => {
+              const isHookRead =
+                operation === 'pr-creation' &&
+                phase === 'before' &&
+                ++beforeReads >= 2
+              if (!isHookRead)
+                return base.remoteSnapshot?.(operation, phase) ?? UNREADABLE
+              if (hookBefore === 'throw') throw new Error('probe failed')
+              return hookBefore
+            },
+          },
+          ['pr-creation'],
+        )
+      }
+
+      function prReceipts(adapter: OpencodeWorkflowGuard): number {
+        return ledger(adapter)
+          .listReceipts()
+          .filter((receipt) => receipt.canonical.operation === 'pr-creation')
+          .length
+      }
+
+      test.each([
+        ['a: unavailable/command-timeout', TIMEOUT],
+        [
+          'b: another unavailable reason',
+          { status: 'unavailable', reasonCode: 'remote-missing-field' },
+        ],
+        ['c: a before-read that throws', 'throw'],
+      ] as const)(
+        '%s never seeds from the after-read and is not admitted',
+        async (_name, hookBefore) => {
+          const adapter = prAdapter(hookBefore)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await observeOperationTool(
+            adapter,
+            'bash',
+            PR_CREATE,
+            { title: 'pr', output: 'created', metadata: { exit: 0 } },
+            'pr-self-seed',
+          )
+          expect(prReceipts(adapter)).toBe(0)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter).missingOperations).toContain('pr-creation')
+        },
+      )
+
+      test('d: a missing-resource before-read still seeds from the after-read and mints', async () => {
+        const adapter = prAdapter(MISSING)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'pr-self-seed',
+        )
+        expect(prReceipts(adapter)).toBe(1)
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test('e: a PR present before, with an unchanged head after, is a no-op', async () => {
+        const adapter = prAdapter(prAvailable)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'exists', metadata: { exit: 1 } },
+          'pr-self-seed',
+        )
+        expect(prReceipts(adapter)).toBe(0)
+        expect(status(adapter).state).not.toBe('unavailable')
       })
     })
 
