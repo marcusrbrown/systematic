@@ -260,6 +260,7 @@ interface SessionRuntime {
   status(): WorkflowStatus
   readStatus(): WorkflowStatus
   unavailableCause(): GuardUnavailableCause | undefined
+  seedDeferrals(): readonly SeedDeferral[]
   refreshReadback(): Promise<void>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
@@ -426,7 +427,6 @@ type GuardUnavailableCauseKind =
   | 'local-snapshot-error'
   | 'local-snapshot-unavailable'
   | 'remote-scope-unreadable'
-  | 'remote-scope-missing-resource'
   | 'remote-scope-unavailable'
   | 'remote-readback-rejected'
   | 'history-read-failed'
@@ -435,6 +435,22 @@ type GuardUnavailableCauseKind =
   | 'recovery-rejected'
   | 'markerless-guard-history'
   | 'observer-readback-failed'
+
+// A remote operation whose activation seeding was deferred instead of
+// failing the session. Status-only, enum-only, and bound to the unit that
+// recorded it; never carried in markers, receipts, tool metadata, or digests.
+type SeedDeferralReason = 'command-timeout' | 'missing-resource'
+
+interface SeedDeferral {
+  readonly operation: RemoteOperation
+  readonly reasonCode: SeedDeferralReason
+}
+
+type RemoteSeedOutcome =
+  | { readonly kind: 'seeded' }
+  | { readonly kind: 'tolerated' }
+  | { readonly kind: 'deferred'; readonly reasonCode: SeedDeferralReason }
+  | { readonly kind: 'fatal'; readonly cause: GuardUnavailableCause }
 
 interface GuardUnavailableCause {
   readonly site:
@@ -1268,6 +1284,7 @@ function isSuccessfulSkillAfter(output: unknown): output is HostOutput {
 function statusForTool(
   status: WorkflowStatus,
   unavailableCause?: GuardUnavailableCause,
+  seedDeferrals: readonly SeedDeferral[] = [],
 ): string {
   return JSON.stringify({
     state: status.state,
@@ -1280,6 +1297,16 @@ function statusForTool(
     // so the field doesn't outlive the state it describes.
     ...(unavailableCause && status.state === 'unavailable'
       ? { firstUnavailableCause: unavailableCause }
+      : {}),
+    // Operations whose activation seeding was deferred for the current unit;
+    // shown in any state.
+    ...(seedDeferrals.length > 0
+      ? {
+          seedDeferrals: seedDeferrals.map(({ operation, reasonCode }) => ({
+            operation,
+            reasonCode,
+          })),
+        }
       : {}),
   })
 }
@@ -1561,6 +1588,11 @@ function createSessionRuntime(
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
   let firstUnavailableCause: GuardUnavailableCause | undefined
+  // Deferred activation seedings, keyed by the unit that recorded them and
+  // cleared at every unit start. Runtime-only; never persisted.
+  let seedDeferralRecord:
+    | { readonly unitId: string; readonly entries: SeedDeferral[] }
+    | undefined
 
   // Single choke point for every `guard.startUnit()` call. The reset below is
   // currently unreachable: mode has no path back to 'protected' ('disabled'
@@ -1571,7 +1603,10 @@ function createSessionRuntime(
     policy?: RuntimeUnitPolicy,
   ): StartUnitResult {
     const result = guard.startUnit(input, policy)
-    if (result.status === 'started') firstUnavailableCause = undefined
+    if (result.status === 'started') {
+      firstUnavailableCause = undefined
+      seedDeferralRecord = undefined
+    }
     return result
   }
 
@@ -3438,53 +3473,83 @@ function createSessionRuntime(
         timedOut: local.reasonCode === 'command-timeout',
       }
     }
-    for (const operation of remoteOperations) {
-      const cause = await seedRemoteScope(
-        remoteSnapshot,
-        operation,
-        local.snapshot,
-      )
-      if (cause) return cause
+    return seedEachRemoteScope(remoteOperations, remoteSnapshot, local.snapshot)
+  }
+
+  // Continues past deferrals; only a fatal outcome stops seeding.
+  async function seedEachRemoteScope(
+    operations: readonly RemoteOperation[],
+    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+    local: OperationObserverSnapshot,
+  ): Promise<GuardUnavailableCause | undefined> {
+    for (const operation of operations) {
+      const outcome = await seedRemoteScope(reader, operation, local)
+      if (outcome.kind === 'fatal') return outcome.cause
+      if (outcome.kind === 'deferred') {
+        recordSeedDeferral(operation, outcome.reasonCode)
+      }
     }
     return undefined
+  }
+
+  // A deferral is recorded only when the core has no baseline for the
+  // operation yet (neither declared on the unit nor propagated from PR
+  // creation): with a baseline there is nothing left to defer.
+  function recordSeedDeferral(
+    operation: RemoteOperation,
+    reasonCode: SeedDeferralReason,
+  ): void {
+    if (guard.hasResourceBaseline(operation)) return
+    const unitId = guard.status().unit?.unitId
+    if (!unitId) return
+    if (seedDeferralRecord?.unitId !== unitId) {
+      seedDeferralRecord = { unitId, entries: [] }
+    }
+    seedDeferralRecord.entries.push({ operation, reasonCode })
+  }
+
+  function currentSeedDeferrals(): readonly SeedDeferral[] {
+    const unitId = guard.status().unit?.unitId
+    return seedDeferralRecord && seedDeferralRecord.unitId === unitId
+      ? [...seedDeferralRecord.entries]
+      : []
+  }
+
+  function fatalSeed(cause: GuardUnavailableCause): RemoteSeedOutcome {
+    return { kind: 'fatal', cause }
   }
 
   async function seedRemoteScope(
     reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
     operation: RemoteOperation,
     local: OperationObserverSnapshot,
-  ): Promise<GuardUnavailableCause | undefined> {
+  ): Promise<RemoteSeedOutcome> {
     const result = await readRemoteScope(reader, operation, 'before')
     if (!result) {
-      return {
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-scope-unreadable',
         operation,
         timedOut: false,
-      }
+      })
     }
     if (result.status === 'missing-resource') {
-      const allowed =
-        operation === 'pr-creation' ||
-        operation === 'check-readback' ||
-        operation === 'review-readback'
-      return allowed
-        ? undefined
-        : {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-missing-resource',
-            operation,
-            timedOut: false,
-          }
+      if (operation === 'push') {
+        return { kind: 'deferred', reasonCode: 'missing-resource' }
+      }
+      return { kind: 'tolerated' }
     }
     if (result.status !== 'available') {
-      return {
+      if (result.reasonCode === 'command-timeout') {
+        return { kind: 'deferred', reasonCode: 'command-timeout' }
+      }
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-scope-unavailable',
         operation,
         reasonCode: result.reasonCode,
-        timedOut: result.reasonCode === 'command-timeout',
-      }
+        timedOut: false,
+      })
     }
     const observed = guard.observeReadback(
       remoteReadbackInput(
@@ -3496,15 +3561,15 @@ function createSessionRuntime(
       ),
     )
     if (observed.status === 'rejected') {
-      return {
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-readback-rejected',
         operation,
         reasonCode: observed.reasonCode,
         timedOut: false,
-      }
+      })
     }
-    return undefined
+    return { kind: 'seeded' }
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host skill completion preserves ordering and marker projection
@@ -4474,6 +4539,7 @@ function createSessionRuntime(
     },
     readStatus,
     unavailableCause: () => firstUnavailableCause,
+    seedDeferrals: currentSeedDeferrals,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
@@ -4636,7 +4702,11 @@ export function createOpencodeWorkflowGuard(
         return {
           title: 'Workflow guard status',
           output: statusToolSchema.safeParse(input).success
-            ? statusForTool(runtime.readStatus(), runtime.unavailableCause())
+            ? statusForTool(
+                runtime.readStatus(),
+                runtime.unavailableCause(),
+                runtime.seedDeferrals(),
+              )
             : unavailableToolResult(),
         }
       },

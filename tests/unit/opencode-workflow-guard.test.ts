@@ -4972,6 +4972,274 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(unavailable).state).toBe('unavailable')
   })
 
+  describe('remote seeding deferrals', () => {
+    const D = 'd'.repeat(64)
+    const E = 'e'.repeat(64)
+    const TIMEOUT = {
+      status: 'unavailable' as const,
+      reasonCode: 'command-timeout' as const,
+    }
+    const prAvailable = remoteAvailable(D, E, {
+      pullRequest: { identity: D, state: 'open' },
+    })
+    const checkAvailable = remoteAvailable(D, E, {
+      pullRequest: { identity: D, state: 'open' },
+      checkState: 'pending',
+    })
+
+    function deferralAdapter(
+      mode: 'observe' | 'protected',
+      required: readonly ReceiptOperation[],
+      remote: Record<string, readonly OperationObserverRemoteResult[]>,
+    ): OpencodeWorkflowGuard {
+      return createAdapter(
+        mode,
+        false,
+        sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          remote,
+        ),
+        required,
+      )
+    }
+
+    async function statusParsed(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      return JSON.parse(expectToolOutput(result).output)
+    }
+
+    test.each([
+      { mode: 'observe', reason: 'command-timeout', result: TIMEOUT },
+      {
+        mode: 'protected',
+        reason: 'command-timeout',
+        result: TIMEOUT,
+      },
+      {
+        mode: 'observe',
+        reason: 'missing-resource',
+        result: { status: 'missing-resource' as const },
+      },
+      {
+        mode: 'protected',
+        reason: 'missing-resource',
+        result: { status: 'missing-resource' as const },
+      },
+    ] as const)(
+      'b/c/k: a push $reason defers only push; the session stays active ($mode)',
+      async ({ mode, reason, result }) => {
+        const adapter = deferralAdapter(mode, ['push', 'check-readback'], {
+          'push:before': [result],
+          'check-readback:before': [checkAvailable],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const current = status(adapter)
+        expect(current.state).not.toBe('unavailable')
+        expect(current.epoch).not.toBeNull()
+        expect(current.unit?.status).toBe('active')
+        expect(current.missingOperations).toContain('push')
+        const parsed = await statusParsed(adapter)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: reason },
+        ])
+      },
+    )
+
+    test.each(['check-readback', 'review-readback'] as const)(
+      'd: a %s seeding timeout defers that operation while the others seed',
+      async (operation) => {
+        const adapter = deferralAdapter('observe', ['push', operation], {
+          'push:before': [remoteAvailable(D, E)],
+          [`${operation}:before`]: [TIMEOUT],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        const parsed = await statusParsed(adapter)
+        expect(parsed.seedDeferrals).toEqual([
+          { operation, reasonCode: 'command-timeout' },
+        ])
+      },
+    )
+
+    test('e: a local snapshot timeout at seeding is still fatal', async () => {
+      const base = sequenceObserver([operationSnapshot()], {
+        'push:before': [remoteAvailable(D, E)],
+      })
+      const adapter = createAdapter(
+        'observe',
+        false,
+        { ...base, snapshot: async () => TIMEOUT },
+        ['push'],
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-timeout',
+        timedOut: true,
+      })
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('f: a deferred operation that is never performed leaves completion blocked on missing evidence', async () => {
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      expect(status(adapter).missingOperations).toEqual(['push'])
+      expect(
+        adapter.prepareTransition(SESSION_A, {
+          callId: 'deferred-complete',
+          target: 'unit',
+        }),
+      ).toMatchObject({ status: 'waiting', reasonCode: 'missing-evidence' })
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
+    test('g: a check timeout after pr-creation seeded records no check deferral', async () => {
+      const adapter = deferralAdapter(
+        'observe',
+        ['pr-creation', 'check-readback'],
+        {
+          'pr-creation:before': [prAvailable],
+          'check-readback:before': [TIMEOUT],
+        },
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('h: a timeout for an operation whose resource the unit declared records no deferral', async () => {
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [remoteAvailable(D, E), remoteAvailable(D, E), TIMEOUT],
+        'push:after': [remoteAvailable(D, 'f'.repeat(64))],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'git push origin main' },
+        { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+        'declared-push',
+      )
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      await completeUnit(adapter, 'declared-complete-unit1')
+      expect(status(adapter).unit?.status).toBe('completed')
+      const firstUnitId = status(adapter).unit?.unitId
+
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'declared-start',
+        },
+        { args: startArgs },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'declared-start',
+          args: startArgs,
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('i: a deferral is cleared when the next unit start runs', async () => {
+      // A completed first unit cannot be reached with a deferred push (the
+      // operation observation needs the baseline the deferral never got), so
+      // the next start is a re-declaration on the still-pristine unit. It runs
+      // through the same start path that clears the deferral before seeding.
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT, remoteAvailable(D, E)],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'command-timeout' },
+      ])
+      const unitId = status(adapter).unit?.unitId
+
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'next-unit-start',
+        },
+        { args: startArgs },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'next-unit-start',
+          args: startArgs,
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      expect(status(adapter).unit?.unitId).toBe(unitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+    })
+
+    test('j: the deferral list never enters markers, receipts, tool metadata, or digests', async () => {
+      const deferred = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT],
+      })
+      const skillOutput = { title: 'Loaded skill', output: 'ok', metadata: {} }
+      await observeSkill(
+        deferred,
+        'systematic_skill',
+        'ce:work',
+        'deferral-skill',
+        SESSION_A,
+        skillOutput,
+      )
+      const statusResult = expectToolOutput(
+        await getTool(deferred, 'systematic_workflow_status').execute(
+          {},
+          toolContext(),
+        ),
+      )
+      expect(JSON.parse(statusResult.output).seedDeferrals).toBeDefined()
+      const transformed = { system: ['base'] }
+      await deferred.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        transformed,
+      )
+      const everything = JSON.stringify([
+        skillOutput,
+        statusResult.metadata,
+        transformed.system,
+        ledger(deferred).listReceipts(),
+        status(deferred),
+      ])
+      expect(everything).not.toContain('seedDeferrals')
+      expect(everything).not.toContain('command-timeout')
+    })
+  })
+
   describe('guard-unavailable first-cause diagnostic (seedRemoteScopes)', () => {
     // sequenceObserver's default remoteResults is `{}`: any operation/phase
     // key not supplied resolves to `{status:'unavailable', reasonCode:
@@ -5237,7 +5505,7 @@ describe('OpenCode workflow guard adapter', () => {
     })
 
     test('table: every GuardUnavailableCauseKind reports the correct site, operation, and reasonCode', async () => {
-      interface CauseCase {
+      interface UnavailableCase {
         readonly name: string
         readonly observer: OpencodeOperationObserver
         readonly expected: {
@@ -5248,6 +5516,15 @@ describe('OpenCode workflow guard adapter', () => {
           readonly timedOut: boolean
         }
       }
+      interface DeferredCase {
+        readonly name: string
+        readonly observer: OpencodeOperationObserver
+        readonly deferred: {
+          readonly operation: 'push'
+          readonly reasonCode: 'command-timeout' | 'missing-resource'
+        }
+      }
+      type CauseCase = UnavailableCase | DeferredCase
 
       const validateRegisteredWorktree = (candidateDirectory: string) => ({
         status: 'ok' as const,
@@ -5358,16 +5635,11 @@ describe('OpenCode workflow guard adapter', () => {
           },
         },
         {
-          name: 'remote-scope-missing-resource',
+          name: 'push missing-resource defers the operation',
           observer: sequenceObserver([operationSnapshot()], {
             'push:before': [{ status: 'missing-resource' }],
           }),
-          expected: {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-missing-resource',
-            operation: 'push',
-            timedOut: false,
-          },
+          deferred: { operation: 'push', reasonCode: 'missing-resource' },
         },
         {
           name: 'remote-scope-unavailable, non-timeout reasonCode',
@@ -5385,19 +5657,13 @@ describe('OpenCode workflow guard adapter', () => {
           },
         },
         {
-          name: 'remote-scope-unavailable, command-timeout',
+          name: 'remote command-timeout defers the operation',
           observer: sequenceObserver([operationSnapshot()], {
             'push:before': [
               { status: 'unavailable', reasonCode: 'command-timeout' },
             ],
           }),
-          expected: {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-unavailable',
-            operation: 'push',
-            reasonCode: 'command-timeout',
-            timedOut: true,
-          },
+          deferred: { operation: 'push', reasonCode: 'command-timeout' },
         },
         {
           name: 'remote-readback-rejected',
@@ -5427,12 +5693,20 @@ describe('OpenCode workflow guard adapter', () => {
           'push',
         ])
         await observeSkill(adapter, 'systematic_skill', 'ce:work')
-        expect(status(adapter).state).toBe('unavailable')
         const result = await getTool(
           adapter,
           'systematic_workflow_status',
         ).execute({}, toolContext())
         const parsed = JSON.parse(expectToolOutput(result).output)
+        if ('deferred' in causeCase) {
+          expect(status(adapter).state, causeCase.name).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause, causeCase.name).toBeUndefined()
+          expect(parsed.seedDeferrals, causeCase.name).toEqual([
+            causeCase.deferred,
+          ])
+          continue
+        }
+        expect(status(adapter).state, causeCase.name).toBe('unavailable')
         expect(parsed.firstUnavailableCause, causeCase.name).toEqual(
           causeCase.expected,
         )

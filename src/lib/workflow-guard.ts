@@ -208,6 +208,12 @@ export interface WorkflowGuard {
   ): Promise<EvidenceObservationResult>
   observeReadback(input: unknown): ReadbackObservationResult
   currentOperationContext(): CurrentOperationContext
+  /**
+   * Read-only: whether the active unit already has a resource baseline for
+   * `operation` (declared on the unit, seeded, or propagated from PR
+   * creation). False when there is no active unit.
+   */
+  hasResourceBaseline(operation: ReceiptOperation): boolean
   status(): WorkflowStatus
   prepareTransition(input: unknown): TransitionPrepareResult
   finalizeTransition(input: unknown): TransitionFinalizeResult
@@ -3606,6 +3612,12 @@ export function createWorkflowGuard(
 
     currentOperationContext(): CurrentOperationContext {
       return currentOperationContext()
+    },
+
+    hasResourceBaseline(operation: ReceiptOperation): boolean {
+      return epoch?.unit
+        ? currentResource(epoch.unit, operation) !== undefined
+        : false
     },
 
     status(): WorkflowStatus {
