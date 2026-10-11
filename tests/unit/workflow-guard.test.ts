@@ -427,6 +427,59 @@ describe('workflow guard', () => {
     })
   })
 
+  describe('operation-scoped readback propagation', () => {
+    const PR = 'a'.repeat(64)
+
+    function prUnit() {
+      const { guard } = createGuard()
+      activateWork(guard)
+      startUnit(guard, ['pr-creation', 'check-readback', 'review-readback'])
+      return guard
+    }
+
+    test('a pr-creation readback propagates its resource to undeclared check and review by default', () => {
+      const guard = prUnit()
+      expect(guard.hasResourceBaseline('check-readback')).toBe(false)
+      expect(
+        guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: GUARD_SCOPE.workspaceIdentity,
+          resourceIdentity: PR,
+        }),
+      ).toMatchObject({ status: 'accepted' })
+      expect(guard.hasResourceBaseline('pr-creation')).toBe(true)
+      expect(guard.hasResourceBaseline('check-readback')).toBe(true)
+      expect(guard.hasResourceBaseline('review-readback')).toBe(true)
+    })
+
+    test('propagate: false binds only the named operation', () => {
+      const guard = prUnit()
+      expect(
+        guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: GUARD_SCOPE.workspaceIdentity,
+          resourceIdentity: PR,
+          propagate: false,
+        }),
+      ).toMatchObject({ status: 'accepted' })
+      expect(guard.hasResourceBaseline('pr-creation')).toBe(true)
+      expect(guard.hasResourceBaseline('check-readback')).toBe(false)
+      expect(guard.hasResourceBaseline('review-readback')).toBe(false)
+    })
+
+    test('a non-boolean propagate is rejected', () => {
+      const guard = prUnit()
+      expect(
+        guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: GUARD_SCOPE.workspaceIdentity,
+          resourceIdentity: PR,
+          propagate: 'no',
+        }),
+      ).toMatchObject({ status: 'rejected' })
+    })
+  })
+
   test('starts immutable units with mandatory minima that optional input cannot lower', () => {
     const { guard } = createGuard()
     activateWork(guard)

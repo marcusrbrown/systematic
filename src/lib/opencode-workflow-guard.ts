@@ -446,6 +446,13 @@ interface SeedDeferral {
   readonly reasonCode: SeedDeferralReason
 }
 
+// A recorded deferral plus the observer and target the seed read from. Only a
+// before-read from that same observer and target may bind the baseline.
+interface DeferredSeed extends SeedDeferral {
+  readonly observer: OpencodeOperationObserver
+  readonly targetIdentity: string
+}
+
 type RemoteSeedOutcome =
   | { readonly kind: 'seeded' }
   | { readonly kind: 'tolerated' }
@@ -1591,7 +1598,7 @@ function createSessionRuntime(
   // Deferred activation seedings, keyed by the unit that recorded them and
   // cleared at every unit start. Runtime-only; never persisted.
   let seedDeferralRecord:
-    | { readonly unitId: string; readonly entries: SeedDeferral[] }
+    | { readonly unitId: string; readonly entries: DeferredSeed[] }
     | undefined
 
   // Single choke point for every `guard.startUnit()` call. The reset below is
@@ -3199,10 +3206,16 @@ function createSessionRuntime(
     const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return { operation: classification.category }
     try {
-      return {
-        operation: classification.category,
-        before: await remoteSnapshot(classification.category, 'before'),
+      let before = await remoteSnapshot(classification.category, 'before')
+      // A deferred operation gets one immediate retry on a probe timeout.
+      if (
+        before.status === 'unavailable' &&
+        before.reasonCode === 'command-timeout' &&
+        deferredSeedFor(classification.category)
+      ) {
+        before = await remoteSnapshot(classification.category, 'before')
       }
+      return { operation: classification.category, before }
     } catch {
       return { operation: classification.category }
     }
@@ -3296,6 +3309,9 @@ function createSessionRuntime(
       observer: operationObserver,
     })
     const remote = await remoteIntentForOperation(host, args, operationObserver)
+    if (remote) {
+      bindDeferredBaseline(remote.operation, remote.before, operationObserver)
+    }
     pendingOperations.set(callDigest, {
       callID: host.callID,
       tool: host.tool,
@@ -3501,17 +3517,94 @@ function createSessionRuntime(
   ): void {
     if (guard.hasResourceBaseline(operation)) return
     const unitId = guard.status().unit?.unitId
-    if (!unitId) return
+    const observer = options.observer
+    if (!unitId || !observer) return
     if (seedDeferralRecord?.unitId !== unitId) {
       seedDeferralRecord = { unitId, entries: [] }
     }
-    seedDeferralRecord.entries.push({ operation, reasonCode })
+    seedDeferralRecord.entries.push({
+      operation,
+      reasonCode,
+      observer,
+      targetIdentity: observer.targetDigest,
+    })
+  }
+
+  function deferredSeedFor(
+    operation: RemoteOperation,
+  ): DeferredSeed | undefined {
+    const unitId = guard.status().unit?.unitId
+    return seedDeferralRecord && seedDeferralRecord.unitId === unitId
+      ? seedDeferralRecord.entries.find(
+          (entry) => entry.operation === operation,
+        )
+      : undefined
+  }
+
+  function clearSeedDeferral(operation: RemoteOperation): void {
+    if (!seedDeferralRecord) return
+    const index = seedDeferralRecord.entries.findIndex(
+      (entry) => entry.operation === operation,
+    )
+    if (index !== -1) seedDeferralRecord.entries.splice(index, 1)
+  }
+
+  // Binds a deferred baseline from the operation's own before-read, and only
+  // from the observer and target the seed used. The readback names its
+  // operation and carries the resource identity (plus revision for push)
+  // only: no repository or worktree identities, and no PR-scope propagation.
+  // Anything that does not bind leaves the deferral in place; nothing here
+  // marks the session unavailable (the receipt fails closed instead).
+  function bindDeferredBaseline(
+    operation: RemoteOperation,
+    before: OperationObserverRemoteResult | undefined,
+    observer: OpencodeOperationObserver,
+  ): void {
+    const deferred = deferredSeedFor(operation)
+    if (!deferred || !before || !sameSeedObserver(deferred, observer)) return
+    if (before.status === 'missing-resource') {
+      if (operation !== 'push') clearSeedDeferral(operation)
+      return
+    }
+    if (before.status !== 'available') return
+    const observed = guard.observeReadback(
+      deferredBaselineReadback(operation, before.snapshot),
+    )
+    if (observed.status !== 'rejected') clearSeedDeferral(operation)
+  }
+
+  function sameSeedObserver(
+    deferred: DeferredSeed,
+    observer: OpencodeOperationObserver,
+  ): boolean {
+    return (
+      observer === deferred.observer &&
+      observer.targetDigest === deferred.targetIdentity
+    )
+  }
+
+  function deferredBaselineReadback(
+    operation: RemoteOperation,
+    snapshot: OperationObserverRemoteSnapshot,
+  ): Record<string, unknown> {
+    return {
+      operation,
+      workspaceIdentity: options.workspaceIdentity,
+      resourceIdentity: snapshot.resourceIdentity,
+      ...(operation === 'push'
+        ? { resourceRevisionIdentity: snapshot.resourceRevisionIdentity }
+        : {}),
+      ...(operation === 'pr-creation' ? { propagate: false } : {}),
+    }
   }
 
   function currentSeedDeferrals(): readonly SeedDeferral[] {
     const unitId = guard.status().unit?.unitId
     return seedDeferralRecord && seedDeferralRecord.unitId === unitId
-      ? [...seedDeferralRecord.entries]
+      ? seedDeferralRecord.entries.map(({ operation, reasonCode }) => ({
+          operation,
+          reasonCode,
+        }))
       : []
   }
 
