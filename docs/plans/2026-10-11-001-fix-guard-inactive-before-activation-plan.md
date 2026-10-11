@@ -1,7 +1,7 @@
 ---
 title: "fix: Report the workflow guard as inactive before activation"
 type: fix
-status: active
+status: completed
 date: 2026-10-11
 ---
 
@@ -270,7 +270,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 
 ## Implementation Units
 
-- [ ] **Unit 1: Core `inactive` state and no-epoch result semantics**
+- [x] **Unit 1: Core `inactive` state and no-epoch result semantics**
 
 **Goal:** The core reports `inactive / no-active-epoch` for a session without an epoch, and no-epoch transitions return `rejected / no-active-epoch`.
 
@@ -304,7 +304,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 
 **Verification:** both unit suites pass, and the typecheck enforces exhaustive rank coverage.
 
-- [ ] **Unit 2: Initialization cause plumbing**
+- [x] **Unit 2: Initialization cause plumbing**
 
 **Goal:** Every `unavailable` published from an initialization or recovery path, or from observer readback, records a bounded cause that the status output shows.
 
@@ -333,7 +333,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 
 **Verification:** status for each branch is distinguishable from its output alone.
 
-- [ ] **Unit 3: Host history read fails closed**
+- [x] **Unit 3: Host history read fails closed**
 
 **Goal:** A failed or malformed host history read can no longer look like empty history.
 
@@ -355,7 +355,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 
 **Verification:** no initialization-path read maps a failed read to `[]`.
 
-- [ ] **Unit 4: History exemption rule and provisional inactive**
+- [x] **Unit 4: History exemption rule and provisional inactive**
 
 **Goal:** Status calls and guard-owned no-epoch rejections stop blocking fresh initialization, while every evidence-bearing history stays closed.
 
@@ -401,7 +401,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 
 **Verification:** both #1076 reproductions now pass. Every pre-existing fail-closed recovery test passes unchanged, except tuple renames from Unit 1.
 
-- [ ] **Unit 5: Status and readback without lifecycle side effects**
+- [x] **Unit 5: Status and readback without lifecycle side effects**
 
 **Goal:** A status call can't discard sibling pending work or disable an epoch-less session.
 
@@ -423,7 +423,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 
 **Verification:** no status-path call mutates the pending maps, and an epoch-less status never reaches the observer.
 
-- [ ] **Unit 6: Agent guidance and architecture docs**
+- [x] **Unit 6: Agent guidance and architecture docs**
 
 **Goal:** Agents treat `inactive` as non-terminal, and the docs describe the state, the causes, and the residual limits.
 
@@ -458,7 +458,7 @@ Exempt guard parts: status in any state; completed start/complete with guard-own
 - `bun run docs:generate` leaves no unexpected generated drift.
 - `bun run registry:drift` is clean (no `references/` files added or removed).
 
-- [ ] **Unit 7: Real-host status-first verification**
+- [x] **Unit 7: Real-host status-first verification**
 
 **Goal:** Prove the fix on the pinned real OpenCode host: a fresh conversation, status-first, then a guarded skill.
 
