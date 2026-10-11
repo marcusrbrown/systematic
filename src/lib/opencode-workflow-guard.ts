@@ -1852,6 +1852,42 @@ function createSessionRuntime(
     }
   }
 
+  // True when the guard itself recorded a no-epoch rejection on this part.
+  // Structured fields only; the guard writes `workflowGuard` onto the tool
+  // result metadata, which the host persists on `state.metadata`. The
+  // part-level `metadata` is checked too.
+  function hasNoEpochRejection(part: Record<string, unknown>): boolean {
+    const carriers = [
+      part.metadata,
+      isRecord(part.state) && part.state.metadata,
+    ]
+    return carriers.some(
+      (carrier) =>
+        isRecord(carrier) &&
+        isRecord(carrier.workflowGuard) &&
+        carrier.workflowGuard.status === 'rejected' &&
+        carrier.workflowGuard.reasonCode === 'no-active-epoch',
+    )
+  }
+
+  // Guard-owned parts that carry no evidence and never mutate guard state:
+  // status reads (any state) and COMPLETED start/complete calls the guard
+  // itself rejected with `no-active-epoch`. Everything else stays history.
+  function isExemptGuardPart(part: Record<string, unknown>): boolean {
+    if (part.tool === 'systematic_workflow_status') return true
+    if (
+      part.tool !== 'systematic_workflow_start' &&
+      part.tool !== 'systematic_workflow_complete'
+    ) {
+      return false
+    }
+    return (
+      isRecord(part.state) &&
+      part.state.status === 'completed' &&
+      hasNoEpochRejection(part)
+    )
+  }
+
   function containsGuardHistory(value: unknown): boolean {
     if (!isRecord(value)) return false
     if (
@@ -1860,7 +1896,7 @@ function createSessionRuntime(
       value.tool === 'systematic_workflow_complete' ||
       value.tool === 'systematic_workflow_control'
     ) {
-      return true
+      return !isExemptGuardPart(value)
     }
     return (
       Array.isArray(value.parts) &&
@@ -2134,18 +2170,22 @@ function createSessionRuntime(
     allowFresh: boolean,
   ): void {
     const reusableLedger = emptyHistoryLedgerForRetry()
-    const hasGuardHistory = parts.some((part) => containsGuardHistory(part))
-    if (allowFresh && !hasGuardHistory) {
-      publishFresh(reusableLedger)
-    } else {
-      retryableEmptyHistory = true
+    if (parts.some((part) => containsGuardHistory(part))) {
+      // Evidence-bearing guard history without markers can never become
+      // recoverable, so this unavailable is final (not retryable).
       publishUnavailable(
-        hasGuardHistory
-          ? initializationCause('markerless-guard-history')
-          : undefined,
+        initializationCause('markerless-guard-history'),
         reusableLedger,
       )
+      return
     }
+    if (allowFresh) {
+      publishFresh(reusableLedger)
+      return
+    }
+    // Deferred fresh: no guard history, but this pass may not publish fresh.
+    retryableEmptyHistory = true
+    publishUnavailable(undefined, reusableLedger)
   }
 
   async function initializeSession(

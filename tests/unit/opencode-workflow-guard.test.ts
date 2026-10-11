@@ -6627,7 +6627,9 @@ describe('OpenCode workflow guard adapter', () => {
         )
       })
 
-      test('a later successful fresh initialization clears a stale cause and a cause-less transition does not resurface it', async () => {
+      test('markerless-guard-history is final: history that later looks empty neither retries nor clears the cause, and a cause-less transition keeps the first cause', async () => {
+        // Previously this history was retryable, so a later fresh publication
+        // cleared the cause. It is now final, so the first cause must persist.
         let historyPresent = true
         const adapter = adapterWithHistory(async () =>
           historyPresent ? GUARD_HISTORY_PARTS : [],
@@ -6646,12 +6648,14 @@ describe('OpenCode workflow guard adapter', () => {
           },
         })
         await adapter.hooks['tool.execute.before'](
-          { tool: 'read', sessionID: SESSION_A, callID: 'fresh-retry' },
+          { tool: 'read', sessionID: SESSION_A, callID: 'no-fresh-retry' },
           { args: {} },
         )
-        const fresh = await statusJson(adapter)
-        expect(fresh.state).toBe('inactive')
-        expect(fresh.firstUnavailableCause).toBeUndefined()
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
 
         // A cause-less markUnavailable(): reusing a callID across call kinds.
         for (const tool of ['systematic_skill', 'systematic_workflow_start']) {
@@ -6660,12 +6664,16 @@ describe('OpenCode workflow guard adapter', () => {
             { args: tool === 'systematic_skill' ? { name: 'ce:work' } : {} },
           )
         }
-        const after = await statusJson(adapter)
-        expect(after.state).toBe('unavailable')
-        expect(after.firstUnavailableCause).toBeUndefined()
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
       })
 
-      test('a successful restoration clears a stale cause', async () => {
+      test('markerless-guard-history is final: markers that later become restorable are not re-read', async () => {
+        // Previously retryable, so a later successful restoration cleared the
+        // cause. It is now final.
         const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
         let mode: 'history' | 'markers' = 'history'
         const adapter = adapterWithHistory(
@@ -6686,12 +6694,14 @@ describe('OpenCode workflow guard adapter', () => {
           },
         })
         await adapter.hooks['tool.execute.before'](
-          { tool: 'read', sessionID: SESSION_A, callID: 'restore-retry' },
+          { tool: 'read', sessionID: SESSION_A, callID: 'no-restore-retry' },
           { args: {} },
         )
-        const restored = await statusJson(adapter)
-        expect(restored.state).not.toBe('unavailable')
-        expect(restored.firstUnavailableCause).toBeUndefined()
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
       })
 
       test('causes never enter markers, tool metadata, receipts, or digests', async () => {
@@ -6746,6 +6756,275 @@ describe('OpenCode workflow guard adapter', () => {
         // Same pinned registration + same state/reason: digests and markers are
         // identical regardless of which cause was recorded.
         expect(withReadFailure).toBe(withMarkerlessHistory)
+      })
+
+      describe('exempt guard-owned history', () => {
+        function toolPart(
+          tool: string,
+          state: Record<string, unknown> | undefined,
+          extra: Record<string, unknown> = {},
+        ): readonly unknown[] {
+          return [
+            {
+              info: {},
+              parts: [
+                {
+                  type: 'tool',
+                  tool,
+                  callID: 'prior-call',
+                  ...(state ? { state } : {}),
+                  ...extra,
+                },
+              ],
+            },
+          ]
+        }
+
+        const NO_EPOCH_REJECTION = {
+          workflowGuard: { status: 'rejected', reasonCode: 'no-active-epoch' },
+        }
+
+        async function expectInactive(
+          parts: readonly unknown[],
+        ): Promise<void> {
+          const adapter = adapterWithHistory(async () => parts)
+          const parsed = await statusJson(adapter)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        }
+
+        async function expectMarkerless(
+          parts: readonly unknown[],
+        ): Promise<void> {
+          await expectCause(
+            adapterWithHistory(async () => parts),
+            'initialize-session',
+            'markerless-guard-history',
+          )
+        }
+
+        test('a: an in-flight status part does not poison a fresh session; a guarded skill then activates', async () => {
+          const adapter = adapterWithHistory(async () =>
+            toolPart('systematic_workflow_status', { status: 'running' }),
+          )
+          expect((await statusJson(adapter)).state).toBe('inactive')
+          expect((await statusJson(adapter)).state).toBe('inactive')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter)).toMatchObject({
+            state: 'waiting',
+            reasonCode: 'missing-evidence',
+          })
+        })
+
+        test('b: restart with only completed markerless status parts is inactive', async () => {
+          await expectInactive(
+            toolPart('systematic_workflow_status', {
+              status: 'completed',
+              metadata: {},
+            }),
+          )
+        })
+
+        test('c: restart with a completed start rejected / no-active-epoch is inactive', async () => {
+          await expectInactive(
+            toolPart('systematic_workflow_start', {
+              status: 'completed',
+              metadata: NO_EPOCH_REJECTION,
+            }),
+          )
+        })
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`d: restart after a real ${mode}-mode no-epoch completion is inactive`, async () => {
+            const first = createAdapter(mode)
+            const output = {
+              title: 'pending',
+              output: 'pending',
+              metadata: {},
+            }
+            const input = {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID: `restart-no-epoch-${mode}`,
+            }
+            await first.hooks['tool.execute.before'](input, {
+              args: { target: 'unit' },
+            })
+            await first.hooks['tool.execute.after'](
+              { ...input, args: { target: 'unit' } },
+              output,
+            )
+            expect(output.metadata).toMatchObject({
+              workflowGuard: {
+                status: 'rejected',
+                reasonCode: 'no-active-epoch',
+              },
+            })
+            await expectInactive(
+              toolPart('systematic_workflow_complete', {
+                status: 'completed',
+                metadata: output.metadata,
+              }),
+            )
+          })
+        }
+
+        test('e: restart histories that stay closed publish markerless-guard-history', async () => {
+          const closed: ReadonlyArray<{
+            name: string
+            parts: readonly unknown[]
+          }> = [
+            {
+              name: 'completed markerless control',
+              parts: toolPart('systematic_workflow_control', {
+                status: 'completed',
+                metadata: {},
+              }),
+            },
+            {
+              name: 'completed start that started a unit',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: { workflowGuard: { status: 'started' } },
+              }),
+            },
+            {
+              name: 'completed start rejected with epoch-completed',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: {
+                  workflowGuard: {
+                    status: 'rejected',
+                    reasonCode: 'epoch-completed',
+                  },
+                },
+              }),
+            },
+            {
+              name: 'completed complete without rejected / no-active-epoch metadata',
+              parts: toolPart('systematic_workflow_complete', {
+                status: 'completed',
+                metadata: {},
+              }),
+            },
+            {
+              name: 'guard part missing state.status',
+              parts: toolPart('systematic_workflow_start', undefined, {
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'guard part with state but no status',
+              parts: toolPart('systematic_workflow_complete', {
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'running start from a prior process',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'running',
+              }),
+            },
+            {
+              name: 'errored complete',
+              parts: toolPart('systematic_workflow_complete', {
+                status: 'error',
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'pending control',
+              parts: toolPart('systematic_workflow_control', {
+                status: 'pending',
+              }),
+            },
+          ]
+          for (const entry of closed) {
+            const adapter = adapterWithHistory(async () => entry.parts)
+            const parsed = await statusJson(adapter)
+            expect(parsed.state, entry.name).toBe('unavailable')
+            expect(parsed.firstUnavailableCause, entry.name).toEqual({
+              site: 'initialize-session',
+              kind: 'markerless-guard-history',
+              timedOut: false,
+            })
+          }
+        })
+
+        test('f: malformed or ambiguous markers stay closed even when every guard part is exempt', async () => {
+          const exempt = toolPart('systematic_workflow_status', {
+            status: 'completed',
+            metadata: {},
+          })
+          await expectCause(
+            adapterWithHistory(async () => [
+              ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+              ...exempt,
+            ]),
+            'initialize-session',
+            'markers-ambiguous',
+          )
+
+          const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+          const corrupted = {
+            ...(ownMarkers[0] as Record<string, unknown>),
+            integrity: 'a'.repeat(64),
+          }
+          await expectCause(
+            adapterWithHistory(async () => [
+              ...wrapMarkers([corrupted, ...ownMarkers.slice(1)]),
+              ...toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            ]),
+            'initialize-session',
+            'markers-malformed-or-incompatible',
+          )
+        })
+
+        test('g: markerless-guard-history unavailable is not retried by later hooks', async () => {
+          let reads = 0
+          const adapter = adapterWithHistory(async () => {
+            reads += 1
+            return GUARD_HISTORY_PARTS
+          })
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+          expect(reads).toBe(1)
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID: 'no-retry' },
+            { args: {} },
+          )
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+          await statusJson(adapter)
+          expect(reads).toBe(1)
+          expect(adapter.status(SESSION_A).state).toBe('unavailable')
+        })
+
+        test('h: valid foreign-only markers keep current behavior', async () => {
+          const foreignMarkers = buildMarkersForRegistration(
+            'cause-foreign-registration',
+            new Uint8Array(32).fill(72),
+          )
+          await expectInactive(wrapMarkers(foreignMarkers))
+          await expectMarkerless([
+            ...wrapMarkers(foreignMarkers),
+            ...GUARD_HISTORY_PARTS,
+          ])
+        })
       })
 
       describe('strict own-history read versus lenient child-rollup read', () => {
