@@ -373,6 +373,9 @@ interface TerminalComplete {
   // tool result's title/output. Set for outcomes where the host tool's
   // own title/output is evidence that must survive replay untouched.
   metadataOnly?: boolean
+  // Title the first write used, when it was not the generic one, so a
+  // replay reproduces the identical result.
+  title?: string
 }
 
 type OperationCompletionResult =
@@ -2956,40 +2959,42 @@ function createSessionRuntime(
   // epoch. The guard is re-read at write time: a skill earlier in the same
   // message batch may have activated an epoch since the before-hook, in which
   // case claiming `no-active-epoch` would be false and the current status is
-  // reported instead.
+  // reported instead. The outcome is recorded as this call's terminal result,
+  // so a duplicate after-hook replays exactly what was written here.
   function writeNoEpochBlockedResult(
+    callDigest: string,
     output: unknown,
     target: TransitionTarget,
   ): void {
     const current = guard.status()
-    if (!current.epoch) {
-      writeTerminalCompletionResult(
-        output,
-        { target, status: 'rejected', reasonCode: 'no-active-epoch' },
-        target,
-        'Workflow transition rejected',
-      )
-      return
-    }
-    const status = current.state === 'unavailable' ? 'unavailable' : 'rejected'
-    writeTerminalCompletionResult(
-      output,
-      { target, status, reasonCode: current.reasonCode },
-      target,
-      status === 'rejected'
-        ? 'Workflow transition rejected'
-        : 'Workflow transition unavailable',
-    )
+    const terminal: TerminalComplete = !current.epoch
+      ? {
+          target,
+          status: 'rejected',
+          reasonCode: 'no-active-epoch',
+          title: 'Workflow transition rejected',
+        }
+      : current.state === 'unavailable'
+        ? { target, status: 'unavailable', reasonCode: current.reasonCode }
+        : {
+            target,
+            status: 'rejected',
+            reasonCode: current.reasonCode,
+            title: 'Workflow transition rejected',
+          }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
   }
 
   // Only the no-epoch block is guard-owned output; every other blocked
   // reason keeps writing nothing here.
   function writeBlockedCompleteResult(
+    callDigest: string,
     output: unknown,
     blocked: BlockedComplete | undefined,
   ): void {
     if (blocked?.reasonCode === 'no-active-epoch') {
-      writeNoEpochBlockedResult(output, blocked.target)
+      writeNoEpochBlockedResult(callDigest, output, blocked.target)
     }
   }
 
@@ -3715,7 +3720,7 @@ function createSessionRuntime(
       writeAbandonedCompletionMetadata(output, target, terminal.reasonCode)
       return
     }
-    writeTerminalCompletionResult(output, terminal, target)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
   }
 
   function replayTerminalComplete(
@@ -3759,7 +3764,7 @@ function createSessionRuntime(
     }
     if (replay) replayComplete(callDigest)
     blockedCompletes.delete(callDigest)
-    writeBlockedCompleteResult(output, blocked)
+    writeBlockedCompleteResult(callDigest, output, blocked)
     return true
   }
 

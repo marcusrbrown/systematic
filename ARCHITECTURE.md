@@ -248,13 +248,13 @@ operation and reason code) to that specific transition — never to whichever co
 finished computing a cause first — and surfaces it only as `firstUnavailableCause` on
 `systematic_workflow_status` tool output while the state remains `unavailable`; it never appears on a
 receipt envelope, marker envelope, or anything covered by an integrity digest. At initialization the
-session's own status calls, guard-owned `no-active-epoch` rejections, and the uniquely identified
-in-flight guard call do not count as unrecoverable history; any other markerless guard history fails
-closed. Known limits: a dual registration running an older build rejects the `inactive` marker state
-and fails closed until both upgrade; if host history loses every marker, a previously activated
-session cannot be told apart from a fresh one; and a restart whose first hook is an event for an
-in-flight guard call fails closed. OpenCode only — `src/pi.ts` registers no guard, and the Claude
-Code bundle ships no runtime.
+session's own status calls, guard-owned `no-active-epoch` rejections, and an in-flight guard call in
+the current, unfinished assistant turn do not count as unrecoverable history; any other markerless
+guard history fails closed. Known limits: a dual registration running an older build rejects the
+`inactive` marker state and fails closed until both upgrade; if host history loses every marker, a
+previously activated session cannot be told apart from a fresh one; and in-flight guard calls from a
+turn that began before this runtime started fail closed. OpenCode only — `src/pi.ts` registers no
+guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

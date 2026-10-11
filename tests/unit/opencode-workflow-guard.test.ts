@@ -2374,6 +2374,110 @@ describe('OpenCode workflow guard adapter', () => {
       expect(status(adapter).unit?.status).not.toBe('completed')
     })
 
+    async function completeAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<HostOutput> {
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: SESSION_A,
+          callID,
+          args: { target: 'unit' },
+        },
+        output,
+      )
+      return output
+    }
+
+    for (const mode of ['observe', 'protected'] as const) {
+      test(`a duplicate after-hook replays the identical no-epoch rejection without a second before-hook and leaves the session inactive (${mode})`, async () => {
+        const adapter = createAdapter(mode)
+        const callID = `replay-no-epoch-${mode}`
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID,
+          },
+          { args: { target: 'unit' } },
+        )
+        const first = await completeAfter(adapter, callID)
+        const second = await completeAfter(adapter, callID)
+        expect(first.metadata).toMatchObject({
+          workflowGuard: {
+            status: 'rejected',
+            reasonCode: 'no-active-epoch',
+            target: 'unit',
+          },
+        })
+        expect(second.metadata.workflowGuard).toEqual(
+          first.metadata.workflowGuard,
+        )
+        expect(second.title).toBe(first.title)
+        expect(second.output).toBe(first.output)
+        expect(second.title).not.toContain('unavailable')
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+        })
+      })
+    }
+
+    test('a duplicate after-hook replays the write-time recheck outcome, not a false no-active-epoch', async () => {
+      const adapter = createAdapter('protected')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'replay-batch-skill',
+      }
+      const completeInput = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'replay-batch-complete',
+      }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        freshOutput(),
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+
+      const first = await completeAfter(adapter, completeInput.callID)
+      const second = await completeAfter(adapter, completeInput.callID)
+      const firstGuard = first.metadata.workflowGuard as {
+        status: string
+        reasonCode: string
+      }
+      expect(firstGuard.reasonCode).not.toBe('no-active-epoch')
+      expect(second.metadata.workflowGuard).toEqual(
+        first.metadata.workflowGuard,
+      )
+      expect(second.title).toBe(first.title)
+      expect(second.output).toBe(first.output)
+      expect(status(adapter).epoch).not.toBeNull()
+      expect(status(adapter).unit?.status).not.toBe('completed')
+      expect(status(adapter).reasonCode).not.toBe('guard-unavailable')
+    })
+
+    test('an after-hook for a callID that never had a before-hook still takes the unreplayable path', async () => {
+      const adapter = createAdapter('observe')
+      const output = await completeAfter(adapter, 'never-prepared')
+      expect(output.metadata).toMatchObject({
+        workflowGuard: {
+          status: 'unavailable',
+          reasonCode: 'guard-unavailable',
+        },
+      })
+      expect(status(adapter).state).toBe('unavailable')
+    })
+
     test('never finalizes a transition or mints a receipt', async () => {
       for (const mode of ['observe', 'protected'] as const) {
         const adapter = createAdapter(mode)
