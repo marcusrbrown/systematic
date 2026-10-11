@@ -32,6 +32,7 @@ export type WorkflowState =
   | 'rejected'
   | 'disabled'
   | 'unavailable'
+  | 'inactive'
 export type RepairKind =
   | 'fresh-readback'
   | 'rerun-operation'
@@ -2192,7 +2193,7 @@ export function createWorkflowGuard(
       return projectControl('unavailable', 'guard-unavailable', lists)
     }
     if (globalIssue) return projectGlobalIssue(globalIssue, lists)
-    if (!epoch) return makeStatus('unavailable', 'no-active-epoch')
+    if (!epoch) return makeStatus('inactive', 'no-active-epoch')
     if (epoch.status === 'completed') {
       return makeStatus(
         'protected',
@@ -2252,7 +2253,7 @@ export function createWorkflowGuard(
     if (!epoch) {
       return {
         ready: false,
-        status: 'unavailable',
+        status: 'rejected',
         reasonCode: 'no-active-epoch',
       }
     }

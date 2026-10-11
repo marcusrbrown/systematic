@@ -199,6 +199,8 @@ export interface OpencodeWorkflowGuardOptions {
   readonly sessionSalt?: Uint8Array
   readonly targetDirectory?: string
   readonly sessionLocation?: string
+  /** Injectable clock (epoch milliseconds); defaults to `Date.now`. */
+  readonly now?: () => number
 }
 
 export interface OpencodeWorkflowChildSession {
@@ -207,7 +209,21 @@ export interface OpencodeWorkflowChildSession {
 }
 
 export interface OpencodeWorkflowHostReadback {
+  /**
+   * Lenient read, used for child-session rollup: a host error or malformed
+   * payload may be reported as `[]` (nothing to roll up), and only a thrown
+   * read marks the parent unavailable.
+   */
   readSessionParts(sessionID: string): Promise<ReadonlyArray<unknown>>
+  /**
+   * Strict read of the session's OWN history, used for initialization and
+   * recovery. Must throw on a host error or malformed payload so a failed read
+   * can never be mistaken for empty history. Optional only so injected readers
+   * need no mass edits; when absent, initialization falls back to
+   * `readSessionParts`, which then carries the same obligation to throw on
+   * failure.
+   */
+  readSessionPartsStrict?(sessionID: string): Promise<ReadonlyArray<unknown>>
   listChildren(
     sessionID: string,
   ): Promise<ReadonlyArray<OpencodeWorkflowChildSession>>
@@ -336,6 +352,11 @@ interface SealedOperation {
   argsFingerprint: string
 }
 
+interface BlockedComplete {
+  target: TransitionTarget
+  reasonCode: WorkflowReasonCode
+}
+
 interface TerminalComplete {
   // Optional: some terminal outcomes (see `finishUnreplayableComplete()`)
   // are recorded without ever having observed a real target. `target` is
@@ -352,6 +373,9 @@ interface TerminalComplete {
   // tool result's title/output. Set for outcomes where the host tool's
   // own title/output is evidence that must survive replay untouched.
   metadataOnly?: boolean
+  // Title the first write used, when it was not the generic one, so a
+  // replay reproduces the identical result.
+  title?: string
 }
 
 type OperationCompletionResult =
@@ -390,8 +414,10 @@ interface MarkerDocument {
   }
 }
 
-// Bounded first-cause diagnostic for a `seedRemoteScopes`/`seedRemoteScope`
-// failure that led to `markUnavailable()`. Side-channel only: surfaced on
+// Bounded first-cause diagnostic for a failure that led to the guard going
+// `unavailable`: a `seedRemoteScopes`/`seedRemoteScope` failure, a session
+// initialization/recovery failure, or an observer readback failure.
+// Enum-only: no call IDs, tool names, paths, or free text. Side-channel only: surfaced on
 // `systematic_workflow_status` tool output (see `statusForTool`), never on a
 // receipt envelope, marker envelope, or anything covered by an integrity
 // digest. Never carries raw command output, paths, or tokens.
@@ -403,14 +429,43 @@ type GuardUnavailableCauseKind =
   | 'remote-scope-missing-resource'
   | 'remote-scope-unavailable'
   | 'remote-readback-rejected'
+  | 'history-read-failed'
+  | 'markers-malformed-or-incompatible'
+  | 'markers-ambiguous'
+  | 'recovery-rejected'
+  | 'markerless-guard-history'
+  | 'observer-readback-failed'
 
 interface GuardUnavailableCause {
-  readonly site: 'seed-remote-scopes' | 'seed-remote-scope'
+  readonly site:
+    | 'seed-remote-scopes'
+    | 'seed-remote-scope'
+    | 'initialize-session'
+    | 'refresh-readback'
   readonly kind: GuardUnavailableCauseKind
   readonly operation?: RemoteOperation
   readonly reasonCode?: OperationObserverReasonCode | WorkflowReasonCode
   readonly timedOut: boolean
 }
+
+function initializationCause(
+  kind: Extract<
+    GuardUnavailableCauseKind,
+    | 'history-read-failed'
+    | 'markers-malformed-or-incompatible'
+    | 'markers-ambiguous'
+    | 'recovery-rejected'
+    | 'markerless-guard-history'
+  >,
+): GuardUnavailableCause {
+  return { site: 'initialize-session', kind, timedOut: false }
+}
+
+const OBSERVER_READBACK_FAILED_CAUSE: GuardUnavailableCause = Object.freeze({
+  site: 'refresh-readback',
+  kind: 'observer-readback-failed',
+  timedOut: false,
+})
 
 const startToolShape = {
   expected_operations: z
@@ -1242,13 +1297,15 @@ interface ToolResultContent {
 }
 
 function markerStatusRank(state: WorkflowStatus['state']): number {
-  return {
+  const ranks = {
     disabled: 0,
-    protected: 1,
-    waiting: 2,
-    rejected: 3,
-    unavailable: 4,
-  }[state]
+    inactive: 1,
+    protected: 2,
+    waiting: 3,
+    rejected: 4,
+    unavailable: 5,
+  } satisfies Record<WorkflowStatus['state'], number>
+  return ranks[state]
 }
 
 function isWorkflowState(value: unknown): value is WorkflowStatus['state'] {
@@ -1257,7 +1314,8 @@ function isWorkflowState(value: unknown): value is WorkflowStatus['state'] {
     value === 'waiting' ||
     value === 'rejected' ||
     value === 'disabled' ||
-    value === 'unavailable'
+    value === 'unavailable' ||
+    value === 'inactive'
   )
 }
 
@@ -1478,6 +1536,7 @@ function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
   operationObservers: OperationObserverRegistry,
   recoveredOperationContexts: RecoveredOperationRegistry,
+  runtimeStartedAt: number,
 ): SessionRuntime {
   let ledger!: ReceiptLedger
   let guard!: WorkflowGuard
@@ -1490,7 +1549,7 @@ function createSessionRuntime(
   const pendingCompletes = new Map<string, PendingComplete>()
   const finalizedCompletes = new Map<string, PendingComplete>()
   const abandonedCompletes = new Map<string, TransitionTarget>()
-  const blockedCompletes = new Map<string, TransitionTarget>()
+  const blockedCompletes = new Map<string, BlockedComplete>()
   const terminalCompletes = new Map<string, TerminalComplete>()
   const callBindings = new Map<string, { kind: string; fingerprint: string }>()
   const pendingOperations = new Map<string, PendingOperation>()
@@ -1514,6 +1573,20 @@ function createSessionRuntime(
     const result = guard.startUnit(input, policy)
     if (result.status === 'started') firstUnavailableCause = undefined
     return result
+  }
+
+  // Shared first-cause-wins recorder: the cause is stored only when THIS call
+  // flips `target`'s mode to 'unavailable' and none is stored yet. Both
+  // `markUnavailable` and `publishUnavailable` commit through here so the
+  // runtime and initialization paths cannot disagree.
+  function recordUnavailable(
+    target: WorkflowGuard,
+    cause?: GuardUnavailableCause,
+  ): void {
+    const result = target.setMode({ mode: 'unavailable' })
+    if (cause && result.status === 'changed' && !firstUnavailableCause) {
+      firstUnavailableCause = cause
+    }
   }
 
   function effectiveTargetContext(): {
@@ -1785,7 +1858,127 @@ function createSessionRuntime(
     }
   }
 
-  function containsGuardHistory(value: unknown): boolean {
+  // True when the guard itself recorded a no-epoch rejection on this part.
+  // Structured fields only; the guard writes `workflowGuard` onto the tool
+  // result metadata, which the host persists on `state.metadata`. The
+  // part-level `metadata` is checked too.
+  function hasNoEpochRejection(part: Record<string, unknown>): boolean {
+    const carriers = [
+      part.metadata,
+      isRecord(part.state) && part.state.metadata,
+    ]
+    return carriers.some(
+      (carrier) =>
+        isRecord(carrier) &&
+        isRecord(carrier.workflowGuard) &&
+        carrier.workflowGuard.status === 'rejected' &&
+        carrier.workflowGuard.reasonCode === 'no-active-epoch',
+    )
+  }
+
+  // Chronology is established from `info.time.created`, not array position:
+  // the newest message is the one with the greatest created time. Any entry
+  // without a finite created time, or a tie for the newest, means the newest
+  // message cannot be identified and nothing is exempt.
+  function newestMessage(
+    history: ReadonlyArray<unknown>,
+  ): Record<string, unknown> | undefined {
+    let newest: Record<string, unknown> | undefined
+    let newestCreated = Number.NEGATIVE_INFINITY
+    let tied = false
+    for (const entry of history) {
+      const created = messageCreated(entry)
+      if (!isRecord(entry) || created === undefined) return undefined
+      if (created > newestCreated) {
+        newest = entry
+        newestCreated = created
+        tied = false
+      } else if (created === newestCreated) {
+        tied = true
+      }
+    }
+    return tied ? undefined : newest
+  }
+
+  function messageInfo(entry: unknown): Record<string, unknown> | undefined {
+    return isRecord(entry) && isRecord(entry.info) ? entry.info : undefined
+  }
+
+  function messageCreated(entry: unknown): number | undefined {
+    const info = messageInfo(entry)
+    const time = info && isRecord(info.time) ? info.time : undefined
+    return typeof time?.created === 'number' && Number.isFinite(time.created)
+      ? time.created
+      : undefined
+  }
+
+  // The current turn is the newest message, provided it is an unfinished
+  // assistant message created during this process's lifetime.
+  function isCurrentTurn(message: Record<string, unknown>): boolean {
+    const info = messageInfo(message)
+    const time = info && isRecord(info.time) ? info.time : undefined
+    const created = messageCreated(message)
+    return (
+      info?.role === 'assistant' &&
+      (time?.completed === undefined || time.completed === null) &&
+      created !== undefined &&
+      created >= runtimeStartedAt
+    )
+  }
+
+  // Pending/running guard mutation parts of the current turn, by identity.
+  // These belong to the call now executing, whose host part is persisted
+  // before its before-hook runs; they carry no evidence yet.
+  function currentTurnExemptParts(
+    history: ReadonlyArray<unknown>,
+  ): ReadonlySet<unknown> {
+    const exempt = new Set<unknown>()
+    const newest = newestMessage(history)
+    if (!newest || !isCurrentTurn(newest) || !Array.isArray(newest.parts)) {
+      return exempt
+    }
+    for (const part of newest.parts) {
+      if (
+        isRecord(part) &&
+        (part.tool === 'systematic_workflow_start' ||
+          part.tool === 'systematic_workflow_complete' ||
+          part.tool === 'systematic_workflow_control') &&
+        isRecord(part.state) &&
+        (part.state.status === 'pending' || part.state.status === 'running')
+      ) {
+        exempt.add(part)
+      }
+    }
+    return exempt
+  }
+
+  // Guard-owned parts that carry no evidence and never mutate guard state:
+  // status reads (any state), COMPLETED start/complete calls the guard
+  // itself rejected with `no-active-epoch`, and the pending/running guard
+  // mutation parts of the current turn. Everything else stays history.
+  function isExemptGuardPart(
+    part: Record<string, unknown>,
+    currentTurn: ReadonlySet<unknown>,
+  ): boolean {
+    if (part.tool === 'systematic_workflow_status') return true
+    if (currentTurn.has(part)) return true
+    if (
+      part.tool !== 'systematic_workflow_start' &&
+      part.tool !== 'systematic_workflow_complete'
+    ) {
+      return false
+    }
+    return (
+      isRecord(part.state) &&
+      part.state.status === 'completed' &&
+      hasNoEpochRejection(part)
+    )
+  }
+
+  function containsGuardHistory(
+    value: unknown,
+    currentTurn: ReadonlySet<unknown>,
+  ): boolean {
     if (!isRecord(value)) return false
     if (
       value.tool === 'systematic_workflow_start' ||
@@ -1793,11 +1986,11 @@ function createSessionRuntime(
       value.tool === 'systematic_workflow_complete' ||
       value.tool === 'systematic_workflow_control'
     ) {
-      return true
+      return !isExemptGuardPart(value, currentTurn)
     }
     return (
       Array.isArray(value.parts) &&
-      value.parts.some((part) => containsGuardHistory(part))
+      value.parts.some((part) => containsGuardHistory(part, currentTurn))
     )
   }
 
@@ -1845,17 +2038,25 @@ function createSessionRuntime(
     return emptyHistoryLedger
   }
 
-  function publishUnavailable(reusableLedger?: ReceiptLedger): void {
+  // `cause` is undefined only for the deferred-fresh case (no guard history
+  // yet, fresh publication not allowed on this pass), which is a pending
+  // state rather than a failure. Retries keep the first recorded cause.
+  function publishUnavailable(
+    cause: GuardUnavailableCause | undefined,
+    reusableLedger?: ReceiptLedger,
+  ): void {
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
-    if (options.config.mode !== 'disabled')
-      guard.setMode({ mode: 'unavailable' })
+    if (options.config.mode !== 'disabled') {
+      recordUnavailable(guard, cause)
+    }
     initialized = true
   }
 
   function publishFresh(reusableLedger?: ReceiptLedger): void {
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
+    firstUnavailableCause = undefined
     initialized = true
   }
 
@@ -1943,10 +2144,15 @@ function createSessionRuntime(
     return undefined
   }
 
-  function recoverPersistedMarkers(markers: readonly unknown[]): boolean {
+  // Returns undefined on success, otherwise the cause of the failure.
+  function recoverPersistedMarkers(
+    markers: readonly unknown[],
+  ): GuardUnavailableCause | undefined {
     // Callers must pass pre-filtered (own-registration) markers.
     const seed = extractReceiptReadbackSeed(markers)
-    if (seed.status !== 'ready') return false
+    if (seed.status !== 'ready') {
+      return initializationCause('markers-malformed-or-incompatible')
+    }
     let recoveredLedger: ReceiptLedger
     try {
       recoveredLedger = createReceiptLedger({
@@ -1955,14 +2161,14 @@ function createSessionRuntime(
         sessionSalt: seed.sessionSalt,
       })
     } catch {
-      return false
+      return initializationCause('markers-malformed-or-incompatible')
     }
     if (!seedAgrees(recoveredLedger, seed)) {
-      return false
+      return initializationCause('markers-malformed-or-incompatible')
     }
     const recovered = recoveredLedger.recoverReadback(markers)
     if (recovered.status === 'rejected') {
-      return false
+      return initializationCause('recovery-rejected')
     }
     const recoveredGuard = createGuard(recoveredLedger)
     const restored = recoveredGuard.restore({
@@ -1974,12 +2180,13 @@ function createSessionRuntime(
       },
     })
     if (restored.status === 'rejected') {
-      return false
+      return initializationCause('recovery-rejected')
     }
     ledger = recoveredLedger
     guard = recoveredGuard
+    firstUnavailableCause = undefined
     initialized = true
-    return true
+    return undefined
   }
 
   type OwnMarkersClassification =
@@ -2053,19 +2260,36 @@ function createSessionRuntime(
     allowFresh: boolean,
   ): void {
     const reusableLedger = emptyHistoryLedgerForRetry()
-    if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
-      publishFresh(reusableLedger)
-    } else {
-      retryableEmptyHistory = true
-      publishUnavailable(reusableLedger)
+    const currentTurn = currentTurnExemptParts(parts)
+    if (parts.some((part) => containsGuardHistory(part, currentTurn))) {
+      // Evidence-bearing guard history without markers can never become
+      // recoverable, so this unavailable is final (not retryable).
+      publishUnavailable(
+        initializationCause('markerless-guard-history'),
+        reusableLedger,
+      )
+      return
     }
+    if (allowFresh) {
+      publishFresh(reusableLedger)
+      return
+    }
+    // Deferred fresh: no guard history, but this pass may not confirm fresh.
+    // Publish a provisional inactive guard (same ledger, so the marker is
+    // stable) and stay retryable: the next allow-fresh recovery re-reads the
+    // history and either confirms it, restores from late own markers, or
+    // fails closed on guard history.
+    retryableEmptyHistory = true
+    publishFresh(reusableLedger)
   }
 
   async function initializeSession(
     sessionID: string,
     allowFresh: boolean,
   ): Promise<void> {
-    const reader = options.hostReadback?.readSessionParts
+    const reader =
+      options.hostReadback?.readSessionPartsStrict ??
+      options.hostReadback?.readSessionParts
     if (!reader) {
       publishFresh()
       return
@@ -2074,7 +2298,7 @@ function createSessionRuntime(
     try {
       parts = await reader(sessionID)
     } catch {
-      publishUnavailable()
+      publishUnavailable(initializationCause('history-read-failed'))
       return
     }
     const classification = classifyMarkersFromParts(parts)
@@ -2082,7 +2306,7 @@ function createSessionRuntime(
       // Cannot determine whether markers include corrupted own state → fail closed.
       // Do NOT use retryableEmptyHistory here; this is a corruption signal, not a
       // transient empty-history state.
-      publishUnavailable()
+      publishUnavailable(initializationCause('markers-ambiguous'))
       return
     }
     if (classification.kind === 'foreign-empty') {
@@ -2093,22 +2317,33 @@ function createSessionRuntime(
       return
     }
     // kind === 'own': recover from filtered own markers.
-    if (!recoverPersistedMarkers(classification.markers)) publishUnavailable()
+    const failure = recoverPersistedMarkers(classification.markers)
+    if (failure) publishUnavailable(failure)
   }
 
   async function recoverFromHost(
     sessionID: string,
     allowFresh = true,
   ): Promise<void> {
-    if (initializationPromise) {
-      await initializationPromise
+    // Waiter protocol: no hook proceeds while an initialization is in flight.
+    // After awaiting promise P a waiter re-checks that P is still the current
+    // initialization; if another waiter already started a newer one, this
+    // waiter awaits that one too. Only the waiter that STARTS a re-init
+    // resets the retry state and the published guard.
+    let reinitialize = false
+    while (initializationPromise) {
+      const seen = initializationPromise
+      await seen
+      if (initializationPromise !== seen) continue
       if (!retryableEmptyHistory || !allowFresh) return
-      initializationPromise = undefined
-      initialized = false
+      reinitialize = true
+      break
     }
+    if (reinitialize) initialized = false
     retryableEmptyHistory = false
-    initializationPromise = initializeSession(sessionID, allowFresh)
-    await initializationPromise
+    const next = initializeSession(sessionID, allowFresh)
+    initializationPromise = next
+    await next
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: lineage verification and parent minting must remain atomic
@@ -2359,10 +2594,7 @@ function createSessionRuntime(
   // an unrelated cause that already won the race.
   function markUnavailable(cause?: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
-    const result = guard.setMode({ mode: 'unavailable' })
-    if (cause && result.status === 'changed' && !firstUnavailableCause) {
-      firstUnavailableCause = cause
-    }
+    recordUnavailable(guard, cause)
   }
 
   function bindCall(
@@ -2402,8 +2634,9 @@ function createSessionRuntime(
     }
   }
 
+  // A status read must not touch sibling calls' pending work: pending
+  // entries are only cleared at the request boundary (the transform).
   function readStatus(): WorkflowStatus {
-    abandonPending()
     return guard.status()
   }
 
@@ -2447,26 +2680,31 @@ function createSessionRuntime(
     }
   }
 
+  // Without an epoch there is nothing to protect with observer readback:
+  // skip every observer read, identity update, and unavailable transition.
+  function observerReadbackApplies(): boolean {
+    return options.observer !== undefined && guard.status().epoch !== null
+  }
+
   async function refreshReadback(): Promise<void> {
-    abandonPending()
-    if (!options.observer) return
+    if (!observerReadbackApplies()) return
     const effective = effectiveOperationObserver()
     if (!effective) {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
       return
     }
     let result: OperationObserverResult
     try {
       result = await effective.observer.snapshot()
     } catch {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
       return
     }
     if (
       result.status === 'unavailable' ||
       result.snapshot.targetDigest !== effective.targetIdentity
     ) {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
       return
     }
     const observed = guard.observeReadback({
@@ -2482,7 +2720,7 @@ function createSessionRuntime(
         observed.reasonCode === 'workspace-mismatch') ||
       !(await refreshRemoteReadbacks(effective.observer, result.snapshot))
     ) {
-      markUnavailable()
+      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
     }
   }
 
@@ -2697,10 +2935,11 @@ function createSessionRuntime(
     output: unknown,
     result: TerminalComplete,
     target: TransitionTarget | undefined,
+    title = 'Workflow transition unavailable',
   ): void {
     if (!isRecord(output)) return
     const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
-    output.title = 'Workflow transition unavailable'
+    output.title = title
     output.output = JSON.stringify({
       status: result.status,
       reasonCode: result.reasonCode,
@@ -2713,6 +2952,49 @@ function createSessionRuntime(
         ...targetMetadataField(target),
         reasonCode: result.reasonCode,
       },
+    }
+  }
+
+  // Writes the guard-owned result for a completion that was requested with no
+  // epoch. The guard is re-read at write time: a skill earlier in the same
+  // message batch may have activated an epoch since the before-hook, in which
+  // case claiming `no-active-epoch` would be false and the current status is
+  // reported instead. The outcome is recorded as this call's terminal result,
+  // so a duplicate after-hook replays exactly what was written here.
+  function writeNoEpochBlockedResult(
+    callDigest: string,
+    output: unknown,
+    target: TransitionTarget,
+  ): void {
+    const current = guard.status()
+    const terminal: TerminalComplete = !current.epoch
+      ? {
+          target,
+          status: 'rejected',
+          reasonCode: 'no-active-epoch',
+          title: 'Workflow transition rejected',
+        }
+      : current.state === 'unavailable'
+        ? { target, status: 'unavailable', reasonCode: current.reasonCode }
+        : {
+            target,
+            status: 'rejected',
+            reasonCode: current.reasonCode,
+            title: 'Workflow transition rejected',
+          }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
+  }
+
+  // Only the no-epoch block is guard-owned output; every other blocked
+  // reason keeps writing nothing here.
+  function writeBlockedCompleteResult(
+    callDigest: string,
+    output: unknown,
+    blocked: BlockedComplete | undefined,
+  ): void {
+    if (blocked?.reasonCode === 'no-active-epoch') {
+      writeNoEpochBlockedResult(callDigest, output, blocked.target)
     }
   }
 
@@ -2815,7 +3097,10 @@ function createSessionRuntime(
     if (options.config.mode === 'protected') {
       throw createWorkflowGuardBlockedError('guard-unavailable')
     }
-    blockedCompletes.set(callDigest, target)
+    blockedCompletes.set(callDigest, {
+      target,
+      reasonCode: status.reasonCode,
+    })
     blockedQuestionCalls.set(callDigest, challenge.challenge.challengeId)
     return true
   }
@@ -2841,10 +3126,19 @@ function createSessionRuntime(
       })
       return
     }
-    if (options.config.mode === 'protected') {
+    // A completion requested before any epoch exists is a guard-owned
+    // rejection recorded for the after-hook, in protected mode too. Every
+    // other blocked reason keeps the protected-mode throw.
+    if (
+      options.config.mode === 'protected' &&
+      prepared.reasonCode !== 'no-active-epoch'
+    ) {
       throw createWorkflowGuardBlockedError(prepared.reasonCode)
     }
-    blockedCompletes.set(callDigest, target)
+    blockedCompletes.set(callDigest, {
+      target,
+      reasonCode: prepared.reasonCode,
+    })
   }
 
   async function remoteIntentForOperation(
@@ -3426,7 +3720,7 @@ function createSessionRuntime(
       writeAbandonedCompletionMetadata(output, target, terminal.reasonCode)
       return
     }
-    writeTerminalCompletionResult(output, terminal, target)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
   }
 
   function replayTerminalComplete(
@@ -3461,8 +3755,8 @@ function createSessionRuntime(
     }
     const replay = finalizedCompletes.get(callDigest)
     const abandonedTarget = abandonedCompletes.get(callDigest)
-    const blockedTarget = blockedCompletes.get(callDigest)
-    const expectedTarget = replay?.target ?? abandonedTarget ?? blockedTarget
+    const blocked = blockedCompletes.get(callDigest)
+    const expectedTarget = replay?.target ?? abandonedTarget ?? blocked?.target
     if (!expectedTarget) return false
     if (finalTarget !== expectedTarget) {
       markUnavailable()
@@ -3470,6 +3764,7 @@ function createSessionRuntime(
     }
     if (replay) replayComplete(callDigest)
     blockedCompletes.delete(callDigest)
+    writeBlockedCompleteResult(callDigest, output, blocked)
     return true
   }
 
@@ -4294,6 +4589,10 @@ export function createOpencodeWorkflowGuard(
   const sessions = new Map<string, SessionRuntime>()
   const operationObservers: OperationObserverRegistry = new Map()
   const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
+  // Captured once per guard instance (the process's registration), not per
+  // lazily created session runtime, so a turn the host created before the
+  // first hook for a session ran still counts as this process's turn.
+  const runtimeStartedAt = (options.now ?? Date.now)()
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
@@ -4306,6 +4605,7 @@ export function createOpencodeWorkflowGuard(
       },
       operationObservers,
       recoveredOperationContexts,
+      runtimeStartedAt,
     )
     sessions.set(sessionID, runtime)
     return runtime

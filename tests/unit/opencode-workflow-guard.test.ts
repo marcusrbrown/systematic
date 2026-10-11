@@ -1984,7 +1984,7 @@ describe('OpenCode workflow guard adapter', () => {
         callId: 'shared-transition',
         target: 'unit',
       }),
-    ).toMatchObject({ status: 'unavailable' })
+    ).toMatchObject({ status: 'rejected', reasonCode: 'no-active-epoch' })
   })
 
   test('requires valid session identities and does not alias missing tool contexts', async () => {
@@ -2210,7 +2210,7 @@ describe('OpenCode workflow guard adapter', () => {
     expect(rejectedOutput.output).toContain('no-active-epoch')
     expect(rejectedOutput.metadata).toMatchObject({
       protocolVersion: expect.any(Number),
-      state: 'unavailable',
+      state: 'inactive',
       workflowGuard: {
         status: 'rejected',
         reasonCode: 'no-active-epoch',
@@ -2257,6 +2257,476 @@ describe('OpenCode workflow guard adapter', () => {
       workflowGuard: { status: 'started' },
     })
     expect(status(subsequent).unit?.status).toBe('active')
+  })
+
+  describe('completion requested with no epoch', () => {
+    interface HostOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    function freshOutput(): HostOutput {
+      return { title: 'pending', output: 'pending', metadata: {} }
+    }
+
+    async function completeBeforeAndAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      target: 'unit' | 'epoch' = 'unit',
+    ): Promise<HostOutput> {
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID,
+      }
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.before'](input, { args: { target } })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target } },
+        output,
+      )
+      return output
+    }
+
+    for (const mode of ['observe', 'protected'] as const) {
+      test(`${mode} mode writes a guard-owned rejected / no-active-epoch result and stays inactive`, async () => {
+        const adapter = createAdapter(mode)
+        const output = await completeBeforeAndAfter(
+          adapter,
+          `no-epoch-complete-${mode}`,
+        )
+        expect(output.metadata).toMatchObject({
+          workflowGuard: {
+            status: 'rejected',
+            reasonCode: 'no-active-epoch',
+            target: 'unit',
+          },
+        })
+        expect(output.title).not.toContain('unavailable')
+        expect(output.output).not.toContain('unavailable')
+        expect(output.title).toBe('Workflow transition rejected')
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+        })
+      })
+    }
+
+    test('protected mode still throws for other blocked reasons', async () => {
+      const adapter = createAdapter('protected')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      await completeBeforeAndAfter(adapter, 'unit-complete', 'unit')
+      await completeBeforeAndAfter(adapter, 'epoch-complete', 'epoch')
+      expect(status(adapter).reasonCode).toBe('epoch-completed')
+
+      await expect(
+        adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID: 'epoch-complete-again',
+          },
+          { args: { target: 'epoch' } },
+        ),
+      ).rejects.toMatchObject({
+        code: 'workflow-guard-blocked',
+        reasonCode: 'epoch-completed',
+      })
+    })
+
+    test('a same-batch skill activation is not recorded as no-active-epoch', async () => {
+      const adapter = createAdapter('protected')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'batch-skill',
+      }
+      const completeInput = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'batch-complete',
+      }
+      const skillOutput = freshOutput()
+      const completeOutput = freshOutput()
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        skillOutput,
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        completeOutput,
+      )
+      const guardMetadata = completeOutput.metadata.workflowGuard as
+        | { status: string; reasonCode: string }
+        | undefined
+      expect(guardMetadata?.reasonCode).not.toBe('no-active-epoch')
+      expect(status(adapter).unit?.status).not.toBe('completed')
+    })
+
+    async function completeAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<HostOutput> {
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: SESSION_A,
+          callID,
+          args: { target: 'unit' },
+        },
+        output,
+      )
+      return output
+    }
+
+    for (const mode of ['observe', 'protected'] as const) {
+      test(`a duplicate after-hook replays the identical no-epoch rejection without a second before-hook and leaves the session inactive (${mode})`, async () => {
+        const adapter = createAdapter(mode)
+        const callID = `replay-no-epoch-${mode}`
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID,
+          },
+          { args: { target: 'unit' } },
+        )
+        const first = await completeAfter(adapter, callID)
+        const second = await completeAfter(adapter, callID)
+        expect(first.metadata).toMatchObject({
+          workflowGuard: {
+            status: 'rejected',
+            reasonCode: 'no-active-epoch',
+            target: 'unit',
+          },
+        })
+        expect(second.metadata.workflowGuard).toEqual(
+          first.metadata.workflowGuard,
+        )
+        expect(second.title).toBe(first.title)
+        expect(second.output).toBe(first.output)
+        expect(second.title).not.toContain('unavailable')
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+        })
+      })
+    }
+
+    test('a duplicate after-hook replays the write-time recheck outcome, not a false no-active-epoch', async () => {
+      const adapter = createAdapter('protected')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'replay-batch-skill',
+      }
+      const completeInput = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'replay-batch-complete',
+      }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        freshOutput(),
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+
+      const first = await completeAfter(adapter, completeInput.callID)
+      const second = await completeAfter(adapter, completeInput.callID)
+      const firstGuard = first.metadata.workflowGuard as {
+        status: string
+        reasonCode: string
+      }
+      expect(firstGuard.reasonCode).not.toBe('no-active-epoch')
+      expect(second.metadata.workflowGuard).toEqual(
+        first.metadata.workflowGuard,
+      )
+      expect(second.title).toBe(first.title)
+      expect(second.output).toBe(first.output)
+      expect(status(adapter).epoch).not.toBeNull()
+      expect(status(adapter).unit?.status).not.toBe('completed')
+      expect(status(adapter).reasonCode).not.toBe('guard-unavailable')
+    })
+
+    test('an after-hook for a callID that never had a before-hook still takes the unreplayable path', async () => {
+      const adapter = createAdapter('observe')
+      const output = await completeAfter(adapter, 'never-prepared')
+      expect(output.metadata).toMatchObject({
+        workflowGuard: {
+          status: 'unavailable',
+          reasonCode: 'guard-unavailable',
+        },
+      })
+      expect(status(adapter).state).toBe('unavailable')
+    })
+
+    test('never finalizes a transition or mints a receipt', async () => {
+      for (const mode of ['observe', 'protected'] as const) {
+        const adapter = createAdapter(mode)
+        await completeBeforeAndAfter(adapter, `no-finalize-${mode}`)
+        await completeBeforeAndAfter(adapter, `no-finalize-${mode}`)
+        expect(adapter.ledger(SESSION_A)?.listReceipts() ?? []).toEqual([])
+        expect(status(adapter).epoch).toBeNull()
+        expect(status(adapter).state).toBe('inactive')
+      }
+    })
+  })
+
+  describe('status path isolation', () => {
+    interface HostOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    function freshOutput(): HostOutput {
+      return { title: 'pending', output: 'pending', metadata: {} }
+    }
+
+    async function statusTool(adapter: OpencodeWorkflowGuard): Promise<void> {
+      await getTool(adapter, 'systematic_workflow_status').execute(
+        {},
+        toolContext(SESSION_A),
+      )
+    }
+
+    async function transformPass(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<void> {
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+    }
+
+    function startBefore(adapter: OpencodeWorkflowGuard, callID: string) {
+      return adapter.hooks['tool.execute.before'](
+        { tool: 'systematic_workflow_start', sessionID: SESSION_A, callID },
+        { args: {} },
+      )
+    }
+
+    async function startAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<HostOutput> {
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID,
+          args: {},
+        },
+        output,
+      )
+      return output
+    }
+
+    async function completeFirstUnit(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<void> {
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'complete-first-unit',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        freshOutput(),
+      )
+      expect(status(adapter).unit?.status).toBe('completed')
+    }
+
+    test('a: a status call between a sibling start before- and after-hook does not discard the start', async () => {
+      const adapter = createAdapter('observe')
+      await completeFirstUnit(adapter)
+      const ledgerBefore = ledger(adapter)
+
+      await Promise.all([
+        startBefore(adapter, 'batch-start'),
+        adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_status',
+            sessionID: SESSION_A,
+            callID: 'batch-status',
+          },
+          { args: {} },
+        ),
+      ])
+      await statusTool(adapter)
+      const output = await startAfter(adapter, 'batch-start')
+
+      expect(output.metadata).toMatchObject({
+        workflowGuard: { status: 'started' },
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+      expect(ledger(adapter)).toBe(ledgerBefore)
+    })
+
+    test('b: a status call between a sibling guarded skill before- and after-hook does not lose the activation', async () => {
+      const adapter = createAdapter('observe')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'batch-skill',
+      }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await statusTool(adapter)
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        { title: 'Loaded skill', output: 'skill result', metadata: {} },
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+      expect(status(adapter)).toMatchObject({
+        state: 'waiting',
+        reasonCode: 'missing-evidence',
+      })
+    })
+
+    test('c: a status call between a sibling complete before- and after-hook does not lose or poison the completion', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'batch-complete',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      await statusTool(adapter)
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        output,
+      )
+      expect(output.metadata).toMatchObject({
+        workflowGuard: { status: 'completed', target: 'unit' },
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('completed')
+    })
+
+    test('d: a before-hook that never gets an after-hook keeps its pending entry across status calls; the next transform clears it', async () => {
+      const adapter = createAdapter('observe')
+      await completeFirstUnit(adapter)
+
+      await startBefore(adapter, 'orphan-start')
+      await statusTool(adapter)
+      await statusTool(adapter)
+      // Status left the entry alone, so a late after-hook still completes it.
+      expect(
+        (await startAfter(adapter, 'orphan-start')).metadata,
+      ).toMatchObject({ workflowGuard: { status: 'started' } })
+
+      const second = createAdapter('observe')
+      await completeFirstUnit(second)
+      await startBefore(second, 'orphan-start')
+      await transformPass(second)
+      await startAfter(second, 'orphan-start')
+      expect(status(second).state).toBe('unavailable')
+    })
+
+    describe('observer readback without an epoch', () => {
+      function countingObserver(behavior: 'unavailable' | 'throws'): {
+        observer: OpencodeOperationObserver
+        calls: () => number
+      } {
+        const base = sequenceObserver([operationSnapshot()])
+        let calls = 0
+        return {
+          observer: {
+            ...base,
+            snapshot: async () => {
+              calls += 1
+              if (behavior === 'throws') throw new Error('observer exploded')
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+          },
+          calls: () => calls,
+        }
+      }
+
+      for (const behavior of ['unavailable', 'throws'] as const) {
+        test(`e: status in an inactive session with a ${behavior} observer stays inactive and never reads the observer`, async () => {
+          const { observer, calls } = countingObserver(behavior)
+          const adapter = createAdapter('observe', false, observer)
+          await statusTool(adapter)
+          await statusTool(adapter)
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect(calls()).toBe(0)
+        })
+      }
+
+      test('e: status in an inactive session with no observer stays inactive', async () => {
+        const adapter = createAdapter('observe')
+        await statusTool(adapter)
+        expect(status(adapter).state).toBe('inactive')
+      })
+
+      for (const behavior of ['unavailable', 'throws'] as const) {
+        test(`f: status during an active epoch with a ${behavior} observer still goes unavailable with the observer-readback-failed cause`, async () => {
+          const base = sequenceObserver([operationSnapshot()])
+          let failing = false
+          const observer: OpencodeOperationObserver = {
+            ...base,
+            snapshot: async () => {
+              if (!failing) return base.snapshot()
+              if (behavior === 'throws') throw new Error('observer exploded')
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+          }
+          const adapter = createAdapter('observe', false, observer)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).state).not.toBe('unavailable')
+          failing = true
+          const result = await getTool(
+            adapter,
+            'systematic_workflow_status',
+          ).execute({}, toolContext(SESSION_A))
+          const parsed = JSON.parse(expectToolOutput(result).output)
+          expect(parsed.state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toEqual({
+            site: 'refresh-readback',
+            kind: 'observer-readback-failed',
+            timedOut: false,
+          })
+        })
+      }
+    })
   })
 
   test('partial registration finalization fails closed and remains replay-idempotent', async () => {
@@ -2991,7 +3461,10 @@ describe('OpenCode workflow guard adapter', () => {
     expect((firstPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length).toBe(
       1,
     )
-    expect(firstPass).toContain('unavailable')
+    // The epoch-less second adapter is `inactive`; the active first adapter is
+    // `waiting`, which outranks it in the aggregate.
+    expect(firstPass).toContain('"state":"inactive"')
+    expect(firstPass).toContain('"aggregate":{"state":"waiting"')
 
     await first.hooks['experimental.chat.system.transform'](
       { sessionID: 'session-1' },
@@ -3001,7 +3474,8 @@ describe('OpenCode workflow guard adapter', () => {
     expect(
       (secondPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length,
     ).toBe(1)
-    expect(secondPass).toContain('unavailable')
+    expect(secondPass).toContain('"state":"inactive"')
+    expect(secondPass).toContain('"aggregate":{"state":"waiting"')
   })
 
   test('round-trips operation-target-mismatch in prior guard marker sources', async () => {
@@ -3038,6 +3512,138 @@ describe('OpenCode workflow guard adapter', () => {
       sources: Array<{ source: string; reasonCode: string }>
     }
     expect(document.sources).toContainEqual(priorSource)
+  })
+
+  describe('inactive guard state', () => {
+    interface MarkerDoc {
+      sources: Array<{ source: string; state: string; reasonCode: string }>
+      aggregate: { state: string; reasonCode: string }
+    }
+
+    function priorMarker(sources: readonly object[]): string {
+      return `<SYSTEMATIC_WORKFLOW_GUARD>${JSON.stringify({
+        protocolVersion: 2,
+        sources,
+        aggregate: sources[0],
+      })}</SYSTEMATIC_WORKFLOW_GUARD>`
+    }
+
+    function readMarker(system: readonly string[]): MarkerDoc {
+      const body = system
+        .join('\n')
+        .match(
+          /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
+        )?.[1]
+      if (!body) throw new Error('guard marker missing')
+      return JSON.parse(body) as MarkerDoc
+    }
+
+    const inactiveSource = {
+      source: 'prior-inactive',
+      state: 'inactive',
+      reasonCode: 'no-active-epoch',
+      enforcement: 'protected',
+      statusDigest: 'prior-inactive-digest',
+    }
+
+    test('a fresh session reports inactive / no-active-epoch in protected and observe mode', () => {
+      for (const mode of ['protected', 'observe'] as const) {
+        const adapter = createAdapter(mode)
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+        })
+      }
+    })
+
+    test('activation from inactive creates an epoch and projects waiting / missing-evidence', async () => {
+      const adapter = createAdapter('protected')
+      expect(status(adapter).state).toBe('inactive')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter)).toMatchObject({
+        state: 'waiting',
+        reasonCode: 'missing-evidence',
+      })
+      expect(status(adapter).epoch).not.toBeNull()
+    })
+
+    test('disabled mode never projects inactive', () => {
+      const adapter = createAdapter('disabled')
+      expect(status(adapter).state).toBe('disabled')
+      expect(status(adapter).state).not.toBe('inactive')
+    })
+
+    test('marker aggregate: inactive alone aggregates to inactive', async () => {
+      const adapter = createAdapter('protected')
+      const output = { system: ['base', priorMarker([inactiveSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        output,
+      )
+      const document = readMarker(output.system)
+      expect(document.sources).toContainEqual(inactiveSource)
+      expect(document.aggregate).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+    })
+
+    for (const blocking of [
+      { state: 'waiting', reasonCode: 'missing-evidence' },
+      { state: 'rejected', reasonCode: 'operation-target-mismatch' },
+      { state: 'unavailable', reasonCode: 'guard-unavailable' },
+    ] as const) {
+      test(`marker aggregate: inactive mixed with ${blocking.state} aggregates to ${blocking.state}`, async () => {
+        const adapter = createAdapter('protected')
+        const blockingSource = {
+          source: `prior-${blocking.state}`,
+          ...blocking,
+          enforcement: 'protected',
+          statusDigest: `prior-${blocking.state}-digest`,
+        }
+        const output = {
+          system: ['base', priorMarker([inactiveSource, blockingSource])],
+        }
+        await adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          output,
+        )
+        const document = readMarker(output.system)
+        expect(document.sources.map((source) => source.state)).toContain(
+          'inactive',
+        )
+        expect(document.aggregate).toMatchObject(blocking)
+      })
+    }
+
+    test('a marker source with state inactive parses and an unknown state is rejected', async () => {
+      const adapter = createAdapter('protected')
+      const accepted = { system: ['base', priorMarker([inactiveSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        accepted,
+      )
+      expect(readMarker(accepted.system).sources).toContainEqual(inactiveSource)
+      expect(readMarker(accepted.system).aggregate.reasonCode).not.toBe(
+        'guard-unavailable',
+      )
+
+      const unknownSource = { ...inactiveSource, state: 'dormant' }
+      const rejected = { system: ['base', priorMarker([unknownSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        rejected,
+      )
+      const document = readMarker(rejected.system)
+      expect(document.sources.map((source) => source.state)).not.toContain(
+        'dormant',
+      )
+      expect(document.aggregate).toMatchObject({
+        state: 'unavailable',
+        reasonCode: 'guard-unavailable',
+      })
+    })
   })
 
   test('recovers a persisted legacy (v1) guard marker under v2 parsing', async () => {
@@ -3125,11 +3731,9 @@ describe('OpenCode workflow guard adapter', () => {
     expect(document.sources.some((source) => source.debug !== undefined)).toBe(
       true,
     )
-    const worst = document.sources.find(
-      (source) => source.state === 'unavailable',
-    )
-    if (!worst) throw new Error('expected an unavailable source')
-    expect(document.aggregate.state).toBe('unavailable')
+    const worst = document.sources.find((source) => source.state === 'waiting')
+    if (!worst) throw new Error('expected a waiting source')
+    expect(document.aggregate.state).toBe('waiting')
     expect(document.aggregate.statusDigest).toBe(worst.statusDigest)
   })
 
@@ -4919,7 +5523,7 @@ describe('OpenCode workflow guard adapter', () => {
         'systematic_workflow_status',
       ).execute({}, toolContext(otherSessionID))
       const otherParsed = JSON.parse(expectToolOutput(otherResult).output)
-      // An untouched session reports state 'unavailable'/reasonCode
+      // An untouched session reports state 'inactive'/reasonCode
       // 'no-active-epoch' (nothing has happened yet) — distinct from the
       // mode-level 'guard-unavailable' session A hit. Assert on the
       // mode-level reasonCode and the cause itself, not on `state`.
@@ -4928,7 +5532,7 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
-  test('before-only operation is abandoned at the next status boundary', async () => {
+  test('before-only operation is abandoned at the next request boundary (transform), not by a status call', async () => {
     const adapter = createAdapter(
       'observe',
       false,
@@ -4942,9 +5546,14 @@ describe('OpenCode workflow guard adapter', () => {
       { tool: 'write', sessionID: SESSION_A, callID: 'before-only' },
       { args: { filePath: 'pending.ts', content: 'pending' } },
     )
+    // A status call is a sibling tool call and must not discard the entry.
     await getTool(adapter, 'systematic_workflow_status').execute(
       {},
       toolContext(),
+    )
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      { system: ['base'] },
     )
     await adapter.hooks['tool.execute.after'](
       {
@@ -5939,7 +6548,7 @@ describe('OpenCode workflow guard adapter', () => {
       // This is effectively the foreign-only case: after filtering there are no own markers.
       // The guard should treat this as a fresh start (allowFresh path in initializeSession),
       // NOT as guard-unavailable. A fresh guard without an active epoch has state
-      // 'unavailable' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
+      // 'inactive' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
       const ownIdentity = 'empty-after-filter-reg'
       const ownSalt = new Uint8Array(32).fill(55)
       const foreignIdentity = 'unrelated-foreign-reg'
@@ -5981,10 +6590,11 @@ describe('OpenCode workflow guard adapter', () => {
         toolContext(SESSION_A),
       )
 
-      // A fresh guard (no epoch activated yet) has state 'unavailable' / 'no-active-epoch'.
+      // A fresh guard (no epoch activated yet) has state 'inactive' / 'no-active-epoch'.
       // The key invariant: it must NOT be 'guard-unavailable' (which publishUnavailable sets).
       const s = restored.status(SESSION_A)
       expect(s.reasonCode).not.toBe('guard-unavailable')
+      expect(s.state).toBe('inactive')
       expect(s.reasonCode).toBe('no-active-epoch')
     })
 
@@ -6226,8 +6836,1271 @@ describe('OpenCode workflow guard adapter', () => {
 
       const s = adapter.status(SESSION_A)
       // Foreign-only → publishFresh → no-active-epoch (NOT guard-unavailable).
+      expect(s.state).toBe('inactive')
       expect(s.reasonCode).toBe('no-active-epoch')
       expect(s.epoch).toBeNull()
+    })
+
+    describe('initialization and observer-readback unavailable causes', () => {
+      const OWN_IDENTITY = 'cause-own-registration'
+      const OWN_SALT = new Uint8Array(32).fill(71)
+      const GUARD_HISTORY_PARTS: readonly unknown[] = [
+        {
+          info: {},
+          parts: [
+            {
+              type: 'tool',
+              tool: 'systematic_workflow_control',
+              state: { status: 'completed', metadata: {} },
+            },
+          ],
+        },
+      ]
+
+      function adapterWithHistory(
+        readSessionParts: () => Promise<readonly unknown[]>,
+        workspaceIdentity = 'workspace',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode: 'protected', debug: false },
+          workspaceIdentity,
+          registrationIdentity: OWN_IDENTITY,
+          sessionSalt: OWN_SALT,
+          hostReadback: { readSessionParts, listChildren: async () => [] },
+        })
+      }
+
+      async function statusJson(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      async function expectCause(
+        adapter: OpencodeWorkflowGuard,
+        site: string,
+        kind: string,
+      ): Promise<void> {
+        const parsed = await statusJson(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site,
+          kind,
+          timedOut: false,
+        })
+      }
+
+      test('history read failure records history-read-failed', async () => {
+        const adapter = adapterWithHistory(async () => {
+          throw new Error('read failed')
+        })
+        await expectCause(adapter, 'initialize-session', 'history-read-failed')
+      })
+
+      test('markerless guard history records markerless-guard-history and keeps it across unavailable retries', async () => {
+        const adapter = adapterWithHistory(async () => GUARD_HISTORY_PARTS)
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('ambiguous markers record markers-ambiguous', async () => {
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+        )
+        await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
+      })
+
+      test('a corrupted own marker records markers-malformed-or-incompatible', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        const corrupted = {
+          ...(ownMarkers[0] as Record<string, unknown>),
+          integrity: 'a'.repeat(64),
+        }
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers([corrupted, ...ownMarkers.slice(1)]),
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markers-malformed-or-incompatible',
+        )
+      })
+
+      test('own markers that fail to reconstruct record recovery-rejected', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        // Unit start and receipt without the epoch start: valid markers that
+        // cannot be folded into a coherent guard state.
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers(ownMarkers.slice(1)),
+        )
+        await expectCause(adapter, 'initialize-session', 'recovery-rejected')
+      })
+
+      test('an observer readback failure during an active epoch records observer-readback-failed', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let failing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () =>
+            failing
+              ? { status: 'unavailable', reasonCode: 'target-unavailable' }
+              : base.snapshot(),
+        }
+        const adapter = createAdapter('observe', false, observer)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        failing = true
+        await expectCause(
+          adapter,
+          'refresh-readback',
+          'observer-readback-failed',
+        )
+      })
+
+      test('markerless-guard-history is final: history that later looks empty neither retries nor clears the cause, and a cause-less transition keeps the first cause', async () => {
+        // Previously this history was retryable, so a later fresh publication
+        // cleared the cause. It is now final, so the first cause must persist.
+        let historyPresent = true
+        const adapter = adapterWithHistory(async () =>
+          historyPresent ? GUARD_HISTORY_PARTS : [],
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+
+        historyPresent = false
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'read', sessionID: SESSION_A, callID: 'no-fresh-retry' },
+          { args: {} },
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+
+        // A cause-less markUnavailable(): reusing a callID across call kinds.
+        for (const tool of ['systematic_skill', 'systematic_workflow_start']) {
+          await adapter.hooks['tool.execute.before'](
+            { tool, sessionID: SESSION_A, callID: 'reused-call' },
+            { args: tool === 'systematic_skill' ? { name: 'ce:work' } : {} },
+          )
+        }
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('markerless-guard-history is final: markers that later become restorable are not re-read', async () => {
+        // Previously retryable, so a later successful restoration cleared the
+        // cause. It is now final.
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        let mode: 'history' | 'markers' = 'history'
+        const adapter = adapterWithHistory(
+          async () =>
+            mode === 'history' ? GUARD_HISTORY_PARTS : wrapMarkers(ownMarkers),
+          'workspace-a',
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+        mode = 'markers'
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'read', sessionID: SESSION_A, callID: 'no-restore-retry' },
+          { args: {} },
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('causes never enter markers, tool metadata, receipts, or digests', async () => {
+        const markerSource = async (
+          readSessionParts: () => Promise<readonly unknown[]>,
+        ) => {
+          const adapter = adapterWithHistory(readSessionParts)
+          const skillOutput = {
+            title: 'Loaded skill',
+            output: 'ok',
+            metadata: {},
+          }
+          await observeSkill(
+            adapter,
+            'systematic_skill',
+            'ce:work',
+            'cause-skill',
+            SESSION_A,
+            skillOutput,
+          )
+          const output = { system: ['base'] }
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            output,
+          )
+          const parsed = await statusJson(adapter)
+          expect(parsed.firstUnavailableCause).toBeDefined()
+          const serialized = [
+            JSON.stringify(skillOutput),
+            output.system.join('\n'),
+            JSON.stringify(adapter.status(SESSION_A)),
+            JSON.stringify(adapter.ledger(SESSION_A)?.listReceipts() ?? []),
+          ].join('\n')
+          for (const forbidden of [
+            'firstUnavailableCause',
+            'initialize-session',
+            'history-read-failed',
+            'markerless-guard-history',
+            'observer-readback-failed',
+          ]) {
+            expect(serialized).not.toContain(forbidden)
+          }
+          return output.system.join('\n')
+        }
+
+        const withReadFailure = await markerSource(async () => {
+          throw new Error('read failed')
+        })
+        const withMarkerlessHistory = await markerSource(
+          async () => GUARD_HISTORY_PARTS,
+        )
+        // Same pinned registration + same state/reason: digests and markers are
+        // identical regardless of which cause was recorded.
+        expect(withReadFailure).toBe(withMarkerlessHistory)
+      })
+
+      describe('exempt guard-owned history', () => {
+        function toolPart(
+          tool: string,
+          state: Record<string, unknown> | undefined,
+          extra: Record<string, unknown> = {},
+        ): readonly unknown[] {
+          return [
+            {
+              info: {},
+              parts: [
+                {
+                  type: 'tool',
+                  tool,
+                  callID: 'prior-call',
+                  ...(state ? { state } : {}),
+                  ...extra,
+                },
+              ],
+            },
+          ]
+        }
+
+        const NO_EPOCH_REJECTION = {
+          workflowGuard: { status: 'rejected', reasonCode: 'no-active-epoch' },
+        }
+
+        async function expectInactive(
+          parts: readonly unknown[],
+        ): Promise<void> {
+          const adapter = adapterWithHistory(async () => parts)
+          const parsed = await statusJson(adapter)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        }
+
+        async function expectMarkerless(
+          parts: readonly unknown[],
+        ): Promise<void> {
+          await expectCause(
+            adapterWithHistory(async () => parts),
+            'initialize-session',
+            'markerless-guard-history',
+          )
+        }
+
+        test('a: an in-flight status part does not poison a fresh session; a guarded skill then activates', async () => {
+          const adapter = adapterWithHistory(async () =>
+            toolPart('systematic_workflow_status', { status: 'running' }),
+          )
+          expect((await statusJson(adapter)).state).toBe('inactive')
+          expect((await statusJson(adapter)).state).toBe('inactive')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter)).toMatchObject({
+            state: 'waiting',
+            reasonCode: 'missing-evidence',
+          })
+        })
+
+        test('b: restart with only completed markerless status parts is inactive', async () => {
+          await expectInactive(
+            toolPart('systematic_workflow_status', {
+              status: 'completed',
+              metadata: {},
+            }),
+          )
+        })
+
+        test('c: restart with a completed start rejected / no-active-epoch is inactive', async () => {
+          await expectInactive(
+            toolPart('systematic_workflow_start', {
+              status: 'completed',
+              metadata: NO_EPOCH_REJECTION,
+            }),
+          )
+        })
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`d: restart after a real ${mode}-mode no-epoch completion is inactive`, async () => {
+            const first = createAdapter(mode)
+            const output = {
+              title: 'pending',
+              output: 'pending',
+              metadata: {},
+            }
+            const input = {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID: `restart-no-epoch-${mode}`,
+            }
+            await first.hooks['tool.execute.before'](input, {
+              args: { target: 'unit' },
+            })
+            await first.hooks['tool.execute.after'](
+              { ...input, args: { target: 'unit' } },
+              output,
+            )
+            expect(output.metadata).toMatchObject({
+              workflowGuard: {
+                status: 'rejected',
+                reasonCode: 'no-active-epoch',
+              },
+            })
+            await expectInactive(
+              toolPart('systematic_workflow_complete', {
+                status: 'completed',
+                metadata: output.metadata,
+              }),
+            )
+          })
+        }
+
+        test('e: restart histories that stay closed publish markerless-guard-history', async () => {
+          const closed: ReadonlyArray<{
+            name: string
+            parts: readonly unknown[]
+          }> = [
+            {
+              name: 'completed markerless control',
+              parts: toolPart('systematic_workflow_control', {
+                status: 'completed',
+                metadata: {},
+              }),
+            },
+            {
+              name: 'completed start that started a unit',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: { workflowGuard: { status: 'started' } },
+              }),
+            },
+            {
+              name: 'completed start rejected with epoch-completed',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: {
+                  workflowGuard: {
+                    status: 'rejected',
+                    reasonCode: 'epoch-completed',
+                  },
+                },
+              }),
+            },
+            {
+              name: 'completed complete without rejected / no-active-epoch metadata',
+              parts: toolPart('systematic_workflow_complete', {
+                status: 'completed',
+                metadata: {},
+              }),
+            },
+            {
+              name: 'guard part missing state.status',
+              parts: toolPart('systematic_workflow_start', undefined, {
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'guard part with state but no status',
+              parts: toolPart('systematic_workflow_complete', {
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'running start from a prior process',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'running',
+              }),
+            },
+            {
+              name: 'errored complete',
+              parts: toolPart('systematic_workflow_complete', {
+                status: 'error',
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'pending control',
+              parts: toolPart('systematic_workflow_control', {
+                status: 'pending',
+              }),
+            },
+          ]
+          for (const entry of closed) {
+            const adapter = adapterWithHistory(async () => entry.parts)
+            const parsed = await statusJson(adapter)
+            expect(parsed.state, entry.name).toBe('unavailable')
+            expect(parsed.firstUnavailableCause, entry.name).toEqual({
+              site: 'initialize-session',
+              kind: 'markerless-guard-history',
+              timedOut: false,
+            })
+          }
+        })
+
+        test('f: malformed or ambiguous markers stay closed even when every guard part is exempt', async () => {
+          const exempt = toolPart('systematic_workflow_status', {
+            status: 'completed',
+            metadata: {},
+          })
+          await expectCause(
+            adapterWithHistory(async () => [
+              ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+              ...exempt,
+            ]),
+            'initialize-session',
+            'markers-ambiguous',
+          )
+
+          const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+          const corrupted = {
+            ...(ownMarkers[0] as Record<string, unknown>),
+            integrity: 'a'.repeat(64),
+          }
+          await expectCause(
+            adapterWithHistory(async () => [
+              ...wrapMarkers([corrupted, ...ownMarkers.slice(1)]),
+              ...toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            ]),
+            'initialize-session',
+            'markers-malformed-or-incompatible',
+          )
+        })
+
+        test('g: markerless-guard-history unavailable is not retried by later hooks', async () => {
+          let reads = 0
+          const adapter = adapterWithHistory(async () => {
+            reads += 1
+            return GUARD_HISTORY_PARTS
+          })
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+          expect(reads).toBe(1)
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID: 'no-retry' },
+            { args: {} },
+          )
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+          await statusJson(adapter)
+          expect(reads).toBe(1)
+          expect(adapter.status(SESSION_A).state).toBe('unavailable')
+        })
+
+        test('h: valid foreign-only markers keep current behavior', async () => {
+          const foreignMarkers = buildMarkersForRegistration(
+            'cause-foreign-registration',
+            new Uint8Array(32).fill(72),
+          )
+          await expectInactive(wrapMarkers(foreignMarkers))
+          await expectMarkerless([
+            ...wrapMarkers(foreignMarkers),
+            ...GUARD_HISTORY_PARTS,
+          ])
+        })
+      })
+
+      describe('transform-first provisional inactive and re-initialization waiters', () => {
+        type GuardMode = 'protected' | 'observe'
+
+        function adapterFor(
+          mode: GuardMode,
+          readSessionParts: () => Promise<readonly unknown[]>,
+          workspaceIdentity = 'workspace',
+        ): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity,
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: { readSessionParts, listChildren: async () => [] },
+          })
+        }
+
+        async function transformText(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<string> {
+          const output = { system: ['base'] }
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            output,
+          )
+          return output.system.join('\n')
+        }
+
+        async function eventHook(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+        }
+
+        async function beforeHook(
+          adapter: OpencodeWorkflowGuard,
+          callID = 'ordering-read',
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID },
+            { args: {} },
+          )
+        }
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`a/f: every first-hook ordering on a fresh empty-history session ends inactive / no-active-epoch with identical marker text (${mode})`, async () => {
+            const orderings: ReadonlyArray<{
+              name: string
+              run: (adapter: OpencodeWorkflowGuard) => Promise<void>
+            }> = [
+              { name: 'event-first', run: eventHook },
+              {
+                name: 'transform-first',
+                run: async (adapter) => {
+                  await transformText(adapter)
+                  await beforeHook(adapter)
+                },
+              },
+              { name: 'before-hook-first', run: (a) => beforeHook(a) },
+              {
+                name: 'direct-tool',
+                run: async (adapter) => {
+                  await statusJson(adapter)
+                },
+              },
+            ]
+            const finals: string[] = []
+            for (const ordering of orderings) {
+              const adapter = adapterFor(mode, async () => [])
+              await ordering.run(adapter)
+              expect(status(adapter), ordering.name).toMatchObject({
+                state: 'inactive',
+                reasonCode: 'no-active-epoch',
+              })
+              finals.push(await transformText(adapter))
+            }
+            expect(new Set(finals).size).toBe(1)
+          })
+
+          test(`a/f: the transform marker is identical across the provisional and confirmed passes (${mode})`, async () => {
+            const adapter = adapterFor(mode, async () => [])
+            const provisional = await transformText(adapter)
+            expect(status(adapter)).toMatchObject({
+              state: 'inactive',
+              reasonCode: 'no-active-epoch',
+            })
+            await beforeHook(adapter)
+            const confirmed = await transformText(adapter)
+            expect(provisional).toContain('"state":"inactive"')
+            expect(confirmed).toBe(provisional)
+          })
+        }
+
+        test('b: a late own marker found by the confirming re-read is restored, not overwritten fresh', async () => {
+          const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+          let reads = 0
+          const adapter = adapterFor(
+            'protected',
+            async () => {
+              reads += 1
+              return reads === 1 ? [] : wrapMarkers(ownMarkers)
+            },
+            'workspace-a',
+          )
+          await transformText(adapter)
+          expect(status(adapter).epoch).toBeNull()
+          await beforeHook(adapter)
+          expect(reads).toBe(2)
+          expect(status(adapter).epoch).not.toBeNull()
+          expect(status(adapter).state).not.toBe('unavailable')
+        })
+
+        test('c: a confirming re-read that finds non-exempt guard history becomes final markerless-guard-history', async () => {
+          let reads = 0
+          const adapter = adapterFor('protected', async () => {
+            reads += 1
+            return reads === 1 ? [] : GUARD_HISTORY_PARTS
+          })
+          await transformText(adapter)
+          await beforeHook(adapter)
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+          await eventHook(adapter)
+          await beforeHook(adapter, 'ordering-read-2')
+          expect(reads).toBe(2)
+        })
+
+        test('d: concurrent hooks never run against, or observe, a guard whose re-initialization is in flight', async () => {
+          let reads = 0
+          let releaseRead: (parts: readonly unknown[]) => void = () => {}
+          const adapter = adapterFor('protected', () => {
+            reads += 1
+            if (reads === 1) return Promise.resolve([])
+            return new Promise<readonly unknown[]>((resolve) => {
+              releaseRead = resolve
+            })
+          })
+          await transformText(adapter)
+          expect(reads).toBe(1)
+
+          // Invoked in the same tick, before any microtask runs: every hook
+          // sees the settled provisional initialization promise.
+          const settled = { event: false, before: false }
+          const eventDone = eventHook(adapter).then(() => {
+            settled.event = true
+          })
+          const beforeDone = beforeHook(adapter, 'race-read').then(() => {
+            settled.before = true
+          })
+          const statusDone = statusJson(adapter)
+
+          // Give every continuation a chance to run while the read is held.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          expect(reads).toBe(2)
+          expect(settled).toEqual({ event: false, before: false })
+
+          releaseRead([])
+          await Promise.all([eventDone, beforeDone])
+          const observed = await statusDone
+          expect(observed.state).toBe('inactive')
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect(reads).toBe(2)
+        })
+
+        test('e: a guarded skill and a bash hook racing the confirming re-read activate exactly one epoch', async () => {
+          let reads = 0
+          let releaseRead: (parts: readonly unknown[]) => void = () => {}
+          const adapter = adapterFor('protected', () => {
+            reads += 1
+            if (reads === 1) return Promise.resolve([])
+            return new Promise<readonly unknown[]>((resolve) => {
+              releaseRead = resolve
+            })
+          })
+          await transformText(adapter)
+
+          const skillDone = observeSkill(adapter, 'systematic_skill', 'ce:work')
+          const bashDone = adapter.hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: SESSION_A, callID: 'race-bash' },
+            { args: { command: 'git status --short' } },
+          )
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          expect(status(adapter).epoch).toBeNull()
+
+          releaseRead([])
+          await Promise.all([skillDone, bashDone])
+          expect(reads).toBe(2)
+          const after = status(adapter)
+          expect(after.epoch).not.toBeNull()
+          expect(after).toMatchObject({
+            state: 'waiting',
+            reasonCode: 'missing-evidence',
+          })
+          const epochId = after.epoch?.epochId
+          await eventHook(adapter)
+          expect(status(adapter).epoch?.epochId).toBe(epochId)
+        })
+      })
+
+      describe('current-turn exemption on first initialization', () => {
+        type MutationTool =
+          | 'systematic_workflow_start'
+          | 'systematic_workflow_complete'
+          | 'systematic_workflow_control'
+
+        // The injected runtime clock: messages created at or after this
+        // instant belong to this process's lifetime.
+        const RUNTIME_START = 1_000
+        const CALL = 'call_0'
+
+        function adapterFor(
+          mode: 'protected' | 'observe',
+          readSessionParts: () => Promise<readonly unknown[]>,
+        ): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            now: () => RUNTIME_START,
+            hostReadback: {
+              readSessionParts,
+              listChildren: async () => [],
+            },
+          })
+        }
+
+        function hostPart(
+          tool: string,
+          callID: string,
+          state: Record<string, unknown>,
+        ): Record<string, unknown> {
+          return { type: 'tool', tool, callID, state }
+        }
+
+        let messageSequence = 0
+        function message(
+          role: string,
+          time: Record<string, unknown> | undefined,
+          ...parts: Record<string, unknown>[]
+        ): Record<string, unknown> {
+          messageSequence += 1
+          return {
+            info: {
+              id: `msg_${messageSequence}`,
+              sessionID: SESSION_A,
+              role,
+              ...(time ? { time } : {}),
+            },
+            parts,
+          }
+        }
+
+        function turn(
+          ...parts: Record<string, unknown>[]
+        ): Record<string, unknown> {
+          return message('assistant', { created: 2_000 }, ...parts)
+        }
+
+        // First read (transform) is empty; every later read is `confirming`.
+        function transformThen(
+          confirming: readonly unknown[],
+        ): () => Promise<readonly unknown[]> {
+          let reads = 0
+          return async () => {
+            reads += 1
+            return reads === 1 ? [] : confirming
+          }
+        }
+
+        async function transformPass(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+        }
+
+        function beforeHook(
+          adapter: OpencodeWorkflowGuard,
+          tool: string,
+          callID = CALL,
+        ): Promise<void> {
+          return adapter.hooks['tool.execute.before'](
+            { tool, sessionID: SESSION_A, callID },
+            {
+              args:
+                tool === 'systematic_workflow_complete'
+                  ? { target: 'unit' }
+                  : {},
+            },
+          )
+        }
+
+        async function expectClosed(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+        }
+
+        const mutationTools: ReadonlyArray<{
+          tool: MutationTool
+          modes: ReadonlyArray<'protected' | 'observe'>
+        }> = [
+          { tool: 'systematic_workflow_start', modes: ['protected'] },
+          {
+            tool: 'systematic_workflow_complete',
+            modes: ['protected', 'observe'],
+          },
+          { tool: 'systematic_workflow_control', modes: ['protected'] },
+        ]
+
+        async function expectNoEpochRejection(
+          adapter: OpencodeWorkflowGuard,
+          tool: MutationTool,
+        ): Promise<void> {
+          const output = { title: 'pending', output: 'pending', metadata: {} }
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool,
+              sessionID: SESSION_A,
+              callID: CALL,
+              args:
+                tool === 'systematic_workflow_complete'
+                  ? { target: 'unit' }
+                  : {},
+            },
+            output,
+          )
+          expect(output.metadata).toMatchObject({
+            workflowGuard: {
+              status: 'rejected',
+              reasonCode: 'no-active-epoch',
+            },
+          })
+        }
+
+        async function runCurrentTurnCase(
+          tool: MutationTool,
+          mode: 'protected' | 'observe',
+          transformFirst: boolean,
+        ): Promise<void> {
+          const history = [
+            message('user', { created: 1_900 }),
+            turn(hostPart(tool, CALL, { status: 'running' })),
+          ]
+          const adapter = adapterFor(
+            mode,
+            transformFirst ? transformThen(history) : async () => history,
+          )
+          if (transformFirst) await transformPass(adapter)
+          await beforeHook(adapter, tool)
+          expect(status(adapter).state).toBe('inactive')
+          if (tool !== 'systematic_workflow_control') {
+            await expectNoEpochRejection(adapter, tool)
+          }
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect((await statusJson(adapter)).state).toBe('inactive')
+        }
+
+        const currentTurnCases = mutationTools.flatMap(({ tool, modes }) =>
+          modes.flatMap((mode) =>
+            [true, false].map((transformFirst) => ({
+              tool,
+              mode,
+              transformFirst,
+            })),
+          ),
+        )
+        test.each(currentTurnCases)(
+          'a: the current-turn running $tool part does not poison initialization ($mode, transformFirst=$transformFirst)',
+          (c) => runCurrentTurnCase(c.tool, c.mode, c.transformFirst),
+        )
+
+        test.each(['pending', 'running'])(
+          'a: a %s current-turn part is accepted',
+          async (exempt) => {
+            const adapter = adapterFor('protected', async () => [
+              turn(
+                hostPart('systematic_workflow_start', CALL, { status: exempt }),
+              ),
+            ])
+            await beforeHook(adapter, 'systematic_workflow_start')
+            expect((await statusJson(adapter)).state).toBe('inactive')
+          },
+        )
+
+        test('b (P1-a): an old running start whose callID is reused by a new call is not exempt and no epoch is minted over it', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 1_500 },
+              hostPart('systematic_workflow_start', 'call_0', {
+                status: 'running',
+              }),
+            ),
+            message('user', { created: 1_800 }),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start', 'call_0')
+          await expectClosed(adapter)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).epoch).toBeNull()
+          expect(status(adapter).state).toBe('unavailable')
+        })
+
+        test('c: an unfinished assistant turn created before the runtime started is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 500 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        async function raceStatusAndStart(statusFirst: boolean): Promise<void> {
+          let reads = 0
+          const history = [
+            turn(
+              hostPart('systematic_workflow_status', 'call_status', {
+                status: 'running',
+              }),
+              hostPart('systematic_workflow_start', 'call_start', {
+                status: 'running',
+              }),
+            ),
+          ]
+          const adapter = adapterFor('protected', async () => {
+            reads += 1
+            return reads === 1 ? [] : history
+          })
+          await transformPass(adapter)
+          const statusCall = () =>
+            beforeHook(adapter, 'systematic_workflow_status', 'call_status')
+          const startCall = () =>
+            beforeHook(adapter, 'systematic_workflow_start', 'call_start')
+          await Promise.all(
+            statusFirst
+              ? [statusCall(), startCall()]
+              : [startCall(), statusCall()],
+          )
+          expect(reads).toBe(2)
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+        }
+
+        test.each([true, false])(
+          'd (P1-b): status and start before-hooks racing the confirming read both end inactive (statusFirst=%s)',
+          raceStatusAndStart,
+        )
+
+        test('e: a completed newest assistant message is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 2_000, completed: 2_500 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('e: a newest user message is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'user',
+              { created: 2_000 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        const malformedInfo: ReadonlyArray<{
+          name: string
+          history: readonly unknown[]
+        }> = [
+          {
+            name: 'missing info.time',
+            history: [
+              message(
+                'assistant',
+                undefined,
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+          {
+            name: 'non-numeric info.time.created',
+            history: [
+              message(
+                'assistant',
+                { created: 'now' },
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+          {
+            name: 'missing info',
+            history: [
+              {
+                parts: [
+                  hostPart('systematic_workflow_start', CALL, {
+                    status: 'running',
+                  }),
+                ],
+              },
+            ],
+          },
+          {
+            name: 'two messages sharing the newest created time',
+            history: [
+              message('user', { created: 2_000 }),
+              turn(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+        ]
+        test.each([...malformedInfo])(
+          'e: $name is not the current turn',
+          async (entry) => {
+            const adapter = adapterFor('protected', async () => entry.history)
+            await beforeHook(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          },
+        )
+
+        test.each(['completed', 'error'])(
+          'e: a %s current-turn part is never exempt through this rule',
+          async (closedState) => {
+            const adapter = adapterFor('protected', async () => [
+              turn(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: closedState,
+                  metadata: {},
+                }),
+              ),
+            ])
+            await beforeHook(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          },
+        )
+
+        test('e: a non-current-turn running part next to a current-turn one keeps history closed', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 1_500, completed: 1_600 },
+              hostPart('systematic_workflow_start', 'call_prior', {
+                status: 'running',
+              }),
+            ),
+            turn(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('f: an ambiguous marker plus a current-turn running part is still markers-ambiguous', async () => {
+          const adapter = adapterFor('protected', async () => [
+            ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+            turn(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
+        })
+      })
+
+      describe('strict own-history read versus lenient child-rollup read', () => {
+        function adapterWithReaders(readers: {
+          lenient: (sessionID: string) => Promise<readonly unknown[]>
+          strict?: (sessionID: string) => Promise<readonly unknown[]>
+        }): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode: 'observe', debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: {
+              readSessionParts: readers.lenient,
+              ...(readers.strict
+                ? { readSessionPartsStrict: readers.strict }
+                : {}),
+              listChildren: async (sessionID) =>
+                sessionID === SESSION_A
+                  ? [{ sessionId: 'child-session', parentID: SESSION_A }]
+                  : [],
+            },
+          })
+        }
+
+        async function fireTask(adapter: OpencodeWorkflowGuard): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'task', sessionID: SESSION_A, callID: 'strict-task' },
+            { args: {} },
+          )
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool: 'task',
+              sessionID: SESSION_A,
+              callID: 'strict-task',
+              args: {},
+            },
+            {
+              title: 'task result',
+              output: 'done',
+              metadata: { sessionId: 'child-session' },
+            },
+          )
+        }
+
+        test('a thrown strict read is unavailable / history-read-failed even when the lenient read would return []', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => {
+              throw new Error('strict read failed')
+            },
+          })
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'history-read-failed',
+          )
+          expect(adapter.status(SESSION_A).state).toBe('unavailable')
+        })
+
+        test('a successful empty strict read is inactive, not unavailable', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => [],
+          })
+          const parsed = await statusJson(adapter)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        })
+
+        test('initialization uses the strict read and never the lenient one', async () => {
+          const lenientCalls: string[] = []
+          const adapter = adapterWithReaders({
+            lenient: async (sessionID) => {
+              lenientCalls.push(sessionID)
+              return []
+            },
+            strict: async () => [],
+          })
+          await statusJson(adapter)
+          expect(lenientCalls).toEqual([])
+        })
+
+        test('a child rollup read returning no parts rolls up nothing and leaves the parent unchanged', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => [],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          const before = status(adapter)
+          await fireTask(adapter)
+          const after = status(adapter)
+          expect(after.state).toBe(before.state)
+          expect(after.state).not.toBe('unavailable')
+          expect(after.epoch?.epochId).toBe(before.epoch?.epochId)
+          expect(adapter.ledger(SESSION_A)?.listReceipts() ?? []).toEqual([])
+        })
+
+        test('a thrown child rollup read still marks the parent unavailable', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async (sessionID) => {
+              if (sessionID === 'child-session') {
+                throw new Error('child read failed')
+              }
+              return []
+            },
+            strict: async () => [],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).state).not.toBe('unavailable')
+          await fireTask(adapter)
+          expect(status(adapter).state).toBe('unavailable')
+        })
+      })
     })
   })
 

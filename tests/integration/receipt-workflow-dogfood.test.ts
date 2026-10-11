@@ -360,6 +360,46 @@ function callsFor(name: string, index: number): ToolCall[] {
       },
     ]
   }
+  if (name === 'status-first') {
+    // First guard call of the session is a status read (no epoch yet), then a
+    // guarded skill activates the epoch, then status is read again.
+    return [
+      {
+        id: 'status-first-before',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+      skill,
+      {
+        id: 'status-first-after',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+    ]
+  }
+  if (name === 'start-first') {
+    // First guard call is a start with no skill loaded (no epoch): the guard
+    // owns the rejection. Status must then stay inactive (not unavailable)
+    // even though a start part now sits in history, until a skill activates.
+    return [
+      {
+        id: 'start-first-start',
+        name: 'systematic_workflow_start',
+        arguments: {},
+      },
+      {
+        id: 'start-first-status-inactive',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+      skill,
+      {
+        id: 'start-first-status-active',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+    ]
+  }
   if (name === 'no-op') {
     return [
       { ...skill, id: 'noop-skill' },
@@ -522,6 +562,70 @@ describe.skipIf(!isOpencodeAvailable())('focused real-host dogfood', () => {
     await stopAllOpencodeHosts()
     cleanupPackedTarball()
   })
+
+  test(
+    'reports inactive / no-active-epoch for a status-first session, then waiting / missing-evidence after activation',
+    async () => {
+      const statusFirst = await runScenario('observe', 'status-first', 20)
+      const before = statusFirst.results.find(
+        (r) =>
+          r.callID === 'status-first-before' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(before).toBeDefined()
+      expect(before?.status).toBe('completed')
+      expect(before?.state).toBe('inactive')
+      expect(before?.reasonCode).toBe('no-active-epoch')
+
+      const after = statusFirst.results.find(
+        (r) =>
+          r.callID === 'status-first-after' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(after).toBeDefined()
+      expect(after?.status).toBe('completed')
+      expect(after?.state).toBe('waiting')
+      expect(after?.reasonCode).toBe('missing-evidence')
+    },
+    TIMEOUT_MS * 4,
+  )
+
+  test(
+    'rejects a start-first session as no-active-epoch, stays inactive (not unavailable), then waits after activation',
+    async () => {
+      const startFirst = await runScenario('observe', 'start-first', 21)
+      const start = startFirst.results.find(
+        (r) =>
+          r.callID === 'start-first-start' &&
+          r.tool === 'systematic_workflow_start',
+      )
+      expect(start).toBeDefined()
+      expect(start?.status).toBe('completed')
+      expect(start?.workflowGuardStatus).toBe('rejected')
+      expect(start?.workflowGuardReasonCode).toBe('no-active-epoch')
+
+      const inactive = startFirst.results.find(
+        (r) =>
+          r.callID === 'start-first-status-inactive' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(inactive).toBeDefined()
+      expect(inactive?.status).toBe('completed')
+      expect(inactive?.state).toBe('inactive')
+      expect(inactive?.reasonCode).toBe('no-active-epoch')
+
+      const active = startFirst.results.find(
+        (r) =>
+          r.callID === 'start-first-status-active' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(active).toBeDefined()
+      expect(active?.status).toBe('completed')
+      expect(active?.state).toBe('waiting')
+      expect(active?.reasonCode).toBe('missing-evidence')
+    },
+    TIMEOUT_MS * 4,
+  )
 
   test(
     'proves decisive shipping flows in isolated observe/protected hosts',

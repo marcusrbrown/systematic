@@ -240,13 +240,21 @@ change. Must pass before any release.
 `tool.execute.before` / `tool.execute.after` / `event` hooks, classifies them into operations
 (implementation, verification, commit, push, pr-creation, check-readback, review-readback),
 validates each claim against observed workspace state, and mints integrity-checked receipts. A
-guarded transition that lacks its required receipts is rejected. When remote-scope seeding fails and
-flips mode to `unavailable`, the runtime binds a bounded `GuardUnavailableCause` (site, failure kind,
-operation, reason code) to that specific transition — never to whichever concurrent caller finished
-computing a cause first — and surfaces it only as `firstUnavailableCause` on
+guarded transition that lacks its required receipts is rejected. A session with no epoch reports
+`inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
+seeding, session initialization, marker recovery, or observer readback flips mode to `unavailable`,
+the runtime binds a bounded `GuardUnavailableCause` (site, failure kind, and for remote scopes the
+operation and reason code) to that specific transition — never to whichever concurrent caller
+finished computing a cause first — and surfaces it only as `firstUnavailableCause` on
 `systematic_workflow_status` tool output while the state remains `unavailable`; it never appears on a
-receipt envelope, marker envelope, or anything covered by an integrity digest. OpenCode only —
-`src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
+receipt envelope, marker envelope, or anything covered by an integrity digest. At initialization the
+session's own status calls, guard-owned `no-active-epoch` rejections, and an in-flight guard call in
+the current, unfinished assistant turn do not count as unrecoverable history; any other markerless
+guard history fails closed. Known limits: a dual registration running an older build rejects the
+`inactive` marker state and fails closed until both upgrade; if host history loses every marker, a
+previously activated session cannot be told apart from a fresh one; and in-flight guard calls from a
+turn that began before this runtime started fail closed. OpenCode only — `src/pi.ts` registers no
+guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
