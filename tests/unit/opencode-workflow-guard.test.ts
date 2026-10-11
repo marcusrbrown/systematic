@@ -7931,7 +7931,7 @@ describe('OpenCode workflow guard adapter', () => {
             ],
           },
         ]
-        test.each(malformedInfo)(
+        test.each([...malformedInfo])(
           'e: $name is not the current turn',
           async (entry) => {
             const adapter = adapterFor('protected', async () => entry.history)
