@@ -7027,6 +7027,216 @@ describe('OpenCode workflow guard adapter', () => {
         })
       })
 
+      describe('transform-first provisional inactive and re-initialization waiters', () => {
+        type GuardMode = 'protected' | 'observe'
+
+        function adapterFor(
+          mode: GuardMode,
+          readSessionParts: () => Promise<readonly unknown[]>,
+          workspaceIdentity = 'workspace',
+        ): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity,
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: { readSessionParts, listChildren: async () => [] },
+          })
+        }
+
+        async function transformText(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<string> {
+          const output = { system: ['base'] }
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            output,
+          )
+          return output.system.join('\n')
+        }
+
+        async function eventHook(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+        }
+
+        async function beforeHook(
+          adapter: OpencodeWorkflowGuard,
+          callID = 'ordering-read',
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID },
+            { args: {} },
+          )
+        }
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`a/f: every first-hook ordering on a fresh empty-history session ends inactive / no-active-epoch with identical marker text (${mode})`, async () => {
+            const orderings: ReadonlyArray<{
+              name: string
+              run: (adapter: OpencodeWorkflowGuard) => Promise<void>
+            }> = [
+              { name: 'event-first', run: eventHook },
+              {
+                name: 'transform-first',
+                run: async (adapter) => {
+                  await transformText(adapter)
+                  await beforeHook(adapter)
+                },
+              },
+              { name: 'before-hook-first', run: (a) => beforeHook(a) },
+              {
+                name: 'direct-tool',
+                run: async (adapter) => {
+                  await statusJson(adapter)
+                },
+              },
+            ]
+            const finals: string[] = []
+            for (const ordering of orderings) {
+              const adapter = adapterFor(mode, async () => [])
+              await ordering.run(adapter)
+              expect(status(adapter), ordering.name).toMatchObject({
+                state: 'inactive',
+                reasonCode: 'no-active-epoch',
+              })
+              finals.push(await transformText(adapter))
+            }
+            expect(new Set(finals).size).toBe(1)
+          })
+
+          test(`a/f: the transform marker is identical across the provisional and confirmed passes (${mode})`, async () => {
+            const adapter = adapterFor(mode, async () => [])
+            const provisional = await transformText(adapter)
+            expect(status(adapter)).toMatchObject({
+              state: 'inactive',
+              reasonCode: 'no-active-epoch',
+            })
+            await beforeHook(adapter)
+            const confirmed = await transformText(adapter)
+            expect(provisional).toContain('"state":"inactive"')
+            expect(confirmed).toBe(provisional)
+          })
+        }
+
+        test('b: a late own marker found by the confirming re-read is restored, not overwritten fresh', async () => {
+          const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+          let reads = 0
+          const adapter = adapterFor(
+            'protected',
+            async () => {
+              reads += 1
+              return reads === 1 ? [] : wrapMarkers(ownMarkers)
+            },
+            'workspace-a',
+          )
+          await transformText(adapter)
+          expect(status(adapter).epoch).toBeNull()
+          await beforeHook(adapter)
+          expect(reads).toBe(2)
+          expect(status(adapter).epoch).not.toBeNull()
+          expect(status(adapter).state).not.toBe('unavailable')
+        })
+
+        test('c: a confirming re-read that finds non-exempt guard history becomes final markerless-guard-history', async () => {
+          let reads = 0
+          const adapter = adapterFor('protected', async () => {
+            reads += 1
+            return reads === 1 ? [] : GUARD_HISTORY_PARTS
+          })
+          await transformText(adapter)
+          await beforeHook(adapter)
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+          await eventHook(adapter)
+          await beforeHook(adapter, 'ordering-read-2')
+          expect(reads).toBe(2)
+        })
+
+        test('d: concurrent hooks never run against, or observe, a guard whose re-initialization is in flight', async () => {
+          let reads = 0
+          let releaseRead: (parts: readonly unknown[]) => void = () => {}
+          const adapter = adapterFor('protected', () => {
+            reads += 1
+            if (reads === 1) return Promise.resolve([])
+            return new Promise<readonly unknown[]>((resolve) => {
+              releaseRead = resolve
+            })
+          })
+          await transformText(adapter)
+          expect(reads).toBe(1)
+
+          // Invoked in the same tick, before any microtask runs: every hook
+          // sees the settled provisional initialization promise.
+          const settled = { event: false, before: false }
+          const eventDone = eventHook(adapter).then(() => {
+            settled.event = true
+          })
+          const beforeDone = beforeHook(adapter, 'race-read').then(() => {
+            settled.before = true
+          })
+          const statusDone = statusJson(adapter)
+
+          // Give every continuation a chance to run while the read is held.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          expect(reads).toBe(2)
+          expect(settled).toEqual({ event: false, before: false })
+
+          releaseRead([])
+          await Promise.all([eventDone, beforeDone])
+          const observed = await statusDone
+          expect(observed.state).toBe('inactive')
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect(reads).toBe(2)
+        })
+
+        test('e: a guarded skill and a bash hook racing the confirming re-read activate exactly one epoch', async () => {
+          let reads = 0
+          let releaseRead: (parts: readonly unknown[]) => void = () => {}
+          const adapter = adapterFor('protected', () => {
+            reads += 1
+            if (reads === 1) return Promise.resolve([])
+            return new Promise<readonly unknown[]>((resolve) => {
+              releaseRead = resolve
+            })
+          })
+          await transformText(adapter)
+
+          const skillDone = observeSkill(adapter, 'systematic_skill', 'ce:work')
+          const bashDone = adapter.hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: SESSION_A, callID: 'race-bash' },
+            { args: { command: 'git status --short' } },
+          )
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          expect(status(adapter).epoch).toBeNull()
+
+          releaseRead([])
+          await Promise.all([skillDone, bashDone])
+          expect(reads).toBe(2)
+          const after = status(adapter)
+          expect(after.epoch).not.toBeNull()
+          expect(after).toMatchObject({
+            state: 'waiting',
+            reasonCode: 'missing-evidence',
+          })
+          const epochId = after.epoch?.epochId
+          await eventHook(adapter)
+          expect(status(adapter).epoch?.epochId).toBe(epochId)
+        })
+      })
+
       describe('strict own-history read versus lenient child-rollup read', () => {
         function adapterWithReaders(readers: {
           lenient: (sessionID: string) => Promise<readonly unknown[]>

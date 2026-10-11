@@ -2183,9 +2183,13 @@ function createSessionRuntime(
       publishFresh(reusableLedger)
       return
     }
-    // Deferred fresh: no guard history, but this pass may not publish fresh.
+    // Deferred fresh: no guard history, but this pass may not confirm fresh.
+    // Publish a provisional inactive guard (same ledger, so the marker is
+    // stable) and stay retryable: the next allow-fresh recovery re-reads the
+    // history and either confirms it, restores from late own markers, or
+    // fails closed on guard history.
     retryableEmptyHistory = true
-    publishUnavailable(undefined, reusableLedger)
+    publishFresh(reusableLedger)
   }
 
   async function initializeSession(
@@ -2230,15 +2234,25 @@ function createSessionRuntime(
     sessionID: string,
     allowFresh = true,
   ): Promise<void> {
-    if (initializationPromise) {
-      await initializationPromise
+    // Waiter protocol: no hook proceeds while an initialization is in flight.
+    // After awaiting promise P a waiter re-checks that P is still the current
+    // initialization; if another waiter already started a newer one, this
+    // waiter awaits that one too. Only the waiter that STARTS a re-init
+    // resets the retry state and the published guard.
+    let reinitialize = false
+    while (initializationPromise) {
+      const seen = initializationPromise
+      await seen
+      if (initializationPromise !== seen) continue
       if (!retryableEmptyHistory || !allowFresh) return
-      initializationPromise = undefined
-      initialized = false
+      reinitialize = true
+      break
     }
+    if (reinitialize) initialized = false
     retryableEmptyHistory = false
-    initializationPromise = initializeSession(sessionID, allowFresh)
-    await initializationPromise
+    const next = initializeSession(sessionID, allowFresh)
+    initializationPromise = next
+    await next
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: lineage verification and parent minting must remain atomic
