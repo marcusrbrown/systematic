@@ -3550,8 +3550,12 @@ function createSessionRuntime(
   // from the observer and target the seed used. The readback names its
   // operation and carries the resource identity (plus revision for push)
   // only: no repository or worktree identities, and no PR-scope propagation.
-  // Anything that does not bind leaves the deferral in place; nothing here
-  // marks the session unavailable (the receipt fails closed instead).
+  // The one exception is a `missing-resource` before-read for pr-creation,
+  // which clears the deferral without binding because creation seeds its
+  // baseline from the after-read. For every other operation, including
+  // push, check-readback, and review-readback, anything that does not bind
+  // leaves the deferral in place; nothing here marks the session unavailable
+  // (the receipt fails closed instead).
   function bindDeferredBaseline(
     operation: RemoteOperation,
     before: OperationObserverRemoteResult | undefined,
@@ -3560,7 +3564,7 @@ function createSessionRuntime(
     const deferred = deferredSeedFor(operation)
     if (!deferred || !before || !sameSeedObserver(deferred, observer)) return
     if (before.status === 'missing-resource') {
-      if (operation !== 'push') clearSeedDeferral(operation)
+      if (operation === 'pr-creation') clearSeedDeferral(operation)
       return
     }
     if (before.status !== 'available') return

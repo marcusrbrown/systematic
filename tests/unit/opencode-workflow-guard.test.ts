@@ -5538,6 +5538,84 @@ describe('OpenCode workflow guard adapter', () => {
         ])
       })
 
+      describe.each([
+        [
+          'check-readback',
+          'gh pr checks 42',
+          'checkState',
+          'completed-success',
+        ],
+        [
+          'review-readback',
+          'gh pr view 42 --json reviewDecision',
+          'reviewDecision',
+          'approved',
+        ],
+      ] as const)(
+        '%s deferral on a missing-resource before-read',
+        (operation, command, field, finalValue) => {
+          const PR = '1'.repeat(64)
+          const pullRequest = { identity: PR, state: 'open' as const }
+          const pendingValue = field === 'checkState' ? 'pending' : 'required'
+          const before = remoteAvailable(PR, E, {
+            pullRequest,
+            [field]: pendingValue,
+          })
+          const after = remoteAvailable(PR, FRESH, {
+            pullRequest,
+            [field]: finalValue,
+          })
+
+          function adapterFor(
+            beforeReads: readonly OperationObserverRemoteResult[],
+          ): OpencodeWorkflowGuard {
+            return pushAdapter(
+              {
+                [`${operation}:before`]: [TIMEOUT, ...beforeReads],
+                [`${operation}:after`]: [after],
+              },
+              {},
+              [operation],
+            )
+          }
+
+          function runOperation(
+            adapter: OpencodeWorkflowGuard,
+            callID: string,
+          ): Promise<void> {
+            return observeOperationTool(
+              adapter,
+              'bash',
+              { command },
+              { title: operation, output: 'ok', metadata: { exit: 0 } },
+              callID,
+            )
+          }
+
+          test('a missing-resource before-read keeps the deferral and admits nothing', async () => {
+            const adapter = adapterFor([{ status: 'missing-resource' }])
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            await runOperation(adapter, 'missing-before')
+            expect(operations(adapter)).not.toContain(operation)
+            expect(status(adapter).state).not.toBe('unavailable')
+            expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+              { operation, reasonCode: 'command-timeout' },
+            ])
+          })
+
+          test('a later available before-read from the same observer binds it and the receipt is admitted', async () => {
+            const adapter = adapterFor([{ status: 'missing-resource' }, before])
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            await runOperation(adapter, 'missing-before')
+            expect(operations(adapter)).not.toContain(operation)
+            await runOperation(adapter, 'available-before')
+            expect(operations(adapter)).toContain(operation)
+            expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+            expect(status(adapter).state).not.toBe('unavailable')
+          })
+        },
+      )
+
       test('l: a push before-hook that runs while the push seed is in flight binds nothing', async () => {
         let releaseSeed: (result: OperationObserverRemoteResult) => void =
           () => {}
