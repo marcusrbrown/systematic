@@ -1307,14 +1307,7 @@ function statusForTool(
       : {}),
     // Operations whose activation seeding was deferred for the current unit;
     // shown in any state.
-    ...(seedDeferrals.length > 0
-      ? {
-          seedDeferrals: seedDeferrals.map(({ operation, reasonCode }) => ({
-            operation,
-            reasonCode,
-          })),
-        }
-      : {}),
+    ...(seedDeferrals.length > 0 ? { seedDeferrals } : {}),
   })
 }
 
@@ -3516,13 +3509,9 @@ function createSessionRuntime(
     reasonCode: SeedDeferralReason,
   ): void {
     if (guard.hasResourceBaseline(operation)) return
-    const unitId = guard.status().unit?.unitId
     const observer = options.observer
-    if (!unitId || !observer) return
-    if (seedDeferralRecord?.unitId !== unitId) {
-      seedDeferralRecord = { unitId, entries: [] }
-    }
-    seedDeferralRecord.entries.push({
+    if (!observer) return
+    seedDeferralEntries(true).push({
       operation,
       reasonCode,
       observer,
@@ -3530,15 +3519,23 @@ function createSessionRuntime(
     })
   }
 
+  // The active unit's deferral entries. A record left by another unit is
+  // never returned; with `reset` it is replaced by an empty one for the
+  // active unit. With no active unit nothing is recorded: the returned array
+  // is a throwaway.
+  function seedDeferralEntries(reset = false): DeferredSeed[] {
+    const unitId = guard.status().unit?.unitId
+    if (!unitId) return []
+    if (seedDeferralRecord?.unitId === unitId) return seedDeferralRecord.entries
+    if (!reset) return []
+    seedDeferralRecord = { unitId, entries: [] }
+    return seedDeferralRecord.entries
+  }
+
   function deferredSeedFor(
     operation: RemoteOperation,
   ): DeferredSeed | undefined {
-    const unitId = guard.status().unit?.unitId
-    return seedDeferralRecord && seedDeferralRecord.unitId === unitId
-      ? seedDeferralRecord.entries.find(
-          (entry) => entry.operation === operation,
-        )
-      : undefined
+    return seedDeferralEntries().find((entry) => entry.operation === operation)
   }
 
   function clearSeedDeferral(operation: RemoteOperation): void {
@@ -3599,13 +3596,10 @@ function createSessionRuntime(
   }
 
   function currentSeedDeferrals(): readonly SeedDeferral[] {
-    const unitId = guard.status().unit?.unitId
-    return seedDeferralRecord && seedDeferralRecord.unitId === unitId
-      ? seedDeferralRecord.entries.map(({ operation, reasonCode }) => ({
-          operation,
-          reasonCode,
-        }))
-      : []
+    return seedDeferralEntries().map(({ operation, reasonCode }) => ({
+      operation,
+      reasonCode,
+    }))
   }
 
   function fatalSeed(cause: GuardUnavailableCause): RemoteSeedOutcome {

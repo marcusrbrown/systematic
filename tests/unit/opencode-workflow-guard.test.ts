@@ -5515,7 +5515,30 @@ describe('OpenCode workflow guard adapter', () => {
         expect(operations(adapter)).toContain('pr-creation')
       })
 
-      test('j: a push before-hook that runs while the push seed is in flight binds nothing', async () => {
+      test('m: an available before-read that observeReadback rejects binds nothing and keeps the deferral', async () => {
+        const adapter = pushAdapter({
+          'push:before': [
+            TIMEOUT,
+            {
+              status: 'available',
+              snapshot: {
+                resourceIdentity: '',
+                resourceRevisionIdentity: E,
+              },
+            },
+          ],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('l: a push before-hook that runs while the push seed is in flight binds nothing', async () => {
         let releaseSeed: (result: OperationObserverRemoteResult) => void =
           () => {}
         let pushBeforeReads = 0
