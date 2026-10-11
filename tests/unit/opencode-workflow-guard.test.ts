@@ -1984,7 +1984,7 @@ describe('OpenCode workflow guard adapter', () => {
         callId: 'shared-transition',
         target: 'unit',
       }),
-    ).toMatchObject({ status: 'unavailable' })
+    ).toMatchObject({ status: 'rejected', reasonCode: 'no-active-epoch' })
   })
 
   test('requires valid session identities and does not alias missing tool contexts', async () => {
@@ -2257,6 +2257,133 @@ describe('OpenCode workflow guard adapter', () => {
       workflowGuard: { status: 'started' },
     })
     expect(status(subsequent).unit?.status).toBe('active')
+  })
+
+  describe('completion requested with no epoch', () => {
+    interface HostOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    function freshOutput(): HostOutput {
+      return { title: 'pending', output: 'pending', metadata: {} }
+    }
+
+    async function completeBeforeAndAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      target: 'unit' | 'epoch' = 'unit',
+    ): Promise<HostOutput> {
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID,
+      }
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.before'](input, { args: { target } })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target } },
+        output,
+      )
+      return output
+    }
+
+    for (const mode of ['observe', 'protected'] as const) {
+      test(`${mode} mode writes a guard-owned rejected / no-active-epoch result and stays inactive`, async () => {
+        const adapter = createAdapter(mode)
+        const output = await completeBeforeAndAfter(
+          adapter,
+          `no-epoch-complete-${mode}`,
+        )
+        expect(output.metadata).toMatchObject({
+          workflowGuard: {
+            status: 'rejected',
+            reasonCode: 'no-active-epoch',
+            target: 'unit',
+          },
+        })
+        expect(output.title).not.toContain('unavailable')
+        expect(output.output).not.toContain('unavailable')
+        expect(output.title).toBe('Workflow transition rejected')
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+        })
+      })
+    }
+
+    test('protected mode still throws for other blocked reasons', async () => {
+      const adapter = createAdapter('protected')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      await completeBeforeAndAfter(adapter, 'unit-complete', 'unit')
+      await completeBeforeAndAfter(adapter, 'epoch-complete', 'epoch')
+      expect(status(adapter).reasonCode).toBe('epoch-completed')
+
+      await expect(
+        adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID: 'epoch-complete-again',
+          },
+          { args: { target: 'epoch' } },
+        ),
+      ).rejects.toMatchObject({
+        code: 'workflow-guard-blocked',
+        reasonCode: 'epoch-completed',
+      })
+    })
+
+    test('a same-batch skill activation is not recorded as no-active-epoch', async () => {
+      const adapter = createAdapter('protected')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'batch-skill',
+      }
+      const completeInput = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'batch-complete',
+      }
+      const skillOutput = freshOutput()
+      const completeOutput = freshOutput()
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        skillOutput,
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        completeOutput,
+      )
+      const guardMetadata = completeOutput.metadata.workflowGuard as
+        | { status: string; reasonCode: string }
+        | undefined
+      expect(guardMetadata?.reasonCode).not.toBe('no-active-epoch')
+      expect(status(adapter).unit?.status).not.toBe('completed')
+    })
+
+    test('never finalizes a transition or mints a receipt', async () => {
+      for (const mode of ['observe', 'protected'] as const) {
+        const adapter = createAdapter(mode)
+        await completeBeforeAndAfter(adapter, `no-finalize-${mode}`)
+        await completeBeforeAndAfter(adapter, `no-finalize-${mode}`)
+        expect(adapter.ledger(SESSION_A)?.listReceipts() ?? []).toEqual([])
+        expect(status(adapter).epoch).toBeNull()
+        expect(status(adapter).state).toBe('inactive')
+      }
+    })
   })
 
   test('partial registration finalization fails closed and remains replay-idempotent', async () => {

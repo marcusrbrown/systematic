@@ -370,7 +370,7 @@ describe('workflow guard', () => {
     expect(
       guard.prepareTransition({ callId: 'inactive-call', target: 'unit' }),
     ).toMatchObject({
-      status: 'unavailable',
+      status: 'rejected',
       reasonCode: 'no-active-epoch',
     })
     expect(guard.status().epoch).toBeNull()

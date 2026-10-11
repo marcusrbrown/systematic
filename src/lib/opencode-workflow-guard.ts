@@ -336,6 +336,11 @@ interface SealedOperation {
   argsFingerprint: string
 }
 
+interface BlockedComplete {
+  target: TransitionTarget
+  reasonCode: WorkflowReasonCode
+}
+
 interface TerminalComplete {
   // Optional: some terminal outcomes (see `finishUnreplayableComplete()`)
   // are recorded without ever having observed a real target. `target` is
@@ -1493,7 +1498,7 @@ function createSessionRuntime(
   const pendingCompletes = new Map<string, PendingComplete>()
   const finalizedCompletes = new Map<string, PendingComplete>()
   const abandonedCompletes = new Map<string, TransitionTarget>()
-  const blockedCompletes = new Map<string, TransitionTarget>()
+  const blockedCompletes = new Map<string, BlockedComplete>()
   const terminalCompletes = new Map<string, TerminalComplete>()
   const callBindings = new Map<string, { kind: string; fingerprint: string }>()
   const pendingOperations = new Map<string, PendingOperation>()
@@ -2700,10 +2705,11 @@ function createSessionRuntime(
     output: unknown,
     result: TerminalComplete,
     target: TransitionTarget | undefined,
+    title = 'Workflow transition unavailable',
   ): void {
     if (!isRecord(output)) return
     const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
-    output.title = 'Workflow transition unavailable'
+    output.title = title
     output.output = JSON.stringify({
       status: result.status,
       reasonCode: result.reasonCode,
@@ -2716,6 +2722,47 @@ function createSessionRuntime(
         ...targetMetadataField(target),
         reasonCode: result.reasonCode,
       },
+    }
+  }
+
+  // Writes the guard-owned result for a completion that was requested with no
+  // epoch. The guard is re-read at write time: a skill earlier in the same
+  // message batch may have activated an epoch since the before-hook, in which
+  // case claiming `no-active-epoch` would be false and the current status is
+  // reported instead.
+  function writeNoEpochBlockedResult(
+    output: unknown,
+    target: TransitionTarget,
+  ): void {
+    const current = guard.status()
+    if (!current.epoch) {
+      writeTerminalCompletionResult(
+        output,
+        { target, status: 'rejected', reasonCode: 'no-active-epoch' },
+        target,
+        'Workflow transition rejected',
+      )
+      return
+    }
+    const status = current.state === 'unavailable' ? 'unavailable' : 'rejected'
+    writeTerminalCompletionResult(
+      output,
+      { target, status, reasonCode: current.reasonCode },
+      target,
+      status === 'rejected'
+        ? 'Workflow transition rejected'
+        : 'Workflow transition unavailable',
+    )
+  }
+
+  // Only the no-epoch block is guard-owned output; every other blocked
+  // reason keeps writing nothing here.
+  function writeBlockedCompleteResult(
+    output: unknown,
+    blocked: BlockedComplete | undefined,
+  ): void {
+    if (blocked?.reasonCode === 'no-active-epoch') {
+      writeNoEpochBlockedResult(output, blocked.target)
     }
   }
 
@@ -2818,7 +2865,10 @@ function createSessionRuntime(
     if (options.config.mode === 'protected') {
       throw createWorkflowGuardBlockedError('guard-unavailable')
     }
-    blockedCompletes.set(callDigest, target)
+    blockedCompletes.set(callDigest, {
+      target,
+      reasonCode: status.reasonCode,
+    })
     blockedQuestionCalls.set(callDigest, challenge.challenge.challengeId)
     return true
   }
@@ -2844,10 +2894,19 @@ function createSessionRuntime(
       })
       return
     }
-    if (options.config.mode === 'protected') {
+    // A completion requested before any epoch exists is a guard-owned
+    // rejection recorded for the after-hook, in protected mode too. Every
+    // other blocked reason keeps the protected-mode throw.
+    if (
+      options.config.mode === 'protected' &&
+      prepared.reasonCode !== 'no-active-epoch'
+    ) {
       throw createWorkflowGuardBlockedError(prepared.reasonCode)
     }
-    blockedCompletes.set(callDigest, target)
+    blockedCompletes.set(callDigest, {
+      target,
+      reasonCode: prepared.reasonCode,
+    })
   }
 
   async function remoteIntentForOperation(
@@ -3464,8 +3523,8 @@ function createSessionRuntime(
     }
     const replay = finalizedCompletes.get(callDigest)
     const abandonedTarget = abandonedCompletes.get(callDigest)
-    const blockedTarget = blockedCompletes.get(callDigest)
-    const expectedTarget = replay?.target ?? abandonedTarget ?? blockedTarget
+    const blocked = blockedCompletes.get(callDigest)
+    const expectedTarget = replay?.target ?? abandonedTarget ?? blocked?.target
     if (!expectedTarget) return false
     if (finalTarget !== expectedTarget) {
       markUnavailable()
@@ -3473,6 +3532,7 @@ function createSessionRuntime(
     }
     if (replay) replayComplete(callDigest)
     blockedCompletes.delete(callDigest)
+    writeBlockedCompleteResult(output, blocked)
     return true
   }
 

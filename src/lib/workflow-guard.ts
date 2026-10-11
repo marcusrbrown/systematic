@@ -2213,7 +2213,7 @@ export function createWorkflowGuard(
     return {
       ready: false,
       status:
-        state === 'unavailable' || state === 'inactive'
+        state === 'unavailable'
           ? 'unavailable'
           : state === 'waiting'
             ? 'waiting'
@@ -2253,7 +2253,7 @@ export function createWorkflowGuard(
     if (!epoch) {
       return {
         ready: false,
-        status: 'unavailable',
+        status: 'rejected',
         reasonCode: 'no-active-epoch',
       }
     }
