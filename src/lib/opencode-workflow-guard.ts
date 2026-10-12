@@ -429,14 +429,19 @@ function unconfirmedReadback(
   return { probe, reasonCode: 'command-timeout' }
 }
 
-// Remote probes that were skipped on a timeout, plus the first non-timeout
-// failure (if any), which stops the loop and stays fatal.
-interface RemoteReadbackOutcome {
-  readonly unconfirmed: readonly UnconfirmedReadback[]
-  readonly failure?: {
-    readonly reasonCode?: GuardUnavailableCause['reasonCode']
-  }
-}
+// Remote probes that were skipped on a timeout. `fatal` is the first
+// non-timeout failure, which stops the loop; the probes skipped before it are
+// still reported.
+type RemoteReadbackOutcome =
+  | {
+      readonly kind: 'ok'
+      readonly unconfirmed: readonly UnconfirmedReadback[]
+    }
+  | {
+      readonly kind: 'fatal'
+      readonly unconfirmed: readonly UnconfirmedReadback[]
+      readonly reasonCode?: GuardUnavailableCause['reasonCode']
+    }
 
 type EffectiveSnapshotRead =
   | { readonly kind: 'ok'; readonly snapshot: OperationObserverSnapshot }
@@ -617,12 +622,6 @@ function observerReadbackFailedCause(
     ...(reasonCode !== undefined ? { reasonCode } : {}),
     timedOut: reasonCode === 'command-timeout',
   }
-}
-
-function lookupFailureReason(
-  lookup: Exclude<EffectiveObserverLookup, { readonly kind: 'ok' }>,
-): GuardUnavailableCause['reasonCode'] {
-  return lookup.kind === 'timeout' ? 'command-timeout' : lookup.reasonCode
 }
 
 // A throw (`undefined`) has no reason code.
@@ -2921,7 +2920,7 @@ function createSessionRuntime(
     const lookup = resolveEffectiveObserver()
     if (lookup.kind === 'timeout') return [unconfirmedReadback('pinned')]
     if (lookup.kind !== 'ok') {
-      markUnavailable(observerReadbackFailedCause(lookupFailureReason(lookup)))
+      markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
       return []
     }
     const effective = lookup.observer
@@ -2956,8 +2955,8 @@ function createSessionRuntime(
       return []
     }
     const remote = await refreshRemoteReadbacks(effective.observer, snapshot)
-    if (remote.failure) {
-      markUnavailable(observerReadbackFailedCause(remote.failure.reasonCode))
+    if (remote.kind === 'fatal') {
+      markUnavailable(observerReadbackFailedCause(remote.reasonCode))
     }
     return remote.unconfirmed
   }
@@ -2991,9 +2990,9 @@ function createSessionRuntime(
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return { unconfirmed: [] }
+    if (remoteOperations.length === 0) return { kind: 'ok', unconfirmed: [] }
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return { unconfirmed: [], failure: {} }
+    if (!remoteSnapshot) return { kind: 'fatal', unconfirmed: [] }
     const unconfirmed: UnconfirmedReadback[] = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
@@ -3003,8 +3002,9 @@ function createSessionRuntime(
       }
       if (result?.status !== 'available') {
         return {
+          kind: 'fatal',
           unconfirmed,
-          failure: { reasonCode: remoteFailureReason(result) },
+          reasonCode: remoteFailureReason(result),
         }
       }
       const observed = guard.observeReadback(
@@ -3015,9 +3015,9 @@ function createSessionRuntime(
           result.snapshot,
         ),
       )
-      if (observed.status === 'rejected') return { unconfirmed, failure: {} }
+      if (observed.status === 'rejected') return { kind: 'fatal', unconfirmed }
     }
-    return { unconfirmed }
+    return { kind: 'ok', unconfirmed }
   }
 
   function currentMarkerSource(): MarkerSource {
