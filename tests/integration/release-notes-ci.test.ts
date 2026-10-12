@@ -1,5 +1,6 @@
 /**
- * Smoke tests for the successCmd bash logic in scripts/dispatch-release-notes.sh.
+ * Smoke tests for the bash logic in scripts/dispatch-release-notes.sh (run by
+ * .github/workflows/release-notes.yaml).
  *
  * Strategy: copy scripts/dispatch-release-notes.sh to a temp dir and invoke it
  * with a mock `gh` binary on PATH. The mock binary's behavior is controlled
@@ -50,7 +51,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const SCRIPT_PATH = path.join(REPO_ROOT, 'scripts/dispatch-release-notes.sh')
 const MOCK_GH_PATH = path.join(REPO_ROOT, 'tests/fixtures/mock-gh.sh')
 
-// Timeout per scenario — the successCmd has a 180s polling loop; we cap it
+// Timeout per scenario — the script has a 180s polling loop; we cap it
 // tightly in tests by making the mock return immediately.
 const SCENARIO_TIMEOUT_MS = 30_000
 
@@ -236,7 +237,7 @@ beforeEach(() => {
   fs.mkdirSync(testMockBinDir, { recursive: true })
 
   // Copy the canonical script to the per-test temp dir.
-  scriptPath = path.join(testTempDir, 'successCmd.sh')
+  scriptPath = path.join(testTempDir, 'dispatch-release-notes.sh')
   fs.copyFileSync(SCRIPT_PATH, scriptPath)
   fs.chmodSync(scriptPath, 0o755)
 })
@@ -257,7 +258,7 @@ function run(env: ScenarioEnv): ScenarioResult {
 // Scenarios
 // ---------------------------------------------------------------------------
 
-describe('release-notes-ci successCmd smoke tests', () => {
+describe('release-notes-ci dispatch script smoke tests', () => {
   // -------------------------------------------------------------------------
   // 1. Validation — invalid RELEASE_VERSION
   // -------------------------------------------------------------------------

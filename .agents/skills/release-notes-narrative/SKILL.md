@@ -8,7 +8,7 @@ argument-hint: <tag-or-range>
 
 ## CI Automation
 
-This skill also runs automatically post-publish via `@semantic-release/exec`'s `successCmd` in `.releaserc.yaml`. The hook dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the 13-step procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI automation handles forward-going releases without operator intervention.
+This skill also runs automatically post-publish via `.github/workflows/release-notes.yaml` (triggered by `release: published`, or a manual dispatch with a `tag` input to re-narrate). That workflow runs `scripts/dispatch-release-notes.sh`, which dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the 13-step procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI automation handles forward-going releases without operator intervention.
 
 If you are reading this as the dispatched Fro Bot run, the prompt embedded the target tag and a correlation token. Echo the correlation token as your first log line, then proceed with the procedure below.
 

@@ -1,0 +1,122 @@
+name: Release Notes
+
+# Rewrites a published release's notes into a narrative (via the Fro Bot
+# workflow), verifies the rewrite landed, then triggers the docs rebuild for the
+# tag. Runs in its own job so a failed narrative leaves a red run here instead of
+# being hidden inside semantic-release's publish job. Re-run for a given tag with
+# a manual dispatch.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published release tag to narrate (e.g. v3.21.7)
+        required: true
+        type: string
+
+concurrency:
+  group: release-notes-${{ github.event.release.tag_name || github.event.inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  narrate:
+    name: Narrate Release Notes
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
+    permissions:
+      contents: read
+      # Dispatch fro-bot.yaml and docs.yaml, and read their runs. Writes to the
+      # release itself are done by the dispatched Fro Bot run with its own PAT.
+      actions: write
+    steps:
+      # Everything below is gated on `proceed`, so an untrusted release author
+      # ends the job cleanly without dispatching anything.
+      - name: Check release author
+        id: author
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_AUTHOR: ${{ github.event.release.author.login }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]' }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ] && [ "$RELEASE_AUTHOR" != "$EXPECTED_AUTHOR" ]; then
+            echo "::notice::Skipping release notes: release author '${RELEASE_AUTHOR}' is not the expected release author '${EXPECTED_AUTHOR}'."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      # Runs before checkout: the target must be a stable vX.Y.Z tag and, for a
+      # manual dispatch, an existing published (non-draft, non-prerelease) release.
+      - name: Validate release tag
+        id: tag
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_TAG"
+          else
+            tag="$INPUT_TAG"
+          fi
+
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid release tag '${tag}': expected vX.Y.Z"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" != "release" ]; then
+            if ! state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"'); then
+              echo "::error::No release found for tag '${tag}'"
+              exit 1
+            fi
+            if [ "$state" != "false false" ]; then
+              echo "::error::Release '${tag}' is not a published, non-prerelease release (isDraft isPrerelease = ${state})"
+              exit 1
+            fi
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package is published to npm
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if ! npm view "@fro.bot/systematic@${VERSION}" version; then
+            echo "::error::@fro.bot/systematic@${VERSION} is not published to npm; refusing to narrate it"
+            exit 1
+          fi
+
+      - name: Checkout
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Exits 0 only when the release body starts with `## What's new` afterwards
+      # (2 = narrative-not-applied, 1 = security-class failure). A non-zero exit
+      # fails this step, which skips the docs rebuild below and leaves the run red.
+      - name: Narrate release notes
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/dispatch-release-notes.sh "$TAG"
+
+      - name: Trigger docs rebuild
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run docs.yaml --ref main -f tag="$TAG"

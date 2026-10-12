@@ -13,9 +13,6 @@ plugins:
     - releasedLabels: false
       successComment: false
 
-  - - '@semantic-release/exec'
-    - successCmd: 'scripts/dispatch-release-notes.sh "${nextRelease.gitTag}"'
-
   - semantic-release-export-data
 
 analyzeCommits:

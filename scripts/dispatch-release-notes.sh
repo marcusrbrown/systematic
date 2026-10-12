@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Invoked by @semantic-release/exec successCmd. Receives target tag as $1.
+# Invoked by .github/workflows/release-notes.yaml (on `release: published`, or a
+# manual dispatch for re-narration). Receives target tag as $1.
 # Dispatches fro-bot.yaml workflow and waits for the narrative rewrite.
 #
 # Terminal rule: exits 0 ONLY when the re-read release body starts with
@@ -83,8 +84,8 @@ fi
 
 # Construct the prompt. $RELEASE_VERSION, $CORRELATION_ID, and $GITHUB_REPOSITORY
 # are runtime bash env vars expanded by the heredoc. Do NOT use GitHub Actions
-# workflow-expression syntax (e.g. github.repository) here — those are not interpolated inside successCmd
-# strings, which run on the runner after YAML preprocessing is complete.
+# workflow-expression syntax (e.g. github.repository) here — those are only interpolated in
+# workflow YAML, not inside this script, which runs on the runner after YAML preprocessing.
 PROMPT=$(cat <<PROMPT_EOF
 correlation=$CORRELATION_ID
 
