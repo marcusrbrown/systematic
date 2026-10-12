@@ -15,6 +15,8 @@ Merging a feature PR never publishes.
 
 If `main` moves after a release merge but before `publish` runs, publish refuses (`superseded`) and the next release PR carries the change.
 
+A publish that fails before it creates the tag is retried by the hourly reconcile while `main` is unchanged. Once `main` moves, the next release PR re-proposes the commits and needs a fresh approval.
+
 ## Release mode
 
 `RELEASE_MODE` selects the publish path. It must be exactly `legacy` or `gated`; any other value (unset, empty, `Gated`) fails the run and nothing publishes.
@@ -36,6 +38,22 @@ In `legacy` mode the `legacy-release` job in `main.yaml` publishes, and `release
 - Every PR into `main` needs one approval on its latest push. A new push dismisses earlier approvals, and an author cannot approve their own PR.
 - Fro Bot approves the maintainer's PRs, the maintainer approves Renovate PRs, and the maintainer or the gate approves the release PR.
 - Escape hatch: an admin can edit or disable the `main` ruleset under Settings → Rules.
+
+## Release entry on main with no publish
+
+The `Refresh release PR` job fails with `Rendered CHANGELOG.md matches main; a release entry is already on main without a publish`. It never opens an empty release PR.
+
+This happens when a release PR merged but its publish failed, and another merge then landed. That leaves a changelog entry on `main` with no tag.
+
+To recover:
+
+1. Land any new commit on `main`, for example a `chore:` commit.
+2. Its subject changes the rendered entry, so the refresh opens a new release PR.
+3. Approve that PR. The gate or the maintainer can do it.
+
+If that does not work, an admin removes the stale entry from `CHANGELOG.md` in a normal PR.
+
+If the tag exists but npm does not have the package, use the break-glass section below instead.
 
 ## Hold and unhold
 

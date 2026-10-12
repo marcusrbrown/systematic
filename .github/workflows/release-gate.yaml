@@ -45,13 +45,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Required checks: branch-protection contexts in .github/settings.yml minus
-      # Fro Bot, CodeQL and Renovate / Renovate (Fro Bot skips bot PRs; Renovate
-      # ignores release/**).
+      # Required checks: the branch-protection contexts in .github/settings.yml.
+      # Fro Bot reports `skipped` on bot pull requests, which the gate accepts.
       - name: Decide
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+          RELEASE_APP_LOGIN: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
         run: |
           bun scripts/release/gate-decide.ts --out "$RUNNER_TEMP/gate" \
             --required-check "Build" \
@@ -61,7 +61,10 @@ jobs:
             --required-check "Test" \
             --required-check "Registry" \
             --required-check "Release" \
-            --required-check "Analyze (typescript)"
+            --required-check "Analyze (typescript)" \
+            --required-check "CodeQL" \
+            --required-check "Fro Bot" \
+            --required-check "Renovate / Renovate"
 
       - name: Expose decision
         id: expose

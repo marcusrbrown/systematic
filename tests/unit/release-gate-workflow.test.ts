@@ -160,6 +160,14 @@ describe('release-gate decide job', () => {
     expect(env.RELEASE_HOLD).toBe(RELEASE_HOLD_EXPR)
   })
 
+  test('gate-decide reads the release App login from the one shared variable', () => {
+    const env = asRecord(findStep('decide', 'Decide').env, 'decide env')
+    expect(env.RELEASE_APP_LOGIN).toBe(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+      "${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}",
+    )
+  })
+
   test('outputs kind, pr, head-sha and version are exposed', () => {
     expect(
       Object.keys(asRecord(getJob('decide').outputs, 'outputs')).sort(),
@@ -287,9 +295,6 @@ describe('release-gate credential isolation', () => {
 })
 
 describe('release-gate required checks', () => {
-  // Fro Bot skips bot PRs; CodeQL/Renovate checks do not run on release/**.
-  const EXCLUDED = ['Fro Bot', 'CodeQL', 'Renovate / Renovate']
-
   function workflowChecks(): string[] {
     const run = runOf(findStep('decide', 'Decide'))
     return [...run.matchAll(/--required-check "([^"]+)"/g)].map(
@@ -297,7 +302,7 @@ describe('release-gate required checks', () => {
     )
   }
 
-  test('equals branch-protection contexts minus bot-skipped checks', () => {
+  test('equals the branch-protection contexts', () => {
     const settings = asRecord(
       yaml.load(fs.readFileSync(SETTINGS_PATH, 'utf8')),
       'settings',
@@ -311,10 +316,7 @@ describe('release-gate required checks', () => {
       'contexts',
     ).map(String)
 
-    expect(workflowChecks()).toEqual(
-      contexts.filter((name) => !EXCLUDED.includes(name)),
-    )
-    expect(workflowChecks()).toHaveLength(8)
+    expect([...workflowChecks()].sort()).toEqual([...contexts].sort())
   })
 })
 

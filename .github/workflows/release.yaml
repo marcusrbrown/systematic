@@ -47,7 +47,7 @@ jobs:
   verify:
     name: Verify release merge
     needs: mode
-    if: needs.mode.outputs.mode == 'gated'
+    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,6 +75,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+          RELEASE_APP_LOGIN: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
         run: |
           bun scripts/release/verify-merge.ts --sha "$GITHUB_SHA" --out "$RUNNER_TEMP/decision"
           {
@@ -131,8 +132,9 @@ jobs:
   publish:
     name: Publish
     needs: [mode, verify, build]
-    if: needs.mode.outputs.mode == 'gated' && needs.verify.outputs.kind == 'publish'
+    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main' && needs.verify.outputs.kind == 'publish'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: release
     concurrency:
       group: release-state
@@ -226,6 +228,7 @@ jobs:
     needs: [verify, publish]
     if: needs.publish.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -371,8 +374,9 @@ jobs:
   refresh:
     name: Refresh release PR
     needs: [mode, render]
-    if: needs.mode.outputs.mode == 'gated' && needs.render.result == 'success'
+    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main' && needs.render.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     concurrency:
       group: release-state
@@ -462,6 +466,13 @@ jobs:
           jq -cn --arg base_tree "$base_tree" --arg blob "$blob_sha" \
             '{base_tree: $base_tree, tree: [{path: "CHANGELOG.md", mode: "100644", type: "blob", sha: $blob}]}' > "$work/tree.json"
           tree_sha=$(gh api --method POST "repos/$REPO/git/trees" --input "$work/tree.json" --jq .sha)
+
+          # An unchanged tree means the rendered changelog already matches main:
+          # a release entry is on main without a publish. Never open an empty PR.
+          if [ "$tree_sha" = "$base_tree" ]; then
+            echo "::error::Rendered CHANGELOG.md matches main; a release entry is already on main without a publish. See RELEASING.md."
+            exit 1
+          fi
           jq -cn --arg message "$TITLE" --arg tree "$tree_sha" --arg parent "$BASE_SHA" \
             '{message: $message, tree: $tree, parents: [$parent]}' > "$work/commit.json"
           commit_sha=$(gh api --method POST "repos/$REPO/git/commits" --input "$work/commit.json" --jq .sha)

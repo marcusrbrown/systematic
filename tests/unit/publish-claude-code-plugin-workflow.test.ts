@@ -219,7 +219,66 @@ describe('publish-claude-code-plugin build job', () => {
     )
     expect(run).toMatch(/for attempt in/)
     expect(run).toContain('::notice::')
-    expect(run).not.toContain('exit 1')
+    // The registry's own errors stay visible.
+    expect(run).not.toContain('2>/dev/null')
+  })
+
+  describe('npm wait step (executed)', () => {
+    function runWait(eventName: string) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-npm-'))
+      try {
+        const bin = path.join(dir, 'bin')
+        fs.mkdirSync(bin)
+        const npm = path.join(bin, 'npm')
+        fs.writeFileSync(
+          npm,
+          '#!/usr/bin/env bash\necho "registry outage" >&2\nexit 1\n',
+        )
+        fs.chmodSync(npm, 0o755)
+        const output = path.join(dir, 'github-output')
+        fs.writeFileSync(output, '')
+        const result = spawnSync(
+          'bash',
+          ['-e', '-c', runOf(findStep(build(), 'Confirm package is on npm'))],
+          {
+            encoding: 'utf8',
+            env: {
+              PATH: `${bin}:${process.env.PATH ?? ''}`,
+              HOME: dir,
+              GITHUB_OUTPUT: output,
+              GITHUB_EVENT_NAME: eventName,
+              VERSION: '3.22.0',
+              NPM_RETRY_DELAY: '0',
+            },
+          },
+        )
+        return {
+          status: result.status,
+          text: `${result.stdout}${result.stderr}`,
+          outputs: fs.readFileSync(output, 'utf8'),
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    test('a release event fails with ::error:: when npm never serves the version', () => {
+      const r = runWait('release')
+      expect(r.status).toBe(1)
+      expect(r.text).toContain('::error::')
+      expect(r.outputs).not.toContain('available=true')
+    })
+
+    test('a manual dispatch ends cleanly with ::notice:: and available=false', () => {
+      const r = runWait('workflow_dispatch')
+      expect(r.status).toBe(0)
+      expect(r.text).toContain('::notice::')
+      expect(r.outputs).toContain('available=false')
+    })
+
+    test('npm stderr stays visible', () => {
+      expect(runWait('workflow_dispatch').text).toContain('registry outage')
+    })
   })
 
   test('installs and builds the plugin, then guards the bundle before upload', () => {
@@ -277,6 +336,10 @@ describe('publish-claude-code-plugin build job', () => {
 
 describe('publish-claude-code-plugin push job', () => {
   const push = () => getJob('push')
+
+  test('declares a 10 minute timeout', () => {
+    expect(push()['timeout-minutes']).toBe(10)
+  })
 
   test('depends on build and runs only when build produced output', () => {
     expect(push().needs).toBe('build')

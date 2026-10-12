@@ -67,6 +67,8 @@ jobs:
 
       # The plugin ships in lockstep with npm, so wait briefly for the registry
       # to serve the version and end cleanly if it never does.
+      # A release event is automatic, so a missing version fails the run where
+      # someone will see it; a manual dispatch ends cleanly instead.
       - name: Confirm package is on npm
         id: npm
         if: ${{ steps.target.outputs.proceed == 'true' }}
@@ -74,13 +76,17 @@ jobs:
           VERSION: ${{ steps.target.outputs.version }}
         run: |
           for attempt in 1 2 3 4 5; do
-            if [[ "$(npm view "@fro.bot/systematic@${VERSION}" version 2>/dev/null)" == "$VERSION" ]]; then
+            if [[ "$(npm view "@fro.bot/systematic@${VERSION}" version)" == "$VERSION" ]]; then
               echo "available=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "@fro.bot/systematic@${VERSION} not on npm yet (attempt ${attempt}/5)"
-            sleep 10
+            sleep "${NPM_RETRY_DELAY:-10}"
           done
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            echo "::error::@fro.bot/systematic@${VERSION} is not available on npm; the Claude Code plugin was not published."
+            exit 1
+          fi
           echo "::notice::@fro.bot/systematic@${VERSION} is not available on npm; not publishing the plugin."
           echo "available=false" >> "$GITHUB_OUTPUT"
 
@@ -155,6 +161,7 @@ jobs:
     needs: build
     if: ${{ needs.build.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

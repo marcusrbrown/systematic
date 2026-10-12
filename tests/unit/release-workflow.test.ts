@@ -150,10 +150,11 @@ describe('release.yaml triggers and top-level settings', () => {
     )
   })
 
-  test('verify and build only run in gated mode', () => {
-    for (const id of ['verify', 'build']) {
-      expect(getJob(id).if).toBe("needs.mode.outputs.mode == 'gated'")
-    }
+  test('build only runs in gated mode; verify adds the main-ref guard', () => {
+    expect(getJob('build').if).toBe("needs.mode.outputs.mode == 'gated'")
+    expect(getJob('verify').if).toBe(
+      "needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main'",
+    )
   })
 })
 
@@ -553,6 +554,47 @@ describe('confirm job', () => {
   })
 })
 
+describe('job timeouts', () => {
+  test.each([
+    ['publish', 20],
+    ['refresh', 10],
+    ['confirm', 10],
+  ])('%s declares timeout-minutes %d', (id, minutes) => {
+    expect(getJob(id)['timeout-minutes']).toBe(minutes)
+  })
+})
+
+describe('ref guard', () => {
+  test.each(['verify', 'publish', 'refresh'])(
+    '%s only runs on refs/heads/main and keeps its other conditions',
+    (id) => {
+      expect(String(getJob(id).if)).toContain("github.ref == 'refs/heads/main'")
+      expect(String(getJob(id).if)).toContain(
+        "needs.mode.outputs.mode == 'gated'",
+      )
+    },
+  )
+
+  test('the other conditions of each guarded job are kept', () => {
+    expect(String(getJob('publish').if)).toContain(
+      "needs.verify.outputs.kind == 'publish'",
+    )
+    expect(String(getJob('refresh').if)).toContain(
+      "needs.render.result == 'success'",
+    )
+  })
+})
+
+describe('release App login', () => {
+  test('the verify step sets RELEASE_APP_LOGIN from the one shared variable', () => {
+    expect(envOf(findStep('verify', 'Verify release merge'))).toMatchObject({
+      RELEASE_APP_LOGIN: expr(
+        "vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]'",
+      ),
+    })
+  })
+})
+
 describe('action pins', () => {
   test('every uses: reference is pinned to a 40-hex commit SHA', () => {
     let count = 0
@@ -911,6 +953,7 @@ describe('refresh job', () => {
       remoteBlob?: string
       refCount?: number
       mergeFails?: boolean
+      treeMatchesBase?: boolean
     }
 
     interface Outcome {
@@ -929,6 +972,21 @@ describe('refresh job', () => {
         author: { login: BOT, is_bot: true },
         headRepositoryOwner: { login: 'o' },
         ...overrides,
+      }
+    }
+
+    function scenarioEnv(
+      scenario: Scenario,
+      localBlob: string,
+    ): Record<string, string> {
+      return {
+        STUB_TIP: scenario.tip ?? BASE,
+        STUB_PRS: JSON.stringify(scenario.prs ?? []),
+        STUB_PARENT: scenario.parent ?? BASE,
+        STUB_REMOTE_BLOB: scenario.remoteBlob ?? localBlob,
+        STUB_REF_COUNT: String(scenario.refCount ?? 0),
+        STUB_MERGE_FAIL: scenario.mergeFails ? '1' : '',
+        STUB_TREE_SHA: scenario.treeMatchesBase ? 'basetree' : 'treesha',
       }
     }
 
@@ -975,7 +1033,7 @@ describe('refresh job', () => {
             '  *"git/commits/"*) echo basetree ;;',
             '  *"/commits/"*) printf \'%s\\n\' "$STUB_PARENT" ;;',
             '  *"git/blobs"*) echo blobsha ;;',
-            '  *"git/trees"*) echo treesha ;;',
+            '  *"git/trees"*) printf \'%s\\n\' "$STUB_TREE_SHA" ;;',
             '  *"git/commits"*) echo newcommitsha ;;',
             '  *"git/refs"*) ;;',
             '  *) echo "unexpected gh call: $args" >&2; exit 99 ;;',
@@ -1012,12 +1070,7 @@ describe('refresh job', () => {
             REPO: 'o/r',
             BOT_LOGIN: BOT,
             STUB_LOG: log,
-            STUB_TIP: scenario.tip ?? BASE,
-            STUB_PRS: JSON.stringify(scenario.prs ?? []),
-            STUB_PARENT: scenario.parent ?? BASE,
-            STUB_REMOTE_BLOB: scenario.remoteBlob ?? localBlob,
-            STUB_REF_COUNT: String(scenario.refCount ?? 0),
-            STUB_MERGE_FAIL: scenario.mergeFails ? '1' : '',
+            ...scenarioEnv(scenario, localBlob),
             MERGE_RETRY_DELAY: '0',
           },
         })
@@ -1156,6 +1209,27 @@ describe('refresh job', () => {
       expect(outcome.status).not.toBe(0)
       expect(outcome.log).not.toMatch(WRITE)
     })
+
+    test.each([
+      ['no release PR is open', []],
+      ['a stale release PR is open', [pr()]],
+    ])(
+      'an unchanged tree fails with no commit, ref, PR or merge call when %s',
+      (_name, prs) => {
+        const outcome = runRefresh({
+          prs,
+          parent: 'd'.repeat(40),
+          treeMatchesBase: true,
+        })
+        expect(outcome.status).toBe(1)
+        expect(outcome.output).toContain(
+          '::error::Rendered CHANGELOG.md matches main; a release entry is already on main without a publish. See RELEASING.md.',
+        )
+        expect(outcome.log).not.toMatch(
+          /pr (create|edit|close|merge)|git\/refs|--method POST \S+\/git\/commits /,
+        )
+      },
+    )
 
     test('warns instead of failing when auto-merge cannot be armed', () => {
       const outcome = runRefresh({ mergeFails: true })
