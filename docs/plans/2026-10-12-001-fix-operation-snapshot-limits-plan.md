@@ -36,7 +36,7 @@ Both added surface that removing the cliff does not need.
 - No change to how files are read or hashed, to the digest format, or to the trust model.
 - No change to remote readback semantics, activation seeding, or completion readback.
 - Receipt, marker, and readback protocols are unchanged.
-- Non-git workspaces behave as today: they go unavailable on the first operation. They now record a cause.
+- Non-git workspaces behave as today: they go unavailable on the first operation. They now record a cause (worktree validation fails first with `command-failed`).
 
 ### Deferred to Separate Tasks
 
@@ -189,7 +189,7 @@ Other separate tasks:
 - Error path: one case per remaining table row asserts its site and kind. For `bindCall`, cover a skill call and an operation call, and check that each reports its own site.
 - Edge case: an exception in the event and transform hooks records `hook-threw` with that site.
 - Edge case: when a later operation also fails, the earlier cause is kept (first wins).
-- Edge case: a non-git workspace's first operation records `tool-before` with `local-snapshot-unavailable` and `command-failed`.
+- Edge case: a non-git workspace's first operation records `tool-before` with `operation-input-invalid` and `command-failed` (worktree validation runs before the snapshot and fails first).
 - Integration: a hook throws while a file with a secret-looking name exists. The serialized status contains only the allowlisted cause keys, and no path or message text.
 
 **Verification:** No guard hook transitions to unavailable without a cause.

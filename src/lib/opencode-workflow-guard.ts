@@ -522,6 +522,12 @@ type GuardUnavailableCauseKind =
   | 'recovery-rejected'
   | 'markerless-guard-history'
   | 'observer-readback-failed'
+  | 'operation-input-invalid'
+  | 'operation-target-mismatch'
+  | 'call-lifecycle-mismatch'
+  | 'operation-classifier-unavailable'
+  | 'operation-observation-rejected'
+  | 'hook-threw'
 
 // A remote operation whose activation seeding was deferred instead of
 // failing the session. Status-only, enum-only, and bound to the unit that
@@ -546,6 +552,8 @@ type RemoteSeedOutcome =
   | { readonly kind: 'deferred'; readonly reasonCode: SeedDeferralReason }
   | { readonly kind: 'fatal'; readonly cause: GuardUnavailableCause }
 
+type GuardHookCauseSite = 'tool-before' | 'tool-after' | 'event' | 'transform'
+
 interface GuardUnavailableCause {
   readonly site:
     | 'seed-remote-scopes'
@@ -553,6 +561,7 @@ interface GuardUnavailableCause {
     | 'initialize-session'
     | 'refresh-readback'
     | 'complete-readback'
+    | GuardHookCauseSite
   readonly kind: GuardUnavailableCauseKind
   readonly operation?: RemoteOperation
   readonly reasonCode?:
@@ -584,6 +593,22 @@ function observerReadbackFailedCause(
   return {
     site,
     kind: 'observer-readback-failed',
+    ...(reasonCode !== undefined ? { reasonCode } : {}),
+    timedOut: reasonCode === 'command-timeout',
+  }
+}
+
+// Builds a hook-path cause. `reasonCode` is an enum the failing check itself
+// supplied (an observer or validation reason); a throw or a pure mismatch has
+// none. `timedOut` mirrors a `command-timeout`.
+function hookCause(
+  site: GuardHookCauseSite,
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return {
+    site,
+    kind,
     ...(reasonCode !== undefined ? { reasonCode } : {}),
     timedOut: reasonCode === 'command-timeout',
   }
@@ -2819,6 +2844,7 @@ function createSessionRuntime(
     callDigest: string,
     kind: string,
     fingerprint: string,
+    site: GuardHookCauseSite,
   ): 'new' | 'duplicate' | 'conflict' {
     const existing = callBindings.get(callDigest)
     if (!existing) {
@@ -2828,7 +2854,7 @@ function createSessionRuntime(
     if (existing.kind === kind && existing.fingerprint === fingerprint) {
       return 'duplicate'
     }
-    markUnavailable()
+    markUnavailable(hookCause(site, 'call-lifecycle-mismatch'))
     return 'conflict'
   }
 
@@ -3306,7 +3332,7 @@ function createSessionRuntime(
     const skill = normalizeSkill(host.tool, args)
     if (!skill) return
     const callDigest = digestCall(ledger, host.callID)
-    if (bindCall(callDigest, 'skill', skill) !== 'new') return
+    if (bindCall(callDigest, 'skill', skill, 'tool-before') !== 'new') return
     pendingSkills.set(callDigest, { callID: host.callID, skill })
   }
 
@@ -3315,7 +3341,8 @@ function createSessionRuntime(
     if (normalized === undefined) return
     const callDigest = digestCall(ledger, host.callID)
     const fingerprint = JSON.stringify(normalized)
-    if (bindCall(callDigest, 'start', fingerprint) !== 'new') return
+    if (bindCall(callDigest, 'start', fingerprint, 'tool-before') !== 'new')
+      return
     pendingStarts.set(callDigest, {
       callID: host.callID,
       input: normalized,
@@ -3367,7 +3394,9 @@ function createSessionRuntime(
     const target = normalizeTarget(args)
     if (!target) return
     const callDigest = digestCall(ledger, host.callID)
-    if (bindCall(callDigest, 'complete', target) === 'conflict') {
+    if (
+      bindCall(callDigest, 'complete', target, 'tool-before') === 'conflict'
+    ) {
       if (options.config.mode === 'protected') {
         throw createWorkflowGuardBlockedError('guard-unavailable')
       }
@@ -3437,6 +3466,13 @@ function createSessionRuntime(
     }
   }
 
+  function beforeCause(
+    kind: GuardUnavailableCauseKind,
+    reasonCode?: GuardUnavailableCause['reasonCode'],
+  ): GuardUnavailableCause {
+    return hookCause('tool-before', kind, reasonCode)
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: target derivation, registered-worktree validation, and observer registration must stay atomic on the before hook
   async function prepareOperation(
     host: HostToolBefore,
@@ -3454,12 +3490,17 @@ function createSessionRuntime(
       sessionLocation,
     )
     if (!fingerprint) {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid'))
       return
     }
     const callDigest = digestCall(ledger, host.callID)
     if (
-      bindCall(callDigest, 'operation', `${host.tool}:${fingerprint}`) !== 'new'
+      bindCall(
+        callDigest,
+        'operation',
+        `${host.tool}:${fingerprint}`,
+        'tool-before',
+      ) !== 'new'
     ) {
       return
     }
@@ -3469,7 +3510,7 @@ function createSessionRuntime(
       validateRegisteredWorktree: options.observer.validateRegisteredWorktree,
     })
     if (target.status === 'unavailable') {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid', target.reasonCode))
       return
     }
     let registeredTarget: RegisteredWorktreeValidationResult
@@ -3478,7 +3519,7 @@ function createSessionRuntime(
         target.targetRoot,
       )
     } catch {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid'))
       return
     }
     const registeredIdentity = registeredWorktreeIdentity(registeredTarget)
@@ -3487,7 +3528,14 @@ function createSessionRuntime(
       registeredIdentity === undefined ||
       registeredTarget.targetRoot !== target.targetRoot
     ) {
-      markUnavailable()
+      markUnavailable(
+        beforeCause(
+          'operation-input-invalid',
+          registeredTarget.status === 'error'
+            ? registeredTarget.reasonCode
+            : undefined,
+        ),
+      )
       return
     }
     const canonicalParentTargetRoot = canonicalExistingPath(
@@ -3495,7 +3543,7 @@ function createSessionRuntime(
       fs.realpathSync,
     )
     if (!canonicalParentTargetRoot) {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid'))
       return
     }
     const operationObserver =
@@ -3511,15 +3559,17 @@ function createSessionRuntime(
     try {
       result = await operationObserver.snapshot()
     } catch {
-      markUnavailable()
+      markUnavailable(beforeCause('local-snapshot-error'))
       return
     }
     if (result.status === 'unavailable') {
-      markUnavailable()
+      markUnavailable(
+        beforeCause('local-snapshot-unavailable', result.reasonCode),
+      )
       return
     }
     if (result.snapshot.targetDigest !== operationObserver.targetDigest) {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-target-mismatch'))
       return
     }
     rememberOperationObserver({
