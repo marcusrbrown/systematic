@@ -472,7 +472,15 @@ type OperationCompletionResult =
       operation: ReceiptOperation
       after: OperationObserverSnapshot
     }
-  | { status: 'deferred' | 'ignored' | 'unavailable' }
+  | { status: 'deferred' | 'ignored' }
+  | OperationFailure
+
+// A typed after-hook failure: the pipeline stopped and says why. The cause is
+// enum-only and is committed by `finishOperation` via `markUnavailable`.
+interface OperationFailure {
+  status: 'unavailable'
+  cause: GuardUnavailableCause
+}
 
 interface MarkerSource {
   source: string
@@ -611,6 +619,16 @@ function hookCause(
     kind,
     ...(reasonCode !== undefined ? { reasonCode } : {}),
     timedOut: reasonCode === 'command-timeout',
+  }
+}
+
+function afterFailure(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): OperationFailure {
+  return {
+    status: 'unavailable',
+    cause: hookCause('tool-after', kind, reasonCode),
   }
 }
 
@@ -4561,7 +4579,7 @@ function createSessionRuntime(
   ): PendingOperation | undefined {
     const pending = pendingOperations.get(callDigest)
     if (!pending) {
-      markUnavailable()
+      markUnavailable(afterFailure('call-lifecycle-mismatch').cause)
       return undefined
     }
     pendingOperations.delete(callDigest)
@@ -4571,23 +4589,23 @@ function createSessionRuntime(
       fingerprint !== pending.argsFingerprint
     ) {
       sealOperation(callDigest, pending, true)
-      markUnavailable()
+      markUnavailable(afterFailure('call-lifecycle-mismatch').cause)
       return undefined
     }
     return pending
   }
 
-  async function captureAfterOperation(
+  // Re-validates the registered worktree the operation began under. Returns
+  // the typed failure when it no longer matches.
+  function afterTargetFailure(
+    observer: OpencodeOperationObserver,
     pending: PendingOperation,
-  ): Promise<OperationObserverSnapshot | undefined> {
-    if (!options.observer) return undefined
+  ): OperationFailure | undefined {
     let validation: RegisteredWorktreeValidationResult
     try {
-      validation = options.observer.validateRegisteredWorktree(
-        pending.targetRoot,
-      )
+      validation = observer.validateRegisteredWorktree(pending.targetRoot)
     } catch {
-      return undefined
+      return afterFailure('operation-input-invalid')
     }
     if (
       validation.status === 'error' ||
@@ -4595,33 +4613,58 @@ function createSessionRuntime(
       registeredWorktreeIdentity(validation) !==
         pending.registeredWorktreeIdentity
     ) {
-      return undefined
+      return afterFailure(
+        'operation-input-invalid',
+        validation.status === 'error' ? validation.reasonCode : undefined,
+      )
     }
+    return undefined
+  }
+
+  async function captureAfterOperation(
+    pending: PendingOperation,
+  ): Promise<
+    | { status: 'available'; snapshot: OperationObserverSnapshot }
+    | OperationFailure
+  > {
+    if (!options.observer) return afterFailure('operation-input-invalid')
+    const targetFailure = afterTargetFailure(options.observer, pending)
+    if (targetFailure) return targetFailure
     let result: OperationObserverResult
     try {
       result = await pending.observer.snapshot()
     } catch {
-      return undefined
+      return afterFailure('local-snapshot-error')
     }
-    return result.status === 'available' &&
-      result.snapshot.targetDigest === pending.targetIdentity
-      ? result.snapshot
-      : undefined
+    if (result.status === 'unavailable') {
+      return afterFailure('local-snapshot-unavailable', result.reasonCode)
+    }
+    return result.snapshot.targetDigest === pending.targetIdentity
+      ? { status: 'available', snapshot: result.snapshot }
+      : afterFailure('operation-target-mismatch')
   }
 
   async function captureRemoteAfter(
     operation: RemoteOperation,
     observer: OpencodeOperationObserver,
-  ): Promise<OperationObserverRemoteSnapshot | undefined> {
+  ): Promise<
+    | { status: 'available'; snapshot: OperationObserverRemoteSnapshot }
+    | OperationFailure
+  > {
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return undefined
+    if (!remoteSnapshot) return afterFailure('operation-observation-rejected')
     let result: OperationObserverRemoteResult
     try {
       result = await remoteSnapshot(operation, 'after')
     } catch {
-      return undefined
+      return afterFailure('operation-observation-rejected')
     }
-    return result.status === 'available' ? result.snapshot : undefined
+    return result.status === 'available'
+      ? { status: 'available', snapshot: result.snapshot }
+      : afterFailure(
+          'operation-observation-rejected',
+          remoteFailureReason(result),
+        )
   }
 
   async function readRemoteScope(
@@ -4708,17 +4751,17 @@ function createSessionRuntime(
   async function classifyLocalObservation(
     observation: ReceiptOperationObservation,
   ): Promise<
-    | { status: 'unavailable' }
+    | OperationFailure
     | { status: 'deferred' }
     | { status: 'ready'; observation: ReceiptOperationObservation }
   > {
     const classify = options.classifier?.classifyOperation
-    if (!classify) return { status: 'unavailable' }
+    if (!classify) return afterFailure('operation-classifier-unavailable')
     let classification: ReceiptClassification
     try {
       classification = await classify(observation)
     } catch {
-      return { status: 'unavailable' }
+      return afterFailure('operation-classifier-unavailable')
     }
     if (!localOperation(classification.category)) {
       if (remoteOperation(classification.category)) {
@@ -4732,7 +4775,7 @@ function createSessionRuntime(
       }
       return classification.category === null
         ? { status: 'deferred' }
-        : { status: 'unavailable' }
+        : afterFailure('operation-classifier-unavailable')
     }
     return {
       status: 'ready',
@@ -4780,14 +4823,15 @@ function createSessionRuntime(
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)
-      return { status: 'unavailable' }
+      return afterFailure('operation-input-invalid')
     }
-    const afterSnapshot = await captureAfterOperation(pending)
+    const capture = await captureAfterOperation(pending)
     if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
-    if (!afterSnapshot) {
+    if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
-      return { status: 'unavailable' }
+      return capture
     }
+    const afterSnapshot = capture.snapshot
     const observation = buildOperationObservation(
       host,
       pending,
@@ -4803,21 +4847,22 @@ function createSessionRuntime(
     if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     if (classification.status !== 'ready') {
       sealOperation(callDigest, pending, true)
-      return { status: classification.status }
+      return classification
     }
     let finalObservation = classification.observation
     if (remoteOperation(finalObservation.operation)) {
-      const remoteAfter = await captureRemoteAfter(
+      const remoteCapture = await captureRemoteAfter(
         finalObservation.operation,
         pending.observer,
       )
       if (!ownsOperation(pending)) {
         return sealLostOperation(callDigest, pending)
       }
-      if (!remoteAfter) {
+      if (remoteCapture.status === 'unavailable') {
         sealOperation(callDigest, pending, true)
-        return { status: 'unavailable' }
+        return remoteCapture
       }
+      const remoteAfter = remoteCapture.snapshot
       const rebuilt = buildOperationObservation(
         host,
         pending,
@@ -4848,7 +4893,10 @@ function createSessionRuntime(
         })
         if (seeded.status === 'rejected') {
           sealOperation(callDigest, pending, true)
-          return { status: 'unavailable' }
+          return afterFailure(
+            'operation-observation-rejected',
+            seeded.reasonCode,
+          )
         }
       }
     }
@@ -4858,11 +4906,11 @@ function createSessionRuntime(
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)
-      return { status: 'unavailable' }
+      return afterFailure('operation-observation-rejected')
     }
     sealOperation(callDigest, pending, observed.status !== 'accepted')
     if (observed.status === 'unavailable') {
-      return { status: 'unavailable' }
+      return afterFailure('operation-observation-rejected', observed.reasonCode)
     }
     if (observed.status !== 'accepted') return { status: 'ignored' }
     return {
@@ -4935,7 +4983,7 @@ function createSessionRuntime(
       output,
     )
     if (result.status === 'unavailable') {
-      markUnavailable()
+      markUnavailable(result.cause)
       return
     }
     if (result.status !== 'accepted') return

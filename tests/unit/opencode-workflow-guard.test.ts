@@ -9004,6 +9004,504 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
+  describe('guard-unavailable first-cause diagnostic (operation after-hook)', () => {
+    const D = 'd'.repeat(64)
+    const E = 'e'.repeat(64)
+    const COMMAND = { command: 'bun test' }
+    const OUTPUT = { title: 'run', output: 'ok', metadata: { exit: 0 } }
+
+    interface ArmedOverrides {
+      readonly snapshot?: OpencodeOperationObserver['snapshot']
+      readonly validate?: OpencodeOperationObserver['validateRegisteredWorktree']
+    }
+
+    // Behaves normally through the before-hook; `arm()` switches the supplied
+    // overrides on for the after-hook.
+    function armable(
+      overrides: ArmedOverrides,
+      remoteResults: Readonly<
+        Record<string, readonly OperationObserverRemoteResult[]>
+      > = {},
+    ): { observer: OpencodeOperationObserver; arm: () => void } {
+      let armed = false
+      const base = sequenceObserver([operationSnapshot()], remoteResults)
+      const observer: OpencodeOperationObserver = {
+        ...base,
+        snapshot: () =>
+          armed && overrides.snapshot ? overrides.snapshot() : base.snapshot(),
+        validateRegisteredWorktree: (candidateDirectory) =>
+          armed && overrides.validate
+            ? overrides.validate(candidateDirectory)
+            : base.validateRegisteredWorktree(candidateDirectory),
+      }
+      return {
+        observer,
+        arm: () => {
+          armed = true
+        },
+      }
+    }
+
+    async function afterHook(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      args: Record<string, unknown> = COMMAND,
+      output: unknown = OUTPUT,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](
+        { tool: 'bash', sessionID: SESSION_A, callID, args },
+        output,
+      )
+    }
+
+    async function beforeThenAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      arm?: () => void,
+      output: unknown = OUTPUT,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID },
+        { args: COMMAND },
+      )
+      arm?.()
+      await afterHook(adapter, callID, COMMAND, output)
+    }
+
+    async function causeOf(adapter: OpencodeWorkflowGuard): Promise<unknown> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      return parsed.state === 'unavailable'
+        ? parsed.firstUnavailableCause
+        : 'not-unavailable'
+    }
+
+    async function activatedAdapter(
+      observer: OpencodeOperationObserver,
+      runtimeRequired: readonly ReceiptOperation[] = [],
+      classifierOverride?: Record<string, unknown>,
+    ): Promise<OpencodeWorkflowGuard> {
+      const adapter = classifierOverride
+        ? createOpencodeWorkflowGuard({
+            config: { mode: 'observe', debug: false },
+            ...OPERATION_SCOPE,
+            observer,
+            ...(classifierOverride.classifier === undefined
+              ? {}
+              : {
+                  classifier: classifierOverride.classifier as ReturnType<
+                    typeof createReceiptClassifier
+                  >,
+                }),
+            runtimeRequiredOperations: runtimeRequired,
+          })
+        : createAdapter('observe', false, observer, runtimeRequired)
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+      return adapter
+    }
+
+    function afterCause(
+      kind: string,
+      reasonCode?: string,
+      timedOut = false,
+    ): Record<string, unknown> {
+      return {
+        site: 'tool-after',
+        kind,
+        ...(reasonCode === undefined ? {} : { reasonCode }),
+        timedOut,
+      }
+    }
+
+    test('an after hook with no pending operation records call-lifecycle-mismatch', async () => {
+      const adapter = await activatedAdapter(
+        sequenceObserver([operationSnapshot()]),
+      )
+      await afterHook(adapter, 'after-no-pending')
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('call-lifecycle-mismatch'),
+      )
+    })
+
+    test('an after hook whose args differ from the pending operation records call-lifecycle-mismatch', async () => {
+      const adapter = await activatedAdapter(
+        sequenceObserver([operationSnapshot()]),
+      )
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID: 'after-mismatch' },
+        { args: COMMAND },
+      )
+      await afterHook(adapter, 'after-mismatch', { command: 'bun lint' })
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('call-lifecycle-mismatch'),
+      )
+    })
+
+    test.each([
+      ['missing metadata', { title: 'run', output: 'ok' }],
+      ['oversized title', { title: 'x'.repeat(100_000), metadata: {} }],
+      ['non-record output', 'not a record'],
+    ] as const)(
+      'an unparseable host output (%s) records operation-input-invalid',
+      async (_name, output) => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+        )
+        await beforeThenAfter(adapter, 'after-bad-output', undefined, output)
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-input-invalid'),
+        )
+      },
+    )
+
+    describe('after-hook registered-worktree validation', () => {
+      const cases: ReadonlyArray<{
+        readonly name: string
+        readonly validate: OpencodeOperationObserver['validateRegisteredWorktree']
+        readonly reasonCode?: OperationObserverReasonCode
+      }> = [
+        {
+          name: 'an error with a reason',
+          validate: () => ({ status: 'error', reasonCode: 'command-failed' }),
+          reasonCode: 'command-failed',
+        },
+        {
+          name: 'a timeout',
+          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
+          reasonCode: 'command-timeout',
+        },
+        {
+          name: 'a different target root',
+          validate: (candidateDirectory) => ({
+            status: 'ok',
+            targetRoot: path.join(candidateDirectory, 'elsewhere'),
+            gitDir: '/git',
+            commonDir: '/git',
+          }),
+        },
+        {
+          name: 'a different registered identity',
+          validate: (candidateDirectory) => ({
+            status: 'ok',
+            targetRoot: candidateDirectory,
+            gitDir: '/other-git',
+            commonDir: '/other-git',
+          }),
+        },
+        {
+          name: 'a throw',
+          validate: () => {
+            throw new Error('validation exploded')
+          },
+        },
+      ]
+      for (const validationCase of cases) {
+        test(`${validationCase.name} records operation-input-invalid`, async () => {
+          const { observer, arm } = armable({
+            validate: validationCase.validate,
+          })
+          const adapter = await activatedAdapter(observer)
+          await beforeThenAfter(adapter, 'after-validation', arm)
+          expect(await causeOf(adapter)).toEqual(
+            afterCause(
+              'operation-input-invalid',
+              validationCase.reasonCode,
+              validationCase.reasonCode === 'command-timeout',
+            ),
+          )
+        })
+      }
+    })
+
+    test('an after snapshot that is unavailable records its observer reasonCode', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => ({
+          status: 'unavailable',
+          reasonCode: 'file-output-limit',
+        }),
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-file-output-limit', arm)
+      expect(await causeOf(adapter)).toEqual({
+        site: 'tool-after',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'file-output-limit',
+        timedOut: false,
+      })
+    })
+
+    test('an after snapshot command-timeout records timedOut', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => ({
+          status: 'unavailable',
+          reasonCode: 'command-timeout',
+        }),
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-timeout', arm)
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('local-snapshot-unavailable', 'command-timeout', true),
+      )
+    })
+
+    test('an after snapshot that throws records local-snapshot-error', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => {
+          throw new Error('after snapshot exploded')
+        },
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-throws', arm)
+      expect(await causeOf(adapter)).toEqual(afterCause('local-snapshot-error'))
+    })
+
+    test('an after snapshot for a different target digest records operation-target-mismatch', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => ({
+          status: 'available',
+          snapshot: { ...operationSnapshot(), targetDigest: 'f'.repeat(64) },
+        }),
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-digest-mismatch', arm)
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('operation-target-mismatch'),
+      )
+    })
+
+    describe('classifier not ready', () => {
+      const realClassifier = createReceiptClassifier()
+
+      test('a missing classifier records operation-classifier-unavailable', async () => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {},
+        )
+        await beforeThenAfter(adapter, 'after-no-classifier')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-classifier-unavailable'),
+        )
+      })
+
+      test('a classifier that throws records operation-classifier-unavailable', async () => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {
+            classifier: {
+              ...realClassifier,
+              classifyOperation: async () => {
+                throw new Error('classifier exploded')
+              },
+            },
+          },
+        )
+        await beforeThenAfter(adapter, 'after-classifier-throws')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-classifier-unavailable'),
+        )
+      })
+
+      test('a classifier that returns an unexpected category records operation-classifier-unavailable', async () => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {
+            classifier: {
+              ...realClassifier,
+              classifyOperation: async () => ({
+                outcome: 'accepted',
+                category: 'bogus-category',
+              }),
+            },
+          },
+        )
+        await beforeThenAfter(adapter, 'after-classifier-bogus')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-classifier-unavailable'),
+        )
+      })
+    })
+
+    describe('operation-observation-rejected', () => {
+      const PUSH = { command: 'git push origin main' }
+
+      async function pushAfter(
+        adapter: OpencodeWorkflowGuard,
+        callID: string,
+      ): Promise<void> {
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID },
+          { args: PUSH },
+        )
+        await afterHook(adapter, callID, PUSH)
+      }
+
+      const pushCases: ReadonlyArray<{
+        readonly name: string
+        readonly after: OperationObserverRemoteResult | 'throw'
+        readonly reasonCode?: string
+      }> = [
+        {
+          name: 'a remote after-read that is unavailable',
+          after: { status: 'unavailable', reasonCode: 'remote-missing-field' },
+          reasonCode: 'remote-missing-field',
+        },
+        {
+          name: 'a remote after-read that times out',
+          after: { status: 'unavailable', reasonCode: 'command-timeout' },
+          reasonCode: 'command-timeout',
+        },
+        {
+          name: 'a remote after-read with a missing resource',
+          after: { status: 'missing-resource' },
+          reasonCode: 'missing-resource',
+        },
+        { name: 'a remote after-read that throws', after: 'throw' },
+      ]
+
+      for (const pushCase of pushCases) {
+        test(`${pushCase.name} records operation-observation-rejected`, async () => {
+          const base = sequenceObserver([operationSnapshot()], {
+            'push:before': [remoteAvailable(D, E), remoteAvailable(D, E)],
+          })
+          const observer: OpencodeOperationObserver = {
+            ...base,
+            remoteSnapshot: async (operation, phase) => {
+              if (operation === 'push' && phase === 'after') {
+                if (pushCase.after === 'throw') throw new Error('probe failed')
+                return pushCase.after
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ?? {
+                  status: 'unavailable',
+                  reasonCode: 'remote-missing-field',
+                }
+              )
+            },
+          }
+          const adapter = await activatedAdapter(observer, ['push'])
+          await pushAfter(adapter, 'after-remote')
+          expect(await causeOf(adapter)).toEqual(
+            afterCause(
+              'operation-observation-rejected',
+              pushCase.reasonCode,
+              pushCase.reasonCode === 'command-timeout',
+            ),
+          )
+        })
+      }
+
+      test('a pr-creation self-seed readback the guard rejects records operation-observation-rejected with the guard reason', async () => {
+        const MISSING = { status: 'missing-resource' as const }
+        const base = sequenceObserver([operationSnapshot()], {
+          'pr-creation:before': [MISSING],
+          // An empty resource identity cannot be seeded as a baseline.
+          'pr-creation:after': [
+            remoteAvailable('', E, {
+              pullRequest: { identity: D, state: 'open' },
+            }),
+          ],
+        })
+        const adapter = await activatedAdapter(base, ['pr-creation'])
+        const create = { command: 'gh pr create --title t --body b' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'after-pr-seed' },
+          { args: create },
+        )
+        await afterHook(adapter, 'after-pr-seed', create)
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-observation-rejected', 'invalid-receipt'),
+        )
+      })
+
+      test('a guard observeOperation that throws records operation-observation-rejected', async () => {
+        const realClassifier = createReceiptClassifier()
+        const classify = realClassifier.classifyOperation
+        if (!classify)
+          throw new Error('classifier implements classifyOperation')
+        let calls = 0
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {
+            classifier: {
+              ...realClassifier,
+              classifyOperation: async (input: unknown) => {
+                calls += 1
+                const classification = await classify(input)
+                if (calls === 1) return classification
+                return {
+                  ...classification,
+                  get outcome(): never {
+                    throw new Error('guard admission exploded')
+                  },
+                }
+              },
+            },
+          },
+        )
+        await beforeThenAfter(adapter, 'after-observe-throws')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-observation-rejected'),
+        )
+      })
+
+      test('a guard observeOperation that returns unavailable carries the guard reasonCode', async () => {
+        // The first accepted local operation pins the unit's operation target;
+        // a second operation under a different target digest makes the guard
+        // itself answer unavailable/operation-target-mismatch.
+        let targetDigest = OPERATION_SCOPE.workspaceIdentity
+        const base = sequenceObserver([operationSnapshot()])
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          get targetDigest() {
+            return targetDigest
+          },
+          snapshot: async () => ({
+            status: 'available',
+            snapshot: { ...operationSnapshot(), targetDigest },
+          }),
+        }
+        const adapter = await activatedAdapter(observer)
+        await beforeThenAfter(adapter, 'after-pin-target')
+        expect(await causeOf(adapter)).toBe('not-unavailable')
+        targetDigest = 'f'.repeat(64)
+        await beforeThenAfter(adapter, 'after-guard-unavailable')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause(
+            'operation-observation-rejected',
+            'operation-target-mismatch',
+          ),
+        )
+      })
+    })
+
+    test('a before-hook cause keeps winning over a later after-hook failure', async () => {
+      const { observer } = armable({})
+      const failingBefore: OpencodeOperationObserver = {
+        ...observer,
+        snapshot: async () => ({
+          status: 'unavailable',
+          reasonCode: 'file-output-limit',
+        }),
+      }
+      const adapter = createAdapter('observe', false, failingBefore)
+      await beforeThenAfter(adapter, 'first-wins-after')
+      expect(await causeOf(adapter)).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'file-output-limit',
+        timedOut: false,
+      })
+    })
+  })
+
   test('before-only operation is abandoned at the next request boundary (transform), not by a status call', async () => {
     const adapter = createAdapter(
       'observe',
