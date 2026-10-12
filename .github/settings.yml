@@ -7,6 +7,27 @@ repository:
   homepage: https://fro.bot/systematic
   topics: opencode, plugin, ai, workflow, systematic, semantic-release, bun
 
+# Applied by the settings workflow, which deletes any ruleset not listed here.
+# Environments are managed by hand and must not be declared in this file.
+rulesets:
+  - name: release-branch
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ['refs/heads/release/**']
+        exclude: []
+    rules:
+      - type: creation
+      - type: update
+      - type: deletion
+      - type: non_fast_forward
+    bypass_actors:
+      # systematic-release GitHub App
+      - actor_id: 5287597
+        actor_type: Integration
+        bypass_mode: always
+
 branches:
   - name: main
     protection:
