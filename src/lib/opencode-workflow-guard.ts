@@ -268,9 +268,38 @@ function defaultTargetObserver(
   return createOpencodeOperationObserver({ targetDirectory })
 }
 
+// A fatal completion failure carries the failing stage's observer reason code
+// when one is known; a throw, target mismatch, or drift has none.
+type CompletionFailure =
+  | { readonly status: 'timeout' }
+  | {
+      readonly status: 'fatal'
+      readonly reasonCode?: GuardUnavailableCause['reasonCode']
+    }
+
 type CompletionProbeRead =
   | { readonly kind: 'ok'; readonly snapshot: OperationObserverSnapshot }
-  | { readonly kind: 'timeout' | 'fatal' }
+  | { readonly kind: 'timeout' }
+  | {
+      readonly kind: 'fatal'
+      readonly reasonCode?: GuardUnavailableCause['reasonCode']
+    }
+
+function probeFailure(
+  read: Exclude<CompletionProbeRead, { readonly kind: 'ok' }>,
+): CompletionFailure {
+  return read.kind === 'timeout'
+    ? { status: 'timeout' }
+    : { status: 'fatal', reasonCode: read.reasonCode }
+}
+
+function lookupFailure(
+  lookup: Exclude<EffectiveObserverLookup, { readonly kind: 'ok' }>,
+): CompletionFailure {
+  return lookup.kind === 'timeout'
+    ? { status: 'timeout' }
+    : { status: 'fatal', reasonCode: lookup.reasonCode }
+}
 
 type CompletionRemoteOutcome =
   | {
@@ -280,14 +309,14 @@ type CompletionRemoteOutcome =
         snapshot: OperationObserverRemoteSnapshot
       }[]
     }
-  | { readonly status: 'timeout' | 'fatal' }
+  | CompletionFailure
 
 // `none`: no observer. `timeout`: a probe timed out, so the attempt is
 // retryable. `fatal`: any other readback failure.
 type CompletionReadbackOutcome =
   | { readonly status: 'none' }
   | { readonly status: 'ready'; readonly readbacks: readonly unknown[] }
-  | { readonly status: 'timeout' | 'fatal' }
+  | CompletionFailure
 
 interface SessionRuntime {
   readonly ledger?: ReceiptLedger
@@ -553,6 +582,7 @@ interface GuardUnavailableCause {
     | 'seed-remote-scope'
     | 'initialize-session'
     | 'refresh-readback'
+    | 'complete-readback'
   readonly kind: GuardUnavailableCauseKind
   readonly operation?: RemoteOperation
   readonly reasonCode?:
@@ -579,9 +609,10 @@ function initializationCause(
 // one is known; a throw has none. `timedOut` mirrors a `command-timeout`.
 function observerReadbackFailedCause(
   reasonCode?: GuardUnavailableCause['reasonCode'],
+  site: 'refresh-readback' | 'complete-readback' = 'refresh-readback',
 ): GuardUnavailableCause {
   return {
-    site: 'refresh-readback',
+    site,
     kind: 'observer-readback-failed',
     ...(reasonCode !== undefined ? { reasonCode } : {}),
     timedOut: reasonCode === 'command-timeout',
@@ -4199,19 +4230,17 @@ function createSessionRuntime(
     const observer = options.observer
     if (!observer) return { status: 'none' }
     const parent = await completionSnapshot(observer)
-    if (parent.kind !== 'ok') return { status: parent.kind }
+    if (parent.kind !== 'ok') return probeFailure(parent)
     if (parent.snapshot.targetDigest !== options.workspaceIdentity) {
       return { status: 'fatal' }
     }
     const lookup = resolveEffectiveObserver()
-    if (lookup.kind !== 'ok') {
-      return { status: lookup.kind === 'timeout' ? 'timeout' : 'fatal' }
-    }
+    if (lookup.kind !== 'ok') return lookupFailure(lookup)
     const effective = lookup.observer
     let initialEffective = parent.snapshot
     if (effective.pinned) {
       const pinned = await completionSnapshot(effective.observer)
-      if (pinned.kind !== 'ok') return { status: pinned.kind }
+      if (pinned.kind !== 'ok') return probeFailure(pinned)
       if (pinned.snapshot.targetDigest !== effective.targetIdentity) {
         return { status: 'fatal' }
       }
@@ -4220,7 +4249,7 @@ function createSessionRuntime(
     const remote = await completionRemoteReadbacks(effective.observer)
     if (remote.status !== 'ready') return remote
     const finalParent = await completionSnapshot(observer)
-    if (finalParent.kind !== 'ok') return { status: finalParent.kind }
+    if (finalParent.kind !== 'ok') return probeFailure(finalParent)
     if (completionParentDrifted(parent.snapshot, finalParent.snapshot)) {
       return { status: 'fatal' }
     }
@@ -4259,7 +4288,9 @@ function createSessionRuntime(
       return { kind: 'fatal' }
     }
     if (isProbeTimeout(result)) return { kind: 'timeout' }
-    if (result.status === 'unavailable') return { kind: 'fatal' }
+    if (result.status === 'unavailable') {
+      return { kind: 'fatal', reasonCode: result.reasonCode }
+    }
     return { kind: 'ok', snapshot: result.snapshot }
   }
 
@@ -4285,12 +4316,10 @@ function createSessionRuntime(
         readonly effective: EffectiveOperationObserver
         readonly snapshot: OperationObserverSnapshot
       }
-    | { readonly status: 'timeout' | 'fatal' }
+    | CompletionFailure
   > {
     const lookup = resolveEffectiveObserver()
-    if (lookup.kind !== 'ok') {
-      return { status: lookup.kind === 'timeout' ? 'timeout' : 'fatal' }
-    }
+    if (lookup.kind !== 'ok') return lookupFailure(lookup)
     const revalidated = lookup.observer
     if (
       revalidated.observer !== effective.observer ||
@@ -4300,7 +4329,7 @@ function createSessionRuntime(
       return { status: 'fatal' }
     }
     const pinned = await completionSnapshot(revalidated.observer)
-    if (pinned.kind !== 'ok') return { status: pinned.kind }
+    if (pinned.kind !== 'ok') return probeFailure(pinned)
     if (
       pinned.snapshot.targetDigest !== revalidated.targetIdentity ||
       pinned.snapshot.repositoryRevisionDigest !==
@@ -4332,7 +4361,9 @@ function createSessionRuntime(
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
       if (isProbeTimeout(result)) return { status: 'timeout' }
-      if (result?.status !== 'available') return { status: 'fatal' }
+      if (result?.status !== 'available') {
+        return { status: 'fatal', reasonCode: remoteFailureReason(result) }
+      }
       readbacks.push({ operation, snapshot: result.snapshot })
     }
     return { status: 'ready', readbacks }
@@ -4371,13 +4402,25 @@ function createSessionRuntime(
     writeAbandonedCompletionResult(output, finalTarget, 'guard-unavailable')
   }
 
+  // A fatal completion readback. The terminal entry makes a duplicate
+  // after-hook replay exactly the result written here, and the transition
+  // records its cause (first-wins: a session that was already unavailable keeps
+  // its earlier cause).
   function finishUnavailableReadback(
     callDigest: string,
     pending: PendingComplete,
     output: unknown,
+    reasonCode?: GuardUnavailableCause['reasonCode'],
   ): void {
     abandonComplete(callDigest, pending, true)
-    markUnavailable()
+    terminalCompletes.set(callDigest, {
+      target: pending.target,
+      status: 'unavailable',
+      reasonCode: 'finalization-failed',
+    })
+    markUnavailable(
+      observerReadbackFailedCause(reasonCode, 'complete-readback'),
+    )
     writeAbandonedCompletionResult(
       output,
       pending.target,
@@ -4393,7 +4436,7 @@ function createSessionRuntime(
     output: unknown,
   ): void {
     if (guard.status().state === 'unavailable') {
-      finishUnavailableReadback(callDigest, pending, output)
+      finishUnavailableReadback(callDigest, pending, output, 'command-timeout')
     } else {
       finishRetryableReadback(callDigest, pending, output)
     }
@@ -4441,7 +4484,12 @@ function createSessionRuntime(
     }
     const readbacks = await completionReadbacks()
     if (readbacks.status === 'fatal') {
-      finishUnavailableReadback(callDigest, pending, output)
+      finishUnavailableReadback(
+        callDigest,
+        pending,
+        output,
+        readbacks.reasonCode,
+      )
       return
     }
     if (readbacks.status === 'timeout') {

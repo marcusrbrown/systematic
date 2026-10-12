@@ -2835,7 +2835,7 @@ describe('OpenCode workflow guard adapter', () => {
         // The Nth upcoming local snapshot call reports a drifted revision.
         driftLocalSnapshotOnCall(n: number): void
         // Every upcoming local snapshot fails without a timeout.
-        failLocalSnapshot(how: 'throw' | 'target-unavailable' | undefined): void
+        failLocalSnapshot(how: LocalFailure | undefined): void
         // The next remote 'after' read of `operation` is held until released.
         holdRemote(operation: RemoteOperation): {
           readonly reached: Promise<void>
@@ -2871,10 +2871,18 @@ describe('OpenCode workflow guard adapter', () => {
         expect(status(adapter).satisfiedOperations).toContain('pr-creation')
       }
 
+      type LocalFailure = 'throw' | 'target-unavailable' | 'target-mismatch'
+
       function failedSnapshot(
-        how: 'throw' | 'target-unavailable',
+        how: LocalFailure,
       ): Awaited<ReturnType<OpencodeOperationObserver['snapshot']>> {
         if (how === 'throw') throw new Error('snapshot exploded')
+        if (how === 'target-mismatch') {
+          return {
+            status: 'available',
+            snapshot: { ...operationSnapshot(), targetDigest: 'f'.repeat(64) },
+          }
+        }
         return { status: 'unavailable', reasonCode: how }
       }
 
@@ -2900,7 +2908,7 @@ describe('OpenCode workflow guard adapter', () => {
         let snapshotCalls = 0
         let timeoutOnCall: number | undefined
         let driftOnCall: number | undefined
-        let localFailure: 'throw' | 'target-unavailable' | undefined
+        let localFailure: LocalFailure | undefined
         let remoteCalls = 0
         const overrides = new Map<
           RemoteOperation,
@@ -3534,6 +3542,135 @@ describe('OpenCode workflow guard adapter', () => {
             } finally {
               setup.fixture.cleanup()
             }
+          })
+        })
+
+        describe('fatal completion readbacks are replayable and caused', () => {
+          const causeOf = async (adapter: OpencodeWorkflowGuard) =>
+            (await refreshed(adapter)).firstUnavailableCause
+
+          const fatalCases: Array<{
+            name: string
+            arm: (fx: SkipFixture) => void
+            reasonCode?: string
+          }> = [
+            {
+              name: 'a remote missing-resource',
+              arm: (fx) => fx.failRemote('push', MISSING),
+              reasonCode: 'missing-resource',
+            },
+            {
+              name: 'a non-timeout unavailable parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('target-unavailable'),
+              reasonCode: 'target-unavailable',
+            },
+            {
+              name: 'a throwing parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('throw'),
+            },
+            {
+              name: 'a parent snapshot target mismatch',
+              arm: (fx) => fx.failLocalSnapshot('target-mismatch'),
+            },
+          ]
+
+          test.each(fatalCases)(
+            'a: $name writes finalization-failed, and a duplicate after-hook replays it instead of leaving the raw output',
+            async ({ arm }) => {
+              const fx = await skipFixture('observe')
+              arm(fx)
+              const first = await complete(fx.adapter, 'fatal-complete')
+              expectFatal(first)
+              const raw: CompletionOutput = {
+                title: 'host title',
+                output: 'raw pending output',
+                metadata: {},
+              }
+              await afterComplete(fx.adapter, 'fatal-complete', raw)
+              expectFatal(raw)
+              expect(raw.title).toBe(first.title)
+              expect(raw.output).toBe(first.output)
+              expect(raw.metadata.workflowGuard).toEqual(
+                first.metadata.workflowGuard,
+              )
+            },
+          )
+
+          test.each(fatalCases)(
+            'b: $name records a complete-readback cause',
+            async ({ arm, reasonCode }) => {
+              const fx = await skipFixture('observe')
+              arm(fx)
+              expectFatal(await complete(fx.adapter, 'fatal-complete'))
+              expect(await causeOf(fx.adapter)).toEqual({
+                site: 'complete-readback',
+                kind: 'observer-readback-failed',
+                ...(reasonCode === undefined ? {} : { reasonCode }),
+                timedOut: false,
+              })
+            },
+          )
+
+          test.each([
+            { name: 'a non-timeout failure', result: MISSING },
+            { name: 'a timeout', result: TIMEOUT },
+          ])(
+            'c: $name that lands after a fatal status refresh keeps the earlier cause',
+            async ({ result }) => {
+              const fx = await skipFixture('observe')
+              const hold = fx.holdRemote('push')
+              await beforeComplete(fx.adapter, 'held-complete')
+              const output = freshCompletionOutput()
+              const done = afterComplete(fx.adapter, 'held-complete', output)
+              await hold.reached
+              fx.failLocalSnapshot('target-unavailable')
+              expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+              fx.failLocalSnapshot(undefined)
+              hold.release(result)
+              await done
+              expectFatal(output)
+              expect(await causeOf(fx.adapter)).toEqual({
+                site: 'refresh-readback',
+                kind: 'observer-readback-failed',
+                reasonCode: 'target-unavailable',
+                timedOut: false,
+              })
+            },
+          )
+
+          test('d: a mismatched completion target still goes through finishMismatchedTarget as invalid-transition', async () => {
+            const fx = await skipFixture('observe')
+            await beforeComplete(fx.adapter, 'mismatch-complete')
+            const output = freshCompletionOutput()
+            await fx.adapter.hooks['tool.execute.after'](
+              {
+                tool: 'systematic_workflow_complete',
+                sessionID: SESSION_A,
+                callID: 'mismatch-complete',
+                args: { target: 'epoch' },
+              },
+              output,
+            )
+            expect(JSON.parse(output.output)).toEqual({
+              status: 'unavailable',
+              reasonCode: 'invalid-transition',
+            })
+            expect(status(fx.adapter).state).toBe('unavailable')
+          })
+
+          test('e: a retryable timeout records no cause; a later fatal refresh records its own', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            expect(await causeOf(fx.adapter)).toBeUndefined()
+            fx.failRemote('push', undefined)
+            fx.failLocalSnapshot('target-unavailable')
+            expect(await causeOf(fx.adapter)).toEqual({
+              site: 'refresh-readback',
+              kind: 'observer-readback-failed',
+              reasonCode: 'target-unavailable',
+              timedOut: false,
+            })
           })
         })
 
