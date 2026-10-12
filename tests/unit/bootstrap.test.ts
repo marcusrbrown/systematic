@@ -76,7 +76,7 @@ describe('getBootstrapContent', () => {
       { bundledSkillsDir: skillsDir },
     )
 
-    expect(content).toHaveLength(6559)
+    expect(content).toHaveLength(6821)
     expect(content).not.toContain('<available_skills>')
     expect(content).not.toContain('<location>')
     expect(
@@ -196,7 +196,7 @@ describe('getBootstrapContent', () => {
 
       When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
 
-      Check the workflow guard availability once per execution unit. Guard state is per session; a child session starts \`inactive\`. \`inactive\` (reason \`no-active-epoch\`) means no guarded workflow has started in this session. It is not unavailable and not terminal: load a guarded skill to begin, and do not call \`systematic_workflow_start\` or \`systematic_workflow_complete\` before one is active. If the guard reports \`unavailable\` or \`guard-unavailable\`, treat it as terminal for that unit: do not retry \`systematic_workflow_start\` or \`systematic_workflow_complete\`. Use the documented unguarded fallback only when authorized, and report the unavailable state once.
+      Check the workflow guard availability once per execution unit. Guard state is per session; a child session starts \`inactive\`. \`inactive\` (reason \`no-active-epoch\`) means no guarded workflow has started in this session. It is not unavailable and not terminal: load a guarded skill to begin, and do not call \`systematic_workflow_start\` or \`systematic_workflow_complete\` before one is active. A completion rejected with \`readback-timeout\` is retryable: call \`systematic_workflow_complete\` again at most twice, then report it to the user. Operations listed in \`unconfirmedReadbacks\` on status output are unverified until a later status call confirms them. If the guard reports \`unavailable\` or \`guard-unavailable\`, treat it as terminal for that unit: do not retry \`systematic_workflow_start\` or \`systematic_workflow_complete\`. Use the documented unguarded fallback only when authorized, and report the unavailable state once.
 
       **Skills naming:**
       - Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:onboarding\`)
