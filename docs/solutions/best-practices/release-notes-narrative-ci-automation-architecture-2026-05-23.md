@@ -43,13 +43,16 @@ The v1 skill's procedure (`.agents/skills/release-notes-narrative/SKILL.md`) is 
 The narrative runs in its own workflow, triggered by the `release: published` event that semantic-release's publish causes. It is not part of the publish job, so a failed narrative is a red `release-notes.yaml` run rather than a failure buried in (or hidden from) the publish job. All coordination still happens through GitHub-native primitives (no external queues, no broker, no shared state):
 
 ```
-.github/workflows/main.yaml: Release job
-  └─ npx semantic-release
+.github/workflows/release.yaml: publish job (RELEASE_MODE=gated, after the approved release PR merges)
+  └─ npx --no-install semantic-release (gated config; the approved CHANGELOG.md entry is the notes)
       ├─ @semantic-release/commit-analyzer
-      ├─ @semantic-release/release-notes-generator (produces auto-body)
+      ├─ @semantic-release/exec (notes = approved entry; fails unless the version matches)
       ├─ @semantic-release/npm (publishes to npm)
       ├─ @semantic-release/github (creates GitHub release; body is live)
       └─ semantic-release-export-data (emits final outputs)
+
+.github/workflows/main.yaml: legacy-release job (only while RELEASE_MODE is legacy)
+  └─ npx semantic-release (.releaserc.yaml, including release-notes-generator)
 
 .github/workflows/release-notes.yaml (release: published, or workflow_dispatch with a tag)
   └─ narrate job (contents: read + actions: write; references no secrets, uses github.token)
