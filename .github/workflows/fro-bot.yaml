@@ -1,6 +1,13 @@
 ---
 name: Fro Bot
 
+# Embeds the caller's correlation-id in the run title so dispatchers
+# (scripts/dispatch-release-notes.sh) can pick out exactly their own run among
+# concurrent dispatches. `inputs` is empty on every other trigger (and when no id
+# is given), where this resolves to the plain 'Fro Bot'. The job name below stays
+# `Fro Bot`: it is a required status-check context.
+run-name: ${{ inputs.correlation-id && format('Fro Bot narrative {0}', inputs.correlation-id) || 'Fro Bot' }}
+
 on:
   issue_comment:
     types: [created]

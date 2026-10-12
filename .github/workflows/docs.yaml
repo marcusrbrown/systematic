@@ -5,27 +5,65 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      version:
-        description: Release version (optional, semver or v-prefixed)
-        required: false
+      tag:
+        description: Existing published release tag to rebuild docs from (e.g. v3.21.7)
+        required: true
         type: string
-
-concurrency:
-  group: docs-deploy
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  build-and-deploy:
-    name: Build and Deploy Docs
+  # Builds the docs site and OCX registry from a validated release tag. This job
+  # executes repository code (bun install, docs/scripts, registry build), so it
+  # runs read-only and never sees the deploy key (that lives in the `docs`
+  # environment, available to the `deploy` job only).
+  build:
+    name: Build Docs
     runs-on: ubuntu-latest
     if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.target.outputs.proceed }}
+      tag: ${{ steps.target.outputs.tag }}
     steps:
-      - name: Checkout
+      # The validator always comes from the default branch, never the target tag,
+      # so a release on an older line (which may predate the script) is still
+      # validated and skipped as not-latest. It lands in its own path so the tag
+      # checkout below is unaffected, with no persisted credentials.
+      - name: Fetch release target validator
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: scripts/validate-release-target.sh
+          sparse-checkout-cone-mode: false
+          path: .release-target-validator
+          persist-credentials: false
+
+      # Runs before the target checkout. Everything after it is gated on `proceed`,
+      # so an untrusted author or a non-latest release event ends the job cleanly
+      # without building or deploying; a dispatch for either fails loudly. Docs
+      # only ever deploy the repo's latest release (REQUIRE_LATEST), so a
+      # historical or backport tag can never replace the live site.
+      - name: Validate release target
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_AUTHOR: ${{ github.event.release.author.login }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]' }}
+          REQUIRE_LATEST: 'true'
+          GH_TOKEN: ${{ github.token }}
+        run: bash .release-target-validator/scripts/validate-release-target.sh
+
+      - name: Checkout
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.target.outputs.tag }}
+          persist-credentials: false
           # Full history (not just tags): generate-stats.ts resolves the version
           # via `git describe --tags`, which needs HEAD connected to the tag. A
           # shallow checkout with fetch-tags alone leaves describe unable to
@@ -33,17 +71,21 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
       - name: Setup Bun
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         run: bun install --frozen-lockfile
 
       - name: Cache Playwright browsers
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -52,52 +94,91 @@ jobs:
       # Keep this install in step with the docs job in `main.yaml`; `--with-deps`
       # is omitted there for the same reason. See that comment for the detail.
       - name: Install Playwright Chromium
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         run: bun playwright install chromium
         working-directory: docs
 
       - name: Generate reference content
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        env:
+          # Read-only token (contents: read) for the generator's GitHub releases lookup.
+          GH_TOKEN: ${{ github.token }}
         run: bun run docs:generate
 
-      - name: Resolve registry version
-        id: registry-version
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-        run: |
-          if [ "$EVENT_NAME" = "release" ]; then
-            version="$RELEASE_TAG"
-            version="${version#v}"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -n "$INPUT_VERSION" ]; then
-            version="$INPUT_VERSION"
-            version="${version#v}"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "version=" >> "$GITHUB_OUTPUT"
-
       - name: Build registry
-        run: |
-          if [ -n "${{ steps.registry-version.outputs.version }}" ]; then
-            bun scripts/build-registry.ts --version "${{ steps.registry-version.outputs.version }}"
-          else
-            bun scripts/build-registry.ts
-          fi
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        run: bun scripts/build-registry.ts --version "${{ steps.target.outputs.version }}"
 
       - name: Build docs
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           # Public website id (ships in the client HTML), so a repo variable, not a
           # secret. When unset, astro.config.mjs omits the analytics script entirely.
           UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}
         run: bun run --cwd docs build
 
       - name: Copy registry to docs output
+        if: ${{ steps.target.outputs.proceed == 'true' }}
         run: cp -r dist/registry/. docs/dist/
+
+      # Hidden files must be included: docs/dist holds .nojekyll and .well-known/.
+      - name: Upload docs site
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-site
+          path: docs/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # Publishes the built artifact to fro-bot/systematic. Holds the only reference
+  # to the Fro Bot app credentials (via the `docs` environment) and runs no
+  # repository code: only the downloaded static artifact is touched.
+  deploy:
+    name: Deploy Docs
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ needs.build.outputs.proceed == 'true' }}
+    environment: docs
+    # Serialized here, not at the workflow level: admission (author, latest
+    # release) happens in `build`, so a run that gets rejected there must never
+    # cancel an active deployment. Only admitted runs queue for this slot.
+    # `queue: max` keeps every pending run: with the default single slot, an older
+    # admitted build finishing late would replace the latest release's pending
+    # deploy and then skip itself as stale, leaving the latest undeployed. Each run
+    # re-checks freshness right before publishing, so stale ones skip in turn.
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+    steps:
+      - name: Download docs site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docs-site
+          path: docs/dist
+
+      # The artifact is copied into a git clone that holds the App token, so it
+      # must be inert content: a .git entry (core.fsmonitor and friends run on the
+      # next git command), a symlink, or a special file is rejected. Runs before
+      # the token exists. Dotfiles such as .nojekyll and .well-known/ are fine.
+      - name: Verify docs artifact
+        run: |
+          set -euo pipefail
+          if [ ! -d docs/dist ]; then
+            echo "::error::Docs artifact not found at docs/dist"
+            exit 1
+          fi
+          bad=$(find docs/dist \( -iname .git -o -type l -o \( ! -type f ! -type d \) \) -print)
+          if [ -n "$bad" ]; then
+            echo "::error::Docs artifact contains forbidden entries (.git, symlinks, or special files)"
+            printf '  %q\n' "$bad"
+            exit 1
+          fi
 
       - name: Create GitHub App token
         if: github.repository == 'marcusrbrown/systematic'
@@ -113,7 +194,24 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          DEPLOY_TAG: ${{ needs.build.outputs.tag }}
+          # Read-only token for the source repository; GH_TOKEN above is the App
+          # token for fro-bot/systematic and cannot be used for the lookup below.
+          SOURCE_GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
+          # A newer release may have become Latest while this run built or waited
+          # for the deploy slot; publishing now would replace newer content.
+          if ! latest=$(GH_TOKEN="$SOURCE_GH_TOKEN" gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName); then
+            echo "::error::Could not resolve the latest release of ${GITHUB_REPOSITORY}; refusing to publish"
+            exit 1
+          fi
+          if [ "$latest" != "$DEPLOY_TAG" ]; then
+            echo "::notice::Skipping deploy: artifact for ${DEPLOY_TAG} is stale; the latest release is now '${latest}'."
+            exit 0
+          fi
+
           name="${APP_SLUG}[bot]"
           user_id=$(gh api "/users/${name}" --jq .id)
           email="${user_id}+${name}@users.noreply.github.com"
@@ -135,12 +233,13 @@ jobs:
 
           # Clean and copy new docs (preserve .git directory, include dotfiles)
           find . -mindepth 1 -not -path './.git' -not -path './.git/*' -delete
-          cp -r ../docs/dist/. .
+          # Never carry a .git entry from the artifact into the clone.
+          tar -C ../docs/dist --exclude='.git' -cf - . | tar -xf - --no-same-owner
 
           # Commit and push if there are changes
           git add -A
           if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-            git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}"
+            git commit -m "Deploy docs from marcusrbrown/systematic@${DEPLOY_TAG}"
             git push --force origin gh-pages
           else
             echo "No changes to commit"

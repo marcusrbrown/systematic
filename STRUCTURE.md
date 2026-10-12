@@ -154,8 +154,10 @@ bundled assets before editing or building the docs site.
   orphan `claude-code-plugin` branch, never committed to `main`
 - `scripts/run-evals.ts` — local eval CLI: creates isolated source/installed-mode fixtures, executes
   eval cases from `evals/cases/`, and persists privacy-checked results to `evals/runs/<runId>/`
-- `scripts/dispatch-release-notes.sh` — invoked by the semantic-release `successCmd`; dispatches the
+- `scripts/dispatch-release-notes.sh` — invoked by `.github/workflows/release-notes.yaml`; dispatches the
   release-notes narrative-rewrite workflow
+- `scripts/validate-release-target.sh` — validates the release tag, author, npm version, and (for docs)
+  latest-release status before `docs.yaml` or `release-notes.yaml` acts on a release
 - `scripts/lib/`, `scripts/eval-cases/` — shared helpers and eval case definitions consumed by
   `run-evals.ts`
 
