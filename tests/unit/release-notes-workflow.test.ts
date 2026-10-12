@@ -152,6 +152,23 @@ describe('release-notes workflow target validation', () => {
     expect(asRecord(step.env, 'validate env').GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
   })
 
+  test('a manual dispatch fails when the release author is not the expected release author', () => {
+    const step = findStep('Validate release tag')
+    const run = runOf(step)
+    const env = asRecord(step.env, 'validate env')
+
+    // Dispatch has no release payload, so the author is read from the release.
+    expect(run).toContain('gh release view')
+    expect(run).toMatch(/--json[^\n]*\bauthor\b/)
+    expect(run).toContain('.author.login')
+    // Same trust anchor as the release-event author check.
+    expect(String(env.EXPECTED_AUTHOR)).toContain('vars.RELEASE_AUTHOR_LOGIN')
+    expect(String(env.EXPECTED_AUTHOR)).toContain("'mrbro-bot[bot]'")
+    // A mismatch is loud (error + non-zero exit), not a silent skip.
+    expect(run).toMatch(/"\$author" != "\$EXPECTED_AUTHOR"[\s\S]*?exit 1/)
+    expect(run).toMatch(/::error::[^\n]*author/i)
+  })
+
   test('the npm view check exists and fails loudly', () => {
     const run = runOf(findStep('Verify package is published to npm'))
     expect(run).toMatch(/npm view "?@fro\.bot\/systematic@/)

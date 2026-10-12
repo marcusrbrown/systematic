@@ -57,6 +57,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$EVENT_NAME" = "release" ]; then
@@ -71,12 +72,20 @@ jobs:
           fi
 
           if [ "$EVENT_NAME" != "release" ]; then
-            if ! state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"'); then
+            if ! info=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,author --jq '"\(.isDraft) \(.isPrerelease) \(.author.login)"'); then
               echo "::error::No release found for tag '${tag}'"
               exit 1
             fi
+            read -r is_draft is_prerelease author <<< "$info"
+            state="${is_draft} ${is_prerelease}"
             if [ "$state" != "false false" ]; then
               echo "::error::Release '${tag}' is not a published, non-prerelease release (isDraft isPrerelease = ${state})"
+              exit 1
+            fi
+            # A release event is author-gated by the earlier step; a dispatch has no
+            # release payload, so apply the same gate here and fail loudly.
+            if [ "$author" != "$EXPECTED_AUTHOR" ]; then
+              echo "::error::Release '${tag}' author '${author}' is not the expected release author '${EXPECTED_AUTHOR}'"
               exit 1
             fi
           fi
