@@ -334,8 +334,14 @@ function sanitizeNode(node: MdNode, state: SanitizeState): MdNode[] {
     case 'heading':
       return [sanitizeHeading(node, state)]
     case 'code': {
-      // The info string is free text; keep only a plain language word.
-      node.lang = /^[\w+#.-]+$/.test(node.lang ?? '') ? node.lang : null
+      // The info string is free text; keep only a plain language word. Never
+      // `mermaid`: rehype-mermaid (no errorFallback) throws on an unparsable
+      // diagram, so one bad fence in any release would fail the docs build.
+      const lang = node.lang ?? ''
+      node.lang =
+        /^[\w+#.-]+$/.test(lang) && lang.toLowerCase() !== 'mermaid'
+          ? lang
+          : null
       node.meta = null
       return [node]
     }

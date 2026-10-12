@@ -314,6 +314,31 @@ describe('renderReleaseNotesPage', () => {
     expect(path.extname(OUTPUT_PATH)).toBe('.md')
   })
 
+  test.each([
+    ['mermaid', 'mermaid'],
+    ['Mermaid', 'Mermaid'],
+    ['MERMAID', 'MERMAID'],
+  ])(
+    'a %s fence renders as a plain code block, never a diagram',
+    (_name, lang) => {
+      const diagram = 'graph TD\n  A --> --> B[unclosed'
+      const page = renderReleaseNotesPage([
+        makeRelease({
+          body: `## What's new\n\n\`\`\`${lang}\n${diagram}\n\`\`\`\n`,
+        }),
+      ])
+      expect(page).not.toMatch(/mermaid/i)
+      expect(page).toContain(`\`\`\`\n${diagram}\n\`\`\``)
+    },
+  )
+
+  test('keeps other language words on code fences', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({ body: "## What's new\n\n```ts\nconst x = 1\n```\n" }),
+    ])
+    expect(page).toContain('```ts\nconst x = 1\n```')
+  })
+
   test('drops javascript: links with nested brackets in the link text', () => {
     const page = renderReleaseNotesPage([
       makeRelease({ body: "## What's new\n\n[a [b] c](javascript:alert(1))" }),
