@@ -69,6 +69,43 @@ describe('decidePublish', () => {
       kind: 'publish',
       version: '3.22.0',
       reviewId: 1,
+      approver: 'maintainer',
+    })
+  })
+
+  describe('approver', () => {
+    const gateReview = (overrides: Partial<Review> = {}) =>
+      review({ id: 7, user: 'fro-bot', ...overrides })
+
+    test('a maintainer approval names the maintainer', () => {
+      const decision = decidePublish(baseFacts())
+      expect(decision).toMatchObject({
+        kind: 'publish',
+        approver: 'maintainer',
+      })
+    })
+
+    test('an attested gate approval alone names the gate', () => {
+      const decision = decidePublish(
+        baseFacts({
+          reviews: [gateReview()],
+          gateAttestedReviewIds: new Set([7]),
+        }),
+      )
+      expect(decision).toMatchObject({ kind: 'publish', approver: 'gate' })
+    })
+
+    test('when both approved, the maintainer is the qualifying approver', () => {
+      const decision = decidePublish(
+        baseFacts({
+          reviews: [gateReview(), review({ id: 3 })],
+          gateAttestedReviewIds: new Set([7]),
+        }),
+      )
+      expect(decision).toMatchObject({
+        kind: 'publish',
+        approver: 'maintainer',
+      })
     })
   })
 
@@ -304,6 +341,7 @@ describe('decidePublish', () => {
         kind: 'publish',
         version: '3.22.0',
         reviewId: 7,
+        approver: 'gate',
       })
     })
 
@@ -354,6 +392,7 @@ describe('decidePublish', () => {
         kind: 'publish',
         version: '3.22.0',
         reviewId: 3,
+        approver: 'maintainer',
       })
     })
 
@@ -376,6 +415,7 @@ describe('decidePublish', () => {
         kind: 'publish',
         version: '3.22.0',
         reviewId: 7,
+        approver: 'gate',
       })
     })
   })

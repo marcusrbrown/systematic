@@ -35,6 +35,16 @@ function b64(text: string): { content: string; encoding: 'base64' } {
   return { content: raw.replace(/(.{60})/g, '$1\n'), encoding: 'base64' }
 }
 
+/** Pages of 100, ending with a short (possibly empty) page. */
+function reviewPages(reviews: unknown[]): unknown[][] {
+  const pages: unknown[][] = []
+  for (let i = 0; i < reviews.length; i += 100) {
+    pages.push(reviews.slice(i, i + 100))
+  }
+  if (reviews.length % 100 === 0) pages.push([])
+  return pages
+}
+
 interface FakeOptions {
   prList?: unknown[]
   parentChangelog?: string | null
@@ -43,6 +53,9 @@ interface FakeOptions {
   tags?: string[]
   files?: string[]
   release?: boolean
+  reviewPages?: unknown[][]
+  headRef?: string
+  headRepo?: string
 }
 
 function fake(options: FakeOptions = {}) {
@@ -64,9 +77,9 @@ function fake(options: FakeOptions = {}) {
   )
   set(`repos/${REPO}/pulls/${PR_NUMBER}`, {
     head: {
-      ref: 'release/pending',
+      ref: options.headRef ?? 'release/pending',
       sha: HEAD,
-      repo: { full_name: REPO },
+      repo: { full_name: options.headRepo ?? REPO },
     },
     base: { repo: { full_name: REPO } },
     user: { login: 'systematic-release[bot]' },
@@ -93,18 +106,23 @@ function fake(options: FakeOptions = {}) {
     `repos/${REPO}/contents/CHANGELOG.md?ref=${HEAD}`,
     b64(options.headChangelog ?? changelog('3.22.0', '3.21.8')),
   )
-  set(
-    `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100`,
-    options.reviews ?? [
-      {
-        id: 1,
-        user: { login: 'marcusrbrown' },
-        state: 'APPROVED',
-        commit_id: HEAD,
-        submitted_at: '2026-10-12T10:00:00Z',
-      },
-    ],
-  )
+  const defaultReviews = [
+    {
+      id: 1,
+      user: { login: 'marcusrbrown' },
+      state: 'APPROVED',
+      commit_id: HEAD,
+      submitted_at: '2026-10-12T10:00:00Z',
+    },
+  ]
+  const pages =
+    options.reviewPages ?? reviewPages(options.reviews ?? defaultReviews)
+  pages.forEach((page, index) => {
+    set(
+      `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100&page=${index + 1}`,
+      page,
+    )
+  })
   set(
     `repos/${REPO}/git/matching-refs/tags/v`,
     (options.tags ?? ['v3.21.8', 'v3.21.7']).map((name) => ({
@@ -174,6 +192,163 @@ describe('gatherPublishFacts', () => {
       kind: 'publish',
       version: '3.22.0',
       reviewId: 1,
+      approver: 'maintainer',
+    })
+  })
+
+  describe('regenerated entries (superseded same-version replacement)', () => {
+    const original = changelog('3.22.0', '3.21.8')
+    const regenerated = original.replace(
+      'ship 3.22.0',
+      'ship 3.22.0, regenerated',
+    )
+
+    test('an untagged entry with new text replaces the old one and publishes', async () => {
+      const { api } = fake({
+        parentChangelog: original,
+        headChangelog: regenerated,
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.pr?.addedEntryVersion).toBe('3.22.0')
+      expect(facts.pr?.removedEntryVersions).toEqual([])
+      expect(decidePublish(facts)).toMatchObject({
+        kind: 'publish',
+        version: '3.22.0',
+      })
+    })
+
+    test('an identical top entry adds nothing', async () => {
+      const { api } = fake({
+        parentChangelog: original,
+        headChangelog: original,
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.pr?.addedEntryVersion).toBeNull()
+      expect(decidePublish(facts).kind).toBe('refused')
+    })
+
+    test('a tagged top entry with rewritten text adds nothing', async () => {
+      const { api } = fake({
+        tags: ['v3.22.0', 'v3.21.8'],
+        parentChangelog: original,
+        headChangelog: regenerated,
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.pr?.addedEntryVersion).toBeNull()
+      expect(decidePublish(facts).kind).toBe('refused')
+    })
+
+    test('a tagged entry still counts as removed when the head drops it', async () => {
+      const { api } = fake({
+        tags: ['v3.21.8'],
+        parentChangelog: changelog('3.21.8'),
+        headChangelog: changelog('3.22.0'),
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.pr?.removedEntryVersions).toEqual(['3.21.8'])
+      expect(decidePublish(facts).kind).toBe('refused')
+    })
+  })
+
+  describe('review pagination', () => {
+    const filler = (count: number, firstId: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: firstId + i,
+        user: { login: 'bystander' },
+        state: 'COMMENTED',
+        commit_id: HEAD,
+        submitted_at: '2026-10-12T09:00:00Z',
+      }))
+    const approval = {
+      id: 5000,
+      user: { login: 'marcusrbrown' },
+      state: 'APPROVED',
+      commit_id: HEAD,
+      submitted_at: '2026-10-12T10:00:00Z',
+    }
+
+    test('an approval on page 2 counts', async () => {
+      const { api, calls } = fake({ reviews: [...filler(100, 1), approval] })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.reviews).toHaveLength(101)
+      expect(decidePublish(facts)).toMatchObject({
+        kind: 'publish',
+        reviewId: 5000,
+      })
+      expect(calls.filter((c) => c.includes('/reviews?'))).toEqual([
+        `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100&page=1`,
+        `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100&page=2`,
+      ])
+    })
+
+    test('a changes-requested review on page 2 voids an earlier approval', async () => {
+      const voiding = {
+        id: 5001,
+        user: { login: 'marcusrbrown' },
+        state: 'CHANGES_REQUESTED',
+        commit_id: HEAD,
+        submitted_at: '2026-10-12T10:30:00Z',
+      }
+      const { api } = fake({
+        reviews: [approval, ...filler(99, 1), voiding],
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(decidePublish(facts).kind).toBe('refused')
+    })
+
+    test('a dismissal on page 2 voids an earlier approval', async () => {
+      const dismissal = {
+        id: 5001,
+        user: { login: 'marcusrbrown' },
+        state: 'DISMISSED',
+        commit_id: HEAD,
+        submitted_at: '2026-10-12T10:30:00Z',
+      }
+      const { api } = fake({
+        reviews: [approval, ...filler(99, 1), dismissal],
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(decidePublish(facts).kind).toBe('refused')
+    })
+
+    test('stops after a short page without requesting more', async () => {
+      const { api, calls } = fake({ reviews: [approval] })
+      await gatherPublishFacts(baseOptions(api))
+      expect(calls.filter((c) => c.includes('/reviews?'))).toHaveLength(1)
+    })
+
+    test('past the 20 page cap it throws instead of deciding on partial history', async () => {
+      const fullPages = Array.from({ length: 21 }, (_, page) =>
+        filler(100, page * 100 + 1),
+      )
+      const { api } = fake({ reviewPages: fullPages })
+      await expect(gatherPublishFacts(baseOptions(api))).rejects.toThrow(
+        /reviews/,
+      )
+    })
+  })
+
+  describe('non-release merges', () => {
+    const changelogCalls = (calls: string[]) =>
+      calls.filter((c) => c.includes('CHANGELOG.md') || c.includes('/compare/'))
+
+    test('an ordinary merged PR skips without any changelog endpoint, even with no CHANGELOG.md', async () => {
+      const { api, calls } = fake({ headRef: 'feat/ordinary' })
+      const noChangelog: Api = async (path) => {
+        if (path.includes('CHANGELOG.md')) throw notFound(path)
+        return api(path)
+      }
+      const facts = await gatherPublishFacts(baseOptions(noChangelog))
+      expect(decidePublish(facts).kind).toBe('skip')
+      expect(changelogCalls(calls)).toEqual([])
+      expect(calls.some((c) => c.includes('/reviews?'))).toBe(false)
+    })
+
+    test('a release/pending PR from another repo is refused without changelog fetches', async () => {
+      const { api, calls } = fake({ headRepo: 'mallory/systematic' })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(decidePublish(facts).kind).toBe('refused')
+      expect(changelogCalls(calls)).toEqual([])
     })
   })
 
@@ -339,7 +514,7 @@ describe('gatherPublishFacts', () => {
       'parent changelog (non-404)',
       `repos/${REPO}/contents/CHANGELOG.md?ref=${HEAD_PARENT}`,
     ],
-    ['reviews', `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100`],
+    ['reviews', `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100&page=1`],
     ['tags', `repos/${REPO}/git/matching-refs/tags/v`],
   ])('a 500 from %s propagates', async (_name, failing) => {
     const { api } = fake()

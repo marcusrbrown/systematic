@@ -142,14 +142,38 @@ export async function runVerifyMerge(
   return decision
 }
 
-const spawnExec: Exec = async (cmd, args) => {
-  const proc = Bun.spawn([cmd, ...args], { stdout: 'pipe', stderr: 'pipe' })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { code, stdout, stderr }
+const ATTESTATION_TIMEOUT_MS = 60_000
+
+/**
+ * An `Exec` that kills the process after `timeoutMs` and reports code 124, so a
+ * stalled `gh attestation verify` counts as not verified instead of hanging.
+ */
+export function createSpawnExec(timeoutMs: number): Exec {
+  return async (cmd, args) => {
+    const proc = Bun.spawn([cmd, ...args], { stdout: 'pipe', stderr: 'pipe' })
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      proc.kill()
+    }, timeoutMs)
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      if (timedOut) {
+        return {
+          code: 124,
+          stdout,
+          stderr: `${stderr}${cmd} timed out after ${timeoutMs}ms`,
+        }
+      }
+      return { code, stdout, stderr }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
 }
 
 function parseArgs(argv: string[]): { sha: string; out: string } {
@@ -188,7 +212,7 @@ if (import.meta.main) {
       hold: process.env.RELEASE_HOLD === 'true',
       cwd: process.cwd(),
       api: githubApi(requireEnv('GH_TOKEN')),
-      exec: spawnExec,
+      exec: createSpawnExec(ATTESTATION_TIMEOUT_MS),
     })
     if (decision.kind === 'refused' || decision.kind === 'superseded') {
       console.log(`::error::${decision.reason}`)

@@ -21,6 +21,7 @@ export interface GatherPublishFactsOptions {
 
 const API_ORIGIN = 'https://api.github.com'
 const REQUEST_TIMEOUT_MS = 15_000
+const RELEASE_BRANCH = 'release/pending'
 const REVIEW_STATES = [
   'APPROVED',
   'CHANGES_REQUESTED',
@@ -129,14 +130,21 @@ export async function readChangelog(
 }
 
 /**
- * Compare CHANGELOG.md entry versions between a commit and its parent.
- * A 404 at the parent means the file is new (empty changelog).
+ * Compare CHANGELOG.md entries between a commit and its parent. A 404 at the
+ * parent means the file is new (empty changelog).
+ *
+ * `addedEntryVersion` is the head's top entry version when that entry is new
+ * (absent at the parent), or when an untagged version's entry was regenerated
+ * (same version, different text; how a superseded release is replaced). A
+ * tagged version's rewritten entry is never an addition.
+ * `removedEntryVersions` lists parent versions missing at the head.
  */
 export async function changelogVersionDelta(
   api: Api,
   repo: string,
   parentSha: string,
   headSha: string,
+  existingTags: ReadonlySet<string>,
 ): Promise<{
   addedEntryVersion: string | null
   removedEntryVersions: string[]
@@ -145,18 +153,31 @@ export async function changelogVersionDelta(
     readChangelog(api, repo, parentSha, { missingIsEmpty: true }),
     readChangelog(api, repo, headSha, { missingIsEmpty: false }),
   ])
-  const parentVersions = parseEntries(parentChangelog).map(
-    (entry) => entry.version,
+  const parentEntries = parseEntries(parentChangelog)
+  const headEntries = parseEntries(headChangelog)
+  const headVersions = new Set(headEntries.map((entry) => entry.version))
+
+  const top = headEntries[0]
+  const parentTop = parentEntries.find(
+    (entry) => entry.version === top?.version,
   )
-  const headVersions = parseEntries(headChangelog).map((entry) => entry.version)
-  const parentSet = new Set(parentVersions)
-  const headSet = new Set(headVersions)
+  let addedEntryVersion: string | null = null
+  if (top !== undefined) {
+    if (parentTop === undefined) {
+      addedEntryVersion = top.version
+    } else if (
+      parentTop.text !== top.text &&
+      !existingTags.has(`v${top.version}`)
+    ) {
+      addedEntryVersion = top.version
+    }
+  }
+
   return {
-    removedEntryVersions: parentVersions.filter(
-      (version) => !headSet.has(version),
-    ),
-    addedEntryVersion:
-      headVersions.find((version) => !parentSet.has(version)) ?? null,
+    removedEntryVersions: parentEntries
+      .map((entry) => entry.version)
+      .filter((version) => !headVersions.has(version)),
+    addedEntryVersion,
   }
 }
 
@@ -198,47 +219,107 @@ async function releaseExists(
   }
 }
 
+const REVIEWS_PAGE_SIZE = 100
+const MAX_REVIEW_PAGES = 20
+
+/** Every review of a PR; throws rather than decide on a truncated history. */
+async function fetchAllReviews(
+  api: Api,
+  repo: string,
+  number: number,
+): Promise<Review[]> {
+  const reviews: Review[] = []
+  for (let page = 1; page <= MAX_REVIEW_PAGES; page++) {
+    const batch = requireArray(
+      await api(
+        `repos/${repo}/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
+      ),
+      'reviews',
+    )
+    reviews.push(...batch.map(toReview))
+    if (batch.length < REVIEWS_PAGE_SIZE) return reviews
+  }
+  throw new Error(
+    `PR ${number} has more than ${MAX_REVIEW_PAGES * REVIEWS_PAGE_SIZE} reviews; cannot establish its approval state`,
+  )
+}
+
 async function gatherPr(
   options: GatherPublishFactsOptions,
   number: number,
-): Promise<{ pr: MergedReleasePr; reviews: Review[] }> {
+  existingTags: ReadonlySet<string>,
+): Promise<{
+  pr: MergedReleasePr
+  reviews: Review[]
+  releasePublished: boolean
+}> {
   const { api, repo } = options
   const raw = await api(`repos/${repo}/pulls/${number}`)
   const headSha = requireString(
     dig(raw, 'head', 'sha'),
     `head sha of PR ${number}`,
   )
-  const headParentSha = await parentShaOf(api, repo, headSha)
-
-  const [compare, delta, rawReviews] = await Promise.all([
-    api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
-    changelogVersionDelta(api, repo, headParentSha, headSha),
-    api(`repos/${repo}/pulls/${number}/reviews?per_page=100`),
-  ])
-
-  const changedFiles = requireArray(dig(compare, 'files'), 'compare files').map(
-    (file) => requireString(dig(file, 'filename'), 'compare filename'),
-  )
-
-  const pr: MergedReleasePr = {
-    number,
+  const identity = {
     headRef: requireString(dig(raw, 'head', 'ref'), `head ref of PR ${number}`),
     // A deleted fork has no head repo; empty never equals the repo, so it is refused.
     headRepo: String(dig(raw, 'head', 'repo', 'full_name') ?? ''),
     baseRepo: String(dig(raw, 'base', 'repo', 'full_name') ?? ''),
     author: String(dig(raw, 'user', 'login') ?? ''),
+  }
+  const common = {
+    number,
+    ...identity,
     headSha,
-    headParentSha,
     mergedAt: requireString(dig(raw, 'merged_at'), `merged_at of PR ${number}`),
     mergeCommitSha: requireString(
       dig(raw, 'merge_commit_sha'),
       `merge commit of PR ${number}`,
     ),
-    changedFiles,
-    removedEntryVersions: delta.removedEntryVersions,
-    addedEntryVersion: delta.addedEntryVersion,
   }
-  return { pr, reviews: requireArray(rawReviews, 'reviews').map(toReview) }
+
+  // Classify before requesting release-only facts: an ordinary merge (no
+  // CHANGELOG.md, no review history needed) must reach decidePublish's skip,
+  // and a spoofed release/pending PR is refused on identity alone.
+  const isReleasePr =
+    identity.headRef === RELEASE_BRANCH &&
+    identity.headRepo === repo &&
+    identity.baseRepo === repo &&
+    identity.author === options.releaseAppLogin
+  if (!isReleasePr) {
+    return {
+      pr: {
+        ...common,
+        headParentSha: '',
+        changedFiles: [],
+        removedEntryVersions: [],
+        addedEntryVersion: null,
+      },
+      reviews: [],
+      releasePublished: false,
+    }
+  }
+
+  const headParentSha = await parentShaOf(api, repo, headSha)
+  const [compare, delta, reviews] = await Promise.all([
+    api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
+    changelogVersionDelta(api, repo, headParentSha, headSha, existingTags),
+    fetchAllReviews(api, repo, number),
+  ])
+  const changedFiles = requireArray(dig(compare, 'files'), 'compare files').map(
+    (file) => requireString(dig(file, 'filename'), 'compare filename'),
+  )
+
+  return {
+    pr: {
+      ...common,
+      headParentSha,
+      changedFiles,
+      removedEntryVersions: delta.removedEntryVersions,
+      addedEntryVersion: delta.addedEntryVersion,
+    },
+    reviews,
+    releasePublished: await releaseExists(api, repo, delta.addedEntryVersion),
+  }
 }
 
 export async function gatherPublishFacts(
@@ -274,14 +355,11 @@ export async function gatherPublishFacts(
     const gathered = await gatherPr(
       options,
       requireNumber(dig(merged, 'number'), 'PR number'),
+      existingTags,
     )
     pr = gathered.pr
     reviews = gathered.reviews
-    releasePublished = await releaseExists(
-      api,
-      repo,
-      gathered.pr.addedEntryVersion,
-    )
+    releasePublished = gathered.releasePublished
     const gateApprovals = reviews.filter(
       (review) =>
         review.user === gateLogin &&

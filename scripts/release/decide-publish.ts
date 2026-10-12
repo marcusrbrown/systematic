@@ -54,7 +54,13 @@ export interface PublishFacts {
 
 export type PublishDecision =
   | { kind: 'skip'; reason: string }
-  | { kind: 'publish'; version: string; reviewId: number }
+  | {
+      kind: 'publish'
+      version: string
+      reviewId: number
+      /** Which approval qualified; the publish job re-checks the live hold against it. */
+      approver: 'maintainer' | 'gate'
+    }
   | { kind: 'superseded'; reason: string }
   | { kind: 'refused'; reason: string }
 
@@ -103,7 +109,7 @@ function latestReviewPerUser(
 function findApproval(
   facts: PublishFacts,
   pr: MergedReleasePr,
-): { reviewId: number } | { missing: string } {
+): { reviewId: number; approver: 'maintainer' | 'gate' } | { missing: string } {
   const mergedAt = new Date(pr.mergedAt).getTime()
   const candidates = latestReviewPerUser(facts.reviews, mergedAt).filter(
     (review) =>
@@ -113,7 +119,9 @@ function findApproval(
   )
 
   const maintainer = candidates.find((r) => r.user === facts.maintainerLogin)
-  if (maintainer !== undefined) return { reviewId: maintainer.id }
+  if (maintainer !== undefined) {
+    return { reviewId: maintainer.id, approver: 'maintainer' }
+  }
 
   const gate = candidates.find((r) => r.user === facts.gateLogin)
   if (gate !== undefined) {
@@ -127,7 +135,7 @@ function findApproval(
         missing: `the ${facts.gateLogin} approval has no verified gate attestation`,
       }
     }
-    return { reviewId: gate.id }
+    return { reviewId: gate.id, approver: 'gate' }
   }
 
   return {
@@ -237,5 +245,6 @@ export function decidePublish(facts: PublishFacts): PublishDecision {
     kind: 'publish',
     version: addedVersion,
     reviewId: approval.reviewId,
+    approver: approval.approver,
   }
 }

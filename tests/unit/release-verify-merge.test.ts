@@ -9,6 +9,7 @@ import {
 import type { Api } from '../../scripts/release/gather-publish-facts.ts'
 import {
   approvalSubject,
+  createSpawnExec,
   PREDICATE_TYPE,
   runVerifyMerge,
 } from '../../scripts/release/verify-merge.ts'
@@ -100,9 +101,13 @@ function fakeResponses(options: FakeOptions = {}): Map<string, unknown> {
     `repos/${REPO}/contents/CHANGELOG.md?ref=${X}`,
     b64(options.xChangelog ?? headChangelog),
   )
-  set(
-    `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100`,
-    options.reviews ?? [review(1, 'marcusrbrown')],
+  reviewPages(options.reviews ?? [review(1, 'marcusrbrown')]).forEach(
+    (page, index) => {
+      set(
+        `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100&page=${index + 1}`,
+        page,
+      )
+    },
   )
   set(
     `repos/${REPO}/git/matching-refs/tags/v`,
@@ -120,6 +125,16 @@ function fakeApi(options: FakeOptions = {}): Api {
     if (!responses.has(p)) throw notFound(p)
     return responses.get(p)
   }
+}
+
+/** Pages of 100, ending with a short (possibly empty) page. */
+function reviewPages(reviews: unknown[]): unknown[][] {
+  const pages: unknown[][] = []
+  for (let i = 0; i < reviews.length; i += 100) {
+    pages.push(reviews.slice(i, i + 100))
+  }
+  if (reviews.length % 100 === 0) pages.push([])
+  return pages
 }
 
 function review(id: number, user: string) {
@@ -228,10 +243,16 @@ describe('runVerifyMerge', () => {
       kind: 'publish',
       version: '3.22.0',
       reviewId: 1,
+      approver: 'maintainer',
     })
     expect(
       JSON.parse(fs.readFileSync(path.join(outDir, 'decision.json'), 'utf8')),
-    ).toEqual({ kind: 'publish', version: '3.22.0', reviewId: 1 })
+    ).toEqual({
+      kind: 'publish',
+      version: '3.22.0',
+      reviewId: 1,
+      approver: 'maintainer',
+    })
     expect(fs.readFileSync(path.join(outDir, 'notes.md'), 'utf8')).toBe(
       entry('3.22.0'),
     )
@@ -257,7 +278,11 @@ describe('runVerifyMerge', () => {
       kind: 'publish',
       version: '3.22.0',
       reviewId: 123,
+      approver: 'gate',
     })
+    expect(
+      JSON.parse(fs.readFileSync(path.join(outDir, 'decision.json'), 'utf8')),
+    ).toMatchObject({ kind: 'publish', approver: 'gate' })
     expect(calls).toHaveLength(1)
     const call = calls[0]
     expect(call?.cmd).toBe('gh')
@@ -327,6 +352,33 @@ describe('runVerifyMerge', () => {
   test('a publish version with no changelog entry at the sha throws', async () => {
     const api = fakeApi({ xChangelog: changelog('3.21.8') })
     await expect(runVerifyMerge(opts(api))).rejects.toThrow('3.22.0')
+  })
+})
+
+describe('createSpawnExec', () => {
+  test('runs a command and reports its code and output', async () => {
+    const exec = createSpawnExec(5_000)
+    const result = await exec('sh', ['-c', 'echo out; echo err >&2; exit 3'])
+    expect(result.code).toBe(3)
+    expect(result.stdout.trim()).toBe('out')
+    expect(result.stderr.trim()).toBe('err')
+  })
+
+  test('kills a command that outlives the deadline and reports failure', async () => {
+    const exec = createSpawnExec(100)
+    const started = Date.now()
+    const result = await exec('sleep', ['10'])
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toContain('timed out')
+  })
+
+  test('a timed-out attestation check counts as not verified', async () => {
+    const exec = createSpawnExec(100)
+    const slowGh: typeof exec = (_cmd, _args) => exec('sleep', ['10'])
+    const api = fakeApi({ reviews: [review(123, 'fro-bot')] })
+    const decision = await runVerifyMerge(opts(api, slowGh))
+    expect(decision.kind).toBe('refused')
   })
 })
 

@@ -55,34 +55,59 @@ async function findOpenPrNumber(
 }
 
 async function gatherPr(
-  api: Api,
-  repo: string,
+  options: GatherGateFactsOptions,
   number: number,
+  existingTags: ReadonlySet<string>,
 ): Promise<GatePr> {
+  const { api, repo } = options
   const raw = await api(`repos/${repo}/pulls/${number}`)
   const headSha = requireString(
     dig(raw, 'head', 'sha'),
     `head sha of PR ${number}`,
   )
-  const headParentSha = await parentShaOf(api, repo, headSha)
-
-  const [mainRef, compare, delta, commits] = await Promise.all([
-    api(`repos/${repo}/git/ref/heads/main`),
-    api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
-    changelogVersionDelta(api, repo, headParentSha, headSha),
-    api(`repos/${repo}/pulls/${number}/commits?per_page=100`),
-  ])
-
-  return {
+  const common = {
     number,
     headRef: requireString(dig(raw, 'head', 'ref'), `head ref of PR ${number}`),
     // A deleted fork has no head repo; empty never equals the repo, so it skips.
     headRepo: stringOrEmpty(dig(raw, 'head', 'repo', 'full_name')),
     baseRepo: stringOrEmpty(dig(raw, 'base', 'repo', 'full_name')),
     author: stringOrEmpty(dig(raw, 'user', 'login')),
-    state: dig(raw, 'state') === 'open' ? 'open' : 'closed',
+    state:
+      dig(raw, 'state') === 'open' ? ('open' as const) : ('closed' as const),
     draft: dig(raw, 'draft') === true,
     headSha,
+  }
+
+  // Classify before requesting release-only facts: a PR that fails the
+  // identity checks skips on identity alone, so a missing CHANGELOG.md on it
+  // can never fail fact collection.
+  const isReleasePr =
+    common.headRef === RELEASE_BRANCH &&
+    common.headRepo === repo &&
+    common.baseRepo === repo &&
+    common.author === options.releaseAppLogin
+  if (!isReleasePr) {
+    return {
+      ...common,
+      headParentSha: '',
+      mainTipSha: '',
+      changedFiles: [],
+      addedEntryVersion: null,
+      removedEntryVersions: [],
+      headCommitAuthors: [],
+    }
+  }
+
+  const headParentSha = await parentShaOf(api, repo, headSha)
+  const [mainRef, compare, delta, commits] = await Promise.all([
+    api(`repos/${repo}/git/ref/heads/main`),
+    api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
+    changelogVersionDelta(api, repo, headParentSha, headSha, existingTags),
+    api(`repos/${repo}/pulls/${number}/commits?per_page=100`),
+  ])
+
+  return {
+    ...common,
     headParentSha,
     mainTipSha: requireString(dig(mainRef, 'object', 'sha'), 'main tip sha'),
     changedFiles: requireArray(dig(compare, 'files'), 'compare files').map(
@@ -150,7 +175,8 @@ export async function gatherGateFacts(
     ),
   )
 
-  const pr = number === null ? null : await gatherPr(api, repo, number)
+  const pr =
+    number === null ? null : await gatherPr(options, number, existingTags)
   const requiredChecks =
     pr === null
       ? []

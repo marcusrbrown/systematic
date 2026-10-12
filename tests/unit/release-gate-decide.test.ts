@@ -55,6 +55,7 @@ interface FakeOptions {
   deletedFork?: boolean
   commits?: unknown[]
   checkRuns?: unknown[]
+  author?: string
 }
 
 function fake(options: FakeOptions = {}) {
@@ -70,7 +71,7 @@ function fake(options: FakeOptions = {}) {
       repo: options.deletedFork ? null : { full_name: REPO },
     },
     base: { repo: { full_name: REPO } },
-    user: { login: APP },
+    user: { login: options.author ?? APP },
     state: 'open',
     draft: false,
   })
@@ -272,6 +273,65 @@ describe('gatherGateFacts', () => {
     const facts = await gatherGateFacts(baseOptions(failing))
     expect(facts.pr?.addedEntryVersion).toBe('3.22.0')
     expect(facts.pr?.removedEntryVersions).toEqual([])
+  })
+
+  describe('regenerated entries (superseded same-version replacement)', () => {
+    const original = changelog('3.22.0', '3.21.8')
+    const regenerated = original.replace(
+      'ship 3.22.0',
+      'ship 3.22.0, regenerated',
+    )
+
+    test('an untagged same-version entry with new text is approved', async () => {
+      const { api, set } = fake()
+      set(`repos/${REPO}/contents/CHANGELOG.md?ref=${MAIN}`, b64(original))
+      set(`repos/${REPO}/contents/CHANGELOG.md?ref=${HEAD}`, b64(regenerated))
+      const facts = await gatherGateFacts(baseOptions(api))
+      expect(facts.pr?.addedEntryVersion).toBe('3.22.0')
+      expect(decideGate(facts)).toEqual({
+        kind: 'approve',
+        pr: PR_NUMBER,
+        headSha: HEAD,
+        version: '3.22.0',
+      })
+    })
+
+    test('an identical top entry adds nothing and skips', async () => {
+      const { api, set } = fake()
+      set(`repos/${REPO}/contents/CHANGELOG.md?ref=${MAIN}`, b64(original))
+      set(`repos/${REPO}/contents/CHANGELOG.md?ref=${HEAD}`, b64(original))
+      const facts = await gatherGateFacts(baseOptions(api))
+      expect(facts.pr?.addedEntryVersion).toBeNull()
+      expect(decideGate(facts).kind).toBe('skip')
+    })
+
+    test('a tagged top entry with rewritten text adds nothing and skips', async () => {
+      const { api, set } = fake()
+      set(`repos/${REPO}/git/matching-refs/tags/v`, [
+        { ref: 'refs/tags/v3.22.0' },
+        { ref: 'refs/tags/v3.21.8' },
+      ])
+      set(`repos/${REPO}/contents/CHANGELOG.md?ref=${MAIN}`, b64(original))
+      set(`repos/${REPO}/contents/CHANGELOG.md?ref=${HEAD}`, b64(regenerated))
+      const facts = await gatherGateFacts(baseOptions(api))
+      expect(facts.pr?.addedEntryVersion).toBeNull()
+      expect(decideGate(facts).kind).toBe('skip')
+    })
+  })
+
+  test('a PR that is not from the release app skips without any changelog fetch', async () => {
+    const { api, calls } = fake({ author: 'mallory' })
+    const noChangelog: Api = async (p) => {
+      if (p.includes('CHANGELOG.md')) throw notFound(p)
+      return api(p)
+    }
+    const facts = await gatherGateFacts(baseOptions(noChangelog))
+    expect(decideGate(facts).kind).toBe('skip')
+    expect(
+      calls.filter(
+        (c) => c.includes('CHANGELOG.md') || c.includes('/compare/'),
+      ),
+    ).toEqual([])
   })
 
   test('a 500 from the check-runs endpoint propagates', async () => {
