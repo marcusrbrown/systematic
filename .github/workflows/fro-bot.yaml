@@ -576,6 +576,10 @@ jobs:
   fro-bot:
     name: Fro Bot
     runs-on: ubuntu-latest
+    # pull-requests: read lets the approval-rule step read the PR author and commits.
+    permissions:
+      contents: read
+      pull-requests: read
     if: >-
       (
         github.event.pull_request == null ||
@@ -662,6 +666,39 @@ jobs:
             exit 1
           fi
 
+      # R23: Fro Bot may APPROVE only marcusrbrown's PRs with no fro-bot commit.
+      # Any API error yields allowed=false (fail closed).
+      - name: Decide whether Fro Bot may approve
+        id: approval-rule
+        if: >-
+          github.event_name == 'pull_request' ||
+          github.event_name == 'pull_request_review_comment' ||
+          (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          allow='Approval is permitted for this pull request if your review finds no blocking issues.'
+          deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
+
+          decide() {
+            local author logins
+            author=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" | jq -er '.user.login' | tr '[:upper:]' '[:lower:]') || return 1
+            [ "$author" = "marcusrbrown" ] || return 1
+            logins=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/commits?per_page=100" |
+              jq -r '.[] | (.author.login // ""), (.committer.login // "")' |
+              tr '[:upper:]' '[:lower:]') || return 1
+            if printf '%s\n' "$logins" | grep -qx 'fro-bot'; then
+              return 1
+            fi
+          }
+
+          if decide; then
+            { echo 'allowed=true'; echo "rule=${allow}"; } >> "$GITHUB_OUTPUT"
+          else
+            { echo 'allowed=false'; echo "rule=${deny}"; } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -704,6 +741,7 @@ jobs:
           # ignored and AUTOHEAL_PROMPT rendered instead — breaking the live
           # release-notes automation contract verified across v2.23.4-v2.24.0.
           #
+          # PR_REVIEW_PROMPT ends in a newline, so the approval rule lands on its own line.
           # When editing this ternary, walk every event_name × mode × cron
           # combination explicitly. The validate-review-mode-inputs step
           # above only protects against `mode=review` with empty prompt;
@@ -716,7 +754,7 @@ jobs:
               || (github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal' && env.AUTOHEAL_PROMPT)
               || (github.event_name == 'workflow_dispatch' && env.AUTOHEAL_PROMPT)
               || (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *' && env.AUTOHEAL_PROMPT)
-              || (github.event_name == 'pull_request' && env.PR_REVIEW_PROMPT)
+              || (github.event_name == 'pull_request' && format('{0}{1}', env.PR_REVIEW_PROMPT, steps.approval-rule.outputs.rule))
               || ''
             }}
         with:
@@ -737,3 +775,35 @@ jobs:
           output-mode: ${{ ((github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.prompt == '' && inputs.mode == 'autoheal')) && 'branch-pr' || '' }}
           prompt: ${{ env.PROMPT }}
           timeout: 0
+
+      # Deterministic backstop for R23: whatever the agent did, a fro-bot APPROVED
+      # review on a PR where approval is not allowed gets dismissed. Comment-triggered
+      # runs get no prompt rule (their PROMPT is empty), so this is their only guard
+      # besides the main ruleset's last-push approval rule.
+      - name: Dismiss disallowed Fro Bot approvals
+        if: >-
+          always() &&
+          steps.approval-rule.outputs.allowed != 'true' &&
+          (
+            github.event_name == 'pull_request' ||
+            github.event_name == 'pull_request_review_comment' ||
+            (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+          )
+        env:
+          GH_TOKEN: ${{ secrets.FRO_BOT_PAT }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          if ! ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews?per_page=100" |
+            jq -r '.[] | select((.user.login | ascii_downcase) == "fro-bot" and .state == "APPROVED") | .id'); then
+            echo "::error::Could not list reviews for PR #${PR}; cannot confirm Fro Bot did not approve."
+            exit 1
+          fi
+
+          for id in $ids; do
+            if gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews/${id}/dismissals" \
+              -f message="Fro Bot may not approve this pull request." -f event=DISMISS > /dev/null; then
+              echo "Dismissed Fro Bot approval ${id} on PR #${PR}."
+            else
+              echo "::warning::Could not dismiss Fro Bot approval ${id} on PR #${PR}."
+            fi
+          done
