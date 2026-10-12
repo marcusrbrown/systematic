@@ -55,7 +55,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Walk `keys` through nested records; undefined when any step is missing or null. */
-function dig(value: unknown, ...keys: string[]): unknown {
+export function dig(value: unknown, ...keys: string[]): unknown {
   let current = value
   for (const key of keys) {
     if (!isRecord(current)) return undefined
@@ -64,7 +64,7 @@ function dig(value: unknown, ...keys: string[]): unknown {
   return current
 }
 
-function requireString(value: unknown, what: string): string {
+export function requireString(value: unknown, what: string): string {
   if (typeof value !== 'string' || value === '') {
     throw new Error(`Unexpected GitHub API response: missing ${what}`)
   }
@@ -78,7 +78,7 @@ function requireNumber(value: unknown, what: string): number {
   return value
 }
 
-function requireArray(value: unknown, what: string): unknown[] {
+export function requireArray(value: unknown, what: string): unknown[] {
   if (!Array.isArray(value)) {
     throw new Error(`Unexpected GitHub API response: ${what} is not a list`)
   }
@@ -89,7 +89,7 @@ function isNotFound(error: unknown): boolean {
   return isRecord(error) && error.status === 404
 }
 
-async function parentShaOf(
+export async function parentShaOf(
   api: Api,
   repo: string,
   sha: string,
@@ -117,6 +117,38 @@ async function readChangelog(
     `CHANGELOG.md content at ${ref}`,
   )
   return Buffer.from(content.replaceAll('\n', ''), 'base64').toString('utf8')
+}
+
+/**
+ * Compare CHANGELOG.md entry versions between a commit and its parent.
+ * A 404 at the parent means the file is new (empty changelog).
+ */
+export async function changelogVersionDelta(
+  api: Api,
+  repo: string,
+  parentSha: string,
+  headSha: string,
+): Promise<{
+  addedEntryVersion: string | null
+  removedEntryVersions: string[]
+}> {
+  const [parentChangelog, headChangelog] = await Promise.all([
+    readChangelog(api, repo, parentSha, { missingIsEmpty: true }),
+    readChangelog(api, repo, headSha, { missingIsEmpty: false }),
+  ])
+  const parentVersions = parseEntries(parentChangelog).map(
+    (entry) => entry.version,
+  )
+  const headVersions = parseEntries(headChangelog).map((entry) => entry.version)
+  const parentSet = new Set(parentVersions)
+  const headSet = new Set(headVersions)
+  return {
+    removedEntryVersions: parentVersions.filter(
+      (version) => !headSet.has(version),
+    ),
+    addedEntryVersion:
+      headVersions.find((version) => !parentSet.has(version)) ?? null,
+  }
 }
 
 function toReview(raw: unknown): Review {
@@ -153,23 +185,15 @@ async function gatherPr(
   )
   const headParentSha = await parentShaOf(api, repo, headSha)
 
-  const [compare, parentChangelog, headChangelog, rawReviews] =
-    await Promise.all([
-      api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
-      readChangelog(api, repo, headParentSha, { missingIsEmpty: true }),
-      readChangelog(api, repo, headSha, { missingIsEmpty: false }),
-      api(`repos/${repo}/pulls/${number}/reviews?per_page=100`),
-    ])
+  const [compare, delta, rawReviews] = await Promise.all([
+    api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
+    changelogVersionDelta(api, repo, headParentSha, headSha),
+    api(`repos/${repo}/pulls/${number}/reviews?per_page=100`),
+  ])
 
   const changedFiles = requireArray(dig(compare, 'files'), 'compare files').map(
     (file) => requireString(dig(file, 'filename'), 'compare filename'),
   )
-  const parentVersions = parseEntries(parentChangelog).map(
-    (entry) => entry.version,
-  )
-  const headVersions = parseEntries(headChangelog).map((entry) => entry.version)
-  const parentSet = new Set(parentVersions)
-  const headSet = new Set(headVersions)
 
   const pr: MergedReleasePr = {
     number,
@@ -186,11 +210,8 @@ async function gatherPr(
       `merge commit of PR ${number}`,
     ),
     changedFiles,
-    removedEntryVersions: parentVersions.filter(
-      (version) => !headSet.has(version),
-    ),
-    addedEntryVersion:
-      headVersions.find((version) => !parentSet.has(version)) ?? null,
+    removedEntryVersions: delta.removedEntryVersions,
+    addedEntryVersion: delta.addedEntryVersion,
   }
   return { pr, reviews: requireArray(rawReviews, 'reviews').map(toReview) }
 }
