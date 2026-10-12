@@ -47,15 +47,12 @@ read_release_body() {
 }
 
 # Scratch directory: the ONLY place the dispatched agent may write scratch files.
-# The agent was previously denied writes to /tmp/opencode, gave up, and the
-# release kept its raw notes (issue #1089), so the prompt names this path.
-if [[ -n "${RUNNER_TEMP:-}" ]]; then
-  SCRATCH_DIR="$RUNNER_TEMP/release-notes"
-  mkdir -p "$SCRATCH_DIR"
-else
-  SCRATCH_DIR="$(mktemp -d)"
-  trap 'rm -rf "$SCRATCH_DIR"' EXIT
-fi
+# The agent runs on a different runner, and its runtime denies every external
+# path except $RUNNER_TEMP/fro-bot-response/*. The prompt therefore names the
+# path with $RUNNER_TEMP left literal; the agent resolves it on its own runner
+# and creates the directory there. Nothing is created on this runner.
+# shellcheck disable=SC2016  # $RUNNER_TEMP must stay unexpanded
+SCRATCH_PATH='$RUNNER_TEMP/fro-bot-response/release-notes'
 
 # Idempotency: skip dispatch entirely when the release is already narrated.
 BODY_BEFORE="$(read_release_body)"
@@ -96,11 +93,15 @@ specific echo is required of you — the correlation value above is for audit on
 Target release tag: $RELEASE_VERSION
 Target repository: $GITHUB_REPOSITORY
 
-Scratch directory: $SCRATCH_DIR
+Scratch directory: $SCRATCH_PATH
 - This is the ONLY directory you may write scratch files to (pre-edit snapshot, rendered
-  body file, anything temporary). Do NOT write to /tmp, /tmp/opencode, or any other path.
-- Set \`SCRATCH_DIR=$SCRATCH_DIR\` before running the skill's bash snippets; the skill
-  uses it in place of its default local paths.
+  body file, anything temporary). Do NOT write to /tmp, /tmp/opencode, or any other path;
+  every other external path is denied.
+- \$RUNNER_TEMP is resolved on your runner, not this one. Before using any file tool
+  (which needs absolute paths), run \`echo "\$RUNNER_TEMP"\` and use the printed value
+  in place of \$RUNNER_TEMP. Create the directory with \`mkdir -p\`.
+- Set \`SCRATCH_DIR="$SCRATCH_PATH"\` (with \$RUNNER_TEMP expanded) before running the
+  skill's bash snippets; the skill uses it in place of its default local paths.
 
 Idempotency check (do this FIRST):
 - Fetch the current release body: \`gh release view $RELEASE_VERSION --json body --jq '.body'\`
@@ -110,7 +111,7 @@ Idempotency check (do this FIRST):
 Procedure (only if idempotency check did NOT short-circuit):
 1. Load the skill at .agents/skills/release-notes-narrative/SKILL.md from this checkout.
 2. Execute the 13-step procedure against tag $RELEASE_VERSION.
-3. Apply the rendered body via \`gh release edit $RELEASE_VERSION --notes-file <file in $SCRATCH_DIR>\`.
+3. Apply the rendered body via \`gh release edit $RELEASE_VERSION --notes-file <file in the scratch directory>\`.
 
 Scope constraints (do not violate):
 - Do NOT comment on any PR, issue, or discussion.

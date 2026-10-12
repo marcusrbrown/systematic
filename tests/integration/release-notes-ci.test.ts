@@ -34,8 +34,8 @@
  * 17.  Edge case — generic narrative failure → narrative-not-applied
  * 18.  Edge case — unknown future conclusion → narrative-not-applied
  * 19.  Integration — prompt construction includes correlation token, target tag, repo name
- * 20.  Integration — prompt names the RUNNER_TEMP-based scratch directory as the only writable path
- * 20b. Integration — prompt names a mktemp scratch directory when RUNNER_TEMP is unset
+ * 20.  Integration — prompt names the literal $RUNNER_TEMP/fro-bot-response/release-notes scratch directory as the only writable path
+ * 20b. Integration — the same literal path appears when the dispatcher's RUNNER_TEMP is unset
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
@@ -1022,15 +1022,19 @@ describe('release-notes-ci dispatch script smoke tests', () => {
   )
 
   // -------------------------------------------------------------------------
-  // 20. Integration — prompt names the RUNNER_TEMP scratch dir as the only writable path
+  // 20. Integration — prompt names the fro-bot-response scratch dir, unexpanded
   // -------------------------------------------------------------------------
+  // The Fro Bot run happens on a different runner and denies every external
+  // path except $RUNNER_TEMP/fro-bot-response/*, so the dispatcher must name
+  // that path literally and let the agent resolve $RUNNER_TEMP itself.
+  const SCRATCH_LITERAL = '$RUNNER_TEMP/fro-bot-response/release-notes'
+
   it(
-    'prompt names $RUNNER_TEMP/release-notes as the only writable scratch directory',
+    'prompt names $RUNNER_TEMP/fro-bot-response/release-notes literally as the only writable directory',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
       const runnerTemp = path.join(testTempDir, 'runner-temp')
       fs.mkdirSync(runnerTemp, { recursive: true })
-      const expectedScratch = path.join(runnerTemp, 'release-notes')
 
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
@@ -1041,18 +1045,32 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       expect(result.exitCode).toBe(0)
       expect(fs.existsSync(promptCapturePath)).toBe(true)
       const capturedPrompt = fs.readFileSync(promptCapturePath, 'utf8')
-      expect(capturedPrompt).toContain(expectedScratch)
+      expect(capturedPrompt).toMatch(
+        new RegExp(
+          `^Scratch directory: ${SCRATCH_LITERAL.replace(/[$]/g, '\\$&')}$`,
+          'm',
+        ),
+      )
+      expect(capturedPrompt).toContain(`SCRATCH_DIR="${SCRATCH_LITERAL}"`)
       expect(capturedPrompt).toMatch(/only directory/i)
-      expect(fs.statSync(expectedScratch).isDirectory()).toBe(true)
+      // The variable stays unexpanded: it resolves on the agent's runner.
+      expect(capturedPrompt).not.toContain(runnerTemp)
+      // The agent must resolve it before using file tools (absolute paths only).
+      expect(capturedPrompt).toContain('echo "$RUNNER_TEMP"')
+      // The old path is denied by the agent runtime and must never be named.
+      expect(capturedPrompt).not.toMatch(/_temp\/release-notes/)
+      expect(capturedPrompt).not.toContain('$RUNNER_TEMP/release-notes')
+      // The dispatcher's runner is not the agent's runner: nothing is created here.
+      expect(fs.readdirSync(runnerTemp)).toEqual([])
     },
     SCENARIO_TIMEOUT_MS,
   )
 
   // -------------------------------------------------------------------------
-  // 20b. Integration — prompt names a mktemp scratch dir when RUNNER_TEMP is unset
+  // 20b. Integration — the prompt does not depend on the dispatcher's RUNNER_TEMP
   // -------------------------------------------------------------------------
   it(
-    'prompt names an absolute mktemp scratch directory when RUNNER_TEMP is unset',
+    'prompt names the same literal scratch directory when RUNNER_TEMP is unset',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
 
@@ -1063,9 +1081,7 @@ describe('release-notes-ci dispatch script smoke tests', () => {
 
       expect(result.exitCode).toBe(0)
       const capturedPrompt = fs.readFileSync(promptCapturePath, 'utf8')
-      const match = capturedPrompt.match(/^Scratch directory: (\S+)$/m)
-      expect(match).not.toBeNull()
-      expect(path.isAbsolute(match?.[1] ?? '')).toBe(true)
+      expect(capturedPrompt).toContain(`Scratch directory: ${SCRATCH_LITERAL}`)
       expect(capturedPrompt).toMatch(/only directory/i)
     },
     SCENARIO_TIMEOUT_MS,
