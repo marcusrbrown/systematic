@@ -457,11 +457,22 @@ describe('publish job', () => {
 
   describe('recheck release hold step (executed)', () => {
     const HOLD_STEP = 'Recheck release hold'
+    const HOLD_ERROR =
+      '::error::RELEASE_HOLD is set; only a maintainer approval can publish.'
+    const READ_ERROR =
+      '::error::Could not read RELEASE_HOLD; refusing to publish.'
 
-    function runHold(hold: string, decision: Record<string, unknown> | null) {
+    type HoldApi =
+      | { kind: 'value'; value: string }
+      | { kind: 'not-found' }
+      | { kind: 'error' }
+
+    function runHold(api: HoldApi, decision: Record<string, unknown> | null) {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-hold-'))
       try {
+        const bin = path.join(dir, 'bin')
         const runner = path.join(dir, 'runner')
+        fs.mkdirSync(bin)
         fs.mkdirSync(path.join(runner, 'decision'), { recursive: true })
         if (decision !== null) {
           fs.writeFileSync(
@@ -469,66 +480,129 @@ describe('publish job', () => {
             JSON.stringify(decision),
           )
         }
+        const log = path.join(dir, 'gh.log')
+        fs.writeFileSync(log, '')
+        writeExecutable(
+          path.join(bin, 'gh'),
+          [
+            '#!/usr/bin/env bash',
+            'echo "gh $*" >> "$STUB_LOG"',
+            'echo "token=$GH_TOKEN" >> "$STUB_LOG"',
+            'case "$STUB_MODE" in',
+            '  value) printf \'%s\\n\' "$STUB_VALUE" ;;',
+            '  not-found) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
+            '  *) echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1 ;;',
+            'esac',
+            '',
+          ].join('\n'),
+        )
         const result = spawnSync(
           'bash',
           ['-e', '-c', runOf(findStep('publish', HOLD_STEP))],
           {
             encoding: 'utf8',
             env: {
-              PATH: process.env.PATH ?? '',
+              PATH: `${bin}:${process.env.PATH ?? ''}`,
               HOME: dir,
               RUNNER_TEMP: runner,
-              RELEASE_HOLD: hold,
+              GH_TOKEN: 'app-token',
+              REPO: 'o/r',
+              STUB_LOG: log,
+              STUB_MODE: api.kind,
+              STUB_VALUE: api.kind === 'value' ? api.value : '',
             },
           },
         )
         return {
           status: result.status,
           text: `${result.stdout}${result.stderr}`,
+          log: fs.readFileSync(log, 'utf8'),
         }
       } finally {
         fs.rmSync(dir, { recursive: true, force: true })
       }
     }
 
-    test('reads the current RELEASE_HOLD and runs right before semantic-release', () => {
-      expect(envOf(findStep('publish', HOLD_STEP))).toEqual({
-        RELEASE_HOLD: expr('vars.RELEASE_HOLD'),
+    const held: HoldApi = { kind: 'value', value: 'true' }
+
+    test('reads the live hold with the App token, not the job-start vars snapshot', () => {
+      const step = findStep('publish', HOLD_STEP)
+      expect(envOf(step)).toEqual({
+        GH_TOKEN: expr('steps.app-token.outputs.token'),
+        REPO: expr('github.repository'),
       })
-      expect(indexOfStep('publish', HOLD_STEP)).toBe(
+      expect(JSON.stringify(step)).not.toContain('vars.RELEASE_HOLD')
+      expect(runOf(step)).toContain(
+        'gh api "repos/$REPO/actions/variables/RELEASE_HOLD" --jq .value',
+      )
+    })
+
+    test('runs after the App token step and directly before semantic-release', () => {
+      const hold = indexOfStep('publish', HOLD_STEP)
+      expect(hold).toBeGreaterThan(
+        indexOfStep('publish', 'Create release App token'),
+      )
+      expect(hold).toBe(
         indexOfStep('publish', 'Publish with semantic-release') - 1,
       )
     })
 
+    test('queries the variable API with the App token', () => {
+      const r = runHold(held, { approver: 'maintainer' })
+      expect(r.log).toContain(
+        'gh api repos/o/r/actions/variables/RELEASE_HOLD --jq .value',
+      )
+      expect(r.log).toContain('token=app-token')
+    })
+
     test.each([
-      ['true', { kind: 'publish', approver: 'gate' }],
-      ['true', { kind: 'publish', approver: 'robot' }],
-      ['true', { kind: 'publish' }],
-      ['true', { kind: 'publish', approver: '' }],
-      ['true', {}],
+      ['gate', { kind: 'publish', approver: 'gate' }],
+      ['an unknown approver', { kind: 'publish', approver: 'robot' }],
+      ['no approver', { kind: 'publish' }],
+      ['an empty approver', { kind: 'publish', approver: '' }],
+      ['an empty decision', {}],
     ])(
-      'RELEASE_HOLD=%s with decision %j exits 1 with the hold error',
-      (hold, decision) => {
-        const r = runHold(hold, decision)
+      'a held variable with %s exits 1 with the hold error',
+      (_name, decision) => {
+        const r = runHold(held, decision)
         expect(r.status).toBe(1)
-        expect(r.text).toContain(
-          '::error::RELEASE_HOLD is set; only a maintainer approval can publish.',
-        )
+        expect(r.text).toContain(HOLD_ERROR)
       },
     )
 
-    test('RELEASE_HOLD=true with a missing decision file fails closed', () => {
-      expect(runHold('true', null).status).not.toBe(0)
+    test('a held variable with a missing decision file fails closed', () => {
+      expect(runHold(held, null).status).not.toBe(0)
     })
 
-    test('RELEASE_HOLD=true lets a maintainer approval through', () => {
-      expect(runHold('true', { approver: 'maintainer' }).status).toBe(0)
+    test('a held variable lets a maintainer approval through', () => {
+      expect(runHold(held, { approver: 'maintainer' }).status).toBe(0)
+    })
+
+    test('an unset variable (HTTP 404) does not hold a gate approval', () => {
+      const r = runHold({ kind: 'not-found' }, { approver: 'gate' })
+      expect(r.status).toBe(0)
+      expect(r.text).not.toContain('::error::')
     })
 
     test.each(['', 'false', 'True'])(
-      'RELEASE_HOLD=%j lets a gate approval through',
-      (hold) => {
-        expect(runHold(hold, { approver: 'gate' }).status).toBe(0)
+      'a variable of %j does not hold a gate approval',
+      (value) => {
+        expect(
+          runHold({ kind: 'value', value }, { approver: 'gate' }).status,
+        ).toBe(0)
+      },
+    )
+
+    test.each([
+      ['gate', { approver: 'gate' }],
+      ['maintainer', { approver: 'maintainer' }],
+    ])(
+      'any other API failure fails closed even for a %s approval',
+      (_name, decision) => {
+        const r = runHold({ kind: 'error' }, decision)
+        expect(r.status).toBe(1)
+        expect(r.text).toContain(READ_ERROR)
+        expect(r.text).not.toContain(HOLD_ERROR)
       },
     )
   })

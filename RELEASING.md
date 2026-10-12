@@ -131,6 +131,7 @@ Before setting `RELEASE_MODE` to `gated`:
 - [ ] The `main` ruleset requiring one approving review, provided by `.github/settings.yml`, is active under Settings → Rules.
 - [ ] Fro Bot has been seen approving a maintainer PR.
 - [ ] `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY` and the `release` environment are in place; `NPM_TOKEN` is only a fallback.
+- [ ] The release App has the Variables: read repository permission, so publish can read the live `RELEASE_HOLD`.
 
 After the first gated release, check:
 

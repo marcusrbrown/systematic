@@ -215,15 +215,29 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      # `vars` resolve when the job starts, after concurrency and environment
-      # admission, so this reads the hold as it is now, not as verify saw it.
-      # Fails closed: with a hold set, only a maintainer approval may publish.
+      # `vars` is a snapshot taken when the job starts, so a hold set while the
+      # job runs would be missed. Read the live value from the API instead, with
+      # the release App token (needs the Variables: read permission). A 404 means
+      # the variable is unset; any other failure fails closed. With a hold set,
+      # only a maintainer approval may publish.
       - name: Recheck release hold
         env:
-          RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "$RELEASE_HOLD" = "true" ]; then
+          out="$RUNNER_TEMP/release-hold.out"
+          err="$RUNNER_TEMP/release-hold.err"
+          if gh api "repos/$REPO/actions/variables/RELEASE_HOLD" --jq .value > "$out" 2> "$err"; then
+            hold=$(< "$out")
+          elif grep -q 'HTTP 404' "$err"; then
+            hold=""
+          else
+            cat "$err" >&2
+            echo "::error::Could not read RELEASE_HOLD; refusing to publish."
+            exit 1
+          fi
+          if [ "$hold" = "true" ]; then
             approver=$(jq -r '.approver // ""' "$RUNNER_TEMP/decision/decision.json")
             if [ "$approver" != "maintainer" ]; then
               echo "::error::RELEASE_HOLD is set; only a maintainer approval can publish."
