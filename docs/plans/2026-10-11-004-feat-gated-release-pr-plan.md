@@ -10,7 +10,7 @@ origin: docs/brainstorms/2026-10-11-gated-release-pr-requirements.md
 
 ## Overview
 
-Today a merge to main stops publishing directly. Each push to main instead rebuilds a single bot-owned release PR. That PR's only change is the pending `CHANGELOG.md` entry. It publishes only after it auto-merges with an approval on its exact head commit. The approval comes from Marcus at any time, or from a deterministic Wednesday/Sunday gate that approves as `fro-bot` and attests the approval.
+A merge to main no longer publishes. Each push to main instead rebuilds a single bot-owned release PR. That PR's only change is the pending `CHANGELOG.md` entry. It publishes only after it auto-merges with an approval on its exact head commit. The approval comes from Marcus at any time, or from a deterministic Wednesday/Sunday gate that approves as `fro-bot` and attests the approval.
 
 The publish job re-verifies the approval, then publishes with npm trusted publishing (OIDC) from a credential-scoped environment. Fro Bot's narrative still lands on the GitHub release after publish. Its silent-failure gap is closed (#1089), and the docs site gains a changelog page and a narrative release-notes page.
 
@@ -50,7 +50,6 @@ Requirements are numbered as in the origin doc.
 
 - **Dedicated settings App:** a Marcus-org-level change, because the existing App serves Renovate and settings across his repos. Recorded below as an accepted risk.
 - **Workflow linting (`actionlint`/`zizmor`):** adding a CI gate is ask-first. Propose it separately.
-- **Removing the now-unused `@semantic-release/exec` devDependency:** touches the lockfile, so ask first. Do it after PR 3.
 
 ## Context & Research
 
@@ -182,52 +181,96 @@ Requirements are numbered as in the origin doc.
 
 ## Key Technical Decisions
 
-- **The published body is the committed `CHANGELOG.md` entry.** A small semantic-release plugin's `generateNotes` returns the top entry, replacing release-notes-generator in the gated publish. Its `verifyRelease` refuses when the entry's version differs from `nextRelease.version`. Regenerating at publish would differ from what was approved: the date changes, and the range includes the release commit's own `chore(release)` subject.
-- **Preview calls the configured plugins directly, not semantic-release core.** Core dry-run needs push credentials (`verifyAuth`), so a core-based check could not be credential-free. Preview loads `.releaserc.yaml` and runs commit-analyzer and release-notes-generator over `git log <last tag>..HEAD`. The refresh, the PR check, and publish verification all use this one path. `.releaserc.yaml` stays the single rule source (R4), and the publish-time `verifyRelease` catches any divergence.
-- **Strict currency.** The release PR is rebuilt from current main on every main advance (R7), keyed on the main SHA, so reruns are no-ops. Any merge to main voids a pending approval, and the gate re-approves on its next pass.
-- **Publish invariants before semantic-release runs.** The merged commit X must satisfy all of these, or nothing publishes:
-  - X is the main tip.
-  - X maps to a merged `release/pending` PR whose `merge_commit_sha == X`.
-  - The PR's final head is one commit over `parent(X)`.
-  - That head's diff touches only `CHANGELOG.md`, as a prepend plus removal of untagged entries.
-  - The head carries a valid approval submitted before the merge. A valid approval is either Marcus's, or a `fro-bot` approval with a gate attestation from `release-gate.yaml@refs/heads/main` that binds PR, head, review, and run.
-  - While a hold is set, only Marcus's approval counts.
+- **Credentialed jobs run no repo code.** Every credentialed workflow is split into two jobs. A credential-free *decide/render* job runs the repo's scripts and writes a small, data-only decision artifact. A credentialed *act* job runs only pinned tooling from the lockfile, plus `gh` and `git`. That tooling is installed with `--frozen-lockfile --ignore-scripts`, and the act job installs nothing else. This holds for publish, refresh, the gate, the Claude plugin push, and the docs deploy.
+- **The published body is the committed `CHANGELOG.md` entry.**
+  - The credential-free `verify` job extracts the top entry and writes a gated semantic-release config. The config is pure data: the shared rules from `.releaserc.yaml`, plus a gated plugin list.
+  - In that list, `@semantic-release/exec`'s `generateNotesCmd` emits the entry, and `verifyReleaseCmd` fails when `${nextRelease.version}` differs from the entry's version.
+  - The publish job overwrites its checkout's `.releaserc.yaml` with this generated config before it runs semantic-release.
+  - The reason for this design is that regenerating the notes at publish would differ from what was approved: the date changes, and the range includes the release commit's own `chore(release)` subject.
+- **Preview reproduces core's inputs explicitly.** Core's dry run needs push credentials (`verifyAuth`), so preview cannot use it. Preview instead loads `.releaserc.yaml` and calls the configured commit-analyzer and release-notes-generator with a context built the way core builds it:
+  - last-release discovery from tags matching `tagFormat` (`v${version}`) on the main lineage;
+  - the commit range `lastRelease.gitHead..HEAD`;
+  - `lastRelease` / `nextRelease` objects;
+  - `options` merged from the config.
 
-  If main moved, the run reports **superseded** (job summary and a comment on the merged PR) and exits 0. Any other failed invariant is **refused**, which turns the job red.
-- **Hold is an admin-only repository variable (`RELEASE_HOLD`).** Only an admin can set or clear it. Fro Bot's PAT has write access, not admin. Labels are writable by triage, so they don't qualify.
-- **Gate attribution is an artifact attestation, not an environment.** `FRO_BOT_PAT` is already a repo secret used by `fro-bot.yaml`, so an environment copy adds nothing. A copy of the gate dispatched from a branch would sign with a non-main source ref, and publish rejects that. A leaked PAT can still approve, which is the accepted risk from the origin doc.
-- **Credentialed publish runs no project code.** A credential-free job builds `dist/` and uploads it with its digest. The publish job installs only lockfile tooling with `--ignore-scripts`, verifies the artifact digest, and runs semantic-release with `npm_config_ignore_scripts=true`, which stops `prepublishOnly` from rebuilding. `registry-url` is dropped from `setup-node`, and the job asserts npm ≥11.5.1.
-- **Post-publish work moves to `release: published`.** Narrative (`release-notes.yaml`), the Claude plugin (`publish-claude-code-plugin.yaml`), and docs all trigger on that event. They work in both legacy and gated mode, and none of them can turn publish red (R11, R25).
-- **Concurrency per job, never cancelling a publish:**
-  - The workflow-level setting cancels only on `pull_request`.
-  - Publish: one group, no cancel. It discovers its target by state, meaning the latest merged release PR with no tag.
-  - Refresh: cancel group plus a `--force-with-lease` compare-and-swap.
-  - Gate: idempotent per head.
-- **Cutover lever.** A repository variable `RELEASE_MODE` (`legacy` | `gated`) selects the path. Both paths can't publish at once. `NPM_TOKEN` stays in the `release` environment as a fallback for the first gated release, then is deleted in PR 3.
-- **Docs refresh after the narrative.** The narrative job dispatches `docs.yaml` with the tag once it has verified the rewrite. `release: edited` is not used, so an arbitrary body edit can't trigger a deploy. Docs builds run credential-free and treat release bodies as untrusted. A separate job holds the deploy key.
+  A parity test runs real core in dry-run against a local bare remote and compares the version and notes byte-for-byte. The publish-time `verifyReleaseCmd` is the backstop.
+- **Strict currency.** The release PR is rebuilt from current main on every main advance (R7). Rebuilds are keyed on the main SHA, so a rerun is a no-op. Any merge to main voids a pending approval, and the gate re-approves on its next pass.
+- **Publish invariants.** The credential-free `verify` job checks all of these for the merged commit X:
+  - X is the main tip.
+  - X maps to a merged PR that meets every one of these:
+    - its head ref is `release/pending`;
+    - its head repo is this repo;
+    - its author login is the release App's bot;
+    - `merge_commit_sha == X`.
+  - The PR's final head is one commit over `parent(X)`.
+  - The head's diff touches only `CHANGELOG.md`. It must be a prepend plus removal of untagged entries.
+  - The head carries a valid approval submitted before the merge. The approval is valid in either of two cases:
+    - It is Marcus's.
+    - It is `fro-bot`'s, and a gate attestation exists that meets both of these:
+      - it comes from `release-gate.yaml@refs/heads/main`;
+      - its subject digest equals the digest of `{repo, PR, head, review id, run}`, recomputed from the live review read through the API.
+  - While `RELEASE_HOLD` is set, only Marcus's approval counts.
+
+  How a failed check is reported:
+  - If main moved, the run reports **superseded**. The job goes red with a comment on the merged PR, and the commits are re-proposed in the next release PR.
+  - Any other failed invariant is **refused**, and the job goes red.
+  - Both outcomes happen before anything publishes.
+- **The hold is an admin-only repository variable (`RELEASE_HOLD`).** `fro-bot`'s PAT has write access, not admin. Labels are writable by anyone with triage, so they aren't used.
+- **The gate is attributed by attestation, not by environment.** `FRO_BOT_PAT` is already a repo secret. Only `release-gate.yaml` on main mints attestations that publish accepts. A copy of the workflow on a branch, or a leaked PAT, can still approve and merge. Publish refuses the result, and the run is visible. That is the accepted risk from the origin doc.
+- **Merge gate before cutover.** Main's ruleset is in place before `RELEASE_MODE` flips: one approval, stale approvals dismissed, no bypass. The Fro Bot approval rule (R23) lands with it. Without these, an armed auto-merge would merge unapproved release PRs, and each refused publish would loop `CHANGELOG.md` commits onto main.
+- **Post-publish work moves to `release: published`.** The narrative (`release-notes.yaml`), the Claude plugin (`publish-claude-code-plugin.yaml`), and docs all trigger on that event. Each one acts only when both are true:
+  - the release's author is the release App;
+  - `npm view @fro.bot/systematic@<version>` exists.
+
+  They work in both legacy and gated mode, and none of them can turn publish red (R11, R25). Publish creates the GitHub release with the release App token, because a release created with `GITHUB_TOKEN` doesn't fire `release: published`.
+- **Publish concurrency.** One non-cancelling group, `release-state`, covers three jobs: `legacy-release`, gated `publish`, and `refresh`. This serializes the release state across modes and runs. GitHub replaces an older pending run in a group with a newer one. That's safe because publish discovers its target by state: the latest merged, untagged release PR. An hourly scheduled reconcile covers a merge whose push never triggered a run. Workflow-level `cancel-in-progress` applies only to `pull_request`.
+- **The cutover lever fails closed.** `RELEASE_MODE` is an admin-only repository variable.
+  - `legacy-release` runs only when it is exactly `legacy`.
+  - Gated publish and refresh run only when it is exactly `gated`.
+  - Any other value, including unset, fails red and publishes nothing.
+- **OIDC is proven at the first real release.**
+  - `NPM_TOKEN` stays in the `release` environment as a fallback, exposed only in the publish step's env.
+  - Cutover verification checks the npm publisher identity (`_npmUser`) to confirm a trusted-publishing publish. A token fallback therefore can't pass as OIDC.
+  - `NPM_TOKEN` is deleted only after a clean OIDC publish.
+- **Docs.** Docs builds are credential-free and treat release bodies as untrusted. Deploy runs in a `docs` environment limited to main and `v*` tags. A tag dispatch must name an existing published `v*` release. The registry version comes from that tag.
 
 ## Open Questions
 
 ### Resolved During Planning
 
-- **Notes file vs. PR body:** `CHANGELOG.md` is the PR's only change (origin R9). The body mirrors it and is never read.
-- **Changelog history:** starts at cutover, and its header links to GitHub Releases.
-- **Release-notes page:** full history. A release without a narrative shows its body marked "narrative unavailable."
+- **Notes file vs. PR body:** the PR's only change is `CHANGELOG.md`. The body mirrors it and is never read.
+- **Changelog history:** starts at cutover, and the header links to GitHub Releases.
+- **Release-notes page:** full history. A release with no narrative shows its body, marked "narrative unavailable."
 - **Docs refresh trigger:** an explicit dispatch from the narrative job.
-- **PR phasing:** Phase 0 sandbox, then PR 1 (narrative and docs), PR 2 (gated pipeline, dark), cutover, and PR 3 (hardening).
+- **PR phasing:**
+  - Phase 0 sandbox.
+  - PR 1: narrative and docs.
+  - PR 2: gated pipeline, landed dark, plus the merge gate.
+  - Cutover.
+  - PR 3: tags, immutability, policy, and removing the legacy path.
 - **Settings App split:** accepted risk, outside this change.
+- **OIDC proof:** at the first gated release, using the publisher-identity check.
+- **Narrative rewrite token:** the narrative job dispatches `fro-bot.yaml`, which edits the release with `FRO_BOT_PAT` as it does today. The narrative job itself needs only `contents: read` and `actions: write`.
 
 ### Deferred to Implementation
 
-All of these need Phase 0 sandbox evidence first:
+Phase 0 sandbox evidence is needed first for these:
 
-- Can a GitHub App installation token enable auto-merge on its own PR? Is the resulting merge's push attributed so that `on: push` fires? Fallback: the publish job also runs on a bounded schedule and through `workflow_dispatch` reconcile, finding merged-but-untagged release PRs.
-- Do `commitHeadline`/`commitBody` on `enablePullRequestAutoMerge` override the squash message? This keeps a `BREAKING CHANGE:` line in the mirrored body out of X. The publish version check is the backstop.
-- Does OIDC publish work with no `NODE_AUTH_TOKEN` and no `registry-url`? Does `@semantic-release/npm` exchange OIDC in `verifyConditions`, before any tag is created? If it exchanges after the tag, an OIDC failure orphans a tag, so the reconcile path and the break-glass runbook must cover it.
-- Does the bfra-me settings applier support `target: tag` rulesets and environments, and does it remove resources missing from config? If not, apply them with documented `gh api` calls.
-- Can the `fro-bot` user dismiss its own review after a head change mid-gate? If not, the gate must re-check before approving with `commit_id`, and publish's exact-head check stays the backstop.
-- How does the Fro Bot review flow (R23) withhold an approval when the PR head contains a `fro-bot`-authored commit? A deterministic pre-step in `fro-bot.yaml` versus an agent action input. Read the pinned `fro-bot/agent` inputs.
-- What exact attestation subject and predicate format to use, and the matching `gh attestation verify` flags.
+- **Auto-merge.** Can a GitHub App installation token enable auto-merge on its own PR? Does the resulting merge fire `on: push`? The hourly reconcile covers it if not.
+- **Squash message.** Do `commitHeadline`/`commitBody` on `enablePullRequestAutoMerge` override the squash message? The publish version check is the backstop.
+- **Settings applier.** Does the bfra-me applier support `target: tag` rulesets, environments with branch-and-tag policies, and removal of resources missing from config? If not, document `gh api` calls instead.
+- **Review dismissal.** Can the `fro-bot` user dismiss its own review after the head changes mid-gate? If not, the gate re-checks before approving with `commit_id`, and publish's exact-head check is the backstop.
+- **Repository variables.** Confirm that only admins can set them. This is the assumption behind `RELEASE_MODE` and `RELEASE_HOLD`.
+
+Observed at the first gated release:
+
+- Does OIDC work with no `registry-url` and no `NODE_AUTH_TOKEN`?
+- Does `@semantic-release/npm` exchange OIDC in `verifyConditions`, before the tag? If not, an OIDC failure leaves an orphaned tag. The break-glass runbook covers that, and tag rulesets land only after a clean publish.
+
+Decided during implementation:
+
+- How Fro Bot's review (R23) withholds approval: a deterministic pre-step in `fro-bot.yaml`, or an agent action input. Read the pinned `fro-bot/agent` inputs.
+- The exact attestation statement format and the matching `gh attestation verify` flags.
 
 ## High-Level Technical Design
 
@@ -239,43 +282,62 @@ sequenceDiagram
     participant Rel as release.yaml
     participant PR as release/pending PR
     participant Gate as release-gate.yaml
-    participant Pub as publish job (env: release)
-    participant Post as release: published consumers
+    participant Post as release published consumers
 
-    Main->>Rel: push (any merge)
-    Rel->>Rel: publish? only if tip is a merged, untagged release PR
-    Rel->>PR: refresh (needs publish): rebuild from main, prepend CHANGELOG entry, mirror body, arm auto-merge
+    Main->>Rel: push or hourly reconcile
+    Rel->>Rel: build and verify, credential-free
+    Rel->>Rel: publish only if verify says publish, env release
+    Rel->>Rel: render refresh patch, credential-free
+    Rel->>PR: push patch, mirror body, arm auto-merge, App token only
     Note over PR: new head voids prior approvals
     alt Marcus approves
-        PR-->>Main: auto-merge (squash X)
-    else Wed/Sun gate (no hold, checks green, current, shape ok)
-        Gate->>PR: approve head H as fro-bot (commit_id=H)
-        Gate->>Gate: re-read head/hold, attest {PR,H,review,run}
-        PR-->>Main: auto-merge (squash X)
+        PR-->>Main: auto-merge squash X
+    else Wed or Sun gate
+        Gate->>Gate: decide with no credentials
+        Gate->>PR: approve head H as fro-bot, PAT only
+        Gate->>Gate: attest digest of repo PR H review run, OIDC only
+        PR-->>Main: auto-merge squash X
     end
     Main->>Rel: push X
-    Rel->>Pub: verify invariants + approval/attestation
-    Pub->>Pub: semantic-release (OIDC, committed entry as notes)
-    Pub->>Post: release: published
-    Post->>Post: Claude plugin branch; docs deploy; narrative job
-    Post->>Post: narrative verified → dispatch docs.yaml(tag)
+    Rel->>Post: release published by release App
+    Post->>Post: Claude plugin, docs deploy, narrative
+    Post->>Post: narrative verified, then dispatch docs for the tag
 ```
 
-| State on push to main | Publish job | Refresh job |
+| State on push to main or reconcile | Publish | Refresh |
 |---|---|---|
-| Tip is an untagged release merge X with a valid approval | publish | skip until a tag exists, then preview for the new range |
+| Tip is an untagged release merge X with a valid approval | publish | waits in `release-state`, then previews the new range |
 | Tip is an untagged release merge X, approval invalid | refused (red) | rebuild a new release PR |
-| An untagged release merge exists but is not the tip | superseded (comment, green) | rebuild |
+| An untagged release merge exists but is not the tip | superseded (red, comment) | rebuild; commits re-proposed |
 | Ordinary merge | skip | rebuild, or close the PR if nothing is releasable |
-| `RELEASE_MODE != gated` | skip (legacy job publishes) | preview to the job summary only |
+| `RELEASE_MODE` is not exactly `gated` | skip (legacy runs only on exactly `legacy`) | preview to the job summary only |
 
 ## Phased Delivery
 
-- **Phase 0, sandbox (Marcus, with agent help).** Use a throwaway GitHub repo to settle the deferred questions above. Create the release App, the `release` environment (deployment branch `main`), and the npm trusted publisher bound to `release.yaml` plus `release`. The workflow filename is final from here on.
-- **PR 1:** narrative hardening, the narrative job, and the docs release-notes page. These work on today's pipeline.
-- **PR 2:** the gated pipeline, landed dark (`RELEASE_MODE=legacy`).
-- **Cutover:** flip `RELEASE_MODE=gated`. The first gated release keeps `NPM_TOKEN` as a fallback.
-- **PR 3, after one verified gated release:** rulesets and tag rulesets, immutable releases, `SECURITY.md`, SHA pinning, the R23 enforcement, and removal of the legacy path and `NPM_TOKEN`.
+- **Phase 0, sandbox (Marcus, with agent help).**
+  - In a throwaway GitHub repo, settle the auto-merge, squash-message, settings-applier, review-dismissal, and repository-variable questions.
+  - Create the release App and the `release` environment (deployment branch `main`).
+  - Create the `docs` environment (`main` plus `v*` tags) and move `FRO_BOT_APPLICATION_*` into it.
+  - Create the npm trusted publisher bound to `release.yaml` and `release`. The workflow filename is final from here on.
+- **PR 1:**
+  - narrative hardening;
+  - the narrative job;
+  - the docs split and environment;
+  - the release-notes page.
+
+  All of these work on today's pipeline.
+- **PR 2:** the gated pipeline, landed dark (`RELEASE_MODE=legacy`). It also adds the changelog page, the Fro Bot approval rule, and the main ruleset.
+- **Cutover.** Preconditions:
+  - the main ruleset is active;
+  - Fro Bot is approving Marcus's PRs.
+
+  Then flip `RELEASE_MODE=gated`.
+- **PR 3** (after one clean OIDC gated release):
+  - tag rulesets;
+  - immutable releases;
+  - `SECURITY.md`;
+  - SHA pinning;
+  - removal of the legacy path and `NPM_TOKEN`.
 
 ## Implementation Units
 
@@ -283,7 +345,7 @@ sequenceDiagram
 
 - [ ] **Unit 1: Narrative hardening (#1089)**
 
-**Goal:** A narrative run that doesn't rewrite the release is reported as `narrative-not-applied`, never as success. The agent gets a writable scratch directory.
+**Goal:** When a narrative run doesn't rewrite the release, it reports `narrative-not-applied` instead of success. The agent gets a writable scratch directory.
 
 **Requirements:** R25, AE12
 
@@ -295,54 +357,56 @@ sequenceDiagram
 
 **Approach:**
 - The prompt and the skill both name `$RUNNER_TEMP/release-notes` as the only scratch directory.
-- Replace the `BODY_LEN >= 200` check with a before/after body comparison plus the `## What's new` marker.
-- `narrative-not-applied` becomes its own outcome with a non-zero exit. The script will now run in its own job (Unit 2), so a red result there never marks publish as failed.
+- Replace `BODY_LEN >= 200` with a before/after body comparison plus the `## What's new` marker.
+- `narrative-not-applied` becomes its own outcome with a non-zero exit. The script runs in its own job (Unit 2), so a red result never marks publish as failed.
 - Keep the existing security-class outcomes.
 
 **Execution note:** Test-first. Extend the mock-gh scenarios before changing the script.
 
-**Patterns to follow:** existing scenario env vars in `tests/integration/release-notes-ci.test.ts`.
+**Patterns to follow:** the scenario env vars in `tests/integration/release-notes-ci.test.ts`.
 
 **Test scenarios:**
-- Happy path: the body changes and starts with `## What's new` → success.
-- Error path: the body is unchanged and longer than 200 characters (the v3.21.7 case) → `narrative-not-applied` with a non-zero exit.
-- Error path: the body changed but lacks the marker → `narrative-not-applied`.
-- Edge: the release already narrated (idempotency check) → success with no dispatch.
-- Integration: the prompt text contains the scratch-directory instruction, and the skill's paths match it.
+- Happy path: the body changed and starts with `## What's new` → success.
+- Error path: the body is unchanged and longer than 200 characters (the v3.21.7 case) → `narrative-not-applied`, non-zero exit.
+- Error path: the body changed but has no marker → `narrative-not-applied`.
+- Edge: the release is already narrated → success, no dispatch.
+- Integration: the prompt contains the scratch-directory instruction, and the skill's paths match it.
 
-**Verification:** Every scenario passes. A reproduction of the v3.21.7 failure no longer exits 0.
+**Verification:** Every scenario passes, and the v3.21.7 reproduction no longer exits 0.
 
 - [ ] **Unit 2: Narrative as its own job**
 
-**Goal:** The narrative runs on `release: published` in its own workflow, outside the publish job, and dispatches the docs refresh once it has verified the rewrite.
+**Goal:** The narrative runs on `release: published` in its own workflow, then dispatches the docs refresh after it verifies the rewrite.
 
-**Requirements:** R11, R25, R27, AE12, AE14
+**Requirements:** R10, R11, R25, R27, AE12, AE14
 
-**Dependencies:** Unit 1
+**Dependencies:** Units 1 and 4
 
 **Files:**
 - Create: `.github/workflows/release-notes.yaml`
-- Modify: `.releaserc.yaml` (drop the `@semantic-release/exec` `successCmd` entry)
+- Modify: `.releaserc.yaml` (drop the `successCmd` entry)
 - Test: `tests/unit/release-notes-workflow.test.ts`
 
 **Approach:**
 - Triggers: `release: published` (skip prereleases) and `workflow_dispatch` with a `tag` input, for re-narration.
-- Permissions: `contents: read` and `actions: write`. Uses `GITHUB_TOKEN`, which can dispatch `workflow_dispatch` runs.
-- Concurrency: group per tag, no cancel.
-- On verified success, dispatch `docs.yaml` with the tag.
+- The job acts only when the release author is the App that creates releases and npm has that version. In PR 1 that is the existing App; in PR 2 it is the release App.
+- It dispatches `fro-bot.yaml` through `scripts/dispatch-release-notes.sh`. `fro-bot.yaml` applies the edit with `FRO_BOT_PAT`, as it does today. The job's own permissions are `contents: read` and `actions: write`, with `GITHUB_TOKEN`.
+- Concurrency: one group per tag, no cancel.
+- On a verified success, it dispatches `docs.yaml` with the tag.
 
 **Patterns to follow:** `tests/unit/host-contract-workflow.test.ts` (`readWorkflow`, `findStep`).
 
 **Test scenarios:**
-- The workflow triggers on `release: published` and dispatch only, and holds no release secrets.
-- The docs dispatch step runs only after a successful narrative step.
+- Triggers are only `release: published` and dispatch, and the workflow holds no release secrets.
+- A release authored by another identity → no action.
+- The docs dispatch runs only after the narrative step succeeds.
 - `.releaserc.yaml` has no `successCmd`.
 
-**Verification:** The workflow tests pass. A dispatch against an existing tag in a manual run narrates and redeploys docs. That run is observed after merge.
+**Verification:** The tests pass, and a post-merge dispatch against an existing tag narrates the release and redeploys docs.
 
 - [ ] **Unit 3: Docs release-notes page**
 
-**Goal:** A generated release-notes page shows every release, newest first, using the narrative body. A release without the marker shows its body labelled "narrative unavailable."
+**Goal:** A generated page lists every release, newest first, with its narrative. A release without the marker is shown with the label "narrative unavailable."
 
 **Requirements:** R27, AE14
 
@@ -350,57 +414,57 @@ sequenceDiagram
 
 **Files:**
 - Create: `docs/scripts/generate-release-notes.ts`
-- Modify: `package.json` (`docs:generate` chain), `.gitignore` (generated page), `docs/astro.config.mjs` (sidebar entry, if `autogenerate` doesn't cover it)
+- Modify: `package.json` (`docs:generate`), `.gitignore`, `docs/astro.config.mjs` (sidebar, if needed)
 - Test: `tests/unit/generate-release-notes.test.ts`
 
 **Approach:**
-- Fetch releases through the GitHub API with `GH_TOKEN` when present.
-- Without a token or network, generate a stub page that links to GitHub Releases, so local `docs:build` still works.
-- Treat bodies as untrusted: strip raw HTML, allowlist `https:` links, escape MDX-significant braces, and cap the per-release length.
-- Record each release's `updated_at`.
+- Fetch releases with `GH_TOKEN` when it is present. Without it, write a stub page that links to GitHub Releases.
+- Treat bodies as untrusted: strip raw HTML, allowlist `https:` links, escape MDX braces, and cap the length per release.
+- Record `updated_at`.
 
-**Patterns to follow:** `docs/scripts/transform-content.ts` and its sanitization history (`tests/unit/transform-content.test.ts`).
+**Patterns to follow:** `docs/scripts/transform-content.ts` and `tests/unit/transform-content.test.ts`.
 
 **Test scenarios:**
-- Happy path: narrated releases render in order, with their version headings.
-- Edge: a release without `## What's new` gets the "narrative unavailable" label.
-- Edge: no token → a stub page, and the build still succeeds.
+- Happy path: releases are ordered newest first and have headings.
+- Edge: a release with no marker gets the label.
+- Edge: no token produces the stub, and the build succeeds.
 - Error path: hostile bodies (`<script>`, `{}`, backticks, `javascript:` links) are neutralized.
-- Integration: the generated page passes `markdownlint` with the repo config.
+- Integration: the output passes `markdownlint` with the repo config.
 
-**Verification:** `bun run docs:build` succeeds locally with and without `GH_TOKEN`, and the tests pass.
+**Verification:** `bun run docs:build` succeeds both with and without `GH_TOKEN`, and the tests pass.
 
-- [ ] **Unit 4: Split the docs build and deploy, and add a tag dispatch**
+- [ ] **Unit 4: Docs build/deploy split, `docs` environment, tag dispatch**
 
-**Goal:** Docs build without credentials, the deploy key never runs next to fetched release bodies, and a tag dispatch builds that tag.
+**Goal:** Docs build with no credentials. The deploy key lives only in a `docs` environment. A tag dispatch builds a validated release tag.
 
 **Requirements:** R10, R20, R27
 
-**Dependencies:** Unit 3
+**Dependencies:** Unit 3; the Phase 0 `docs` environment
 
 **Files:**
 - Modify: `.github/workflows/docs.yaml`
 - Test: `tests/unit/docs-workflow.test.ts`
 
 **Approach:**
-- A `build` job (`contents: read`; `GITHUB_TOKEN` for reading releases) uploads the site artifact.
-- A `deploy` job downloads it and holds `FRO_BOT_APPLICATION_*`.
-- A `workflow_dispatch` with a tag input checks out that tag.
-- Keep `docs-deploy` with cancel-in-progress, so the newer run wins.
+- `build` job: `contents: read`, with `GITHUB_TOKEN` for reading releases. It uploads the site artifact.
+- `deploy` job: environment `docs`, holding `FRO_BOT_APPLICATION_*`. It downloads the artifact and pushes, with no install and no repo scripts.
+- The `workflow_dispatch` tag input must match `v<semver>` and name an existing published, non-prerelease release. The job checks out that tag and takes the registry version from it.
+- On `release: published`, the workflow acts only when the release author is the releasing App.
+- Keep `docs-deploy` with cancel-in-progress.
 
 **Test scenarios:**
-- Only the deploy job references `FRO_BOT_APPLICATION_*`.
-- The build job's permissions are read-only.
-- A dispatch with a tag checks out that ref.
-- Prereleases are still skipped.
+- Only `deploy` references the environment and the App secrets. `build` has read-only permissions.
+- A dispatch input that is not a tag, or names an unknown tag, fails before checkout.
+- A dispatch with a valid tag checks out that tag and passes its version to the registry build.
+- Prereleases are skipped.
 
-**Verification:** The workflow tests pass. After merge, a manual dispatch for the latest tag deploys the page.
+**Verification:** The tests pass, and after merge a dispatch for the latest tag deploys the page.
 
-### PR 2: Gated pipeline, landed dark
+### PR 2: Gated pipeline, landed dark, plus the merge gate
 
 - [ ] **Unit 5: Preview and changelog writer**
 
-**Goal:** One deterministic preview of the pending version and entry, and a writer that maintains `CHANGELOG.md`.
+**Goal:** One deterministic preview of the pending version and entry, plus the `CHANGELOG.md` writer.
 
 **Requirements:** R2, R3, R4, R9, R26, AE1, AE4
 
@@ -411,134 +475,149 @@ sequenceDiagram
 - Test: `tests/unit/release-preview.test.ts`, `tests/unit/release-changelog.test.ts`
 
 **Approach:**
-- `preview` loads `.releaserc.yaml` and runs the configured commit-analyzer and release-notes-generator over commits since the last `v*` tag. It returns `{version, entry}` or "nothing releasable."
-- `changelog` creates the file from the header template and sentinel when it is absent. If the file exists but the sentinel is missing, it fails loudly. It removes entries whose `v<version>` tag doesn't exist (phantoms), then prepends the new entry after the sentinel.
-- Output is markdownlint-clean.
+- `preview` builds core's plugin context from tags matching `tagFormat` and the commit range (see Key Technical Decisions). It returns `{version, entry}`, or "nothing releasable."
+- `changelog` behavior:
+  - If the file is absent, create it from the header template plus a sentinel.
+  - If the file exists without the sentinel, fail.
+  - Before stripping anything, require a successful, non-empty tag listing. Fail closed otherwise.
+  - Strip entries whose `v<version>` tag doesn't exist, then prepend the new entry after the sentinel.
+- The output must be clean under markdownlint.
 
-**Execution note:** Test-first with temporary git repos as fixtures.
+**Execution note:** Test-first, using temporary git repos as fixtures.
 
 **Test scenarios:**
-- Happy path: two `fix` commits since the last tag → next patch, with both in the entry (AE1).
-- Happy path: one `feat` among several `chore` commits → minor.
+- Happy path: two `fix` commits → next patch, with both in the entry (AE1).
+- Happy path: one `feat` among `chore` commits → minor.
 - Edge: only `chore`/`test` commits → nothing releasable (AE4).
-- Edge: a `docs(readme)` commit → patch, per `releaseRules`.
-- Edge: no `CHANGELOG.md` → created with the header and a link to GitHub Releases.
-- Error path: the file exists without a sentinel → hard error.
-- Edge: a phantom entry for an untagged version → stripped before the prepend.
-- Integration: the preview version equals what semantic-release core computes for the same fixture. Run core in dry-run against a local bare remote.
+- Edge: `docs(readme)` → patch.
+- Edge: no file → created with the header and the Releases link.
+- Error path: the file has no sentinel → error.
+- Edge: a phantom untagged entry is stripped.
+- Error path: tag listing fails or returns empty → no entries are removed, and the job fails.
+- Integration: the version and notes match real core dry-run byte-for-byte, against a local bare remote.
 
-**Verification:** The tests pass, including the parity test against core.
+**Verification:** The tests pass, including the core parity test.
 
-- [ ] **Unit 6: Publish verification and the changelog notes plugin**
+- [ ] **Unit 6: Publish verifier and gated config**
 
-**Goal:** A deterministic verifier for the publish invariants, plus a semantic-release plugin that publishes the committed entry and refuses on a version mismatch.
+**Goal:** A credential-free verifier that emits the decision artifact, and a generator for the data-only gated semantic-release config.
 
 **Requirements:** R6, R7, R8, R9, R15, AE5, AE6, AE9
 
 **Dependencies:** Unit 5
 
 **Files:**
-- Create: `scripts/release/verify-merge.ts`, `scripts/release/changelog-notes-plugin.ts`
-- Test: `tests/unit/release-verify-merge.test.ts`, `tests/unit/release-changelog-notes-plugin.test.ts`
+- Create: `scripts/release/verify-merge.ts`, `scripts/release/gated-config.ts`
+- Test: `tests/unit/release-verify-merge.test.ts`, `tests/unit/release-gated-config.test.ts`
 
 **Approach:**
-- The verifier takes X and GitHub API reads (injected for tests).
-- It returns `publish`, `superseded`, or `refused`, with a reason.
-- It enforces every invariant listed in Key Technical Decisions, including the hold rule.
-- The plugin's `generateNotes` returns the top entry. Its `verifyRelease` refuses when the entry version is not `nextRelease.version`.
+- The verifier takes X and GitHub API reads (injected in tests). It returns `publish`, `superseded`, or `refused` with a reason, plus the entry and version when the result is `publish`.
+- It enforces every publish invariant in Key Technical Decisions: identity, attestation digest, and hold.
+- `gated-config` copies the rules from `.releaserc.yaml` and writes a JSON config. Its plugin list is commit-analyzer, then exec (`generateNotesCmd` emits the entry file; `verifyReleaseCmd` compares versions), then npm, then github.
 
-**Execution note:** Test-first. One verifier rule per slice.
+**Execution note:** Test-first, with one verifier rule per slice.
 
 **Test scenarios:**
-- Happy path: Marcus approval on the final head, submitted before the merge → `publish`.
-- Happy path: a `fro-bot` approval with a valid gate attestation for the same PR, head, and review → `publish`.
-- Error path: the approval's `commit_id` is an earlier head → `refused` (AE5).
-- Error path: the approval was submitted after `merged_at` → `refused`.
-- Error path: a dismissed approval → `refused`.
-- Error path: a `fro-bot` approval without an attestation, or with a branch source ref → `refused`.
-- Error path: hold set and only a `fro-bot` approval → `refused`. Hold set with Marcus's approval → `publish`.
-- Error path: the head diff touches a file other than `CHANGELOG.md`, removes a tagged entry, or the head's parent ≠ X's parent → `refused`.
-- Edge: X is not the main tip → `superseded`.
-- Edge: no merged release PR for X (an ordinary merge or a dispatch) → no publish (AE6).
-- Plugin: the entry version differs from `nextRelease.version` (for example, a `BREAKING CHANGE:` in the squash body) → `verifyRelease` throws.
-- Plugin: `generateNotes` returns exactly the committed entry bytes, without the sentinel or header (AE9).
+- Happy path: Marcus's approval on the final head, submitted before the merge → `publish`.
+- Happy path: a `fro-bot` approval with an attestation whose digest matches {repo, PR, head, review, run} → `publish`.
+- Error path: the approval is on an earlier head (AE5), was submitted after the merge, or was dismissed → `refused`.
+- Error path: the attestation is reused from a different PR, head, or review, or comes from a branch source ref → `refused`.
+- Error path: hold is set and only `fro-bot` approved → `refused`. Hold is set and Marcus approved → `publish`.
+- Error path: the head repo is a fork, or the PR author isn't the release App, even with the right branch name → `refused`.
+- Error path: the diff touches another file, removes a tagged entry, or the head's parent ≠ X's parent → `refused`.
+- Edge: X is not the tip → `superseded`.
+- Edge: no merged release PR for X → no publish (AE6).
+- Config: the rules are identical to `.releaserc.yaml`. There is no release-notes-generator, and the exec commands read only the decision artifact.
+- Config: the version check fails on a mismatch (for example, `BREAKING CHANGE:` in the squash body), and the notes equal the entry bytes (AE9).
 
-**Verification:** All tests pass.
+**Verification:** The tests pass.
 
-- [ ] **Unit 7: `release.yaml` (publish and refresh)**
+- [ ] **Unit 7: `release.yaml`**
 
-**Goal:** The gated workflow. Publish runs only on a verified release merge. The refresh maintains the release PR. In legacy mode it only previews.
+**Goal:** The gated workflow, built from credential-free decide/render jobs and credentialed act jobs.
 
 **Requirements:** R1–R3, R5–R8, R11–R13, R16–R18, R20, AE2, AE7, AE8
 
-**Dependencies:** Units 5 and 6. Phase 0 (App, environment, npm binding).
+**Dependencies:** Units 5 and 6; Phase 0 (App, environment, npm binding)
 
 **Files:**
 - Create: `.github/workflows/release.yaml`
 - Test: `tests/unit/release-workflow.test.ts`
 
 **Approach:**
-- Triggers: push to `main` and `workflow_dispatch` (reconcile).
-- **`build` job (no credentials):** install, build, and upload `dist/` with its digest.
+- **Triggers:** push to `main`, an hourly `schedule` reconcile, and `workflow_dispatch` reconcile.
+- **Credential-free jobs:**
+  - `build`: frozen install, build, upload `dist/` with its digest.
+  - `verify`: verifier plus gated config. Uploads the decision artifact.
+  - `render`: preview plus changelog writer. Uploads the patch and body.
 - **`publish` job:**
-  - Runs only when `vars.RELEASE_MODE == 'gated'`, with environment `release` and `id-token: write`.
-  - Concurrency group with no cancel.
-  - Installs lockfile tooling with `--ignore-scripts`, verifies the artifact, and runs the verifier.
-  - Runs semantic-release with gated plugin overrides (the changelog notes plugin in place of release-notes-generator, no exec) and `npm_config_ignore_scripts=true`.
-  - Afterwards asserts that the tag, the release, and `npm view <version>` all exist.
+  - Runs only when `vars.RELEASE_MODE == 'gated'` and `verify` says `publish`.
+  - Environment `release`, `id-token: write`, concurrency group `release-state` with no cancel.
+  - Does a `--frozen-lockfile --ignore-scripts` install, checks the artifact digest, replaces `.releaserc.yaml` with the gated config, and runs semantic-release with `npm_config_ignore_scripts=true`.
+  - Uses the release App token for the tag and the GitHub release.
+  - `NPM_TOKEN` appears only in the semantic-release step's env.
+- **`confirm` job:** runs after `publish` and reports on its own. It asserts that the tag, the release, `npm view`, and `_npmUser` all match a trusted-publishing publish.
 - **`refresh` job:**
-  - `needs: publish` with `always()`, environment `release`, and a cancel group.
-  - In gated mode it rebuilds `release/pending` from the main tip using the release App token, then writes the entry.
-  - It pushes with `--force-with-lease` on the observed head, then updates the PR body to mirror the entry.
-  - It opens the PR with a non-releasing title (`chore(release): v<version>`) and arms auto-merge with `expectedHeadOid`. It closes the PR when nothing is releasable and the tip is unchanged.
-  - In legacy mode it writes the preview to the job summary only.
+  - Environment `release`, group `release-state`.
+  - Uses only `git` and `gh`: applies the rendered patch on top of the main tip and pushes `release/pending` with `--force-with-lease` against the observed head.
+  - Mirrors the body, opens or edits the PR titled `chore(release): v<version>`, and arms auto-merge with `expectedHeadOid`.
+  - Closes the PR when nothing is releasable and the tip hasn't changed.
+  - When the mode is not `gated`, it writes the preview to the job summary only.
+- **Any other `RELEASE_MODE` value** fails a guard job red.
 
 **Patterns to follow:** the current `release` job's App-token and git-identity steps.
 
 **Test scenarios:**
-- Publish is skipped unless `RELEASE_MODE == gated`.
-- Only `publish` and `refresh` reference the `release` environment or the App secrets.
-- No job references `NPM_TOKEN` outside the `release` environment.
-- `publish` has no `bun run build` step, and sets `ignore-scripts`.
-- `setup-node` has no `registry-url`.
-- `refresh` depends on `publish`.
-- No job has `cancel-in-progress: true` except `refresh`.
-- The release PR title type is non-releasing under `.releaserc.yaml` rules.
+- Publish and refresh are skipped unless the mode is exactly `gated`. Unset, empty, or `Gated` → the guard fails red.
+- Only `publish` and `refresh` declare environment `release`, and neither runs a `scripts/` path or `bun run`.
+- `NPM_TOKEN` appears only in the semantic-release step's env.
+- `publish` has no build step. It uses frozen, ignore-scripts installs, and `setup-node` has no `registry-url`.
+- `publish` and `refresh` share `release-state` with no cancel.
+- The release PR title is non-releasing under the `.releaserc.yaml` rules.
 
-**Verification:** The workflow tests pass. A dark-mode run on main writes a preview summary that matches Unit 5 output.
+**Verification:** The tests pass, and a dark-mode run on main writes a preview summary that matches Unit 5.
 
-- [ ] **Unit 8: `main.yaml`, the credential-free `Release` check, and moving the Claude plugin**
+- [ ] **Unit 8: `main.yaml`, the `Release` check, legacy publish, Claude plugin**
 
-**Goal:** The required `Release` context becomes a credential-free check. The legacy publish runs only in legacy mode and can't be cancelled. The Claude plugin publish moves to `release: published`.
+**Goal:**
+- The required `Release` context becomes a credential-free check.
+- Legacy publish moves into the `release` environment, fails closed, and serializes.
+- The Claude plugin publish moves to `release: published`.
 
 **Requirements:** R10, R11, R19, AE8
 
-**Dependencies:** Unit 5
+**Dependencies:** Unit 5; the Phase 0 `release` environment
 
 **Files:**
-- Modify: `.github/workflows/main.yaml`, `.github/workflows/renovate.yaml` (exclude `release/**` from `push`)
+- Modify: `.github/workflows/main.yaml`, `.github/workflows/renovate.yaml` (ignore `release/**` on `push`)
 - Create: `.github/workflows/publish-claude-code-plugin.yaml`
 - Test: `tests/unit/host-contract-workflow.test.ts`, `tests/unit/main-release-workflow.test.ts`
 
 **Approach:**
-- **`Release` job.** Keeps its name. It runs the preview on PRs and pushes, with `contents: read` and no secrets. On a `release/pending` PR it also checks the entry against the preview.
-- **Legacy publish.** Becomes `legacy-release`: push-only, `if: vars.RELEASE_MODE != 'gated'`, carrying today's steps. The `workflow_dispatch` dry-run input is removed.
-- **Concurrency.** Workflow-level `cancel-in-progress` applies only on `pull_request`.
-- **Claude plugin.** Its job moves to its own workflow on `release: published`, checking out the tag. The existing bundle guard is unchanged.
+- **`Release` job.** Keeps its name and its required-context role, and now means "release config and preview are valid." It runs the preview with `contents: read` and no secrets. On a `release/pending` PR, it also checks the entry against the preview.
+- **`legacy-release` job.**
+  - Push only. Runs only when `vars.RELEASE_MODE == 'legacy'`.
+  - Environment `release`, group `release-state` with no cancel.
+  - Runs today's steps. `NPM_TOKEN` is moved to the environment.
+- **Removals.** The `workflow_dispatch` dry-run input goes away. Workflow-level cancel applies only to `pull_request`.
+- **Claude plugin workflow.**
+  - Runs on non-prerelease `release: published`, and only for releases authored by the releasing App with the version present on npm.
+  - A credential-free build job checks out the tag.
+  - A push-only job holds `contents: write`.
 
 **Test scenarios:**
-- On `pull_request`, no job references a release secret or `id-token: write`.
-- `legacy-release` is skipped in gated mode.
+- No job on `pull_request` references a release secret or `id-token: write`.
+- `legacy-release` runs only for the exact value `legacy`, declares environment `release`, and shares `release-state`.
 - The `Release` context exists for every PR event.
-- `cancel-in-progress` evaluates false on push.
-- The Claude plugin workflow triggers only on non-prerelease `release: published`.
-- `renovate.yaml` ignores `release/**`.
+- `cancel-in-progress` is false on push.
+- The plugin workflow ignores releases from other authors, and only its push job holds a write token.
+- Renovate ignores `release/**`.
 
-**Verification:** The workflow tests pass, and the next legacy release still publishes the plugin through the new workflow. Confirm with `npm view` and the plugin branch's commit.
+**Verification:** The tests pass, and the next legacy release publishes the plugin through the new workflow. Confirm with `npm view` and the plugin branch's commit.
 
 - [ ] **Unit 9: Release approval gate**
 
-**Goal:** A deterministic Wednesday/Sunday (or Marcus-dispatched) gate that approves the current head as `fro-bot` and attests that approval.
+**Goal:** A deterministic gate that approves on Wednesday and Sunday, or when Marcus dispatches it. It is split into decide, approve, and attest jobs.
 
 **Requirements:** R14, R15, AE2, AE3, AE10
 
@@ -549,130 +628,190 @@ sequenceDiagram
 - Test: `tests/unit/release-gate.test.ts`, `tests/unit/release-gate-workflow.test.ts`
 
 **Approach:**
-- Triggers: cron for Wednesday and Sunday, plus `workflow_dispatch`, which proceeds only when `actor` and `triggering_actor` are both Marcus.
-- `gate.ts` approves the head only when all of these hold:
+- **Triggers:** a cron for Wednesday and Sunday, and `workflow_dispatch`, which proceeds only when both `actor` and `triggering_actor` are Marcus.
+- **`decide` job (no credentials).** Runs `gate.ts`, which selects the single open PR that meets these conditions:
+  - head `release/pending`;
+  - head repo is this repo;
+  - author is the release App.
+
+  It approves the head only when all of these hold:
   - `RELEASE_HOLD` is unset;
-  - required checks are green on the head;
-  - the PR is 0 behind and 1 ahead of main;
-  - its diff is the expected `CHANGELOG.md` shape;
-  - the head commit's author is the release App.
-- It approves with `commit_id`, then re-reads the head and the hold, and dismisses (or reports) if either changed.
-- After the re-check it creates an attestation binding the PR, head, review id, and run.
-- Permissions: `id-token: write`, `attestations: write`, `contents: read`. `FRO_BOT_PAT` is used only for the review call.
+  - required checks on the head are green;
+  - the PR is 0 behind and 1 ahead;
+  - the diff has the expected `CHANGELOG.md` shape.
+
+  It writes `{PR, head}`.
+- **`approve` job (`FRO_BOT_PAT`, `gh` only).** Approves with `commit_id=head`, then re-reads the head and the hold. If either changed, it dismisses or reports, and writes the review id.
+- **`attest` job (`id-token: write`, `attestations: write`, attest action only).** Attests the digest of `{repo, PR, head, review id, run}`.
 
 **Test scenarios:**
 - Happy path: all conditions hold → approve, then attest.
-- Edge: hold set → no approval, with the reported reason (AE3).
-- Edge: checks pending or failing → no approval.
-- Edge: behind main, or a diff outside `CHANGELOG.md` → no approval.
-- Error path: the head changes between the read and the approval → dismissed or reported, and no attestation.
+- Edge: the hold is set (AE3), checks are pending or failing, the PR is behind, or the diff is outside `CHANGELOG.md` → no approval, with a reason given.
+- Edge: a fork PR or a PR by another author named `release/pending` → not selected.
+- Error path: the head changes between decide and approve → dismissed or reported, with no attestation.
 - Error path: dispatched by anyone else → refused (AE10).
-- The workflow file has no `pull_request` trigger and does not use agent actions.
+- Only `approve` references `FRO_BOT_PAT`. Only `attest` has `id-token` and `attestations`. Neither runs repo scripts.
 
-**Verification:** The gate tests pass. In Phase 0, a sandbox run produces an approval and an attestation that `verify-merge` accepts.
+**Verification:** The tests pass, and a Phase 0 sandbox run produces an approval and attestation that `verify-merge` accepts.
 
-- [ ] **Unit 10: Settings for the dark launch**
+- [ ] **Unit 10: Docs changelog page**
 
-**Goal:** The environment and release-branch protection needed before cutover. Main protection is unchanged.
+**Goal:** A changelog page generated from `CHANGELOG.md` at the release tag.
+
+**Requirements:** R26, AE13
+
+**Dependencies:** Units 4 and 5
+
+**Files:**
+- Create: `docs/scripts/generate-changelog-page.ts`
+- Modify: `package.json` (`docs:generate`), `.gitignore`, `docs/astro.config.mjs` (if needed)
+- Test: `tests/unit/generate-changelog-page.test.ts`
+
+**Approach:**
+- Strip the sentinel and the duplicate h1, then sanitize the commit subjects.
+- Builds at deploy time drop entries that have no tag, and assert that the top entry equals the tag being deployed.
+- The PR-time docs build uses an include-pending mode, so a release PR can prove its entry parses.
+- When the file is absent, render a placeholder page that links to Releases.
+
+**Test scenarios:**
+- Happy path: tagged entries render, newest first.
+- Edge: at deploy time, untagged entries are dropped. In include-pending mode they are kept.
+- Error path: the top entry doesn't match the deployed tag → build fails.
+- Error path: hostile commit subjects are neutralized.
+- Edge: the file is absent → placeholder.
+
+**Verification:** The tests pass, and `docs:build` succeeds with and without the file.
+
+- [ ] **Unit 11: Settings for the dark launch**
+
+**Goal:** Protect the release branch and enable auto-merge settings.
 
 **Requirements:** R16, R17
 
 **Dependencies:** Phase 0 settings-applier findings
 
 **Files:**
-- Modify: `.github/settings.yml` (or a documented `gh api` runbook if the applier lacks support)
+- Modify: `.github/settings.yml`, or a documented `gh api` runbook if the applier lacks support
 
 **Approach:**
-- Environment `release` with deployment branches limited to `main`.
-- A `release/**` branch ruleset that restricts creation, update, and deletion, with the release App as its only bypass.
+- A `release/**` ruleset that restricts creation, update, and deletion. Its only bypass is the release App.
 - `allow_auto_merge` stays true.
+- Declare the `release` and `docs` environments if the applier supports them.
 
-**Test expectation:** none, because this is repository configuration. It is verified live.
+**Test expectation:** none. This is configuration and is verified live.
 
-**Verification:** `gh api` shows the environment, its branch policy, and the ruleset. A push to `release/pending` with any other identity is rejected.
+**Verification:** `gh api` shows the environments, their branch policies, and the ruleset. A push to `release/pending` from any other identity is rejected.
 
-### Cutover (manual, Marcus)
+- [ ] **Unit 12: Fro Bot approval rule (R23)**
 
-Set `RELEASE_MODE=gated`. The first gated release keeps `NPM_TOKEN` in the `release` environment. Verify that:
-- the release PR opens;
-- the gate or Marcus approves it;
-- it publishes, confirmed with `npm view` and the provenance attestation;
-- the plugin branch and docs update;
-- the narrative lands.
-
-Roll back by setting `RELEASE_MODE=legacy`.
-
-### PR 3: Hardening after cutover
-
-- [ ] **Unit 11: Fro Bot approval rule (R23)**
-
-**Goal:** Fro Bot approves only PRs that Marcus authored, and never a head that contains a commit it authored.
+**Goal:** Fro Bot approves only PRs that Marcus authored, and never a head containing its own commit.
 
 **Requirements:** R23, AE11
 
-**Dependencies:** Cutover verified
+**Dependencies:** None
 
 **Files:**
 - Modify: `.github/workflows/fro-bot.yaml`
 - Test: `tests/unit/fro-bot-workflow.test.ts`
 
-**Approach:** A deterministic pre-step computes whether the PR author is Marcus and whether the head contains any `fro-bot` commit. When either check fails, the review runs in comment-only mode (mechanism decided under Deferred to Implementation).
+**Approach:** A deterministic pre-step checks two things: whether Marcus authored the PR, and whether any commit in it was authored by `fro-bot`. If either check fails, the review runs comment-only. The mechanism is listed under Deferred to Implementation.
 
 **Test scenarios:**
-- A Marcus PR with no `fro-bot` commits → approval allowed.
+- A Marcus PR → approval allowed.
 - A Marcus PR after an autoheal push → comment only.
-- A non-Marcus author → comment only.
+- A PR from another author → comment only.
 
-**Verification:** The workflow tests pass. An observed autoheal PR is not approved by Fro Bot.
+**Verification:** The tests pass, and an observed autoheal PR is not approved by Fro Bot.
 
-- [ ] **Unit 12: Rulesets, tags, immutable releases, and policy**
+- [ ] **Unit 13: Main ruleset (merge gate)**
 
-**Goal:** Scorecard-readable protection and the hardening end state.
+**Goal:** A Scorecard-readable main ruleset with required review, active before cutover.
 
-**Requirements:** R21, R22, R24
+**Requirements:** R7, R13, R21
 
-**Dependencies:** Unit 11. Main must have no open PRs that rely on classic-only behavior.
+**Dependencies:** Unit 12 merged, and Fro Bot observed approving a Marcus PR
+
+**Files:**
+- Modify: `.github/settings.yml`
+
+**Approach:**
+- No bypass actors.
+- Block force pushes and deletion.
+- Require linear history.
+- Require the existing checks, pinned to the GitHub Actions integration.
+- Require one approval and dismiss stale approvals.
+- Require branches to be up to date.
+- Activate the ruleset, then remove classic protection.
+- Document the admin UI escape hatch.
+
+**Test expectation:** none. This is configuration and is verified live.
+
+**Verification:**
+- `gh api` shows the ruleset.
+- A direct push to main is rejected.
+- A release PR with checks green and no approval stays unmerged while auto-merge is armed.
+
+### Cutover (manual, Marcus)
+
+**Preconditions:** the Unit 13 ruleset is active, and Phase 0 has passed.
+
+**Steps:**
+1. Set `RELEASE_MODE=gated`.
+2. The release PR opens.
+3. You or the gate approve it, and it auto-merges.
+
+**Verify all of these:**
+- `publish` passes.
+- `confirm` shows the npm version with a trusted-publishing `_npmUser` and provenance.
+- The plugin branch updated, the docs updated, and the narrative landed.
+
+If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
+
+**Rollback:** set `RELEASE_MODE=legacy`.
+
+### PR 3: Hardening after a clean OIDC release
+
+- [ ] **Unit 14: Tag rulesets, immutable releases, policy**
+
+**Goal:** The tag and release end state, plus a security policy.
+
+**Requirements:** R22, R24
+
+**Dependencies:** One clean OIDC gated release
 
 **Files:**
 - Modify: `.github/settings.yml`
 - Create: `SECURITY.md`
 
 **Approach:**
-- Main ruleset with no bypass:
-  - block force pushes and deletion;
-  - require linear history;
-  - require the existing checks, pinned to the GitHub Actions integration;
-  - require one approval and dismiss stale approvals.
-- Activate it, then remove classic protection.
-- Tag rulesets:
-  - `v*` creation, with the release App as bypass;
-  - `v*` update and delete, with no bypass.
-- Turn on immutable releases and `sha_pinning_required`.
-- Document the admin break-glass path: edit the ruleset in the UI.
+- Tag ruleset for `v*` creation, with the release App as bypass.
+- Tag ruleset for `v*` updates and deletes, with no bypass.
+- Turn on immutable releases.
+- Turn on `sha_pinning_required`.
 
-**Test expectation:** none, because this is configuration. It is verified live, and through Scorecard.
+**Test expectation:** none. This is configuration, verified live and through Scorecard.
 
 **Verification:**
-- `gh api` shows the rulesets and the settings.
-- A direct push to main is rejected.
-- The next Scorecard run shows a Branch-Protection score instead of -1 and Security-Policy at 10.
+- `gh api` shows the rulesets and settings.
+- Another identity cannot create a `v*` tag.
+- On the next Scorecard run, Branch-Protection is scored and Security-Policy is 10.
 
-- [ ] **Unit 13: Remove the legacy path and `NPM_TOKEN`**
+- [ ] **Unit 15: Remove the legacy path and `NPM_TOKEN`**
 
-**Goal:** One publish path and no long-lived npm token.
+**Goal:** One publish path, with no long-lived npm token.
 
-**Requirements:** R12, R1
+**Requirements:** R1, R12
 
-**Dependencies:** One verified OIDC gated release
+**Dependencies:** Unit 14
 
 **Files:**
-- Modify: `.github/workflows/main.yaml` (delete `legacy-release` and the `RELEASE_MODE` branches), `.github/workflows/release.yaml` (drop the mode check), `.releaserc.yaml` (move the gated plugin list in, so the config matches what publishes)
+- Modify: `.github/workflows/main.yaml` (delete `legacy-release`), `.github/workflows/release.yaml` (drop the mode guard), `.releaserc.yaml` (adopt the gated plugin list, so the checkout config matches what publishes)
 - Test: `tests/unit/main-release-workflow.test.ts`, `tests/unit/release-workflow.test.ts`
 
-**Approach:** Delete the `NPM_TOKEN` secret from the environment and the repo after the merge. The runbook moves into the contributor docs.
+**Approach:** After the merge, delete `NPM_TOKEN` from the environment and the repo, and delete the `RELEASE_MODE` variable. Move the runbook into the contributor docs.
 
 **Test scenarios:**
-- No workflow references `NPM_TOKEN`.
+- No workflow references `NPM_TOKEN` or `RELEASE_MODE`.
 - No job publishes outside `release.yaml`.
 - `.releaserc.yaml` matches the gated plugin list.
 
@@ -681,56 +820,60 @@ Roll back by setting `RELEASE_MODE=legacy`.
 ## System-Wide Impact
 
 - **Interaction graph:**
-  - Push to main → `main.yaml` (CI plus the `Release` check), `release.yaml` (publish, then refresh), and Renovate's `workflow_run`.
-  - `release: published` → narrative, Claude plugin, and docs.
-  - Narrative → docs dispatch.
-  - Schedule → gate.
+  - A push to main runs `main.yaml` (CI and the `Release` check) and `release.yaml` (build, verify, and render; then publish, confirm, and refresh). It also fires Renovate's `workflow_run`.
+  - `release: published` from the releasing App triggers the narrative, the Claude plugin, and docs.
+  - The narrative run dispatches docs.
+  - The cron runs the gate. The hourly schedule runs reconcile.
 - **Error propagation:**
-  - Refused publishes go red.
-  - Superseded publishes comment and stay green.
+  - Refused and superseded runs go red before anything publishes.
+  - `confirm` fails on its own and doesn't turn publish red.
   - Narrative failures go red in their own workflow.
-  - Docs refresh failures go red in `docs.yaml`, and can be retried by dispatching the tag.
+  - A failed docs refresh goes red in `docs.yaml` and can be retried by tag dispatch.
 - **State lifecycle risks:**
-  - Phantom `CHANGELOG.md` entries after a failed publish, which the refresh strips.
-  - An orphaned tag after an OIDC failure, handled by reconcile and the runbook.
-  - A stale release PR after cancelled refreshes, prevented by the compare-and-swap.
-- **API surface parity:** `.releaserc.yaml` stays the only rule source for preview, check, and publish.
+  - Phantom `CHANGELOG.md` entries are stripped, failing closed when no tags are listed.
+  - An orphaned tag after an OIDC failure is handled by reconcile and the runbook. Tag rulesets wait for a clean publish.
+  - A stale release PR is prevented by the compare-and-swap push plus `release-state` serialization.
+- **API surface parity:** `.releaserc.yaml` stays the only rule source. The gated config copies its rules and is checked for equality.
 - **Integration coverage:**
-  - The preview-vs-core parity test (Unit 5).
-  - Phase 0 sandbox runs for auto-merge, attestation, and OIDC.
-  - The first gated release is the end-to-end proof.
+  - Core parity test (Unit 5).
+  - Phase 0 sandbox: auto-merge, attestation, and settings.
+  - The first gated release is the end-to-end OIDC proof.
 - **Unchanged invariants:**
   - The release rules and `tagFormat`.
-  - The Claude plugin bundle guard and the orphan branch.
-  - The docs and registry build contents.
-  - The PR title still selects the release type for feature PRs.
+  - The Claude plugin bundle guard and orphan branch.
+  - The docs and registry contents.
+  - Feature PR titles still select the release type.
 
 ## Risks & Dependencies
 
 | Risk | Mitigation |
 |------|------------|
-| App-enabled auto-merge doesn't trigger `on: push` | Phase 0 test. A reconcile dispatch and a bounded schedule discover merged, untagged release PRs. |
-| OIDC fails at first publish | `NPM_TOKEN` fallback in the `release` environment for the first gated release. Rollback with `RELEASE_MODE=legacy`. |
-| OIDC failure after the tag is created | Phase 0 verifies when OIDC is exchanged. Reconcile and a break-glass runbook cover an orphaned tag before the tag rulesets land. |
-| Rulesets brick main mid-cutover | Main ruleset only in PR 3, after a verified release. Activate it before removing classic protection. Document the admin UI escape hatch. |
-| Approval churn when main moves often | Accepted. Marcus approves when ready, and the gate re-approves on each pass. |
-| Leaked `FRO_BOT_PAT` approves a release | Accepted risk (origin). Approvals and publishes are visible, and the hold restricts publishing to Marcus's approval. |
-| The shared Renovate/settings App key has `administration` | Accepted risk, outside this change. A dedicated settings App is planned at Marcus's org level. |
-| Hostile commit subjects or release bodies break the docs build | Sanitization and hostile-input tests (Units 3 and 5). The build job has no credentials. |
-| Preview diverges from core | Parity test (Unit 5). Publish-time `verifyRelease` version check (Unit 6). |
+| App-enabled auto-merge doesn't fire `on: push` | Phase 0 test. The hourly reconcile finds merged, untagged release PRs. |
+| OIDC fails at the first publish | Step-scoped `NPM_TOKEN` fallback. `confirm` checks `_npmUser`. Roll back with `RELEASE_MODE=legacy`. |
+| An OIDC failure after the tag is created | Observed at the first release. Reconcile plus the break-glass runbook. Tag rulesets wait for a clean publish. |
+| The ruleset bricks main | It lands in PR 2 after R23 is observed working. Activate it before removing classic protection. Document the admin escape hatch. |
+| An unapproved release PR merges | Required review before cutover (Unit 13). Publish refuses anything that slips through. |
+| Approvals churn when main moves often | Accepted. Marcus approves when he's ready, and the gate re-approves on each pass. |
+| A leaked `FRO_BOT_PAT` or a branch-copied gate approves and merges | Accepted risk (origin). Publish requires an attestation from the main gate. The hold restricts publishing to Marcus's approval. |
+| The shared Renovate/settings App key holds `administration` | Accepted risk, outside this change. A dedicated settings App is planned at Marcus's org level. |
+| A compromised build dependency alters `dist/` | Accepted residual. The build job holds no credentials, the lockfile is frozen, and the risk is the same as today. |
+| A rogue `release: published` triggers the plugin or docs | Consumers act only on releases authored by the releasing App, with the npm version present. |
+| Hostile commit subjects or release bodies | Sanitization plus hostile-input tests (Units 3 and 10). Builds hold no credentials. |
+| Preview diverges from core | Byte-for-byte parity test (Unit 5) plus the publish-time `verifyReleaseCmd`. |
 
 ## Documentation / Operational Notes
 
-- **Runbook** (contributor docs plus a `docs/solutions/` entry after cutover). It covers:
+- **Runbook:** contributor docs, plus a `docs/solutions/` entry after cutover. It covers:
   - hold and unhold (`RELEASE_HOLD`);
   - on-demand gate dispatch;
   - reconcile dispatch;
   - rollback (`RELEASE_MODE`);
   - re-narration dispatch;
   - break-glass for an orphaned tag;
-  - the ruleset escape hatch.
-- Update `docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md` for the new job and the post-check.
-- Phase 0 results are recorded in this plan's Deferred to Implementation answers before PR 2 is finalized.
+  - the ruleset escape hatch;
+  - the fact that only admins can set the two variables.
+- Update `docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`.
+- Record the Phase 0 results in this plan's Deferred to Implementation answers before PR 2 is finalized.
 
 ## Sources & References
 
