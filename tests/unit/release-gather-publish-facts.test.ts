@@ -42,6 +42,7 @@ interface FakeOptions {
   reviews?: unknown[]
   tags?: string[]
   files?: string[]
+  release?: boolean
 }
 
 function fake(options: FakeOptions = {}) {
@@ -111,6 +112,10 @@ function fake(options: FakeOptions = {}) {
     })),
   )
 
+  if (options.release === true) {
+    set(`repos/${REPO}/releases/tags/v3.22.0`, { tag_name: 'v3.22.0' })
+  }
+
   const api: Api = async (path) => {
     calls.push(path)
     if (!responses.has(path)) throw notFound(path)
@@ -170,6 +175,40 @@ describe('gatherPublishFacts', () => {
       version: '3.22.0',
       reviewId: 1,
     })
+  })
+
+  test('releasePublished is true when the release for the added version exists', async () => {
+    const { api } = fake({ release: true })
+    const facts = await gatherPublishFacts(baseOptions(api))
+    expect(facts.releasePublished).toBe(true)
+  })
+
+  test('releasePublished is false when the release lookup returns 404', async () => {
+    const { api, calls } = fake()
+    const facts = await gatherPublishFacts(baseOptions(api))
+    expect(facts.releasePublished).toBe(false)
+    expect(calls).toContain(`repos/${REPO}/releases/tags/v3.22.0`)
+  })
+
+  test('releasePublished is false, with no lookup, when no version was added', async () => {
+    const { api, calls } = fake({ headChangelog: changelog('3.21.8') })
+    const facts = await gatherPublishFacts(baseOptions(api))
+    expect(facts.pr?.addedEntryVersion).toBeNull()
+    expect(facts.releasePublished).toBe(false)
+    expect(calls.some((c) => c.includes('/releases/'))).toBe(false)
+  })
+
+  test('a 500 from the release lookup propagates', async () => {
+    const { api } = fake({ release: true })
+    const failingApi: Api = async (path) => {
+      if (path === `repos/${REPO}/releases/tags/v3.22.0`) {
+        throw Object.assign(new Error('boom'), { status: 500 })
+      }
+      return api(path)
+    }
+    await expect(gatherPublishFacts(baseOptions(failingApi))).rejects.toThrow(
+      'boom',
+    )
   })
 
   test('no merged PR yields pr: null and never calls PR endpoints', async () => {

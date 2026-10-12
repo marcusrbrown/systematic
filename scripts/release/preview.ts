@@ -34,7 +34,6 @@ export interface PreviewOptions {
 
 interface ReleaseConfig {
   [key: string]: unknown
-  plugins?: PluginSpec[]
 }
 
 const KEPT_PLUGINS = [
@@ -155,21 +154,41 @@ export async function dryRunRelease({
   }
 }
 
+function pluginName(entry: PluginSpec): string {
+  return Array.isArray(entry) ? entry[0] : entry
+}
+
+/**
+ * The declared plugins reduced to exactly one entry each of KEPT_PLUGINS.
+ * Anything else (missing, duplicated, or a non-list) is a config error.
+ */
+function selectKeptPlugins(declared: unknown): PluginSpec[] {
+  if (!Array.isArray(declared)) {
+    throw new Error('.releaserc.yaml plugins must be a list')
+  }
+  const kept = (declared as PluginSpec[]).filter((entry) =>
+    KEPT_PLUGINS.includes(pluginName(entry)),
+  )
+  const names = new Set(kept.map(pluginName))
+  const exact =
+    kept.length === KEPT_PLUGINS.length &&
+    names.size === KEPT_PLUGINS.length &&
+    KEPT_PLUGINS.every((name) => names.has(name))
+  if (!exact) {
+    throw new Error(
+      `.releaserc.yaml must declare ${KEPT_PLUGINS.join(' and ')}`,
+    )
+  }
+  return kept
+}
+
 /** Compute the pending release for `targetSha` from the repo's `.releaserc.yaml`. */
 export async function previewRelease({
   cwd,
   targetSha,
 }: PreviewOptions): Promise<PreviewResult> {
   const { plugins: declaredPlugins, ...rest } = loadReleaseConfig(cwd)
-  const plugins = (declaredPlugins ?? []).filter((entry) => {
-    const name = Array.isArray(entry) ? entry[0] : entry
-    return KEPT_PLUGINS.includes(name)
-  })
-  if (plugins.length !== KEPT_PLUGINS.length) {
-    throw new Error(
-      `.releaserc.yaml must declare ${KEPT_PLUGINS.join(' and ')}`,
-    )
-  }
+  const plugins = selectKeptPlugins(declaredPlugins)
 
   const result = await dryRunRelease({
     cwd,

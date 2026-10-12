@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import yaml from 'js-yaml'
 import { previewRelease } from '../../scripts/release/preview.ts'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
@@ -199,6 +200,70 @@ describe('previewRelease', () => {
     },
     TEST_TIMEOUT_MS,
   )
+
+  describe('plugin validation', () => {
+    function withPlugins(dir: string, plugins: unknown): void {
+      const config = yaml.load(fs.readFileSync(RELEASERC, 'utf8')) as Record<
+        string,
+        unknown
+      >
+      config.plugins = plugins
+      fs.writeFileSync(path.join(dir, '.releaserc.yaml'), yaml.dump(config))
+    }
+
+    test(
+      'a duplicated commit-analyzer with the notes generator missing throws',
+      async () => {
+        const dir = createFixture()
+        commit(dir, 'fix: something broken')
+        withPlugins(dir, [
+          '@semantic-release/commit-analyzer',
+          ['@semantic-release/commit-analyzer', {}],
+        ])
+
+        await expect(
+          previewRelease({ cwd: dir, targetSha: 'HEAD' }),
+        ).rejects.toThrow(/must declare/)
+      },
+      TEST_TIMEOUT_MS,
+    )
+
+    test(
+      'a duplicated plugin alongside both required ones throws',
+      async () => {
+        const dir = createFixture()
+        commit(dir, 'fix: something broken')
+        withPlugins(dir, [
+          '@semantic-release/commit-analyzer',
+          '@semantic-release/release-notes-generator',
+          '@semantic-release/release-notes-generator',
+        ])
+
+        await expect(
+          previewRelease({ cwd: dir, targetSha: 'HEAD' }),
+        ).rejects.toThrow(/must declare/)
+      },
+      TEST_TIMEOUT_MS,
+    )
+
+    test.each([
+      ['a string', '@semantic-release/commit-analyzer'],
+      ['a mapping', { '@semantic-release/commit-analyzer': {} }],
+      ['null', null],
+    ])(
+      'plugins that is %s throws a clear message',
+      async (_label, plugins) => {
+        const dir = createFixture()
+        commit(dir, 'fix: something broken')
+        withPlugins(dir, plugins)
+
+        await expect(
+          previewRelease({ cwd: dir, targetSha: 'HEAD' }),
+        ).rejects.toThrow(/plugins must be a list/)
+      },
+      TEST_TIMEOUT_MS,
+    )
+  })
 
   test(
     'cleans up the temp directory when the preview fails',

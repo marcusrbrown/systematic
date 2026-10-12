@@ -48,6 +48,8 @@ export interface PublishFacts {
   releaseAppLogin: string
   /** Gate-login review ids that carry a verified gate attestation. */
   gateAttestedReviewIds: ReadonlySet<number>
+  /** A GitHub release exists for the PR's added version (false without one). */
+  releasePublished: boolean
 }
 
 export type PublishDecision =
@@ -133,6 +135,27 @@ function findApproval(
   }
 }
 
+/**
+ * Rule 5. Returns the fresh, untagged version that was added, or the decision
+ * that ends the run. A tag with a release is a finished publish (the hourly
+ * reconcile lands here while main's tip is still the release merge); a tag
+ * alone is a partial publish.
+ */
+function checkAddedVersion(
+  facts: PublishFacts,
+  pr: MergedReleasePr,
+): PublishDecision | string {
+  const version = pr.addedEntryVersion
+  if (version === null) {
+    return refused('Release PR did not add a CHANGELOG entry.')
+  }
+  if (!facts.existingTags.has(`v${version}`)) return version
+  if (facts.releasePublished) {
+    return { kind: 'skip', reason: `v${version} is already published.` }
+  }
+  return refused(`Version v${version} is already tagged.`)
+}
+
 export function decidePublish(facts: PublishFacts): PublishDecision {
   const { pr } = facts
 
@@ -183,12 +206,8 @@ export function decidePublish(facts: PublishFacts): PublishDecision {
   }
 
   // Rule 5: a fresh, untagged version was added.
-  if (pr.addedEntryVersion === null) {
-    return refused('Release PR did not add a CHANGELOG entry.')
-  }
-  if (facts.existingTags.has(`v${pr.addedEntryVersion}`)) {
-    return refused(`Version v${pr.addedEntryVersion} is already tagged.`)
-  }
+  const addedVersion = checkAddedVersion(facts, pr)
+  if (typeof addedVersion !== 'string') return addedVersion
 
   // Rule 6: only never-tagged entries may be removed.
   const removedTagged = pr.removedEntryVersions.filter((version) =>
@@ -216,7 +235,7 @@ export function decidePublish(facts: PublishFacts): PublishDecision {
 
   return {
     kind: 'publish',
-    version: pr.addedEntryVersion,
+    version: addedVersion,
     reviewId: approval.reviewId,
   }
 }

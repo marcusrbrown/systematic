@@ -182,6 +182,22 @@ function toReview(raw: unknown): Review {
   }
 }
 
+/** True when a GitHub release exists for `version`; only a 404 means false. */
+async function releaseExists(
+  api: Api,
+  repo: string,
+  version: string | null,
+): Promise<boolean> {
+  if (version === null) return false
+  try {
+    await api(`repos/${repo}/releases/tags/v${version}`)
+    return true
+  } catch (error) {
+    if (isNotFound(error)) return false
+    throw error
+  }
+}
+
 async function gatherPr(
   options: GatherPublishFactsOptions,
   number: number,
@@ -251,6 +267,7 @@ export async function gatherPublishFacts(
 
   let pr: MergedReleasePr | null = null
   let reviews: Review[] = []
+  let releasePublished = false
   const gateAttestedReviewIds = new Set<number>()
 
   if (merged !== undefined) {
@@ -260,6 +277,11 @@ export async function gatherPublishFacts(
     )
     pr = gathered.pr
     reviews = gathered.reviews
+    releasePublished = await releaseExists(
+      api,
+      repo,
+      gathered.pr.addedEntryVersion,
+    )
     const gateApprovals = reviews.filter(
       (review) =>
         review.user === gateLogin &&
@@ -293,5 +315,6 @@ export async function gatherPublishFacts(
     gateLogin,
     releaseAppLogin: options.releaseAppLogin,
     gateAttestedReviewIds,
+    releasePublished,
   }
 }

@@ -54,6 +54,7 @@ function baseFacts(overrides: Partial<PublishFacts> = {}): PublishFacts {
     gateLogin: 'fro-bot',
     releaseAppLogin: 'systematic-release[bot]',
     gateAttestedReviewIds: new Set<number>(),
+    releasePublished: false,
     ...overrides,
   }
 }
@@ -167,11 +168,32 @@ describe('decidePublish', () => {
       )
     })
 
-    test('an already-tagged added version refuses', () => {
+    test('a tagged added version without a release is a partial publish and refuses', () => {
       const decision = decidePublish(
-        baseFacts({ existingTags: new Set(['v3.22.0', 'v3.21.8']) }),
+        baseFacts({
+          existingTags: new Set(['v3.22.0', 'v3.21.8']),
+          releasePublished: false,
+        }),
       )
       expect(decision.kind).toBe('refused')
+    })
+
+    test('a tagged added version with a published release skips (already published)', () => {
+      const decision = decidePublish(
+        baseFacts({
+          existingTags: new Set(['v3.22.0', 'v3.21.8']),
+          releasePublished: true,
+        }),
+      )
+      expect(decision).toEqual({
+        kind: 'skip',
+        reason: 'v3.22.0 is already published.',
+      })
+    })
+
+    test('a published release does not rescue an untagged version', () => {
+      const decision = decidePublish(baseFacts({ releasePublished: true }))
+      expect(decision.kind).toBe('publish')
     })
 
     test('removing an entry whose version is tagged refuses', () => {

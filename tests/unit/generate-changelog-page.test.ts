@@ -224,6 +224,36 @@ describe('generateChangelogPage', () => {
     ).toThrow(/1\.1\.0/)
   })
 
+  // The deploy guard applies only when entries exist: pre-gated (legacy) releases
+  // are tagged without any CHANGELOG.md entry, and their tag deploys must build.
+  test('a deploy tag with a missing CHANGELOG.md renders the placeholder', () => {
+    const page = generateChangelogPage({ content: null, deployTag: 'v3.21.8' })
+
+    expect(page).toContain(
+      'Entries begin with the first release made through the release pull request',
+    )
+    expect(headingLevels(page)).toEqual([])
+  })
+
+  test('a deploy tag with an entry-less CHANGELOG.md renders the placeholder', () => {
+    const page = generateChangelogPage({
+      content: makeChangelog(),
+      deployTag: 'v3.21.8',
+    })
+
+    expect(page).toContain(`(${RELEASES_URL})`)
+    expect(headingLevels(page)).toEqual([])
+  })
+
+  test('a malformed deploy tag still throws when there is no changelog', () => {
+    expect(() =>
+      generateChangelogPage({ content: null, deployTag: 'main' }),
+    ).toThrow(/deploy tag/i)
+  })
+
+  // With entries present, a deploy tag matching none of them still throws: see
+  // 'throws when the top kept entry is not the deploy tag' above.
+
   test('throws when every entry is newer than the deploy tag', () => {
     expect(() =>
       generateChangelogPage({

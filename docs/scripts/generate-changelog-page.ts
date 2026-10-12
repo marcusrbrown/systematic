@@ -20,6 +20,12 @@
  * the top kept entry is exactly the tag's version (a guard against deploying
  * the wrong tree). Without it (PR and local builds) every entry renders, so a
  * release PR proves its entry parses.
+ *
+ * The deploy guard applies only when entries exist. A missing or entry-less
+ * `CHANGELOG.md` renders the placeholder page even with a deploy tag, on
+ * purpose: releases made before the first gated release were tagged without a
+ * changelog entry, and their tag deploys must still build. (The tag's format is
+ * still validated first.)
  */
 import fs from 'node:fs'
 import path from 'node:path'

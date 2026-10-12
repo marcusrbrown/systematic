@@ -35,11 +35,25 @@ function prBody(version: string, entry: string): string {
   ].join('\n')
 }
 
-function readChangelog(cwd: string): string | null {
+/** `git show` stderr when the path is absent at the commit; any other failure is real. */
+const MISSING_PATH = /(does not exist in|exists on disk, but not in)/
+
+/** CHANGELOG.md as committed at `sha`, or null when the commit has none. */
+async function readChangelogAt(
+  cwd: string,
+  sha: string,
+): Promise<string | null> {
   try {
-    return fs.readFileSync(path.join(cwd, 'CHANGELOG.md'), 'utf8')
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', cwd, 'show', `${sha}:CHANGELOG.md`],
+      // LC_ALL=C keeps git's stderr in English so MISSING_PATH can match it.
+      { maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } },
+    )
+    return stdout
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    const stderr = (error as { stderr?: unknown }).stderr
+    if (typeof stderr === 'string' && MISSING_PATH.test(stderr)) return null
     throw error
   }
 }
@@ -76,7 +90,7 @@ export async function renderReleasePr({
       .filter((tag) => tag !== ''),
   )
   const changelog = renderChangelog({
-    current: readChangelog(cwd),
+    current: await readChangelogAt(cwd, baseSha),
     entry: notes,
     version,
     existingTags,

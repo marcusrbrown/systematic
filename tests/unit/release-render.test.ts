@@ -151,6 +151,85 @@ describe('renderReleasePr', () => {
   )
 
   test(
+    'builds from the CHANGELOG.md committed at the sha, not the working tree',
+    async () => {
+      const dir = createFixture()
+      const entry = (version: string, note: string) =>
+        [
+          `## [${version}](https://example.com/compare/v0...v${version}) (2026-01-01)`,
+          '',
+          '### Bug Fixes',
+          '',
+          `* ${note}`,
+          '',
+        ].join('\n')
+      fs.writeFileSync(
+        path.join(dir, 'CHANGELOG.md'),
+        [
+          '# Changelog',
+          '',
+          CHANGELOG_SENTINEL,
+          '',
+          entry('1.0.0', 'committed-old-entry'),
+        ].join('\n'),
+      )
+      git(dir, 'add', 'CHANGELOG.md')
+      git(dir, 'commit', '-m', 'chore: add changelog')
+      commit(dir, 'fix: real fix')
+      // Dirty edit after committing: must not leak into the render.
+      fs.writeFileSync(
+        path.join(dir, 'CHANGELOG.md'),
+        [
+          '# Changelog',
+          '',
+          CHANGELOG_SENTINEL,
+          '',
+          entry('1.0.0', 'working-tree-only-entry'),
+        ].join('\n'),
+      )
+      const outDir = createOutDir()
+
+      const result = await renderReleasePr({ cwd: dir, sha: 'HEAD', outDir })
+
+      expect(result.kind).toBe('release')
+      const changelog = fs.readFileSync(
+        path.join(outDir, 'CHANGELOG.md'),
+        'utf8',
+      )
+      expect(changelog).toContain('committed-old-entry')
+      expect(changelog).not.toContain('working-tree-only-entry')
+      expect(changelog).toContain('real fix')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  test(
+    'treats a CHANGELOG.md absent at the sha as new even if the working tree has one',
+    async () => {
+      const dir = createFixture()
+      const older = commit(dir, 'fix: early fix')
+      fs.writeFileSync(
+        path.join(dir, 'CHANGELOG.md'),
+        '# Changelog\n\nworking-tree-only-content\n',
+      )
+      git(dir, 'add', 'CHANGELOG.md')
+      git(dir, 'commit', '-m', 'chore: add changelog later')
+      const outDir = createOutDir()
+
+      const result = await renderReleasePr({ cwd: dir, sha: older, outDir })
+
+      expect(result.kind).toBe('release')
+      const changelog = fs.readFileSync(
+        path.join(outDir, 'CHANGELOG.md'),
+        'utf8',
+      )
+      expect(changelog).not.toContain('working-tree-only-content')
+      expect(changelog).toContain('early fix')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  test(
     'only chore commits yield kind none and write no CHANGELOG or body',
     async () => {
       const dir = createFixture()

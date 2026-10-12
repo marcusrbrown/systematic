@@ -53,6 +53,8 @@ interface FakeOptions {
   xChangelog?: string
   reviews?: unknown[]
   mainTip?: string
+  tags?: string[]
+  release?: boolean
 }
 
 function fakeResponses(options: FakeOptions = {}): Map<string, unknown> {
@@ -102,7 +104,13 @@ function fakeResponses(options: FakeOptions = {}): Map<string, unknown> {
     `repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100`,
     options.reviews ?? [review(1, 'marcusrbrown')],
   )
-  set(`repos/${REPO}/git/matching-refs/tags/v`, [{ ref: 'refs/tags/v3.21.8' }])
+  set(
+    `repos/${REPO}/git/matching-refs/tags/v`,
+    (options.tags ?? ['v3.21.8']).map((name) => ({ ref: `refs/tags/${name}` })),
+  )
+  if (options.release === true) {
+    set(`repos/${REPO}/releases/tags/v3.22.0`, { tag_name: 'v3.22.0' })
+  }
   return responses
 }
 
@@ -291,6 +299,24 @@ describe('runVerifyMerge', () => {
     expect(fs.existsSync(path.join(outDir, 'releaserc.json'))).toBe(false)
   })
 
+  test('an already-published release skips and writes only decision.json', async () => {
+    const api = fakeApi({ tags: ['v3.22.0', 'v3.21.8'], release: true })
+    const decision = await runVerifyMerge(opts(api))
+
+    expect(decision).toEqual({
+      kind: 'skip',
+      reason: 'v3.22.0 is already published.',
+    })
+    expect(fs.readdirSync(outDir)).toEqual(['decision.json'])
+  })
+
+  test('a tag without a release is still refused (partial publish)', async () => {
+    const api = fakeApi({ tags: ['v3.22.0', 'v3.21.8'] })
+    const decision = await runVerifyMerge(opts(api))
+
+    expect(decision.kind).toBe('refused')
+  })
+
   test('no merged PR skips and writes only decision.json', async () => {
     const decision = await runVerifyMerge(opts(fakeApi({ prList: [] })))
 
@@ -407,6 +433,16 @@ describe('verify-merge CLI', () => {
     expect(result.decision?.kind).toBe('superseded')
     expect(result.code).toBe(1)
     expect(result.output).toContain(`::error::${result.decision?.reason}`)
+  })
+
+  test('an already-published release exits 0 without ::error::', async () => {
+    const result = await runCli(
+      { tags: ['v3.22.0', 'v3.21.8'], release: true },
+      {},
+    )
+    expect(result.decision?.kind).toBe('skip')
+    expect(result.code).toBe(0)
+    expect(result.output).not.toContain('::error::')
   })
 
   test('a skip decision exits 0 without ::error::', async () => {
