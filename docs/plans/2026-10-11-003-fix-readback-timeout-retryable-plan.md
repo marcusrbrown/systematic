@@ -13,7 +13,7 @@ After an operation has succeeded, a typed `command-timeout` during a readback no
 
 - **On a status refresh**, the probe that timed out is skipped and reported as unconfirmed.
 - **At completion**, that attempt is rejected with a new retryable reason, and nothing is consumed. A failure that isn't a timeout is still fatal for the session.
-- **Every fatal readback transition** now records a typed cause and can be replayed.
+- **A fatal readback that moves the session into `unavailable`** now records a typed cause (first cause wins), and its result can be replayed.
 
 ## Problem Frame
 
@@ -44,9 +44,8 @@ These paths were split into #1084: timeouts in an operation's before-hook and af
   - Nothing is consumed, the unit stays active, and the session is not marked unavailable.
   - A duplicate after-hook for that call replays the result.
   - A new call ID prepares fresh.
-  - The retryable result is written and replayed only while the guard is `protected` or `waiting`:
-    - If the session is `unavailable`, the attempt takes the fatal path, and a replay returns `finalization-failed`.
-    - If the guard is `rejected`, the attempt returns the core's blocking reason and does not mark the session unavailable.
+  - If the session mode is already `unavailable` when the timeout is classified, the attempt takes the fatal path instead.
+  - A duplicate after-hook replays the first result exactly. Any blocking reason that arises later reaches the agent through the next completion call.
 - R5. Exactly two shapes count as a timeout:
   - an observer snapshot with `status: 'unavailable'` and `reasonCode: 'command-timeout'`;
   - a worktree-registration lookup with `status: 'error'` and `reasonCode: 'command-timeout'`.
@@ -237,11 +236,12 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - **Completion rejects immediately, with no internal retry.** The agent retries with a new call ID. This adds no probe latency and needs no new state.
 - **A timed-out completion is `rejected`, not `unavailable`.** The `using-systematic` rule treats `unavailable` as terminal. A new reason code, `readback-timeout`, with its own title, tells the agent that a retry is valid.
 - **One shared classifier decides what counts as a timeout.** Refresh and completion both use it, and it accepts exactly the two shapes in R5. Each completion stage returns `ok`, `timeout`, or `fatal`. The first stage that isn't `ok` ends the attempt. An earlier timeout can mask later drift, which is safe because the next attempt re-reads everything.
-- **Retryability is judged at write time and again at replay.** A status call can change the guard while a completion waits on a probe.
-  - A retryable result is written only while the guard is `protected` or `waiting`.
-  - If the session is `unavailable`, the fatal path runs.
-  - If the guard is `rejected` because of a repairable global issue, the attempt returns the core's blocking reason without marking the session unavailable.
-  - Replay applies the same check, so a dead session never replays "retryable".
+- **A completion timeout checks only the session mode.** A status call can mark the session unavailable while a completion waits on a probe.
+  - If the mode is `unavailable`, the fatal path runs.
+  - In any other mode, the attempt is abandoned and remembered, and a terminal `rejected / readback-timeout` entry is recorded. This path never calls `markUnavailable`.
+  - A duplicate after-hook replays that entry exactly, like every other terminal entry.
+  - The agent's retry uses a new call ID, so `prepareTransition` runs the real core decision. If the unit or epoch is already complete, a global issue is open, or the guard is disabled or unavailable, the retry returns that reason.
+  - The alternative was re-judging retryability against the guard's projected state at write time and at replay. It was rejected for three reasons: the adapter can't read a unit-level blocking reason without finalizing, the projected state can't tell whether a retry can succeed, and re-evaluating on replay would give one call ID two different outcomes.
 - **The typed lookup sibling serves completion and status refresh.** It returns `ok`, `timeout`, or `invalid`, and the existing function stays as a wrapper. A missing registration or an identity mismatch stays fatal. Callers in the operation path belong to #1084.
 - **A local or pinned timeout skips the remote probes.** Remote readback input needs the local identities, and the remote snapshot starts with the same command, so it would very likely time out too.
 - **The probe diagnostic is returned by value from each refresh.**
@@ -262,7 +262,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - Persistent timeouts: bounded by skill guidance (two retries, then report). No guard cap.
 - Cause scope: status refresh and completion. First-wins, recorded at the transition, never backfilled.
 - Latency: only the local and pinned skip. The worst case is accepted.
-- Retryability: judged at write time and at replay against the current guard state.
+- Retryability: a completion timeout checks only whether the session is already `unavailable`. Replay returns the first result exactly. A new call surfaces any real blocking reason.
 - Guidance: `readback-timeout` is retryable twice, and listed unconfirmed operations are unverified.
 - Persistence: `readback-timeout` never reaches a marker.
 
@@ -280,12 +280,11 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 | Status, local snapshot, pinned lookup, or pinned snapshot | timeout (R5) | Skip it and every remote probe. The diagnostic lists `local` or `pinned`. State and receipts are unchanged. |
 | Status, one remote operation | timeout | Skip that operation and continue with the rest. The diagnostic lists it. |
 | Status, any probe | throw, readback identity mismatch, other reason, `missing-resource`, other lookup error | The session becomes `unavailable` with a typed per-site cause. The diagnostic still lists earlier skipped probes. |
-| Completion, any readback stage | timeout, guard `protected` or `waiting` | Abandon and remember. Terminal entry `rejected / readback-timeout` with its own title. No `markUnavailable`. Replayable. |
-| Completion, any readback stage | timeout, guard `rejected` | Return the core's blocking reason. No `markUnavailable`. |
-| Completion, any readback stage | timeout, session `unavailable` | Fatal path. |
+| Completion, any readback stage | timeout, session mode not `unavailable` | Abandon and remember. Terminal entry `rejected / readback-timeout` with its own title. No `markUnavailable`. A duplicate replays it exactly. |
+| Completion, any readback stage | timeout, session mode `unavailable` | Fatal path. |
 | Completion, any readback stage | throw, readback identity mismatch, drift, other reason, `undefined` | Fatal path: abandon and remember, terminal entry `unavailable / finalization-failed`, and `markUnavailable` with a `complete-readback` cause. Replayable. |
 | Completion, target mismatch | not a readback | Unchanged: `finishMismatchedTarget`, `invalid-transition`. |
-| Replay of `readback-timeout` | guard no longer `protected` or `waiting` | Replay the result that matches the current guard state, never "retryable". |
+| Next completion call after `readback-timeout` | any | A fresh prepare runs the core decision and returns the real reason if the transition is blocked. |
 
 ## Implementation Units
 
@@ -342,7 +341,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 
 - [ ] **Unit 2: Completion rejects a timed-out readback as retryable**
 
-**Goal:** A completion readback timeout at any stage rejects that attempt with `readback-timeout`. The rejection can be replayed, and the guard state decides whether it is retryable.
+**Goal:** A completion readback timeout at any stage rejects that attempt with `readback-timeout`, and the rejection can be replayed. The session and unit are left unchanged.
 
 **Requirements:** R4, R5
 
@@ -356,11 +355,10 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 
 **Approach:**
 - `completionReadbacks` and `completionRemoteReadbacks` return a discriminated outcome per stage. The pinned lookups use the typed sibling.
-- On `timeout`, `finishComplete` checks guard state:
-  - `protected` or `waiting`: abandon with `remember=true`, record a `terminalCompletes` entry `{status: 'rejected', reasonCode: 'readback-timeout', title}`, skip `markUnavailable`, and write through the terminal writer.
-  - `rejected`: return the core's blocking reason without `markUnavailable`.
-  - `unavailable`: take the fatal path.
-- `replayTerminalComplete` re-checks guard state for a stored `readback-timeout` entry and replays the result that matches the current state.
+- On `timeout`, `finishComplete` checks the session mode:
+  - Mode `unavailable`: take the fatal path.
+  - Any other mode: abandon with `remember=true`, record a `terminalCompletes` entry `{status: 'rejected', reasonCode: 'readback-timeout', title}`, skip `markUnavailable`, and write through the terminal writer.
+- `replayTerminalComplete` is unchanged and replays the stored entry exactly.
 - Add `readback-timeout` to the adapter `REASON_CODES`.
 
 **Execution note:** Test-first. Each stage gets its own failing case.
@@ -377,8 +375,9 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - Edge case: a timeout, then a new call ID whose readbacks show drift. The first attempt applied nothing, and the second takes today's fatal path.
 - Edge case: replaying the before-hook with the same call ID. Protected mode throws `abandoned-transition`. Observe mode records the call, and the after-hook replays the terminal entry.
 - Error path: the session is marked unavailable while a completion probe is held, then the probe times out. The result is the fatal one.
-- Error path: a repairable global evidence issue is set while a completion probe is held, then the probe times out. The result carries the core's blocking reason, not `readback-timeout`, and the session is not unavailable.
-- Error path: a timeout, then a fatal status refresh, then a duplicate after-hook for the timed-out call. The replay is `unavailable / finalization-failed`.
+- Edge case: a repairable global evidence issue is set while a completion probe is held, then the probe times out. The result is `rejected / readback-timeout`, and the session is not unavailable. A new completion call returns the core's blocking reason from prepare.
+- Edge case: a second completion finishes the unit while the first one's probe is held, then that probe times out. The first gets `rejected / readback-timeout`, and a retry with a new call ID returns the core's completed-unit reason.
+- Edge case: a timeout, then a fatal status refresh, then a duplicate after-hook for the timed-out call. The duplicate replays `rejected / readback-timeout` exactly, and a new completion call is refused because the guard is unavailable.
 - Error path: a missing worktree registration or an identity mismatch at the pinned lookup stays fatal.
 - Integration: after a timed-out completion, no marker carries `readback-timeout`. A restart recovers the active unit from the earlier markers, and the session is not unavailable.
 
@@ -439,7 +438,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
   - `unavailable` stays the only terminal state.
 - ARCHITECTURE.md covers:
   - status skips and the diagnostic;
-  - the retryable completion rejection and how retryability is judged;
+  - the retryable completion rejection, and how a retry surfaces any real blocking reason;
   - fatal replay and causes;
   - the limits: no recovery from `unavailable`; an earlier timeout can mask later drift until the next attempt; replaying the before-hook with the same call ID; worst-case status latency with a degraded remote.
 
@@ -457,7 +456,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - **State lifecycle risks:**
   - A skipped probe must not partially apply.
   - The completion timeout branch must abandon and remember, so nothing is left pending.
-  - Retryability is re-checked at write time and at replay.
+  - The timeout branch checks the session mode before it writes. Replay never re-evaluates.
 - **API surface parity:** status output gains `unconfirmedReadbacks`, and completion results gain one reason code. No marker, receipt, or readback shape changes.
 - **Integration coverage:** the real-host dogfood suite runs as a regression check. Timeouts are proven by unit tests, because the real host can't inject them.
 - **Unchanged invariants:**
@@ -472,7 +471,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 | A failure that isn't a timeout is classified as one, which would fail open | One classifier accepts only the two typed shapes in R5. Throws and `undefined` stay fatal. Tests cover every result that isn't a timeout. |
 | Status looks healthy while nothing was verified | The diagnostic lists every skipped probe, the guard rule says those operations are unverified, and completion still re-reads everything. |
 | A deterministic timeout makes completion loop | The skill bounds retries to two, then report. A guard cap is deliberately left out. |
-| A retryable result for a transition the guard will keep refusing | Retryability is judged against the current guard state at write time and at replay. |
+| A retryable result for a transition the guard will keep refusing | The next completion call gets a fresh prepare, which returns the core's real blocking reason. The skill's two-retry bound caps the cost at one wasted call. |
 | Snapshot call counts shift fixture scripts | Use targeted failure wrappers, and count snapshot calls per path before writing tests. |
 
 ## Documentation / Operational Notes
