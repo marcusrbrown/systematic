@@ -191,11 +191,19 @@ describe('docs workflow privilege separation', () => {
     expect(asRecord(download.with, 'download with').name).toBe(withBlock.name)
   })
 
-  test('the docs-deploy concurrency group cancels in-progress runs', () => {
-    expect(readWorkflow().concurrency).toEqual({
+  test('there is no workflow-level concurrency (it would cancel before admission)', () => {
+    expect(readWorkflow()).not.toHaveProperty('concurrency')
+  })
+
+  test('only the deploy job serializes on docs-deploy, without cancelling', () => {
+    expect(getJob('deploy').concurrency).toEqual({
       group: 'docs-deploy',
-      'cancel-in-progress': true,
+      'cancel-in-progress': false,
     })
+  })
+
+  test('the build job has no concurrency, so rejected runs cannot cancel a deployment', () => {
+    expect(getJob('build')).not.toHaveProperty('concurrency')
   })
 
   test('every `uses:` is pinned to a 40-hex commit SHA', () => {
@@ -356,6 +364,149 @@ describe('docs workflow build job target validation', () => {
     for (const step of getSteps('build')) {
       expect(runOf(step)).not.toContain('git push')
     }
+  })
+})
+
+describe('docs workflow deploy freshness (executed)', () => {
+  const STEP_NAME = 'Deploy to fro-bot/systematic'
+
+  const GH_STUB = `#!/usr/bin/env bash
+echo "gh $* :: GH_TOKEN=\${GH_TOKEN:-}" >> "$STUB_LOG"
+if [ "\${1:-}" = release ] && [ "\${2:-}" = view ]; then
+  [ -z "\${STUB_LATEST_FAIL:-}" ] || exit 1
+  printf '%s\\n' "\${STUB_LATEST-}"
+  exit 0
+fi
+if [ "\${1:-}" = api ]; then
+  echo 12345
+  exit 0
+fi
+exit 0
+`
+
+  const GIT_STUB = `#!/usr/bin/env bash
+echo "git $*" >> "$STUB_LOG"
+if [ "\${1:-}" = clone ]; then
+  mkdir -p "\${@: -1}"
+fi
+if [ "\${1:-}" = diff-index ]; then
+  exit 1
+fi
+exit 0
+`
+
+  interface Run {
+    readonly status: number | null
+    readonly output: string
+    readonly calls: readonly string[]
+  }
+
+  function runDeploy(latest: { value?: string; fail?: boolean }): Run {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-deploy-'))
+    try {
+      const bin = path.join(cwd, 'bin')
+      fs.mkdirSync(bin)
+      fs.writeFileSync(path.join(bin, 'gh'), GH_STUB, { mode: 0o755 })
+      fs.writeFileSync(path.join(bin, 'git'), GIT_STUB, { mode: 0o755 })
+      fs.mkdirSync(path.join(cwd, 'docs', 'dist'), { recursive: true })
+      fs.writeFileSync(path.join(cwd, 'docs', 'dist', 'index.html'), 'ok')
+      const log = path.join(cwd, 'stub.log')
+      fs.writeFileSync(log, '')
+
+      const result = spawnSync(
+        'bash',
+        ['-e', '-c', runOf(findStep(getSteps('deploy'), STEP_NAME))],
+        {
+          cwd,
+          encoding: 'utf8',
+          env: {
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            HOME: cwd,
+            STUB_LOG: log,
+            STUB_LATEST: latest.value ?? '',
+            ...(latest.fail ? { STUB_LATEST_FAIL: '1' } : {}),
+            DEPLOY_TAG: 'v1.0.0',
+            SOURCE_GH_TOKEN: 'source-token',
+            GH_TOKEN: 'app-token',
+            APP_SLUG: 'fro-bot',
+            GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+          },
+        },
+      )
+      return {
+        status: result.status,
+        output: `${result.stdout}${result.stderr}`,
+        calls: fs.readFileSync(log, 'utf8').split('\n').filter(Boolean),
+      }
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  }
+
+  const pushed = (r: Run) => r.calls.some((c) => c.startsWith('git push'))
+  const cloned = (r: Run) => r.calls.some((c) => c.startsWith('git clone'))
+
+  test('the deploy step receives a separate source-repo read-only token', () => {
+    const env = asRecord(
+      findStep(getSteps('deploy'), STEP_NAME).env,
+      'deploy env',
+    )
+    expect(env.SOURCE_GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
+    expect(env.GH_TOKEN).not.toBe(GITHUB_TOKEN_EXPR)
+  })
+
+  test('a stale artifact (Latest moved on) is not published', () => {
+    const r = runDeploy({ value: 'v2.0.0' })
+
+    expect(r.status).toBe(0)
+    expect(r.output).toContain('::notice::')
+    expect(r.output).toContain('v2.0.0')
+    expect(cloned(r)).toBe(false)
+    expect(pushed(r)).toBe(false)
+  })
+
+  test('a fresh artifact (Latest equals DEPLOY_TAG) is published', () => {
+    const r = runDeploy({ value: 'v1.0.0' })
+
+    expect(r.status).toBe(0)
+    expect(cloned(r)).toBe(true)
+    expect(pushed(r)).toBe(true)
+  })
+
+  test('the freshness lookup uses the source token and the app token is kept for the deploy repo', () => {
+    const r = runDeploy({ value: 'v1.0.0' })
+
+    const lookup = r.calls.find((c) => c.startsWith('gh release view'))
+    expect(lookup).toBeDefined()
+    expect(lookup).toContain('--repo marcusrbrown/systematic')
+    expect(lookup).toContain('--json tagName')
+    expect(lookup).toContain('GH_TOKEN=source-token')
+    const clone = r.calls.find((c) => c.startsWith('git clone'))
+    expect(clone).toContain('app-token')
+    expect(clone).toContain('fro-bot/systematic.git')
+  })
+
+  test('the freshness check happens before the clone', () => {
+    const r = runDeploy({ value: 'v1.0.0' })
+
+    const lookup = r.calls.findIndex((c) => c.startsWith('gh release view'))
+    const clone = r.calls.findIndex((c) => c.startsWith('git clone'))
+    expect(lookup).toBeGreaterThanOrEqual(0)
+    expect(lookup).toBeLessThan(clone)
+  })
+
+  test('a failed latest lookup fails closed without publishing', () => {
+    const r = runDeploy({ fail: true })
+
+    expect(r.status).not.toBe(0)
+    expect(cloned(r)).toBe(false)
+    expect(pushed(r)).toBe(false)
+  })
+
+  test('an empty latest value fails closed without publishing', () => {
+    const r = runDeploy({ value: '' })
+
+    expect(pushed(r)).toBe(false)
   })
 })
 

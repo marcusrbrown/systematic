@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 
@@ -77,6 +79,8 @@ function runOf(step: RecordValue): string {
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const GITHUB_TOKEN_EXPR = '${{ github.token }}'
 
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const DEFAULT_BRANCH_EXPR = '${{ github.event.repository.default_branch }}'
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const EVENT_NAME_EXPR = '${{ github.event_name }}'
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
@@ -168,12 +172,14 @@ describe('release-notes workflow target validation', () => {
     }
   })
 
-  test('the workflow checks out its own commit (never a target ref) before validating', () => {
+  test('the trusted default branch is checked out (never the release tag) before validating', () => {
     const checkout = findStep('Checkout')
     expect(String(checkout.uses)).toStartWith('actions/checkout@')
     const withBlock = asRecord(checkout.with, 'checkout with')
     expect(withBlock['persist-credentials']).toBe(false)
-    expect(withBlock).not.toHaveProperty('ref')
+    // A release event's default checkout is the tagged commit, which is not
+    // trusted: both scripts run with an actions: write token.
+    expect(withBlock.ref).toBe(DEFAULT_BRANCH_EXPR)
     expect(checkout).not.toHaveProperty('if')
     expect(indexOfStep('Checkout')).toBeLessThan(
       indexOfStep('Validate release target'),
@@ -234,6 +240,83 @@ describe('release-notes workflow narrative and docs dispatch', () => {
       expect(runOf(step)).not.toContain('${{')
     }
   })
+})
+
+describe('release-notes workflow Trigger docs rebuild (executed)', () => {
+  const GH_STUB = `#!/usr/bin/env bash
+echo "gh $*" >> "$STUB_LOG"
+if [ "\${1:-}" = release ] && [ "\${2:-}" = view ]; then
+  [ -z "\${STUB_LATEST_FAIL:-}" ] || exit 1
+  printf '%s\\n' "\${STUB_LATEST-}"
+  exit 0
+fi
+exit 0
+`
+
+  function runTrigger(latest: { value?: string; fail?: boolean }) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'release-notes-'))
+    try {
+      const bin = path.join(cwd, 'bin')
+      fs.mkdirSync(bin)
+      fs.writeFileSync(path.join(bin, 'gh'), GH_STUB, { mode: 0o755 })
+      const log = path.join(cwd, 'stub.log')
+      fs.writeFileSync(log, '')
+
+      const result = spawnSync(
+        'bash',
+        ['-e', '-c', runOf(findStep('Trigger docs rebuild'))],
+        {
+          cwd,
+          encoding: 'utf8',
+          env: {
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            HOME: cwd,
+            STUB_LOG: log,
+            STUB_LATEST: latest.value ?? '',
+            ...(latest.fail ? { STUB_LATEST_FAIL: '1' } : {}),
+            TAG: 'v1.0.0',
+            GH_TOKEN: 'token',
+            GH_REPO: 'marcusrbrown/systematic',
+          },
+        },
+      )
+      const calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)
+      return {
+        status: result.status,
+        output: `${result.stdout}${result.stderr}`,
+        dispatches: calls.filter((c) => c.startsWith('gh workflow run')),
+      }
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  }
+
+  test('narrating v1.0.0 while v2.0.0 is Latest dispatches docs for v2.0.0', () => {
+    const r = runTrigger({ value: 'v2.0.0' })
+
+    expect(r.status).toBe(0)
+    expect(r.dispatches).toEqual([
+      'gh workflow run docs.yaml --ref main -f tag=v2.0.0',
+    ])
+  })
+
+  test('a failed latest lookup dispatches nothing and fails', () => {
+    const r = runTrigger({ fail: true })
+
+    expect(r.status).not.toBe(0)
+    expect(r.dispatches).toEqual([])
+  })
+
+  test.each(['latest', '', 'v2.0', 'v2.0.0-rc.1', 'v2.0.0 --ref evil'])(
+    'a malformed latest value (%j) dispatches nothing and fails',
+    (value) => {
+      const r = runTrigger({ value })
+
+      expect(r.status).not.toBe(0)
+      expect(r.output).toContain('::error::')
+      expect(r.dispatches).toEqual([])
+    },
+  )
 })
 
 describe('release-notes workflow structure', () => {

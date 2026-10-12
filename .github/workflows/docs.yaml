@@ -10,10 +10,6 @@ on:
         required: true
         type: string
 
-concurrency:
-  group: docs-deploy
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -146,6 +142,14 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ needs.build.outputs.proceed == 'true' }}
     environment: docs
+    # Serialized here, not at the workflow level: admission (author, latest
+    # release) happens in `build`, so a run that gets rejected there must never
+    # cancel an active deployment. Only admitted runs queue for this slot; GitHub
+    # keeps one pending run, and a newer pending run replacing an older one is fine
+    # because each run re-checks freshness right before publishing.
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
@@ -188,8 +192,23 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           DEPLOY_TAG: ${{ needs.build.outputs.tag }}
+          # Read-only token for the source repository; GH_TOKEN above is the App
+          # token for fro-bot/systematic and cannot be used for the lookup below.
+          SOURCE_GH_TOKEN: ${{ github.token }}
         run: |
-          set -o pipefail
+          set -euo pipefail
+
+          # A newer release may have become Latest while this run built or waited
+          # for the deploy slot; publishing now would replace newer content.
+          if ! latest=$(GH_TOKEN="$SOURCE_GH_TOKEN" gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName); then
+            echo "::error::Could not resolve the latest release of ${GITHUB_REPOSITORY}; refusing to publish"
+            exit 1
+          fi
+          if [ "$latest" != "$DEPLOY_TAG" ]; then
+            echo "::notice::Skipping deploy: artifact for ${DEPLOY_TAG} is stale; the latest release is now '${latest}'."
+            exit 0
+          fi
+
           name="${APP_SLUG}[bot]"
           user_id=$(gh api "/users/${name}" --jq .id)
           email="${user_id}+${name}@users.noreply.github.com"
