@@ -468,7 +468,7 @@ sequenceDiagram
 
 ### PR 2: Gated pipeline, landed dark, plus the merge gate
 
-- [ ] **Unit 5: Preview and changelog writer**
+- [x] **Unit 5: Preview and changelog writer**
 
 **Goal:** One deterministic preview of the pending version and entry, plus the `CHANGELOG.md` writer.
 
@@ -504,7 +504,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, including the core parity test.
 
-- [ ] **Unit 6: Publish verifier and gated config**
+- [x] **Unit 6: Publish verifier and gated config**
 
 **Goal:** A credential-free verifier that emits the decision artifact, and a generator for the data-only gated semantic-release config.
 
@@ -538,7 +538,7 @@ sequenceDiagram
 
 **Verification:** The tests pass.
 
-- [ ] **Unit 7: `release.yaml`**
+- [x] **Unit 7: `release.yaml`**
 
 **Goal:** The gated workflow, built from credential-free decide/render jobs and credentialed act jobs.
 
@@ -583,7 +583,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, and a dark-mode run on main writes a preview summary that matches Unit 5.
 
-- [ ] **Unit 8: `main.yaml`, the `Release` check, legacy publish, Claude plugin**
+- [x] **Unit 8: `main.yaml`, the `Release` check, legacy publish, Claude plugin**
 
 **Goal:**
 - The required `Release` context becomes a credential-free check.
@@ -621,7 +621,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, and the next legacy release publishes the plugin through the new workflow. Confirm with `npm view` and the plugin branch's commit.
 
-- [ ] **Unit 9: Release approval gate**
+- [x] **Unit 9: Release approval gate**
 
 **Goal:** A deterministic gate that approves on Wednesday and Sunday, or when Marcus dispatches it. It is split into decide, approve, and attest jobs.
 
@@ -660,7 +660,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, and a Phase 0 sandbox run produces an approval and attestation that `verify-merge` accepts.
 
-- [ ] **Unit 10: Docs changelog page**
+- [x] **Unit 10: Docs changelog page**
 
 **Goal:** A changelog page generated from `CHANGELOG.md` at the release tag.
 
@@ -688,7 +688,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, and `docs:build` succeeds with and without the file.
 
-- [ ] **Unit 11: Settings for the dark launch**
+- [x] **Unit 11: Settings for the dark launch**
 
 **Goal:** Protect the release branch and enable auto-merge settings.
 
@@ -708,7 +708,7 @@ sequenceDiagram
 
 **Verification:** `gh api` shows the environments, their branch policies, and the ruleset. A push to `release/pending` from any other identity is rejected.
 
-- [ ] **Unit 12: Fro Bot approval rule (R23)**
+- [x] **Unit 12: Fro Bot approval rule (R23)**
 
 **Goal:** Fro Bot approves only PRs that Marcus authored, and never a head containing its own commit.
 
