@@ -93,16 +93,16 @@ function parseArgs(argv: string[]): {
     if (value === undefined) throw new Error(`${flag} requires a value`)
     values.set(flag, value)
   }
-  const require = (flag: string): string => {
+  const requiredFlag = (flag: string): string => {
     const value = values.get(flag)
     if (value === undefined) throw new Error(`Missing required ${flag}`)
     return value
   }
   return {
-    releaserc: require('--releaserc'),
-    notes: require('--notes'),
-    version: require('--version'),
-    out: require('--out'),
+    releaserc: requiredFlag('--releaserc'),
+    notes: requiredFlag('--notes'),
+    version: requiredFlag('--version'),
+    out: requiredFlag('--out'),
   }
 }
 

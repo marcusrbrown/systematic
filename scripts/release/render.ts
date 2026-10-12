@@ -2,8 +2,8 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { renderChangelog } from './changelog.ts'
-import { previewRelease } from './preview.ts'
+import { renderChangelog } from './changelog.js'
+import { previewRelease } from './preview.js'
 
 const execFileAsync = promisify(execFile)
 

@@ -29,8 +29,8 @@ import {
   CHANGELOG_SENTINEL,
   type ChangelogEntry,
   parseEntries,
-} from '../../scripts/release/changelog.ts'
-import { sanitizeBody } from './generate-release-notes.ts'
+} from '../../scripts/release/changelog.js'
+import { sanitizeBody } from './generate-release-notes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)

@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { decideGate, type GateDecision, type GateFacts } from './gate.ts'
+import { decideGate, type GateDecision, type GateFacts } from './gate.js'
 import {
   type Api,
   changelogVersionDelta,
@@ -9,7 +9,7 @@ import {
   parentShaOf,
   requireArray,
   requireString,
-} from './gather-publish-facts.ts'
+} from './gather-publish-facts.js'
 
 const RELEASE_BRANCH = 'release/pending'
 const DEFAULT_RELEASE_APP_LOGIN = 'systematic-release[bot]'

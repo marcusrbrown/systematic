@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 
@@ -327,6 +329,147 @@ describe('publish-claude-code-plugin push job', () => {
     for (const step of getSteps(push())) {
       expect(runOf(step)).not.toContain('${{')
     }
+  })
+
+  describe('archive hardening', () => {
+    const PUBLISH_STEP = 'Publish bundle to claude-code-plugin branch'
+    const SHA = 'a'.repeat(40)
+
+    function publishStep(): RecordValue {
+      return findStep(push(), PUBLISH_STEP)
+    }
+
+    test('rejects any archive entry with a .git path component before the first git call', () => {
+      const run = runOf(publishStep())
+      expect(run).toMatch(/tar -tf "\$ARCHIVE" > /)
+      expect(run).toMatch(/grep -Eq [^\n]*entries\.txt/)
+      expect(run).toContain('(^|/)\\.git(/|$)')
+      const guardAt = run.indexOf('(^|/)\\.git(/|$)')
+      const firstGit = run.search(/^\s*git /m)
+      expect(guardAt).toBeGreaterThan(-1)
+      expect(guardAt).toBeLessThan(firstGit)
+    })
+
+    test('disables hooks and fsmonitor for every git command in the step', () => {
+      const env = asRecord(publishStep().env, 'env')
+      const pairs: Record<string, unknown> = {}
+      const count = Number(env.GIT_CONFIG_COUNT)
+      expect(count).toBeGreaterThanOrEqual(2)
+      for (let i = 0; i < count; i++) {
+        pairs[String(env[`GIT_CONFIG_KEY_${i}`])] = env[`GIT_CONFIG_VALUE_${i}`]
+      }
+      expect(pairs['core.hooksPath']).toBe('/dev/null')
+      expect(pairs['core.fsmonitor']).toBe('false')
+    })
+
+    function buildArchive(
+      dir: string,
+      pluginDir: string,
+      entries: Record<string, string>,
+    ): void {
+      const staging = path.join(dir, 'staging')
+      for (const [name, content] of Object.entries(entries)) {
+        const file = path.join(staging, name)
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.writeFileSync(file, content)
+      }
+      const tar = spawnSync(
+        'tar',
+        [
+          '-cf',
+          path.join(pluginDir, 'claude-code-plugin.tar'),
+          '-C',
+          staging,
+          '.',
+        ],
+        { encoding: 'utf8' },
+      )
+      if (tar.status !== 0) throw new Error(tar.stderr)
+    }
+
+    /** Stub git: log every call; `init` creates the directory; nothing is staged. */
+    function writeGitStub(bin: string): void {
+      const lines = [
+        '#!/usr/bin/env bash',
+        'echo "git $*" >> "$STUB_LOG"',
+        'if [ "$1" = init ]; then mkdir -p "$' + '{@: -1}"; fi',
+        'exit 0',
+        '',
+      ]
+      fs.writeFileSync(path.join(bin, 'git'), lines.join('\n'), { mode: 0o755 })
+    }
+
+    function literalStepEnv(): Record<string, string> {
+      const env: Record<string, string> = {}
+      for (const [key, value] of Object.entries(
+        asRecord(publishStep().env, 'env'),
+      )) {
+        if (!String(value).includes('${{')) env[key] = String(value)
+      }
+      return env
+    }
+
+    function runPublish(entries: Record<string, string>): {
+      status: number | null
+      output: string
+      gitCalls: string
+    } {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-push-'))
+      try {
+        const bin = path.join(dir, 'bin')
+        const runner = path.join(dir, 'runner')
+        const pluginDir = path.join(runner, 'plugin')
+        for (const d of [bin, pluginDir]) fs.mkdirSync(d, { recursive: true })
+        buildArchive(dir, pluginDir, entries)
+        writeGitStub(bin)
+
+        const log = path.join(dir, 'git.log')
+        fs.writeFileSync(log, '')
+        const scriptPath = path.join(dir, 'step.sh')
+        fs.writeFileSync(scriptPath, runOf(publishStep()))
+        const result = spawnSync('bash', ['-e', scriptPath], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            ...literalStepEnv(),
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            HOME: dir,
+            RUNNER_TEMP: runner,
+            GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+            GH_TOKEN: 'token',
+            SHA,
+            STUB_LOG: log,
+          },
+        })
+        return {
+          status: result.status,
+          output: result.stdout + result.stderr,
+          gitCalls: fs.readFileSync(log, 'utf8'),
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    test.each(['.git/hooks/pre-commit', 'nested/.git/config', '.git'])(
+      'refuses an archive containing %p and makes no git call',
+      (entry) => {
+        const result = runPublish({ [entry]: '#!/bin/sh\necho pwned\n' })
+        expect(result.status).not.toBe(0)
+        expect(result.output).toContain('::error::')
+        expect(result.gitCalls).toBe('')
+      },
+    )
+
+    test('accepts an archive whose names merely contain .git as a substring', () => {
+      const result = runPublish({
+        '.gitignore': 'x\n',
+        'docs/.github/readme.md': 'x\n',
+        'plugin.json': '{}\n',
+      })
+      expect(result.status).toBe(0)
+      expect(result.gitCalls).toContain('git init')
+    })
   })
 })
 

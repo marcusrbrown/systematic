@@ -1,14 +1,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseEntries } from './changelog.ts'
-import { decidePublish, type PublishDecision } from './decide-publish.ts'
-import { buildGatedReleaseConfig } from './gated-config.ts'
+import { parseEntries } from './changelog.js'
+import { decidePublish, type PublishDecision } from './decide-publish.js'
+import { buildGatedReleaseConfig } from './gated-config.js'
 import {
   type Api,
   gatherPublishFacts,
   githubApi,
-} from './gather-publish-facts.ts'
+  readChangelog,
+} from './gather-publish-facts.js'
 
 export const PREDICATE_TYPE =
   'https://github.com/marcusrbrown/systematic/attestations/release-gate-approval/v1'
@@ -56,22 +57,6 @@ export function approvalSubject({
   reviewId,
 }: ApprovalSubjectInput): string {
   return `{"headSha":${JSON.stringify(headSha)},"pr":${JSON.stringify(pr)},"repo":${JSON.stringify(repo)},"reviewId":${JSON.stringify(reviewId)}}`
-}
-
-async function fetchChangelog(
-  api: Api,
-  repo: string,
-  sha: string,
-): Promise<string> {
-  const file = await api(`repos/${repo}/contents/CHANGELOG.md?ref=${sha}`)
-  const content =
-    typeof file === 'object' && file !== null
-      ? (file as Record<string, unknown>).content
-      : undefined
-  if (typeof content !== 'string' || content === '') {
-    throw new Error(`Unexpected GitHub API response: no CHANGELOG.md at ${sha}`)
-  }
-  return Buffer.from(content.replaceAll('\n', ''), 'base64').toString('utf8')
 }
 
 export async function runVerifyMerge(
@@ -127,7 +112,9 @@ export async function runVerifyMerge(
 
   fs.mkdirSync(outDir, { recursive: true })
   if (decision.kind === 'publish') {
-    const entries = parseEntries(await fetchChangelog(api, repo, sha))
+    const entries = parseEntries(
+      await readChangelog(api, repo, sha, { missingIsEmpty: false }),
+    )
     const approved = entries.find((e) => e.version === decision.version)
     if (approved === undefined) {
       throw new Error(

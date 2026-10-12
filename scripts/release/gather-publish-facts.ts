@@ -1,5 +1,5 @@
-import { parseEntries } from './changelog.ts'
-import type { MergedReleasePr, PublishFacts, Review } from './decide-publish.ts'
+import { parseEntries } from './changelog.js'
+import type { MergedReleasePr, PublishFacts, Review } from './decide-publish.js'
 
 /** GET `https://api.github.com/<path>` as parsed JSON; throws on non-2xx. */
 export type Api = (path: string) => Promise<unknown>
@@ -21,13 +21,17 @@ export interface GatherPublishFactsOptions {
 
 const API_ORIGIN = 'https://api.github.com'
 const REQUEST_TIMEOUT_MS = 15_000
-const REVIEW_STATES: ReadonlySet<string> = new Set<Review['state']>([
+const REVIEW_STATES = [
   'APPROVED',
   'CHANGES_REQUESTED',
   'COMMENTED',
   'DISMISSED',
   'PENDING',
-])
+] as const satisfies readonly Review['state'][]
+
+function isReviewState(value: string): value is Review['state'] {
+  return REVIEW_STATES.some((state) => state === value)
+}
 
 export function githubApi(token: string, fetchImpl: typeof fetch = fetch): Api {
   return async (path) => {
@@ -99,7 +103,12 @@ export async function parentShaOf(
   return requireString(dig(parents[0], 'sha'), `first parent of ${sha}`)
 }
 
-async function readChangelog(
+/**
+ * Read CHANGELOG.md at `ref` through the contents API. With `missingIsEmpty`,
+ * a 404 yields an empty string (a file that does not exist yet); otherwise a
+ * missing file throws.
+ */
+export async function readChangelog(
   api: Api,
   repo: string,
   ref: string,
@@ -153,7 +162,7 @@ export async function changelogVersionDelta(
 
 function toReview(raw: unknown): Review {
   const state = dig(raw, 'state')
-  if (typeof state !== 'string' || !REVIEW_STATES.has(state)) {
+  if (typeof state !== 'string' || !isReviewState(state)) {
     throw new Error(
       `Unexpected GitHub API response: unknown review state ${String(state)}`,
     )
@@ -164,7 +173,7 @@ function toReview(raw: unknown): Review {
     id: requireNumber(dig(raw, 'id'), 'review id'),
     // Deleted accounts and pending reviews can lack these; empty never matches a login.
     user: typeof user === 'string' ? user : '',
-    state: state as Review['state'],
+    state,
     commitId:
       typeof dig(raw, 'commit_id') === 'string'
         ? (dig(raw, 'commit_id') as string)

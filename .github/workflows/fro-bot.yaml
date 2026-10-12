@@ -677,15 +677,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        # `shell: bash` runs with pipefail; the default shell does not, and a failed
+        # `gh` inside a pipeline would read as an empty (allowing) result.
+        shell: bash
         run: |
           allow='Approval is permitted for this pull request if your review finds no blocking issues.'
           deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
 
           decide() {
-            local author logins
-            author=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" | jq -er '.user.login' | tr '[:upper:]' '[:lower:]') || return 1
+            local pr_json author commits_json logins
+            pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}") || return 1
+            author=$(printf '%s' "$pr_json" | jq -er '.user.login' | tr '[:upper:]' '[:lower:]') || return 1
             [ "$author" = "marcusrbrown" ] || return 1
-            logins=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/commits?per_page=100" |
+            commits_json=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/commits?per_page=100") || return 1
+            logins=$(printf '%s' "$commits_json" |
               jq -r '.[] | (.author.login // ""), (.committer.login // "")' |
               tr '[:upper:]' '[:lower:]') || return 1
             if printf '%s\n' "$logins" | grep -qx 'fro-bot'; then
@@ -792,9 +797,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FRO_BOT_PAT }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        shell: bash
         run: |
-          if ! ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews?per_page=100" |
-            jq -r '.[] | select((.user.login | ascii_downcase) == "fro-bot" and .state == "APPROVED") | .id'); then
+          if ! reviews=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews?per_page=100") ||
+            ! ids=$(printf '%s' "$reviews" |
+              jq -r '.[] | select((.user.login | ascii_downcase) == "fro-bot" and .state == "APPROVED") | .id'); then
             echo "::error::Could not list reviews for PR #${PR}; cannot confirm Fro Bot did not approve."
             exit 1
           fi

@@ -454,6 +454,7 @@ describe('Fro Bot approval rule (R23)', () => {
     const stub = `#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 [ -z "\${GH_FAIL:-}" ] || exit 1
+if [ -n "\${GH_FAIL_AT:-}" ] && [[ "$*" == *"\${GH_FAIL_AT}"* ]]; then exit 1; fi
 case "$*" in
   *"-X PUT"*dismissals*)
     if [ -n "\${GH_FAIL_DISMISS_ID:-}" ] && [[ "$*" == */reviews/\${GH_FAIL_DISMISS_ID}/* ]]; then exit 1; fi
@@ -481,21 +482,24 @@ esac
   ): { exitCode: number; stdout: string; outputs: Map<string, string> } {
     const step = findStep(froBotSteps(), name)
     const script = asString(step.run, `${name} run`)
-    const result = Bun.spawnSync(
-      ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
-      {
-        env: {
-          PATH: `${path.join(box.dir, 'bin')}:${process.env.PATH ?? ''}`,
-          GH_LOG: box.log,
-          GH_FIXTURES: box.dir,
-          GH_TOKEN: 'stub-token',
-          GITHUB_REPOSITORY: 'marcusrbrown/systematic',
-          GITHUB_OUTPUT: box.outputs,
-          PR: '42',
-          ...extraEnv,
-        },
+    // Mirror the runner: an explicit `shell: bash` adds pipefail, the default does not.
+    const shellFlags = step.shell === 'bash' ? '-eo' : '-e'
+    const shellArgs =
+      step.shell === 'bash'
+        ? ['--noprofile', '--norc', shellFlags, 'pipefail']
+        : [shellFlags]
+    const result = Bun.spawnSync(['bash', ...shellArgs, '-c', script], {
+      env: {
+        PATH: `${path.join(box.dir, 'bin')}:${process.env.PATH ?? ''}`,
+        GH_LOG: box.log,
+        GH_FIXTURES: box.dir,
+        GH_TOKEN: 'stub-token',
+        GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+        GITHUB_OUTPUT: box.outputs,
+        PR: '42',
+        ...extraEnv,
       },
-    )
+    })
     const outputs = new Map<string, string>()
     if (fs.existsSync(box.outputs)) {
       for (const line of fs.readFileSync(box.outputs, 'utf8').split('\n')) {
@@ -614,6 +618,42 @@ esac
       expect(result.exitCode).toBe(0)
       expect(result.outputs.get('allowed')).toBe('false')
       expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('fails closed when only the commits call fails inside its pipeline', () => {
+      // gh fails while the pipeline's last command (`tr`) still succeeds; a
+      // pipeline without pipefail would see no fro-bot logins and allow.
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box, {
+        GH_FAIL_AT: '/commits',
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('false')
+      expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('fails closed when only the PR author call fails', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box, {
+        GH_FAIL_AT: 'pulls/42',
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('false')
+    })
+
+    test('runs under pipefail', () => {
+      for (const name of [APPROVAL_RULE_STEP, BACKSTOP_STEP]) {
+        const step = findStep(froBotSteps(), name)
+        expect(
+          step.shell === 'bash' || /set -\w*o pipefail/.test(String(step.run)),
+        ).toBe(true)
+      }
     })
 
     test('fails closed when the PR payload has no author', () => {
@@ -755,6 +795,14 @@ esac
       const dismissals = calls(box).filter((c) => c.includes('dismissals'))
       expect(dismissals).toHaveLength(2)
       expect(dismissals[1]).toContain('/reviews/2/dismissals')
+    })
+
+    test('fails loudly when only the reviews call fails inside its pipeline', () => {
+      const box = sandbox({ reviews: [review(1, 'fro-bot', 'APPROVED')] })
+      const result = runStep(BACKSTOP_STEP, box, { GH_FAIL_AT: '/reviews?' })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('::error::')
+      expect(calls(box).some((c) => c.includes('dismissals'))).toBe(false)
     })
 
     test('fails loudly when reviews cannot be listed', () => {

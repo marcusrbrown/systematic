@@ -52,15 +52,18 @@ interface FakeOptions {
   headChangelog?: string
   xChangelog?: string
   reviews?: unknown[]
+  mainTip?: string
 }
 
-function fakeApi(options: FakeOptions = {}): Api {
+function fakeResponses(options: FakeOptions = {}): Map<string, unknown> {
   const responses = new Map<string, unknown>()
   const set = (p: string, value: unknown) => responses.set(p, value)
   const headChangelog = options.headChangelog ?? changelog('3.22.0', '3.21.8')
 
   set(`repos/${REPO}/commits/${X}`, { parents: [{ sha: PARENT }] })
-  set(`repos/${REPO}/git/ref/heads/main`, { object: { sha: X } })
+  set(`repos/${REPO}/git/ref/heads/main`, {
+    object: { sha: options.mainTip ?? X },
+  })
   set(
     `repos/${REPO}/commits/${X}/pulls`,
     options.prList ?? [
@@ -100,7 +103,11 @@ function fakeApi(options: FakeOptions = {}): Api {
     options.reviews ?? [review(1, 'marcusrbrown')],
   )
   set(`repos/${REPO}/git/matching-refs/tags/v`, [{ ref: 'refs/tags/v3.21.8' }])
+  return responses
+}
 
+function fakeApi(options: FakeOptions = {}): Api {
+  const responses = fakeResponses(options)
   return async (p) => {
     if (!responses.has(p)) throw notFound(p)
     return responses.get(p)
@@ -298,6 +305,75 @@ describe('runVerifyMerge', () => {
 })
 
 describe('verify-merge CLI', () => {
+  interface CliResult {
+    code: number
+    output: string
+    decision: { kind: string; reason?: string } | null
+  }
+
+  /**
+   * Runs the real CLI. GitHub's REST API is served from a preloaded fetch stub
+   * and `gh` is a stub that fails attestation verification.
+   */
+  async function runCli(
+    options: FakeOptions,
+    env: Record<string, string>,
+  ): Promise<CliResult> {
+    const bin = path.join(workDir, 'bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nexit 1\n', {
+      mode: 0o755,
+    })
+    const responsesFile = path.join(workDir, 'responses.json')
+    fs.writeFileSync(
+      responsesFile,
+      JSON.stringify(Object.fromEntries(fakeResponses(options))),
+    )
+    const preload = path.join(workDir, 'preload.ts')
+    fs.writeFileSync(
+      preload,
+      [
+        "import fs from 'node:fs'",
+        "const responses = JSON.parse(fs.readFileSync(process.env.FAKE_API_RESPONSES ?? '', 'utf8'))",
+        'globalThis.fetch = (async (input: unknown) => {',
+        "  const p = String(input).replace('https://api.github.com/', '')",
+        "  if (!(p in responses)) return new Response('{}', { status: 404, statusText: 'Not Found' })",
+        '  return Response.json(responses[p])',
+        '}) as unknown as typeof fetch',
+        '',
+      ].join('\n'),
+    )
+    const proc = Bun.spawn(
+      ['bun', '--preload', preload, SCRIPT, '--sha', X, '--out', outDir],
+      {
+        cwd,
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          HOME: workDir,
+          GITHUB_REPOSITORY: REPO,
+          GH_TOKEN: 'token',
+          FAKE_API_RESPONSES: responsesFile,
+          ...env,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    const decisionFile = path.join(outDir, 'decision.json')
+    return {
+      code,
+      output: `${stdout}${stderr}`,
+      decision: fs.existsSync(decisionFile)
+        ? JSON.parse(fs.readFileSync(decisionFile, 'utf8'))
+        : null,
+    }
+  }
+
   test('exits 1 with ::error:: when GH_TOKEN is missing', async () => {
     const env: Record<string, string> = {}
     for (const [key, value] of Object.entries(process.env)) {
@@ -316,5 +392,27 @@ describe('verify-merge CLI', () => {
     ])
     expect(code).toBe(1)
     expect(`${stdout}${stderr}`).toContain('::error::')
+  })
+
+  test('a refused decision exits 1 and prints ::error:: with the reason', async () => {
+    // Gate approval whose attestation fails verification (stub gh exits 1).
+    const result = await runCli({ reviews: [review(123, 'fro-bot')] }, {})
+    expect(result.decision?.kind).toBe('refused')
+    expect(result.code).toBe(1)
+    expect(result.output).toContain(`::error::${result.decision?.reason}`)
+  })
+
+  test('a superseded decision exits 1 and prints ::error:: with the reason', async () => {
+    const result = await runCli({ mainTip: 'd'.repeat(40) }, {})
+    expect(result.decision?.kind).toBe('superseded')
+    expect(result.code).toBe(1)
+    expect(result.output).toContain(`::error::${result.decision?.reason}`)
+  })
+
+  test('a skip decision exits 0 without ::error::', async () => {
+    const result = await runCli({ prList: [] }, {})
+    expect(result.decision?.kind).toBe('skip')
+    expect(result.code).toBe(0)
+    expect(result.output).not.toContain('::error::')
   })
 })
