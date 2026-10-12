@@ -1,7 +1,7 @@
 ---
 title: "fix: Size the operation snapshot for real repositories and record why it fails"
 type: fix
-status: active
+status: completed
 date: 2026-10-12
 ---
 
@@ -133,7 +133,7 @@ Other separate tasks:
 
 ## Implementation Units
 
-- [ ] **Unit 1: Real-repository limits and a separate remote item cap**
+- [x] **Unit 1: Real-repository limits and a separate remote item cap**
 
 **Goal:** Ordinary large repositories get an available snapshot, while remote bounds stay as they are.
 
@@ -160,7 +160,7 @@ Other separate tasks:
 
 **Verification:** The existing observer suite passes unchanged except for tests that intentionally exercise the new defaults.
 
-- [ ] **Unit 2: Bounded causes for every guard hook transition to unavailable**
+- [x] **Unit 2: Bounded causes for every guard hook transition to unavailable**
 
 **Goal:** Status names where and why a hook made the guard unavailable.
 
@@ -194,7 +194,7 @@ Other separate tasks:
 
 **Verification:** No guard hook transitions to unavailable without a cause.
 
-- [ ] **Unit 3: Documentation**
+- [x] **Unit 3: Documentation**
 
 **Goal:** Architecture docs state the limits and the hook causes.
 
