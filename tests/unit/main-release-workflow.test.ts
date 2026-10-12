@@ -352,20 +352,12 @@ describe('main workflow: release-mode guard job', () => {
   })
 })
 
-describe('main workflow: publish-claude-code-plugin', () => {
-  test('hangs off legacy-release, not release', () => {
-    const job = getJob('publish-claude-code-plugin')
-    expect(job.needs).toEqual([
-      'build',
-      'typecheck',
-      'lint',
-      'test',
-      'legacy-release',
-    ])
-    const condition = normalize(String(job.if))
-    expect(condition).toContain(
-      "needs.legacy-release.outputs.new-release-published == 'true'",
-    )
-    expect(condition).not.toContain('needs.release.')
+describe('main workflow: publish-claude-code-plugin moved out', () => {
+  test('the job is gone (it lives in publish-claude-code-plugin.yaml)', () => {
+    expect(getJobs()).not.toHaveProperty('publish-claude-code-plugin')
+  })
+
+  test('no job in main.yaml publishes the claude-code-plugin branch', () => {
+    expect(readSource()).not.toContain('git push origin claude-code-plugin')
   })
 })
