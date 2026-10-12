@@ -57,7 +57,7 @@ The narrative runs in its own workflow, triggered by the `release: published` ev
 .github/workflows/release-notes.yaml (release: published, or workflow_dispatch with a tag)
   └─ narrate job (contents: read + actions: write; references no secrets, uses github.token)
       ├─ check release author (vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]'); mismatch ends cleanly
-      ├─ validate tag shape (and, on dispatch, an existing published release); npm view
+      ├─ validate tag shape (and, on dispatch, an existing published release)
       ├─ checkout (persist-credentials: false)
       ├─ scripts/dispatch-release-notes.sh "$TAG":
       │   ├─ RELEASE_VERSION = $1
