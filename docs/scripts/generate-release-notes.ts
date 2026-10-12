@@ -195,6 +195,7 @@ export interface MdNode {
   alt?: string | null
   depth?: number
   identifier?: string
+  label?: string | null
   lang?: string | null
   meta?: string | null
 }
@@ -205,6 +206,8 @@ interface SanitizeState {
   /** Added to every body heading depth. */
   shift: number
   previousLevel: number
+  /** Footnote ids are document-scoped, so each release gets its own namespace. */
+  footnotePrefix: string
 }
 
 function isHttps(url: string): boolean {
@@ -221,7 +224,7 @@ function walk(node: MdNode, visit: (node: MdNode) => void): void {
   for (const child of node.children ?? []) walk(child, visit)
 }
 
-function prepareState(root: MdNode): SanitizeState {
+function prepareState(root: MdNode, footnotePrefix: string): SanitizeState {
   const definitions = new Map<string, string>()
   const depths: number[] = []
   walk(root, (node) => {
@@ -238,7 +241,12 @@ function prepareState(root: MdNode): SanitizeState {
   // The shallowest body heading becomes one level below the version heading.
   const shift =
     depths.length === 0 ? 0 : VERSION_HEADING_LEVEL + 1 - Math.min(...depths)
-  return { definitions, shift, previousLevel: VERSION_HEADING_LEVEL }
+  return {
+    definitions,
+    shift,
+    previousLevel: VERSION_HEADING_LEVEL,
+    footnotePrefix,
+  }
 }
 
 /**
@@ -263,8 +271,11 @@ function neutralizeAutolinks(value: string): MdNode[] {
   return [...nodes, ...textNode(value.slice(last))]
 }
 
+/** Prose text node. Hard tabs become spaces (markdownlint MD010); code never passes through here. */
 function textNode(value: string | null | undefined): MdNode[] {
-  return value == null || value === '' ? [] : [{ type: 'text', value }]
+  return value == null || value === ''
+    ? []
+    : [{ type: 'text', value: value.replace(/\t/g, '  ') }]
 }
 
 function sanitizeChildren(node: MdNode, state: SanitizeState): void {
@@ -304,6 +315,26 @@ function sanitizeHeading(node: MdNode, state: SanitizeState): MdNode {
   return node
 }
 
+/** Prefix both identifier and label; the label is what gets serialized. */
+function namespaceFootnote(node: MdNode, state: SanitizeState): void {
+  const label = node.label ?? node.identifier ?? ''
+  node.identifier = `${state.footnotePrefix}${node.identifier ?? label}`
+  node.label = `${state.footnotePrefix}${label}`
+}
+
+/**
+ * The info string is free text; keep only a plain language word. Never
+ * `mermaid`: rehype-mermaid (no errorFallback) throws on an unparsable
+ * diagram, so one bad fence in any release would fail the docs build.
+ * The code value itself is never touched.
+ */
+function restrictCodeInfo(node: MdNode): void {
+  const lang = node.lang ?? ''
+  node.lang =
+    /^[\w+#.-]+$/.test(lang) && lang.toLowerCase() !== 'mermaid' ? lang : null
+  node.meta = null
+}
+
 /**
  * Rewrite one node, returning the nodes that replace it:
  * - raw HTML and definitions are removed;
@@ -331,20 +362,16 @@ function sanitizeNode(node: MdNode, state: SanitizeState): MdNode[] {
       const link = keepLink(node, url, state)
       return link == null ? (node.children ?? []) : [link]
     }
+    case 'footnoteReference':
+    case 'footnoteDefinition':
+      namespaceFootnote(node, state)
+      sanitizeChildren(node, state)
+      return [node]
     case 'heading':
       return [sanitizeHeading(node, state)]
-    case 'code': {
-      // The info string is free text; keep only a plain language word. Never
-      // `mermaid`: rehype-mermaid (no errorFallback) throws on an unparsable
-      // diagram, so one bad fence in any release would fail the docs build.
-      const lang = node.lang ?? ''
-      node.lang =
-        /^[\w+#.-]+$/.test(lang) && lang.toLowerCase() !== 'mermaid'
-          ? lang
-          : null
-      node.meta = null
+    case 'code':
+      restrictCodeInfo(node)
       return [node]
-    }
     default:
       sanitizeChildren(node, state)
       return [node]
@@ -353,20 +380,16 @@ function sanitizeNode(node: MdNode, state: SanitizeState): MdNode[] {
 
 function stringifyNodes(children: MdNode[]): string {
   const root = { type: 'root', children } as unknown as Root
-  return stringifier
-    .stringify(root)
-    .replace(/\t/g, '  ')
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  // No whitespace rewriting here: it would also alter fenced and inline code,
+  // which must stay byte-for-byte (a Makefile needs its tabs). Prose is
+  // normalized on the syntax tree instead, in `textNode`.
+  return stringifier.stringify(root).trim()
 }
 
 /** Parse an untrusted Markdown body, strip anything unsafe, re-serialize it. */
-function sanitizeBody(body: string): string {
+function sanitizeBody(body: string, footnotePrefix: string): string {
   const root = parseMarkdown(body)
-  sanitizeChildren(root, prepareState(root))
+  sanitizeChildren(root, prepareState(root, footnotePrefix))
   return stringifyNodes(root.children ?? [])
 }
 
@@ -412,13 +435,13 @@ function releaseTime(release: GithubRelease): number {
   return Number.isNaN(time) ? 0 : time
 }
 
-function renderRelease(release: GithubRelease): string {
+function renderRelease(release: GithubRelease, index: number): string {
   const url = isHttps(release.html_url)
     ? new URL(release.html_url).href
     : RELEASES_PAGE_URL
   const rawBody = release.body ?? ''
   const { text, truncated } = capBody(rawBody.replace(/\r\n?/g, '\n'))
-  const body = sanitizeBody(text)
+  const body = sanitizeBody(text, `r${index}-`)
 
   // Header text comes from the API too, so it is built as syntax-tree nodes and
   // serialized, never interpolated into Markdown.
@@ -469,7 +492,12 @@ export function renderReleaseNotesPage(releases: GithubRelease[]): string {
   if (published.length === 0) {
     return renderPage(`${intro}\n\nNo releases have been published yet.`)
   }
-  return renderPage([intro, ...published.map(renderRelease)].join('\n\n'))
+  return renderPage(
+    [
+      intro,
+      ...published.map((release, index) => renderRelease(release, index)),
+    ].join('\n\n'),
+  )
 }
 
 // ---------------------------------------------------------------------------

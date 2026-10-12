@@ -332,6 +332,74 @@ describe('renderReleaseNotesPage', () => {
     },
   )
 
+  test('preserves fenced code bytes: tabs, trailing spaces, blank runs', () => {
+    const code = 'all:\n\tcc -o x x.c  \n\techo done\t\n\n\nclean:\n\trm x'
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        body: `## What's new\n\nBuild with make:\n\n\`\`\`make\n${code}\n\`\`\`\n`,
+      }),
+    ])
+    expect(page).toContain(`\`\`\`make\n${code}\n\`\`\``)
+  })
+
+  test('preserves inline code spans byte for byte', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        body: "## What's new\n\nRun `a  b` or `c\td` now.",
+      }),
+    ])
+    expect(page).toContain('`a  b`')
+    expect(page).toContain('`c\td`')
+  })
+
+  test('still normalizes whitespace in prose', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({ body: "## What's new\n\nprose\twith tab   \n\n\n\nnext" }),
+    ])
+    expect(page).not.toContain('\t')
+    expect(page).not.toMatch(/[ \t]+$/m)
+    expect(page).not.toMatch(/\n{3,}/)
+  })
+
+  test('footnotes are namespaced per release so they never collide', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        tag_name: 'v2.0.0',
+        name: 'v2.0.0',
+        published_at: '2026-02-01T00:00:00Z',
+        body: "## What's new\n\nClaim A[^1].\n\n[^1]: Footnote text alpha",
+      }),
+      makeRelease({
+        tag_name: 'v1.0.0',
+        name: 'v1.0.0',
+        published_at: '2026-01-01T00:00:00Z',
+        body: "## What's new\n\nClaim B[^1].\n\n[^1]: Footnote text beta",
+      }),
+    ])
+
+    const references: string[] = []
+    const definitions = new Map<string, string>()
+    const textOf = (node: MdNode): string =>
+      (node.value ?? '') + (node.children ?? []).map(textOf).join('')
+    const visit = (node: MdNode) => {
+      if (node.type === 'footnoteReference') {
+        references.push(node.identifier ?? '')
+      }
+      if (node.type === 'footnoteDefinition') {
+        definitions.set(node.identifier ?? '', textOf(node))
+      }
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(parseMarkdown(page))
+
+    expect(references).toHaveLength(2)
+    expect(new Set(references).size).toBe(2)
+    expect(definitions.size).toBe(2)
+    expect(definitions.get(references[0] ?? '')).toContain('alpha')
+    expect(definitions.get(references[1] ?? '')).toContain('beta')
+    expect(unsafeNodes(page)).toEqual([])
+  })
+
   test('keeps other language words on code fences', () => {
     const page = renderReleaseNotesPage([
       makeRelease({ body: "## What's new\n\n```ts\nconst x = 1\n```\n" }),
