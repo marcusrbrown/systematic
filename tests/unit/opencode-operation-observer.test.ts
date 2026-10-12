@@ -882,6 +882,60 @@ describe('OpenCode operation observer', () => {
     }
   })
 
+  test('snapshots an ordinary large repository with default limits', async () => {
+    const fixture = createGitFixture()
+    try {
+      const largeChunk = Buffer.alloc(6 * 1024 * 1024, 'x')
+      for (let index = 0; index < 3; index += 1) {
+        fs.writeFileSync(
+          path.join(fixture.root, `large-${index}.bin`),
+          largeChunk,
+        )
+      }
+      const tinyDirectory = path.join(fixture.root, 'tiny')
+      fs.mkdirSync(tinyDirectory)
+      for (let index = 0; index < 4200; index += 1) {
+        fs.writeFileSync(
+          path.join(tinyDirectory, `f-${index}.txt`),
+          `${index}\n`,
+        )
+      }
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const result = await observer.snapshot()
+      expect(result.status).toBe('available')
+    } finally {
+      fixture.cleanup()
+    }
+  }, 60_000)
+
+  test('reports command-output-limit when the file listing exceeds maxCommandOutputBytes', async () => {
+    const fixture = createGitFixture()
+    try {
+      for (let index = 0; index < 200; index += 1) {
+        fs.writeFileSync(
+          path.join(
+            fixture.root,
+            `listing-entry-with-a-long-name-${index}.txt`,
+          ),
+          'x\n',
+        )
+      }
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits: { maxCommandOutputBytes: 2048 },
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'command-output-limit',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   test('times out slow commands, kills the child, and fails closed without raw facts', async () => {
     const fixture = createGitFixture()
     const secret = `${fixture.root}/raw-timeout-secret`
@@ -1217,6 +1271,81 @@ describe('OpenCode operation observer', () => {
         reasonCode: 'remote-invalid-json',
       })
       expect(JSON.stringify(malformedResult)).not.toContain('bad')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('caps remote payload items by maxRemoteItems, independent of maxFiles', async () => {
+    const fixture = createGitFixture()
+    const limits: OperationObserverLimits = {
+      maxFiles: 1_000_000,
+      maxRemoteItems: 2,
+    }
+    const gitStdout = (args: readonly string[]) =>
+      args[0] === 'rev-parse' && args[1] === 'HEAD'
+        ? 'a'.repeat(40)
+        : 'origin/main\n'
+    try {
+      const oversizedPullRequest = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits,
+        remoteCommandRunner: (executable, args) =>
+          executable === 'git'
+            ? { status: 0, stdout: gitStdout(args), stderr: '' }
+            : {
+                status: 0,
+                stdout: JSON.stringify({
+                  number: 42,
+                  state: 'OPEN',
+                  headRefOid: 'b'.repeat(40),
+                  reviewDecision: null,
+                }),
+                stderr: '',
+              },
+      })
+      await expect(
+        callRemoteSnapshot(oversizedPullRequest, 'review-readback', 'after'),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-missing-field',
+      })
+
+      const oversizedChecks = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits,
+        remoteCommandRunner: (executable, args) => {
+          if (executable === 'git') {
+            return { status: 0, stdout: gitStdout(args), stderr: '' }
+          }
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                number: 42,
+                state: 'OPEN',
+                headRefOid: 'b'.repeat(40),
+              }),
+              stderr: '',
+            }
+          }
+          return {
+            status: 0,
+            stdout: JSON.stringify([
+              { state: 'SUCCESS' },
+              { state: 'SUCCESS' },
+              { state: 'SUCCESS' },
+            ]),
+            stderr: '',
+          }
+        },
+      })
+      await expect(
+        callRemoteSnapshot(oversizedChecks, 'check-readback', 'after'),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-missing-field',
+      })
     } finally {
       fixture.cleanup()
     }
