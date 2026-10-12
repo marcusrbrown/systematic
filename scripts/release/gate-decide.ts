@@ -57,7 +57,6 @@ async function findOpenPrNumber(
 async function gatherPr(
   options: GatherGateFactsOptions,
   number: number,
-  existingTags: ReadonlySet<string>,
 ): Promise<GatePr> {
   const { api, repo } = options
   const raw = await api(`repos/${repo}/pulls/${number}`)
@@ -102,7 +101,7 @@ async function gatherPr(
   const [mainRef, compare, delta, commits] = await Promise.all([
     api(`repos/${repo}/git/ref/heads/main`),
     api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
-    changelogVersionDelta(api, repo, headParentSha, headSha, existingTags),
+    changelogVersionDelta(api, repo, headParentSha, headSha),
     api(`repos/${repo}/pulls/${number}/commits?per_page=100`),
   ])
 
@@ -175,8 +174,7 @@ export async function gatherGateFacts(
     ),
   )
 
-  const pr =
-    number === null ? null : await gatherPr(options, number, existingTags)
+  const pr = number === null ? null : await gatherPr(options, number)
   const requiredChecks =
     pr === null
       ? []

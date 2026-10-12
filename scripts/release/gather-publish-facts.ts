@@ -134,9 +134,11 @@ export async function readChangelog(
  * parent means the file is new (empty changelog).
  *
  * `addedEntryVersion` is the head's top entry version when that entry is new
- * (absent at the parent), or when an untagged version's entry was regenerated
- * (same version, different text; how a superseded release is replaced). A
- * tagged version's rewritten entry is never an addition.
+ * (absent at the parent) or was regenerated (same version, different text; how
+ * a superseded release is replaced). Tags are deliberately ignored: this only
+ * detects the candidate. Eligibility belongs to the decisions, which skip a
+ * tagged version with a release (already published), refuse one without
+ * (partial publish), and never approve one at the gate.
  * `removedEntryVersions` lists parent versions missing at the head.
  */
 export async function changelogVersionDelta(
@@ -144,7 +146,6 @@ export async function changelogVersionDelta(
   repo: string,
   parentSha: string,
   headSha: string,
-  existingTags: ReadonlySet<string>,
 ): Promise<{
   addedEntryVersion: string | null
   removedEntryVersions: string[]
@@ -161,17 +162,11 @@ export async function changelogVersionDelta(
   const parentTop = parentEntries.find(
     (entry) => entry.version === top?.version,
   )
-  let addedEntryVersion: string | null = null
-  if (top !== undefined) {
-    if (parentTop === undefined) {
-      addedEntryVersion = top.version
-    } else if (
-      parentTop.text !== top.text &&
-      !existingTags.has(`v${top.version}`)
-    ) {
-      addedEntryVersion = top.version
-    }
-  }
+  const addedEntryVersion =
+    top !== undefined &&
+    (parentTop === undefined || parentTop.text !== top.text)
+      ? top.version
+      : null
 
   return {
     removedEntryVersions: parentEntries
@@ -247,7 +242,6 @@ async function fetchAllReviews(
 async function gatherPr(
   options: GatherPublishFactsOptions,
   number: number,
-  existingTags: ReadonlySet<string>,
 ): Promise<{
   pr: MergedReleasePr
   reviews: Review[]
@@ -302,7 +296,7 @@ async function gatherPr(
   const headParentSha = await parentShaOf(api, repo, headSha)
   const [compare, delta, reviews] = await Promise.all([
     api(`repos/${repo}/compare/${headParentSha}...${headSha}`),
-    changelogVersionDelta(api, repo, headParentSha, headSha, existingTags),
+    changelogVersionDelta(api, repo, headParentSha, headSha),
     fetchAllReviews(api, repo, number),
   ])
   const changedFiles = requireArray(dig(compare, 'files'), 'compare files').map(
@@ -355,7 +349,6 @@ export async function gatherPublishFacts(
     const gathered = await gatherPr(
       options,
       requireNumber(dig(merged, 'number'), 'PR number'),
-      existingTags,
     )
     pr = gathered.pr
     reviews = gathered.reviews

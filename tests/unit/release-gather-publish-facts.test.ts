@@ -227,15 +227,53 @@ describe('gatherPublishFacts', () => {
       expect(decidePublish(facts).kind).toBe('refused')
     })
 
-    test('a tagged top entry with rewritten text adds nothing', async () => {
+    test("a tagged rewrite is still a candidate; eligibility is the decision's job", async () => {
       const { api } = fake({
         tags: ['v3.22.0', 'v3.21.8'],
         parentChangelog: original,
         headChangelog: regenerated,
       })
       const facts = await gatherPublishFacts(baseOptions(api))
-      expect(facts.pr?.addedEntryVersion).toBeNull()
+      expect(facts.pr?.addedEntryVersion).toBe('3.22.0')
+    })
+
+    test('replacement, then tag and release exist: reconcile on the same merge skips', async () => {
+      const { api } = fake({
+        tags: ['v3.22.0', 'v3.21.8'],
+        release: true,
+        parentChangelog: original,
+        headChangelog: regenerated,
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.releasePublished).toBe(true)
+      expect(decidePublish(facts)).toEqual({
+        kind: 'skip',
+        reason: 'v3.22.0 is already published.',
+      })
+    })
+
+    test('replacement, then tag without a release: partial publish is refused', async () => {
+      const { api } = fake({
+        tags: ['v3.22.0', 'v3.21.8'],
+        parentChangelog: original,
+        headChangelog: regenerated,
+      })
+      const facts = await gatherPublishFacts(baseOptions(api))
+      expect(facts.releasePublished).toBe(false)
       expect(decidePublish(facts).kind).toBe('refused')
+    })
+
+    test('a tagged rewrite with no release never publishes', async () => {
+      for (const release of [true, false]) {
+        const { api } = fake({
+          tags: ['v3.22.0', 'v3.21.8'],
+          release,
+          parentChangelog: original,
+          headChangelog: regenerated,
+        })
+        const facts = await gatherPublishFacts(baseOptions(api))
+        expect(decidePublish(facts).kind).not.toBe('publish')
+      }
     })
 
     test('a tagged entry still counts as removed when the head drops it', async () => {
@@ -309,6 +347,19 @@ describe('gatherPublishFacts', () => {
       })
       const facts = await gatherPublishFacts(baseOptions(api))
       expect(decidePublish(facts).kind).toBe('refused')
+    })
+
+    test('a page-two API failure after a page-one approval rejects, not a partial list', async () => {
+      const { api } = fake({ reviews: [...filler(100, 1), approval] })
+      const failing: Api = async (path) => {
+        if (path.endsWith('reviews?per_page=100&page=2')) {
+          throw Object.assign(new Error('boom'), { status: 500 })
+        }
+        return api(path)
+      }
+      await expect(gatherPublishFacts(baseOptions(failing))).rejects.toThrow(
+        'boom',
+      )
     })
 
     test('stops after a short page without requesting more', async () => {

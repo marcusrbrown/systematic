@@ -305,7 +305,7 @@ describe('gatherGateFacts', () => {
       expect(decideGate(facts).kind).toBe('skip')
     })
 
-    test('a tagged top entry with rewritten text adds nothing and skips', async () => {
+    test('a PR rewriting an already-tagged entry is a candidate but never approved', async () => {
       const { api, set } = fake()
       set(`repos/${REPO}/git/matching-refs/tags/v`, [
         { ref: 'refs/tags/v3.22.0' },
@@ -314,7 +314,7 @@ describe('gatherGateFacts', () => {
       set(`repos/${REPO}/contents/CHANGELOG.md?ref=${MAIN}`, b64(original))
       set(`repos/${REPO}/contents/CHANGELOG.md?ref=${HEAD}`, b64(regenerated))
       const facts = await gatherGateFacts(baseOptions(api))
-      expect(facts.pr?.addedEntryVersion).toBeNull()
+      expect(facts.pr?.addedEntryVersion).toBe('3.22.0')
       expect(decideGate(facts).kind).toBe('skip')
     })
   })
