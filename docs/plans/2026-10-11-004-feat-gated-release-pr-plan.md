@@ -343,7 +343,7 @@ sequenceDiagram
 
 ### PR 1: Narrative and docs
 
-- [ ] **Unit 1: Narrative hardening (#1089)**
+- [x] **Unit 1: Narrative hardening (#1089)**
 
 **Goal:** When a narrative run doesn't rewrite the release, it reports `narrative-not-applied` instead of success. The agent gets a writable scratch directory.
 
@@ -374,7 +374,7 @@ sequenceDiagram
 
 **Verification:** Every scenario passes, and the v3.21.7 reproduction no longer exits 0.
 
-- [ ] **Unit 2: Narrative as its own job**
+- [x] **Unit 2: Narrative as its own job**
 
 **Goal:** The narrative runs on `release: published` in its own workflow, then dispatches the docs refresh after it verifies the rewrite.
 
@@ -404,7 +404,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, and a post-merge dispatch against an existing tag narrates the release and redeploys docs.
 
-- [ ] **Unit 3: Docs release-notes page**
+- [x] **Unit 3: Docs release-notes page**
 
 **Goal:** A generated page lists every release, newest first, with its narrative. A release without the marker is shown with the label "narrative unavailable."
 
@@ -433,7 +433,7 @@ sequenceDiagram
 
 **Verification:** `bun run docs:build` succeeds both with and without `GH_TOKEN`, and the tests pass.
 
-- [ ] **Unit 4: Docs build/deploy split, `docs` environment, tag dispatch**
+- [x] **Unit 4: Docs build/deploy split, `docs` environment, tag dispatch**
 
 **Goal:** Docs build with no credentials. The deploy key lives only in a `docs` environment. A tag dispatch builds a validated release tag.
 
