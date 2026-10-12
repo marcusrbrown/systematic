@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 
@@ -78,20 +80,23 @@ function runOf(step: RecordValue): string {
   return String(step.run ?? '')
 }
 
-function stepsWhere(
-  steps: readonly RecordValue[],
-  predicate: (step: RecordValue) => boolean,
-): readonly RecordValue[] {
-  return steps.filter(predicate)
-}
-
 // Literal GitHub Actions expressions as they appear in the YAML (not JS templates).
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const GITHUB_TOKEN_EXPR = '${{ github.token }}'
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
-const TAG_OUTPUT_EXPR = '${{ steps.tag.outputs.tag }}'
-
-const TAG_PATTERN = '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
+const TAG_OUTPUT_EXPR = '${{ steps.target.outputs.tag }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const PROCEED_OUTPUT_EXPR = '${{ steps.target.outputs.proceed }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const EVENT_NAME_EXPR = '${{ github.event_name }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const RELEASE_TAG_EXPR = '${{ github.event.release.tag_name }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const INPUT_TAG_EXPR = '${{ github.event.inputs.tag }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const RELEASE_AUTHOR_EXPR = '${{ github.event.release.author.login }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const DEFAULT_BRANCH_EXPR = '${{ github.event.repository.default_branch }}'
 
 describe('docs workflow privilege separation', () => {
   test('the workflow defines exactly the build and deploy jobs', () => {
@@ -227,90 +232,108 @@ describe('docs workflow triggers', () => {
 })
 
 describe('docs workflow build job target validation', () => {
-  test('tag validation checks the stable-tag pattern and calls gh release view', () => {
-    const step = findStep(getSteps('build'), 'Validate release tag')
-    const run = runOf(step)
-
-    expect(run).toContain(TAG_PATTERN)
-    expect(run).toContain('gh release view')
-    // Draft / prerelease dispatch targets are rejected.
-    expect(run).toContain('isDraft')
-    expect(run).toContain('isPrerelease')
-    expect(asRecord(step.env, 'validate env').GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
-  })
-
-  test('a manual dispatch fails when the release author is not the expected release author', () => {
-    const step = findStep(getSteps('build'), 'Validate release tag')
-    const run = runOf(step)
+  test('validation is delegated to scripts/validate-release-target.sh and requires the latest release', () => {
+    const step = findStep(getSteps('build'), 'Validate release target')
     const env = asRecord(step.env, 'validate env')
 
-    // Dispatch has no release payload, so the author is read from the release.
-    expect(run).toContain('gh release view')
-    expect(run).toMatch(/--json[^\n]*\bauthor\b/)
-    expect(run).toContain('.author.login')
-    // Same trust anchor as the release-event author check.
-    expect(String(env.EXPECTED_AUTHOR)).toContain('vars.RELEASE_AUTHOR_LOGIN')
-    expect(String(env.EXPECTED_AUTHOR)).toContain("'mrbro-bot[bot]'")
-    // A mismatch is loud (error + non-zero exit), not a silent skip.
-    expect(run).toMatch(/"\$author" != "\$EXPECTED_AUTHOR"[\s\S]*?exit 1/)
-    expect(run).toMatch(/::error::[^\n]*author/i)
+    expect(step.id).toBe('target')
+    expect(runOf(step)).toContain('validate-release-target.sh')
+    // Docs only ever deploy the current latest release.
+    expect(env.REQUIRE_LATEST).toBe('true')
+    expect(env.GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
+    expect(env.EVENT_NAME).toBe(EVENT_NAME_EXPR)
+    expect(env.RELEASE_TAG).toBe(RELEASE_TAG_EXPR)
+    expect(env.INPUT_TAG).toBe(INPUT_TAG_EXPR)
+    expect(env.RELEASE_AUTHOR).toBe(RELEASE_AUTHOR_EXPR)
+  })
+
+  test('the expected author references RELEASE_AUTHOR_LOGIN with the mrbro-bot[bot] default', () => {
+    const step = findStep(getSteps('build'), 'Validate release target')
+    const expected = String(asRecord(step.env, 'validate env').EXPECTED_AUTHOR)
+
+    expect(expected).toContain('vars.RELEASE_AUTHOR_LOGIN')
+    expect(expected).toContain("'mrbro-bot[bot]'")
   })
 
   test('untrusted inputs reach the script through env, not inline interpolation', () => {
-    const step = findStep(getSteps('build'), 'Validate release tag')
-    expect(runOf(step)).not.toContain('${{')
+    for (const step of getSteps('build')) {
+      if (step.name === 'Build registry') continue
+      expect(runOf(step)).not.toContain('${{')
+    }
   })
 
-  test('tag validation, author check, and npm check all come before checkout', () => {
+  test('the validator is fetched from the workflow commit by sparse checkout, before it runs', () => {
     const steps = getSteps('build')
-    const checkout = stepIndex(steps, isCheckoutStep, 'checkout')
+    const fetch = findStep(steps, 'Fetch release target validator')
+    const withBlock = asRecord(fetch.with, 'validator checkout with')
 
+    expect(isCheckoutStep(fetch)).toBe(true)
+    expect(withBlock.ref).toBe(DEFAULT_BRANCH_EXPR)
+    expect(withBlock['sparse-checkout']).toBe(
+      'scripts/validate-release-target.sh',
+    )
+    expect(withBlock['sparse-checkout-cone-mode']).toBe(false)
+    expect(withBlock['persist-credentials']).toBe(false)
+    // A separate path, so the later tag checkout is unaffected.
+    expect(withBlock.path).toBeTruthy()
+    expect(runOf(findStep(steps, 'Validate release target'))).toContain(
+      String(withBlock.path),
+    )
+    expect(
+      stepIndex(steps, (s) => s.name === 'Fetch release target validator', 'f'),
+    ).toBeLessThan(
+      stepIndex(steps, (s) => s.name === 'Validate release target', 'v'),
+    )
+  })
+
+  test('validation and the npm check live in the script, and both come before the tag checkout', () => {
+    const steps = getSteps('build')
+    const checkout = stepIndex(
+      steps,
+      (s) => s.name === 'Checkout',
+      'tag checkout',
+    )
+    expect(
+      stepIndex(steps, (s) => s.name === 'Validate release target', 'v'),
+    ).toBeLessThan(checkout)
+    // No leftover inline gate steps.
     for (const name of [
       'Check release author',
       'Validate release tag',
       'Verify package is published to npm',
     ]) {
-      expect(stepIndex(steps, (s) => s.name === name, name)).toBeLessThan(
-        checkout,
+      expect(steps.some((s) => s.name === name)).toBe(false)
+    }
+  })
+
+  test('every step after validation is gated on its proceed output', () => {
+    const steps = getSteps('build')
+    const validate = stepIndex(
+      steps,
+      (s) => s.name === 'Validate release target',
+      'validate',
+    )
+    for (const step of steps.slice(validate + 1)) {
+      expect(String(step.if ?? '')).toContain(
+        "steps.target.outputs.proceed == 'true'",
       )
     }
   })
 
-  test('the release author check references RELEASE_AUTHOR_LOGIN with the mrbro-bot[bot] default', () => {
-    const step = findStep(getSteps('build'), 'Check release author')
-    const serialized = JSON.stringify(step)
-
-    expect(serialized).toContain('vars.RELEASE_AUTHOR_LOGIN')
-    expect(serialized).toContain("'mrbro-bot[bot]'")
-    expect(serialized).toContain('github.event.release.author.login')
-    // A mismatch ends cleanly (no failure) and says why.
-    expect(runOf(step)).toContain('proceed=false')
-    expect(runOf(step)).not.toMatch(/exit 1/)
-  })
-
-  test('the npm check runs `npm view @fro.bot/systematic@<version>` and fails loudly', () => {
-    const step = findStep(
-      getSteps('build'),
-      'Verify package is published to npm',
-    )
-    const run = runOf(step)
-
-    expect(run).toMatch(/npm view "?@fro\.bot\/systematic@/)
-    expect(run).toContain('::error::')
-    expect(run).toContain('exit 1')
+  test('the build job exposes proceed and tag from the validation step', () => {
+    expect(asRecord(getJob('build').outputs, 'outputs')).toEqual({
+      proceed: PROCEED_OUTPUT_EXPR,
+      tag: TAG_OUTPUT_EXPR,
+    })
   })
 
   test('build checks out the resolved tag without persisting credentials', () => {
-    const checkout = stepsWhere(getSteps('build'), isCheckoutStep)
-    expect(checkout).toHaveLength(1)
-    const withBlock = asRecord(checkout[0]?.with, 'checkout with')
+    const checkout = findStep(getSteps('build'), 'Checkout')
+    const withBlock = asRecord(checkout.with, 'checkout with')
 
+    expect(isCheckoutStep(checkout)).toBe(true)
     expect(withBlock.ref).toBe(TAG_OUTPUT_EXPR)
     expect(withBlock['persist-credentials']).toBe(false)
-  })
-
-  test('the tag step has the id the checkout and registry steps depend on', () => {
-    expect(findStep(getSteps('build'), 'Validate release tag').id).toBe('tag')
   })
 
   test('docs generate and build steps receive the read-only github token', () => {
@@ -324,7 +347,7 @@ describe('docs workflow build job target validation', () => {
   test('the registry is versioned from the validated tag, not raw event inputs', () => {
     const steps = getSteps('build')
     const registry = findStep(steps, 'Build registry')
-    expect(runOf(registry)).toContain('steps.tag.outputs.version')
+    expect(runOf(registry)).toContain('steps.target.outputs.version')
     expect(JSON.stringify(steps)).not.toContain('github.event.inputs.version')
     expect(JSON.stringify(steps)).not.toContain('inputs.version')
   })
@@ -333,5 +356,106 @@ describe('docs workflow build job target validation', () => {
     for (const step of getSteps('build')) {
       expect(runOf(step)).not.toContain('git push')
     }
+  })
+})
+
+describe('docs workflow deploy artifact check', () => {
+  const STEP_NAME = 'Verify docs artifact'
+
+  function runCheck(setup: (dist: string) => void) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-artifact-'))
+    try {
+      const dist = path.join(cwd, 'docs', 'dist')
+      fs.mkdirSync(dist, { recursive: true })
+      setup(dist)
+      return spawnSync(
+        'bash',
+        ['-c', runOf(findStep(getSteps('deploy'), STEP_NAME))],
+        { cwd, encoding: 'utf8' },
+      )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  }
+
+  test('the artifact check runs after download and before the App token is created', () => {
+    const steps = getSteps('deploy')
+    const check = stepIndex(steps, (s) => s.name === STEP_NAME, STEP_NAME)
+    const download = stepIndex(
+      steps,
+      (s) => s.name === 'Download docs site',
+      'download',
+    )
+    const token = stepIndex(
+      steps,
+      (s) => s.name === 'Create GitHub App token',
+      'token',
+    )
+
+    expect(check).toBeGreaterThan(download)
+    expect(check).toBeLessThan(token)
+    expect(findStep(steps, STEP_NAME)).not.toHaveProperty('uses')
+  })
+
+  test('an artifact containing .git/config is rejected', () => {
+    const result = runCheck((dist) => {
+      fs.mkdirSync(path.join(dist, '.git'))
+      fs.writeFileSync(
+        path.join(dist, '.git', 'config'),
+        '[core]\n\tfsmonitor = touch pwned\n',
+      )
+      fs.writeFileSync(path.join(dist, 'index.html'), '<html></html>')
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toContain('::error::')
+  })
+
+  test('a nested .git entry (directory or file) is rejected', () => {
+    const nestedDir = runCheck((dist) => {
+      fs.mkdirSync(path.join(dist, 'a', '.git'), { recursive: true })
+    })
+    const nestedFile = runCheck((dist) => {
+      fs.mkdirSync(path.join(dist, 'a'))
+      fs.writeFileSync(path.join(dist, 'a', '.git'), 'gitdir: ../elsewhere\n')
+    })
+
+    expect(nestedDir.status).not.toBe(0)
+    expect(nestedFile.status).not.toBe(0)
+  })
+
+  test('a symlink is rejected', () => {
+    const result = runCheck((dist) => {
+      fs.writeFileSync(path.join(dist, 'index.html'), '<html></html>')
+      fs.symlinkSync('/etc/passwd', path.join(dist, 'link'))
+    })
+
+    expect(result.status).not.toBe(0)
+  })
+
+  test('a special file (FIFO) is rejected', () => {
+    const result = runCheck((dist) => {
+      spawnSync('mkfifo', [path.join(dist, 'pipe')])
+    })
+
+    expect(result.status).not.toBe(0)
+  })
+
+  test('.nojekyll and .well-known/ocx.json are accepted', () => {
+    const result = runCheck((dist) => {
+      fs.writeFileSync(path.join(dist, '.nojekyll'), '')
+      fs.mkdirSync(path.join(dist, '.well-known'))
+      fs.writeFileSync(path.join(dist, '.well-known', 'ocx.json'), '{}')
+      fs.writeFileSync(path.join(dist, 'index.html'), '<html></html>')
+    })
+
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+  })
+
+  test('the copy into the deploy clone excludes .git', () => {
+    const deploy = findStep(getSteps('deploy'), 'Deploy to fro-bot/systematic')
+    expect(runOf(deploy)).toMatch(/--exclude[= ]'?\.git'?/)
+    expect(runOf(deploy)).not.toContain('cp -r ../docs/dist/. .')
   })
 })

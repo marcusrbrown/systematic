@@ -77,7 +77,14 @@ function runOf(step: RecordValue): string {
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const GITHUB_TOKEN_EXPR = '${{ github.token }}'
 
-const TAG_PATTERN = '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const EVENT_NAME_EXPR = '${{ github.event_name }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const RELEASE_TAG_EXPR = '${{ github.event.release.tag_name }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const INPUT_TAG_EXPR = '${{ github.event.inputs.tag }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const RELEASE_AUTHOR_EXPR = '${{ github.event.release.author.login }}'
 
 describe('release-notes workflow triggers', () => {
   test('triggers are exactly release: published and workflow_dispatch', () => {
@@ -128,79 +135,57 @@ describe('release-notes workflow credentials', () => {
 })
 
 describe('release-notes workflow target validation', () => {
-  test('the author check references RELEASE_AUTHOR_LOGIN and ends cleanly on mismatch', () => {
-    const step = findStep('Check release author')
-    const serialized = JSON.stringify(step)
-
-    expect(serialized).toContain('vars.RELEASE_AUTHOR_LOGIN')
-    expect(serialized).toContain("'mrbro-bot[bot]'")
-    expect(serialized).toContain('github.event.release.author.login')
-    expect(runOf(step)).toContain('proceed=false')
-    expect(runOf(step)).not.toMatch(/exit 1/)
-    expect(step.id).toBe('author')
-  })
-
-  test('tag validation checks the stable-tag pattern and, on dispatch, the published release', () => {
-    const step = findStep('Validate release tag')
-    const run = runOf(step)
-
-    expect(run).toContain(TAG_PATTERN)
-    expect(run).toContain('gh release view')
-    expect(run).toContain('isDraft')
-    expect(run).toContain('isPrerelease')
-    expect(step.id).toBe('tag')
-    expect(asRecord(step.env, 'validate env').GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
-  })
-
-  test('a manual dispatch fails when the release author is not the expected release author', () => {
-    const step = findStep('Validate release tag')
-    const run = runOf(step)
+  test('validation is delegated to scripts/validate-release-target.sh without requiring the latest release', () => {
+    const step = findStep('Validate release target')
     const env = asRecord(step.env, 'validate env')
 
-    // Dispatch has no release payload, so the author is read from the release.
-    expect(run).toContain('gh release view')
-    expect(run).toMatch(/--json[^\n]*\bauthor\b/)
-    expect(run).toContain('.author.login')
-    // Same trust anchor as the release-event author check.
-    expect(String(env.EXPECTED_AUTHOR)).toContain('vars.RELEASE_AUTHOR_LOGIN')
-    expect(String(env.EXPECTED_AUTHOR)).toContain("'mrbro-bot[bot]'")
-    // A mismatch is loud (error + non-zero exit), not a silent skip.
-    expect(run).toMatch(/"\$author" != "\$EXPECTED_AUTHOR"[\s\S]*?exit 1/)
-    expect(run).toMatch(/::error::[^\n]*author/i)
+    expect(step.id).toBe('target')
+    expect(runOf(step)).toContain('scripts/validate-release-target.sh')
+    // Narration is allowed for historical releases; only docs need the latest.
+    expect(env.REQUIRE_LATEST).toBe('false')
+    expect(env.GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
+    expect(env.EVENT_NAME).toBe(EVENT_NAME_EXPR)
+    expect(env.RELEASE_TAG).toBe(RELEASE_TAG_EXPR)
+    expect(env.INPUT_TAG).toBe(INPUT_TAG_EXPR)
+    expect(env.RELEASE_AUTHOR).toBe(RELEASE_AUTHOR_EXPR)
   })
 
-  test('the npm view check exists and fails loudly', () => {
-    const run = runOf(findStep('Verify package is published to npm'))
-    expect(run).toMatch(/npm view "?@fro\.bot\/systematic@/)
-    expect(run).toContain('::error::')
-    expect(run).toContain('exit 1')
+  test('the expected author references RELEASE_AUTHOR_LOGIN with the mrbro-bot[bot] default', () => {
+    const expected = String(
+      asRecord(findStep('Validate release target').env, 'env').EXPECTED_AUTHOR,
+    )
+    expect(expected).toContain('vars.RELEASE_AUTHOR_LOGIN')
+    expect(expected).toContain("'mrbro-bot[bot]'")
   })
 
-  test('author check, tag validation, and npm check all come before checkout', () => {
-    const checkout = indexOfStep('Checkout')
+  test('no inline author, tag, or npm gate steps remain in the workflow', () => {
     for (const name of [
       'Check release author',
       'Validate release tag',
       'Verify package is published to npm',
     ]) {
-      expect(indexOfStep(name)).toBeLessThan(checkout)
+      expect(getSteps().some((s) => s.name === name)).toBe(false)
     }
   })
 
-  test('checkout uses the default ref and does not persist credentials', () => {
+  test('the workflow checks out its own commit (never a target ref) before validating', () => {
     const checkout = findStep('Checkout')
     expect(String(checkout.uses)).toStartWith('actions/checkout@')
     const withBlock = asRecord(checkout.with, 'checkout with')
     expect(withBlock['persist-credentials']).toBe(false)
     expect(withBlock).not.toHaveProperty('ref')
+    expect(checkout).not.toHaveProperty('if')
+    expect(indexOfStep('Checkout')).toBeLessThan(
+      indexOfStep('Validate release target'),
+    )
   })
 
-  test('every step after the author check is gated on its proceed output', () => {
+  test('every step after validation is gated on its proceed output', () => {
     const steps = getSteps()
-    const authorIndex = indexOfStep('Check release author')
-    for (const step of steps.slice(authorIndex + 1)) {
+    const validateIndex = indexOfStep('Validate release target')
+    for (const step of steps.slice(validateIndex + 1)) {
       expect(String(step.if ?? '')).toContain(
-        "steps.author.outputs.proceed == 'true'",
+        "steps.target.outputs.proceed == 'true'",
       )
     }
   })
@@ -210,17 +195,27 @@ describe('release-notes workflow narrative and docs dispatch', () => {
   test('the narrative step runs scripts/dispatch-release-notes.sh with the validated tag', () => {
     const step = findStep('Narrate release notes')
     expect(runOf(step)).toContain('scripts/dispatch-release-notes.sh "$TAG"')
-    expect(JSON.stringify(step.env)).toContain('steps.tag.outputs.tag')
+    expect(JSON.stringify(step.env)).toContain('steps.target.outputs.tag')
   })
 
-  test('the docs dispatch step comes after the narrative step and passes the tag', () => {
+  test('the docs dispatch step comes after the narrative step', () => {
     expect(indexOfStep('Trigger docs rebuild')).toBeGreaterThan(
       indexOfStep('Narrate release notes'),
     )
-    const run = runOf(findStep('Trigger docs rebuild'))
+  })
+
+  test('the docs dispatch targets the LATEST release tag, not the narrated tag', () => {
+    const step = findStep('Trigger docs rebuild')
+    const run = runOf(step)
+
+    // Resolved the same way the validator does: no tag argument = Latest.
+    expect(run).toMatch(/gh release view --repo "\$GH_REPO" --json tagName/)
+    expect(run).toContain('.tagName')
     expect(run).toContain('gh workflow run docs.yaml')
     expect(run).toContain('--ref main')
-    expect(run).toContain('-f tag="$TAG"')
+    expect(run).toContain('-f tag="$LATEST"')
+    // A historical tag must never reach docs.yaml (it would downgrade the site).
+    expect(run).not.toContain('-f tag="$TAG"')
   })
 
   test('a narrative failure cannot be masked: no always(), failure(), or continue-on-error', () => {
