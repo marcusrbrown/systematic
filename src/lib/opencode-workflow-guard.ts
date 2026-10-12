@@ -261,7 +261,7 @@ interface SessionRuntime {
   readStatus(): WorkflowStatus
   unavailableCause(): GuardUnavailableCause | undefined
   seedDeferrals(): readonly SeedDeferral[]
-  refreshReadback(): Promise<void>
+  refreshReadback(): Promise<readonly UnconfirmedReadback[]>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
@@ -350,10 +350,34 @@ type EffectiveObserverLookup =
       readonly reasonCode?: OperationObserverReasonCode
     }
 
-type RemoteReadbackOutcome =
-  | { readonly ok: true }
+// A status-refresh probe that timed out and was skipped instead of failing
+// the session. Status-only and enum-only: never carried in markers, receipts,
+// tool metadata, or digests. At most six entries (local/pinned + four remote).
+interface UnconfirmedReadback {
+  readonly probe: 'local' | 'pinned' | RemoteOperation
+  readonly reasonCode: 'command-timeout'
+}
+
+function unconfirmedReadback(
+  probe: UnconfirmedReadback['probe'],
+): UnconfirmedReadback {
+  return { probe, reasonCode: 'command-timeout' }
+}
+
+// Remote probes that were skipped on a timeout, plus the first non-timeout
+// failure (if any), which stops the loop and stays fatal.
+interface RemoteReadbackOutcome {
+  readonly unconfirmed: readonly UnconfirmedReadback[]
+  readonly failure?: {
+    readonly reasonCode?: GuardUnavailableCause['reasonCode']
+  }
+}
+
+type EffectiveSnapshotRead =
+  | { readonly kind: 'ok'; readonly snapshot: OperationObserverSnapshot }
+  | { readonly kind: 'timeout' }
   | {
-      readonly ok: false
+      readonly kind: 'failed'
       readonly reasonCode?: GuardUnavailableCause['reasonCode']
     }
 
@@ -1363,6 +1387,7 @@ function statusForTool(
   status: WorkflowStatus,
   unavailableCause?: GuardUnavailableCause,
   seedDeferrals: readonly SeedDeferral[] = [],
+  unconfirmedReadbacks: readonly UnconfirmedReadback[] = [],
 ): string {
   return JSON.stringify({
     state: status.state,
@@ -1379,6 +1404,9 @@ function statusForTool(
     // Operations whose activation seeding was deferred for the current unit;
     // shown in any state.
     ...(seedDeferrals.length > 0 ? { seedDeferrals } : {}),
+    // Status-refresh probes skipped on a timeout in this call; shown in any
+    // state, never persisted.
+    ...(unconfirmedReadbacks.length > 0 ? { unconfirmedReadbacks } : {}),
   })
 }
 
@@ -2825,20 +2853,33 @@ function createSessionRuntime(
     return options.observer !== undefined && guard.status().epoch !== null
   }
 
-  async function refreshReadback(): Promise<void> {
-    if (!observerReadbackApplies()) return
+  // A probe that times out is skipped: no readback is applied for it and no
+  // existing staleness is cleared. The skipped probes are returned by value for
+  // the status tool. Every non-timeout failure stays fatal.
+  async function refreshReadback(): Promise<readonly UnconfirmedReadback[]> {
+    if (!observerReadbackApplies()) return []
     const lookup = resolveEffectiveObserver()
+    if (lookup.kind === 'timeout') return [unconfirmedReadback('pinned')]
     if (lookup.kind !== 'ok') {
       markUnavailable(observerReadbackFailedCause(lookupFailureReason(lookup)))
-      return
+      return []
     }
     const effective = lookup.observer
     const read = await readEffectiveSnapshot(effective)
-    if (!read.ok) {
-      markUnavailable(observerReadbackFailedCause(read.reasonCode))
-      return
+    if (read.kind === 'timeout') {
+      return [unconfirmedReadback(effective.pinned ? 'pinned' : 'local')]
     }
-    const snapshot = read.snapshot
+    if (read.kind === 'failed') {
+      markUnavailable(observerReadbackFailedCause(read.reasonCode))
+      return []
+    }
+    return applyReadbackAndProbeRemote(effective, read.snapshot)
+  }
+
+  async function applyReadbackAndProbeRemote(
+    effective: EffectiveOperationObserver,
+    snapshot: OperationObserverSnapshot,
+  ): Promise<readonly UnconfirmedReadback[]> {
     const observed = guard.observeReadback({
       workspaceIdentity: options.workspaceIdentity,
       repositoryIdentity: snapshot.repositoryRevisionDigest,
@@ -2852,12 +2893,13 @@ function createSessionRuntime(
       observed.reasonCode === 'workspace-mismatch'
     ) {
       markUnavailable(observerReadbackFailedCause())
-      return
+      return []
     }
     const remote = await refreshRemoteReadbacks(effective.observer, snapshot)
-    if (!remote.ok) {
-      markUnavailable(observerReadbackFailedCause(remote.reasonCode))
+    if (remote.failure) {
+      markUnavailable(observerReadbackFailedCause(remote.failure.reasonCode))
     }
+    return remote.unconfirmed
   }
 
   // Reads the effective observer's local snapshot. A failure carries the
@@ -2865,26 +2907,21 @@ function createSessionRuntime(
   // has none.
   async function readEffectiveSnapshot(
     effective: EffectiveOperationObserver,
-  ): Promise<
-    | { readonly ok: true; readonly snapshot: OperationObserverSnapshot }
-    | {
-        readonly ok: false
-        readonly reasonCode?: GuardUnavailableCause['reasonCode']
-      }
-  > {
+  ): Promise<EffectiveSnapshotRead> {
     let result: OperationObserverResult
     try {
       result = await effective.observer.snapshot()
     } catch {
-      return { ok: false }
+      return { kind: 'failed' }
     }
+    if (isProbeTimeout(result)) return { kind: 'timeout' }
     if (result.status === 'unavailable') {
-      return { ok: false, reasonCode: result.reasonCode }
+      return { kind: 'failed', reasonCode: result.reasonCode }
     }
     if (result.snapshot.targetDigest !== effective.targetIdentity) {
-      return { ok: false }
+      return { kind: 'failed' }
     }
-    return { ok: true, snapshot: result.snapshot }
+    return { kind: 'ok', snapshot: result.snapshot }
   }
 
   async function refreshRemoteReadbacks(
@@ -2894,13 +2931,21 @@ function createSessionRuntime(
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return { ok: true }
+    if (remoteOperations.length === 0) return { unconfirmed: [] }
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return { ok: false }
+    if (!remoteSnapshot) return { unconfirmed: [], failure: {} }
+    const unconfirmed: UnconfirmedReadback[] = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
+      if (isProbeTimeout(result)) {
+        unconfirmed.push(unconfirmedReadback(operation))
+        continue
+      }
       if (result?.status !== 'available') {
-        return { ok: false, reasonCode: remoteFailureReason(result) }
+        return {
+          unconfirmed,
+          failure: { reasonCode: remoteFailureReason(result) },
+        }
       }
       const observed = guard.observeReadback(
         remoteReadbackInput(
@@ -2910,9 +2955,9 @@ function createSessionRuntime(
           result.snapshot,
         ),
       )
-      if (observed.status === 'rejected') return { ok: false }
+      if (observed.status === 'rejected') return { unconfirmed, failure: {} }
     }
-    return { ok: true }
+    return { unconfirmed }
   }
 
   function currentMarkerSource(): MarkerSource {
@@ -4999,7 +5044,7 @@ export function createOpencodeWorkflowGuard(
       statusToolShape,
       sessionRuntimeFor,
       async (runtime, input) => {
-        await runtime.refreshReadback()
+        const unconfirmed = await runtime.refreshReadback()
         return {
           title: 'Workflow guard status',
           output: statusToolSchema.safeParse(input).success
@@ -5007,6 +5052,7 @@ export function createOpencodeWorkflowGuard(
                 runtime.readStatus(),
                 runtime.unavailableCause(),
                 runtime.seedDeferrals(),
+                unconfirmed,
               )
             : unavailableToolResult(),
         }
