@@ -68,17 +68,27 @@ function createCapture(): Writable {
   })
 }
 
+export type DryRunResult = Awaited<ReturnType<typeof semanticRelease>>
+
+export interface DryRunOptions {
+  cwd: string
+  targetSha: string
+  /** semantic-release options; dryRun, ci, branches and repositoryUrl are forced. */
+  options: Record<string, unknown>
+}
+
 /**
- * Compute the pending release for `targetSha` by running real semantic-release
- * core in dry-run mode against an isolated temp clone. No credentials and no
- * network: push/fetch hit a local bare mirror, while `repositoryUrl` stays the
- * real GitHub URL so generated links are correct.
+ * Run real semantic-release core in dry-run mode against an isolated temp
+ * clone of `cwd` checked out at `targetSha`. No credentials and no network:
+ * push/fetch hit a local bare mirror, while `repositoryUrl` stays the real
+ * GitHub URL so generated links are correct. The temp directory is always
+ * removed.
  */
-export async function previewRelease({
+export async function dryRunRelease({
   cwd,
   targetSha,
-}: PreviewOptions): Promise<PreviewResult> {
-  const config = loadReleaseConfig(cwd)
+  options,
+}: DryRunOptions): Promise<DryRunResult> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), TEMP_PREFIX))
 
   try {
@@ -127,41 +137,52 @@ export async function previewRelease({
       )
     }
 
-    const { plugins: _plugins, ...rest } = config
-    const plugins = (config.plugins ?? []).filter((entry) => {
-      const name = Array.isArray(entry) ? entry[0] : entry
-      return KEPT_PLUGINS.includes(name)
-    })
-    if (plugins.length !== KEPT_PLUGINS.length) {
-      throw new Error(
-        `.releaserc.yaml must declare ${KEPT_PLUGINS.join(' and ')}`,
-      )
-    }
-
     const stdout = createCapture() as unknown as NodeJS.WriteStream
     const stderr = createCapture() as unknown as NodeJS.WriteStream
 
-    const result = await semanticRelease(
+    return await semanticRelease(
       {
-        ...rest,
+        ...options,
         dryRun: true,
         ci: false,
         branches: ['main'],
         repositoryUrl: REPOSITORY_URL,
-        plugins,
       },
       { cwd: work, env, stdout, stderr },
     )
-
-    if (!result) return { kind: 'none' }
-    const { version, gitTag, notes } = result.nextRelease
-    if (notes === undefined) {
-      throw new Error('semantic-release returned a release without notes')
-    }
-    return { kind: 'release', version, gitTag, notes }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
+}
+
+/** Compute the pending release for `targetSha` from the repo's `.releaserc.yaml`. */
+export async function previewRelease({
+  cwd,
+  targetSha,
+}: PreviewOptions): Promise<PreviewResult> {
+  const { plugins: declaredPlugins, ...rest } = loadReleaseConfig(cwd)
+  const plugins = (declaredPlugins ?? []).filter((entry) => {
+    const name = Array.isArray(entry) ? entry[0] : entry
+    return KEPT_PLUGINS.includes(name)
+  })
+  if (plugins.length !== KEPT_PLUGINS.length) {
+    throw new Error(
+      `.releaserc.yaml must declare ${KEPT_PLUGINS.join(' and ')}`,
+    )
+  }
+
+  const result = await dryRunRelease({
+    cwd,
+    targetSha,
+    options: { ...rest, plugins },
+  })
+
+  if (!result) return { kind: 'none' }
+  const { version, gitTag, notes } = result.nextRelease
+  if (notes === undefined) {
+    throw new Error('semantic-release returned a release without notes')
+  }
+  return { kind: 'release', version, gitTag, notes }
 }
 
 function parseArgs(argv: string[]): { sha: string; out: string | undefined } {
