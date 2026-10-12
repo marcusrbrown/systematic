@@ -1,7 +1,7 @@
 ---
 title: "fix: Keep a readback timeout from disabling the workflow guard"
 type: fix
-status: active
+status: completed
 date: 2026-10-11
 ---
 
@@ -288,7 +288,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 
 ## Implementation Units
 
-- [ ] **Unit 1: Status refresh skips timed-out probes**
+- [x] **Unit 1: Status refresh skips timed-out probes**
 
 **Goal:** A timeout during status refresh skips the probe and is reported. Every other refresh failure records a typed cause.
 
@@ -339,7 +339,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - The `target-unavailable` and `throws` cases in the refresh-cause describe are updated deliberately and pass.
 - No other refresh path changes.
 
-- [ ] **Unit 2: Completion rejects a timed-out readback as retryable**
+- [x] **Unit 2: Completion rejects a timed-out readback as retryable**
 
 **Goal:** A completion readback timeout at any stage rejects that attempt with `readback-timeout`, and the rejection can be replayed. The session and unit are left unchanged.
 
@@ -386,7 +386,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - The existing `failed-operation` and `invalid-transition` replay tests pass unchanged.
 - The interleaved-digest `finalization-failed` test is unchanged.
 
-- [ ] **Unit 3: Fatal completion readbacks are replayable and have a cause**
+- [x] **Unit 3: Fatal completion readbacks are replayable and have a cause**
 
 **Goal:** A fatal completion readback records a terminal entry, and a `complete-readback` cause at the transition.
 
@@ -418,7 +418,7 @@ Paths without a directory are in `src/lib/opencode-workflow-guard.ts` (the adapt
 - The fatal replay and cause tests pass.
 - The set of completion failures that are fatal does not change.
 
-- [ ] **Unit 4: Document the retryable reason**
+- [x] **Unit 4: Document the retryable reason**
 
 **Goal:** Agents treat `readback-timeout` as retryable within a bound and treat unconfirmed readbacks as unverified. The architecture notes describe the new behavior.
 
