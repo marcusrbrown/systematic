@@ -9986,6 +9986,52 @@ describe('OpenCode workflow guard adapter', () => {
         })
       })
 
+      test('a unit start the guard rejects records unit-start-rejected with the guard reason', async () => {
+        // The guard validates the required operations when it is created, so
+        // an invalid runtime policy is reached by corrupting the shared list
+        // after initialization and before the skill rebuilds the policy.
+        const required: ReceiptOperation[] = []
+        const adapter = createAdapter(
+          'observe',
+          false,
+          sequenceObserver([operationSnapshot()]),
+          required,
+        )
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        required.push('bogus-operation' as ReceiptOperation)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'start-invalid-policy',
+          },
+          { args: {} },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'start-invalid-policy',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          kind: 'unit-start-rejected',
+          reasonCode: 'invalid-configuration',
+          timedOut: false,
+        })
+      })
+
       test('a skill after-hook for a different skill than the before-hook records call-lifecycle-mismatch', async () => {
         const adapter = createAdapter('observe')
         await adapter.hooks['tool.execute.before'](
@@ -10035,46 +10081,27 @@ describe('OpenCode workflow guard adapter', () => {
       })
     })
 
-    // Behavioral coverage of every markUnavailable() site would need a fixture
-    // per site (host readback, question gates, terminal replays), so this is a
-    // source-text guard: a zero-argument call records no cause and makes the
-    // guard unavailable with no diagnostic. The only allowed zero-argument
-    // calls are the two in the workflow tools' execute wrapper
-    // (`makeWorkflowTool`): they run on a tool call, not in a hook, and have
-    // no hook site to attribute.
-    test('no hook path calls markUnavailable() without a cause', () => {
-      // Line comments are blanked in place (same length) so a comment that
-      // mentions `markUnavailable()` is not mistaken for a call.
-      const source = fs
-        .readFileSync(
-          path.resolve(
-            import.meta.dir,
-            '../../src/lib/opencode-workflow-guard.ts',
-          ),
-          'utf8',
-        )
-        .replace(/\/\/.*$/gm, (comment) => ' '.repeat(comment.length))
-      // `markUnavailable(): void` in the SessionRuntime interface is a
-      // signature, not a call.
-      const bareCall = /\bmarkUnavailable\(\s*\)(?!\s*:)/g
-      const toolWrapperStart = source.indexOf('function makeWorkflowTool(')
-      const toolWrapperEnd = source.indexOf(
-        'export function createOpencodeWorkflowGuard(',
-      )
-      expect(toolWrapperStart).toBeGreaterThan(-1)
-      expect(toolWrapperEnd).toBeGreaterThan(toolWrapperStart)
-      const outsideWrapper: string[] = []
-      const insideWrapper: string[] = []
-      for (const match of source.matchAll(bareCall)) {
-        const line = source.slice(0, match.index).split('\n').length
-        const inWrapper =
-          match.index >= toolWrapperStart && match.index < toolWrapperEnd
-        ;(inWrapper ? insideWrapper : outsideWrapper).push(`line ${line}`)
+    // The type system now requires a cause on every `markUnavailable` call, so
+    // the old source-text completeness guard is gone. `makeWorkflowTool`'s
+    // `runtime.metadata()` catch has no reachable seam (it only throws if the
+    // marker projection itself throws), so only the `context.metadata` catch
+    // is exercised.
+    test('a tool whose host metadata callback throws records hook-threw at tool-execute', async () => {
+      const adapter = createAdapter('observe')
+      const throwingContext = {
+        ...toolContext(),
+        metadata: () => boom(),
       }
-      expect(outsideWrapper).toEqual([])
-      expect(insideWrapper).toHaveLength(2)
+      await getTool(adapter, 'systematic_workflow_status').execute(
+        {},
+        throwingContext,
+      )
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-execute'))
     })
   })
+
   test('before-only operation is abandoned at the next request boundary (transform), not by a status call', async () => {
     const adapter = createAdapter(
       'observe',

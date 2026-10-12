@@ -245,7 +245,7 @@ command output; remote readback payloads have their own 4096-item cap. Exceeding
 fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
 seeding, session initialization, marker recovery, observer readback, a completion readback, or a
-hook (`tool-before`, `tool-after`, `event`, `transform`) flips mode to `unavailable`, the runtime
+hook or tool wrapper (`tool-before`, `tool-after`, `event`, `transform`, `tool-execute`) flips mode to `unavailable`, the runtime
 binds a bounded `GuardUnavailableCause` (site, failure kind, and where known the operation and
 reason code; every field is an enum, never a message, path, call ID, or digest) to that specific
 transition — never to whichever
@@ -256,7 +256,7 @@ causes use the kinds `local-snapshot-error`, `local-snapshot-unavailable` (carry
 reason code), `operation-input-invalid`, `operation-target-mismatch`, `call-lifecycle-mismatch`,
 `operation-classifier-unavailable`, `operation-observation-rejected`,
 `transition-finalize-rejected` (the guard refused to finalize a prepared completion, carrying its
-reason code), and `hook-threw` (an exception no helper classified). A hook that fails before the
+reason code), `unit-start-rejected` (the guard rejected a unit start, carrying its reason code), and `hook-threw` (an exception no helper classified). A hook that fails before the
 session's guard exists is held and committed when the guard is published, and protected mode
 rejects the call if no guard can be published. An exception during session initialization after
 the host read publishes `unavailable` with `initialization-threw` at `initialize-session`. At
