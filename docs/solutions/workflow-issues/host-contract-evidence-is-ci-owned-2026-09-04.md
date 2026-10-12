@@ -52,10 +52,10 @@ memoizes. Every fixture-consuming suite wraps it in a memoizing
 The evidence itself is the `host-contract` job in
 `.github/workflows/main.yaml`. Its "Run host contract suite" step sets
 `SYSTEMATIC_REQUIRE_OPENCODE=1` and runs `bun test tests/integration` with a
-JUnit reporter. `release.yaml` does not depend on `main.yaml` jobs, and
-`Host Contract` is not in the `main` ruleset's required status checks
-(`.github/settings.yml`), so a red `host-contract` job does not block the
-release PR by itself. For pull requests the job is path-gated on
+JUnit reporter. `Host Contract` is a required status check in the `main`
+ruleset and in the classic branch protection (`.github/settings.yml`), so a red
+`host-contract` job blocks the merge of any pull request, including the release
+PR. For pull requests the job is path-gated on
 `src/**`, `tests/**`, `scripts/**`, `evals/**`, `skills/**`, `agents/**`,
 `registry/**`, `package.json`, `bun.lock`, and the workflow file itself, via
 the job's "Detect relevant path changes" step; on push to `main` it always
@@ -99,8 +99,8 @@ consequence differs by design:
   (`scripts/lib/opencode-availability.ts:192-201`) at module scope right after
   `isOpencodeAvailable()`. When the classification is not `available`, that
   call throws — a module-scope throw fails the file to load, Bun reports it as
-  a suite error, the `host-contract` job goes red, and `release` is blocked by
-  its `needs`. There is no path where a missing host quietly skips in CI.
+  a suite error, the `host-contract` job goes red, and the required `Host Contract` check
+  blocks the merge. There is no path where a missing host quietly skips in CI.
 
 That module-scope throw covers a missing or mismatched host, but not a
 narrower failure: a single `test.skipIf(...)` inside an otherwise-loaded file

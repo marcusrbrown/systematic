@@ -60,6 +60,7 @@ rulesets:
             - {context: Typecheck, integration_id: 15368}
             - {context: Lint, integration_id: 15368}
             - {context: Test, integration_id: 15368}
+            - {context: Host Contract, integration_id: 15368}
             - {context: Registry, integration_id: 15368}
             - {context: Release, integration_id: 15368}
             - {context: Analyze (typescript), integration_id: 15368}
@@ -80,6 +81,7 @@ branches:
             Typecheck,
             Lint,
             Test,
+            Host Contract,
             Registry,
             Release,
             Analyze (typescript),

@@ -456,6 +456,7 @@ a real OpenCode host pinned to the `@opencode-ai/sdk` devDependency version
 (`SYSTEMATIC_REQUIRE_OPENCODE=1`), then guards the run's JUnit output and console log against a
 fixed expected-suite-file list, an exempt-skip list, and a pass floor
 (`scripts/host-contract-guard.ts`). `host-contract` runs on pull requests and on pushes to `main`
-but is not a required status check in the `main` ruleset; evidence gathered at one pinned OpenCode
-version is not evidence at another, so a Renovate OpenCode bump is only complete when this job is
-green on that bump.
+and is a required status check (`Host Contract`) in the `main` ruleset and classic branch
+protection, so a red run blocks the merge; evidence gathered at one pinned OpenCode version is not
+evidence at another, so a Renovate OpenCode bump is only complete when this job is green on that
+bump.

@@ -59,6 +59,7 @@ jobs:
             --required-check "Typecheck" \
             --required-check "Lint" \
             --required-check "Test" \
+            --required-check "Host Contract" \
             --required-check "Registry" \
             --required-check "Release" \
             --required-check "Analyze (typescript)" \
