@@ -268,38 +268,19 @@ function defaultTargetObserver(
   return createOpencodeOperationObserver({ targetDirectory })
 }
 
-// A fatal completion failure carries the failing stage's observer reason code
-// when one is known; a throw, target mismatch, or drift has none.
-type CompletionFailure =
+// The one ok/timeout/fatal split shared by every probe read (snapshots and
+// effective-observer lookups) in both status refresh and completion. `timeout`
+// is a `command-timeout` per `isProbeTimeout`; `fatal` is every other failure
+// and carries the observer's reason code when one is known (a throw, target
+// mismatch, or drift has none).
+type ProbeFailure =
   | { readonly status: 'timeout' }
   | {
       readonly status: 'fatal'
       readonly reasonCode?: GuardUnavailableCause['reasonCode']
     }
 
-type CompletionProbeRead =
-  | { readonly kind: 'ok'; readonly snapshot: OperationObserverSnapshot }
-  | { readonly kind: 'timeout' }
-  | {
-      readonly kind: 'fatal'
-      readonly reasonCode?: GuardUnavailableCause['reasonCode']
-    }
-
-function probeFailure(
-  read: Exclude<CompletionProbeRead, { readonly kind: 'ok' }>,
-): CompletionFailure {
-  return read.kind === 'timeout'
-    ? { status: 'timeout' }
-    : { status: 'fatal', reasonCode: read.reasonCode }
-}
-
-function lookupFailure(
-  lookup: Exclude<EffectiveObserverLookup, { readonly kind: 'ok' }>,
-): CompletionFailure {
-  return lookup.kind === 'timeout'
-    ? { status: 'timeout' }
-    : { status: 'fatal', reasonCode: lookup.reasonCode }
-}
+type ProbeRead<T> = { readonly status: 'ok'; readonly value: T } | ProbeFailure
 
 type CompletionRemoteOutcome =
   | {
@@ -309,14 +290,14 @@ type CompletionRemoteOutcome =
         snapshot: OperationObserverRemoteSnapshot
       }[]
     }
-  | CompletionFailure
+  | ProbeFailure
 
 // `none`: no observer. `timeout`: a probe timed out, so the attempt is
 // retryable. `fatal`: any other readback failure.
 type CompletionReadbackOutcome =
   | { readonly status: 'none' }
   | { readonly status: 'ready'; readonly readbacks: readonly unknown[] }
-  | CompletionFailure
+  | ProbeFailure
 
 interface SessionRuntime {
   readonly ledger?: ReceiptLedger
@@ -407,14 +388,6 @@ interface EffectiveOperationObserver {
   readonly pinned: boolean
 }
 
-type EffectiveObserverLookup =
-  | { readonly kind: 'ok'; readonly observer: EffectiveOperationObserver }
-  | { readonly kind: 'timeout' }
-  | {
-      readonly kind: 'invalid'
-      readonly reasonCode?: OperationObserverReasonCode
-    }
-
 // A status-refresh probe that timed out and was skipped instead of failing
 // the session. Status-only and enum-only: never carried in markers, receipts,
 // tool metadata, or digests. At most six entries (local/pinned + four remote).
@@ -440,14 +413,6 @@ type RemoteReadbackOutcome =
   | {
       readonly kind: 'fatal'
       readonly unconfirmed: readonly UnconfirmedReadback[]
-      readonly reasonCode?: GuardUnavailableCause['reasonCode']
-    }
-
-type EffectiveSnapshotRead =
-  | { readonly kind: 'ok'; readonly snapshot: OperationObserverSnapshot }
-  | { readonly kind: 'timeout' }
-  | {
-      readonly kind: 'failed'
       readonly reasonCode?: GuardUnavailableCause['reasonCode']
     }
 
@@ -631,6 +596,33 @@ function remoteFailureReason(
   if (result?.status === 'missing-resource') return 'missing-resource'
   if (result?.status === 'unavailable') return result.reasonCode
   return undefined
+}
+
+// Reads one observer's local snapshot as a `ProbeRead`. When an expected
+// target identity is given, a snapshot for any other target is fatal. A
+// failure carries the observer's reason code when it supplied one; a throw or
+// a target mismatch has none.
+async function readSnapshot(
+  observer: OpencodeOperationObserver,
+  expectedTargetIdentity?: string,
+): Promise<ProbeRead<OperationObserverSnapshot>> {
+  let result: OperationObserverResult
+  try {
+    result = await observer.snapshot()
+  } catch {
+    return { status: 'fatal' }
+  }
+  if (isProbeTimeout(result)) return { status: 'timeout' }
+  if (result.status === 'unavailable') {
+    return { status: 'fatal', reasonCode: result.reasonCode }
+  }
+  if (
+    expectedTargetIdentity !== undefined &&
+    result.snapshot.targetDigest !== expectedTargetIdentity
+  ) {
+    return { status: 'fatal' }
+  }
+  return { status: 'ok', value: result.snapshot }
 }
 
 // The only probe outcomes that count as a transient timeout: an observer
@@ -1855,10 +1847,10 @@ function createSessionRuntime(
 
   // Typed lookup of the observer for the pinned (or parent) target. A pinned
   // worktree validation that times out is `timeout`; every other failure,
-  // including a throw, is `invalid` (with the observer's reason code if any).
-  function resolveEffectiveObserver(): EffectiveObserverLookup {
+  // including a throw, is `fatal` (with the observer's reason code if any).
+  function resolveEffectiveObserver(): ProbeRead<EffectiveOperationObserver> {
     const parentObserver = options.observer
-    if (!parentObserver) return { kind: 'invalid' }
+    if (!parentObserver) return { status: 'fatal' }
     const pinnedTargetIdentity =
       guard.status().unit?.pinnedOperationTargetIdentity
     if (
@@ -1866,8 +1858,8 @@ function createSessionRuntime(
       pinnedTargetIdentity === options.workspaceIdentity
     ) {
       return {
-        kind: 'ok',
-        observer: {
+        status: 'ok',
+        value: {
           observer: parentObserver,
           targetIdentity: options.workspaceIdentity,
           pinned: false,
@@ -1875,7 +1867,7 @@ function createSessionRuntime(
       }
     }
     const registration = operationObserverRegistration(pinnedTargetIdentity)
-    if (!registration) return { kind: 'invalid' }
+    if (!registration) return { status: 'fatal' }
     return resolvePinnedObserver(
       parentObserver,
       registration,
@@ -1887,18 +1879,18 @@ function createSessionRuntime(
     parentObserver: OpencodeOperationObserver,
     registration: OperationObserverRegistration,
     pinnedTargetIdentity: string,
-  ): EffectiveObserverLookup {
+  ): ProbeRead<EffectiveOperationObserver> {
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = parentObserver.validateRegisteredWorktree(
         registration.targetRoot,
       )
     } catch {
-      return { kind: 'invalid' }
+      return { status: 'fatal' }
     }
-    if (isProbeTimeout(validation)) return { kind: 'timeout' }
+    if (isProbeTimeout(validation)) return { status: 'timeout' }
     if (validation.status !== 'ok') {
-      return { kind: 'invalid', reasonCode: validation.reasonCode }
+      return { status: 'fatal', reasonCode: validation.reasonCode }
     }
     if (
       validation.targetRoot !== registration.targetRoot ||
@@ -1906,11 +1898,11 @@ function createSessionRuntime(
         registration.registeredWorktreeIdentity ||
       registration.observer.targetDigest !== pinnedTargetIdentity
     ) {
-      return { kind: 'invalid' }
+      return { status: 'fatal' }
     }
     return {
-      kind: 'ok',
-      observer: {
+      status: 'ok',
+      value: {
         observer: registration.observer,
         targetIdentity: pinnedTargetIdentity,
         pinned: true,
@@ -2933,21 +2925,24 @@ function createSessionRuntime(
   async function refreshReadback(): Promise<readonly UnconfirmedReadback[]> {
     if (!observerReadbackApplies()) return []
     const lookup = resolveEffectiveObserver()
-    if (lookup.kind === 'timeout') return skippedWithRemoteTail('pinned')
-    if (lookup.kind !== 'ok') {
+    if (lookup.status === 'timeout') return skippedWithRemoteTail('pinned')
+    if (lookup.status === 'fatal') {
       markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
       return []
     }
-    const effective = lookup.observer
-    const read = await readEffectiveSnapshot(effective)
-    if (read.kind === 'timeout') {
+    const effective = lookup.value
+    const read = await readSnapshot(
+      effective.observer,
+      effective.targetIdentity,
+    )
+    if (read.status === 'timeout') {
       return skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
     }
-    if (read.kind === 'failed') {
+    if (read.status === 'fatal') {
       markUnavailable(observerReadbackFailedCause(read.reasonCode))
       return []
     }
-    return applyReadbackAndProbeRemote(effective, read.snapshot)
+    return applyReadbackAndProbeRemote(effective, read.value)
   }
 
   async function applyReadbackAndProbeRemote(
@@ -2974,28 +2969,6 @@ function createSessionRuntime(
       markUnavailable(observerReadbackFailedCause(remote.reasonCode))
     }
     return remote.unconfirmed
-  }
-
-  // Reads the effective observer's local snapshot. A failure carries the
-  // observer's reason code when it supplied one; a throw or a target mismatch
-  // has none.
-  async function readEffectiveSnapshot(
-    effective: EffectiveOperationObserver,
-  ): Promise<EffectiveSnapshotRead> {
-    let result: OperationObserverResult
-    try {
-      result = await effective.observer.snapshot()
-    } catch {
-      return { kind: 'failed' }
-    }
-    if (isProbeTimeout(result)) return { kind: 'timeout' }
-    if (result.status === 'unavailable') {
-      return { kind: 'failed', reasonCode: result.reasonCode }
-    }
-    if (result.snapshot.targetDigest !== effective.targetIdentity) {
-      return { kind: 'failed' }
-    }
-    return { kind: 'ok', snapshot: result.snapshot }
   }
 
   async function refreshRemoteReadbacks(
@@ -4244,33 +4217,30 @@ function createSessionRuntime(
   async function completionReadbacks(): Promise<CompletionReadbackOutcome> {
     const observer = options.observer
     if (!observer) return { status: 'none' }
-    const parent = await completionSnapshot(observer)
-    if (parent.kind !== 'ok') return probeFailure(parent)
-    if (parent.snapshot.targetDigest !== options.workspaceIdentity) {
-      return { status: 'fatal' }
-    }
+    const parent = await readSnapshot(observer, options.workspaceIdentity)
+    if (parent.status !== 'ok') return parent
     const lookup = resolveEffectiveObserver()
-    if (lookup.kind !== 'ok') return lookupFailure(lookup)
-    const effective = lookup.observer
-    let initialEffective = parent.snapshot
+    if (lookup.status !== 'ok') return lookup
+    const effective = lookup.value
+    let initialEffective = parent.value
     if (effective.pinned) {
-      const pinned = await completionSnapshot(effective.observer)
-      if (pinned.kind !== 'ok') return probeFailure(pinned)
-      if (pinned.snapshot.targetDigest !== effective.targetIdentity) {
-        return { status: 'fatal' }
-      }
-      initialEffective = pinned.snapshot
+      const pinned = await readSnapshot(
+        effective.observer,
+        effective.targetIdentity,
+      )
+      if (pinned.status !== 'ok') return pinned
+      initialEffective = pinned.value
     }
     const remote = await completionRemoteReadbacks(effective.observer)
     if (remote.status !== 'ready') return remote
-    const finalParent = await completionSnapshot(observer)
-    if (finalParent.kind !== 'ok') return probeFailure(finalParent)
-    if (completionParentDrifted(parent.snapshot, finalParent.snapshot)) {
+    const finalParent = await readSnapshot(observer)
+    if (finalParent.status !== 'ok') return finalParent
+    if (completionParentDrifted(parent.value, finalParent.value)) {
       return { status: 'fatal' }
     }
     const final = effective.pinned
       ? await revalidatePinnedCompletion(effective, initialEffective)
-      : { status: 'ready' as const, effective, snapshot: finalParent.snapshot }
+      : { status: 'ready' as const, effective, snapshot: finalParent.value }
     if (final.status !== 'ready') return final
     return {
       status: 'ready',
@@ -4291,22 +4261,6 @@ function createSessionRuntime(
         ),
       ],
     }
-  }
-
-  async function completionSnapshot(
-    observer: OpencodeOperationObserver,
-  ): Promise<CompletionProbeRead> {
-    let result: OperationObserverResult
-    try {
-      result = await observer.snapshot()
-    } catch {
-      return { kind: 'fatal' }
-    }
-    if (isProbeTimeout(result)) return { kind: 'timeout' }
-    if (result.status === 'unavailable') {
-      return { kind: 'fatal', reasonCode: result.reasonCode }
-    }
-    return { kind: 'ok', snapshot: result.snapshot }
   }
 
   function completionParentDrifted(
@@ -4331,11 +4285,11 @@ function createSessionRuntime(
         readonly effective: EffectiveOperationObserver
         readonly snapshot: OperationObserverSnapshot
       }
-    | CompletionFailure
+    | ProbeFailure
   > {
     const lookup = resolveEffectiveObserver()
-    if (lookup.kind !== 'ok') return lookupFailure(lookup)
-    const revalidated = lookup.observer
+    if (lookup.status !== 'ok') return lookup
+    const revalidated = lookup.value
     if (
       revalidated.observer !== effective.observer ||
       revalidated.targetIdentity !== effective.targetIdentity ||
@@ -4343,20 +4297,22 @@ function createSessionRuntime(
     ) {
       return { status: 'fatal' }
     }
-    const pinned = await completionSnapshot(revalidated.observer)
-    if (pinned.kind !== 'ok') return probeFailure(pinned)
+    const pinned = await readSnapshot(
+      revalidated.observer,
+      revalidated.targetIdentity,
+    )
+    if (pinned.status !== 'ok') return pinned
     if (
-      pinned.snapshot.targetDigest !== revalidated.targetIdentity ||
-      pinned.snapshot.repositoryRevisionDigest !==
+      pinned.value.repositoryRevisionDigest !==
         initial.repositoryRevisionDigest ||
-      pinned.snapshot.worktreeRevisionDigest !== initial.worktreeRevisionDigest
+      pinned.value.worktreeRevisionDigest !== initial.worktreeRevisionDigest
     ) {
       return { status: 'fatal' }
     }
     return {
       status: 'ready',
       effective: revalidated,
-      snapshot: pinned.snapshot,
+      snapshot: pinned.value,
     }
   }
 
