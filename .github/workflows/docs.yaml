@@ -144,12 +144,15 @@ jobs:
     environment: docs
     # Serialized here, not at the workflow level: admission (author, latest
     # release) happens in `build`, so a run that gets rejected there must never
-    # cancel an active deployment. Only admitted runs queue for this slot; GitHub
-    # keeps one pending run, and a newer pending run replacing an older one is fine
-    # because each run re-checks freshness right before publishing.
+    # cancel an active deployment. Only admitted runs queue for this slot.
+    # `queue: max` keeps every pending run: with the default single slot, an older
+    # admitted build finishing late would replace the latest release's pending
+    # deploy and then skip itself as stale, leaving the latest undeployed. Each run
+    # re-checks freshness right before publishing, so stale ones skip in turn.
     concurrency:
       group: docs-deploy
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
     steps:

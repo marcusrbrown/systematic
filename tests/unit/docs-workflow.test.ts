@@ -195,10 +195,11 @@ describe('docs workflow privilege separation', () => {
     expect(readWorkflow()).not.toHaveProperty('concurrency')
   })
 
-  test('only the deploy job serializes on docs-deploy, without cancelling', () => {
+  test('only the deploy job serializes on docs-deploy, queueing every pending run without cancelling', () => {
     expect(getJob('deploy').concurrency).toEqual({
       group: 'docs-deploy',
       'cancel-in-progress': false,
+      queue: 'max',
     })
   })
 
