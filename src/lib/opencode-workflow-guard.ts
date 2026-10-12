@@ -2870,6 +2870,9 @@ function createSessionRuntime(
   // an unrelated cause that already won the race.
   function markUnavailable(cause?: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
+    // A hook can throw before the guard exists. Status already reports an
+    // uninitialized runtime as unavailable, so there is nothing to transition.
+    if ((guard as WorkflowGuard | undefined) === undefined) return
     recordUnavailable(guard, cause)
   }
 

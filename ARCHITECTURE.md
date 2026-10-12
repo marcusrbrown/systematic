@@ -110,7 +110,7 @@ Pi adapter
   src/lib/setup.ts                 — atomically configure project-local OpenCode or Pi harness settings
 
 Workflow guard and evidence
-  src/lib/opencode-operation-observer.ts — snapshot local and remote operation evidence for guard readback
+  src/lib/opencode-operation-observer.ts — snapshot local and remote operation evidence for guard readback, within fixed size limits
   src/lib/opencode-workflow-guard.ts     — OpenCode hook and tool adapter for the receipt-backed workflow guard
   src/lib/receipt-classifier.ts          — classify observed tool commands into receipt operations
   src/lib/receipt-ledger.ts              — mint, validate, and consume integrity-checked operation receipts
@@ -239,16 +239,23 @@ change. Must pass before any release.
 / `receipt-ledger.ts` / `receipt-readback.ts`) — observes tool executions through the
 `tool.execute.before` / `tool.execute.after` / `event` hooks, classifies them into operations
 (implementation, verification, commit, push, pr-creation, check-readback, review-readback),
-validates each claim against observed workspace state, and mints integrity-checked receipts. A
-guarded transition that lacks its required receipts is rejected. A session with no epoch reports
+validates each claim against observed workspace state, and mints integrity-checked receipts. Local
+snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
+command output; remote readback payloads have their own 4096-item cap. Exceeding a local limit
+fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
-seeding, session initialization, marker recovery, observer readback, or a completion readback flips
-mode to `unavailable`, the runtime binds a bounded `GuardUnavailableCause` (site, failure kind, and
-for remote scopes the operation and reason code) to that specific transition — never to whichever
+seeding, session initialization, marker recovery, observer readback, a completion readback, or a
+hook (`tool-before`, `tool-after`, `event`, `transform`) flips mode to `unavailable`, the runtime
+binds a bounded `GuardUnavailableCause` (site, failure kind, and where known the operation and
+reason code; every field is an enum, never a message, path, call ID, or digest) to that specific
+transition — never to whichever
 concurrent caller finished computing a cause first — and surfaces it only as `firstUnavailableCause`
 on `systematic_workflow_status` tool output while the state remains `unavailable`; it never appears
-on a receipt envelope, marker envelope, or anything covered by an integrity digest. At
-initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
+on a receipt envelope, marker envelope, or anything covered by an integrity digest. Hook
+causes use the kinds `local-snapshot-error`, `local-snapshot-unavailable` (carrying the observer's
+reason code), `operation-input-invalid`, `operation-target-mismatch`, `call-lifecycle-mismatch`,
+`operation-classifier-unavailable`, `operation-observation-rejected`, and `hook-threw` (an
+exception no helper classified). At initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
 in-flight guard call in the current, unfinished assistant turn do not count as unrecoverable
 history; any other markerless guard history fails closed. At activation, a remote probe timeout, or
 a push `missing-resource`, defers that one operation instead of making the guard unavailable;
@@ -270,7 +277,9 @@ marker, a previously activated session cannot be told apart from a fresh one; in
 from a turn that began before this runtime started fail closed; `missing-resource` cannot
 distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
 defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
-in child rollup still make the guard unavailable (#1084); an earlier completion timeout can mask
+in child rollup still make the guard unavailable (#1084); a snapshot can report unchanged after
+real changes, and files can change while a snapshot reads them (#1099); a worktree that grows past
+a snapshot limit makes the guard unavailable for the session; an earlier completion timeout can mask
 later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
 completion throws `abandoned-transition` in protected mode; completion is confirmed independently
 per registration, not atomically across registrations, so when two registrations share one tool

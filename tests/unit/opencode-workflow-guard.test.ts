@@ -9598,8 +9598,8 @@ describe('OpenCode workflow guard adapter', () => {
 
     test('an exception escaping the event hook records hook-threw at event', async () => {
       const adapter = createAdapter('observe')
-      // Initialize the session first: a throw before the session's guard
-      // exists cannot be recorded at all (see the report for slice 3).
+      // Initialize the session first so the throw reaches the recording path
+      // (the pre-initialization case is covered by the next test).
       await adapter.hooks.event({
         event: {
           type: 'message.updated',
@@ -9617,6 +9617,24 @@ describe('OpenCode workflow guard adapter', () => {
       const { parsed } = await statusOutput(adapter)
       expect(parsed.state).toBe('unavailable')
       expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+    })
+
+    test('a first-ever event that throws before the session guard exists does not leak out of the hook', async () => {
+      const adapter = createAdapter('observe')
+      await expect(
+        adapter.hooks.event({
+          event: {
+            get type(): unknown {
+              return boom()
+            },
+            properties: { sessionID: SESSION_A },
+          },
+        }),
+      ).resolves.toBeUndefined()
+      // Nothing was decided before the throw, so the session still initializes
+      // normally on its next hook.
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
     })
 
     test('an exception escaping the transform hook records hook-threw at transform', async () => {
