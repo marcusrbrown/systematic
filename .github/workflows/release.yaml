@@ -49,6 +49,7 @@ jobs:
     needs: mode
     if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -213,6 +214,22 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # `vars` resolve when the job starts, after concurrency and environment
+      # admission, so this reads the hold as it is now, not as verify saw it.
+      # Fails closed: with a hold set, only a maintainer approval may publish.
+      - name: Recheck release hold
+        env:
+          RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_HOLD" = "true" ]; then
+            approver=$(jq -r '.approver // ""' "$RUNNER_TEMP/decision/decision.json")
+            if [ "$approver" != "maintainer" ]; then
+              echo "::error::RELEASE_HOLD is set; only a maintainer approval can publish."
+              exit 1
+            fi
+          fi
 
       - name: Publish with semantic-release
         env:
@@ -446,14 +463,34 @@ jobs:
             exit 1
           fi
 
+          # Arms auto-merge pinned to a head commit. A failure is not fatal: the
+          # hourly reconcile and a manual merge remain available.
+          arm_auto_merge() {
+            local pr="$1" head="$2" armed=false
+            for _ in 1 2 3; do
+              if gh pr merge "$pr" --repo "$REPO" --auto --squash \
+                --match-head-commit "$head" --subject "$TITLE" --body ""; then
+                armed=true
+                break
+              fi
+              sleep "${MERGE_RETRY_DELAY:-5}"
+            done
+            if [ "$armed" != "true" ]; then
+              echo "::warning::could not arm auto-merge on PR #$pr; merge it manually or wait for the hourly reconcile"
+            fi
+          }
+
           # (d) No-op check: same base and same CHANGELOG.md means the existing
           # commit is current. Only the body changes, so approvals stay valid.
+          # Auto-merge is re-armed on the existing head so a failed arming from an
+          # earlier run is repaired without rewriting the commit.
           if [ -n "$pr_number" ]; then
             parent=$(gh api "repos/$REPO/commits/$head_oid" --jq '.parents[0].sha')
             remote_blob=$(gh api "repos/$REPO/contents/CHANGELOG.md?ref=$head_oid" --jq .sha)
             local_blob=$(git hash-object "$render_dir/CHANGELOG.md")
             if [ "$parent" = "$BASE_SHA" ] && [ "$remote_blob" = "$local_blob" ]; then
               gh pr edit "$pr_number" --repo "$REPO" --title "$TITLE" --body-file "$render_dir/body.md"
+              arm_auto_merge "$pr_number" "$head_oid"
               exit 0
             fi
           fi
@@ -497,17 +534,5 @@ jobs:
             gh pr edit "$pr_number" --repo "$REPO" --title "$TITLE" --body-file "$render_dir/body.md"
           fi
 
-          # (h) Arm auto-merge pinned to the commit just created. A failure is
-          # not fatal: the hourly reconcile and a manual merge remain available.
-          armed=false
-          for _ in 1 2 3; do
-            if gh pr merge "$pr_number" --repo "$REPO" --auto --squash \
-              --match-head-commit "$commit_sha" --subject "$TITLE" --body ""; then
-              armed=true
-              break
-            fi
-            sleep "${MERGE_RETRY_DELAY:-5}"
-          done
-          if [ "$armed" != "true" ]; then
-            echo "::warning::could not arm auto-merge on PR #$pr_number; merge it manually or wait for the hourly reconcile"
-          fi
+          # (h) Arm auto-merge pinned to the commit just created.
+          arm_auto_merge "$pr_number" "$commit_sha"

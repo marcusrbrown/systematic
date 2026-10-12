@@ -351,6 +351,7 @@ describe('publish job', () => {
       'Verify dist digest',
       'Stage release inputs',
       'Create release App token',
+      'Recheck release hold',
       'Publish with semantic-release',
     ]
     const indices = order.map((name) => indexOfStep('publish', name))
@@ -452,6 +453,84 @@ describe('publish job', () => {
       NPM_TOKEN: expr('secrets.NPM_TOKEN'),
       npm_config_ignore_scripts: 'true',
     })
+  })
+
+  describe('recheck release hold step (executed)', () => {
+    const HOLD_STEP = 'Recheck release hold'
+
+    function runHold(hold: string, decision: Record<string, unknown> | null) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-hold-'))
+      try {
+        const runner = path.join(dir, 'runner')
+        fs.mkdirSync(path.join(runner, 'decision'), { recursive: true })
+        if (decision !== null) {
+          fs.writeFileSync(
+            path.join(runner, 'decision', 'decision.json'),
+            JSON.stringify(decision),
+          )
+        }
+        const result = spawnSync(
+          'bash',
+          ['-e', '-c', runOf(findStep('publish', HOLD_STEP))],
+          {
+            encoding: 'utf8',
+            env: {
+              PATH: process.env.PATH ?? '',
+              HOME: dir,
+              RUNNER_TEMP: runner,
+              RELEASE_HOLD: hold,
+            },
+          },
+        )
+        return {
+          status: result.status,
+          text: `${result.stdout}${result.stderr}`,
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    test('reads the current RELEASE_HOLD and runs right before semantic-release', () => {
+      expect(envOf(findStep('publish', HOLD_STEP))).toEqual({
+        RELEASE_HOLD: expr('vars.RELEASE_HOLD'),
+      })
+      expect(indexOfStep('publish', HOLD_STEP)).toBe(
+        indexOfStep('publish', 'Publish with semantic-release') - 1,
+      )
+    })
+
+    test.each([
+      ['true', { kind: 'publish', approver: 'gate' }],
+      ['true', { kind: 'publish', approver: 'robot' }],
+      ['true', { kind: 'publish' }],
+      ['true', { kind: 'publish', approver: '' }],
+      ['true', {}],
+    ])(
+      'RELEASE_HOLD=%s with decision %j exits 1 with the hold error',
+      (hold, decision) => {
+        const r = runHold(hold, decision)
+        expect(r.status).toBe(1)
+        expect(r.text).toContain(
+          '::error::RELEASE_HOLD is set; only a maintainer approval can publish.',
+        )
+      },
+    )
+
+    test('RELEASE_HOLD=true with a missing decision file fails closed', () => {
+      expect(runHold('true', null).status).not.toBe(0)
+    })
+
+    test('RELEASE_HOLD=true lets a maintainer approval through', () => {
+      expect(runHold('true', { approver: 'maintainer' }).status).toBe(0)
+    })
+
+    test.each(['', 'false', 'True'])(
+      'RELEASE_HOLD=%j lets a gate approval through',
+      (hold) => {
+        expect(runHold(hold, { approver: 'gate' }).status).toBe(0)
+      },
+    )
   })
 
   test('runs no repository code', () => {
@@ -559,6 +638,7 @@ describe('job timeouts', () => {
     ['publish', 20],
     ['refresh', 10],
     ['confirm', 10],
+    ['verify', 10],
   ])('%s declares timeout-minutes %d', (id, minutes) => {
     expect(getJob(id)['timeout-minutes']).toBe(minutes)
   })
@@ -1112,13 +1192,33 @@ describe('refresh job', () => {
       expect(outcome.log).not.toMatch(WRITE)
     })
 
-    test('unchanged content only edits the PR body and writes no ref', () => {
+    test('unchanged content edits the PR body, writes no ref, and re-arms auto-merge on the existing head', () => {
       const outcome = runRefresh({ prs: [pr()], parent: BASE })
       expect(outcome.status).toBe(0)
       expect(outcome.log).toMatch(/pr edit 9 .*--body-file/)
-      expect(outcome.log).not.toMatch(
-        /git\/refs|git\/blobs|git\/trees|pr create|pr merge/,
+      expect(outcome.log).toMatch(
+        new RegExp(
+          `pr merge 9 --repo o/r --auto --squash --match-head-commit ${'c'.repeat(40)} --subject chore\\(release\\): v3\\.22\\.0 --body $`,
+          'm',
+        ),
       )
+      expect(outcome.log).not.toMatch(
+        /git\/refs|git\/blobs|git\/trees|git\/commits |pr create|--method/,
+      )
+    })
+
+    test('unchanged content warns instead of failing when auto-merge cannot be re-armed', () => {
+      const outcome = runRefresh({
+        prs: [pr()],
+        parent: BASE,
+        mergeFails: true,
+      })
+      expect(outcome.status).toBe(0)
+      expect(outcome.output).toContain('::warning::')
+      expect(
+        outcome.log.split('\n').filter((l) => l.startsWith('gh pr merge 9 ')),
+      ).toHaveLength(3)
+      expect(outcome.log).not.toMatch(/--method/)
     })
 
     test('new content with no branch POSTs the ref, opens the PR and arms auto-merge', () => {

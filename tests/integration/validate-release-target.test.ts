@@ -42,7 +42,11 @@ exit 99
 
 const NPM_STUB = `#!/usr/bin/env bash
 echo "npm $*" >> "$STUB_LOG"
-[ "\${STUB_NPM_OK:-1}" = "1" ] || exit 1
+attempts=$(grep -c '^npm ' "$STUB_LOG")
+if [ "\${STUB_NPM_OK:-1}" != "1" ] || [ "$attempts" -lt "\${STUB_NPM_OK_ON:-1}" ]; then
+  echo "npm error registry outage" >&2
+  exit 1
+fi
 echo "\${2:-}"
 `
 
@@ -87,6 +91,7 @@ function run(env: Record<string, string>): Run {
       STUB_LOG: logFile,
       EXPECTED_AUTHOR: BOT,
       REQUIRE_LATEST: 'false',
+      NPM_RETRY_DELAY: '0',
       ...env,
     },
   })
@@ -181,6 +186,34 @@ describe('validate-release-target.sh: release events', () => {
     expect(r.status).toBe(1)
     expect(combined(r)).toContain('::error::')
     expect(combined(r)).toContain('1.2.3')
+    expect(r.outputs).toEqual({})
+  })
+
+  test('npm lag: a version that appears on the 3rd attempt passes', () => {
+    const r = run(releaseEvent({ STUB_NPM_OK_ON: '3' }))
+
+    expect(r.status).toBe(0)
+    expect(r.outputs.proceed).toBe('true')
+    expect(r.calls.filter((c) => c.startsWith('npm view '))).toHaveLength(3)
+  })
+
+  test('npm lag on a dispatch also retries', () => {
+    const r = run(dispatchEvent({ STUB_NPM_OK_ON: '2' }))
+
+    expect(r.status).toBe(0)
+    expect(r.outputs.proceed).toBe('true')
+    expect(r.calls.filter((c) => c.startsWith('npm view '))).toHaveLength(2)
+  })
+
+  test('a version that never appears fails after 6 attempts with the same message and visible npm errors', () => {
+    const r = run(releaseEvent({ STUB_NPM_OK: '0' }))
+
+    expect(r.status).toBe(1)
+    expect(r.calls.filter((c) => c.startsWith('npm view '))).toHaveLength(6)
+    expect(combined(r)).toContain(
+      '::error::@fro.bot/systematic@1.2.3 is not published to npm; refusing to continue',
+    )
+    expect(combined(r)).toContain('npm error registry outage')
     expect(r.outputs).toEqual({})
   })
 
