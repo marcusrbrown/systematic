@@ -53,7 +53,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           RELEASE_AUTHOR: ${{ github.event.release.author.login }}
-          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]' }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
           REQUIRE_LATEST: 'true'
           GH_TOKEN: ${{ github.token }}
         run: bash .release-target-validator/scripts/validate-release-target.sh
@@ -103,6 +103,9 @@ jobs:
         env:
           # Read-only token (contents: read) for the generator's GitHub releases lookup.
           GH_TOKEN: ${{ github.token }}
+          # Deploy guard for the changelog page: keeps only entries up to the
+          # validated tag and fails unless the top one is that version.
+          DOCS_DEPLOY_TAG: ${{ steps.target.outputs.tag }}
         run: bun run docs:generate
 
       - name: Build registry

@@ -53,7 +53,7 @@ The narrative runs in its own workflow, triggered by the `release: published` ev
 
 .github/workflows/release-notes.yaml (release: published, or workflow_dispatch with a tag)
   └─ narrate job (contents: read + actions: write; references no secrets, uses github.token)
-      ├─ check release author (vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]'); mismatch ends cleanly
+      ├─ check release author (vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]'); mismatch ends cleanly
       ├─ validate tag shape (and, on dispatch, an existing published release); npm view
       ├─ checkout (persist-credentials: false)
       ├─ scripts/dispatch-release-notes.sh "$TAG":
@@ -233,7 +233,7 @@ If this throws `ReferenceError: VAR is not defined`, the YAML has a Lodash colli
 
 - **Retry semantics.** Re-run the failed `release-notes.yaml` run from the Actions UI, or dispatch it manually with the tag. The script first checks the release body: if it already starts with `## What's new`, it exits 0 without dispatching. The dispatched Fro Bot prompt repeats the same idempotency check; the run reports conclusion `neutral` in that case, which the script accepts only if the body carries the marker.
 - **PAT rotation.** If `FRO_BOT_PAT` is rotated while a release is in flight, the dispatched Fro Bot run may fail with HTTP 401 (using the cached token). This is detected as a security-relevant failure and turns the `release-notes.yaml` run red. The operator restores the token, re-runs the failed run, and the idempotent retry path applies. No leaked-token incident response is defined here; that belongs in a separate security runbook.
-- **Release author gate.** `release-notes.yaml` only acts on releases authored by `vars.RELEASE_AUTHOR_LOGIN` (default `mrbro-bot[bot]`); any other author ends the run cleanly with a notice and no dispatch. A manual dispatch is for re-narrating an existing published tag and is validated against the tag shape and the release's draft/prerelease state.
+- **Release author gate.** `release-notes.yaml` only acts on releases authored by `vars.RELEASE_AUTHOR_LOGIN` (default `systematic-release[bot]`); any other author ends the run cleanly with a notice and no dispatch. Releases are created by the dedicated release App, not a personal or shared bot account. A manual dispatch is for re-narrating an existing published tag and is validated against the tag shape and the release's draft/prerelease state.
 - **GitHub Actions conclusion taxonomy drift.** New conclusion values added by GitHub fall into the forward-compat default branch with `::error::narrative-not-applied` and exit 2. Tighten the classifier when a new value appears in production logs.
 
 ## Related

@@ -12,6 +12,9 @@
  * Usage:
  *   bun docs/scripts/generate-changelog-page.ts [--deploy-tag vX.Y.Z]
  *
+ * The deploy tag may also come from env `DOCS_DEPLOY_TAG` (how `docs.yaml`
+ * passes it through `docs:generate`); the flag wins when both are given.
+ *
  * `--deploy-tag` (deploy builds) keeps only entries at or below that tag's
  * version, so a pending, untagged entry is never published, and fails unless
  * the top kept entry is exactly the tag's version (a guard against deploying
@@ -161,9 +164,19 @@ export function generateChangelogPage(
   return renderPage(parts.join('\n\n'))
 }
 
-function parseDeployTag(argv: string[]): string | undefined {
+/**
+ * The deploy tag from `--deploy-tag`, else env `DOCS_DEPLOY_TAG` (an empty
+ * value counts as unset). The flag wins when both are given.
+ */
+export function resolveDeployTag(
+  argv: string[],
+  env: Record<string, string | undefined>,
+): string | undefined {
   const index = argv.indexOf('--deploy-tag')
-  if (index === -1) return undefined
+  if (index === -1) {
+    const fromEnv = env.DOCS_DEPLOY_TAG
+    return fromEnv === undefined || fromEnv === '' ? undefined : fromEnv
+  }
   const value = argv[index + 1]
   if (value === undefined || value.startsWith('--')) {
     throw new Error('--deploy-tag requires a value like v1.2.3')
@@ -173,7 +186,7 @@ function parseDeployTag(argv: string[]): string | undefined {
 
 if (import.meta.main) {
   try {
-    const deployTag = parseDeployTag(process.argv.slice(2))
+    const deployTag = resolveDeployTag(process.argv.slice(2), process.env)
     const content = fs.existsSync(CHANGELOG_PATH)
       ? fs.readFileSync(CHANGELOG_PATH, 'utf8')
       : null

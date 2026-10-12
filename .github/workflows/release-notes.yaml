@@ -55,7 +55,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           RELEASE_AUTHOR: ${{ github.event.release.author.login }}
-          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]' }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
           REQUIRE_LATEST: 'false'
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/validate-release-target.sh

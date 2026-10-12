@@ -4,6 +4,7 @@ import yaml from 'js-yaml'
 import {
   generateChangelogPage,
   OUTPUT_PATH,
+  resolveDeployTag,
 } from '../../docs/scripts/generate-changelog-page.ts'
 import {
   type MdNode,
@@ -117,6 +118,34 @@ function unsafeNodes(markdown: string): string[] {
   visit(parseMarkdown(markdown))
   return found
 }
+
+describe('resolveDeployTag', () => {
+  test('is undefined without a flag or env var', () => {
+    expect(resolveDeployTag([], {})).toBeUndefined()
+  })
+
+  test('reads DOCS_DEPLOY_TAG when --deploy-tag is absent', () => {
+    expect(resolveDeployTag([], { DOCS_DEPLOY_TAG: 'v1.2.3' })).toBe('v1.2.3')
+  })
+
+  test('treats an empty DOCS_DEPLOY_TAG as unset', () => {
+    expect(resolveDeployTag([], { DOCS_DEPLOY_TAG: '' })).toBeUndefined()
+  })
+
+  test('the --deploy-tag flag wins over DOCS_DEPLOY_TAG', () => {
+    expect(
+      resolveDeployTag(['--deploy-tag', 'v2.0.0'], {
+        DOCS_DEPLOY_TAG: 'v1.2.3',
+      }),
+    ).toBe('v2.0.0')
+  })
+
+  test('--deploy-tag without a value throws even when the env var is set', () => {
+    expect(() =>
+      resolveDeployTag(['--deploy-tag'], { DOCS_DEPLOY_TAG: 'v1.2.3' }),
+    ).toThrow(/--deploy-tag requires a value/)
+  })
+})
 
 describe('generateChangelogPage', () => {
   test('writes to the reference changelog page', () => {
