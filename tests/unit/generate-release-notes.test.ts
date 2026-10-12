@@ -2,8 +2,12 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import {
+  fetchReleases,
   type GithubRelease,
   generateReleaseNotesPage,
+  type MdNode,
+  OUTPUT_PATH,
+  parseMarkdown,
   renderReleaseNotesPage,
 } from '../../docs/scripts/generate-release-notes.ts'
 
@@ -90,6 +94,67 @@ async function lintMarkdown(markdown: string): Promise<unknown[]> {
     config,
   })
   return results.page ?? []
+}
+
+/**
+ * Output-safety property: re-parse a page the way the docs site will and list
+ * every node that must never reach a reader — raw HTML, images, and links or
+ * definitions whose URL is not https (autolink literals included).
+ */
+function unsafeNodes(markdown: string): string[] {
+  const found: string[] = []
+  const visit = (node: MdNode) => {
+    if (node.type === 'html') found.push('html')
+    if (node.type === 'image' || node.type === 'imageReference') {
+      found.push(node.type)
+    }
+    if (
+      (node.type === 'link' || node.type === 'definition') &&
+      !/^https:/i.test(node.url ?? '')
+    ) {
+      found.push(`${node.type}:${node.url}`)
+    }
+    for (const child of node.children ?? []) visit(child)
+  }
+  visit(parseMarkdown(markdown))
+  return found
+}
+
+const HOSTILE_CORPUS: Record<string, string> = {
+  script: "## What's new\n\n<script>alert(1)</script>\n\nafter",
+  braces: "## What's new\n\nLeak {process.env.SECRET} and {{ x }}.",
+  javascriptLink: "## What's new\n\n[x](javascript:alert(1))",
+  dataLink: "## What's new\n\n[x](data:text/html;base64,AAAA)",
+  vbscriptLink: "## What's new\n\n[x](vbscript:msgbox(1))",
+  httpLink: "## What's new\n\n[x](http://example.com/a)",
+  relativeLink: "## What's new\n\n[x](/relative) [y](#frag)",
+  nestedBrackets: "## What's new\n\n[a [b] c](javascript:alert(1))",
+  multilineLinkText: "## What's new\n\n[click\nme](javascript:alert(1))",
+  referenceLink:
+    "## What's new\n\n[x][ref] and [ref] and [y][ok]\n\n[ref]: javascript:alert(1)\n[ok]: https://example.com/ok",
+  httpReferenceDefinition:
+    "## What's new\n\n[x][ref]\n\n[ref]: http://example.com",
+  autolinkJavascript: "## What's new\n\n<javascript:alert(1)>",
+  autolinkMailto: "## What's new\n\n<mailto:a@example.com> and a@example.com",
+  autolinkHttp: "## What's new\n\n<http://example.com/x>",
+  bareHttp: "## What's new\n\nSee http://example.com and www.example.com.",
+  escapedBacktick: "## What's new\n\n\\`<img src=x onerror=alert(1)>`",
+  escapedBacktickBlock:
+    "## What's new\n\n\\`<img src=x onerror=alert(1)>` and \\`<script>alert(2)</script>`",
+  httpsImage: "## What's new\n\n![tracker](https://tracker.example/x.png)",
+  imageReference:
+    "## What's new\n\n![alt][img]\n\n[img]: https://tracker.example/y.png",
+  imageInLink:
+    "## What's new\n\n[![alt](https://t.example/i.png)](javascript:alert(1))",
+  htmlBlocks:
+    "## What's new\n\n<div onclick=alert(1)>\n\nhi\n\n</div>\n\n<!-- c -->\n\n<details><summary>s</summary>x</details>",
+  fenceWithHtml:
+    "## What's new\n\n```html\n<script>alert(1)</script>\n```\n\n`<img src=x>`",
+  unterminatedFence: "## What's new\n\n```js\n<script>alert(1)</script>",
+  tableWithLinks:
+    "## What's new\n\n| a | b |\n| - | - |\n| [x](javascript:1) | http://e.com |",
+  footnote: "## What's new\n\nText[^1].\n\n[^1]: see <b>this</b> http://e.com",
+  setextHeading: 'Title\n=====\n\nbody',
 }
 
 describe('renderReleaseNotesPage', () => {
@@ -245,6 +310,157 @@ describe('renderReleaseNotesPage', () => {
     expect(page).toContain('releases/tag/v1.0.0')
   })
 
+  test('output is a plain .md page so MDX never evaluates it', () => {
+    expect(path.extname(OUTPUT_PATH)).toBe('.md')
+  })
+
+  test('drops javascript: links with nested brackets in the link text', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({ body: "## What's new\n\n[a [b] c](javascript:alert(1))" }),
+    ])
+    expect(page).not.toMatch(/javascript:/i)
+    expect(page).toMatch(/a \\?\[b\] c/)
+  })
+
+  test('drops javascript: links whose text spans a line break', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        body: "## What's new\n\n[click\nme](javascript:alert(1))",
+      }),
+    ])
+    expect(page).not.toMatch(/javascript:/i)
+    expect(page).toMatch(/click\s+me/)
+  })
+
+  test('an escaped backtick cannot open a fake code span around raw HTML', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        body: "## What's new\n\n\\`<img src=x onerror=alert(1)>`",
+      }),
+    ])
+    expect(page).not.toMatch(/<img/i)
+    expect(unsafeNodes(page)).toEqual([])
+  })
+
+  test('drops https images and keeps their alt text', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        body: "## What's new\n\n![a tracker pixel](https://tracker.example/x.png)",
+      }),
+    ])
+    expect(page).not.toContain('tracker.example')
+    expect(page).not.toContain('![')
+    expect(page).toContain('a tracker pixel')
+  })
+
+  test('bare http URLs are not re-autolinked when the page renders', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        body: "## What's new\n\nSee http://example.com/a and <http://example.org/b>.",
+      }),
+    ])
+    expect(unsafeNodes(page)).toEqual([])
+    expect(page).toContain('example.com/a')
+  })
+
+  test.each([
+    ['curly apostrophe', '## What\u2019s new\n\nbody'],
+    ['indented heading', " ## What's new\n\nbody"],
+    ['heading mid-body', "intro\n\n## What's new\n\nbody"],
+    ['leading blank line', "\n## What's new\n\nbody"],
+    ['lowercase', "## what's new\n\nbody"],
+  ])('narrative marker must be the exact body prefix: %s', (_name, body) => {
+    const page = renderReleaseNotesPage([makeRelease({ body })])
+    expect(page).toContain('Narrative unavailable')
+  })
+
+  test('a body starting with the exact marker is narrated', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({ body: "## What's new\n\nbody" }),
+    ])
+    expect(page).not.toContain('Narrative unavailable')
+  })
+
+  for (const [name, body] of Object.entries(HOSTILE_CORPUS)) {
+    test(`output-safety property holds for hostile body: ${name}`, () => {
+      const page = renderReleaseNotesPage([
+        makeRelease({ body }),
+        makeRelease({
+          tag_name: 'v0.1.0',
+          name: 'v0.1.0',
+          published_at: '2025-01-01T00:00:00Z',
+          body: null,
+        }),
+      ])
+      expect(unsafeNodes(page)).toEqual([])
+    })
+  }
+
+  test('output-safety property holds for randomly combined hostile fragments', () => {
+    const fragments = [
+      '[a](javascript:alert(1))',
+      '[a [b] c](vbscript:x)',
+      '[x][r]',
+      '[r]: http://e.example',
+      '![i](https://t.example/p.png)',
+      '![i][r]',
+      '<script>alert(1)</script>',
+      '<img src=x onerror=1>',
+      '<javascript:alert(1)>',
+      '<http://e.example>',
+      'http://e.example/a',
+      'www.e.example',
+      'a@e.example',
+      '\\`<b>x</b>`',
+      '`code <b>`',
+      '```',
+      '~~~html',
+      '<!--',
+      '-->',
+      '{x}',
+      '| a | b |\n| - | - |\n| http://e.example | [l](data:x) |',
+      '> quote [q](javascript:1)',
+      '- item <i>i</i>',
+      '# H1',
+      '#### H4 {y}',
+      'Setext\n===',
+      '[^1]: note http://e.example',
+      '[^1]',
+      '',
+      '',
+    ]
+    let seed = 1337
+    const next = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      return seed / 4294967296
+    }
+    for (let i = 0; i < 400; i++) {
+      const count = 1 + Math.floor(next() * 8)
+      const separators = ['\n', '\n\n', ' ', '']
+      let body = ''
+      for (let j = 0; j < count; j++) {
+        body += fragments[Math.floor(next() * fragments.length)] ?? ''
+        body += separators[Math.floor(next() * separators.length)] ?? ''
+      }
+      const page = renderReleaseNotesPage([makeRelease({ body })])
+      expect({ body, found: unsafeNodes(page) }).toEqual({ body, found: [] })
+    }
+  })
+
+  test('output-safety property holds for hostile release metadata', () => {
+    const page = renderReleaseNotesPage([
+      makeRelease({
+        tag_name: '<img src=x onerror=1>{evil}\n## injected',
+        name: 'x',
+        html_url: 'javascript:alert(1)',
+        published_at: '<script>',
+        updated_at: 'http://example.com',
+      }),
+    ])
+    expect(unsafeNodes(page)).toEqual([])
+    expect(page).not.toMatch(/^## injected/m)
+  })
+
   test('output passes markdownlint with the repo config', async () => {
     const page = renderReleaseNotesPage([
       makeRelease({
@@ -369,6 +585,25 @@ describe('generateReleaseNotesPage', () => {
       },
     })
     expect(requests).toHaveLength(1)
+  })
+
+  test('throws instead of silently stopping at the page limit', async () => {
+    let calls = 0
+    const endless = async () => {
+      calls++
+      return jsonResponse([makeRelease()], {
+        link: `<https://api.github.com/repositories/1/releases?page=${calls + 1}>; rel="next"`,
+      })
+    }
+    await expect(fetchReleases('t', endless)).rejects.toThrow(/page limit/i)
+
+    const warn = spyOn(console, 'warn').mockImplementation(() => {})
+    const page = await generateReleaseNotesPage({
+      token: 't',
+      fetchImpl: endless,
+    })
+    warn.mockRestore()
+    expect(page).toContain('not embedded in this build')
   })
 
   test('falls back to the stub when the API request fails', async () => {

@@ -11,9 +11,11 @@
  * GitHub Releases is written instead, so the docs build never depends on the
  * network.
  *
- * Release bodies are untrusted input: HTML is stripped, MDX-significant braces
- * are escaped, non-https links are dropped (text kept), fences are balanced and
- * bodies are length-capped.
+ * Release bodies are untrusted input. Each is length-capped, parsed with
+ * remark (CommonMark + GFM), rewritten on the syntax tree and re-serialized:
+ * raw HTML and images are removed (alt text kept), links survive only with an
+ * https URL, headings are demoted under the version heading, and braces are
+ * escaped. The page is plain `.md`, so MDX never evaluates it.
  *
  * Usage:
  *   bun docs/scripts/generate-release-notes.ts
@@ -22,6 +24,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
+import remarkGfm from 'remark-gfm'
+import remarkParse from 'remark-parse'
+import remarkStringify from 'remark-stringify'
+import { unified } from 'unified'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -39,8 +45,12 @@ const MAX_PAGES = 50
 /** Per-request cap so a stalled GitHub API call fails fast into the stub page. */
 const FETCH_TIMEOUT_MS = 15_000
 const MAX_BODY_CHARS = 20000
-/** Bodies without this heading were not narrated by Fro Bot. */
-const NARRATIVE_MARKER = /^ {0,3}##[ \t]+What['’]s new\b/im
+/**
+ * A body is narrated only when it starts with exactly this string. This must
+ * match NARRATIVE_MARKER in scripts/dispatch-release-notes.sh, which is the
+ * authority: no leading whitespace, ASCII apostrophe, at the very start.
+ */
+const NARRATIVE_MARKER = "## What's new"
 /** Version headings are h2; body headings nest from h3 downwards. */
 const VERSION_HEADING_LEVEL = 2
 
@@ -130,224 +140,228 @@ export async function fetchReleases(
     }
     url = nextPageUrl(response.headers.get('link'))
   }
+  // A silent stop here would publish a page that quietly omits older releases.
+  if (url != null) {
+    throw new Error(
+      `GitHub API page limit (${MAX_PAGES}) reached; more pages remain`,
+    )
+  }
   return releases
+}
+
+const parser = unified().use(remarkParse).use(remarkGfm)
+
+/**
+ * Plain Markdown out: bullets, emphasis and fences are fixed so every body —
+ * and the lint rules that check consistency across the page — sees one style.
+ * `{` and `}` are escaped in prose so the text stays inert even if the page is
+ * ever renamed to `.mdx`.
+ */
+const stringifier = unified()
+  .use(remarkGfm)
+  .use(remarkStringify, {
+    bullet: '-',
+    emphasis: '_',
+    strong: '*',
+    fences: true,
+    rule: '-',
+    listItemIndent: 'one',
+    unsafe: [{ character: '{' }, { character: '}' }],
+  })
+
+type Root = ReturnType<typeof parser.parse>
+
+/** Parse Markdown the way the docs site will (CommonMark + GFM). */
+export function parseMarkdown(markdown: string): MdNode {
+  return parser.parse(markdown) as unknown as MdNode
 }
 
 // ---------------------------------------------------------------------------
 // Sanitizing
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal structural view of an mdast node. The sanitizer rewrites the tree in
+ * place and in ways the strict per-node mdast types do not model (splicing
+ * phrasing content into parents), so it works on this shape and casts at the
+ * parse/stringify boundary.
+ */
+export interface MdNode {
+  type: string
+  children?: MdNode[]
+  value?: string
+  url?: string
+  title?: string | null
+  alt?: string | null
+  depth?: number
+  identifier?: string
+  lang?: string | null
+  meta?: string | null
+}
+
+interface SanitizeState {
+  /** First definition wins, as in CommonMark. */
+  definitions: Map<string, string>
+  /** Added to every body heading depth. */
+  shift: number
+  previousLevel: number
+}
+
 function isHttps(url: string): boolean {
-  return /^https:\/\//i.test(url)
+  if (!/^https:\/\//i.test(url)) return false
+  try {
+    return new URL(url).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
-const INLINE_LINK =
-  /(!?)\[([^\]]*)\]\(\s*(<[^>]*>|(?:[^\s()]|\([^\s()]*\))*)((?:\s+(?:"[^"]*"|'[^']*'))?)\s*\)/g
-const HTML_CONSTRUCT =
-  /<\/?[A-Za-z][^<>]*>|<!--[\s\S]*?-->|<![^<>]*>|<\?[^<>]*>/g
-const INLINE_CODE = /(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g
-
-/** Keep https links; reduce everything else to its text. */
-function filterLinks(line: string): string {
-  return line
-    .replace(/<(https:\/\/[^\s<>]+)>/gi, '$1')
-    .replace(INLINE_LINK, (_match, bang, text, rawUrl, title) => {
-      const url = String(rawUrl).replace(/^<|>$/g, '')
-      return isHttps(url) ? `${bang}[${text}](${url}${title})` : String(text)
-    })
+function walk(node: MdNode, visit: (node: MdNode) => void): void {
+  visit(node)
+  for (const child of node.children ?? []) walk(child, visit)
 }
 
-/** Sanitize prose that is not inside a code span. */
-function sanitizeProse(segment: string): string {
-  let cleaned = segment
-  let previous: string
-  // Iterate to a fixed point so nested constructs like `<<b>script>` cannot
-  // reassemble into a tag after one pass.
-  do {
-    previous = cleaned
-    cleaned = cleaned.replace(HTML_CONSTRUCT, '')
-  } while (cleaned !== previous)
-  return cleaned.replace(/</g, '\\<').replace(/(?<!\\)([{}])/g, '\\$1')
+function prepareState(root: MdNode): SanitizeState {
+  const definitions = new Map<string, string>()
+  const depths: number[] = []
+  walk(root, (node) => {
+    if (node.type === 'heading') depths.push(node.depth ?? 1)
+    if (
+      node.type === 'definition' &&
+      node.identifier != null &&
+      node.url != null &&
+      !definitions.has(node.identifier)
+    ) {
+      definitions.set(node.identifier, node.url)
+    }
+  })
+  // The shallowest body heading becomes one level below the version heading.
+  const shift =
+    depths.length === 0 ? 0 : VERSION_HEADING_LEVEL + 1 - Math.min(...depths)
+  return { definitions, shift, previousLevel: VERSION_HEADING_LEVEL }
 }
 
-function sanitizeInline(line: string): string {
-  const linked = filterLinks(line)
-  let result = ''
+/**
+ * Text that GFM would autolink on render: `http://` URLs, `www.` hosts,
+ * `mailto:`/`xmpp:` and bare email addresses. Autolinking would create links
+ * that were never in the AST this sanitizer vetted (and so bypass the https
+ * rule), so these spans are emitted as inline code instead. https URLs are
+ * left alone: they autolink to an https link, which is allowed.
+ */
+const AUTOLINK_LITERAL =
+  /http:\/\/\S*|www\.\S*|(?:mailto|xmpp):\S*|[\w.+-]+@[\w-]+(?:\.[\w-]+)+/gi
+
+function neutralizeAutolinks(value: string): MdNode[] {
+  const nodes: MdNode[] = []
   let last = 0
-  for (const match of linked.matchAll(INLINE_CODE)) {
+  for (const match of value.matchAll(AUTOLINK_LITERAL)) {
     const start = match.index ?? 0
-    result += sanitizeProse(linked.slice(last, start)) + match[0]
+    nodes.push(...textNode(value.slice(last, start)))
+    nodes.push({ type: 'inlineCode', value: match[0] })
     last = start + match[0].length
   }
-  return result + sanitizeProse(linked.slice(last))
+  return [...nodes, ...textNode(value.slice(last))]
 }
 
-type BodyLine =
-  | { kind: 'code'; text: string }
-  | { kind: 'text'; text: string }
-  | { kind: 'heading'; level: number; text: string }
+function textNode(value: string | null | undefined): MdNode[] {
+  return value == null || value === '' ? [] : [{ type: 'text', value }]
+}
 
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/
-const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)[ \t]*$/
-const ATX_HEADING = /^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/
-const HORIZONTAL_RULE = /^ {0,3}([*_-][ \t]*){3,}$/
-const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:[ \t]*<?(\S*?)>?(?:[ \t]|$)/
+function sanitizeChildren(node: MdNode, state: SanitizeState): void {
+  if (node.children == null) return
+  node.children = node.children.flatMap((child) => sanitizeNode(child, state))
+}
 
-function isSetextCandidate(line: string): boolean {
-  return (
-    line.trim() !== '' &&
-    !/^( {4}|\t)/.test(line) &&
-    !/^ {0,3}([#>*+|-]|\d+[.)]\s|`{3}|~{3})/.test(line)
+function keepLink(
+  node: MdNode,
+  url: string,
+  state: SanitizeState,
+): MdNode | null {
+  sanitizeChildren(node, state)
+  if (!isHttps(url)) return null
+  const children = node.children?.length ? node.children : textNode(url)
+  return { type: 'link', url, title: null, children }
+}
+
+function sanitizeHeading(node: MdNode, state: SanitizeState): MdNode {
+  const level = Math.min(
+    Math.max((node.depth ?? 1) + state.shift, VERSION_HEADING_LEVEL + 1),
+    state.previousLevel + 1,
+    6,
   )
-}
+  state.previousLevel = level
+  node.depth = level
+  sanitizeChildren(node, state)
 
-function cleanHeadingText(raw: string): string {
-  const text = sanitizeInline(raw.replace(/[ \t]+#+$/, ''))
-    .replace(/\s+/g, ' ')
-    .replace(/[.,;:!]+$/, '')
-    .trim()
-  return text === '' ? 'Untitled' : text
-}
-
-interface Fence {
-  marker: string
-  char: string
-  /** Opening line, reduced to marker + language word. */
-  opening: string
-}
-
-function matchFenceOpen(line: string): Fence | null {
-  const open = line.match(FENCE_OPEN)
-  const marker = open?.[1]
-  if (marker == null) return null
-  const info = open?.[2] ?? ''
-  // A backtick fence's info string cannot contain a backtick (inline code).
-  if (marker.startsWith('`') && info.includes('`')) return null
-  // Keep only the language word; fence metadata is not needed here.
-  const lang = info.trim().match(/^[\w+#.-]*/)?.[0] ?? ''
-  return { marker, char: marker.charAt(0), opening: `${marker}${lang}` }
-}
-
-function closesFence(line: string, fence: Fence): boolean {
-  const marker = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/)?.[1]
-  return (
-    marker?.startsWith(fence.char) === true &&
-    marker.length >= fence.marker.length
+  const last = node.children?.at(-1)
+  if (last?.type === 'text' && last.value != null) {
+    last.value = last.value.replace(/[.,;:!]+$/, '')
+  }
+  const empty = (node.children ?? []).every(
+    (child) => child.type === 'text' && (child.value ?? '') === '',
   )
+  if (empty) node.children = textNode('Untitled')
+  return node
 }
 
 /**
- * Parse one line outside a fence. `consumedNext` is set when a setext
- * underline on the following line was folded into a heading.
+ * Rewrite one node, returning the nodes that replace it:
+ * - raw HTML and definitions are removed;
+ * - images become their alt text;
+ * - links (and reference links, resolved through their definition) survive
+ *   only when the URL is https, otherwise they unwrap to their content;
+ * - code stays as it is — it renders as code, never as HTML.
  */
-function parseProseLine(
-  line: string,
-  nextLine: string,
-): { parsed: BodyLine | null; consumedNext: boolean } {
-  const definition = line.match(REFERENCE_DEFINITION)
-  if (definition != null) {
-    const kept = isHttps(definition[1] ?? '')
-    return {
-      parsed: kept ? { kind: 'text', text: sanitizeInline(line) } : null,
-      consumedNext: false,
+function sanitizeNode(node: MdNode, state: SanitizeState): MdNode[] {
+  switch (node.type) {
+    case 'html':
+    case 'definition':
+      return []
+    case 'text':
+      return neutralizeAutolinks(node.value ?? '')
+    case 'image':
+    case 'imageReference':
+      return textNode(node.alt)
+    case 'link': {
+      const link = keepLink(node, node.url ?? '', state)
+      return link == null ? (node.children ?? []) : [link]
     }
-  }
-
-  const atx = line.match(ATX_HEADING)
-  if (atx?.[1] != null && atx[2] != null) {
-    return {
-      parsed: {
-        kind: 'heading',
-        level: atx[1].length,
-        text: cleanHeadingText(atx[2]),
-      },
-      consumedNext: false,
+    case 'linkReference': {
+      const url = state.definitions.get(node.identifier ?? '') ?? ''
+      const link = keepLink(node, url, state)
+      return link == null ? (node.children ?? []) : [link]
     }
-  }
-
-  const underline = nextLine.match(SETEXT_UNDERLINE)?.[1]
-  if (underline != null && isSetextCandidate(line)) {
-    return {
-      parsed: {
-        kind: 'heading',
-        level: underline.startsWith('=') ? 1 : 2,
-        text: cleanHeadingText(line.trim()),
-      },
-      consumedNext: true,
+    case 'heading':
+      return [sanitizeHeading(node, state)]
+    case 'code': {
+      // The info string is free text; keep only a plain language word.
+      node.lang = /^[\w+#.-]+$/.test(node.lang ?? '') ? node.lang : null
+      node.meta = null
+      return [node]
     }
-  }
-
-  // Normalize bullet markers so lists stay consistent across releases.
-  const normalized = HORIZONTAL_RULE.test(line)
-    ? line
-    : line.replace(/^(\s*)[*+](\s+)/, '$1-$2')
-  return {
-    parsed: { kind: 'text', text: sanitizeInline(normalized) },
-    consumedNext: false,
+    default:
+      sanitizeChildren(node, state)
+      return [node]
   }
 }
 
-/** Split a body into code, prose and heading lines, sanitizing as it goes. */
-function parseBody(body: string): BodyLine[] {
-  const rawLines = body.replace(/\r\n?/g, '\n').replace(/\t/g, '  ').split('\n')
-  const lines: BodyLine[] = []
-  let fence: Fence | null = null
-
-  for (let i = 0; i < rawLines.length; i++) {
-    const line = rawLines[i] ?? ''
-
-    if (fence != null) {
-      if (closesFence(line, fence)) {
-        lines.push({ kind: 'code', text: fence.marker })
-        fence = null
-      } else {
-        lines.push({ kind: 'code', text: line })
-      }
-      continue
-    }
-
-    fence = matchFenceOpen(line)
-    if (fence != null) {
-      lines.push({ kind: 'code', text: fence.opening })
-      continue
-    }
-
-    const { parsed, consumedNext } = parseProseLine(line, rawLines[i + 1] ?? '')
-    if (parsed != null) lines.push(parsed)
-    if (consumedNext) i++
-  }
-
-  // An unterminated fence must not swallow whatever follows this body.
-  if (fence != null) lines.push({ kind: 'code', text: fence.marker })
-  return lines
-}
-
-/**
- * Shift body headings so the shallowest one sits directly under the version
- * heading, and never skip a level (markdownlint MD001).
- */
-function renderBodyLines(lines: BodyLine[]): string {
-  const levels = lines.flatMap((l) => (l.kind === 'heading' ? [l.level] : []))
-  const shift =
-    levels.length === 0 ? 0 : VERSION_HEADING_LEVEL + 1 - Math.min(...levels)
-  let previousLevel = VERSION_HEADING_LEVEL
-
-  const rendered = lines.map((line) => {
-    if (line.kind !== 'heading') return line.text
-    const level = Math.min(
-      Math.max(line.level + shift, VERSION_HEADING_LEVEL + 1),
-      previousLevel + 1,
-      6,
-    )
-    previousLevel = level
-    return `${'#'.repeat(level)} ${line.text}`
-  })
-
-  return rendered
-    .map((l) => l.trimEnd())
+function stringifyNodes(children: MdNode[]): string {
+  const root = { type: 'root', children } as unknown as Root
+  return stringifier
+    .stringify(root)
+    .replace(/\t/g, '  ')
+    .split('\n')
+    .map((line) => line.trimEnd())
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+/** Parse an untrusted Markdown body, strip anything unsafe, re-serialize it. */
+function sanitizeBody(body: string): string {
+  const root = parseMarkdown(body)
+  sanitizeChildren(root, prepareState(root))
+  return stringifyNodes(root.children ?? [])
 }
 
 /** Cap oversized bodies on a line (or word) boundary. */
@@ -393,17 +407,40 @@ function releaseTime(release: GithubRelease): number {
 }
 
 function renderRelease(release: GithubRelease): string {
-  const heading = cleanHeadingText(release.tag_name || release.name || '')
-  const url = isHttps(release.html_url) ? release.html_url : RELEASES_PAGE_URL
+  const url = isHttps(release.html_url)
+    ? new URL(release.html_url).href
+    : RELEASES_PAGE_URL
   const rawBody = release.body ?? ''
   const { text, truncated } = capBody(rawBody.replace(/\r\n?/g, '\n'))
-  const body = renderBodyLines(parseBody(text))
+  const body = sanitizeBody(text)
 
-  const parts = [
-    `## ${heading}`,
-    `Published ${formatDate(release.published_at ?? release.created_at)} · Updated ${formatDate(release.updated_at)} · [View on GitHub](${url})`,
-  ]
-  if (!NARRATIVE_MARKER.test(rawBody)) {
+  // Header text comes from the API too, so it is built as syntax-tree nodes and
+  // serialized, never interpolated into Markdown.
+  const heading = stringifyNodes([
+    {
+      type: 'heading',
+      depth: VERSION_HEADING_LEVEL,
+      children: textNode(release.tag_name || release.name || 'Untitled'),
+    },
+  ])
+  const meta = stringifyNodes([
+    {
+      type: 'paragraph',
+      children: [
+        ...textNode(
+          `Published ${formatDate(release.published_at ?? release.created_at)} · Updated ${formatDate(release.updated_at)} · `,
+        ),
+        {
+          type: 'link',
+          url,
+          children: textNode('View on GitHub'),
+        },
+      ],
+    },
+  ])
+
+  const parts = [heading, meta]
+  if (!rawBody.startsWith(NARRATIVE_MARKER)) {
     parts.push(
       '> **Narrative unavailable.** No Fro Bot narrative was published for this release; the notes below are the raw release body.',
     )
