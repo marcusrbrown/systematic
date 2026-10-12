@@ -312,7 +312,7 @@ interface SessionRuntime {
   prepareTransition(input: unknown): TransitionPrepareResult
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
   control(sessionID: string, input: unknown): ToolResultContent
-  markUnavailable(): void
+  markUnavailable(cause?: GuardUnavailableCause): void
   metadata(): Record<string, unknown>
   recover(sessionID: string, allowFresh?: boolean): Promise<void>
 }
@@ -620,6 +620,13 @@ function hookCause(
     ...(reasonCode !== undefined ? { reasonCode } : {}),
     timedOut: reasonCode === 'command-timeout',
   }
+}
+
+function afterCause(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return hookCause('tool-after', kind, reasonCode)
 }
 
 function afterFailure(
@@ -2633,14 +2640,14 @@ function createSessionRuntime(
           child.parentID === host.sessionID,
       )
     ) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     let parts: ReadonlyArray<unknown>
     try {
       parts = await options.hostReadback.readSessionParts(childSessionID)
     } catch {
-      markUnavailable()
+      markUnavailable(afterCause('history-read-failed'))
       return
     }
     // Classify child session markers: own (filter and recover), foreign-empty
@@ -2649,13 +2656,13 @@ function createSessionRuntime(
     const classification = classifyMarkersFromParts(parts)
     if (classification.kind === 'foreign-empty') return
     if (classification.kind === 'ambiguous') {
-      markUnavailable()
+      markUnavailable(afterCause('markers-ambiguous'))
       return
     }
     const ownMarkers = classification.markers
     const seed = extractReceiptReadbackSeed(ownMarkers)
     if (seed.status !== 'ready') {
-      markUnavailable()
+      markUnavailable(afterCause('recovery-rejected'))
       return
     }
     const childLedger = createReceiptLedger({
@@ -2664,12 +2671,12 @@ function createSessionRuntime(
       sessionSalt: seed.sessionSalt,
     })
     if (!seedAgrees(childLedger, seed)) {
-      markUnavailable()
+      markUnavailable(afterCause('recovery-rejected'))
       return
     }
     const recovered = childLedger.recoverReadback(ownMarkers)
     if (recovered.status === 'rejected') {
-      markUnavailable()
+      markUnavailable(afterCause('recovery-rejected'))
       return
     }
     // Touch the fixed parent observer for the stable workspace path, but do
@@ -2697,27 +2704,27 @@ function createSessionRuntime(
       const operation = childReceipt.canonical.operation
       if (!localOperation(operation)) continue
       if (childReceipt.canonical.workspaceDigest !== expectedWorkspace) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-observation-rejected'))
         return
       }
 
       const targetIdentity = childReceipt.canonical.operationTargetIdentity
       if (!targetIdentity) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-input-invalid'))
         return
       }
       if (
         batchTargetIdentity !== undefined &&
         targetIdentity !== batchTargetIdentity
       ) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-target-mismatch'))
         return
       }
       batchTargetIdentity = targetIdentity
 
       const registration = operationObserverRegistration(targetIdentity)
       if (!registration || !options.observer) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-input-invalid'))
         return
       }
       let validation: RegisteredWorktreeValidationResult
@@ -2726,7 +2733,7 @@ function createSessionRuntime(
           registration.targetRoot,
         )
       } catch {
-        markUnavailable()
+        markUnavailable(afterCause('operation-input-invalid'))
         return
       }
       if (
@@ -2736,7 +2743,12 @@ function createSessionRuntime(
           registration.registeredWorktreeIdentity ||
         registration.observer.targetDigest !== targetIdentity
       ) {
-        markUnavailable()
+        markUnavailable(
+          afterCause(
+            'operation-input-invalid',
+            validation.status === 'error' ? validation.reasonCode : undefined,
+          ),
+        )
         return
       }
 
@@ -2744,14 +2756,17 @@ function createSessionRuntime(
       try {
         targetResult = await registration.observer.snapshot()
       } catch {
-        markUnavailable()
+        markUnavailable(afterCause('local-snapshot-error'))
         return
       }
-      if (
-        targetResult.status === 'unavailable' ||
-        targetResult.snapshot.targetDigest !== targetIdentity
-      ) {
-        markUnavailable()
+      if (targetResult.status === 'unavailable') {
+        markUnavailable(
+          afterCause('local-snapshot-unavailable', targetResult.reasonCode),
+        )
+        return
+      }
+      if (targetResult.snapshot.targetDigest !== targetIdentity) {
+        markUnavailable(afterCause('operation-target-mismatch'))
         return
       }
 
@@ -2763,7 +2778,7 @@ function createSessionRuntime(
           recoveredContext.targetIdentity !== targetIdentity) ||
         (targetIdentity !== options.observer.targetDigest && !recoveredContext)
       ) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-target-mismatch'))
         return
       }
 
@@ -3394,7 +3409,7 @@ function createSessionRuntime(
     }
     const challenge = challengeForTransition(host.sessionID, target)
     if (!challenge) {
-      markUnavailable()
+      markUnavailable(hookCause('tool-before', 'call-lifecycle-mismatch'))
       return true
     }
     if (options.config.mode === 'protected') {
@@ -3743,7 +3758,7 @@ function createSessionRuntime(
       await prepareHostCall(host, output.args)
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
-      markUnavailable()
+      markUnavailable(hookCause('tool-before', 'hook-threw'))
     }
   }
 
@@ -4012,14 +4027,16 @@ function createSessionRuntime(
     const finalSkill = normalizeSkill(host.tool, host.args)
     const completedSkill = completedSkillCalls.get(callDigest)
     if (completedSkill) {
-      if (completedSkill !== finalSkill) markUnavailable()
+      if (completedSkill !== finalSkill) {
+        markUnavailable(afterCause('call-lifecycle-mismatch'))
+      }
       return
     }
     const pending = pendingSkills.get(callDigest)
     if (!pending) return
     pendingSkills.delete(callDigest)
     if (!finalSkill || finalSkill !== pending.skill) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     if (!isSuccessfulSkillAfter(output)) return
@@ -4090,7 +4107,7 @@ function createSessionRuntime(
     const pending = pendingStarts.get(callDigest)
     pendingStarts.delete(callDigest)
     if (!pending) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     const normalized = normalizeStartInput(host.args)
@@ -4098,7 +4115,7 @@ function createSessionRuntime(
       normalized === undefined ||
       JSON.stringify(normalized) !== pending.fingerprint
     ) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     if (!isSuccessfulAfter(output)) return
@@ -4108,7 +4125,7 @@ function createSessionRuntime(
       (result.reasonCode === 'guard-unavailable' ||
         result.reasonCode === 'invalid-configuration')
     ) {
-      markUnavailable()
+      markUnavailable(afterCause('operation-input-invalid', result.reasonCode))
     }
     if (result.status === 'started') {
       const cause = await seedRemoteScopes(
@@ -4190,9 +4207,9 @@ function createSessionRuntime(
       writeSuccessfulCompletionResult(output, pending.target)
       return
     }
-    markUnavailable()
     const reasonCode =
       'reasonCode' in result ? result.reasonCode : 'guard-unavailable'
+    markUnavailable(afterCause('operation-observation-rejected', reasonCode))
     const terminal: TerminalComplete = {
       target: pending.target,
       status: result.status === 'waiting' ? 'unavailable' : result.status,
@@ -4255,7 +4272,7 @@ function createSessionRuntime(
     const expectedTarget = replay?.target ?? abandonedTarget ?? blocked?.target
     if (!expectedTarget) return false
     if (finalTarget !== expectedTarget) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return true
     }
     if (replay) replayComplete(callDigest)
@@ -4423,7 +4440,7 @@ function createSessionRuntime(
       status: 'unavailable',
       reasonCode: 'invalid-transition',
     })
-    markUnavailable()
+    markUnavailable(afterCause('call-lifecycle-mismatch'))
     writeAbandonedCompletionResult(output, pending.target, 'invalid-transition')
   }
 
@@ -4431,7 +4448,7 @@ function createSessionRuntime(
     finalTarget: TransitionTarget | undefined,
     output: unknown,
   ): void {
-    markUnavailable()
+    markUnavailable(afterCause('call-lifecycle-mismatch'))
     // No pending transition and nothing replayable: `finalTarget` is
     // whatever normalizeTarget() could read out of this call's own args
     // (real, when the args named a valid target) and is passed through
@@ -5016,7 +5033,7 @@ function createSessionRuntime(
         await finishOperation(host, output)
       }
     } catch {
-      markUnavailable()
+      markUnavailable(hookCause('tool-after', 'hook-threw'))
     }
   }
 
@@ -5289,7 +5306,7 @@ export function createOpencodeWorkflowGuard(
       await runtime.hooks['tool.execute.before'](input, output)
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
-      runtime.markUnavailable()
+      runtime.markUnavailable(hookCause('tool-before', 'hook-threw'))
     }
   }
 
@@ -5300,7 +5317,7 @@ export function createOpencodeWorkflowGuard(
     try {
       await runtime.hooks['tool.execute.after'](input, output)
     } catch {
-      runtime.markUnavailable()
+      runtime.markUnavailable(hookCause('tool-after', 'hook-threw'))
     }
   }
 
@@ -5318,7 +5335,7 @@ export function createOpencodeWorkflowGuard(
     try {
       await runtime.hooks.event(input)
     } catch {
-      runtime.markUnavailable()
+      runtime.markUnavailable(hookCause('event', 'hook-threw'))
     }
   }
 
@@ -5328,7 +5345,7 @@ export function createOpencodeWorkflowGuard(
     try {
       await runtime.hooks['experimental.chat.system.transform'](input, output)
     } catch {
-      runtime.markUnavailable()
+      runtime.markUnavailable(hookCause('transform', 'hook-threw'))
     }
   }
 

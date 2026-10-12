@@ -9502,6 +9502,314 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
+  describe('guard-unavailable first-cause diagnostic (hook-threw)', () => {
+    const BOOM = 'boom /path/secret-AKIA0000.env token=abc'
+    const FORBIDDEN = ['secret', 'AKIA', 'boom', '/path', 'token']
+    const ALLOWED_CAUSE_KEYS = [
+      'site',
+      'kind',
+      'reasonCode',
+      'operation',
+      'timedOut',
+    ]
+
+    function boom(): never {
+      throw new Error(BOOM)
+    }
+
+    async function statusOutput(adapter: OpencodeWorkflowGuard): Promise<{
+      raw: string
+      parsed: Record<string, unknown>
+    }> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const raw = expectToolOutput(result).output
+      return { raw, parsed: JSON.parse(raw) }
+    }
+
+    function hookThrew(site: string): Record<string, unknown> {
+      return { site, kind: 'hook-threw', timedOut: false }
+    }
+
+    // An exception raised while the runtime before-hook prepares the call (a
+    // host payload accessor that throws) is caught by the runtime before().
+    async function throwInBefore(
+      adapter: OpencodeWorkflowGuard,
+      callID = 'throw-before',
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID },
+        {
+          get args(): unknown {
+            return boom()
+          },
+        },
+      )
+    }
+
+    // A successful before-hook, then a host output whose accessor throws while
+    // the after-hook parses it: caught by the runtime after().
+    async function throwInAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID = 'throw-after',
+      args: Record<string, unknown> = { command: 'bun test' },
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID },
+        { args },
+      )
+      await adapter.hooks['tool.execute.after'](
+        { tool: 'bash', sessionID: SESSION_A, callID, args },
+        {
+          get title(): unknown {
+            return boom()
+          },
+          output: 'ok',
+          metadata: {},
+        },
+      )
+    }
+
+    test('an exception escaping the before hook records hook-threw at tool-before', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await throwInBefore(adapter)
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-before'))
+    })
+
+    test('an exception escaping the after hook records hook-threw at tool-after', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await throwInAfter(adapter)
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-after'))
+    })
+
+    test('an exception escaping the event hook records hook-threw at event', async () => {
+      const adapter = createAdapter('observe')
+      // Initialize the session first: a throw before the session's guard
+      // exists cannot be recorded at all (see the report for slice 3).
+      await adapter.hooks.event({
+        event: {
+          type: 'message.updated',
+          properties: { sessionID: SESSION_A },
+        },
+      })
+      await adapter.hooks.event({
+        event: {
+          get type(): unknown {
+            return boom()
+          },
+          properties: { sessionID: SESSION_A },
+        },
+      })
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+    })
+
+    test('an exception escaping the transform hook records hook-threw at transform', async () => {
+      const adapter = createAdapter('observe')
+      const system = Object.assign(['base prompt'], {
+        filter: () => boom(),
+      })
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system },
+      )
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('transform'))
+    })
+
+    test('an earlier typed cause wins over a later hook-threw', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'bash',
+          sessionID: SESSION_A,
+          callID: 'typed-first',
+          args: { command: 'bun test' },
+        },
+        { title: 'run', output: 'ok', metadata: {} },
+      )
+      await throwInBefore(adapter, 'typed-first-then-throw')
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-after',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+    })
+
+    test('the cause never carries the error message, a path, or a file name', async () => {
+      const worktree = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-hook-threw-')),
+      )
+      try {
+        fs.writeFileSync(path.join(worktree, 'secret-AKIA0000.env'), 'k=v\n')
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          targetDirectory: worktree,
+          observer: sequenceObserver([operationSnapshot()]),
+          classifier: createReceiptClassifier(),
+          runtimeRequiredOperations: [],
+        })
+        const args = { filePath: 'secret-AKIA0000.env', content: 'k=v\n' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'write', sessionID: SESSION_A, callID: 'secret-write' },
+          { args },
+        )
+        await adapter.hooks['tool.execute.after'](
+          { tool: 'write', sessionID: SESSION_A, callID: 'secret-write', args },
+          {
+            get title(): unknown {
+              return boom()
+            },
+            output: 'ok',
+            metadata: {},
+          },
+        )
+        const { raw, parsed } = await statusOutput(adapter)
+        expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-after'))
+        const cause = parsed.firstUnavailableCause as Record<string, unknown>
+        for (const key of Object.keys(cause)) {
+          expect(ALLOWED_CAUSE_KEYS).toContain(key)
+        }
+        for (const forbidden of FORBIDDEN) {
+          expect(raw).not.toContain(forbidden)
+        }
+      } finally {
+        fs.rmSync(worktree, { recursive: true, force: true })
+      }
+    })
+
+    describe('hook paths that already had a typed result now carry a cause', () => {
+      test('a start after-hook with no pending start records call-lifecycle-mismatch', async () => {
+        const adapter = createAdapter('observe')
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'start-no-pending',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(
+          (await statusOutput(adapter)).parsed.firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
+
+      test('a skill after-hook for a different skill than the before-hook records call-lifecycle-mismatch', async () => {
+        const adapter = createAdapter('observe')
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_skill',
+            sessionID: SESSION_A,
+            callID: 'skill-swap',
+          },
+          { args: { name: 'ce:work' } },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_skill',
+            sessionID: SESSION_A,
+            callID: 'skill-swap',
+            args: { name: 'git-commit' },
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(
+          (await statusOutput(adapter)).parsed.firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
+
+      test('a complete after-hook with no pending completion records call-lifecycle-mismatch', async () => {
+        const adapter = createAdapter('observe')
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID: 'complete-no-pending',
+            args: { target: 'unit' },
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(
+          (await statusOutput(adapter)).parsed.firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
+    })
+
+    // Behavioral coverage of every markUnavailable() site would need a fixture
+    // per site (host readback, question gates, terminal replays), so this is a
+    // source-text guard: a zero-argument call records no cause and makes the
+    // guard unavailable with no diagnostic. The only allowed zero-argument
+    // calls are the two in the workflow tools' execute wrapper
+    // (`makeWorkflowTool`): they run on a tool call, not in a hook, and have
+    // no hook site to attribute.
+    test('no hook path calls markUnavailable() without a cause', () => {
+      // Line comments are blanked in place (same length) so a comment that
+      // mentions `markUnavailable()` is not mistaken for a call.
+      const source = fs
+        .readFileSync(
+          path.resolve(
+            import.meta.dir,
+            '../../src/lib/opencode-workflow-guard.ts',
+          ),
+          'utf8',
+        )
+        .replace(/\/\/.*$/gm, (comment) => ' '.repeat(comment.length))
+      // `markUnavailable(): void` in the SessionRuntime interface is a
+      // signature, not a call.
+      const bareCall = /\bmarkUnavailable\(\s*\)(?!\s*:)/g
+      const toolWrapperStart = source.indexOf('function makeWorkflowTool(')
+      const toolWrapperEnd = source.indexOf(
+        'export function createOpencodeWorkflowGuard(',
+      )
+      expect(toolWrapperStart).toBeGreaterThan(-1)
+      expect(toolWrapperEnd).toBeGreaterThan(toolWrapperStart)
+      const outsideWrapper: string[] = []
+      const insideWrapper: string[] = []
+      for (const match of source.matchAll(bareCall)) {
+        const line = source.slice(0, match.index).split('\n').length
+        const inWrapper =
+          match.index >= toolWrapperStart && match.index < toolWrapperEnd
+        ;(inWrapper ? insideWrapper : outsideWrapper).push(`line ${line}`)
+      }
+      expect(outsideWrapper).toEqual([])
+      expect(insideWrapper).toHaveLength(2)
+    })
+  })
   test('before-only operation is abandoned at the next request boundary (transform), not by a status call', async () => {
     const adapter = createAdapter(
       'observe',
