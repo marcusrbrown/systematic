@@ -729,7 +729,7 @@ sequenceDiagram
 
 **Verification:** The tests pass, and an observed autoheal PR is not approved by Fro Bot.
 
-- [ ] **Unit 13: Main ruleset (merge gate)**
+- [x] **Unit 13: Main ruleset (merge gate)**
 
 **Goal:** A Scorecard-readable main ruleset with required review, active before cutover.
 
