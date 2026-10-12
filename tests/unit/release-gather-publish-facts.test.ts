@@ -350,7 +350,7 @@ describe('gatherPublishFacts', () => {
     })
 
     test('a page-two API failure after a page-one approval rejects, not a partial list', async () => {
-      const { api } = fake({ reviews: [...filler(100, 1), approval] })
+      const { api } = fake({ reviews: [approval, ...filler(100, 1)] })
       const failing: Api = async (path) => {
         if (path.endsWith('reviews?per_page=100&page=2')) {
           throw Object.assign(new Error('boom'), { status: 500 })
