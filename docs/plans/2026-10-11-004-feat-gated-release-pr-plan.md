@@ -187,13 +187,12 @@ Requirements are numbered as in the origin doc.
   - In that list, `@semantic-release/exec`'s `generateNotesCmd` emits the entry, and `verifyReleaseCmd` fails when `${nextRelease.version}` differs from the entry's version.
   - The publish job overwrites its checkout's `.releaserc.yaml` with this generated config before it runs semantic-release.
   - The reason for this design is that regenerating the notes at publish would differ from what was approved: the date changes, and the range includes the release commit's own `chore(release)` subject.
-- **Preview reproduces core's inputs explicitly.** Core's dry run needs push credentials (`verifyAuth`), so preview cannot use it. Preview instead loads `.releaserc.yaml` and calls the configured commit-analyzer and release-notes-generator with a context built the way core builds it:
-  - last-release discovery from tags matching `tagFormat` (`v${version}`) on the main lineage;
-  - the commit range `lastRelease.gitHead..HEAD`;
-  - `lastRelease` / `nextRelease` objects;
-  - `options` merged from the config.
+- **Preview runs real semantic-release core with no credentials.** Core's dry run still calls `verifyAuth` (`git push --dry-run`) and fetches tags from `repositoryUrl`. Preview avoids both by running core in dry-run inside a temporary clone of a local bare mirror:
+  - The clone's own git config maps the real GitHub URL to that mirror with `url.<mirror>.insteadOf`. `repositoryUrl` stays the real URL, so links in the notes are correct.
+  - The plugin list is overridden to commit-analyzer plus release-notes-generator.
+  - Every other option comes from `.releaserc.yaml`.
 
-  A parity test runs real core in dry-run against a local bare remote and compares the version and notes byte-for-byte. The publish-time `verifyReleaseCmd` is the backstop.
+  Nothing is reimplemented, which satisfies R4 exactly. The publish-time `verifyReleaseCmd` is still the backstop.
 - **Strict currency.** The release PR is rebuilt from current main on every main advance (R7). Rebuilds are keyed on the main SHA, so a rerun is a no-op. Any merge to main voids a pending approval, and the gate re-approves on its next pass.
 - **Publish invariants.** The credential-free `verify` job checks all of these for the merged commit X:
   - X is the main tip.
@@ -252,25 +251,32 @@ Requirements are numbered as in the origin doc.
 - **OIDC proof:** at the first gated release, using the publisher-identity check.
 - **Narrative rewrite token:** the narrative job dispatches `fro-bot.yaml`, which edits the release with `FRO_BOT_PAT` as it does today. The narrative job itself needs only `contents: read` and `actions: write`.
 
-### Deferred to Implementation
+### Resolved During Implementation
 
-Phase 0 sandbox evidence is needed first for these:
+Phase 0 was done by hand: the release App, the `release` environment (deploys from main only, holds `RELEASE_APP_ID`/`RELEASE_APP_PRIVATE_KEY`), and the npm trusted publisher. The sandbox tests were dropped in favour of building directly. Each open question has a backstop or an answer from evidence:
 
-- **Auto-merge.** Can a GitHub App installation token enable auto-merge on its own PR? Does the resulting merge fire `on: push`? The hourly reconcile covers it if not.
-- **Squash message.** Do `commitHeadline`/`commitBody` on `enablePullRequestAutoMerge` override the squash message? The publish version check is the backstop.
-- **Settings applier.** Does the bfra-me applier support `target: tag` rulesets, environments with branch-and-tag policies, and removal of resources missing from config? If not, document `gh api` calls instead.
-- **Review dismissal.** Can the `fro-bot` user dismiss its own review after the head changes mid-gate? If not, the gate re-checks before approving with `commit_id`, and publish's exact-head check is the backstop.
-- **Repository variables.** Confirm that only admins can set them. This is the assumption behind `RELEASE_MODE` and `RELEASE_HOLD`.
+- **App-token merges fire `on: push`.** Observed in fro-bot/agent: App-merged PRs such as #1786 produced push-triggered runs. Auto-merge enabled by an App is unverified; the hourly reconcile covers it.
+- **Squash message override.** Unverified. The publish version check is the backstop.
+- **Settings applier (bfra-me v4.38.0).**
+  - `rulesets:` objects pass straight through to the API, so `target: tag` and `bypass_actors` are expressible.
+  - A non-empty `rulesets:` or `environments:` list deletes every entry it doesn't name.
+  - Environment branch policies can't be expressed.
+  - Rulesets go in `settings.yml`. Environments are never declared there.
+- **Review dismissal.** The gate re-checks before approving, and publish's exact-head check is the backstop.
+- **Repository variables.** That only admins can set them is a documented assumption, not verified.
+- **OIDC timing.** `@semantic-release/npm` 13.1.5 exchanges the OIDC token in `verifyConditions`, which runs before core creates the tag. A successful exchange wins over `NPM_TOKEN`. An OIDC failure therefore fails before tagging.
+- **Semantic-release plugin config.** Global options merge into each plugin's config (`{...options, ...pluginConfig}`). Step keys such as `analyzeCommits:` apply to the plugin that implements that step.
+- **`@semantic-release/github` opens an issue on failure by default.** The gated config sets `failComment: false`, so the release App needs no Issues permission.
+- **Attestation.** `actions/attest` v4.2.2 with a custom `predicate-type`. Publish verifies with `gh attestation verify --repo --signer-workflow .github/workflows/release-gate.yaml --source-ref refs/heads/main --predicate-type`.
+- **Release App bot login.** Read at runtime from `create-github-app-token`'s `app-slug` output.
 
-Observed at the first gated release:
+Still to observe at the first gated release:
 
-- Does OIDC work with no `registry-url` and no `NODE_AUTH_TOKEN`?
-- Does `@semantic-release/npm` exchange OIDC in `verifyConditions`, before the tag? If not, an OIDC failure leaves an orphaned tag. The break-glass runbook covers that, and tag rulesets land only after a clean publish.
+- Whether OIDC works with no `registry-url` and no `NODE_AUTH_TOKEN`.
 
-Decided during implementation:
+Still to decide during implementation:
 
 - How Fro Bot's review (R23) withholds approval: a deterministic pre-step in `fro-bot.yaml`, or an agent action input. Read the pinned `fro-bot/agent` inputs.
-- The exact attestation statement format and the matching `gh attestation verify` flags.
 
 ## High-Level Technical Design
 
