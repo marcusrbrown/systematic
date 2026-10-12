@@ -5,9 +5,9 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      version:
-        description: Release version (optional, semver or v-prefixed)
-        required: false
+      tag:
+        description: Existing published release tag to rebuild docs from (e.g. v3.21.7)
+        required: true
         type: string
 
 concurrency:
@@ -18,14 +18,88 @@ permissions:
   contents: read
 
 jobs:
-  build-and-deploy:
-    name: Build and Deploy Docs
+  # Builds the docs site and OCX registry from a validated release tag. This job
+  # executes repository code (bun install, docs/scripts, registry build), so it
+  # runs read-only and never sees the deploy key (that lives in the `docs`
+  # environment, available to the `deploy` job only).
+  build:
+    name: Build Docs
     runs-on: ubuntu-latest
     if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.author.outputs.proceed }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
+      # Everything below that touches the target ref is gated on `proceed`, so an
+      # untrusted release author ends the job cleanly without building or deploying.
+      - name: Check release author
+        id: author
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_AUTHOR: ${{ github.event.release.author.login }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'mrbro-bot[bot]' }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ] && [ "$RELEASE_AUTHOR" != "$EXPECTED_AUTHOR" ]; then
+            echo "::notice::Skipping docs build: release author '${RELEASE_AUTHOR}' is not the expected release author '${EXPECTED_AUTHOR}'."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      # Runs before checkout: the target must be a stable vX.Y.Z tag and, for a
+      # manual dispatch, an existing published (non-draft, non-prerelease) release.
+      - name: Validate release tag
+        id: tag
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_TAG"
+          else
+            tag="$INPUT_TAG"
+          fi
+
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid release tag '${tag}': expected vX.Y.Z"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" != "release" ]; then
+            if ! state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"'); then
+              echo "::error::No release found for tag '${tag}'"
+              exit 1
+            fi
+            if [ "$state" != "false false" ]; then
+              echo "::error::Release '${tag}' is not a published, non-prerelease release (isDraft isPrerelease = ${state})"
+              exit 1
+            fi
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package is published to npm
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if ! npm view "@fro.bot/systematic@${VERSION}" version; then
+            echo "::error::@fro.bot/systematic@${VERSION} is not published to npm; refusing to build docs for it"
+            exit 1
+          fi
+
       - name: Checkout
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
           # Full history (not just tags): generate-stats.ts resolves the version
           # via `git describe --tags`, which needs HEAD connected to the tag. A
           # shallow checkout with fetch-tags alone leaves describe unable to
@@ -33,17 +107,21 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
       - name: Setup Bun
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         run: bun install --frozen-lockfile
 
       - name: Cache Playwright browsers
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -52,52 +130,62 @@ jobs:
       # Keep this install in step with the docs job in `main.yaml`; `--with-deps`
       # is omitted there for the same reason. See that comment for the detail.
       - name: Install Playwright Chromium
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         run: bun playwright install chromium
         working-directory: docs
 
       - name: Generate reference content
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        env:
+          # Read-only token (contents: read) for the generator's GitHub releases lookup.
+          GH_TOKEN: ${{ github.token }}
         run: bun run docs:generate
 
-      - name: Resolve registry version
-        id: registry-version
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-        run: |
-          if [ "$EVENT_NAME" = "release" ]; then
-            version="$RELEASE_TAG"
-            version="${version#v}"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -n "$INPUT_VERSION" ]; then
-            version="$INPUT_VERSION"
-            version="${version#v}"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "version=" >> "$GITHUB_OUTPUT"
-
       - name: Build registry
-        run: |
-          if [ -n "${{ steps.registry-version.outputs.version }}" ]; then
-            bun scripts/build-registry.ts --version "${{ steps.registry-version.outputs.version }}"
-          else
-            bun scripts/build-registry.ts
-          fi
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        run: bun scripts/build-registry.ts --version "${{ steps.tag.outputs.version }}"
 
       - name: Build docs
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           # Public website id (ships in the client HTML), so a repo variable, not a
           # secret. When unset, astro.config.mjs omits the analytics script entirely.
           UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}
         run: bun run --cwd docs build
 
       - name: Copy registry to docs output
+        if: ${{ steps.author.outputs.proceed == 'true' }}
         run: cp -r dist/registry/. docs/dist/
+
+      # Hidden files must be included: docs/dist holds .nojekyll and .well-known/.
+      - name: Upload docs site
+        if: ${{ steps.author.outputs.proceed == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-site
+          path: docs/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # Publishes the built artifact to fro-bot/systematic. Holds the only reference
+  # to the Fro Bot app credentials (via the `docs` environment) and runs no
+  # repository code: only the downloaded static artifact is touched.
+  deploy:
+    name: Deploy Docs
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ needs.build.outputs.proceed == 'true' }}
+    environment: docs
+    permissions:
+      contents: read
+    steps:
+      - name: Download docs site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docs-site
+          path: docs/dist
 
       - name: Create GitHub App token
         if: github.repository == 'marcusrbrown/systematic'
@@ -113,6 +201,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          DEPLOY_TAG: ${{ needs.build.outputs.tag }}
         run: |
           name="${APP_SLUG}[bot]"
           user_id=$(gh api "/users/${name}" --jq .id)
@@ -140,7 +229,7 @@ jobs:
           # Commit and push if there are changes
           git add -A
           if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-            git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}"
+            git commit -m "Deploy docs from marcusrbrown/systematic@${DEPLOY_TAG}"
             git push --force origin gh-pages
           else
             echo "No changes to commit"
