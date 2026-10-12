@@ -159,12 +159,14 @@ while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
   # Find the newest workflow_dispatch run on main whose createdAt is strictly
   # after DISPATCH_EPOCH. gh run list returns ISO-8601 timestamps; convert each
   # to epoch via `date -d` and compare numerically.
+  # A failed lookup (transient gh/API error) must yield an empty candidate so the
+  # loop sleeps and retries until POLL_DEADLINE, not abort under errexit/pipefail.
   CANDIDATE_ID="$(gh run list --workflow=fro-bot.yaml --branch=main --event=workflow_dispatch \
     --json databaseId,createdAt --limit 10 2>/dev/null \
     | jq -r --argjson cutoff "$DISPATCH_EPOCH" \
       '[.[] | . + {epoch: (.createdAt | fromdateiso8601)}]
        | map(select(.epoch > $cutoff))
-       | sort_by(.epoch) | reverse | .[0].databaseId // empty')"
+        | sort_by(.epoch) | reverse | .[0].databaseId // empty' || true)"
   if [ -n "$CANDIDATE_ID" ] && [ "$CANDIDATE_ID" != "null" ]; then
     RUN_ID="$CANDIDATE_ID"
     break

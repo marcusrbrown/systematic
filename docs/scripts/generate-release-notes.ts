@@ -36,6 +36,8 @@ const RELEASES_PAGE_URL = `https://github.com/${REPO}/releases`
 const API_ORIGIN = 'https://api.github.com/'
 const API_RELEASES_URL = `${API_ORIGIN}repos/${REPO}/releases?per_page=100`
 const MAX_PAGES = 50
+/** Per-request cap so a stalled GitHub API call fails fast into the stub page. */
+const FETCH_TIMEOUT_MS = 15_000
 const MAX_BODY_CHARS = 20000
 /** Bodies without this heading were not narrated by Fro Bot. */
 const NARRATIVE_MARKER = /^ {0,3}##[ \t]+What['’]s new\b/im
@@ -111,7 +113,10 @@ export async function fetchReleases(
   let url: string | null = API_RELEASES_URL
 
   for (let page = 0; url != null && page < MAX_PAGES; page++) {
-    const response = await fetchImpl(url, { headers })
+    const response = await fetchImpl(url, {
+      headers,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })
     if (!response.ok) {
       throw new Error(`GitHub API responded ${response.status} for ${url}`)
     }

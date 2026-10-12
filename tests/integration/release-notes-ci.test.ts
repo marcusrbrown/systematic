@@ -72,6 +72,7 @@ interface ScenarioEnv {
   RELEASE_VERSION?: string
   GITHUB_REPOSITORY?: string
   MOCK_GH_RUN_LIST_JSON?: string
+  MOCK_GH_RUN_LIST_FAIL_ONCE?: string
   MOCK_GH_RUN_VIEW_LOG?: string
   MOCK_GH_RUN_VIEW_CONCLUSION?: string
   MOCK_GH_RUN_WATCH_EXIT?: string
@@ -191,6 +192,10 @@ function runSuccessCmd(
       env.RELEASE_NOTES_TEST_POLL_INTERVAL_SECS ?? '1',
     RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS:
       env.RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS ?? '5',
+  }
+
+  if (env.MOCK_GH_RUN_LIST_FAIL_ONCE !== undefined) {
+    childEnv.MOCK_GH_RUN_LIST_FAIL_ONCE = env.MOCK_GH_RUN_LIST_FAIL_ONCE
   }
 
   if (env.MOCK_GH_WORKFLOW_RUN_EXIT !== undefined) {
@@ -445,6 +450,29 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       const combined = result.stdout + result.stderr
       expect(combined).toContain('narrative-not-applied')
       expect(combined).toMatch(/not found within|could not be confirmed/i)
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  // -------------------------------------------------------------------------
+  // 6b. Edge case — transient gh run list failure is retried, not fatal
+  // -------------------------------------------------------------------------
+  it(
+    'retries when gh run list fails once, then finds the run and succeeds',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_LIST_FAIL_ONCE: '1',
+        RELEASE_NOTES_TEST_POLL_BUDGET_SECS: '5',
+        RELEASE_NOTES_TEST_POLL_INTERVAL_SECS: '1',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
+      })
+
+      expect(result.exitCode).toBe(0)
+      const combined = result.stdout + result.stderr
+      expect(combined).toMatch(/narrative applied/i)
+      expect(combined).toContain('run=12345')
+      expect(combined).not.toContain('narrative-not-applied')
     },
     SCENARIO_TIMEOUT_MS,
   )

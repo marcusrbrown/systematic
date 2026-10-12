@@ -4,6 +4,7 @@
 # Behavior is driven by environment variables set per-scenario:
 #
 #   MOCK_GH_RUN_LIST_JSON          JSON array for `gh run list` output
+#   MOCK_GH_RUN_LIST_FAIL_ONCE     Set to 1 to make the first `gh run list` call fail (needs MOCK_GH_STATE_DIR)
 #   MOCK_GH_RUN_VIEW_LOG           Log text for `gh run view --log`
 #   MOCK_GH_RUN_VIEW_CONCLUSION    JSON for `gh run view --json conclusion`
 #   MOCK_GH_RUN_WATCH_EXIT         Exit code for `gh run watch`
@@ -61,6 +62,13 @@ case "$SUBCOMMAND" in
     case "$RUN_SUB" in
       list)
         # gh run list --workflow=... --branch=... --json ... --limit ...
+        # MOCK_GH_RUN_LIST_FAIL_ONCE=1 (with MOCK_GH_STATE_DIR): the first call fails.
+        if [[ "${MOCK_GH_RUN_LIST_FAIL_ONCE:-}" == "1" && -n "${MOCK_GH_STATE_DIR:-}" \
+          && ! -f "$MOCK_GH_STATE_DIR/run-list-failed" ]]; then
+          : > "$MOCK_GH_STATE_DIR/run-list-failed"
+          echo "mock-gh: transient gh run list failure" >&2
+          exit 1
+        fi
         echo "${MOCK_GH_RUN_LIST_JSON:-[]}"
         exit 0
         ;;

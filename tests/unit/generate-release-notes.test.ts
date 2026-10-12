@@ -1,5 +1,4 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import {
@@ -76,8 +75,9 @@ async function lintMarkdown(markdown: string): Promise<unknown[]> {
   // markdownlint is a transitive dependency of markdownlint-cli (a devDependency).
   // Under bun's isolated linker it is not resolvable from the repo root, so
   // resolve it relative to the CLI package that depends on it.
-  const require = createRequire(import.meta.url)
-  const cliDir = path.dirname(require.resolve('markdownlint-cli/package.json'))
+  const cliDir = path.dirname(
+    Bun.resolveSync('markdownlint-cli/package.json', import.meta.dir),
+  )
   const modulePath = Bun.resolveSync('markdownlint/promise', cliDir)
   const markdownlint = (await import(modulePath)) as MarkdownlintModule
   const configPath = path.resolve(import.meta.dir, '../../.markdownlint.yaml')
@@ -340,6 +340,21 @@ describe('generateReleaseNotesPage', () => {
     expect(requests.every((r) => r.auth === 'Bearer secret-token')).toBe(true)
     expect(page.indexOf('## v1.1.0')).toBeGreaterThan(-1)
     expect(page.indexOf('## v1.0.0')).toBeGreaterThan(page.indexOf('## v1.1.0'))
+  })
+
+  test('passes an AbortSignal timeout to every request so a stalled fetch cannot hang the build', async () => {
+    const signals: Array<AbortSignal | null | undefined> = []
+    await generateReleaseNotesPage({
+      token: 'secret-token',
+      fetchImpl: async (_url, init) => {
+        signals.push(init?.signal)
+        return jsonResponse([makeRelease()])
+      },
+    })
+
+    expect(signals).toHaveLength(1)
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+    expect(signals[0]?.aborted).toBe(false)
   })
 
   test('refuses to follow a next link off the GitHub API host', async () => {
