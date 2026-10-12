@@ -66,9 +66,9 @@ fi
 
 # Generate a UUID to uniquely identify this dispatch. The token is passed as a
 # workflow input field (correlation-id, declared on fro-bot.yaml) and remains
-# visible in the dispatched run's inputs metadata for auditing. Primary run
-# identification is timestamp-based via DISPATCH_EPOCH below — the correlation
-# token is a secondary audit anchor, not the polling matcher.
+# visible in the dispatched run's inputs metadata for auditing. fro-bot.yaml's
+# `run-name` embeds it in the run title, and the polling loop below matches on it
+# (plus DISPATCH_EPOCH) so concurrent narrations never pick up each other's runs.
 # Test escape hatch: integration tests set RELEASE_NOTES_TEST_CORRELATION_ID to
 # a known UUID so mock-gh fixtures can assert it is forwarded verbatim through
 # the -f correlation-id=... argument to gh workflow run.
@@ -126,18 +126,18 @@ PROMPT_EOF
 
 # Capture dispatch timestamp BEFORE issuing the workflow_run call.
 # We identify our dispatched run by selecting the newest workflow_dispatch run on
-# fro-bot.yaml created strictly after this timestamp. The correlation-id input
-# is also passed (and declared on fro-bot.yaml as an optional input) so that the
-# value is visible in the run's inputs metadata for auditing, but the primary
-# identification mechanism is timestamp-based.
+# fro-bot.yaml created strictly after this timestamp whose displayTitle contains
+# our correlation id (fro-bot.yaml's run-name embeds the correlation-id input).
+# The title match is what keeps concurrent narrations (different tags, manual
+# re-narration) from selecting each other's runs.
 #
 # Previous strategy (log-scanning for correlation token echo) did not work in
 # production: Fro Bot's agent takes several minutes to bootstrap (bun install,
 # model download, MCP server startup) before it emits any prompt-derived log
 # content, so a 90-second log scan budget completed before the correlation
-# token ever appeared in the logs. Timestamp-based identification is robust
+# token ever appeared in the logs. Title/timestamp-based identification is robust
 # against arbitrary agent boot times since gh run list reflects run creation
-# time, not first-log time.
+# time and title, not first-log time.
 DISPATCH_EPOCH=$(date +%s)
 if ! gh workflow run --ref main fro-bot.yaml \
   -f "prompt=$PROMPT" \
@@ -146,8 +146,8 @@ if ! gh workflow run --ref main fro-bot.yaml \
 fi
 
 # Poll up to 180 seconds for a workflow_dispatch run on fro-bot.yaml that was
-# created strictly after DISPATCH_EPOCH. Once found, this is our dispatched run
-# (no other dispatchers race against this from main.yaml's Release job).
+# created strictly after DISPATCH_EPOCH with our correlation id in its title. Once
+# found, this is our dispatched run.
 # Test escape hatches: RELEASE_NOTES_TEST_POLL_BUDGET_SECS and
 # RELEASE_NOTES_TEST_POLL_INTERVAL_SECS shorten the loop for unit tests.
 # Production runs always use 180s budget / 5s interval.
@@ -159,13 +159,16 @@ while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
   # Find the newest workflow_dispatch run on main whose createdAt is strictly
   # after DISPATCH_EPOCH. gh run list returns ISO-8601 timestamps; convert each
   # to epoch via `date -d` and compare numerically.
+  # Only a run whose displayTitle carries OUR correlation id counts: fro-bot.yaml's
+  # run-name embeds the id, so concurrent narrations for other tags (whose runs are
+  # also newer than DISPATCH_EPOCH) are never picked up, watched, or log-scanned.
   # A failed lookup (transient gh/API error) must yield an empty candidate so the
   # loop sleeps and retries until POLL_DEADLINE, not abort under errexit/pipefail.
   CANDIDATE_ID="$(gh run list --workflow=fro-bot.yaml --branch=main --event=workflow_dispatch \
-    --json databaseId,createdAt --limit 10 2>/dev/null \
-    | jq -r --argjson cutoff "$DISPATCH_EPOCH" \
+    --json databaseId,createdAt,displayTitle --limit 10 2>/dev/null \
+    | jq -r --argjson cutoff "$DISPATCH_EPOCH" --arg cid "$CORRELATION_ID" \
       '[.[] | . + {epoch: (.createdAt | fromdateiso8601)}]
-       | map(select(.epoch > $cutoff))
+       | map(select(.epoch > $cutoff and ((.displayTitle // "") | contains($cid))))
         | sort_by(.epoch) | reverse | .[0].databaseId // empty' || true)"
   if [ -n "$CANDIDATE_ID" ] && [ "$CANDIDATE_ID" != "null" ]; then
     RUN_ID="$CANDIDATE_ID"

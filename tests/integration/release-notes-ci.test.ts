@@ -55,6 +55,9 @@ const MOCK_GH_PATH = path.join(REPO_ROOT, 'tests/fixtures/mock-gh.sh')
 // tightly in tests by making the mock return immediately.
 const SCENARIO_TIMEOUT_MS = 30_000
 
+// Correlation id the harness dispatches with unless a scenario overrides it.
+const DEFAULT_CORRELATION_ID = 'test-correlation-token-default'
+
 // Release bodies served by mock-gh. RAW_BODY is deliberately longer than 200
 // chars and has no `## What's new` marker: the v3.21.7 failure left exactly
 // this on the release, and the old length heuristic accepted it.
@@ -106,14 +109,29 @@ interface ScenarioResult {
  * regardless of when the test executes.
  */
 function makeRunListJson(
-  entries: Array<{ databaseId: number; createdAt?: string }>,
+  entries: Array<{
+    databaseId: number
+    createdAt?: string
+    displayTitle?: string
+  }>,
+  correlationId: string = DEFAULT_CORRELATION_ID,
 ): string {
   return JSON.stringify(
     entries.map((e) => ({
       databaseId: e.databaseId,
       createdAt: e.createdAt ?? '2099-01-01T00:00:00Z',
+      displayTitle: e.displayTitle ?? runTitle(correlationId),
     })),
   )
+}
+
+/**
+ * Run title as produced by fro-bot.yaml's `run-name` for a dispatch that carries
+ * a correlation id. The script only accepts runs whose displayTitle contains the
+ * correlation id it dispatched with.
+ */
+function runTitle(correlationId: string): string {
+  return `Fro Bot narrative ${correlationId}`
 }
 
 /**
@@ -155,7 +173,7 @@ function runSuccessCmd(
   // Default correlation ID — forwarded as RELEASE_NOTES_TEST_CORRELATION_ID so
   // scenario 19 can assert the value is passed as a separate -f arg to gh workflow run.
   const defaultCorrelationId =
-    env.RELEASE_NOTES_TEST_CORRELATION_ID ?? 'test-correlation-token-default'
+    env.RELEASE_NOTES_TEST_CORRELATION_ID ?? DEFAULT_CORRELATION_ID
 
   // Default log provides a realistic success-path output for off-target detection
   // and auth-failure scanning. Run identification is now timestamp-based, so the
@@ -171,9 +189,10 @@ function runSuccessCmd(
     GITHUB_REPOSITORY: env.GITHUB_REPOSITORY ?? 'marcusrbrown/systematic',
     MOCK_GH_RUN_LIST_JSON:
       env.MOCK_GH_RUN_LIST_JSON ??
-      makeRunListJson([
-        { databaseId: 12345, createdAt: '2099-01-01T00:00:00Z' },
-      ]),
+      makeRunListJson(
+        [{ databaseId: 12345, createdAt: '2099-01-01T00:00:00Z' }],
+        defaultCorrelationId,
+      ),
     MOCK_GH_RUN_VIEW_LOG: effectiveLog,
     MOCK_GH_RUN_VIEW_CONCLUSION: env.MOCK_GH_RUN_VIEW_CONCLUSION ?? 'success',
     MOCK_GH_RELEASE_VIEW_BODY_BEFORE:
@@ -637,7 +656,7 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       // so the script should select 99999 (newest-after-cutoff wins).
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
-        MOCK_GH_RUN_LIST_JSON: JSON.stringify([
+        MOCK_GH_RUN_LIST_JSON: makeRunListJson([
           { databaseId: 99999, createdAt: '2099-06-01T00:00:00Z' },
           { databaseId: 12345, createdAt: '2099-01-01T00:00:00Z' },
         ]),
@@ -649,6 +668,68 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       expect(combined).not.toContain('::error::')
       // The newer run (99999) should be selected and appear in the output
       expect(combined).toContain('99999')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  // -------------------------------------------------------------------------
+  // 8b. Concurrent narrations: only the run titled with OUR correlation id counts
+  // -------------------------------------------------------------------------
+  it(
+    'watches the run carrying its own correlation id even when a newer run belongs to another dispatch',
+    () => {
+      const argvPath = path.join(testTempDir, 'watch-argv-own-run.txt')
+      const ourId = 'our-correlation-id'
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        RELEASE_NOTES_TEST_CORRELATION_ID: ourId,
+        MOCK_GH_RUN_WATCH_ARGV: argvPath,
+        MOCK_GH_RUN_LIST_JSON: makeRunListJson([
+          {
+            databaseId: 99999,
+            createdAt: '2099-06-01T00:00:00Z',
+            displayTitle: runTitle('someone-elses-correlation-id'),
+          },
+          {
+            databaseId: 12345,
+            createdAt: '2099-01-01T00:00:00Z',
+            displayTitle: runTitle(ourId),
+          },
+        ]),
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(fs.readFileSync(argvPath, 'utf8')).toContain('run watch 12345')
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('run=12345')
+      expect(combined).not.toContain('99999')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  it(
+    'does not confirm a run when no candidate title contains its correlation id',
+    () => {
+      const argvPath = path.join(testTempDir, 'watch-argv-no-match.txt')
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        RELEASE_NOTES_TEST_CORRELATION_ID: 'our-correlation-id',
+        MOCK_GH_RUN_WATCH_ARGV: argvPath,
+        MOCK_GH_RUN_LIST_JSON: makeRunListJson([
+          {
+            databaseId: 99999,
+            displayTitle: runTitle('someone-elses-correlation-id'),
+          },
+          { databaseId: 88888, displayTitle: 'Fro Bot' },
+        ]),
+      })
+
+      expect(result.exitCode).toBe(NARRATIVE_NOT_APPLIED_EXIT)
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('narrative-not-applied')
+      expect(combined).toMatch(/could not be confirmed/i)
+      // Never watched anyone else's run.
+      expect(fs.existsSync(argvPath)).toBe(false)
     },
     SCENARIO_TIMEOUT_MS,
   )

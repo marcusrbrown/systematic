@@ -115,6 +115,29 @@ describe('Fro Bot workflow contracts', () => {
     expect(callInputs).toHaveProperty('correlation-id')
   })
 
+  test('embeds the correlation-id in run-name so dispatchers can match their own run', () => {
+    const { workflow } = readWorkflow()
+    const runName = asString(workflow['run-name'], 'run-name')
+
+    // scripts/dispatch-release-notes.sh selects its run by displayTitle containing
+    // the correlation id it sent; without this, concurrent dispatches can pick
+    // each other's runs.
+    expect(runName).toContain('inputs.correlation-id')
+    expect(runName).toContain(
+      "format('Fro Bot narrative {0}', inputs.correlation-id)",
+    )
+    // Empty on non-dispatch events (and dispatches without an id): plain title.
+    expect(runName).toMatch(/\|\|\s*'Fro Bot'\s*\}\}\s*$/)
+  })
+
+  test('keeps the job name `Fro Bot` (a required status-check context)', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+
+    expect(froBot.name).toBe('Fro Bot')
+  })
+
   test('defines review, triage, and autoheal prompts without maintenance state', () => {
     const { workflow } = readWorkflow()
     const env = asRecord(workflow.env, 'workflow env')
