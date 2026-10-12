@@ -11,8 +11,10 @@ import { z } from 'zod'
 
 import type {
   OpencodeOperationObserver,
+  OperationObserverReasonCode,
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
+  RemoteOperation,
 } from '../../src/lib/opencode-operation-observer.js'
 import { createOpencodeOperationObserver } from '../../src/lib/opencode-operation-observer.js'
 import {
@@ -544,12 +546,23 @@ function buildPinnedRecoveryMarkers(
   return [epochStart, unitStart, mint]
 }
 
-async function createPinnedRecoveryAdapter(): Promise<{
+async function createPinnedRecoveryAdapter(
+  mode: 'observe' | 'protected' = 'observe',
+): Promise<{
   readonly fixture: TargetDerivationFixture
   readonly adapter: OpencodeWorkflowGuard
   readonly targetRoot: string
   readonly targetIdentity: string
-  setTargetValidationAvailable(value: boolean): void
+  setTargetValidationAvailable(
+    value: boolean,
+    reasonCode?: OperationObserverReasonCode,
+  ): void
+  // Targeted one-shot timeouts, counted from the moment they are armed: the
+  // Nth upcoming call of that kind returns `command-timeout`.
+  timeoutParentSnapshotOnCall(n: number): void
+  timeoutPinnedSnapshotOnCall(n: number): void
+  timeoutPinnedValidationOnCall(n: number): void
+  throwParentSnapshotOnCall(n: number): void
 }> {
   const fixture = createTargetDerivationFixture()
   const targetRoot = fs.realpathSync(fixture.linkedRoot)
@@ -570,21 +583,58 @@ async function createPinnedRecoveryAdapter(): Promise<{
     throw new Error('target unavailable')
   }
   let targetValidationAvailable = true
+  let targetValidationReason: OperationObserverReasonCode = 'target-unavailable'
+  const calls = { parent: 0, pinned: 0, validation: 0 }
+  const timeoutOn: Record<keyof typeof calls, number | undefined> = {
+    parent: undefined,
+    pinned: undefined,
+    validation: undefined,
+  }
+  let parentThrowOn: number | undefined
+  const commandTimeout = {
+    status: 'unavailable' as const,
+    reasonCode: 'command-timeout' as const,
+  }
   const observer: OpencodeOperationObserver = {
     targetDigest: baseObserver.targetDigest,
     validateRegisteredWorktree: (candidateDirectory) => {
-      if (!targetValidationAvailable && candidateDirectory === targetRoot) {
-        return { status: 'error', reasonCode: 'target-unavailable' }
+      if (candidateDirectory === targetRoot) {
+        calls.validation += 1
+        if (calls.validation === timeoutOn.validation) {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (!targetValidationAvailable) {
+          return { status: 'error', reasonCode: targetValidationReason }
+        }
       }
       return baseObserver.validateRegisteredWorktree(candidateDirectory)
     },
-    snapshot: () => baseObserver.snapshot(),
+    snapshot: async () => {
+      calls.parent += 1
+      if (calls.parent === parentThrowOn) throw new Error('parent exploded')
+      if (calls.parent === timeoutOn.parent) return commandTimeout
+      return baseObserver.snapshot()
+    },
+  }
+  const createTargetObserver = (
+    targetDirectory: string,
+  ): OpencodeOperationObserver => {
+    const real = createOpencodeOperationObserver({ targetDirectory })
+    if (targetDirectory !== targetRoot) return real
+    return {
+      ...real,
+      snapshot: async () => {
+        calls.pinned += 1
+        if (calls.pinned === timeoutOn.pinned) return commandTimeout
+        return real.snapshot()
+      },
+    }
   }
   const registrationIdentity = 'pinned-completion-registration'
   const sessionSalt = new Uint8Array(32).fill(137)
   let parentMarkers: readonly unknown[] = []
   const adapter = createOpencodeWorkflowGuard({
-    config: { mode: 'observe', debug: false },
+    config: { mode, debug: false },
     workspaceIdentity: initial.snapshot.targetDigest,
     repositoryIdentity: targetInitial.snapshot.repositoryRevisionDigest,
     worktreeIdentity: targetInitial.snapshot.worktreeRevisionDigest,
@@ -593,6 +643,7 @@ async function createPinnedRecoveryAdapter(): Promise<{
     registrationIdentity,
     sessionSalt,
     observer,
+    createTargetObserver,
     classifier: createReceiptClassifier(),
     hostReadback: {
       readSessionParts: async (sessionID) =>
@@ -644,8 +695,21 @@ async function createPinnedRecoveryAdapter(): Promise<{
     adapter,
     targetRoot,
     targetIdentity: targetObserver.targetDigest,
-    setTargetValidationAvailable(value) {
+    setTargetValidationAvailable(value, reasonCode = 'target-unavailable') {
       targetValidationAvailable = value
+      targetValidationReason = reasonCode
+    },
+    timeoutParentSnapshotOnCall(n) {
+      timeoutOn.parent = calls.parent + n
+    },
+    timeoutPinnedSnapshotOnCall(n) {
+      timeoutOn.pinned = calls.pinned + n
+    },
+    timeoutPinnedValidationOnCall(n) {
+      timeoutOn.validation = calls.validation + n
+    },
+    throwParentSnapshotOnCall(n) {
+      parentThrowOn = calls.parent + n
     },
   }
 }
@@ -2719,13 +2783,1595 @@ describe('OpenCode workflow guard adapter', () => {
           ).execute({}, toolContext(SESSION_A))
           const parsed = JSON.parse(expectToolOutput(result).output)
           expect(parsed.state).toBe('unavailable')
-          expect(parsed.firstUnavailableCause).toEqual({
-            site: 'refresh-readback',
-            kind: 'observer-readback-failed',
-            timedOut: false,
-          })
+          // A thrown observer has no reason code; an unavailable result
+          // carries the observer's own reason code through to the cause.
+          expect(parsed.firstUnavailableCause).toEqual(
+            behavior === 'throws'
+              ? {
+                  site: 'refresh-readback',
+                  kind: 'observer-readback-failed',
+                  timedOut: false,
+                }
+              : {
+                  site: 'refresh-readback',
+                  kind: 'observer-readback-failed',
+                  reasonCode: 'target-unavailable',
+                  timedOut: false,
+                },
+          )
         })
       }
+    })
+
+    describe('status-refresh timeouts skip the probe and are reported', () => {
+      const D = 'd'.repeat(64)
+      const E = 'e'.repeat(64)
+      const FRESH = 'f'.repeat(64)
+      const DRIFT = '9'.repeat(64)
+      const TIMEOUT = {
+        status: 'unavailable' as const,
+        reasonCode: 'command-timeout' as const,
+      }
+      const MISSING = { status: 'missing-resource' as const }
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const prAvailable = remoteAvailable(D, E, {
+        pullRequest: { identity: D, state: 'open' },
+      })
+      const prDrifted = remoteAvailable(DRIFT, E, {
+        pullRequest: { identity: DRIFT, state: 'open' },
+      })
+
+      interface SkipFixture {
+        readonly adapter: OpencodeWorkflowGuard
+        setLocalTimeout(value: boolean): void
+        failRemote(
+          operation: RemoteOperation,
+          result: OperationObserverRemoteResult | undefined,
+        ): void
+        resetRemoteCalls(): void
+        remoteCalls(): number
+        localCalls(): number
+        // The Nth upcoming local snapshot call (counted from now) times out.
+        timeoutLocalSnapshotOnCall(n: number): void
+        // The Nth upcoming local snapshot call reports a drifted revision.
+        driftLocalSnapshotOnCall(n: number): void
+        // Every upcoming local snapshot fails without a timeout.
+        failLocalSnapshot(how: LocalFailure | undefined): void
+        // The next remote 'after' read of `operation` is held until released.
+        holdRemote(operation: RemoteOperation): {
+          readonly reached: Promise<void>
+          release(result: OperationObserverRemoteResult): void
+        }
+      }
+
+      async function runRemoteOperations(
+        adapter: OpencodeWorkflowGuard,
+        withPullRequest: boolean,
+        pushOutput: RecordedToolOutput = {
+          title: 'push',
+          output: 'pushed',
+          metadata: { exit: 0 },
+        },
+      ): Promise<void> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          pushOutput,
+          'skip-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        if (!withPullRequest) return
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'skip-pr',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('pr-creation')
+      }
+
+      type LocalFailure = 'throw' | 'target-unavailable' | 'target-mismatch'
+
+      function failedSnapshot(
+        how: LocalFailure,
+      ): Awaited<ReturnType<OpencodeOperationObserver['snapshot']>> {
+        if (how === 'throw') throw new Error('snapshot exploded')
+        if (how === 'target-mismatch') {
+          return {
+            status: 'available',
+            snapshot: { ...operationSnapshot(), targetDigest: 'f'.repeat(64) },
+          }
+        }
+        return { status: 'unavailable', reasonCode: how }
+      }
+
+      // Targeted failure wrappers over a healthy observer: nothing fails until
+      // a test flips a flag after setup, so setup reads are always healthy.
+      async function skipFixture(
+        mode: 'observe' | 'protected',
+        withPullRequest = false,
+        sink?: { push?: RecordedToolOutput },
+      ): Promise<SkipFixture> {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let localTimeout = false
+        let snapshotCalls = 0
+        let timeoutOnCall: number | undefined
+        let driftOnCall: number | undefined
+        let localFailure: LocalFailure | undefined
+        let remoteCalls = 0
+        const overrides = new Map<
+          RemoteOperation,
+          OperationObserverRemoteResult
+        >()
+        const holds = new Map<
+          RemoteOperation,
+          () => Promise<OperationObserverRemoteResult>
+        >()
+        const forcedSnapshot = (
+          call: number,
+        ):
+          | Awaited<ReturnType<OpencodeOperationObserver['snapshot']>>
+          | undefined => {
+          if (localTimeout || call === timeoutOnCall) return TIMEOUT
+          if (call !== driftOnCall) return undefined
+          return {
+            status: 'available',
+            snapshot: operationSnapshot('e'.repeat(64), 'd'.repeat(64)),
+          }
+        }
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () => {
+            snapshotCalls += 1
+            return (
+              forcedSnapshot(snapshotCalls) ??
+              (localFailure ? failedSnapshot(localFailure) : base.snapshot())
+            )
+          },
+          remoteSnapshot: async (operation, phase) => {
+            remoteCalls += 1
+            const hold = holds.get(operation)
+            if (hold && phase === 'after') {
+              holds.delete(operation)
+              return hold()
+            }
+            const override = overrides.get(operation)
+            if (override && phase === 'after') return override
+            return reader.call(base, operation, phase)
+          },
+        }
+        const adapter = createAdapter(
+          mode,
+          false,
+          observer,
+          withPullRequest ? ['push', 'pr-creation'] : ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await runRemoteOperations(adapter, withPullRequest, sink?.push)
+        expect(status(adapter).state).not.toBe('unavailable')
+        return {
+          adapter,
+          setLocalTimeout(value) {
+            localTimeout = value
+          },
+          failRemote(operation, result) {
+            if (result) overrides.set(operation, result)
+            else overrides.delete(operation)
+          },
+          resetRemoteCalls() {
+            remoteCalls = 0
+          },
+          remoteCalls: () => remoteCalls,
+          localCalls: () => snapshotCalls,
+          timeoutLocalSnapshotOnCall(n) {
+            timeoutOnCall = snapshotCalls + n
+          },
+          driftLocalSnapshotOnCall(n) {
+            driftOnCall = snapshotCalls + n
+          },
+          failLocalSnapshot(how) {
+            localFailure = how
+          },
+          holdRemote(operation) {
+            let release: (result: OperationObserverRemoteResult) => void =
+              () => {}
+            const reached = new Promise<void>((resolveReached) => {
+              holds.set(
+                operation,
+                () =>
+                  new Promise<OperationObserverRemoteResult>((resolve) => {
+                    release = resolve
+                    resolveReached()
+                  }),
+              )
+            })
+            return { reached, release: (result) => release(result) }
+          },
+        }
+      }
+
+      async function refreshed(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      test.each(['observe', 'protected'] as const)(
+        'a: a push readback timeout after a satisfied push is skipped; the receipt stays valid and the next healthy status is clean (%s)',
+        async (mode) => {
+          const fx = await skipFixture(mode)
+          const before = status(fx.adapter)
+          fx.failRemote('push', TIMEOUT)
+
+          const parsed = await refreshed(fx.adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.state).toBe(before.state)
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'push', reasonCode: 'command-timeout' },
+          ])
+          expect(status(fx.adapter).satisfiedOperations).toContain('push')
+          expect(status(fx.adapter).reasonCode).toBe(before.reasonCode)
+          expect(status(fx.adapter).reasonCode).not.toBe('stale-receipt')
+
+          fx.failRemote('push', undefined)
+          const healthy = await refreshed(fx.adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+          expect(healthy.state).toBe(before.state)
+          expect(status(fx.adapter).satisfiedOperations).toContain('push')
+          expect(status(fx.adapter).reasonCode).not.toBe('stale-receipt')
+        },
+      )
+
+      test('b: a local snapshot timeout is skipped: no remote probe runs, nothing changes, and the list is [local, then each satisfied remote operation]', async () => {
+        const fx = await skipFixture('observe', true)
+        const before = status(fx.adapter)
+        fx.resetRemoteCalls()
+        fx.setLocalTimeout(true)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+          { probe: 'push', reasonCode: 'command-timeout' },
+          { probe: 'pr-creation', reasonCode: 'command-timeout' },
+        ])
+        expect(fx.remoteCalls()).toBe(0)
+        const after = status(fx.adapter)
+        expect(after.state).toBe(before.state)
+        expect(after.reasonCode).toBe(before.reasonCode)
+        expect(after.satisfiedOperations).toEqual(before.satisfiedOperations)
+        expect(after.missingOperations).toEqual(before.missingOperations)
+      })
+
+      test('b: a local snapshot timeout with no satisfied remote operation lists exactly [local]', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let remoteCalls = 0
+        let timeout = false
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          snapshot: async () => (timeout ? TIMEOUT : base.snapshot()),
+          remoteSnapshot: async (operation, phase) => {
+            remoteCalls += 1
+            return (
+              base.remoteSnapshot?.(operation, phase) ?? {
+                status: 'missing-resource',
+              }
+            )
+          },
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).satisfiedOperations).toEqual([])
+        timeout = true
+
+        const parsed = await refreshed(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+        ])
+        expect(remoteCalls).toBe(0)
+      })
+
+      test('c: a pinned snapshot timeout is skipped and the list is [pinned]', async () => {
+        const setup = await createPinnedRecoveryAdapter()
+        try {
+          const { adapter } = setup
+          const before = status(adapter)
+          setup.timeoutPinnedSnapshotOnCall(1)
+
+          const parsed = await refreshed(adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'pinned', reasonCode: 'command-timeout' },
+          ])
+          expect(status(adapter).state).toBe(before.state)
+
+          const healthy = await refreshed(adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+        } finally {
+          setup.fixture.cleanup()
+        }
+      })
+
+      // The pinned recovery fixture has no satisfied remote operation, so the
+      // pinned skips list only [pinned]; the remote tail is covered by b above.
+      test('c: a pinned lookup timeout is skipped and the list is [pinned]', async () => {
+        const setup = await createPinnedRecoveryAdapter()
+        try {
+          const { adapter } = setup
+          const before = status(adapter)
+          setup.setTargetValidationAvailable(false, 'command-timeout')
+
+          const parsed = await refreshed(adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'pinned', reasonCode: 'command-timeout' },
+          ])
+          expect(status(adapter).state).toBe(before.state)
+
+          setup.setTargetValidationAvailable(true)
+          const healthy = await refreshed(adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+          expect(healthy.state).not.toBe('unavailable')
+        } finally {
+          setup.fixture.cleanup()
+        }
+      })
+
+      test('d: with two satisfied remote operations, the timed-out one stays valid, the drifted one goes stale, and only the timed-out one is listed', async () => {
+        const fx = await skipFixture('observe', true)
+        fx.failRemote('push', TIMEOUT)
+        fx.failRemote('pr-creation', prDrifted)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+        expect(status(fx.adapter).satisfiedOperations).toContain('push')
+        expect(status(fx.adapter).satisfiedOperations).not.toContain(
+          'pr-creation',
+        )
+        expect(status(fx.adapter).missingOperations).toContain('pr-creation')
+        expect(status(fx.adapter).missingOperations).not.toContain('push')
+
+        // A later refresh never clears the staleness: the stale operation is
+        // no longer satisfied, so it is not probed again, and the timed-out
+        // push is still listed on its own.
+        fx.failRemote('pr-creation', TIMEOUT)
+        const again = await refreshed(fx.adapter)
+        expect(again.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+        expect(status(fx.adapter).satisfiedOperations).not.toContain(
+          'pr-creation',
+        )
+        expect(status(fx.adapter).missingOperations).toContain('pr-creation')
+      })
+
+      test('e: a timeout followed by a non-timeout failure is fatal with the typed cause, and the skipped probe is still listed', async () => {
+        const fx = await skipFixture('observe', true)
+        fx.failRemote('push', TIMEOUT)
+        fx.failRemote('pr-creation', {
+          status: 'unavailable',
+          reasonCode: 'remote-command-failed',
+        })
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'remote-command-failed',
+          timedOut: false,
+        })
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('e: a non-timeout failure before a timeout stops the loop and lists nothing', async () => {
+        const fx = await skipFixture('observe', true)
+        fx.failRemote('push', MISSING)
+        fx.failRemote('pr-creation', TIMEOUT)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'missing-resource',
+          timedOut: false,
+        })
+        expect(parsed.unconfirmedReadbacks).toBeUndefined()
+      })
+
+      test('f: when every attempted probe times out, state is unchanged and the list is in fixed order', async () => {
+        const fx = await skipFixture('observe', true)
+        const before = status(fx.adapter)
+        fx.failRemote('push', TIMEOUT)
+        fx.failRemote('pr-creation', TIMEOUT)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).toBe(before.state)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+          { probe: 'pr-creation', reasonCode: 'command-timeout' },
+        ])
+        const after = status(fx.adapter)
+        expect(after.satisfiedOperations).toEqual(before.satisfiedOperations)
+        expect(after.missingOperations).toEqual(before.missingOperations)
+      })
+
+      test('g: the unconfirmed list never enters markers, receipts, tool metadata, or digests', async () => {
+        const pushOutput: RecordedToolOutput = {
+          title: 'push',
+          output: 'pushed',
+          metadata: { exit: 0 },
+        }
+        const fx = await skipFixture('observe', false, { push: pushOutput })
+        fx.failRemote('push', TIMEOUT)
+        const statusResult = expectToolOutput(
+          await getTool(fx.adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        )
+        expect(
+          JSON.parse(statusResult.output).unconfirmedReadbacks,
+        ).toBeDefined()
+        const transformed = { system: ['base'] }
+        await fx.adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          transformed,
+        )
+        const everything = JSON.stringify([
+          pushOutput,
+          statusResult.metadata,
+          transformed.system,
+          ledger(fx.adapter).listReceipts(),
+          status(fx.adapter),
+        ])
+        expect(everything).not.toContain('unconfirmedReadbacks')
+        expect(everything).not.toContain('command-timeout')
+      })
+
+      test('h: with no epoch the refresh is skipped and the list is empty', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let reads = 0
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          snapshot: async () => {
+            reads += 1
+            return TIMEOUT
+          },
+        })
+        const parsed = await refreshed(adapter)
+        expect(parsed.state).toBe('inactive')
+        expect('unconfirmedReadbacks' in parsed).toBe(false)
+        expect(reads).toBe(0)
+      })
+
+      describe('completion readback timeouts are retryable', () => {
+        const RETRY_TITLE = 'Workflow readback timed out'
+        const FATAL_TITLE = 'Workflow transition unavailable'
+
+        type CompletionOutput = {
+          title: string
+          output: string
+          metadata: Record<string, unknown>
+        }
+
+        const freshCompletionOutput = (): CompletionOutput => ({
+          title: 'complete',
+          output: 'done',
+          metadata: {},
+        })
+
+        async function beforeComplete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID,
+            },
+            { args: { target: 'unit' } },
+          )
+        }
+
+        function afterComplete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+          output: CompletionOutput,
+        ): Promise<void> {
+          return adapter.hooks['tool.execute.after'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID,
+              args: { target: 'unit' },
+            },
+            output,
+          )
+        }
+
+        async function complete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<CompletionOutput> {
+          await beforeComplete(adapter, callID)
+          const output = freshCompletionOutput()
+          await afterComplete(adapter, callID, output)
+          return output
+        }
+
+        function expectRetryable(output: CompletionOutput): void {
+          expect(output.title).toBe(RETRY_TITLE)
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'rejected',
+            reasonCode: 'readback-timeout',
+          })
+          expect(output.metadata).toMatchObject({
+            workflowGuard: {
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'readback-timeout',
+            },
+          })
+        }
+
+        function expectFatal(output: CompletionOutput): void {
+          expect(output.title).toBe(FATAL_TITLE)
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'unavailable',
+            reasonCode: 'finalization-failed',
+          })
+        }
+
+        function consumedReceipts(adapter: OpencodeWorkflowGuard): number {
+          return ledger(adapter)
+            .listReceipts()
+            .filter((receipt) => receipt.canonical.consumption === 'consumed')
+            .length
+        }
+
+        function expectUntouched(adapter: OpencodeWorkflowGuard): void {
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter).unit?.status).toBe('active')
+          expect(consumedReceipts(adapter)).toBe(0)
+        }
+
+        interface StageFixture {
+          readonly adapter: OpencodeWorkflowGuard
+          // Arms a command-timeout at exactly this stage.
+          arm(): void
+          // Restores healthy probes (a no-op for the one-shot timeouts).
+          disarm(): void
+          cleanup(): void
+        }
+
+        interface Stage {
+          readonly name: string
+          build(mode: 'observe' | 'protected'): Promise<StageFixture>
+        }
+
+        // Snapshot calls on the completion path, counted per path (prepare is
+        // synchronous and reads nothing): parent #1 initial / #2 final, pinned
+        // #1 initial / #2 final; pinned lookups #1 initial / #2 revalidation.
+        function localStage(
+          name: string,
+          arm: (fx: SkipFixture) => void,
+          disarm: (fx: SkipFixture) => void = () => {},
+        ): Stage {
+          return {
+            name,
+            build: async (mode) => {
+              const fx = await skipFixture(mode)
+              return {
+                adapter: fx.adapter,
+                arm: () => arm(fx),
+                disarm: () => disarm(fx),
+                cleanup() {},
+              }
+            },
+          }
+        }
+
+        function pinnedStage(
+          name: string,
+          arm: (
+            setup: Awaited<ReturnType<typeof createPinnedRecoveryAdapter>>,
+          ) => void,
+        ): Stage {
+          return {
+            name,
+            build: async (mode) => {
+              const setup = await createPinnedRecoveryAdapter(mode)
+              return {
+                adapter: setup.adapter,
+                arm: () => arm(setup),
+                disarm() {},
+                cleanup: () => setup.fixture.cleanup(),
+              }
+            },
+          }
+        }
+
+        const stages: Stage[] = [
+          localStage('initial parent snapshot', (fx) =>
+            fx.timeoutLocalSnapshotOnCall(1),
+          ),
+          pinnedStage('pinned initial lookup', (s) =>
+            s.timeoutPinnedValidationOnCall(1),
+          ),
+          pinnedStage('pinned initial snapshot', (s) =>
+            s.timeoutPinnedSnapshotOnCall(1),
+          ),
+          localStage(
+            'remote readback',
+            (fx) => fx.failRemote('push', TIMEOUT),
+            (fx) => fx.failRemote('push', undefined),
+          ),
+          localStage('final parent snapshot', (fx) =>
+            fx.timeoutLocalSnapshotOnCall(2),
+          ),
+          pinnedStage('pinned revalidation lookup', (s) =>
+            s.timeoutPinnedValidationOnCall(2),
+          ),
+          pinnedStage('pinned final snapshot', (s) =>
+            s.timeoutPinnedSnapshotOnCall(2),
+          ),
+        ]
+        const retryStages = stages.filter((stage) =>
+          [
+            'remote readback',
+            'pinned initial snapshot',
+            'pinned revalidation lookup',
+          ].includes(stage.name),
+        )
+
+        for (const mode of ['observe', 'protected'] as const) {
+          test.each(stages)(
+            `a: a command-timeout at the $name stage is rejected as retryable and consumes nothing (${mode})`,
+            async (stage) => {
+              const fx = await stage.build(mode)
+              try {
+                fx.arm()
+                const output = await complete(fx.adapter, 'timeout-complete')
+                expectRetryable(output)
+                expectUntouched(fx.adapter)
+              } finally {
+                fx.cleanup()
+              }
+            },
+          )
+        }
+
+        test.each(retryStages)(
+          'b: after a timeout at the $name stage, a new call ID with healthy probes completes the unit and consumes each receipt once',
+          async (stage) => {
+            const fx = await stage.build('observe')
+            try {
+              const receipts = ledger(fx.adapter).listReceipts().length
+              fx.arm()
+              expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+              expectUntouched(fx.adapter)
+              fx.disarm()
+              const retry = await complete(fx.adapter, 'healthy-complete')
+              expect(retry.output).toContain('completed')
+              expect(status(fx.adapter).unit?.status).toBe('completed')
+              expect(receipts).toBeGreaterThan(0)
+              expect(consumedReceipts(fx.adapter)).toBe(receipts)
+            } finally {
+              fx.cleanup()
+            }
+          },
+        )
+
+        test.each(retryStages)(
+          'c: a duplicate after-hook for the timed-out call at the $name stage replays an identical result and changes no session state',
+          async (stage) => {
+            const fx = await stage.build('observe')
+            try {
+              fx.arm()
+              const first = await complete(fx.adapter, 'timeout-complete')
+              expectRetryable(first)
+              const before = JSON.stringify(status(fx.adapter))
+              const replay = freshCompletionOutput()
+              await afterComplete(fx.adapter, 'timeout-complete', replay)
+              expect(replay).toEqual(first)
+              expect(JSON.stringify(status(fx.adapter))).toBe(before)
+              expectUntouched(fx.adapter)
+            } finally {
+              fx.cleanup()
+            }
+          },
+        )
+
+        test('d: a session made unavailable while the probe is held takes the fatal path when the probe then times out', async () => {
+          const fx = await skipFixture('observe')
+          const hold = fx.holdRemote('push')
+          await beforeComplete(fx.adapter, 'held-complete')
+          const output = freshCompletionOutput()
+          const done = afterComplete(fx.adapter, 'held-complete', output)
+          await hold.reached
+          fx.failLocalSnapshot('target-unavailable')
+          expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+          fx.failLocalSnapshot(undefined)
+          hold.release(TIMEOUT)
+          await done
+          expectFatal(output)
+          expect(status(fx.adapter).state).toBe('unavailable')
+          expect(consumedReceipts(fx.adapter)).toBe(0)
+        })
+
+        describe('e: non-timeout failures stay fatal', () => {
+          const localCases: Array<{
+            name: string
+            arm: (fx: SkipFixture) => void
+          }> = [
+            {
+              name: 'a remote missing-resource',
+              arm: (fx) => fx.failRemote('push', MISSING),
+            },
+            {
+              name: 'a remote command-failed reason',
+              arm: (fx) =>
+                fx.failRemote('push', {
+                  status: 'unavailable',
+                  reasonCode: 'remote-command-failed',
+                }),
+            },
+            {
+              name: 'a throwing parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('throw'),
+            },
+            {
+              name: 'a non-timeout unavailable parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('target-unavailable'),
+            },
+          ]
+
+          test.each(localCases)('$name', async ({ arm }) => {
+            const fx = await skipFixture('observe')
+            arm(fx)
+            const output = await complete(fx.adapter, 'fatal-complete')
+            expectFatal(output)
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+
+          test.each([
+            {
+              name: 'a pinned lookup that is invalid',
+              reason: 'target-unavailable',
+            },
+            {
+              name: 'a pinned lookup that is invalid (command-failed)',
+              reason: 'command-failed',
+            },
+          ] as const)('$name', async ({ reason }) => {
+            const setup = await createPinnedRecoveryAdapter()
+            try {
+              setup.setTargetValidationAvailable(false, reason)
+              const output = await complete(setup.adapter, 'fatal-pinned')
+              expectFatal(output)
+              expect(status(setup.adapter).state).toBe('unavailable')
+              expect(consumedReceipts(setup.adapter)).toBe(0)
+            } finally {
+              setup.fixture.cleanup()
+            }
+          })
+
+          test('a throwing pinned-flow parent snapshot', async () => {
+            const setup = await createPinnedRecoveryAdapter()
+            try {
+              setup.throwParentSnapshotOnCall(1)
+              const output = await complete(setup.adapter, 'fatal-pinned-throw')
+              expectFatal(output)
+              expect(status(setup.adapter).state).toBe('unavailable')
+            } finally {
+              setup.fixture.cleanup()
+            }
+          })
+        })
+
+        // CHARACTERIZATION TESTS: these pin what the guard does TODAY when two
+        // independent registrations share one after-hook output; they are not
+        // requirements. OpenCode hands the same output reference to every
+        // plugin hook in sequence, and each registration decides completion
+        // independently from its own readbacks. Completion is therefore not
+        // atomic across registrations, and the final output depends on hook
+        // order. The same divergence already exists for fatal readbacks.
+        describe('characterization: two registrations sharing one completion output', () => {
+          type Failure = 'timeout' | 'fatal'
+          type Order = 'failing-first' | 'healthy-first'
+
+          const cases = (['observe', 'protected'] as const).flatMap((mode) =>
+            (['failing-first', 'healthy-first'] as const).flatMap((order) =>
+              (['timeout', 'fatal'] as const).map((failure) => ({
+                mode,
+                order,
+                failure,
+                name: `${mode} / ${order} / ${failure}`,
+              })),
+            ),
+          )
+
+          const callID = 'shared-complete'
+
+          async function pair(mode: 'observe' | 'protected', failure: Failure) {
+            const failing = await skipFixture(mode)
+            const healthy = await skipFixture(mode)
+            failing.failRemote(
+              'push',
+              failure === 'timeout' ? TIMEOUT : MISSING,
+            )
+            return { failing, healthy }
+          }
+
+          function expectGuardResult(
+            output: CompletionOutput,
+            expected: Record<string, unknown>,
+          ): void {
+            expect(output.metadata.workflowGuard).toMatchObject(expected)
+          }
+
+          function failingResult(failure: Failure): Record<string, unknown> {
+            return failure === 'timeout'
+              ? {
+                  status: 'rejected',
+                  target: 'unit',
+                  reasonCode: 'readback-timeout',
+                }
+              : {
+                  status: 'unavailable',
+                  target: 'unit',
+                  reasonCode: 'finalization-failed',
+                }
+          }
+
+          // Duplicate after-hooks consume nothing more. The failing registration
+          // replays its own terminal outcome; the healthy one has none and leaves
+          // the host output untouched.
+          async function expectReplays(
+            failing: SkipFixture,
+            healthy: SkipFixture,
+            failure: Failure,
+            receipts: number,
+          ): Promise<void> {
+            const failingReplay = freshCompletionOutput()
+            await afterComplete(failing.adapter, callID, failingReplay)
+            if (failure === 'timeout') expectRetryable(failingReplay)
+            else expectFatal(failingReplay)
+            const healthyReplay = freshCompletionOutput()
+            await afterComplete(healthy.adapter, callID, healthyReplay)
+            expect(healthyReplay).toEqual(freshCompletionOutput())
+            expect(consumedReceipts(healthy.adapter)).toBe(receipts)
+            expect(consumedReceipts(failing.adapter)).toBe(0)
+          }
+
+          function hookOrder(
+            order: Order,
+            failing: SkipFixture,
+            healthy: SkipFixture,
+          ): SkipFixture[] {
+            return order === 'failing-first'
+              ? [failing, healthy]
+              : [healthy, failing]
+          }
+
+          function finalResult(
+            order: Order,
+            failure: Failure,
+          ): Record<string, unknown> {
+            return order === 'failing-first'
+              ? { status: 'completed', target: 'unit' }
+              : failingResult(failure)
+          }
+
+          test.each(cases)(
+            '$name: the healthy registration completes, the failing one consumes nothing, and the final output follows hook order',
+            async ({ mode, order, failure }) => {
+              const { failing, healthy } = await pair(mode, failure)
+              const receipts = ledger(healthy.adapter).listReceipts().length
+              expect(receipts).toBeGreaterThan(0)
+              await beforeComplete(failing.adapter, callID)
+              await beforeComplete(healthy.adapter, callID)
+              const shared = freshCompletionOutput()
+              for (const fx of hookOrder(order, failing, healthy)) {
+                await afterComplete(fx.adapter, callID, shared)
+              }
+
+              // Final output: whichever registration wrote last.
+              expectGuardResult(shared, finalResult(order, failure))
+
+              // Per-registration state and consumption.
+              expect(status(healthy.adapter).unit?.status).toBe('completed')
+              expect(consumedReceipts(healthy.adapter)).toBe(receipts)
+              expect(status(failing.adapter).unit?.status).toBe('active')
+              expect(consumedReceipts(failing.adapter)).toBe(0)
+              expect(status(failing.adapter).state === 'unavailable').toBe(
+                failure === 'fatal',
+              )
+              await expectReplays(failing, healthy, failure, receipts)
+            },
+          )
+
+          test.each(
+            (['observe', 'protected'] as const).map((mode) => ({ mode })),
+          )(
+            'after a timeout, a new call ID with healthy probes completes the failing registration ($mode)',
+            async ({ mode }) => {
+              const { failing, healthy } = await pair(mode, 'timeout')
+              await beforeComplete(failing.adapter, callID)
+              await beforeComplete(healthy.adapter, callID)
+              const shared = freshCompletionOutput()
+              await afterComplete(failing.adapter, callID, shared)
+              await afterComplete(healthy.adapter, callID, shared)
+              expect(consumedReceipts(failing.adapter)).toBe(0)
+
+              failing.failRemote('push', undefined)
+              const retry = await complete(failing.adapter, 'shared-retry')
+              expect(retry.output).toContain('completed')
+              expect(status(failing.adapter).unit?.status).toBe('completed')
+              const total = ledger(failing.adapter).listReceipts().length
+              expect(consumedReceipts(failing.adapter)).toBe(total)
+              expect(consumedReceipts(healthy.adapter)).toBe(total)
+            },
+          )
+        })
+
+        // CHARACTERIZATION TEST: an earlier completion timeout can mask drift
+        // that a previous probe already saw. Completion collects remote
+        // readbacks and applies them only when every probe succeeds, so a later
+        // timeout discards the drifted evidence; the next attempt re-reads it.
+        describe('characterization: late drift, then a later timeout', () => {
+          test('the timed-out attempt applies nothing, its replay probes nothing, and a fresh attempt with restored probes detects the drift', async () => {
+            const fx = await skipFixture('observe', true)
+            const drifted = remoteAvailable(DRIFT, FRESH, {
+              pullRequest: { identity: DRIFT, state: 'open' },
+            })
+            // Probes run in satisfied order: push (drifted) then pr-creation.
+            fx.failRemote('push', drifted)
+            fx.failRemote('pr-creation', TIMEOUT)
+            const snapshot = () => ({
+              status: JSON.parse(JSON.stringify(status(fx.adapter))),
+              receipts: JSON.parse(
+                JSON.stringify(ledger(fx.adapter).listReceipts()),
+              ),
+            })
+            const before = snapshot()
+            const remoteBefore = fx.remoteCalls()
+
+            const first = await complete(fx.adapter, 'drift-timeout')
+            expectRetryable(first)
+            expect(fx.remoteCalls()).toBeGreaterThan(remoteBefore)
+            expect(snapshot()).toEqual(before)
+
+            // A duplicate after-hook replays the stored outcome and probes nothing.
+            const remoteAfterFirst = fx.remoteCalls()
+            const localAfterFirst = fx.localCalls()
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'drift-timeout', replay)
+            expectRetryable(replay)
+            expect(fx.remoteCalls()).toBe(remoteAfterFirst)
+            expect(fx.localCalls()).toBe(localAfterFirst)
+            expect(snapshot()).toEqual(before)
+
+            // Probes restored (pr-creation healthy); the drift on push persists.
+            fx.failRemote('pr-creation', undefined)
+            const second = await complete(fx.adapter, 'drift-fresh')
+            // Today's path: the drifted push evidence is applied at
+            // finalization, which rejects the transition with the core's
+            // `resource-mismatch`, and the adapter then marks the session
+            // unavailable (finalizeComplete's non-completed branch).
+            expect(second.metadata.workflowGuard).toMatchObject({
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'resource-mismatch',
+            })
+            expect(second.output).not.toContain('completed')
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(status(fx.adapter).unit?.status).toBe('active')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+        })
+
+        describe('fatal completion readbacks are replayable and caused', () => {
+          const causeOf = async (adapter: OpencodeWorkflowGuard) =>
+            (await refreshed(adapter)).firstUnavailableCause
+
+          const fatalCases: Array<{
+            name: string
+            arm: (fx: SkipFixture) => void
+            reasonCode?: string
+          }> = [
+            {
+              name: 'a remote missing-resource',
+              arm: (fx) => fx.failRemote('push', MISSING),
+              reasonCode: 'missing-resource',
+            },
+            {
+              name: 'a non-timeout unavailable parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('target-unavailable'),
+              reasonCode: 'target-unavailable',
+            },
+            {
+              name: 'a throwing parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('throw'),
+            },
+            {
+              name: 'a parent snapshot target mismatch',
+              arm: (fx) => fx.failLocalSnapshot('target-mismatch'),
+            },
+          ]
+
+          test.each(fatalCases)(
+            'a: $name writes finalization-failed, and a duplicate after-hook replays it instead of leaving the raw output',
+            async ({ arm }) => {
+              const fx = await skipFixture('observe')
+              arm(fx)
+              const first = await complete(fx.adapter, 'fatal-complete')
+              expectFatal(first)
+              const raw: CompletionOutput = {
+                title: 'host title',
+                output: 'raw pending output',
+                metadata: {},
+              }
+              await afterComplete(fx.adapter, 'fatal-complete', raw)
+              expectFatal(raw)
+              expect(raw.title).toBe(first.title)
+              expect(raw.output).toBe(first.output)
+              expect(raw.metadata.workflowGuard).toEqual(
+                first.metadata.workflowGuard,
+              )
+            },
+          )
+
+          test.each(fatalCases)(
+            'b: $name records a complete-readback cause',
+            async ({ arm, reasonCode }) => {
+              const fx = await skipFixture('observe')
+              arm(fx)
+              expectFatal(await complete(fx.adapter, 'fatal-complete'))
+              expect(await causeOf(fx.adapter)).toEqual({
+                site: 'complete-readback',
+                kind: 'observer-readback-failed',
+                ...(reasonCode === undefined ? {} : { reasonCode }),
+                timedOut: false,
+              })
+            },
+          )
+
+          test.each([
+            { name: 'a non-timeout failure', result: MISSING },
+            { name: 'a timeout', result: TIMEOUT },
+          ])(
+            'c: $name that lands after a fatal status refresh keeps the earlier cause',
+            async ({ result }) => {
+              const fx = await skipFixture('observe')
+              const hold = fx.holdRemote('push')
+              await beforeComplete(fx.adapter, 'held-complete')
+              const output = freshCompletionOutput()
+              const done = afterComplete(fx.adapter, 'held-complete', output)
+              await hold.reached
+              fx.failLocalSnapshot('target-unavailable')
+              expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+              fx.failLocalSnapshot(undefined)
+              hold.release(result)
+              await done
+              expectFatal(output)
+              expect(await causeOf(fx.adapter)).toEqual({
+                site: 'refresh-readback',
+                kind: 'observer-readback-failed',
+                reasonCode: 'target-unavailable',
+                timedOut: false,
+              })
+            },
+          )
+
+          test('d: a mismatched completion target still goes through finishMismatchedTarget as invalid-transition', async () => {
+            const fx = await skipFixture('observe')
+            await beforeComplete(fx.adapter, 'mismatch-complete')
+            const output = freshCompletionOutput()
+            await fx.adapter.hooks['tool.execute.after'](
+              {
+                tool: 'systematic_workflow_complete',
+                sessionID: SESSION_A,
+                callID: 'mismatch-complete',
+                args: { target: 'epoch' },
+              },
+              output,
+            )
+            expect(JSON.parse(output.output)).toEqual({
+              status: 'unavailable',
+              reasonCode: 'invalid-transition',
+            })
+            expect(status(fx.adapter).state).toBe('unavailable')
+          })
+
+          test('e: a retryable timeout records no cause; a later fatal refresh records its own', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            expect(await causeOf(fx.adapter)).toBeUndefined()
+            fx.failRemote('push', undefined)
+            fx.failLocalSnapshot('target-unavailable')
+            expect(await causeOf(fx.adapter)).toEqual({
+              site: 'refresh-readback',
+              kind: 'observer-readback-failed',
+              reasonCode: 'target-unavailable',
+              timedOut: false,
+            })
+          })
+        })
+
+        describe('interleaving with other activity', () => {
+          // Holds the first completion's remote probe, runs `during`, then times
+          // the probe out and returns the first completion's output.
+          async function timeoutWhileHeld(
+            fx: SkipFixture,
+            during: () => Promise<void>,
+            callID = 'held-complete',
+          ): Promise<CompletionOutput> {
+            const hold = fx.holdRemote('push')
+            await beforeComplete(fx.adapter, callID)
+            const output = freshCompletionOutput()
+            const done = afterComplete(fx.adapter, callID, output)
+            await hold.reached
+            await during()
+            hold.release(TIMEOUT)
+            await done
+            return output
+          }
+
+          async function caughtBefore(
+            adapter: OpencodeWorkflowGuard,
+            callID: string,
+          ): Promise<unknown> {
+            try {
+              await beforeComplete(adapter, callID)
+            } catch (error) {
+              return error
+            }
+            return undefined
+          }
+
+          test.each(['observe', 'protected'] as const)(
+            '1: a repairable global evidence issue set while the probe is held does not make the timeout fatal, and later completions are refused by prepare (%s)',
+            async (mode) => {
+              const fx = await skipFixture(mode)
+              const output = await timeoutWhileHeld(fx, async () => {
+                expect(
+                  fx.adapter.observeReceipt(SESSION_A, { not: 'a receipt' }),
+                ).toMatchObject({
+                  status: 'rejected',
+                  reasonCode: 'invalid-receipt',
+                })
+                expect(status(fx.adapter).state).toBe('rejected')
+                expect(status(fx.adapter).repair).toBe('fresh-readback')
+              })
+              expectRetryable(output)
+              expect(status(fx.adapter).state).toBe('rejected')
+              expect(status(fx.adapter).reasonCode).toBe('invalid-receipt')
+              expect(consumedReceipts(fx.adapter)).toBe(0)
+              expect(
+                fx.adapter.prepareTransition(SESSION_A, {
+                  callId: 'after-issue',
+                  target: 'unit',
+                }),
+              ).toEqual({ status: 'rejected', reasonCode: 'invalid-receipt' })
+              if (mode === 'protected') {
+                const caught = await caughtBefore(
+                  fx.adapter,
+                  'after-issue-hook',
+                )
+                expect(isWorkflowGuardBlockedError(caught)).toBe(true)
+                expect(caught).toMatchObject({ reasonCode: 'invalid-receipt' })
+              }
+            },
+          )
+
+          test('2: a second completion that finishes the unit while the first probe is held leaves the first rejected as retryable, and a retry gets the completed-unit reason without a second consumption', async () => {
+            const fx = await skipFixture('observe')
+            let second: CompletionOutput | undefined
+            const first = await timeoutWhileHeld(fx, async () => {
+              second = await complete(fx.adapter, 'second-complete')
+            })
+            expect(second?.output).toContain('completed')
+            expect(status(fx.adapter).unit?.status).toBe('completed')
+            const consumed = consumedReceipts(fx.adapter)
+            expect(consumed).toBeGreaterThan(0)
+            expectRetryable(first)
+            expect(status(fx.adapter).unit?.status).toBe('completed')
+            expect(status(fx.adapter).state).not.toBe('unavailable')
+            expect(
+              fx.adapter.prepareTransition(SESSION_A, {
+                callId: 'third-complete',
+                target: 'unit',
+              }),
+            ).toMatchObject({
+              status: 'rejected',
+              reasonCode: 'unit-completed',
+            })
+            expect(consumedReceipts(fx.adapter)).toBe(consumed)
+          })
+
+          test('3: a fatal status refresh after a timeout leaves the duplicate after-hook replaying readback-timeout, and new completions are refused as unavailable', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            const first = await complete(fx.adapter, 'timeout-complete')
+            expectRetryable(first)
+            fx.failLocalSnapshot('target-unavailable')
+            expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'timeout-complete', replay)
+            expectRetryable(replay)
+            expect(replay.title).toBe(first.title)
+            expect(replay.output).toBe(first.output)
+            expect(replay.metadata.workflowGuard).toEqual(
+              first.metadata.workflowGuard,
+            )
+            // Everything but the live guard-state fields in metadata() replays
+            // identically; those three track the session's current state.
+            const liveFields = ['state', 'reasonCode', 'statusDigest']
+            const stable = (metadata: Record<string, unknown>) =>
+              Object.fromEntries(
+                Object.entries(metadata).filter(
+                  ([key]) => !liveFields.includes(key),
+                ),
+              )
+            expect(stable(replay.metadata)).toEqual(stable(first.metadata))
+            expect(replay.metadata.state).toBe('unavailable')
+            expect(
+              fx.adapter.prepareTransition(SESSION_A, {
+                callId: 'after-unavailable',
+                target: 'unit',
+              }),
+            ).toEqual({
+              // The core reports an unavailable guard as a rejected prepare.
+              status: 'rejected',
+              reasonCode: 'guard-unavailable',
+            })
+          })
+
+          test('4: a new call ID whose readbacks show drift after a timeout takes the fatal path, and the timed-out attempt applied nothing', async () => {
+            const fx = await skipFixture('observe')
+            const receiptsBefore = JSON.stringify(
+              ledger(fx.adapter).listReceipts(),
+            )
+            const statusBefore = JSON.stringify(status(fx.adapter))
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            expect(JSON.stringify(ledger(fx.adapter).listReceipts())).toBe(
+              receiptsBefore,
+            )
+            expect(JSON.stringify(status(fx.adapter))).toBe(statusBefore)
+
+            fx.failRemote('push', undefined)
+            fx.driftLocalSnapshotOnCall(2)
+            const second = await complete(fx.adapter, 'drift-complete')
+            expectFatal(second)
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+
+          test('5: replaying the before-hook with the timed-out call ID throws abandoned-transition in protected mode', async () => {
+            const fx = await skipFixture('protected')
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            const caught = await caughtBefore(fx.adapter, 'timeout-complete')
+            expect(isWorkflowGuardBlockedError(caught)).toBe(true)
+            expect(caught).toMatchObject({ reasonCode: 'abandoned-transition' })
+            expectUntouched(fx.adapter)
+          })
+
+          test('5: replaying the before-hook with the timed-out call ID in observe mode records it, and the after-hook replays the stored result', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            const first = await complete(fx.adapter, 'timeout-complete')
+            expectRetryable(first)
+            await beforeComplete(fx.adapter, 'timeout-complete')
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'timeout-complete', replay)
+            expectRetryable(replay)
+            expect(replay.title).toBe(first.title)
+            expect(replay.output).toBe(first.output)
+            expectUntouched(fx.adapter)
+          })
+
+          test('6: readback-timeout never enters a marker, and a fresh guard recovering from the same history restores the active unit', async () => {
+            const timeoutNow = { value: false }
+            const base = sequenceObserver([
+              operationSnapshot(),
+              operationSnapshot(undefined, 'd'.repeat(64)),
+            ])
+            const observer: OpencodeOperationObserver = {
+              ...base,
+              snapshot: async () =>
+                timeoutNow.value ? TIMEOUT : base.snapshot(),
+            }
+            const source = createAdapter(
+              'observe',
+              false,
+              observer,
+              [],
+              [],
+              undefined,
+              true,
+            )
+            const skillOutput = freshCompletionOutput()
+            const writeOutput = freshCompletionOutput()
+            const verifyOutput: CompletionOutput = {
+              ...freshCompletionOutput(),
+              metadata: { exit: 0 },
+            }
+            await observeSkill(
+              source,
+              'systematic_skill',
+              'ce:work',
+              'recovery-skill',
+              SESSION_A,
+              skillOutput,
+            )
+            await observeOperationTool(
+              source,
+              'write',
+              { filePath: 'recovered.ts', content: 'x' },
+              writeOutput,
+              'recovery-write',
+            )
+            await observeOperationTool(
+              source,
+              'bash',
+              { command: 'bun test tests/unit/example.test.ts' },
+              verifyOutput,
+              'recovery-verify',
+            )
+            expect(status(source).satisfiedOperations).toEqual(
+              expect.arrayContaining(['implementation', 'verification']),
+            )
+
+            timeoutNow.value = true
+            const completed = await complete(source, 'recovery-complete')
+            expectRetryable(completed)
+            expectUntouched(source)
+
+            // Only the guard's own status key may name the reason; no marker
+            // (receipt, progression, or system prompt) may.
+            const { workflowGuard: _status, ...markerMetadata } =
+              completed.metadata
+            const transformed = { system: ['base'] }
+            await source.hooks['experimental.chat.system.transform'](
+              { sessionID: SESSION_A },
+              transformed,
+            )
+            expect(JSON.stringify(markerMetadata)).not.toContain(
+              'readback-timeout',
+            )
+            expect(JSON.stringify(transformed.system)).not.toContain(
+              'readback-timeout',
+            )
+            expect(JSON.stringify(ledger(source).listReceipts())).not.toContain(
+              'readback-timeout',
+            )
+
+            const parts = [
+              skillOutput,
+              writeOutput,
+              verifyOutput,
+              completed,
+            ].map((part) => ({
+              info: {},
+              parts: [{ state: { metadata: part.metadata } }],
+            }))
+            const restored = createAdapter(
+              'observe',
+              false,
+              sequenceObserver([operationSnapshot(undefined, 'd'.repeat(64))]),
+              [],
+              [],
+              {
+                readSessionParts: async () => parts,
+                listChildren: async () => [],
+              },
+              true,
+            )
+            await refreshed(restored)
+            expect(status(restored).state).not.toBe('unavailable')
+            expect(status(restored).epoch).not.toBeNull()
+            expect(status(restored).unit?.status).toBe('active')
+            expect(status(restored).satisfiedOperations).toEqual(
+              expect.arrayContaining(['implementation', 'verification']),
+            )
+          })
+        })
+      })
+    })
+
+    describe('refresh-readback cause carries the observer reason code', () => {
+      const D = 'd'.repeat(64)
+      const E = 'e'.repeat(64)
+      const FRESH = 'f'.repeat(64)
+
+      async function refreshedStatus(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      test('a: a local snapshot command-timeout during status refresh is skipped, not fatal', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let failing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () => {
+            if (!failing) return base.snapshot()
+            return { status: 'unavailable', reasonCode: 'command-timeout' }
+          },
+        }
+        const adapter = createAdapter('observe', false, observer)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        failing = true
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      async function satisfiedPushAdapter(): Promise<{
+        adapter: OpencodeWorkflowGuard
+        failRemoteWith(result: OperationObserverRemoteResult): void
+      }> {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let override: OperationObserverRemoteResult | undefined
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) =>
+            override ?? reader.call(base, operation, phase),
+        }
+        const adapter = createAdapter('observe', false, observer, ['push'])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'cause-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        return {
+          adapter,
+          failRemoteWith(result) {
+            override = result
+          },
+        }
+      }
+
+      test('b: a remote readback command-timeout after a satisfied push is skipped, not fatal', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({ status: 'unavailable', reasonCode: 'command-timeout' })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('c: a remote missing-resource after a satisfied push goes unavailable with a non-timeout cause', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({ status: 'missing-resource' })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'missing-resource',
+          timedOut: false,
+        })
+      })
+
+      test('d: a non-timeout remote unavailable reason is recorded verbatim and is not a timeout', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({
+          status: 'unavailable',
+          reasonCode: 'remote-command-failed',
+        })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'remote-command-failed',
+          timedOut: false,
+        })
+      })
+
+      test('d: a throwing remote reader has no reason code and is not a timeout', async () => {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let throwing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) => {
+            if (throwing) throw new Error('remote exploded')
+            return reader.call(base, operation, phase)
+          },
+        }
+        const adapter = createAdapter('observe', false, observer, ['push'])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'throw-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        throwing = true
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          timedOut: false,
+        })
+      })
     })
   })
 
@@ -7655,6 +9301,61 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
+  test('a pinned worktree target whose validation times out rejects completion as retryable', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      setup.setTargetValidationAvailable(false, 'command-timeout')
+
+      const completeInput = {
+        tool: 'systematic_workflow_complete' as const,
+        sessionID: SESSION_A,
+        callID: 'timeout-pinned-completion',
+      }
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      const output = { title: 'complete', output: 'done', metadata: {} }
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        output,
+      )
+
+      expect(output.title).toBe('Workflow readback timed out')
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'readback-timeout',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test('a pinned worktree validation target-unavailable during status refresh goes unavailable and records it', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      setup.setTargetValidationAvailable(false, 'target-unavailable')
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext(SESSION_A))
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'refresh-readback',
+        kind: 'observer-readback-failed',
+        reasonCode: 'target-unavailable',
+        timedOut: false,
+      })
+      expect(parsed.unconfirmedReadbacks).toBeUndefined()
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
   test('operation evidence remains isolated across sessions and registrations', async () => {
     const first = createAdapter(
       'observe',
@@ -8418,12 +10119,14 @@ describe('OpenCode workflow guard adapter', () => {
         adapter: OpencodeWorkflowGuard,
         site: string,
         kind: string,
+        reasonCode?: string,
       ): Promise<void> {
         const parsed = await statusJson(adapter)
         expect(parsed.state).toBe('unavailable')
         expect(parsed.firstUnavailableCause).toEqual({
           site,
           kind,
+          ...(reasonCode === undefined ? {} : { reasonCode }),
           timedOut: false,
         })
       }
@@ -8506,6 +10209,7 @@ describe('OpenCode workflow guard adapter', () => {
           adapter,
           'refresh-readback',
           'observer-readback-failed',
+          'target-unavailable',
         )
       })
 

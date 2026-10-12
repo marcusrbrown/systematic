@@ -242,27 +242,42 @@ change. Must pass before any release.
 validates each claim against observed workspace state, and mints integrity-checked receipts. A
 guarded transition that lacks its required receipts is rejected. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
-seeding, session initialization, marker recovery, or observer readback flips mode to `unavailable`,
-the runtime binds a bounded `GuardUnavailableCause` (site, failure kind, and for remote scopes the
-operation and reason code) to that specific transition — never to whichever concurrent caller
-finished computing a cause first — and surfaces it only as `firstUnavailableCause` on
-`systematic_workflow_status` tool output while the state remains `unavailable`; it never appears on a
-receipt envelope, marker envelope, or anything covered by an integrity digest. At initialization the
-session's own status calls, guard-owned `no-active-epoch` rejections, and an in-flight guard call in
-the current, unfinished assistant turn do not count as unrecoverable history; any other markerless
-guard history fails closed. At activation, a remote probe timeout, or a push `missing-resource`,
-defers that one operation instead of making the guard unavailable; deferrals are listed on status
-output as an enum-only `seedDeferrals` list and never appear in receipts, markers, or digests. A
-deferred operation is admitted only after its own before-read is available (retried once on a
-timeout) from the same observer and target as the seed, and PR creation seeds its baseline from the
-after-read only when its before-read reported `missing-resource`. Known limits: a dual registration
-running an older build rejects the `inactive` marker state and fails closed until both upgrade; if
-host history loses every marker, a previously activated session cannot be told apart from a fresh
-one; in-flight guard calls from a turn that began before this runtime started fail closed;
-`missing-resource` cannot distinguish absence from some `gh` or `git` failures, and a first push to
-a branch with no upstream defers but cannot mint a receipt (#1081); and readback failures after an
-operation is satisfied still make the guard unavailable (#1080). OpenCode only — `src/pi.ts`
-registers no guard, and the Claude Code bundle ships no runtime.
+seeding, session initialization, marker recovery, observer readback, or a completion readback flips
+mode to `unavailable`, the runtime binds a bounded `GuardUnavailableCause` (site, failure kind, and
+for remote scopes the operation and reason code) to that specific transition — never to whichever
+concurrent caller finished computing a cause first — and surfaces it only as `firstUnavailableCause`
+on `systematic_workflow_status` tool output while the state remains `unavailable`; it never appears
+on a receipt envelope, marker envelope, or anything covered by an integrity digest. At
+initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
+in-flight guard call in the current, unfinished assistant turn do not count as unrecoverable
+history; any other markerless guard history fails closed. At activation, a remote probe timeout, or
+a push `missing-resource`, defers that one operation instead of making the guard unavailable;
+deferrals are listed on status output as an enum-only `seedDeferrals` list and never appear in
+receipts, markers, or digests. A deferred operation is admitted only after its own before-read is
+available (retried once on a timeout) from the same observer and target as the seed, and PR creation
+seeds its baseline from the after-read only when its before-read reported `missing-resource`. After
+an operation is satisfied, a probe timeout during a status refresh skips that probe instead of
+making the guard unavailable: a remote timeout skips only that operation and the rest still run, a
+local or pinned-worktree timeout skips every remote probe and lists the satisfied remote operations
+it left unprobed too, nothing is applied for a skipped probe, and skipped probes are listed on
+status output as an enum-only `unconfirmedReadbacks` list that never appears in receipts, markers,
+or digests. A completion readback timeout rejects that attempt as `readback-timeout` without
+consuming anything or making the guard unavailable; the next completion call prepares fresh and
+surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
+records a `complete-readback` cause. Known limits: a dual registration running an older build
+rejects the `inactive` marker state and fails closed until both upgrade; if host history loses every
+marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
+from a turn that began before this runtime started fail closed; `missing-resource` cannot
+distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
+defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
+in child rollup still make the guard unavailable (#1084); an earlier completion timeout can mask
+later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
+completion throws `abandoned-transition` in protected mode; completion is confirmed independently
+per registration, not atomically across registrations, so when two registrations share one tool
+output and their readbacks differ, one can complete while the other rejects or becomes unavailable,
+the final output depends on hook order, and a compound retry is not guaranteed; and with a degraded
+remote a status call can wait one probe timeout per satisfied remote operation. OpenCode only —
+`src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
