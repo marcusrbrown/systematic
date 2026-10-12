@@ -1,0 +1,552 @@
+---
+# Gated release pipeline.
+#
+# Credentialed jobs (publish) run no repository code: pinned actions, gh, git,
+# jq and `npx semantic-release` from a `--ignore-scripts` install only.
+# Repository scripts run only in credential-free jobs (verify, build, ...) with
+# `contents: read`, and hand small data artifacts to the jobs that act.
+name: Release
+
+'on':
+  push:
+    branches:
+      - main
+  schedule:
+    # Hourly reconcile: retries a release the push event missed or lost.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  # Fails closed: only the exact values `legacy` and `gated` select a path.
+  mode:
+    name: Select release mode
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      mode: ${{ steps.check.outputs.mode }}
+    steps:
+      - name: Validate RELEASE_MODE
+        id: check
+        env:
+          RELEASE_MODE: ${{ vars.RELEASE_MODE }}
+        run: |
+          case "$RELEASE_MODE" in
+            legacy|gated)
+              echo "mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::RELEASE_MODE must be exactly legacy or gated"
+              exit 1
+              ;;
+          esac
+
+  # Credential-free: decides whether the merge at github.sha is an approved
+  # release merge. Runs repository code, so it holds only read scopes.
+  verify:
+    name: Verify release merge
+    needs: mode
+    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      attestations: read
+    outputs:
+      kind: ${{ steps.decision.outputs.kind }}
+      version: ${{ steps.decision.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify release merge
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+          RELEASE_APP_LOGIN: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
+        run: |
+          bun scripts/release/verify-merge.ts --sha "$GITHUB_SHA" --out "$RUNNER_TEMP/decision"
+          {
+            echo "kind=$(jq -r '.kind' "$RUNNER_TEMP/decision/decision.json")"
+            echo "version=$(jq -r '.version // ""' "$RUNNER_TEMP/decision/decision.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload release decision
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-decision
+          path: ${{ runner.temp }}/decision
+
+  # Credential-free: builds dist/ once; publish re-checks the digest.
+  build:
+    name: Build
+    needs: mode
+    if: needs.mode.outputs.mode == 'gated'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      dist-sha256: ${{ steps.digest.outputs.dist-sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Compute dist digest
+        id: digest
+        run: |
+          echo "dist-sha256=$(find dist -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dist
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/
+
+  # Credentialed: the only job with the release environment, npm OIDC and the
+  # release App token. Runs no repository code.
+  publish:
+    name: Publish
+    needs: [mode, verify, build]
+    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main' && needs.verify.outputs.kind == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    concurrency:
+      group: release-state
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify main tip is the release merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "::error::superseded: main moved past the release merge"
+            exit 1
+          fi
+
+      # No registry-url: it would write an .npmrc that forces token auth and
+      # defeat npm trusted publishing (OIDC).
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Require npm >= 11.5.1
+        run: |
+          version=$(npm --version)
+          oldest=$(printf '%s\n' 11.5.1 "$version" | sort -V | head -n 1)
+          if [ "$oldest" != "11.5.1" ]; then
+            echo "::error::npm $version is older than 11.5.1, which trusted publishing requires"
+            exit 1
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist/
+
+      - name: Download release decision
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-decision
+          path: ${{ runner.temp }}/decision
+
+      - name: Verify dist digest
+        env:
+          EXPECTED_DIGEST: ${{ needs.build.outputs.dist-sha256 }}
+        run: |
+          actual=$(find dist -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          if [ "$actual" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::dist digest mismatch: expected $EXPECTED_DIGEST, got $actual"
+            exit 1
+          fi
+
+      - name: Stage release inputs
+        run: mkdir -p .release && cp "$RUNNER_TEMP/decision/notes.md" .release/notes.md && rm -f .releaserc.yaml && cp "$RUNNER_TEMP/decision/releaserc.json" .releaserc.json
+
+      - name: Create release App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # `vars` is a snapshot taken when the job starts, so a hold set while the
+      # job runs would be missed. Read the live value from the API instead, with
+      # the release App token (needs the Variables: read permission). A 404 means
+      # the variable is unset; any other failure fails closed. With a hold set,
+      # only a maintainer approval may publish.
+      - name: Recheck release hold
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release-hold.out"
+          err="$RUNNER_TEMP/release-hold.err"
+          if gh api "repos/$REPO/actions/variables/RELEASE_HOLD" --jq .value > "$out" 2> "$err"; then
+            hold=$(< "$out")
+          elif grep -q 'HTTP 404' "$err"; then
+            hold=""
+          else
+            cat "$err" >&2
+            echo "::error::Could not read RELEASE_HOLD; refusing to publish."
+            exit 1
+          fi
+          if [ "$hold" = "true" ]; then
+            approver=$(jq -r '.approver // ""' "$RUNNER_TEMP/decision/decision.json")
+            if [ "$approver" != "maintainer" ]; then
+              echo "::error::RELEASE_HOLD is set; only a maintainer approval can publish."
+              exit 1
+            fi
+          fi
+
+      - name: Publish with semantic-release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          npm_config_ignore_scripts: 'true'
+        run: npx --no-install semantic-release --ci
+
+  # Read-only: proves the registry, tag and GitHub release match what was approved.
+  confirm:
+    name: Confirm release
+    needs: [verify, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm published release
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
+        run: |
+          set -euo pipefail
+
+          # The registry can lag the publish by a few seconds.
+          retry() {
+            for _ in 1 2 3 4 5 6; do
+              if "$@"; then return 0; fi
+              sleep 10
+            done
+            return 1
+          }
+
+          published=$(retry npm view "@fro.bot/systematic@$VERSION" version)
+          if [ "$published" != "$VERSION" ]; then
+            echo "::error::npm has $published, expected $VERSION"
+            exit 1
+          fi
+
+          email=$(npm view "@fro.bot/systematic@$VERSION" _npmUser --json | jq -r '.email')
+          if [ "$email" != "npm-oidc-no-reply@github.com" ]; then
+            echo "::error::published with a token, not trusted publishing"
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" --jq .object.sha > /dev/null
+
+          author=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" --jq '.author.login')
+          if [ "$author" != "$EXPECTED_AUTHOR" ]; then
+            echo "::error::release v$VERSION was authored by $author, expected $EXPECTED_AUTHOR"
+            exit 1
+          fi
+
+          {
+            echo "## Release v$VERSION confirmed"
+            echo
+            echo "- npm: \`@fro.bot/systematic@$VERSION\` published via trusted publishing"
+            echo "- tag: \`v$VERSION\`"
+            echo "- release author: \`$author\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Credential-free: renders the pending release from the CURRENT main tip, so
+  # a run right after a publish sees the new tag. In legacy mode the job
+  # summary is the dark-launch preview.
+  render:
+    name: Render pending release
+    needs: [mode, publish]
+    if: always() && needs.mode.result == 'success' && needs.publish.result != 'failure' && needs.publish.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      kind: ${{ steps.render.outputs.kind }}
+      version: ${{ steps.render.outputs.version }}
+      title: ${{ steps.render.outputs.title }}
+      base-sha: ${{ steps.render.outputs.base-sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Render release
+        id: render
+        run: |
+          bun scripts/release/render.ts --sha HEAD --out "$RUNNER_TEMP/render"
+          render_json="$RUNNER_TEMP/render/render.json"
+          kind=$(jq -r '.kind' "$render_json")
+          case "$kind" in
+            none)
+              # render.json carries no baseSha for `none`; HEAD is what was rendered.
+              {
+                echo "kind=none"
+                echo "base-sha=$(git rev-parse HEAD)"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            release)
+              version=$(jq -r '.version' "$render_json")
+              title=$(jq -r '.title' "$render_json")
+              base_sha=$(jq -r '.baseSha' "$render_json")
+              if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::render produced a malformed version"
+                exit 1
+              fi
+              if [ "$title" != "chore(release): v$version" ]; then
+                echo "::error::render produced a malformed release title"
+                exit 1
+              fi
+              {
+                echo "kind=release"
+                echo "version=$version"
+                echo "title=$title"
+                echo "base-sha=$base_sha"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::render produced an unknown kind"
+              exit 1
+              ;;
+          esac
+
+      - name: Write job summary
+        env:
+          KIND: ${{ steps.render.outputs.kind }}
+          VERSION: ${{ steps.render.outputs.version }}
+        run: |
+          if [ "$KIND" = "release" ]; then
+            {
+              echo "## Pending release v$VERSION"
+              echo
+              cat "$RUNNER_TEMP/render/body.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing releasable." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload rendered release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-render
+          path: ${{ runner.temp }}/render
+
+  # Credentialed: keeps the release PR in step with main through the Git Data
+  # API (so the App authors the commit). Uses only gh, git and jq: no checkout,
+  # no install, no repository scripts. Payloads and bodies go through files;
+  # untrusted text never reaches a command line.
+  refresh:
+    name: Refresh release PR
+    needs: [mode, render]
+    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main' && needs.render.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    concurrency:
+      group: release-state
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Download rendered release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-render
+          path: ${{ runner.temp }}/render
+
+      - name: Create release App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Refresh release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          KIND: ${{ needs.render.outputs.kind }}
+          VERSION: ${{ needs.render.outputs.version }}
+          TITLE: ${{ needs.render.outputs.title }}
+          BASE_SHA: ${{ needs.render.outputs.base-sha }}
+          REPO: ${{ github.repository }}
+          BOT_LOGIN: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
+        run: |
+          set -euo pipefail
+          render_dir="$RUNNER_TEMP/render"
+          work="$RUNNER_TEMP/refresh"
+          mkdir -p "$work"
+
+          # (a) Tip check: a newer run owns the PR if main moved.
+          tip=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)
+          if [ "$tip" != "$BASE_SHA" ]; then
+            echo "::notice::main moved; a newer run will refresh"
+            exit 0
+          fi
+
+          # (b) Find the release PR: only the App's own PR from this repository.
+          gh pr list --repo "$REPO" --head release/pending --state open \
+            --json number,headRefOid,author,headRepositoryOwner > "$work/prs.json"
+          jq --arg bot "$BOT_LOGIN" --arg owner "${REPO%%/*}" '
+            def norm: sub("^app/"; "") | sub("\\[bot\\]$"; "");
+            [.[] | select((.author.login | norm) == ($bot | norm)
+                          and .headRepositoryOwner.login == $owner)]
+          ' "$work/prs.json" > "$work/trusted.json"
+          if [ "$(jq 'length' "$work/trusted.json")" -gt 1 ]; then
+            echo "::error::more than one open release PR from $BOT_LOGIN on release/pending"
+            exit 1
+          fi
+          pr_number=$(jq -r '.[0].number // empty' "$work/trusted.json")
+          head_oid=$(jq -r '.[0].headRefOid // empty' "$work/trusted.json")
+
+          # (c) Nothing releasable: retire any open release PR.
+          if [ "$KIND" = "none" ]; then
+            if [ -n "$pr_number" ]; then
+              gh pr close "$pr_number" --repo "$REPO" --comment "Nothing releasable on main; closing."
+            fi
+            exit 0
+          fi
+          if [ "$KIND" != "release" ]; then
+            echo "::error::unexpected render kind"
+            exit 1
+          fi
+
+          # Arms auto-merge pinned to a head commit. A failure is not fatal: the
+          # hourly reconcile and a manual merge remain available.
+          arm_auto_merge() {
+            local pr="$1" head="$2" armed=false
+            for _ in 1 2 3; do
+              if gh pr merge "$pr" --repo "$REPO" --auto --squash \
+                --match-head-commit "$head" --subject "$TITLE" --body ""; then
+                armed=true
+                break
+              fi
+              sleep "${MERGE_RETRY_DELAY:-5}"
+            done
+            if [ "$armed" != "true" ]; then
+              echo "::warning::could not arm auto-merge on PR #$pr; merge it manually or wait for the hourly reconcile"
+            fi
+          }
+
+          # (d) No-op check: same base and same CHANGELOG.md means the existing
+          # commit is current. Only the body changes, so approvals stay valid.
+          # Auto-merge is re-armed on the existing head so a failed arming from an
+          # earlier run is repaired without rewriting the commit.
+          if [ -n "$pr_number" ]; then
+            parent=$(gh api "repos/$REPO/commits/$head_oid" --jq '.parents[0].sha')
+            remote_blob=$(gh api "repos/$REPO/contents/CHANGELOG.md?ref=$head_oid" --jq .sha)
+            local_blob=$(git hash-object "$render_dir/CHANGELOG.md")
+            if [ "$parent" = "$BASE_SHA" ] && [ "$remote_blob" = "$local_blob" ]; then
+              gh pr edit "$pr_number" --repo "$REPO" --title "$TITLE" --body-file "$render_dir/body.md"
+              arm_auto_merge "$pr_number" "$head_oid"
+              exit 0
+            fi
+          fi
+
+          # (e) One commit on top of the main tip, via the Git Data API.
+          jq -cn --rawfile content "$render_dir/CHANGELOG.md" \
+            '{content: ($content | @base64), encoding: "base64"}' > "$work/blob.json"
+          blob_sha=$(gh api --method POST "repos/$REPO/git/blobs" --input "$work/blob.json" --jq .sha)
+          base_tree=$(gh api "repos/$REPO/git/commits/$BASE_SHA" --jq .tree.sha)
+          jq -cn --arg base_tree "$base_tree" --arg blob "$blob_sha" \
+            '{base_tree: $base_tree, tree: [{path: "CHANGELOG.md", mode: "100644", type: "blob", sha: $blob}]}' > "$work/tree.json"
+          tree_sha=$(gh api --method POST "repos/$REPO/git/trees" --input "$work/tree.json" --jq .sha)
+
+          # An unchanged tree means the rendered changelog already matches main:
+          # a release entry is on main without a publish. Never open an empty PR.
+          if [ "$tree_sha" = "$base_tree" ]; then
+            echo "::error::Rendered CHANGELOG.md matches main; a release entry is already on main without a publish. See RELEASING.md."
+            exit 1
+          fi
+          jq -cn --arg message "$TITLE" --arg tree "$tree_sha" --arg parent "$BASE_SHA" \
+            '{message: $message, tree: $tree, parents: [$parent]}' > "$work/commit.json"
+          commit_sha=$(gh api --method POST "repos/$REPO/git/commits" --input "$work/commit.json" --jq .sha)
+
+          # (f) Point release/pending at the new commit.
+          existing=$(gh api "repos/$REPO/git/matching-refs/heads/release/pending" \
+            --jq '[.[] | select(.ref == "refs/heads/release/pending")] | length')
+          if [ "$existing" -gt 0 ]; then
+            jq -cn --arg sha "$commit_sha" '{sha: $sha, force: true}' > "$work/ref.json"
+            gh api --method PATCH "repos/$REPO/git/refs/heads/release/pending" --input "$work/ref.json"
+          else
+            jq -cn --arg sha "$commit_sha" '{ref: "refs/heads/release/pending", sha: $sha}' > "$work/ref.json"
+            gh api --method POST "repos/$REPO/git/refs" --input "$work/ref.json"
+          fi
+
+          # (g) Open or update the PR.
+          if [ -z "$pr_number" ]; then
+            pr_url=$(gh pr create --repo "$REPO" --base main --head release/pending \
+              --title "$TITLE" --body-file "$render_dir/body.md")
+            pr_number="${pr_url##*/}"
+          else
+            gh pr edit "$pr_number" --repo "$REPO" --title "$TITLE" --body-file "$render_dir/body.md"
+          fi
+
+          # (h) Arm auto-merge pinned to the commit just created.
+          arm_auto_merge "$pr_number" "$commit_sha"

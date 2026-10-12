@@ -154,12 +154,13 @@ describe('release-notes workflow target validation', () => {
     expect(env.RELEASE_AUTHOR).toBe(RELEASE_AUTHOR_EXPR)
   })
 
-  test('the expected author references RELEASE_AUTHOR_LOGIN with the mrbro-bot[bot] default', () => {
+  test('the expected author references RELEASE_AUTHOR_LOGIN with the systematic-release[bot] default', () => {
     const expected = String(
       asRecord(findStep('Validate release target').env, 'env').EXPECTED_AUTHOR,
     )
     expect(expected).toContain('vars.RELEASE_AUTHOR_LOGIN')
-    expect(expected).toContain("'mrbro-bot[bot]'")
+    expect(expected).toContain("'systematic-release[bot]'")
+    expect(expected).not.toContain('mrbro-bot')
   })
 
   test('no inline author, tag, or npm gate steps remain in the workflow', () => {

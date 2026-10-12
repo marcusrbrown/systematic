@@ -1,0 +1,243 @@
+name: Publish Claude Code Plugin
+
+# Publishes the built Claude Code plugin bundle to the `claude-code-plugin`
+# branch whenever a release is published, in both legacy and gated release mode.
+# Re-publish an existing tag with a manual dispatch.
+#
+# Two jobs, split by trust: `build` executes repository code (install, build) but
+# is read-only; `push` holds the only write credential and runs no repository
+# code, only git and the downloaded bundle.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published release tag to publish the plugin from (e.g. v3.21.7)
+        required: true
+        type: string
+
+concurrency:
+  group: claude-code-plugin
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build Claude Code Plugin
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.npm.outputs.available }}
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.target.outputs.tag }}
+    steps:
+      # The validator always comes from the default branch, never the target tag,
+      # so a release on an older line (which may predate the script) is still
+      # validated. It lands in its own path so the tag checkout below is
+      # unaffected, with no persisted credentials.
+      - name: Fetch release target validator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: scripts/validate-release-target.sh
+          sparse-checkout-cone-mode: false
+          path: .release-target-validator
+          persist-credentials: false
+
+      # Everything after this is gated on `proceed`: an untrusted author or a
+      # non-latest release event ends the job cleanly, and the same on a manual
+      # dispatch fails loudly. The plugin branch only ever tracks the latest
+      # release, so a historical tag can never replace it.
+      - name: Validate release target
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_AUTHOR: ${{ github.event.release.author.login }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
+          REQUIRE_LATEST: 'true'
+          GH_TOKEN: ${{ github.token }}
+        run: bash .release-target-validator/scripts/validate-release-target.sh
+
+      # The plugin ships in lockstep with npm, so wait briefly for the registry
+      # to serve the version and end cleanly if it never does.
+      # A release event is automatic, so a missing version fails the run where
+      # someone will see it; a manual dispatch ends cleanly instead.
+      - name: Confirm package is on npm
+        id: npm
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if [[ "$(npm view "@fro.bot/systematic@${VERSION}" version)" == "$VERSION" ]]; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "@fro.bot/systematic@${VERSION} not on npm yet (attempt ${attempt}/5)"
+            sleep "${NPM_RETRY_DELAY:-10}"
+          done
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            echo "::error::@fro.bot/systematic@${VERSION} is not available on npm; the Claude Code plugin was not published."
+            exit 1
+          fi
+          echo "::notice::@fro.bot/systematic@${VERSION} is not available on npm; not publishing the plugin."
+          echo "available=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.target.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve source commit
+        id: source
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        run: bun install --frozen-lockfile
+
+      - name: Build Claude Code plugin
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        run: bun run claude-code:build
+
+      - name: Guard built bundle
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        run: |
+          set -euo pipefail
+          required=(
+            "claude-code/.claude-plugin/plugin.json"
+            "claude-code/skills/using-systematic/SKILL.md"
+            "claude-code/output-styles/systematic.md"
+            "claude-code/hooks/hooks.json"
+            "claude-code/bin/systematic-validate-review-artifact"
+          )
+          for f in "${required[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "::error::Missing required artifact: $f"
+              exit 1
+            fi
+          done
+          if [[ ! -x "claude-code/bin/systematic-validate-review-artifact" ]]; then
+            echo "::error::Required artifact is not executable: claude-code/bin/systematic-validate-review-artifact"
+            exit 1
+          fi
+          if ! find claude-code/agents -mindepth 1 -type f | grep -q .; then
+            echo "::error::No files found under claude-code/agents/"
+            exit 1
+          fi
+          echo "Guard passed: built bundle looks complete."
+
+      # Artifacts drop file modes; a tar keeps the executable validator bin.
+      - name: Pack plugin bundle
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        run: tar -C claude-code -cf "$RUNNER_TEMP/claude-code-plugin.tar" .
+
+      - name: Upload plugin bundle
+        if: ${{ steps.target.outputs.proceed == 'true' && steps.npm.outputs.available == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: claude-code-plugin
+          path: ${{ runner.temp }}/claude-code-plugin.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  push:
+    name: Publish Claude Code Plugin
+    needs: build
+    if: ${{ needs.build.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download plugin bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: claude-code-plugin
+          path: ${{ runner.temp }}/plugin
+
+      # No repository checkout: git runs in a fresh directory that tracks only
+      # the plugin branch, so nothing from the repository can execute here.
+      - name: Publish bundle to claude-code-plugin branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.build.outputs.sha }}
+          # The unpacked archive is untrusted data while GH_TOKEN is in scope:
+          # no git hook or fsmonitor command may run from it.
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_0: core.hooksPath
+          GIT_CONFIG_VALUE_0: /dev/null
+          GIT_CONFIG_KEY_1: core.fsmonitor
+          GIT_CONFIG_VALUE_1: 'false'
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid source commit '${SHA}'"
+            exit 1
+          fi
+
+          ARCHIVE="$RUNNER_TEMP/plugin/claude-code-plugin.tar"
+          # List to a file first: under pipefail, `grep -q` closing the pipe early
+          # would turn a match into a SIGPIPE status and skip the rejection.
+          tar -tf "$ARCHIVE" > "$RUNNER_TEMP/plugin/entries.txt"
+          if grep -Eq '(^|/)\.git(/|$)' "$RUNNER_TEMP/plugin/entries.txt"; then
+            echo "::error::Plugin archive contains a .git entry; refusing to unpack it"
+            exit 1
+          fi
+
+          WORKTREE_DIR="$RUNNER_TEMP/claude-code-plugin-branch"
+          git init -q "$WORKTREE_DIR"
+          cd "$WORKTREE_DIR"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth}"
+          git config http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+
+          rc=0
+          git ls-remote --exit-code --heads origin claude-code-plugin > /dev/null || rc=$?
+          case "$rc" in
+            0)
+              git fetch --depth=1 origin claude-code-plugin
+              git checkout -q -B claude-code-plugin FETCH_HEAD
+              ;;
+            2)
+              git checkout -q --orphan claude-code-plugin
+              ;;
+            *)
+              echo "::error::Could not list the claude-code-plugin branch (git exit ${rc})"
+              exit 1
+              ;;
+          esac
+
+          # Clear the worktree contents (keep .git) then unpack the fresh build.
+          find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          tar -xf "$ARCHIVE" -C "$WORKTREE_DIR"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to publish."
+            exit 0
+          fi
+
+          git commit -m "build(claude-code): publish marcusrbrown/systematic@${SHA}"
+          git push origin claude-code-plugin

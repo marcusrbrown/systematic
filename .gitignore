@@ -38,6 +38,8 @@ docs/src/content/docs/reference/skills/
 docs/src/content/docs/reference/agents/
 # Release notes page is regenerated from GitHub Releases at docs:generate time
 docs/src/content/docs/reference/release-notes.md
+# Changelog page is regenerated from CHANGELOG.md at docs:generate time
+docs/src/content/docs/reference/changelog.md
 # Latest schema mirror is regenerated at docs:generate time (derivative of v<MAJOR>/)
 docs/public/schemas/latest/
 # Homepage stats artifact is regenerated at docs:generate time (live counts + version)

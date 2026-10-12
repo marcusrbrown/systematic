@@ -7,17 +7,10 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
-  workflow_dispatch:
-    inputs:
-      dry-run:
-        description: Dry run
-        default: true
-        required: false
-        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -181,8 +174,8 @@ jobs:
 
       # Path gating applies only to pull requests, and only at step level:
       # this job has no top-level `if:`, so it always runs to completion and
-      # reports a status. A `needs` dependency that were skipped would skip
-      # `release` too, silently publishing nothing on a docs-only PR.
+      # reports a status. A skipped `needs` dependency would skip
+      # `legacy-release` too, silently publishing nothing.
       - name: Detect relevant path changes
         id: filter
         if: github.event_name == 'pull_request'
@@ -354,37 +347,132 @@ jobs:
       - name: Build docs
         run: bun run docs:build
 
+  # `Release` is a required status context, so this job has no `if:` and no
+  # `needs`: it reports on every pull request and every push. It is
+  # credential-free by design (contents: read, no secrets, no environment);
+  # publishing lives in `legacy-release` (or release.yaml in gated mode).
   release:
-    env:
-      # The parentheses are load-bearing. `&&` binds tighter than `||`, and a
-      # workflow_dispatch input arrives as a string, so an unparenthesized
-      # `inputs.dry-run && 'true'` evaluates truthy even when the caller passes
-      # false. Compare against the string explicitly rather than relying on
-      # truthiness.
-      #
-      # This value is the only gate on the dry-run flag. Do not add a step that
-      # overrides it for the default branch: semantic-release already refuses to
-      # publish from anywhere its own `branches` config does not allow, and an
-      # override here silently turns a requested dry run into a real release.
-      DRY_RUN: ${{ (github.event_name == 'pull_request' || github.event.inputs.dry-run == 'true') && 'true' || 'false' }}
     name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # On a release/pending PR the head commit is the release commit itself
+      # (it only changes CHANGELOG.md), so check out the PR head rather than
+      # the synthetic merge commit. An empty `ref` falls back to the default.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.head_ref == 'release/pending' && github.event.pull_request.head.sha || '' }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # On release/pending the PR head is the release commit, so render the
+      # state it was rendered from: its parent.
+      - name: Render release
+        env:
+          RENDER_SHA: ${{ github.head_ref == 'release/pending' && 'HEAD^' || 'HEAD' }}
+        run: bun scripts/release/render.ts --sha "$RENDER_SHA" --out "$RUNNER_TEMP/render"
+
+      - name: Summarize release
+        run: |
+          set -euo pipefail
+          render="$RUNNER_TEMP/render/render.json"
+          {
+            echo "### Release"
+            if [[ "$(jq -r '.kind' "$render")" == "release" ]]; then
+              echo "Version: $(jq -r '.version' "$render")"
+            else
+              echo "nothing releasable"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify release pull request
+        if: github.event_name == 'pull_request' && github.head_ref == 'release/pending'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          render="$RUNNER_TEMP/render/render.json"
+
+          if [[ "$(git rev-parse HEAD)" != "$PR_HEAD_SHA" ]]; then
+            echo "::error::Checked-out HEAD is not the pull request head $PR_HEAD_SHA"
+            exit 1
+          fi
+
+          if [[ "$(jq -r '.kind' "$render")" != "release" ]]; then
+            echo "::error::release/pending has nothing releasable to render from its parent commit"
+            exit 1
+          fi
+
+          version="$(jq -r '.version' "$render")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Rendered version is not x.y.z: '$version'"
+            exit 1
+          fi
+
+          if ! grep -Eq "^## \[?${version//./[.]}([] ]|\$)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no heading for version $version"
+            exit 1
+          fi
+
+          if ! cmp -s "$RUNNER_TEMP/render/CHANGELOG.md" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md differs from the rendered changelog for $version"
+            exit 1
+          fi
+
+  # Fails red unless RELEASE_MODE is exactly `legacy` or `gated`, so an unset or
+  # mistyped value can never silently publish nothing (or the wrong thing).
+  release-mode:
+    name: Release Mode
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate RELEASE_MODE
+        env:
+          RELEASE_MODE: ${{ vars.RELEASE_MODE }}
+        run: |
+          case "$RELEASE_MODE" in
+            legacy|gated)
+              echo "RELEASE_MODE=$RELEASE_MODE"
+              ;;
+            *)
+              echo "::error::vars.RELEASE_MODE must be exactly 'legacy' or 'gated', got: '$RELEASE_MODE'"
+              exit 1
+              ;;
+          esac
+
+  # Legacy publish path: today's behavior, removed after the gated cutover.
+  # In gated mode this job is skipped and release.yaml publishes.
+  legacy-release:
+    name: Legacy Release
+    if: github.event_name == 'push' && vars.RELEASE_MODE == 'legacy'
     needs: [build, typecheck, lint, test, host-contract]
+    environment: release
+    concurrency:
+      group: release-state
+      cancel-in-progress: false
     outputs:
       new-release-published: ${{ steps.semantic-release.outputs.new-release-published }}
       new-release-version: ${{ steps.semantic-release.outputs.new-release-version }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
-      issues: write
-      pull-requests: write
     steps:
       - id: get-workflow-app-token
         name: Get Workflow Application Token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.APPLICATION_ID }}
-          private-key: ${{ secrets.APPLICATION_PRIVATE_KEY }}
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - id: setup-git-user
         name: Get GitHub App User ID and Setup Git user
@@ -423,7 +511,6 @@ jobs:
       - name: Semantic Release
         id: semantic-release
         env:
-          CI_FLAG: ${{ env.DRY_RUN == 'true' && 'false' || 'true' }}
           GIT_AUTHOR_EMAIL: ${{ steps.setup-git-user.outputs.user-email }}
           GIT_AUTHOR_NAME: ${{ steps.setup-git-user.outputs.user-name }}
           GIT_COMMITTER_EMAIL: ${{ steps.setup-git-user.outputs.user-email }}
@@ -432,90 +519,5 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
         run: |
-          npx semantic-release --dry-run ${{ env.DRY_RUN }} --ci ${{ env.CI_FLAG }}
+          npx semantic-release
         shell: 'bash -Eeuxo pipefail {0}'
-
-  publish-claude-code-plugin:
-    name: Publish Claude Code Plugin
-    # Publish in lockstep with npm releases: only after the release job cuts a
-    # new version, so the plugin branch never ships a non-released or
-    # release-failed state. The plugin is still versioned by source commit SHA.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.release.outputs.new-release-published == 'true'
-    needs: [build, typecheck, lint, test, release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build Claude Code plugin
-        run: bun run claude-code:build
-
-      - name: Guard built bundle before publish
-        run: |
-          set -euo pipefail
-          required=(
-            "claude-code/.claude-plugin/plugin.json"
-            "claude-code/skills/using-systematic/SKILL.md"
-            "claude-code/output-styles/systematic.md"
-            "claude-code/hooks/hooks.json"
-            "claude-code/bin/systematic-validate-review-artifact"
-          )
-          for f in "${required[@]}"; do
-            if [[ ! -f "$f" ]]; then
-              echo "::error::Missing required artifact: $f"
-              exit 1
-            fi
-          done
-          if [[ ! -x "claude-code/bin/systematic-validate-review-artifact" ]]; then
-            echo "::error::Required artifact is not executable: claude-code/bin/systematic-validate-review-artifact"
-            exit 1
-          fi
-          if ! find claude-code/agents -mindepth 1 -type f | grep -q .; then
-            echo "::error::No files found under claude-code/agents/"
-            exit 1
-          fi
-          echo "Guard passed: built bundle looks complete."
-
-      - name: Configure git user
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Publish bundle to claude-code-plugin branch
-        run: |
-          set -euo pipefail
-
-          WORKTREE_DIR="$(mktemp -d)"
-          rm -rf "$WORKTREE_DIR"
-
-          git fetch origin claude-code-plugin || true
-
-          if git show-ref --verify --quiet refs/remotes/origin/claude-code-plugin; then
-            git worktree add "$WORKTREE_DIR" claude-code-plugin
-          else
-            git worktree add --orphan -b claude-code-plugin "$WORKTREE_DIR"
-          fi
-
-          # Clear the worktree contents (keep .git) then copy in the fresh build.
-          find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
-          cp -a claude-code/. "$WORKTREE_DIR/"
-
-          cd "$WORKTREE_DIR"
-          git add -A
-
-          if git diff --cached --quiet; then
-            echo "No changes to publish."
-            exit 0
-          fi
-
-          git commit -m "build(claude-code): publish marcusrbrown/systematic@${GITHUB_SHA}"
-          git push origin claude-code-plugin

@@ -7,6 +7,66 @@ repository:
   homepage: https://fro.bot/systematic
   topics: opencode, plugin, ai, workflow, systematic, semantic-release, bun
 
+# Applied by the settings workflow, which deletes any ruleset not listed here.
+# Environments are managed by hand and must not be declared in this file.
+rulesets:
+  - name: release-branch
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ['refs/heads/release/**']
+        exclude: []
+    rules:
+      - type: creation
+      - type: update
+      - type: deletion
+      - type: non_fast_forward
+    bypass_actors:
+      # systematic-release GitHub App
+      - actor_id: 5287597
+        actor_type: Integration
+        bypass_mode: always
+
+  # No actor bypasses this ruleset. An admin can still edit or disable it under
+  # Settings → Rules as the escape hatch.
+  - name: main
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ['~DEFAULT_BRANCH']
+        exclude: []
+    rules:
+      - type: deletion
+      - type: non_fast_forward
+      - type: required_linear_history
+      - type: pull_request
+        parameters:
+          required_approving_review_count: 1
+          dismiss_stale_reviews_on_push: true
+          require_last_push_approval: true
+          require_code_owner_review: false
+          required_review_thread_resolution: false
+          allowed_merge_methods: [squash]
+      - type: required_status_checks
+        parameters:
+          strict_required_status_checks_policy: true
+          do_not_enforce_on_create: false
+          required_status_checks:
+            - {context: Build, integration_id: 15368}
+            - {context: Docs Build, integration_id: 15368}
+            - {context: Fro Bot, integration_id: 15368}
+            - {context: Typecheck, integration_id: 15368}
+            - {context: Lint, integration_id: 15368}
+            - {context: Test, integration_id: 15368}
+            - {context: Registry, integration_id: 15368}
+            - {context: Release, integration_id: 15368}
+            - {context: Analyze (typescript), integration_id: 15368}
+            - {context: CodeQL, integration_id: 57789}
+            - {context: Renovate / Renovate, integration_id: 15368}
+    bypass_actors: []
+
 branches:
   - name: main
     protection:

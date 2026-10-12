@@ -14,6 +14,7 @@
 #   GH_TOKEN           token for `gh`
 #   GITHUB_REPOSITORY  owner/name
 #   GITHUB_OUTPUT      step output file
+#   NPM_RETRY_DELAY    seconds between the 6 npm lookups (default 10)
 #
 # Outputs (GITHUB_OUTPUT): `proceed`, and when proceeding `tag` and `version`.
 #
@@ -94,7 +95,21 @@ if [ "$REQUIRE_LATEST" = true ]; then
 fi
 
 version="${tag#v}"
-if ! npm view "${PACKAGE}@${version}" version; then
+# The registry can lag a publish by a few seconds, so retry before giving up.
+# npm's own stderr stays visible so a registry outage is not mistaken for a
+# missing version.
+published=false
+for attempt in 1 2 3 4 5 6; do
+  if npm view "${PACKAGE}@${version}" version; then
+    published=true
+    break
+  fi
+  if [ "$attempt" -lt 6 ]; then
+    echo "${PACKAGE}@${version} not on npm yet (attempt ${attempt}/6)"
+    sleep "${NPM_RETRY_DELAY:-10}"
+  fi
+done
+if [ "$published" != true ]; then
   fail "${PACKAGE}@${version} is not published to npm; refusing to continue"
 fi
 

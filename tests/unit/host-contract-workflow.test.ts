@@ -116,11 +116,11 @@ describe('host-contract workflow structural invariants', () => {
     expect(hostContract).not.toHaveProperty('if')
   })
 
-  test('release.needs includes host-contract', () => {
+  test('legacy-release.needs includes host-contract', () => {
     const workflow = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
-    const release = asRecord(jobs.release, 'release job')
-    const needs = asArray(release.needs, 'release.needs')
+    const release = asRecord(jobs['legacy-release'], 'legacy-release job')
+    const needs = asArray(release.needs, 'legacy-release.needs')
 
     expect(needs).toContain('host-contract')
   })

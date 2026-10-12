@@ -256,12 +256,13 @@ describe('docs workflow build job target validation', () => {
     expect(env.RELEASE_AUTHOR).toBe(RELEASE_AUTHOR_EXPR)
   })
 
-  test('the expected author references RELEASE_AUTHOR_LOGIN with the mrbro-bot[bot] default', () => {
+  test('the expected author references RELEASE_AUTHOR_LOGIN with the systematic-release[bot] default', () => {
     const step = findStep(getSteps('build'), 'Validate release target')
     const expected = String(asRecord(step.env, 'validate env').EXPECTED_AUTHOR)
 
     expect(expected).toContain('vars.RELEASE_AUTHOR_LOGIN')
-    expect(expected).toContain("'mrbro-bot[bot]'")
+    expect(expected).toContain("'systematic-release[bot]'")
+    expect(expected).not.toContain('mrbro-bot')
   })
 
   test('untrusted inputs reach the script through env, not inline interpolation', () => {
@@ -351,6 +352,20 @@ describe('docs workflow build job target validation', () => {
       const env = asRecord(findStep(steps, name).env, `${name} env`)
       expect(env.GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
     }
+  })
+
+  test('the changelog generator receives the validated tag as DOCS_DEPLOY_TAG', () => {
+    const steps = getSteps('build')
+    const env = asRecord(
+      findStep(steps, 'Generate reference content').env,
+      'generate env',
+    )
+    expect(env.DOCS_DEPLOY_TAG).toBe(TAG_OUTPUT_EXPR)
+  })
+
+  test('the generate step is the one that runs the changelog generator', () => {
+    const run = runOf(findStep(getSteps('build'), 'Generate reference content'))
+    expect(run).toBe('bun run docs:generate')
   })
 
   test('the registry is versioned from the validated tag, not raw event inputs', () => {

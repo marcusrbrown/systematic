@@ -387,7 +387,7 @@ function stringifyNodes(children: MdNode[]): string {
 }
 
 /** Parse an untrusted Markdown body, strip anything unsafe, re-serialize it. */
-function sanitizeBody(body: string, footnotePrefix: string): string {
+export function sanitizeBody(body: string, footnotePrefix: string): string {
   const root = parseMarkdown(body)
   sanitizeChildren(root, prepareState(root, footnotePrefix))
   return stringifyNodes(root.children ?? [])
