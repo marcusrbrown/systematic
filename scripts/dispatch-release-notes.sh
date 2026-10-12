@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Invoked by @semantic-release/exec successCmd. Receives target tag as $1.
 # Dispatches fro-bot.yaml workflow and waits for the narrative rewrite.
-# Fails soft for narrative-quality issues, fails hard for security-relevant issues.
+#
+# Terminal rule: exits 0 ONLY when the re-read release body starts with
+# "## What's new" (already narrated, or successfully rewritten). Every other
+# non-security outcome logs `narrative-not-applied` plus a reason and exits 2.
+# Security-relevant outcomes (off-target edits, auth failures, ...) exit 1.
 # See docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md
 # for the full design.
 
@@ -19,6 +23,44 @@ fi
 if ! echo "$RELEASE_VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
   echo "::error::Invalid RELEASE_VERSION shape: $RELEASE_VERSION"
   exit 1
+fi
+
+# A release body is narrated iff it starts with this heading. It is the single
+# success signal for this script (no length heuristics).
+NARRATIVE_MARKER="## What's new"
+
+# Exit code for every non-security outcome where the narrative was not applied.
+NARRATIVE_NOT_APPLIED_EXIT=2
+
+# Log a narrative-not-applied outcome with its reason label and exit non-zero.
+# This script runs in its own workflow job, so a non-zero exit is what makes the
+# failure visible; security-class outcomes use `exit 1` directly instead.
+narrative_not_applied() {
+  echo "::error::narrative-not-applied: $1"
+  exit "$NARRATIVE_NOT_APPLIED_EXIT"
+}
+
+# Read the current release body; empty on any failure.
+read_release_body() {
+  gh release view "$RELEASE_VERSION" --json body --jq '.body' 2>/dev/null || true
+}
+
+# Scratch directory: the ONLY place the dispatched agent may write scratch files.
+# The agent was previously denied writes to /tmp/opencode, gave up, and the
+# release kept its raw notes (issue #1089), so the prompt names this path.
+if [[ -n "${RUNNER_TEMP:-}" ]]; then
+  SCRATCH_DIR="$RUNNER_TEMP/release-notes"
+  mkdir -p "$SCRATCH_DIR"
+else
+  SCRATCH_DIR="$(mktemp -d)"
+  trap 'rm -rf "$SCRATCH_DIR"' EXIT
+fi
+
+# Idempotency: skip dispatch entirely when the release is already narrated.
+BODY_BEFORE="$(read_release_body)"
+if [[ "$BODY_BEFORE" == "$NARRATIVE_MARKER"* ]]; then
+  echo "No-action-taken (already narrated; skipping dispatch): tag=$RELEASE_VERSION"
+  exit 0
 fi
 
 # Generate a UUID to uniquely identify this dispatch. The token is passed as a
@@ -53,6 +95,12 @@ specific echo is required of you — the correlation value above is for audit on
 Target release tag: $RELEASE_VERSION
 Target repository: $GITHUB_REPOSITORY
 
+Scratch directory: $SCRATCH_DIR
+- This is the ONLY directory you may write scratch files to (pre-edit snapshot, rendered
+  body file, anything temporary). Do NOT write to /tmp, /tmp/opencode, or any other path.
+- Set \`SCRATCH_DIR=$SCRATCH_DIR\` before running the skill's bash snippets; the skill
+  uses it in place of its default local paths.
+
 Idempotency check (do this FIRST):
 - Fetch the current release body: \`gh release view $RELEASE_VERSION --json body --jq '.body'\`
 - If the body starts with the heading \`## What's new\`, the narrative has already been applied.
@@ -61,7 +109,7 @@ Idempotency check (do this FIRST):
 Procedure (only if idempotency check did NOT short-circuit):
 1. Load the skill at .agents/skills/release-notes-narrative/SKILL.md from this checkout.
 2. Execute the 13-step procedure against tag $RELEASE_VERSION.
-3. Apply the rendered body via \`gh release edit $RELEASE_VERSION --notes-file <tmpfile>\`.
+3. Apply the rendered body via \`gh release edit $RELEASE_VERSION --notes-file <file in $SCRATCH_DIR>\`.
 
 Scope constraints (do not violate):
 - Do NOT comment on any PR, issue, or discussion.
@@ -90,9 +138,11 @@ PROMPT_EOF
 # against arbitrary agent boot times since gh run list reflects run creation
 # time, not first-log time.
 DISPATCH_EPOCH=$(date +%s)
-gh workflow run --ref main fro-bot.yaml \
+if ! gh workflow run --ref main fro-bot.yaml \
   -f "prompt=$PROMPT" \
-  -f "correlation-id=$CORRELATION_ID"
+  -f "correlation-id=$CORRELATION_ID"; then
+  narrative_not_applied "Workflow dispatch failed (correlation=$CORRELATION_ID)"
+fi
 
 # Poll up to 180 seconds for a workflow_dispatch run on fro-bot.yaml that was
 # created strictly after DISPATCH_EPOCH. Once found, this is our dispatched run
@@ -122,8 +172,7 @@ while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
 done
 
 if [ -z "$RUN_ID" ]; then
-  echo "::warning::Dispatch was sent but its run could not be confirmed within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID, dispatched_at_epoch=$DISPATCH_EPOCH). The narration will still run asynchronously — the release itself is unaffected. This is an observability gap, not a dispatch failure."
-  exit 0
+  narrative_not_applied "Dispatch was sent but its run could not be confirmed within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID, dispatched_at_epoch=$DISPATCH_EPOCH). The narration may still run asynchronously, but the release body was not verified."
 fi
 
 # Wait for the run to complete, hard-bounded at 10 minutes.
@@ -151,26 +200,18 @@ if echo "$LOG" | grep -qE 'HTTP 401|HTTP 403|Bad credentials|Resource not access
   AUTH_FAIL=1
 fi
 
-# Post-write integrity check: if Fro Bot reported success, verify the release body
-# is substantive (>=200 chars). A short body means the write silently failed or
-# produced a partial/empty result.
-BODY_LEN=0
-if [ "$CONCLUSION" = "success" ]; then
-  BODY_LEN="$(gh release view "$RELEASE_VERSION" --json body \
-    --jq '.body | length' 2>/dev/null || echo 0)"
-fi
-
 # Classify outcome by precedence. Security-relevant failures exit 1 with ::error::.
-# Narrative failures exit 0 with ::warning::. Happy path exits 0 with plain stdout.
+# Every other non-security outcome logs narrative-not-applied and exits 2. The only
+# exit-0 path is success/neutral with a release body that starts with the marker,
+# re-read from GitHub after the run (never trust the run conclusion alone).
 # WATCH_EXIT semantics: 0 = run completed (classify by CONCLUSION below),
-# 124 = timeout (narrative-failure), any other non-zero = unexpected (security-relevant).
+# 124 = timeout (narrative-not-applied), any other non-zero = unexpected (security-relevant).
 # The "unexpected" branch covers runner crashes, gh CLI bugs, signal propagation, and
 # any future gh run watch exit codes we haven't anticipated. Without this branch,
 # an unexpected WATCH_EXIT falls through to CONCLUSION classification which may
 # report "unknown" and silently exit 0.
 if [ "$WATCH_EXIT" -eq 124 ]; then
-  echo "::warning::Fro Bot run timed out after 10 minutes (run=$RUN_ID, correlation=$CORRELATION_ID)"
-  exit 0
+  narrative_not_applied "Fro Bot run timed out after 10 minutes (run=$RUN_ID, correlation=$CORRELATION_ID)"
 elif [ "$WATCH_EXIT" -ne 0 ]; then
   echo "::error::Unexpected gh run watch exit (WATCH_EXIT=$WATCH_EXIT, run=$RUN_ID, correlation=$CORRELATION_ID). May indicate a runner crash, gh CLI bug, or signal propagation."
   exit 1
@@ -186,22 +227,24 @@ elif [ "$CONCLUSION" = "action_required" ]; then
 elif [ "$CONCLUSION" = "skipped" ]; then
   echo "::error::Workflow was skipped — likely blocked by policy/branch protection (run=$RUN_ID)"
   exit 1
-elif [ "$CONCLUSION" = "success" ] && [ "$BODY_LEN" -lt 200 ]; then
-  echo "::error::Reported success but body integrity check failed (BODY_LEN=$BODY_LEN, run=$RUN_ID, tag=$RELEASE_VERSION)"
-  exit 1
-elif [ "$CONCLUSION" = "success" ]; then
-  echo "Narrative applied: tag=$RELEASE_VERSION run=$RUN_ID correlation=$CORRELATION_ID"
-  exit 0
-elif [ "$CONCLUSION" = "neutral" ]; then
-  echo "No-action-taken (already-applied idempotency short-circuit): tag=$RELEASE_VERSION run=$RUN_ID"
+elif [ "$CONCLUSION" = "success" ] || [ "$CONCLUSION" = "neutral" ]; then
+  BODY_AFTER="$(read_release_body)"
+  if [[ "$BODY_AFTER" != "$NARRATIVE_MARKER"* ]]; then
+    if [ "$BODY_AFTER" = "$BODY_BEFORE" ]; then
+      narrative_not_applied "Run reported $CONCLUSION but the release body is unchanged (run=$RUN_ID, tag=$RELEASE_VERSION)"
+    fi
+    narrative_not_applied "Run reported $CONCLUSION but the release body does not start with '$NARRATIVE_MARKER' (run=$RUN_ID, tag=$RELEASE_VERSION)"
+  fi
+  if [ "$CONCLUSION" = "success" ]; then
+    echo "Narrative applied: tag=$RELEASE_VERSION run=$RUN_ID correlation=$CORRELATION_ID"
+  else
+    echo "No-action-taken (already-applied idempotency short-circuit): tag=$RELEASE_VERSION run=$RUN_ID"
+  fi
   exit 0
 elif [ "$CONCLUSION" = "cancelled" ]; then
-  echo "::warning::Workflow cancelled (run=$RUN_ID, correlation=$CORRELATION_ID)"
-  exit 0
+  narrative_not_applied "Workflow cancelled (run=$RUN_ID, correlation=$CORRELATION_ID)"
 elif [ "$CONCLUSION" = "failure" ]; then
-  echo "::warning::Fro Bot run failed (narrative-failure, no security signals detected): run=$RUN_ID"
-  exit 0
+  narrative_not_applied "Fro Bot run failed (narrative-failure, no security signals detected): run=$RUN_ID"
 else
-  echo "::warning::Unknown conclusion: $CONCLUSION (run=$RUN_ID, correlation=$CORRELATION_ID)"
-  exit 0
+  narrative_not_applied "Unknown conclusion: $CONCLUSION (run=$RUN_ID, correlation=$CORRELATION_ID)"
 fi

@@ -7,7 +7,15 @@
 #   MOCK_GH_RUN_VIEW_LOG           Log text for `gh run view --log`
 #   MOCK_GH_RUN_VIEW_CONCLUSION    JSON for `gh run view --json conclusion`
 #   MOCK_GH_RUN_WATCH_EXIT         Exit code for `gh run watch`
-#   MOCK_GH_RELEASE_VIEW_BODY_LEN  Integer body length for `gh release view --json body`
+#   MOCK_GH_RELEASE_VIEW_BODY_LEN  Integer body length, returned only when `gh release view` is
+#                                  called with a `--jq` expression containing `length` (legacy)
+#   MOCK_GH_RELEASE_VIEW_BODY_BEFORE  Release body returned by `gh release view` until
+#                                  `gh workflow run` has been called (default: raw notes)
+#   MOCK_GH_RELEASE_VIEW_BODY_AFTER   Release body returned after `gh workflow run`
+#                                  (default: same as BEFORE)
+#   MOCK_GH_STATE_DIR              Directory for cross-invocation state (the dispatched flag);
+#                                  when unset, AFTER is always returned if set, else BEFORE
+#   MOCK_GH_WORKFLOW_RUN_EXIT      Non-zero exit code makes `gh workflow run` fail (dispatch failure)
 #   MOCK_GH_WORKFLOW_RUN_PROMPT       File path where the dispatched prompt is written
 #   MOCK_GH_WORKFLOW_RUN_CORRELATION  File path where the dispatched correlation-id is written
 #
@@ -34,6 +42,13 @@ case "$SUBCOMMAND" in
           printf '%s' "${arg#correlation-id=}" > "$MOCK_GH_WORKFLOW_RUN_CORRELATION"
         fi
       done
+      if [[ -n "${MOCK_GH_WORKFLOW_RUN_EXIT:-}" && "$MOCK_GH_WORKFLOW_RUN_EXIT" != "0" ]]; then
+        echo "mock-gh: workflow dispatch failed" >&2
+        exit "$MOCK_GH_WORKFLOW_RUN_EXIT"
+      fi
+      if [[ -n "${MOCK_GH_STATE_DIR:-}" ]]; then
+        : > "$MOCK_GH_STATE_DIR/dispatched"
+      fi
       echo "Created workflow_dispatch event for fro-bot.yaml at refs/heads/main"
       exit 0
     fi
@@ -98,9 +113,31 @@ case "$SUBCOMMAND" in
     RELEASE_SUB="${2:-}"
     case "$RELEASE_SUB" in
       view)
-        # gh release view $TAG --json body --jq '.body | length'
-        BODY_LEN="${MOCK_GH_RELEASE_VIEW_BODY_LEN:-800}"
-        echo "$BODY_LEN"
+        # gh release view $TAG --json body --jq '.body'
+        JQ_EXPR=""
+        PREV_ARG=""
+        for arg in "$@"; do
+          [[ "$PREV_ARG" == "--jq" ]] && JQ_EXPR="$arg"
+          PREV_ARG="$arg"
+        done
+
+        # Legacy length query (pre-marker script versions)
+        if [[ "$JQ_EXPR" == *length* ]]; then
+          echo "${MOCK_GH_RELEASE_VIEW_BODY_LEN:-800}"
+          exit 0
+        fi
+
+        BODY_BEFORE="${MOCK_GH_RELEASE_VIEW_BODY_BEFORE-Raw auto-generated release notes}"
+        BODY_AFTER="${MOCK_GH_RELEASE_VIEW_BODY_AFTER-$BODY_BEFORE}"
+        if [[ -n "${MOCK_GH_STATE_DIR:-}" ]]; then
+          if [[ -f "$MOCK_GH_STATE_DIR/dispatched" ]]; then
+            printf '%s\n' "$BODY_AFTER"
+          else
+            printf '%s\n' "$BODY_BEFORE"
+          fi
+        else
+          printf '%s\n' "${MOCK_GH_RELEASE_VIEW_BODY_AFTER-$BODY_BEFORE}"
+        fi
         exit 0
         ;;
       *)
