@@ -29,6 +29,14 @@ Assumption: only repository admins can set repository variables. Verify that in 
 
 In `legacy` mode the `legacy-release` job in `main.yaml` publishes, and `release.yaml` only writes a preview to its job summary.
 
+## Main branch ruleset
+
+`.github/settings.yml` defines a `main` ruleset with no bypass actors.
+
+- Every PR into `main` needs one approval on its latest push. A new push dismisses earlier approvals, and an author cannot approve their own PR.
+- Fro Bot approves the maintainer's PRs, the maintainer approves Renovate PRs, and the maintainer or the gate approves the release PR.
+- Escape hatch: an admin can edit or disable the `main` ruleset under Settings → Rules.
+
 ## Hold and unhold
 
 ```bash
@@ -102,7 +110,7 @@ Never delete a release whose version is on npm.
 
 Before setting `RELEASE_MODE` to `gated`:
 
-- [ ] The ruleset on `main` requiring one approving review is active.
+- [ ] The `main` ruleset requiring one approving review, provided by `.github/settings.yml`, is active under Settings → Rules.
 - [ ] Fro Bot has been seen approving a maintainer PR.
 - [ ] `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY` and the `release` environment are in place; `NPM_TOKEN` is only a fallback.
 

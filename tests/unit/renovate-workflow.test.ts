@@ -4,8 +4,9 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 
 /**
- * Pushes to `release/pending` (the gated release PR branch) must never run
- * Renovate: the App-authored release commit is not Renovate's to touch.
+ * `Renovate / Renovate` is a required status context on main. A push to the
+ * gated release PR's head branch (`release/pending`) is what reports it, so
+ * that branch must not be ignored.
  */
 
 const WORKFLOW_PATH = path.resolve(
@@ -24,11 +25,12 @@ function readOn(): Record<string, unknown> {
 describe('renovate workflow push filter', () => {
   const push = () => readOn().push as { 'branches-ignore'?: string[] }
 
-  test('release/** is ignored on push', () => {
-    expect(push()['branches-ignore']).toContain('release/**')
+  test('pushes to release/** trigger Renovate: the required check comes from that run', () => {
+    const ignored = push()['branches-ignore'] ?? []
+    expect(ignored.some((pattern) => pattern.startsWith('release'))).toBe(false)
   })
 
   test('main is still ignored on push', () => {
-    expect(push()['branches-ignore']).toContain('main')
+    expect(push()['branches-ignore']).toEqual(['main'])
   })
 })
