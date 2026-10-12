@@ -66,6 +66,7 @@ export type WorkflowReasonCode =
   | 'no-op-operation'
   | 'operation-not-required'
   | 'operation-target-mismatch'
+  | 'readback-timeout'
   | 'receipt-mismatch'
   | 'rejected-operation'
   | 'resource-mismatch'

@@ -546,7 +546,9 @@ function buildPinnedRecoveryMarkers(
   return [epochStart, unitStart, mint]
 }
 
-async function createPinnedRecoveryAdapter(): Promise<{
+async function createPinnedRecoveryAdapter(
+  mode: 'observe' | 'protected' = 'observe',
+): Promise<{
   readonly fixture: TargetDerivationFixture
   readonly adapter: OpencodeWorkflowGuard
   readonly targetRoot: string
@@ -555,6 +557,12 @@ async function createPinnedRecoveryAdapter(): Promise<{
     value: boolean,
     reasonCode?: OperationObserverReasonCode,
   ): void
+  // Targeted one-shot timeouts, counted from the moment they are armed: the
+  // Nth upcoming call of that kind returns `command-timeout`.
+  timeoutParentSnapshotOnCall(n: number): void
+  timeoutPinnedSnapshotOnCall(n: number): void
+  timeoutPinnedValidationOnCall(n: number): void
+  throwParentSnapshotOnCall(n: number): void
 }> {
   const fixture = createTargetDerivationFixture()
   const targetRoot = fs.realpathSync(fixture.linkedRoot)
@@ -576,21 +584,57 @@ async function createPinnedRecoveryAdapter(): Promise<{
   }
   let targetValidationAvailable = true
   let targetValidationReason: OperationObserverReasonCode = 'target-unavailable'
+  const calls = { parent: 0, pinned: 0, validation: 0 }
+  const timeoutOn: Record<keyof typeof calls, number | undefined> = {
+    parent: undefined,
+    pinned: undefined,
+    validation: undefined,
+  }
+  let parentThrowOn: number | undefined
+  const commandTimeout = {
+    status: 'unavailable' as const,
+    reasonCode: 'command-timeout' as const,
+  }
   const observer: OpencodeOperationObserver = {
     targetDigest: baseObserver.targetDigest,
     validateRegisteredWorktree: (candidateDirectory) => {
-      if (!targetValidationAvailable && candidateDirectory === targetRoot) {
-        return { status: 'error', reasonCode: targetValidationReason }
+      if (candidateDirectory === targetRoot) {
+        calls.validation += 1
+        if (calls.validation === timeoutOn.validation) {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (!targetValidationAvailable) {
+          return { status: 'error', reasonCode: targetValidationReason }
+        }
       }
       return baseObserver.validateRegisteredWorktree(candidateDirectory)
     },
-    snapshot: () => baseObserver.snapshot(),
+    snapshot: async () => {
+      calls.parent += 1
+      if (calls.parent === parentThrowOn) throw new Error('parent exploded')
+      if (calls.parent === timeoutOn.parent) return commandTimeout
+      return baseObserver.snapshot()
+    },
+  }
+  const createTargetObserver = (
+    targetDirectory: string,
+  ): OpencodeOperationObserver => {
+    const real = createOpencodeOperationObserver({ targetDirectory })
+    if (targetDirectory !== targetRoot) return real
+    return {
+      ...real,
+      snapshot: async () => {
+        calls.pinned += 1
+        if (calls.pinned === timeoutOn.pinned) return commandTimeout
+        return real.snapshot()
+      },
+    }
   }
   const registrationIdentity = 'pinned-completion-registration'
   const sessionSalt = new Uint8Array(32).fill(137)
   let parentMarkers: readonly unknown[] = []
   const adapter = createOpencodeWorkflowGuard({
-    config: { mode: 'observe', debug: false },
+    config: { mode, debug: false },
     workspaceIdentity: initial.snapshot.targetDigest,
     repositoryIdentity: targetInitial.snapshot.repositoryRevisionDigest,
     worktreeIdentity: targetInitial.snapshot.worktreeRevisionDigest,
@@ -599,6 +643,7 @@ async function createPinnedRecoveryAdapter(): Promise<{
     registrationIdentity,
     sessionSalt,
     observer,
+    createTargetObserver,
     classifier: createReceiptClassifier(),
     hostReadback: {
       readSessionParts: async (sessionID) =>
@@ -653,6 +698,18 @@ async function createPinnedRecoveryAdapter(): Promise<{
     setTargetValidationAvailable(value, reasonCode = 'target-unavailable') {
       targetValidationAvailable = value
       targetValidationReason = reasonCode
+    },
+    timeoutParentSnapshotOnCall(n) {
+      timeoutOn.parent = calls.parent + n
+    },
+    timeoutPinnedSnapshotOnCall(n) {
+      timeoutOn.pinned = calls.pinned + n
+    },
+    timeoutPinnedValidationOnCall(n) {
+      timeoutOn.validation = calls.validation + n
+    },
+    throwParentSnapshotOnCall(n) {
+      parentThrowOn = calls.parent + n
     },
   }
 }
@@ -2773,6 +2830,15 @@ describe('OpenCode workflow guard adapter', () => {
         ): void
         resetRemoteCalls(): void
         remoteCalls(): number
+        // The Nth upcoming local snapshot call (counted from now) times out.
+        timeoutLocalSnapshotOnCall(n: number): void
+        // Every upcoming local snapshot fails without a timeout.
+        failLocalSnapshot(how: 'throw' | 'target-unavailable' | undefined): void
+        // The next remote 'after' read of `operation` is held until released.
+        holdRemote(operation: RemoteOperation): {
+          readonly reached: Promise<void>
+          release(result: OperationObserverRemoteResult): void
+        }
       }
 
       async function runRemoteOperations(
@@ -2803,6 +2869,13 @@ describe('OpenCode workflow guard adapter', () => {
         expect(status(adapter).satisfiedOperations).toContain('pr-creation')
       }
 
+      function failedSnapshot(
+        how: 'throw' | 'target-unavailable',
+      ): Awaited<ReturnType<OpencodeOperationObserver['snapshot']>> {
+        if (how === 'throw') throw new Error('snapshot exploded')
+        return { status: 'unavailable', reasonCode: how }
+      }
+
       // Targeted failure wrappers over a healthy observer: nothing fails until
       // a test flips a flag after setup, so setup reads are always healthy.
       async function skipFixture(
@@ -2822,16 +2895,32 @@ describe('OpenCode workflow guard adapter', () => {
         const reader = base.remoteSnapshot
         if (!reader) throw new Error('sequenceObserver has a remote reader')
         let localTimeout = false
+        let snapshotCalls = 0
+        let timeoutOnCall: number | undefined
+        let localFailure: 'throw' | 'target-unavailable' | undefined
         let remoteCalls = 0
         const overrides = new Map<
           RemoteOperation,
           OperationObserverRemoteResult
         >()
+        const holds = new Map<
+          RemoteOperation,
+          () => Promise<OperationObserverRemoteResult>
+        >()
         const observer: OpencodeOperationObserver = {
           ...base,
-          snapshot: async () => (localTimeout ? TIMEOUT : base.snapshot()),
+          snapshot: async () => {
+            snapshotCalls += 1
+            if (localTimeout || snapshotCalls === timeoutOnCall) return TIMEOUT
+            return localFailure ? failedSnapshot(localFailure) : base.snapshot()
+          },
           remoteSnapshot: async (operation, phase) => {
             remoteCalls += 1
+            const hold = holds.get(operation)
+            if (hold && phase === 'after') {
+              holds.delete(operation)
+              return hold()
+            }
             const override = overrides.get(operation)
             if (override && phase === 'after') return override
             return reader.call(base, operation, phase)
@@ -2861,6 +2950,27 @@ describe('OpenCode workflow guard adapter', () => {
             remoteCalls = 0
           },
           remoteCalls: () => remoteCalls,
+          timeoutLocalSnapshotOnCall(n) {
+            timeoutOnCall = snapshotCalls + n
+          },
+          failLocalSnapshot(how) {
+            localFailure = how
+          },
+          holdRemote(operation) {
+            let release: (result: OperationObserverRemoteResult) => void =
+              () => {}
+            const reached = new Promise<void>((resolveReached) => {
+              holds.set(
+                operation,
+                () =>
+                  new Promise<OperationObserverRemoteResult>((resolve) => {
+                    release = resolve
+                    resolveReached()
+                  }),
+              )
+            })
+            return { reached, release: (result) => release(result) }
+          },
         }
       }
 
@@ -3078,6 +3188,334 @@ describe('OpenCode workflow guard adapter', () => {
         expect(parsed.state).toBe('inactive')
         expect('unconfirmedReadbacks' in parsed).toBe(false)
         expect(reads).toBe(0)
+      })
+
+      describe('completion readback timeouts are retryable', () => {
+        const RETRY_TITLE = 'Workflow readback timed out'
+        const FATAL_TITLE = 'Workflow transition unavailable'
+
+        interface CompletionOutput {
+          title: string
+          output: string
+          metadata: Record<string, unknown>
+        }
+
+        const freshCompletionOutput = (): CompletionOutput => ({
+          title: 'complete',
+          output: 'done',
+          metadata: {},
+        })
+
+        async function beforeComplete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID,
+            },
+            { args: { target: 'unit' } },
+          )
+        }
+
+        function afterComplete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+          output: CompletionOutput,
+        ): Promise<void> {
+          return adapter.hooks['tool.execute.after'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID,
+              args: { target: 'unit' },
+            },
+            output,
+          )
+        }
+
+        async function complete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<CompletionOutput> {
+          await beforeComplete(adapter, callID)
+          const output = freshCompletionOutput()
+          await afterComplete(adapter, callID, output)
+          return output
+        }
+
+        function expectRetryable(output: CompletionOutput): void {
+          expect(output.title).toBe(RETRY_TITLE)
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'rejected',
+            reasonCode: 'readback-timeout',
+          })
+          expect(output.metadata).toMatchObject({
+            workflowGuard: {
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'readback-timeout',
+            },
+          })
+        }
+
+        function expectFatal(output: CompletionOutput): void {
+          expect(output.title).toBe(FATAL_TITLE)
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'unavailable',
+            reasonCode: 'finalization-failed',
+          })
+        }
+
+        function consumedReceipts(adapter: OpencodeWorkflowGuard): number {
+          return ledger(adapter)
+            .listReceipts()
+            .filter((receipt) => receipt.canonical.consumption === 'consumed')
+            .length
+        }
+
+        function expectUntouched(adapter: OpencodeWorkflowGuard): void {
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter).unit?.status).toBe('active')
+          expect(consumedReceipts(adapter)).toBe(0)
+        }
+
+        interface StageFixture {
+          readonly adapter: OpencodeWorkflowGuard
+          // Arms a command-timeout at exactly this stage.
+          arm(): void
+          // Restores healthy probes (a no-op for the one-shot timeouts).
+          disarm(): void
+          cleanup(): void
+        }
+
+        interface Stage {
+          readonly name: string
+          build(mode: 'observe' | 'protected'): Promise<StageFixture>
+        }
+
+        // Snapshot calls on the completion path, counted per path (prepare is
+        // synchronous and reads nothing): parent #1 initial / #2 final, pinned
+        // #1 initial / #2 final; pinned lookups #1 initial / #2 revalidation.
+        function localStage(
+          name: string,
+          arm: (fx: SkipFixture) => void,
+          disarm: (fx: SkipFixture) => void = () => {},
+        ): Stage {
+          return {
+            name,
+            build: async (mode) => {
+              const fx = await skipFixture(mode)
+              return {
+                adapter: fx.adapter,
+                arm: () => arm(fx),
+                disarm: () => disarm(fx),
+                cleanup() {},
+              }
+            },
+          }
+        }
+
+        function pinnedStage(
+          name: string,
+          arm: (
+            setup: Awaited<ReturnType<typeof createPinnedRecoveryAdapter>>,
+          ) => void,
+        ): Stage {
+          return {
+            name,
+            build: async (mode) => {
+              const setup = await createPinnedRecoveryAdapter(mode)
+              return {
+                adapter: setup.adapter,
+                arm: () => arm(setup),
+                disarm() {},
+                cleanup: () => setup.fixture.cleanup(),
+              }
+            },
+          }
+        }
+
+        const stages: Stage[] = [
+          localStage('initial parent snapshot', (fx) =>
+            fx.timeoutLocalSnapshotOnCall(1),
+          ),
+          pinnedStage('pinned initial lookup', (s) =>
+            s.timeoutPinnedValidationOnCall(1),
+          ),
+          pinnedStage('pinned initial snapshot', (s) =>
+            s.timeoutPinnedSnapshotOnCall(1),
+          ),
+          localStage(
+            'remote readback',
+            (fx) => fx.failRemote('push', TIMEOUT),
+            (fx) => fx.failRemote('push', undefined),
+          ),
+          localStage('final parent snapshot', (fx) =>
+            fx.timeoutLocalSnapshotOnCall(2),
+          ),
+          pinnedStage('pinned revalidation lookup', (s) =>
+            s.timeoutPinnedValidationOnCall(2),
+          ),
+          pinnedStage('pinned final snapshot', (s) =>
+            s.timeoutPinnedSnapshotOnCall(2),
+          ),
+        ]
+        const retryStages = stages.filter((stage) =>
+          [
+            'remote readback',
+            'pinned initial snapshot',
+            'pinned revalidation lookup',
+          ].includes(stage.name),
+        )
+
+        for (const mode of ['observe', 'protected'] as const) {
+          test.each(stages)(
+            `a: a command-timeout at the $name stage is rejected as retryable and consumes nothing (${mode})`,
+            async (stage) => {
+              const fx = await stage.build(mode)
+              try {
+                fx.arm()
+                const output = await complete(fx.adapter, 'timeout-complete')
+                expectRetryable(output)
+                expectUntouched(fx.adapter)
+              } finally {
+                fx.cleanup()
+              }
+            },
+          )
+        }
+
+        test.each(retryStages)(
+          'b: after a timeout at the $name stage, a new call ID with healthy probes completes the unit and consumes each receipt once',
+          async (stage) => {
+            const fx = await stage.build('observe')
+            try {
+              const receipts = ledger(fx.adapter).listReceipts().length
+              fx.arm()
+              expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+              expectUntouched(fx.adapter)
+              fx.disarm()
+              const retry = await complete(fx.adapter, 'healthy-complete')
+              expect(retry.output).toContain('completed')
+              expect(status(fx.adapter).unit?.status).toBe('completed')
+              expect(receipts).toBeGreaterThan(0)
+              expect(consumedReceipts(fx.adapter)).toBe(receipts)
+            } finally {
+              fx.cleanup()
+            }
+          },
+        )
+
+        test.each(retryStages)(
+          'c: a duplicate after-hook for the timed-out call at the $name stage replays an identical result and changes no session state',
+          async (stage) => {
+            const fx = await stage.build('observe')
+            try {
+              fx.arm()
+              const first = await complete(fx.adapter, 'timeout-complete')
+              expectRetryable(first)
+              const before = JSON.stringify(status(fx.adapter))
+              const replay = freshCompletionOutput()
+              await afterComplete(fx.adapter, 'timeout-complete', replay)
+              expect(replay).toEqual(first)
+              expect(JSON.stringify(status(fx.adapter))).toBe(before)
+              expectUntouched(fx.adapter)
+            } finally {
+              fx.cleanup()
+            }
+          },
+        )
+
+        test('d: a session made unavailable while the probe is held takes the fatal path when the probe then times out', async () => {
+          const fx = await skipFixture('observe')
+          const hold = fx.holdRemote('push')
+          await beforeComplete(fx.adapter, 'held-complete')
+          const output = freshCompletionOutput()
+          const done = afterComplete(fx.adapter, 'held-complete', output)
+          await hold.reached
+          fx.failLocalSnapshot('target-unavailable')
+          expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+          fx.failLocalSnapshot(undefined)
+          hold.release(TIMEOUT)
+          await done
+          expectFatal(output)
+          expect(status(fx.adapter).state).toBe('unavailable')
+          expect(consumedReceipts(fx.adapter)).toBe(0)
+        })
+
+        describe('e: non-timeout failures stay fatal', () => {
+          const localCases: Array<{
+            name: string
+            arm: (fx: SkipFixture) => void
+          }> = [
+            {
+              name: 'a remote missing-resource',
+              arm: (fx) => fx.failRemote('push', MISSING),
+            },
+            {
+              name: 'a remote command-failed reason',
+              arm: (fx) =>
+                fx.failRemote('push', {
+                  status: 'unavailable',
+                  reasonCode: 'remote-command-failed',
+                }),
+            },
+            {
+              name: 'a throwing parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('throw'),
+            },
+            {
+              name: 'a non-timeout unavailable parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('target-unavailable'),
+            },
+          ]
+
+          test.each(localCases)('$name', async ({ arm }) => {
+            const fx = await skipFixture('observe')
+            arm(fx)
+            const output = await complete(fx.adapter, 'fatal-complete')
+            expectFatal(output)
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+
+          test.each([
+            {
+              name: 'a pinned lookup that is invalid',
+              reason: 'target-unavailable',
+            },
+            {
+              name: 'a pinned lookup that is invalid (command-failed)',
+              reason: 'command-failed',
+            },
+          ] as const)('$name', async ({ reason }) => {
+            const setup = await createPinnedRecoveryAdapter()
+            try {
+              setup.setTargetValidationAvailable(false, reason)
+              const output = await complete(setup.adapter, 'fatal-pinned')
+              expectFatal(output)
+              expect(status(setup.adapter).state).toBe('unavailable')
+              expect(consumedReceipts(setup.adapter)).toBe(0)
+            } finally {
+              setup.fixture.cleanup()
+            }
+          })
+
+          test('a throwing pinned-flow parent snapshot', async () => {
+            const setup = await createPinnedRecoveryAdapter()
+            try {
+              setup.throwParentSnapshotOnCall(1)
+              const output = await complete(setup.adapter, 'fatal-pinned-throw')
+              expectFatal(output)
+              expect(status(setup.adapter).state).toBe('unavailable')
+            } finally {
+              setup.fixture.cleanup()
+            }
+          })
+        })
       })
     })
 
@@ -8166,7 +8604,7 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
-  test('a pinned worktree target whose validation times out still fails closed on completion', async () => {
+  test('a pinned worktree target whose validation times out rejects completion as retryable', async () => {
     const setup = await createPinnedRecoveryAdapter()
     try {
       const { adapter } = setup
@@ -8186,8 +8624,13 @@ describe('OpenCode workflow guard adapter', () => {
         output,
       )
 
-      expect(status(adapter).state).toBe('unavailable')
-      expect(status(adapter).unit?.status).not.toBe('completed')
+      expect(output.title).toBe('Workflow readback timed out')
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'readback-timeout',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
     } finally {
       setup.fixture.cleanup()
     }

@@ -128,6 +128,7 @@ const REASON_CODES = new Set([
   'no-op-operation',
   'operation-not-required',
   'operation-target-mismatch',
+  'readback-timeout',
   'receipt-mismatch',
   'rejected-operation',
   'resource-mismatch',
@@ -201,6 +202,14 @@ export interface OpencodeWorkflowGuardOptions {
   readonly sessionLocation?: string
   /** Injectable clock (epoch milliseconds); defaults to `Date.now`. */
   readonly now?: () => number
+  /**
+   * Injectable factory for the observer of a registered linked-worktree target;
+   * defaults to `createOpencodeOperationObserver`. A test seam: it lets tests
+   * control a pinned worktree observer's snapshots.
+   */
+  readonly createTargetObserver?: (
+    targetDirectory: string,
+  ) => OpencodeOperationObserver
 }
 
 export interface OpencodeWorkflowChildSession {
@@ -252,6 +261,33 @@ export interface OpencodeWorkflowGuard {
     policy?: RuntimeUnitPolicy,
   ): unknown
 }
+
+function defaultTargetObserver(
+  targetDirectory: string,
+): OpencodeOperationObserver {
+  return createOpencodeOperationObserver({ targetDirectory })
+}
+
+type CompletionProbeRead =
+  | { readonly kind: 'ok'; readonly snapshot: OperationObserverSnapshot }
+  | { readonly kind: 'timeout' | 'fatal' }
+
+type CompletionRemoteOutcome =
+  | {
+      readonly status: 'ready'
+      readonly readbacks: readonly {
+        operation: RemoteOperation
+        snapshot: OperationObserverRemoteSnapshot
+      }[]
+    }
+  | { readonly status: 'timeout' | 'fatal' }
+
+// `none`: no observer. `timeout`: a probe timed out, so the attempt is
+// retryable. `fatal`: any other readback failure.
+type CompletionReadbackOutcome =
+  | { readonly status: 'none' }
+  | { readonly status: 'ready'; readonly readbacks: readonly unknown[] }
+  | { readonly status: 'timeout' | 'fatal' }
 
 interface SessionRuntime {
   readonly ledger?: ReceiptLedger
@@ -1852,13 +1888,6 @@ function createSessionRuntime(
     }
   }
 
-  function effectiveOperationObserver():
-    | EffectiveOperationObserver
-    | undefined {
-    const lookup = resolveEffectiveObserver()
-    return lookup.kind === 'ok' ? lookup.observer : undefined
-  }
-
   function questionResource(target: TransitionTarget): string {
     const status = guard.status()
     return `workflow/${target}/${status.unit?.unitId ?? status.epoch?.epochId ?? 'unknown'}`
@@ -3456,9 +3485,9 @@ function createSessionRuntime(
         : ([...operationObservers.values()].find(
             (registration) => registration.targetRoot === target.targetRoot,
           )?.observer ??
-          createOpencodeOperationObserver({
-            targetDirectory: target.targetRoot,
-          }))
+          (options.createTargetObserver ?? defaultTargetObserver)(
+            target.targetRoot,
+          ))
     let result: OperationObserverResult
     try {
       result = await operationObserver.snapshot()
@@ -4161,112 +4190,57 @@ function createSessionRuntime(
     if (remember) abandonedCompletes.set(callDigest, pending.target)
   }
 
+  // The first stage that is not ok ends the attempt. A `command-timeout` at
+  // any stage is `timeout` (retryable); throws, `undefined`, target mismatch,
+  // revision drift, an invalid pinned lookup, and every other reason are
+  // `fatal`.
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fail-closed effective-observer selection and readback bundle construction must remain a single ordered pipeline
-  async function completionReadbacks(): Promise<
-    | { status: 'none' }
-    | { status: 'unavailable' }
-    | { status: 'ready'; readbacks: readonly unknown[] }
-  > {
-    if (!options.observer) return { status: 'none' }
-    let parentResult: OperationObserverResult
-    try {
-      parentResult = await options.observer.snapshot()
-    } catch {
-      return { status: 'unavailable' }
+  async function completionReadbacks(): Promise<CompletionReadbackOutcome> {
+    const observer = options.observer
+    if (!observer) return { status: 'none' }
+    const parent = await completionSnapshot(observer)
+    if (parent.kind !== 'ok') return { status: parent.kind }
+    if (parent.snapshot.targetDigest !== options.workspaceIdentity) {
+      return { status: 'fatal' }
     }
-    if (
-      parentResult.status === 'unavailable' ||
-      parentResult.snapshot.targetDigest !== options.workspaceIdentity
-    ) {
-      return { status: 'unavailable' }
+    const lookup = resolveEffectiveObserver()
+    if (lookup.kind !== 'ok') {
+      return { status: lookup.kind === 'timeout' ? 'timeout' : 'fatal' }
     }
-    const effective = effectiveOperationObserver()
-    if (!effective) return { status: 'unavailable' }
-    let effectiveSnapshot = parentResult.snapshot
+    const effective = lookup.observer
+    let initialEffective = parent.snapshot
     if (effective.pinned) {
-      let pinnedResult: OperationObserverResult
-      try {
-        pinnedResult = await effective.observer.snapshot()
-      } catch {
-        return { status: 'unavailable' }
+      const pinned = await completionSnapshot(effective.observer)
+      if (pinned.kind !== 'ok') return { status: pinned.kind }
+      if (pinned.snapshot.targetDigest !== effective.targetIdentity) {
+        return { status: 'fatal' }
       }
-      if (
-        pinnedResult.status === 'unavailable' ||
-        pinnedResult.snapshot.targetDigest !== effective.targetIdentity
-      ) {
-        return { status: 'unavailable' }
-      }
-      effectiveSnapshot = pinnedResult.snapshot
+      initialEffective = pinned.snapshot
     }
-    const initialEffectiveSnapshot = effectiveSnapshot
-    const remoteReadbacks = await completionRemoteReadbacks(effective.observer)
-    if (!remoteReadbacks) return { status: 'unavailable' }
-    let finalParentResult: OperationObserverResult
-    try {
-      finalParentResult = await options.observer.snapshot()
-    } catch {
-      return { status: 'unavailable' }
+    const remote = await completionRemoteReadbacks(effective.observer)
+    if (remote.status !== 'ready') return remote
+    const finalParent = await completionSnapshot(observer)
+    if (finalParent.kind !== 'ok') return { status: finalParent.kind }
+    if (completionParentDrifted(parent.snapshot, finalParent.snapshot)) {
+      return { status: 'fatal' }
     }
-    if (
-      finalParentResult.status === 'unavailable' ||
-      finalParentResult.snapshot.targetDigest !==
-        parentResult.snapshot.targetDigest ||
-      finalParentResult.snapshot.repositoryRevisionDigest !==
-        parentResult.snapshot.repositoryRevisionDigest ||
-      finalParentResult.snapshot.worktreeRevisionDigest !==
-        parentResult.snapshot.worktreeRevisionDigest
-    ) {
-      return { status: 'unavailable' }
-    }
-    let finalEffective = effective
-    if (effective.pinned) {
-      const revalidated = effectiveOperationObserver()
-      if (!revalidated) return { status: 'unavailable' }
-      finalEffective = revalidated
-      if (
-        finalEffective.observer !== effective.observer ||
-        finalEffective.targetIdentity !== effective.targetIdentity ||
-        !finalEffective.pinned
-      ) {
-        return { status: 'unavailable' }
-      }
-      let pinnedResult: OperationObserverResult
-      try {
-        pinnedResult = await finalEffective.observer.snapshot()
-      } catch {
-        return { status: 'unavailable' }
-      }
-      if (
-        pinnedResult.status === 'unavailable' ||
-        pinnedResult.snapshot.targetDigest !== finalEffective.targetIdentity
-      ) {
-        return { status: 'unavailable' }
-      }
-      effectiveSnapshot = pinnedResult.snapshot
-      if (
-        effectiveSnapshot.repositoryRevisionDigest !==
-          initialEffectiveSnapshot.repositoryRevisionDigest ||
-        effectiveSnapshot.worktreeRevisionDigest !==
-          initialEffectiveSnapshot.worktreeRevisionDigest
-      ) {
-        return { status: 'unavailable' }
-      }
-    } else {
-      effectiveSnapshot = finalParentResult.snapshot
-    }
+    const final = effective.pinned
+      ? await revalidatePinnedCompletion(effective, initialEffective)
+      : { status: 'ready' as const, effective, snapshot: finalParent.snapshot }
+    if (final.status !== 'ready') return final
     return {
       status: 'ready',
       readbacks: [
         {
           workspaceIdentity: options.workspaceIdentity,
-          repositoryIdentity: effectiveSnapshot.repositoryRevisionDigest,
-          worktreeIdentity: effectiveSnapshot.worktreeRevisionDigest,
-          operationTargetIdentity: finalEffective.targetIdentity,
+          repositoryIdentity: final.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: final.snapshot.worktreeRevisionDigest,
+          operationTargetIdentity: final.effective.targetIdentity,
         },
-        ...remoteReadbacks.map(({ operation, snapshot }) =>
+        ...remote.readbacks.map(({ operation, snapshot }) =>
           remoteReadbackInput(
             operation,
-            effectiveSnapshot,
+            final.snapshot,
             options.workspaceIdentity,
             snapshot,
           ),
@@ -4275,31 +4249,93 @@ function createSessionRuntime(
     }
   }
 
+  async function completionSnapshot(
+    observer: OpencodeOperationObserver,
+  ): Promise<CompletionProbeRead> {
+    let result: OperationObserverResult
+    try {
+      result = await observer.snapshot()
+    } catch {
+      return { kind: 'fatal' }
+    }
+    if (isProbeTimeout(result)) return { kind: 'timeout' }
+    if (result.status === 'unavailable') return { kind: 'fatal' }
+    return { kind: 'ok', snapshot: result.snapshot }
+  }
+
+  function completionParentDrifted(
+    initial: OperationObserverSnapshot,
+    final: OperationObserverSnapshot,
+  ): boolean {
+    return (
+      final.targetDigest !== initial.targetDigest ||
+      final.repositoryRevisionDigest !== initial.repositoryRevisionDigest ||
+      final.worktreeRevisionDigest !== initial.worktreeRevisionDigest
+    )
+  }
+
+  // Second lookup and snapshot of the pinned target. The observer, target, and
+  // revision digests must be exactly what the first pass saw.
+  async function revalidatePinnedCompletion(
+    effective: EffectiveOperationObserver,
+    initial: OperationObserverSnapshot,
+  ): Promise<
+    | {
+        readonly status: 'ready'
+        readonly effective: EffectiveOperationObserver
+        readonly snapshot: OperationObserverSnapshot
+      }
+    | { readonly status: 'timeout' | 'fatal' }
+  > {
+    const lookup = resolveEffectiveObserver()
+    if (lookup.kind !== 'ok') {
+      return { status: lookup.kind === 'timeout' ? 'timeout' : 'fatal' }
+    }
+    const revalidated = lookup.observer
+    if (
+      revalidated.observer !== effective.observer ||
+      revalidated.targetIdentity !== effective.targetIdentity ||
+      !revalidated.pinned
+    ) {
+      return { status: 'fatal' }
+    }
+    const pinned = await completionSnapshot(revalidated.observer)
+    if (pinned.kind !== 'ok') return { status: pinned.kind }
+    if (
+      pinned.snapshot.targetDigest !== revalidated.targetIdentity ||
+      pinned.snapshot.repositoryRevisionDigest !==
+        initial.repositoryRevisionDigest ||
+      pinned.snapshot.worktreeRevisionDigest !== initial.worktreeRevisionDigest
+    ) {
+      return { status: 'fatal' }
+    }
+    return {
+      status: 'ready',
+      effective: revalidated,
+      snapshot: pinned.snapshot,
+    }
+  }
+
   async function completionRemoteReadbacks(
     observer: OpencodeOperationObserver,
-  ): Promise<
-    | readonly {
-        operation: RemoteOperation
-        snapshot: OperationObserverRemoteSnapshot
-      }[]
-    | undefined
-  > {
+  ): Promise<CompletionRemoteOutcome> {
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return []
+    if (remoteOperations.length === 0) return { status: 'ready', readbacks: [] }
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return undefined
+    if (!remoteSnapshot) return { status: 'fatal' }
     const readbacks: Array<{
       operation: RemoteOperation
       snapshot: OperationObserverRemoteSnapshot
     }> = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
-      if (result?.status !== 'available') return undefined
+      if (isProbeTimeout(result)) return { status: 'timeout' }
+      if (result?.status !== 'available') return { status: 'fatal' }
       readbacks.push({ operation, snapshot: result.snapshot })
     }
-    return readbacks
+    return { status: 'ready', readbacks }
   }
 
   function finishMismatchedTarget(
@@ -4349,6 +4385,44 @@ function createSessionRuntime(
     )
   }
 
+  // A session that went unavailable while the probe was in flight is not
+  // retryable: it takes the fatal path.
+  function finishReadbackTimeout(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+  ): void {
+    if (guard.status().state === 'unavailable') {
+      finishUnavailableReadback(callDigest, pending, output)
+    } else {
+      finishRetryableReadback(callDigest, pending, output)
+    }
+  }
+
+  // A probe timed out: reject this attempt as retryable. Nothing is consumed
+  // and the session is NOT marked unavailable. The terminal entry makes a
+  // duplicate after-hook replay exactly what is written here.
+  function finishRetryableReadback(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+  ): void {
+    abandonComplete(callDigest, pending, true)
+    const terminal: TerminalComplete = {
+      target: pending.target,
+      status: 'rejected',
+      reasonCode: 'readback-timeout',
+      title: 'Workflow readback timed out',
+    }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(
+      output,
+      terminal,
+      pending.target,
+      terminal.title,
+    )
+  }
+
   async function finishComplete(
     host: HostToolAfter,
     output: unknown,
@@ -4365,13 +4439,13 @@ function createSessionRuntime(
       finishUnreplayableComplete(finalTarget, output)
       return
     }
-    if (!options.observer) {
-      finalizeComplete(callDigest, pending, output)
+    const readbacks = await completionReadbacks()
+    if (readbacks.status === 'fatal') {
+      finishUnavailableReadback(callDigest, pending, output)
       return
     }
-    const readbacks = await completionReadbacks()
-    if (readbacks.status === 'unavailable') {
-      finishUnavailableReadback(callDigest, pending, output)
+    if (readbacks.status === 'timeout') {
+      finishReadbackTimeout(callDigest, pending, output)
       return
     }
     finalizeComplete(
