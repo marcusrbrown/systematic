@@ -258,22 +258,23 @@ available (retried once on a timeout) from the same observer and target as the s
 seeds its baseline from the after-read only when its before-read reported `missing-resource`. After
 an operation is satisfied, a probe timeout during a status refresh skips that probe instead of
 making the guard unavailable: a remote timeout skips only that operation and the rest still run, a
-local or pinned-worktree timeout skips every remote probe, nothing is applied for a skipped probe,
-and skipped probes are listed on status output as an enum-only `unconfirmedReadbacks` list that
-never appears in receipts, markers, or digests. A completion readback timeout rejects that attempt
-as `readback-timeout` without consuming anything or making the guard unavailable; the next
-completion call prepares fresh and surfaces any real blocking reason. A fatal completion readback
-replays `finalization-failed` and records a `complete-readback` cause. Known limits: a dual
-registration running an older build rejects the `inactive` marker state and fails closed until both
-upgrade; if host history loses every marker, a previously activated session cannot be told apart
-from a fresh one; in-flight guard calls from a turn that began before this runtime started fail
-closed; `missing-resource` cannot distinguish absence from some `gh` or `git` failures, and a first
-push to a branch with no upstream defers but cannot mint a receipt (#1081); timeouts in an
-operation's before-hook or after-hook and in child rollup still make the guard unavailable (#1084);
-an earlier completion timeout can mask later drift until the next attempt; replaying a before-hook
-with the same call ID after a timed-out completion throws `abandoned-transition` in protected mode;
-and with a degraded remote a status call can wait one probe timeout per satisfied remote operation.
-OpenCode only — `src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
+local or pinned-worktree timeout skips every remote probe and lists the satisfied remote operations
+it left unprobed too, nothing is applied for a skipped probe, and skipped probes are listed on
+status output as an enum-only `unconfirmedReadbacks` list that never appears in receipts, markers,
+or digests. A completion readback timeout rejects that attempt as `readback-timeout` without
+consuming anything or making the guard unavailable; the next completion call prepares fresh and
+surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
+records a `complete-readback` cause. Known limits: a dual registration running an older build
+rejects the `inactive` marker state and fails closed until both upgrade; if host history loses every
+marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
+from a turn that began before this runtime started fail closed; `missing-resource` cannot
+distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
+defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
+in child rollup still make the guard unavailable (#1084); an earlier completion timeout can mask
+later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
+completion throws `abandoned-transition` in protected mode; and with a degraded remote a status call
+can wait one probe timeout per satisfied remote operation. OpenCode only — `src/pi.ts` registers no
+guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

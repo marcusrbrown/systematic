@@ -2912,13 +2912,28 @@ function createSessionRuntime(
     return options.observer !== undefined && guard.status().epoch !== null
   }
 
+  // The local or pinned probe was skipped, so no remote probe runs either. List
+  // it first, then every satisfied remote operation that was left unprobed (in
+  // the same order a refresh would have probed them), so none looks verified.
+  function skippedWithRemoteTail(
+    head: 'local' | 'pinned',
+  ): readonly UnconfirmedReadback[] {
+    return [
+      unconfirmedReadback(head),
+      ...guard
+        .status()
+        .satisfiedOperations.filter(remoteOperation)
+        .map((operation) => unconfirmedReadback(operation)),
+    ]
+  }
+
   // A probe that times out is skipped: no readback is applied for it and no
   // existing staleness is cleared. The skipped probes are returned by value for
   // the status tool. Every non-timeout failure stays fatal.
   async function refreshReadback(): Promise<readonly UnconfirmedReadback[]> {
     if (!observerReadbackApplies()) return []
     const lookup = resolveEffectiveObserver()
-    if (lookup.kind === 'timeout') return [unconfirmedReadback('pinned')]
+    if (lookup.kind === 'timeout') return skippedWithRemoteTail('pinned')
     if (lookup.kind !== 'ok') {
       markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
       return []
@@ -2926,7 +2941,7 @@ function createSessionRuntime(
     const effective = lookup.observer
     const read = await readEffectiveSnapshot(effective)
     if (read.kind === 'timeout') {
-      return [unconfirmedReadback(effective.pinned ? 'pinned' : 'local')]
+      return skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
     }
     if (read.kind === 'failed') {
       markUnavailable(observerReadbackFailedCause(read.reasonCode))

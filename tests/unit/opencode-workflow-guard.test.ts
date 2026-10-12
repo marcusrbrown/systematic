@@ -3039,8 +3039,8 @@ describe('OpenCode workflow guard adapter', () => {
         },
       )
 
-      test('b: a local snapshot timeout is skipped: no remote probe runs, nothing changes, and the list is [local]', async () => {
-        const fx = await skipFixture('observe')
+      test('b: a local snapshot timeout is skipped: no remote probe runs, nothing changes, and the list is [local, then each satisfied remote operation]', async () => {
+        const fx = await skipFixture('observe', true)
         const before = status(fx.adapter)
         fx.resetRemoteCalls()
         fx.setLocalTimeout(true)
@@ -3050,6 +3050,8 @@ describe('OpenCode workflow guard adapter', () => {
         expect(parsed.firstUnavailableCause).toBeUndefined()
         expect(parsed.unconfirmedReadbacks).toEqual([
           { probe: 'local', reasonCode: 'command-timeout' },
+          { probe: 'push', reasonCode: 'command-timeout' },
+          { probe: 'pr-creation', reasonCode: 'command-timeout' },
         ])
         expect(fx.remoteCalls()).toBe(0)
         const after = status(fx.adapter)
@@ -3059,6 +3061,58 @@ describe('OpenCode workflow guard adapter', () => {
         expect(after.missingOperations).toEqual(before.missingOperations)
       })
 
+      test('b: a local snapshot timeout with no satisfied remote operation lists exactly [local]', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let remoteCalls = 0
+        let timeout = false
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          snapshot: async () => (timeout ? TIMEOUT : base.snapshot()),
+          remoteSnapshot: async (operation, phase) => {
+            remoteCalls += 1
+            return (
+              base.remoteSnapshot?.(operation, phase) ?? {
+                status: 'missing-resource',
+              }
+            )
+          },
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).satisfiedOperations).toEqual([])
+        timeout = true
+
+        const parsed = await refreshed(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+        ])
+        expect(remoteCalls).toBe(0)
+      })
+
+      test('c: a pinned snapshot timeout is skipped and the list is [pinned]', async () => {
+        const setup = await createPinnedRecoveryAdapter()
+        try {
+          const { adapter } = setup
+          const before = status(adapter)
+          setup.timeoutPinnedSnapshotOnCall(1)
+
+          const parsed = await refreshed(adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'pinned', reasonCode: 'command-timeout' },
+          ])
+          expect(status(adapter).state).toBe(before.state)
+
+          const healthy = await refreshed(adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+        } finally {
+          setup.fixture.cleanup()
+        }
+      })
+
+      // The pinned recovery fixture has no satisfied remote operation, so the
+      // pinned skips list only [pinned]; the remote tail is covered by b above.
       test('c: a pinned lookup timeout is skipped and the list is [pinned]', async () => {
         const setup = await createPinnedRecoveryAdapter()
         try {
