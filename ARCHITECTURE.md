@@ -272,9 +272,12 @@ distinguish absence from some `gh` or `git` failures, and a first push to a bran
 defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
 in child rollup still make the guard unavailable (#1084); an earlier completion timeout can mask
 later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
-completion throws `abandoned-transition` in protected mode; and with a degraded remote a status call
-can wait one probe timeout per satisfied remote operation. OpenCode only — `src/pi.ts` registers no
-guard, and the Claude Code bundle ships no runtime.
+completion throws `abandoned-transition` in protected mode; completion is confirmed independently
+per registration, not atomically across registrations, so when two registrations share one tool
+output and their readbacks differ, one can complete while the other rejects or becomes unavailable,
+the final output depends on hook order, and a compound retry is not guaranteed; and with a degraded
+remote a status call can wait one probe timeout per satisfied remote operation. OpenCode only —
+`src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

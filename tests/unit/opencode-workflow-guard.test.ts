@@ -2830,6 +2830,7 @@ describe('OpenCode workflow guard adapter', () => {
         ): void
         resetRemoteCalls(): void
         remoteCalls(): number
+        localCalls(): number
         // The Nth upcoming local snapshot call (counted from now) times out.
         timeoutLocalSnapshotOnCall(n: number): void
         // The Nth upcoming local snapshot call reports a drifted revision.
@@ -2975,6 +2976,7 @@ describe('OpenCode workflow guard adapter', () => {
             remoteCalls = 0
           },
           remoteCalls: () => remoteCalls,
+          localCalls: () => snapshotCalls,
           timeoutLocalSnapshotOnCall(n) {
             timeoutOnCall = snapshotCalls + n
           },
@@ -3596,6 +3598,208 @@ describe('OpenCode workflow guard adapter', () => {
             } finally {
               setup.fixture.cleanup()
             }
+          })
+        })
+
+        // CHARACTERIZATION TESTS: these pin what the guard does TODAY when two
+        // independent registrations share one after-hook output; they are not
+        // requirements. OpenCode hands the same output reference to every
+        // plugin hook in sequence, and each registration decides completion
+        // independently from its own readbacks. Completion is therefore not
+        // atomic across registrations, and the final output depends on hook
+        // order. The same divergence already exists for fatal readbacks.
+        describe('characterization: two registrations sharing one completion output', () => {
+          type Failure = 'timeout' | 'fatal'
+          type Order = 'failing-first' | 'healthy-first'
+
+          const cases = (['observe', 'protected'] as const).flatMap((mode) =>
+            (['failing-first', 'healthy-first'] as const).flatMap((order) =>
+              (['timeout', 'fatal'] as const).map((failure) => ({
+                mode,
+                order,
+                failure,
+                name: `${mode} / ${order} / ${failure}`,
+              })),
+            ),
+          )
+
+          const callID = 'shared-complete'
+
+          async function pair(mode: 'observe' | 'protected', failure: Failure) {
+            const failing = await skipFixture(mode)
+            const healthy = await skipFixture(mode)
+            failing.failRemote(
+              'push',
+              failure === 'timeout' ? TIMEOUT : MISSING,
+            )
+            return { failing, healthy }
+          }
+
+          function expectGuardResult(
+            output: CompletionOutput,
+            expected: Record<string, unknown>,
+          ): void {
+            expect(output.metadata.workflowGuard).toMatchObject(expected)
+          }
+
+          function failingResult(failure: Failure): Record<string, unknown> {
+            return failure === 'timeout'
+              ? {
+                  status: 'rejected',
+                  target: 'unit',
+                  reasonCode: 'readback-timeout',
+                }
+              : {
+                  status: 'unavailable',
+                  target: 'unit',
+                  reasonCode: 'finalization-failed',
+                }
+          }
+
+          // Duplicate after-hooks consume nothing more. The failing registration
+          // replays its own terminal outcome; the healthy one has none and leaves
+          // the host output untouched.
+          async function expectReplays(
+            failing: SkipFixture,
+            healthy: SkipFixture,
+            failure: Failure,
+            receipts: number,
+          ): Promise<void> {
+            const failingReplay = freshCompletionOutput()
+            await afterComplete(failing.adapter, callID, failingReplay)
+            if (failure === 'timeout') expectRetryable(failingReplay)
+            else expectFatal(failingReplay)
+            const healthyReplay = freshCompletionOutput()
+            await afterComplete(healthy.adapter, callID, healthyReplay)
+            expect(healthyReplay).toEqual(freshCompletionOutput())
+            expect(consumedReceipts(healthy.adapter)).toBe(receipts)
+            expect(consumedReceipts(failing.adapter)).toBe(0)
+          }
+
+          function hookOrder(
+            order: Order,
+            failing: SkipFixture,
+            healthy: SkipFixture,
+          ): SkipFixture[] {
+            return order === 'failing-first'
+              ? [failing, healthy]
+              : [healthy, failing]
+          }
+
+          function finalResult(
+            order: Order,
+            failure: Failure,
+          ): Record<string, unknown> {
+            return order === 'failing-first'
+              ? { status: 'completed', target: 'unit' }
+              : failingResult(failure)
+          }
+
+          test.each(cases)(
+            '$name: the healthy registration completes, the failing one consumes nothing, and the final output follows hook order',
+            async ({ mode, order, failure }) => {
+              const { failing, healthy } = await pair(mode, failure)
+              const receipts = ledger(healthy.adapter).listReceipts().length
+              expect(receipts).toBeGreaterThan(0)
+              await beforeComplete(failing.adapter, callID)
+              await beforeComplete(healthy.adapter, callID)
+              const shared = freshCompletionOutput()
+              for (const fx of hookOrder(order, failing, healthy)) {
+                await afterComplete(fx.adapter, callID, shared)
+              }
+
+              // Final output: whichever registration wrote last.
+              expectGuardResult(shared, finalResult(order, failure))
+
+              // Per-registration state and consumption.
+              expect(status(healthy.adapter).unit?.status).toBe('completed')
+              expect(consumedReceipts(healthy.adapter)).toBe(receipts)
+              expect(status(failing.adapter).unit?.status).toBe('active')
+              expect(consumedReceipts(failing.adapter)).toBe(0)
+              expect(status(failing.adapter).state === 'unavailable').toBe(
+                failure === 'fatal',
+              )
+              await expectReplays(failing, healthy, failure, receipts)
+            },
+          )
+
+          test.each(
+            (['observe', 'protected'] as const).map((mode) => ({ mode })),
+          )(
+            'after a timeout, a new call ID with healthy probes completes the failing registration ($mode)',
+            async ({ mode }) => {
+              const { failing, healthy } = await pair(mode, 'timeout')
+              await beforeComplete(failing.adapter, callID)
+              await beforeComplete(healthy.adapter, callID)
+              const shared = freshCompletionOutput()
+              await afterComplete(failing.adapter, callID, shared)
+              await afterComplete(healthy.adapter, callID, shared)
+              expect(consumedReceipts(failing.adapter)).toBe(0)
+
+              failing.failRemote('push', undefined)
+              const retry = await complete(failing.adapter, 'shared-retry')
+              expect(retry.output).toContain('completed')
+              expect(status(failing.adapter).unit?.status).toBe('completed')
+              const total = ledger(failing.adapter).listReceipts().length
+              expect(consumedReceipts(failing.adapter)).toBe(total)
+              expect(consumedReceipts(healthy.adapter)).toBe(total)
+            },
+          )
+        })
+
+        // CHARACTERIZATION TEST: an earlier completion timeout can mask drift
+        // that a previous probe already saw. Completion collects remote
+        // readbacks and applies them only when every probe succeeds, so a later
+        // timeout discards the drifted evidence; the next attempt re-reads it.
+        describe('characterization: late drift, then a later timeout', () => {
+          test('the timed-out attempt applies nothing, its replay probes nothing, and a fresh attempt with restored probes detects the drift', async () => {
+            const fx = await skipFixture('observe', true)
+            const drifted = remoteAvailable(DRIFT, FRESH, {
+              pullRequest: { identity: DRIFT, state: 'open' },
+            })
+            // Probes run in satisfied order: push (drifted) then pr-creation.
+            fx.failRemote('push', drifted)
+            fx.failRemote('pr-creation', TIMEOUT)
+            const snapshot = () => ({
+              status: JSON.parse(JSON.stringify(status(fx.adapter))),
+              receipts: JSON.parse(
+                JSON.stringify(ledger(fx.adapter).listReceipts()),
+              ),
+            })
+            const before = snapshot()
+            const remoteBefore = fx.remoteCalls()
+
+            const first = await complete(fx.adapter, 'drift-timeout')
+            expectRetryable(first)
+            expect(fx.remoteCalls()).toBeGreaterThan(remoteBefore)
+            expect(snapshot()).toEqual(before)
+
+            // A duplicate after-hook replays the stored outcome and probes nothing.
+            const remoteAfterFirst = fx.remoteCalls()
+            const localAfterFirst = fx.localCalls()
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'drift-timeout', replay)
+            expectRetryable(replay)
+            expect(fx.remoteCalls()).toBe(remoteAfterFirst)
+            expect(fx.localCalls()).toBe(localAfterFirst)
+            expect(snapshot()).toEqual(before)
+
+            // Probes restored (pr-creation healthy); the drift on push persists.
+            fx.failRemote('pr-creation', undefined)
+            const second = await complete(fx.adapter, 'drift-fresh')
+            // Today's path: the drifted push evidence is applied at
+            // finalization, which rejects the transition with the core's
+            // `resource-mismatch`, and the adapter then marks the session
+            // unavailable (finalizeComplete's non-completed branch).
+            expect(second.metadata.workflowGuard).toMatchObject({
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'resource-mismatch',
+            })
+            expect(second.output).not.toContain('completed')
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(status(fx.adapter).unit?.status).toBe('active')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
           })
         })
 
