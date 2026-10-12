@@ -11,6 +11,7 @@ import { z } from 'zod'
 
 import type {
   OpencodeOperationObserver,
+  OperationObserverReasonCode,
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
 } from '../../src/lib/opencode-operation-observer.js'
@@ -549,7 +550,10 @@ async function createPinnedRecoveryAdapter(): Promise<{
   readonly adapter: OpencodeWorkflowGuard
   readonly targetRoot: string
   readonly targetIdentity: string
-  setTargetValidationAvailable(value: boolean): void
+  setTargetValidationAvailable(
+    value: boolean,
+    reasonCode?: OperationObserverReasonCode,
+  ): void
 }> {
   const fixture = createTargetDerivationFixture()
   const targetRoot = fs.realpathSync(fixture.linkedRoot)
@@ -570,11 +574,12 @@ async function createPinnedRecoveryAdapter(): Promise<{
     throw new Error('target unavailable')
   }
   let targetValidationAvailable = true
+  let targetValidationReason: OperationObserverReasonCode = 'target-unavailable'
   const observer: OpencodeOperationObserver = {
     targetDigest: baseObserver.targetDigest,
     validateRegisteredWorktree: (candidateDirectory) => {
       if (!targetValidationAvailable && candidateDirectory === targetRoot) {
-        return { status: 'error', reasonCode: 'target-unavailable' }
+        return { status: 'error', reasonCode: targetValidationReason }
       }
       return baseObserver.validateRegisteredWorktree(candidateDirectory)
     },
@@ -644,8 +649,9 @@ async function createPinnedRecoveryAdapter(): Promise<{
     adapter,
     targetRoot,
     targetIdentity: targetObserver.targetDigest,
-    setTargetValidationAvailable(value) {
+    setTargetValidationAvailable(value, reasonCode = 'target-unavailable') {
       targetValidationAvailable = value
+      targetValidationReason = reasonCode
     },
   }
 }
@@ -2719,13 +2725,186 @@ describe('OpenCode workflow guard adapter', () => {
           ).execute({}, toolContext(SESSION_A))
           const parsed = JSON.parse(expectToolOutput(result).output)
           expect(parsed.state).toBe('unavailable')
-          expect(parsed.firstUnavailableCause).toEqual({
-            site: 'refresh-readback',
-            kind: 'observer-readback-failed',
-            timedOut: false,
-          })
+          // A thrown observer has no reason code; an unavailable result
+          // carries the observer's own reason code through to the cause.
+          expect(parsed.firstUnavailableCause).toEqual(
+            behavior === 'throws'
+              ? {
+                  site: 'refresh-readback',
+                  kind: 'observer-readback-failed',
+                  timedOut: false,
+                }
+              : {
+                  site: 'refresh-readback',
+                  kind: 'observer-readback-failed',
+                  reasonCode: 'target-unavailable',
+                  timedOut: false,
+                },
+          )
         })
       }
+    })
+
+    describe('refresh-readback cause carries the observer reason code', () => {
+      const D = 'd'.repeat(64)
+      const E = 'e'.repeat(64)
+      const FRESH = 'f'.repeat(64)
+
+      async function refreshedStatus(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      test('a: a local snapshot command-timeout during status refresh still goes unavailable, recording the timeout cause', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let failing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () => {
+            if (!failing) return base.snapshot()
+            return { status: 'unavailable', reasonCode: 'command-timeout' }
+          },
+        }
+        const adapter = createAdapter('observe', false, observer)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        failing = true
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'command-timeout',
+          timedOut: true,
+        })
+      })
+
+      async function satisfiedPushAdapter(): Promise<{
+        adapter: OpencodeWorkflowGuard
+        failRemoteWith(result: OperationObserverRemoteResult): void
+      }> {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let override: OperationObserverRemoteResult | undefined
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) =>
+            override ?? reader.call(base, operation, phase),
+        }
+        const adapter = createAdapter('observe', false, observer, ['push'])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'cause-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        return {
+          adapter,
+          failRemoteWith(result) {
+            override = result
+          },
+        }
+      }
+
+      test('b: a remote readback command-timeout after a satisfied push goes unavailable with a timedOut cause', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({ status: 'unavailable', reasonCode: 'command-timeout' })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'command-timeout',
+          timedOut: true,
+        })
+      })
+
+      test('c: a remote missing-resource after a satisfied push goes unavailable with a non-timeout cause', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({ status: 'missing-resource' })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'missing-resource',
+          timedOut: false,
+        })
+      })
+
+      test('d: a non-timeout remote unavailable reason is recorded verbatim and is not a timeout', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({
+          status: 'unavailable',
+          reasonCode: 'remote-command-failed',
+        })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'remote-command-failed',
+          timedOut: false,
+        })
+      })
+
+      test('d: a throwing remote reader has no reason code and is not a timeout', async () => {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let throwing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) => {
+            if (throwing) throw new Error('remote exploded')
+            return reader.call(base, operation, phase)
+          },
+        }
+        const adapter = createAdapter('observe', false, observer, ['push'])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'throw-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        throwing = true
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          timedOut: false,
+        })
+      })
     })
   })
 
@@ -7655,6 +7834,61 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
+  test('a pinned worktree target whose validation times out still fails closed on completion', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      setup.setTargetValidationAvailable(false, 'command-timeout')
+
+      const completeInput = {
+        tool: 'systematic_workflow_complete' as const,
+        sessionID: SESSION_A,
+        callID: 'timeout-pinned-completion',
+      }
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      const output = { title: 'complete', output: 'done', metadata: {} }
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        output,
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).unit?.status).not.toBe('completed')
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test.each([
+    { reasonCode: 'command-timeout', timedOut: true },
+    { reasonCode: 'target-unavailable', timedOut: false },
+  ] as const)(
+    'a pinned worktree validation $reasonCode during status refresh goes unavailable and records it (timedOut: $timedOut)',
+    async ({ reasonCode, timedOut }) => {
+      const setup = await createPinnedRecoveryAdapter()
+      try {
+        const { adapter } = setup
+        setup.setTargetValidationAvailable(false, reasonCode)
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        const parsed = JSON.parse(expectToolOutput(result).output)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode,
+          timedOut,
+        })
+      } finally {
+        setup.fixture.cleanup()
+      }
+    },
+  )
+
   test('operation evidence remains isolated across sessions and registrations', async () => {
     const first = createAdapter(
       'observe',
@@ -8418,12 +8652,14 @@ describe('OpenCode workflow guard adapter', () => {
         adapter: OpencodeWorkflowGuard,
         site: string,
         kind: string,
+        reasonCode?: string,
       ): Promise<void> {
         const parsed = await statusJson(adapter)
         expect(parsed.state).toBe('unavailable')
         expect(parsed.firstUnavailableCause).toEqual({
           site,
           kind,
+          ...(reasonCode === undefined ? {} : { reasonCode }),
           timedOut: false,
         })
       }
@@ -8506,6 +8742,7 @@ describe('OpenCode workflow guard adapter', () => {
           adapter,
           'refresh-readback',
           'observer-readback-failed',
+          'target-unavailable',
         )
       })
 

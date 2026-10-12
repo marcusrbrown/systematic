@@ -342,6 +342,21 @@ interface EffectiveOperationObserver {
   readonly pinned: boolean
 }
 
+type EffectiveObserverLookup =
+  | { readonly kind: 'ok'; readonly observer: EffectiveOperationObserver }
+  | { readonly kind: 'timeout' }
+  | {
+      readonly kind: 'invalid'
+      readonly reasonCode?: OperationObserverReasonCode
+    }
+
+type RemoteReadbackOutcome =
+  | { readonly ok: true }
+  | {
+      readonly ok: false
+      readonly reasonCode?: GuardUnavailableCause['reasonCode']
+    }
+
 type OperationObserverRegistry = Map<string, OperationObserverRegistration>
 
 interface RecoveredOperationContext {
@@ -480,7 +495,10 @@ interface GuardUnavailableCause {
     | 'refresh-readback'
   readonly kind: GuardUnavailableCauseKind
   readonly operation?: RemoteOperation
-  readonly reasonCode?: OperationObserverReasonCode | WorkflowReasonCode
+  readonly reasonCode?:
+    | OperationObserverReasonCode
+    | WorkflowReasonCode
+    | SeedDeferralReason
   readonly timedOut: boolean
 }
 
@@ -497,11 +515,51 @@ function initializationCause(
   return { site: 'initialize-session', kind, timedOut: false }
 }
 
-const OBSERVER_READBACK_FAILED_CAUSE: GuardUnavailableCause = Object.freeze({
-  site: 'refresh-readback',
-  kind: 'observer-readback-failed',
-  timedOut: false,
-})
+// Builds the refresh-path cause. `reasonCode` is the observer's own reason when
+// one is known; a throw has none. `timedOut` mirrors a `command-timeout`.
+function observerReadbackFailedCause(
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return {
+    site: 'refresh-readback',
+    kind: 'observer-readback-failed',
+    ...(reasonCode !== undefined ? { reasonCode } : {}),
+    timedOut: reasonCode === 'command-timeout',
+  }
+}
+
+function lookupFailureReason(
+  lookup: Exclude<EffectiveObserverLookup, { readonly kind: 'ok' }>,
+): GuardUnavailableCause['reasonCode'] {
+  return lookup.kind === 'timeout' ? 'command-timeout' : lookup.reasonCode
+}
+
+// A throw (`undefined`) has no reason code.
+function remoteFailureReason(
+  result: OperationObserverRemoteResult | undefined,
+): GuardUnavailableCause['reasonCode'] {
+  if (result?.status === 'missing-resource') return 'missing-resource'
+  if (result?.status === 'unavailable') return result.reasonCode
+  return undefined
+}
+
+// The only probe outcomes that count as a transient timeout: an observer
+// snapshot or remote readback that is `unavailable` with `command-timeout`, or
+// a worktree-registration lookup that is an `error` with `command-timeout`.
+// Everything else (other reasons, `missing-resource`, `undefined`) is not.
+function isProbeTimeout(
+  result:
+    | OperationObserverResult
+    | OperationObserverRemoteResult
+    | RegisteredWorktreeValidationResult
+    | undefined,
+): boolean {
+  if (result === undefined) return false
+  if (result.status !== 'unavailable' && result.status !== 'error') {
+    return false
+  }
+  return result.reasonCode === 'command-timeout'
+}
 
 const startToolShape = {
   expected_operations: z
@@ -1701,11 +1759,12 @@ function createSessionRuntime(
     return parentObserverRegistration()
   }
 
-  function effectiveOperationObserver():
-    | EffectiveOperationObserver
-    | undefined {
+  // Typed lookup of the observer for the pinned (or parent) target. A pinned
+  // worktree validation that times out is `timeout`; every other failure,
+  // including a throw, is `invalid` (with the observer's reason code if any).
+  function resolveEffectiveObserver(): EffectiveObserverLookup {
     const parentObserver = options.observer
-    if (!parentObserver) return undefined
+    if (!parentObserver) return { kind: 'invalid' }
     const pinnedTargetIdentity =
       guard.status().unit?.pinnedOperationTargetIdentity
     if (
@@ -1713,35 +1772,63 @@ function createSessionRuntime(
       pinnedTargetIdentity === options.workspaceIdentity
     ) {
       return {
-        observer: parentObserver,
-        targetIdentity: options.workspaceIdentity,
-        pinned: false,
+        kind: 'ok',
+        observer: {
+          observer: parentObserver,
+          targetIdentity: options.workspaceIdentity,
+          pinned: false,
+        },
       }
     }
     const registration = operationObserverRegistration(pinnedTargetIdentity)
-    if (!registration) return undefined
+    if (!registration) return { kind: 'invalid' }
+    return resolvePinnedObserver(
+      parentObserver,
+      registration,
+      pinnedTargetIdentity,
+    )
+  }
+
+  function resolvePinnedObserver(
+    parentObserver: OpencodeOperationObserver,
+    registration: OperationObserverRegistration,
+    pinnedTargetIdentity: string,
+  ): EffectiveObserverLookup {
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = parentObserver.validateRegisteredWorktree(
         registration.targetRoot,
       )
     } catch {
-      return undefined
+      return { kind: 'invalid' }
+    }
+    if (isProbeTimeout(validation)) return { kind: 'timeout' }
+    if (validation.status !== 'ok') {
+      return { kind: 'invalid', reasonCode: validation.reasonCode }
     }
     if (
-      validation.status !== 'ok' ||
       validation.targetRoot !== registration.targetRoot ||
       registeredWorktreeIdentity(validation) !==
         registration.registeredWorktreeIdentity ||
       registration.observer.targetDigest !== pinnedTargetIdentity
     ) {
-      return undefined
+      return { kind: 'invalid' }
     }
     return {
-      observer: registration.observer,
-      targetIdentity: pinnedTargetIdentity,
-      pinned: true,
+      kind: 'ok',
+      observer: {
+        observer: registration.observer,
+        targetIdentity: pinnedTargetIdentity,
+        pinned: true,
+      },
     }
+  }
+
+  function effectiveOperationObserver():
+    | EffectiveOperationObserver
+    | undefined {
+    const lookup = resolveEffectiveObserver()
+    return lookup.kind === 'ok' ? lookup.observer : undefined
   }
 
   function questionResource(target: TransitionTarget): string {
@@ -2740,55 +2827,81 @@ function createSessionRuntime(
 
   async function refreshReadback(): Promise<void> {
     if (!observerReadbackApplies()) return
-    const effective = effectiveOperationObserver()
-    if (!effective) {
-      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
+    const lookup = resolveEffectiveObserver()
+    if (lookup.kind !== 'ok') {
+      markUnavailable(observerReadbackFailedCause(lookupFailureReason(lookup)))
       return
     }
-    let result: OperationObserverResult
-    try {
-      result = await effective.observer.snapshot()
-    } catch {
-      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
+    const effective = lookup.observer
+    const read = await readEffectiveSnapshot(effective)
+    if (!read.ok) {
+      markUnavailable(observerReadbackFailedCause(read.reasonCode))
       return
     }
-    if (
-      result.status === 'unavailable' ||
-      result.snapshot.targetDigest !== effective.targetIdentity
-    ) {
-      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
-      return
-    }
+    const snapshot = read.snapshot
     const observed = guard.observeReadback({
       workspaceIdentity: options.workspaceIdentity,
-      repositoryIdentity: result.snapshot.repositoryRevisionDigest,
-      worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+      repositoryIdentity: snapshot.repositoryRevisionDigest,
+      worktreeIdentity: snapshot.worktreeRevisionDigest,
       ...(effective.pinned
         ? { operationTargetIdentity: effective.targetIdentity }
         : {}),
     })
     if (
-      (observed.status === 'rejected' &&
-        observed.reasonCode === 'workspace-mismatch') ||
-      !(await refreshRemoteReadbacks(effective.observer, result.snapshot))
+      observed.status === 'rejected' &&
+      observed.reasonCode === 'workspace-mismatch'
     ) {
-      markUnavailable(OBSERVER_READBACK_FAILED_CAUSE)
+      markUnavailable(observerReadbackFailedCause())
+      return
     }
+    const remote = await refreshRemoteReadbacks(effective.observer, snapshot)
+    if (!remote.ok) {
+      markUnavailable(observerReadbackFailedCause(remote.reasonCode))
+    }
+  }
+
+  // Reads the effective observer's local snapshot. A failure carries the
+  // observer's reason code when it supplied one; a throw or a target mismatch
+  // has none.
+  async function readEffectiveSnapshot(
+    effective: EffectiveOperationObserver,
+  ): Promise<
+    | { readonly ok: true; readonly snapshot: OperationObserverSnapshot }
+    | {
+        readonly ok: false
+        readonly reasonCode?: GuardUnavailableCause['reasonCode']
+      }
+  > {
+    let result: OperationObserverResult
+    try {
+      result = await effective.observer.snapshot()
+    } catch {
+      return { ok: false }
+    }
+    if (result.status === 'unavailable') {
+      return { ok: false, reasonCode: result.reasonCode }
+    }
+    if (result.snapshot.targetDigest !== effective.targetIdentity) {
+      return { ok: false }
+    }
+    return { ok: true, snapshot: result.snapshot }
   }
 
   async function refreshRemoteReadbacks(
     observer: OpencodeOperationObserver,
     local: OperationObserverSnapshot,
-  ): Promise<boolean> {
+  ): Promise<RemoteReadbackOutcome> {
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return true
+    if (remoteOperations.length === 0) return { ok: true }
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return false
+    if (!remoteSnapshot) return { ok: false }
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
-      if (result?.status !== 'available') return false
+      if (result?.status !== 'available') {
+        return { ok: false, reasonCode: remoteFailureReason(result) }
+      }
       const observed = guard.observeReadback(
         remoteReadbackInput(
           operation,
@@ -2797,9 +2910,9 @@ function createSessionRuntime(
           result.snapshot,
         ),
       )
-      if (observed.status === 'rejected') return false
+      if (observed.status === 'rejected') return { ok: false }
     }
-    return true
+    return { ok: true }
   }
 
   function currentMarkerSource(): MarkerSource {
