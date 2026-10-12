@@ -911,6 +911,48 @@ describe('OpenCode operation observer', () => {
     }
   }, 60_000)
 
+  test('snapshots a repository whose staged file listing exceeds 1 MiB with default limits', async () => {
+    const fixture = createGitFixture()
+    try {
+      // ~5,000 files with ~220-character names: the `ls-files --stage` listing
+      // (mode, object id, stage, and path per entry) is well over 1 MiB but far
+      // under the 8 MiB default command-output limit. Untracked files do not
+      // appear in `--stage`, so they are added.
+      const directory = path.join(fixture.root, 'wide')
+      fs.mkdirSync(directory)
+      const suffix = 'n'.repeat(210)
+      for (let index = 0; index < 5000; index += 1) {
+        fs.writeFileSync(
+          path.join(
+            directory,
+            `${String(index).padStart(5, '0')}-${suffix}.txt`,
+          ),
+          `${index}\n`,
+        )
+      }
+      const add = runGit(fixture.root, ['add', '--', 'wide'])
+      expect(add.status).toBe(0)
+      const staged = runGit(fixture.root, [
+        'ls-files',
+        '--stage',
+        '--full-name',
+        '-z',
+        '--',
+        ':/',
+      ])
+      expect(Buffer.byteLength(staged.stdout)).toBeGreaterThan(1_048_576)
+      expect(Buffer.byteLength(staged.stdout)).toBeLessThan(8_388_608)
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const result = await observer.snapshot()
+      expect(result.status).toBe('available')
+    } finally {
+      fixture.cleanup()
+    }
+  }, 60_000)
+
   test('reports command-output-limit when the file listing exceeds maxCommandOutputBytes', async () => {
     const fixture = createGitFixture()
     try {

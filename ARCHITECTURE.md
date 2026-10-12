@@ -254,8 +254,9 @@ on `systematic_workflow_status` tool output while the state remains `unavailable
 on a receipt envelope, marker envelope, or anything covered by an integrity digest. Hook
 causes use the kinds `local-snapshot-error`, `local-snapshot-unavailable` (carrying the observer's
 reason code), `operation-input-invalid`, `operation-target-mismatch`, `call-lifecycle-mismatch`,
-`operation-classifier-unavailable`, `operation-observation-rejected`, and `hook-threw` (an
-exception no helper classified). At initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
+`operation-classifier-unavailable`, `operation-observation-rejected`,
+`transition-finalize-rejected` (the guard refused to finalize a prepared completion, carrying its
+reason code), and `hook-threw` (an exception no helper classified). At initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
 in-flight guard call in the current, unfinished assistant turn do not count as unrecoverable
 history; any other markerless guard history fails closed. At activation, a remote probe timeout, or
 a push `missing-resource`, defers that one operation instead of making the guard unavailable;

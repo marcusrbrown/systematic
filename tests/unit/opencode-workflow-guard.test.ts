@@ -8918,7 +8918,36 @@ describe('OpenCode workflow guard adapter', () => {
       })
     })
 
-    test('a workspace whose snapshot fails with command-failed records it on the first operation', async () => {
+    test('a real non-git workspace records operation-input-invalid with command-failed on the first operation', async () => {
+      const worktree = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-non-git-')),
+      )
+      try {
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          targetDirectory: worktree,
+          observer: createOpencodeOperationObserver({
+            targetDirectory: worktree,
+          }),
+          classifier: createReceiptClassifier(),
+          runtimeRequiredOperations: [],
+        })
+        await beforeOperation(adapter, 'before-non-git')
+        const parsed = await causeOf(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+          reasonCode: 'command-failed',
+          timedOut: false,
+        })
+      } finally {
+        fs.rmSync(worktree, { recursive: true, force: true })
+      }
+    })
+
+    test('a registered worktree whose snapshot fails with command-failed records local-snapshot-unavailable', async () => {
       const adapter = createAdapter(
         'observe',
         false,
@@ -8927,7 +8956,7 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-failed',
         })),
       )
-      await beforeOperation(adapter, 'before-non-git')
+      await beforeOperation(adapter, 'before-snapshot-command-failed')
       expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
         site: 'tool-before',
         kind: 'local-snapshot-unavailable',
@@ -8974,6 +9003,33 @@ describe('OpenCode workflow guard adapter', () => {
         )
       }
       expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+    })
+
+    test('a callID reused across skill and complete calls records call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('observe')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: BEFORE_CAUSE_SESSION,
+          callID: 'reused-skill-complete-call',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: BEFORE_CAUSE_SESSION,
+          callID: 'reused-skill-complete-call',
+        },
+        { args: { target: 'unit' } },
+      )
+      const parsed = await causeOf(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual({
         site: 'tool-before',
         kind: 'call-lifecycle-mismatch',
         timedOut: false,
@@ -9116,6 +9172,48 @@ describe('OpenCode workflow guard adapter', () => {
         timedOut,
       }
     }
+
+    test('a completion the guard refuses to finalize records transition-finalize-rejected with the guard reason', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'finalize-rejected',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      // Consume a receipt out-of-band after the transition was prepared, so
+      // the guard refuses to finalize it.
+      const current = status(adapter)
+      const receipt = ledger(adapter)
+        .listReceipts()
+        .find((candidate) => candidate.canonical.operation === 'implementation')
+      if (!receipt || !current.epoch || !current.unit) {
+        throw new Error('finalize rejection fixture missing')
+      }
+      ledger(adapter).consumeReceipt(receipt.canonical.receiptId, {
+        epochId: current.epoch.epochId,
+        unitId: current.unit.unitId,
+        workspaceIdentity: SCOPE.workspaceIdentity,
+        repositoryIdentity: SCOPE.repositoryIdentity,
+        worktreeIdentity: SCOPE.worktreeIdentity,
+        operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        { title: 'complete', output: 'done', metadata: {} },
+      )
+      expect(await causeOf(adapter)).toEqual({
+        site: 'tool-after',
+        kind: 'transition-finalize-rejected',
+        reasonCode: 'consumed-receipt',
+        timedOut: false,
+      })
+    })
 
     test('an after hook with no pending operation records call-lifecycle-mismatch', async () => {
       const adapter = await activatedAdapter(

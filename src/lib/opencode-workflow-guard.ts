@@ -536,6 +536,7 @@ type GuardUnavailableCauseKind =
   | 'operation-classifier-unavailable'
   | 'operation-observation-rejected'
   | 'hook-threw'
+  | 'transition-finalize-rejected'
 
 // A remote operation whose activation seeding was deferred instead of
 // failing the session. Status-only, enum-only, and bound to the unit that
@@ -622,6 +623,13 @@ function hookCause(
   }
 }
 
+function beforeCause(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return hookCause('tool-before', kind, reasonCode)
+}
+
 function afterCause(
   kind: GuardUnavailableCauseKind,
   reasonCode?: GuardUnavailableCause['reasonCode'],
@@ -633,10 +641,7 @@ function afterFailure(
   kind: GuardUnavailableCauseKind,
   reasonCode?: GuardUnavailableCause['reasonCode'],
 ): OperationFailure {
-  return {
-    status: 'unavailable',
-    cause: hookCause('tool-after', kind, reasonCode),
-  }
+  return { status: 'unavailable', cause: afterCause(kind, reasonCode) }
 }
 
 // A throw (`undefined`) has no reason code.
@@ -2880,7 +2885,6 @@ function createSessionRuntime(
     callDigest: string,
     kind: string,
     fingerprint: string,
-    site: GuardHookCauseSite,
   ): 'new' | 'duplicate' | 'conflict' {
     const existing = callBindings.get(callDigest)
     if (!existing) {
@@ -2890,7 +2894,7 @@ function createSessionRuntime(
     if (existing.kind === kind && existing.fingerprint === fingerprint) {
       return 'duplicate'
     }
-    markUnavailable(hookCause(site, 'call-lifecycle-mismatch'))
+    markUnavailable(beforeCause('call-lifecycle-mismatch'))
     return 'conflict'
   }
 
@@ -3368,7 +3372,7 @@ function createSessionRuntime(
     const skill = normalizeSkill(host.tool, args)
     if (!skill) return
     const callDigest = digestCall(ledger, host.callID)
-    if (bindCall(callDigest, 'skill', skill, 'tool-before') !== 'new') return
+    if (bindCall(callDigest, 'skill', skill) !== 'new') return
     pendingSkills.set(callDigest, { callID: host.callID, skill })
   }
 
@@ -3377,8 +3381,7 @@ function createSessionRuntime(
     if (normalized === undefined) return
     const callDigest = digestCall(ledger, host.callID)
     const fingerprint = JSON.stringify(normalized)
-    if (bindCall(callDigest, 'start', fingerprint, 'tool-before') !== 'new')
-      return
+    if (bindCall(callDigest, 'start', fingerprint) !== 'new') return
     pendingStarts.set(callDigest, {
       callID: host.callID,
       input: normalized,
@@ -3430,9 +3433,7 @@ function createSessionRuntime(
     const target = normalizeTarget(args)
     if (!target) return
     const callDigest = digestCall(ledger, host.callID)
-    if (
-      bindCall(callDigest, 'complete', target, 'tool-before') === 'conflict'
-    ) {
+    if (bindCall(callDigest, 'complete', target) === 'conflict') {
       if (options.config.mode === 'protected') {
         throw createWorkflowGuardBlockedError('guard-unavailable')
       }
@@ -3502,13 +3503,6 @@ function createSessionRuntime(
     }
   }
 
-  function beforeCause(
-    kind: GuardUnavailableCauseKind,
-    reasonCode?: GuardUnavailableCause['reasonCode'],
-  ): GuardUnavailableCause {
-    return hookCause('tool-before', kind, reasonCode)
-  }
-
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: target derivation, registered-worktree validation, and observer registration must stay atomic on the before hook
   async function prepareOperation(
     host: HostToolBefore,
@@ -3531,12 +3525,7 @@ function createSessionRuntime(
     }
     const callDigest = digestCall(ledger, host.callID)
     if (
-      bindCall(
-        callDigest,
-        'operation',
-        `${host.tool}:${fingerprint}`,
-        'tool-before',
-      ) !== 'new'
+      bindCall(callDigest, 'operation', `${host.tool}:${fingerprint}`) !== 'new'
     ) {
       return
     }
@@ -4212,7 +4201,7 @@ function createSessionRuntime(
     }
     const reasonCode =
       'reasonCode' in result ? result.reasonCode : 'guard-unavailable'
-    markUnavailable(afterCause('operation-observation-rejected', reasonCode))
+    markUnavailable(afterCause('transition-finalize-rejected', reasonCode))
     const terminal: TerminalComplete = {
       target: pending.target,
       status: result.status === 'waiting' ? 'unavailable' : result.status,
@@ -4599,7 +4588,7 @@ function createSessionRuntime(
   ): PendingOperation | undefined {
     const pending = pendingOperations.get(callDigest)
     if (!pending) {
-      markUnavailable(afterFailure('call-lifecycle-mismatch').cause)
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return undefined
     }
     pendingOperations.delete(callDigest)
@@ -4609,7 +4598,7 @@ function createSessionRuntime(
       fingerprint !== pending.argsFingerprint
     ) {
       sealOperation(callDigest, pending, true)
-      markUnavailable(afterFailure('call-lifecycle-mismatch').cause)
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return undefined
     }
     return pending
@@ -5304,24 +5293,23 @@ export function createOpencodeWorkflowGuard(
   async function before(input: unknown, output: unknown): Promise<void> {
     const host = parseHostBefore(input)
     if (!host) return
-    const runtime = sessionRuntimeFor(host.sessionID)
-    try {
-      await runtime.hooks['tool.execute.before'](input, output)
-    } catch (error) {
-      if (isWorkflowGuardBlockedError(error)) throw error
-      runtime.markUnavailable(hookCause('tool-before', 'hook-threw'))
-    }
+    // The runtime hook already converts every non-blocked exception into a
+    // `hook-threw` cause; a blocked error propagates to the host unchanged.
+    await sessionRuntimeFor(host.sessionID).hooks['tool.execute.before'](
+      input,
+      output,
+    )
   }
 
   async function after(input: unknown, output: unknown): Promise<void> {
     const host = parseHostAfter(input)
     if (!host) return
-    const runtime = sessionRuntimeFor(host.sessionID)
-    try {
-      await runtime.hooks['tool.execute.after'](input, output)
-    } catch {
-      runtime.markUnavailable(hookCause('tool-after', 'hook-threw'))
-    }
+    // The runtime hook already converts every exception into a `hook-threw`
+    // cause.
+    await sessionRuntimeFor(host.sessionID).hooks['tool.execute.after'](
+      input,
+      output,
+    )
   }
 
   async function event(input: unknown): Promise<void> {
