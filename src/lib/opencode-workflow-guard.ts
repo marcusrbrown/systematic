@@ -537,6 +537,7 @@ type GuardUnavailableCauseKind =
   | 'operation-observation-rejected'
   | 'hook-threw'
   | 'transition-finalize-rejected'
+  | 'initialization-threw'
 
 // A remote operation whose activation seeding was deferred instead of
 // failing the session. Status-only, enum-only, and bound to the unit that
@@ -588,6 +589,7 @@ function initializationCause(
     | 'markers-ambiguous'
     | 'recovery-rejected'
     | 'markerless-guard-history'
+    | 'initialization-threw'
   >,
 ): GuardUnavailableCause {
   return { site: 'initialize-session', kind, timedOut: false }
@@ -1800,6 +1802,10 @@ function createSessionRuntime(
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
   let firstUnavailableCause: GuardUnavailableCause | undefined
+  // A `markUnavailable` that arrived before the session's guard existed (a
+  // hook failed ahead of initialization). Held first-wins and committed when a
+  // guard is published; see `commitPendingUnavailable`.
+  let pendingUnavailable: { readonly cause?: GuardUnavailableCause } | undefined
   // Deferred activation seedings, keyed by the unit that recorded them and
   // cleared at every unit start. Runtime-only; never persisted.
   let seedDeferralRecord:
@@ -2321,15 +2327,31 @@ function createSessionRuntime(
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
     if (options.config.mode !== 'disabled') {
-      recordUnavailable(guard, cause)
+      // The publish's own cause is the earlier, root cause and wins; a pending
+      // hook cause only fills in when the publish brings none.
+      recordUnavailable(guard, cause ?? pendingUnavailable?.cause)
     }
+    pendingUnavailable = undefined
     initialized = true
+  }
+
+  // A fresh publish clears a stale cause left by a previous guard, but never a
+  // pending one: that failure happened in this session after the stale state,
+  // and the hook it came from ran unobserved, so the new guard starts
+  // unavailable with that cause.
+  function commitPendingUnavailable(): void {
+    const pending = pendingUnavailable
+    pendingUnavailable = undefined
+    if (pending && options.config.mode !== 'disabled') {
+      recordUnavailable(guard, pending.cause)
+    }
   }
 
   function publishFresh(reusableLedger?: ReceiptLedger): void {
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
     firstUnavailableCause = undefined
+    commitPendingUnavailable()
     initialized = true
   }
 
@@ -2458,6 +2480,7 @@ function createSessionRuntime(
     ledger = recoveredLedger
     guard = recoveredGuard
     firstUnavailableCause = undefined
+    commitPendingUnavailable()
     initialized = true
     return undefined
   }
@@ -2556,7 +2579,22 @@ function createSessionRuntime(
     publishFresh(reusableLedger)
   }
 
+  // Any throw after the host read (marker classification, seed extraction,
+  // recovery) ends the session in a published unavailable state with a bounded
+  // cause, so no hook re-awaits a rejected initialization and runs unobserved.
   async function initializeSession(
+    sessionID: string,
+    allowFresh: boolean,
+  ): Promise<void> {
+    try {
+      await initializeSessionSteps(sessionID, allowFresh)
+    } catch {
+      retryableEmptyHistory = false
+      publishUnavailable(initializationCause('initialization-threw'))
+    }
+  }
+
+  async function initializeSessionSteps(
     sessionID: string,
     allowFresh: boolean,
   ): Promise<void> {
@@ -2875,10 +2913,20 @@ function createSessionRuntime(
   // an unrelated cause that already won the race.
   function markUnavailable(cause?: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
-    // A hook can throw before the guard exists. Status already reports an
-    // uninitialized runtime as unavailable, so there is nothing to transition.
-    if ((guard as WorkflowGuard | undefined) === undefined) return
+    // A hook can fail before the session's guard exists (the first event for a
+    // session fails ahead of `recoverFromHost`, or initialization cannot
+    // publish). There is no guard state to transition yet, so hold the
+    // failure, first-wins, and let the next publish commit it. Dropping it
+    // would leave the session reporting unavailable with no diagnostic.
+    if (!guardPublished()) {
+      pendingUnavailable ??= cause ? { cause } : {}
+      return
+    }
     recordUnavailable(guard, cause)
+  }
+
+  function guardPublished(): boolean {
+    return (guard as WorkflowGuard | undefined) !== undefined
   }
 
   function bindCall(
@@ -2921,7 +2969,7 @@ function createSessionRuntime(
   // A status read must not touch sibling calls' pending work: pending
   // entries are only cleared at the request boundary (the transform).
   function readStatus(): WorkflowStatus {
-    return guard.status()
+    return guardPublished() ? guard.status() : unavailableWorkflowStatus()
   }
 
   function control(sessionID: string, input: unknown): ToolResultContent {
@@ -3751,6 +3799,11 @@ function createSessionRuntime(
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
       markUnavailable(hookCause('tool-before', 'hook-threw'))
+      // With no guard there is nothing to enforce or observe the call, so
+      // protected mode must not let it run.
+      if (options.config.mode === 'protected' && !guardPublished()) {
+        throw createWorkflowGuardBlockedError('guard-unavailable')
+      }
     }
   }
 
@@ -5084,7 +5137,7 @@ function createSessionRuntime(
       return initialized ? guard.status() : unavailableWorkflowStatus()
     },
     readStatus,
-    unavailableCause: () => firstUnavailableCause,
+    unavailableCause: () => firstUnavailableCause ?? pendingUnavailable?.cause,
     seedDeferrals: currentSeedDeferrals,
     refreshReadback,
     observeReceipt: (input) => {

@@ -9729,10 +9729,159 @@ describe('OpenCode workflow guard adapter', () => {
           },
         }),
       ).resolves.toBeUndefined()
-      // Nothing was decided before the throw, so the session still initializes
-      // normally on its next hook.
+      // The failure is held pending and committed when the session's guard is
+      // published, so the hook's failure is not forgotten.
       await observeSkill(adapter, 'systematic_skill', 'ce:work')
-      expect(status(adapter).state).not.toBe('unavailable')
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+    })
+
+    describe('initialization that throws after the host read', () => {
+      const INIT_CAUSE = {
+        site: 'initialize-session',
+        kind: 'initialization-threw',
+        timedOut: false,
+      }
+
+      // A history part whose every property read throws makes marker
+      // classification throw inside initializeSession.
+      function throwingHistoryAdapter(
+        mode: 'protected' | 'observe',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode, debug: false },
+          workspaceIdentity: 'workspace',
+          registrationIdentity: 'init-threw-registration',
+          sessionSalt: new Uint8Array(32).fill(5),
+          hostReadback: {
+            readSessionParts: async () => [
+              new Proxy({}, { get: () => boom() }),
+            ],
+            listChildren: async () => [],
+          },
+        })
+      }
+
+      // A ledger that cannot be minted: no guard can be published at all.
+      function unpublishableAdapter(
+        mode: 'protected' | 'observe',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode, debug: false },
+          workspaceIdentity: 'workspace',
+          registrationIdentity: 'init-unpublishable-registration',
+          sessionSalt: {
+            get length(): number {
+              return boom()
+            },
+          } as unknown as Uint8Array,
+          hostReadback: {
+            readSessionParts: async () => [],
+            listChildren: async () => [],
+          },
+        })
+      }
+
+      async function beforeBash(
+        adapter: OpencodeWorkflowGuard,
+        callID: string,
+      ): Promise<void> {
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID },
+          { args: { command: 'bun test' } },
+        )
+      }
+
+      async function caught(run: () => Promise<unknown>): Promise<unknown> {
+        try {
+          await run()
+        } catch (error) {
+          return error
+        }
+        return undefined
+      }
+
+      test('protected: marker classification that throws publishes unavailable with initialization-threw and later completions are rejected', async () => {
+        const adapter = throwingHistoryAdapter('protected')
+        await beforeBash(adapter, 'init-throws-1')
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual(INIT_CAUSE)
+        const error = await caught(() =>
+          adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID: 'init-throws-complete',
+            },
+            { args: { target: 'unit' } },
+          ),
+        )
+        expect(isWorkflowGuardBlockedError(error)).toBe(true)
+      })
+
+      test('observe: marker classification that throws does not throw out of the hook and status shows the cause', async () => {
+        const adapter = throwingHistoryAdapter('observe')
+        await expect(beforeBash(adapter, 'init-throws-obs')).resolves.toBe(
+          undefined,
+        )
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual(INIT_CAUSE)
+      })
+
+      test('protected: a before hook that throws while no guard can be published rejects the call', async () => {
+        const adapter = unpublishableAdapter('protected')
+        const error = await caught(() => beforeBash(adapter, 'no-guard-1'))
+        expect(isWorkflowGuardBlockedError(error)).toBe(true)
+        // Still no guard on the next hook: still rejected, never run unobserved.
+        const again = await caught(() => beforeBash(adapter, 'no-guard-2'))
+        expect(isWorkflowGuardBlockedError(again)).toBe(true)
+        expect(status(adapter).state).toBe('unavailable')
+      })
+
+      test('observe: a before hook that throws while no guard can be published does not throw', async () => {
+        const adapter = unpublishableAdapter('observe')
+        await expect(beforeBash(adapter, 'no-guard-obs')).resolves.toBe(
+          undefined,
+        )
+        expect(status(adapter).state).toBe('unavailable')
+      })
+
+      test('a deferred empty-history initialization stays retryable and records no cause', async () => {
+        let reads = 0
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          workspaceIdentity: 'workspace',
+          registrationIdentity: 'init-deferred-registration',
+          sessionSalt: new Uint8Array(32).fill(6),
+          hostReadback: {
+            readSessionParts: async () => {
+              reads += 1
+              return []
+            },
+            listChildren: async () => [],
+          },
+        })
+        // The transform may not confirm a fresh session: provisional inactive.
+        await adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          { system: ['base'] },
+        )
+        expect(status(adapter).state).not.toBe('unavailable')
+        // The next allow-fresh recovery re-reads the history and confirms it.
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        expect(reads).toBe(2)
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      })
     })
 
     test('an exception escaping the transform hook records hook-threw at transform', async () => {

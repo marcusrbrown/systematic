@@ -256,7 +256,11 @@ causes use the kinds `local-snapshot-error`, `local-snapshot-unavailable` (carry
 reason code), `operation-input-invalid`, `operation-target-mismatch`, `call-lifecycle-mismatch`,
 `operation-classifier-unavailable`, `operation-observation-rejected`,
 `transition-finalize-rejected` (the guard refused to finalize a prepared completion, carrying its
-reason code), and `hook-threw` (an exception no helper classified). At initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
+reason code), and `hook-threw` (an exception no helper classified). A hook that fails before the
+session's guard exists is held and committed when the guard is published, and protected mode
+rejects the call if no guard can be published. An exception during session initialization after
+the host read publishes `unavailable` with `initialization-threw` at `initialize-session`. At
+initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
 in-flight guard call in the current, unfinished assistant turn do not count as unrecoverable
 history; any other markerless guard history fails closed. At activation, a remote probe timeout, or
 a push `missing-resource`, defers that one operation instead of making the guard unavailable;
