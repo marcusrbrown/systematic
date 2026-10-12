@@ -76,6 +76,8 @@ interface ScenarioEnv {
   MOCK_GH_RUN_VIEW_LOG?: string
   MOCK_GH_RUN_VIEW_CONCLUSION?: string
   MOCK_GH_RUN_WATCH_EXIT?: string
+  MOCK_GH_RUN_WATCH_ARGV?: string
+  MOCK_GH_RUN_VIEW_LOG_FAIL?: string
   MOCK_GH_RELEASE_VIEW_BODY_BEFORE?: string
   MOCK_GH_RELEASE_VIEW_BODY_AFTER?: string
   RUNNER_TEMP?: string
@@ -174,7 +176,6 @@ function runSuccessCmd(
       ]),
     MOCK_GH_RUN_VIEW_LOG: effectiveLog,
     MOCK_GH_RUN_VIEW_CONCLUSION: env.MOCK_GH_RUN_VIEW_CONCLUSION ?? 'success',
-    MOCK_GH_RUN_WATCH_EXIT: env.MOCK_GH_RUN_WATCH_EXIT ?? '0',
     MOCK_GH_RELEASE_VIEW_BODY_BEFORE:
       env.MOCK_GH_RELEASE_VIEW_BODY_BEFORE ?? RAW_BODY,
     MOCK_GH_RELEASE_VIEW_BODY_AFTER:
@@ -192,6 +193,20 @@ function runSuccessCmd(
       env.RELEASE_NOTES_TEST_POLL_INTERVAL_SECS ?? '1',
     RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS:
       env.RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS ?? '5',
+  }
+
+  // Left unset by default so mock-gh can emulate real gh's `--exit-status`
+  // behavior (failed/cancelled runs exit non-zero) if the script still passes it.
+  if (env.MOCK_GH_RUN_WATCH_EXIT !== undefined) {
+    childEnv.MOCK_GH_RUN_WATCH_EXIT = env.MOCK_GH_RUN_WATCH_EXIT
+  }
+
+  if (env.MOCK_GH_RUN_WATCH_ARGV !== undefined) {
+    childEnv.MOCK_GH_RUN_WATCH_ARGV = env.MOCK_GH_RUN_WATCH_ARGV
+  }
+
+  if (env.MOCK_GH_RUN_VIEW_LOG_FAIL !== undefined) {
+    childEnv.MOCK_GH_RUN_VIEW_LOG_FAIL = env.MOCK_GH_RUN_VIEW_LOG_FAIL
   }
 
   if (env.MOCK_GH_RUN_LIST_FAIL_ONCE !== undefined) {
@@ -430,6 +445,116 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       expect(combined).toMatch(/unexpected gh run watch exit/i)
       expect(combined).not.toContain('narrative-not-applied')
       expect(combined).toContain('WATCH_EXIT=137')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  // -------------------------------------------------------------------------
+  // 5c. gh run watch is not run with --exit-status: failed / cancelled runs are
+  //     classified from the conclusion (exit 2), not as an unexpected watch exit
+  // -------------------------------------------------------------------------
+  for (const conclusion of ['failure', 'cancelled'] as const) {
+    it(
+      `classifies a ${conclusion} run as narrative-not-applied (exit 2), not an unexpected watch exit`,
+      () => {
+        const argvPath = path.join(testTempDir, `watch-argv-${conclusion}.txt`)
+        const result = run({
+          RELEASE_VERSION: 'v2.23.0',
+          MOCK_GH_RUN_VIEW_CONCLUSION: conclusion,
+          MOCK_GH_RUN_WATCH_ARGV: argvPath,
+        })
+
+        expect(result.exitCode).toBe(NARRATIVE_NOT_APPLIED_EXIT)
+        const combined = result.stdout + result.stderr
+        expect(combined).toContain('narrative-not-applied')
+        expect(combined).not.toMatch(/unexpected gh run watch exit/i)
+
+        const watchArgv = fs.readFileSync(argvPath, 'utf8')
+        expect(watchArgv).toContain('run watch 12345')
+        expect(watchArgv).not.toContain('--exit-status')
+      },
+      SCENARIO_TIMEOUT_MS,
+    )
+  }
+
+  // -------------------------------------------------------------------------
+  // 5d. Security checks run (and win) even when the watch timed out
+  // -------------------------------------------------------------------------
+  it(
+    'exits 1 with the off-target error, not narrative-not-applied, when the watch times out and the log shows an off-target edit',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_WATCH_EXIT: '124',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'failure',
+        MOCK_GH_RUN_VIEW_LOG: 'gh release edit v9.9.9\nsome other output',
+      })
+
+      expect(result.exitCode).toBe(1)
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('::error::')
+      expect(combined).toMatch(/[Oo]ff-target/i)
+      expect(combined).not.toContain('narrative-not-applied')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  it(
+    'exits 1 with the auth error, not narrative-not-applied, when the watch times out and the log shows an auth failure',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_WATCH_EXIT: '124',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'failure',
+        MOCK_GH_RUN_VIEW_LOG: 'HTTP 401: Bad credentials\nsome other output',
+      })
+
+      expect(result.exitCode).toBe(1)
+      const combined = result.stdout + result.stderr
+      expect(combined).toMatch(/[Aa]uth failure/i)
+      expect(combined).not.toContain('narrative-not-applied')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  // -------------------------------------------------------------------------
+  // 5e. A failed run-log fetch falls back to an empty log; the body decides
+  // -------------------------------------------------------------------------
+  it(
+    'warns and still exits 0 when the run log is unavailable but the body starts with the marker',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
+        MOCK_GH_RUN_VIEW_LOG_FAIL: '1',
+        MOCK_GH_RELEASE_VIEW_BODY_BEFORE: RAW_BODY,
+        MOCK_GH_RELEASE_VIEW_BODY_AFTER: NARRATIVE_BODY,
+      })
+
+      expect(result.exitCode).toBe(0)
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('::warning::')
+      expect(combined).toMatch(/run log.*unavailable/i)
+      expect(combined).toMatch(/narrative applied/i)
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  it(
+    'exits 2 when the run log is unavailable and the body is unchanged',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
+        MOCK_GH_RUN_VIEW_LOG_FAIL: '1',
+        MOCK_GH_RELEASE_VIEW_BODY_BEFORE: RAW_BODY,
+        MOCK_GH_RELEASE_VIEW_BODY_AFTER: RAW_BODY,
+      })
+
+      expect(result.exitCode).toBe(NARRATIVE_NOT_APPLIED_EXIT)
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('narrative-not-applied')
+      expect(combined).toMatch(/run log.*unavailable/i)
     },
     SCENARIO_TIMEOUT_MS,
   )

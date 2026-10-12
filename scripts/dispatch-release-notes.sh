@@ -182,15 +182,25 @@ fi
 # Test escape hatch: RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS shortens the wait.
 # Disable errexit around `timeout` so a non-zero exit (e.g., 124 for timeout)
 # is captured into WATCH_EXIT rather than killing the script.
+# No --exit-status: with it, gh exits non-zero for a failed or cancelled run, which
+# would be misread below as an unexpected watch error (security class). Without it,
+# WATCH_EXIT is 0 once the run completes, 124 on timeout, or a real gh/runner error;
+# the outcome is classified from the run conclusion instead.
 WATCH_TIMEOUT_SECS="${RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS:-600}"
 set +e
-timeout "$WATCH_TIMEOUT_SECS" gh run watch "$RUN_ID" --exit-status
+timeout "$WATCH_TIMEOUT_SECS" gh run watch "$RUN_ID"
 WATCH_EXIT=$?
 set -e
 
-# Fetch conclusion and full log (ANSI codes stripped) for classification.
+# Fetch conclusion and full log (ANSI codes stripped) for classification. This runs
+# whatever WATCH_EXIT is, so the security scans below also cover a timed-out run.
 CONCLUSION="$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo 'unknown')"
-LOG="$(gh run view "$RUN_ID" --log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')"
+RAW_LOG=""
+if ! RAW_LOG="$(gh run view "$RUN_ID" --log 2>/dev/null)"; then
+  RAW_LOG=""
+  echo "::warning::Run log unavailable (run=$RUN_ID); the text-based security scan (off-target edits, auth failures) was skipped. The release body re-read decides the outcome."
+fi
+LOG="$(printf '%s\n' "$RAW_LOG" | sed 's/\x1b\[[0-9;]*m//g')"
 
 # Check for off-target release edits: any 'release edit vX.Y.Z' line that is NOT
 # our target tag is a security signal (Fro Bot edited the wrong release).
@@ -203,26 +213,27 @@ if echo "$LOG" | grep -qE 'HTTP 401|HTTP 403|Bad credentials|Resource not access
   AUTH_FAIL=1
 fi
 
-# Classify outcome by precedence. Security-relevant failures exit 1 with ::error::.
-# Every other non-security outcome logs narrative-not-applied and exits 2. The only
-# exit-0 path is success/neutral with a release body that starts with the marker,
-# re-read from GitHub after the run (never trust the run conclusion alone).
+# Classify outcome by precedence. Security-relevant failures exit 1 with ::error::
+# and always win, including over a timeout. Every other non-security outcome logs
+# narrative-not-applied and exits 2. The only exit-0 path is success/neutral with a
+# release body that starts with the marker, re-read from GitHub after the run (never
+# trust the run conclusion alone).
 # WATCH_EXIT semantics: 0 = run completed (classify by CONCLUSION below),
 # 124 = timeout (narrative-not-applied), any other non-zero = unexpected (security-relevant).
 # The "unexpected" branch covers runner crashes, gh CLI bugs, signal propagation, and
 # any future gh run watch exit codes we haven't anticipated. Without this branch,
 # an unexpected WATCH_EXIT falls through to CONCLUSION classification which may
 # report "unknown" and silently exit 0.
-if [ "$WATCH_EXIT" -eq 124 ]; then
-  narrative_not_applied "Fro Bot run timed out after 10 minutes (run=$RUN_ID, correlation=$CORRELATION_ID)"
-elif [ "$WATCH_EXIT" -ne 0 ]; then
-  echo "::error::Unexpected gh run watch exit (WATCH_EXIT=$WATCH_EXIT, run=$RUN_ID, correlation=$CORRELATION_ID). May indicate a runner crash, gh CLI bug, or signal propagation."
-  exit 1
-elif [ -n "$OFF_TARGET" ]; then
+if [ -n "$OFF_TARGET" ]; then
   echo "::error::Off-target release edit detected (run=$RUN_ID): $OFF_TARGET"
   exit 1
 elif [ "$AUTH_FAIL" -eq 1 ]; then
   echo "::error::Auth failure in dispatched run (run=$RUN_ID, correlation=$CORRELATION_ID). Check FRO_BOT_PAT scope."
+  exit 1
+elif [ "$WATCH_EXIT" -eq 124 ]; then
+  narrative_not_applied "Fro Bot run timed out after 10 minutes (run=$RUN_ID, correlation=$CORRELATION_ID)"
+elif [ "$WATCH_EXIT" -ne 0 ]; then
+  echo "::error::Unexpected gh run watch exit (WATCH_EXIT=$WATCH_EXIT, run=$RUN_ID, correlation=$CORRELATION_ID). May indicate a runner crash, gh CLI bug, or signal propagation."
   exit 1
 elif [ "$CONCLUSION" = "action_required" ]; then
   echo "::error::Workflow requires manual intervention (run=$RUN_ID, conclusion=$CONCLUSION)"

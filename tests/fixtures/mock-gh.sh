@@ -8,6 +8,10 @@
 #   MOCK_GH_RUN_VIEW_LOG           Log text for `gh run view --log`
 #   MOCK_GH_RUN_VIEW_CONCLUSION    JSON for `gh run view --json conclusion`
 #   MOCK_GH_RUN_WATCH_EXIT         Exit code for `gh run watch`
+#   MOCK_GH_RUN_WATCH_ARGV         File path where the `gh run watch` argv is written
+#                                  (without MOCK_GH_RUN_WATCH_EXIT, `--exit-status` makes a
+#                                  failure/cancelled conclusion exit 1, like real gh)
+#   MOCK_GH_RUN_VIEW_LOG_FAIL      Set to 1 to make `gh run view --log` fail
 #   MOCK_GH_RELEASE_VIEW_BODY_LEN  Integer body length, returned only when `gh release view` is
 #                                  called with a `--jq` expression containing `length` (legacy)
 #   MOCK_GH_RELEASE_VIEW_BODY_BEFORE  Release body returned by `gh release view` until
@@ -82,6 +86,10 @@ case "$SUBCOMMAND" in
         done
 
         if [[ "$LOG_FLAG" == "1" ]]; then
+          if [[ "${MOCK_GH_RUN_VIEW_LOG_FAIL:-}" == "1" ]]; then
+            echo "mock-gh: run log unavailable" >&2
+            exit 1
+          fi
           echo "${MOCK_GH_RUN_VIEW_LOG:-}"
           exit 0
         fi
@@ -107,6 +115,20 @@ case "$SUBCOMMAND" in
         exit 1
         ;;
       watch)
+        if [[ -n "${MOCK_GH_RUN_WATCH_ARGV:-}" ]]; then
+          printf '%s\n' "$*" > "$MOCK_GH_RUN_WATCH_ARGV"
+        fi
+        # Like real gh: with --exit-status, a failed or cancelled run exits non-zero.
+        # An explicit MOCK_GH_RUN_WATCH_EXIT always wins.
+        if [[ -z "${MOCK_GH_RUN_WATCH_EXIT:-}" ]]; then
+          for arg in "$@"; do
+            if [[ "$arg" == "--exit-status" ]]; then
+              case "${MOCK_GH_RUN_VIEW_CONCLUSION:-success}" in
+                failure | cancelled) exit 1 ;;
+              esac
+            fi
+          done
+        fi
         WATCH_EXIT="${MOCK_GH_RUN_WATCH_EXIT:-0}"
         exit "$WATCH_EXIT"
         ;;
