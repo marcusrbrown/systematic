@@ -7,6 +7,7 @@ const DEFAULT_LIMITS = {
   maxCommandOutputBytes: 8_388_608,
   maxCommandTimeoutMs: 5_000,
   maxFiles: 20_000,
+  maxRemoteCommandOutputBytes: 1_048_576,
   maxRemoteItems: 4096,
   maxTotalFileBytes: 134_217_728,
   maxPathBytes: 4096,
@@ -146,6 +147,7 @@ export interface OperationObserverLimits {
   readonly maxCommandOutputBytes?: number
   readonly maxCommandTimeoutMs?: number
   readonly maxFiles?: number
+  readonly maxRemoteCommandOutputBytes?: number
   readonly maxRemoteItems?: number
   readonly maxTotalFileBytes?: number
   readonly maxPathBytes?: number
@@ -186,6 +188,7 @@ interface Limits {
   readonly maxCommandOutputBytes: number
   readonly maxCommandTimeoutMs: number
   readonly maxFiles: number
+  readonly maxRemoteCommandOutputBytes: number
   readonly maxRemoteItems: number
   readonly maxTotalFileBytes: number
   readonly maxPathBytes: number
@@ -304,6 +307,9 @@ function mergeLimits(input?: OperationObserverLimits): Limits {
     maxCommandTimeoutMs:
       input?.maxCommandTimeoutMs ?? DEFAULT_LIMITS.maxCommandTimeoutMs,
     maxFiles: input?.maxFiles ?? DEFAULT_LIMITS.maxFiles,
+    maxRemoteCommandOutputBytes:
+      input?.maxRemoteCommandOutputBytes ??
+      DEFAULT_LIMITS.maxRemoteCommandOutputBytes,
     maxRemoteItems: input?.maxRemoteItems ?? DEFAULT_LIMITS.maxRemoteItems,
     maxTotalFileBytes:
       input?.maxTotalFileBytes ?? DEFAULT_LIMITS.maxTotalFileBytes,
@@ -984,7 +990,7 @@ function runRemoteCommand(
       executable,
       args,
       root,
-      limits.maxCommandOutputBytes,
+      limits.maxRemoteCommandOutputBytes,
       limits.maxCommandTimeoutMs,
     )
   } catch {
@@ -994,8 +1000,8 @@ function runRemoteCommand(
     return { status: 'error', reasonCode: 'command-timeout' }
   }
   if (
-    outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
-    outputBytes(result.stderr) > limits.maxCommandOutputBytes
+    outputBytes(result.stdout) > limits.maxRemoteCommandOutputBytes ||
+    outputBytes(result.stderr) > limits.maxRemoteCommandOutputBytes
   ) {
     return { status: 'error', reasonCode: 'remote-command-output-limit' }
   }

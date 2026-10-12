@@ -1285,7 +1285,7 @@ describe('OpenCode operation observer', () => {
           stdout: 'x'.repeat(8192),
           stderr: '',
         }),
-        limits: { maxCommandOutputBytes: 4096 },
+        limits: { maxRemoteCommandOutputBytes: 4096 },
       })
       await expect(
         callRemoteSnapshot(oversized, 'review-readback', 'after'),
@@ -1313,6 +1313,54 @@ describe('OpenCode operation observer', () => {
         reasonCode: 'remote-invalid-json',
       })
       expect(JSON.stringify(malformedResult)).not.toContain('bad')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('keeps the remote output bound at 1 MiB, independent of maxCommandOutputBytes', async () => {
+    const fixture = createGitFixture()
+    const twoMiB = 'x'.repeat(2 * 1_048_576)
+    const observedMaxOutputBytes: number[] = []
+    const remoteCommandRunner = (
+      _executable: 'git' | 'gh',
+      _args: readonly string[],
+      _cwd: string,
+      maxOutputBytes: number,
+    ): OperationObserverRemoteCommandResult => {
+      observedMaxOutputBytes.push(maxOutputBytes)
+      return { status: 0, stdout: twoMiB, stderr: '' }
+    }
+    try {
+      const defaults = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        remoteCommandRunner,
+      })
+      await expect(
+        callRemoteSnapshot(defaults, 'review-readback', 'after'),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-command-output-limit',
+      })
+      expect(observedMaxOutputBytes.length).toBeGreaterThan(0)
+      expect(observedMaxOutputBytes.every((bytes) => bytes === 1_048_576)).toBe(
+        true,
+      )
+
+      const widened = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        remoteCommandRunner,
+        limits: { maxRemoteCommandOutputBytes: 16 * 1_048_576 },
+      })
+      const widenedResult = await callRemoteSnapshot(
+        widened,
+        'review-readback',
+        'after',
+      )
+      expect(widenedResult).not.toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-command-output-limit',
+      })
     } finally {
       fixture.cleanup()
     }
