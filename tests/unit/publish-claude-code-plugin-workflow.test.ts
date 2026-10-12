@@ -7,8 +7,7 @@ import yaml from 'js-yaml'
 
 /**
  * Locks the shape of .github/workflows/publish-claude-code-plugin.yaml: the
- * Claude Code plugin publish runs on `release: published` (same in legacy and
- * gated release mode), builds the plugin in a credential-free job, and pushes
+ * Claude Code plugin publish runs on `release: published`, builds the plugin in a credential-free job, and pushes
  * the built bundle from a second job that holds the only write credential and
  * runs no repository code.
  */
@@ -209,76 +208,16 @@ describe('publish-claude-code-plugin build job', () => {
     expect(withBlock['persist-credentials']).toBe(false)
   })
 
-  test('requires the version on npm with retries and ends cleanly with ::notice:: otherwise', () => {
-    const step = findStep(build(), 'Confirm package is on npm')
-    const run = runOf(step)
-    expect(step.id).toBe('npm')
-    expect(run).toContain(
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal shell expansion
-      'npm view "@fro.bot/systematic@${VERSION}" version',
+  test('does not consult npm: a trusted-author release already proves the publish', () => {
+    expect(getSteps(build()).map((s) => s.name)).not.toContain(
+      'Confirm package is on npm',
     )
-    expect(run).toMatch(/for attempt in/)
-    expect(run).toContain('::notice::')
-    // The registry's own errors stay visible.
-    expect(run).not.toContain('2>/dev/null')
-  })
-
-  describe('npm wait step (executed)', () => {
-    function runWait(eventName: string) {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-npm-'))
-      try {
-        const bin = path.join(dir, 'bin')
-        fs.mkdirSync(bin)
-        const npm = path.join(bin, 'npm')
-        fs.writeFileSync(
-          npm,
-          '#!/usr/bin/env bash\necho "registry outage" >&2\nexit 1\n',
-        )
-        fs.chmodSync(npm, 0o755)
-        const output = path.join(dir, 'github-output')
-        fs.writeFileSync(output, '')
-        const result = spawnSync(
-          'bash',
-          ['-e', '-c', runOf(findStep(build(), 'Confirm package is on npm'))],
-          {
-            encoding: 'utf8',
-            env: {
-              PATH: `${bin}:${process.env.PATH ?? ''}`,
-              HOME: dir,
-              GITHUB_OUTPUT: output,
-              GITHUB_EVENT_NAME: eventName,
-              VERSION: '3.22.0',
-              NPM_RETRY_DELAY: '0',
-            },
-          },
-        )
-        return {
-          status: result.status,
-          text: `${result.stdout}${result.stderr}`,
-          outputs: fs.readFileSync(output, 'utf8'),
-        }
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true })
-      }
+    expect(readSource()).not.toMatch(/\bnpm\b/)
+    expect(readSource()).not.toContain('NPM_RETRY_DELAY')
+    expect(readSource()).not.toContain('steps.npm.')
+    for (const step of getSteps(build())) {
+      expect(step.id).not.toBe('npm')
     }
-
-    test('a release event fails with ::error:: when npm never serves the version', () => {
-      const r = runWait('release')
-      expect(r.status).toBe(1)
-      expect(r.text).toContain('::error::')
-      expect(r.outputs).not.toContain('available=true')
-    })
-
-    test('a manual dispatch ends cleanly with ::notice:: and available=false', () => {
-      const r = runWait('workflow_dispatch')
-      expect(r.status).toBe(0)
-      expect(r.text).toContain('::notice::')
-      expect(r.outputs).toContain('available=false')
-    })
-
-    test('npm stderr stays visible', () => {
-      expect(runWait('workflow_dispatch').text).toContain('registry outage')
-    })
   })
 
   test('installs and builds the plugin, then guards the bundle before upload', () => {

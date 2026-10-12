@@ -136,96 +136,32 @@ describe('release.yaml triggers and top-level settings', () => {
     expect(workflow.concurrency).toBeUndefined()
   })
 
-  test('defines every pipeline job', () => {
-    expect(Object.keys(getJobs())).toEqual(
-      expect.arrayContaining([
-        'mode',
-        'verify',
-        'build',
-        'publish',
-        'confirm',
-        'render',
-        'refresh',
-      ]),
-    )
+  test('defines exactly the pipeline jobs', () => {
+    expect(Object.keys(getJobs()).sort()).toEqual([
+      'build',
+      'publish',
+      'refresh',
+      'render',
+      'verify',
+    ])
   })
 
-  test('build only runs in gated mode; verify adds the main-ref guard', () => {
-    expect(getJob('build').if).toBe("needs.mode.outputs.mode == 'gated'")
-    expect(getJob('verify').if).toBe(
-      "needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main'",
-    )
-  })
-})
-
-describe('mode job', () => {
-  test('has no permissions and exposes the mode output', () => {
-    const job = getJob('mode')
-    expect(job.permissions).toEqual({})
-    expect(asRecord(job.outputs, 'outputs').mode).toBeDefined()
+  test('build runs unconditionally; verify only guards on the main ref', () => {
+    expect(getJob('build').if).toBeUndefined()
+    expect(getJob('verify').if).toBe("github.ref == 'refs/heads/main'")
   })
 
-  test('reads RELEASE_MODE from the repository variable', () => {
-    const step = getSteps('mode').find((s) => runOf(s) !== '')
-    expect(step).toBeDefined()
-    expect(envOf(step as RecordValue).RELEASE_MODE).toBe(
-      expr('vars.RELEASE_MODE'),
-    )
+  test('no job or condition refers to a release mode', () => {
+    expect(readSource()).not.toContain('RELEASE_MODE')
+    expect(readSource()).not.toContain('needs.mode')
+    expect(getJobs()).not.toHaveProperty('mode')
   })
-
-  function runModeScript(mode: string): { status: number | null; out: string } {
-    const step = getSteps('mode').find((s) => runOf(s) !== '')
-    const script = runOf(step as RecordValue)
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-mode-'))
-    try {
-      const scriptPath = path.join(dir, 'step.sh')
-      const outputPath = path.join(dir, 'github-output')
-      fs.writeFileSync(scriptPath, script)
-      fs.writeFileSync(outputPath, '')
-      const result = spawnSync('bash', ['-e', scriptPath], {
-        cwd: dir,
-        encoding: 'utf8',
-        env: {
-          PATH: process.env.PATH ?? '',
-          RELEASE_MODE: mode,
-          GITHUB_OUTPUT: outputPath,
-        },
-      })
-      return {
-        status: result.status,
-        out: fs.readFileSync(outputPath, 'utf8') + result.stdout,
-      }
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  }
-
-  test.each(['legacy', 'gated'])(
-    'accepts exactly %p and sets the output',
-    (mode) => {
-      const result = runModeScript(mode)
-      expect(result.status).toBe(0)
-      expect(result.out).toContain(`mode=${mode}`)
-    },
-  )
-
-  test.each(['', 'Gated', 'gated ', 'prod', ' legacy', 'legacy\n'])(
-    'fails closed for %p',
-    (mode) => {
-      const result = runModeScript(mode)
-      expect(result.status).toBe(1)
-      expect(result.out).toContain(
-        '::error::RELEASE_MODE must be exactly legacy or gated',
-      )
-      expect(result.out).not.toContain('mode=')
-    },
-  )
 })
 
 describe('verify job', () => {
-  test('needs mode and has read-only permissions', () => {
+  test('needs nothing and has read-only permissions', () => {
     const job = getJob('verify')
-    expect(job.needs).toBe('mode')
+    expect(job.needs).toBeUndefined()
     expect(job.permissions).toEqual({
       contents: 'read',
       'pull-requests': 'read',
@@ -277,9 +213,9 @@ describe('verify job', () => {
 })
 
 describe('build job', () => {
-  test('needs mode and only reads contents', () => {
+  test('needs nothing and only reads contents', () => {
     const job = getJob('build')
-    expect(job.needs).toBe('mode')
+    expect(job.needs).toBeUndefined()
     expect(job.permissions).toEqual({ contents: 'read' })
   })
 
@@ -315,11 +251,12 @@ describe('build job', () => {
 })
 
 describe('publish job', () => {
-  test('is gated on mode == gated and a publish decision', () => {
+  test('is gated on the main ref and a publish decision', () => {
     const job = getJob('publish')
-    expect(job.needs).toEqual(['mode', 'verify', 'build'])
-    expect(String(job.if)).toContain("needs.mode.outputs.mode == 'gated'")
-    expect(String(job.if)).toContain("needs.verify.outputs.kind == 'publish'")
+    expect(job.needs).toEqual(['verify', 'build'])
+    expect(job.if).toBe(
+      "github.ref == 'refs/heads/main' && needs.verify.outputs.kind == 'publish'",
+    )
   })
 
   test('uses the release environment and the release-state concurrency group', () => {
@@ -450,7 +387,6 @@ describe('publish job', () => {
     expect(envOf(step)).toEqual({
       GITHUB_TOKEN: expr('steps.app-token.outputs.token'),
       GH_TOKEN: expr('steps.app-token.outputs.token'),
-      NPM_TOKEN: expr('secrets.NPM_TOKEN'),
       npm_config_ignore_scripts: 'true',
     })
   })
@@ -628,11 +564,11 @@ describe('secrets and environments', () => {
     }
   })
 
-  test('NPM_TOKEN appears only in the semantic-release step env', () => {
-    expect(stepsMentioning('NPM_TOKEN')).toEqual([
-      'publish / Publish with semantic-release',
-    ])
-    expect(jobLevelMentioning('NPM_TOKEN')).toEqual([])
+  test('no npm token exists anywhere: publishing authenticates through OIDC alone', () => {
+    for (const needle of ['NPM_TOKEN', 'NODE_AUTH_TOKEN']) {
+      expect(stepsMentioning(needle)).toEqual([])
+      expect(jobLevelMentioning(needle)).toEqual([])
+    }
     expect(readWorkflow().env).toBeUndefined()
   })
 
@@ -668,50 +604,10 @@ describe('secrets and environments', () => {
   })
 })
 
-describe('confirm job', () => {
-  test('runs after a successful publish with read-only permissions', () => {
-    const job = getJob('confirm')
-    expect(job.needs).toEqual(['verify', 'publish'])
-    expect(job.if).toBe("needs.publish.result == 'success'")
-    expect(job.permissions).toEqual({ contents: 'read' })
-  })
-
-  test('checks out nothing and installs nothing', () => {
-    for (const step of getSteps('confirm')) {
-      expect(String(step.uses ?? '')).not.toMatch(/checkout|setup-/)
-      expect(runOf(step)).not.toMatch(/bun |scripts\//)
-    }
-  })
-
-  test('asserts the npm version, trusted-publishing provenance, tag and release author', () => {
-    const steps = getSteps('confirm')
-    const run = steps.map(runOf).join('\n')
-    const env = Object.assign({}, ...steps.map(envOf))
-    expect(env.VERSION).toBe(expr('needs.verify.outputs.version'))
-    expect(env.GH_TOKEN).toBe(GITHUB_TOKEN_EXPR)
-
-    expect(run).toContain('npm view "@fro.bot/systematic@$VERSION" version')
-    expect(run).toContain(
-      'npm view "@fro.bot/systematic@$VERSION" _npmUser --json',
-    )
-    expect(run).toContain('npm-oidc-no-reply@github.com')
-    expect(run).toContain(
-      '::error::published with a token, not trusted publishing',
-    )
-    expect(run).toContain('git/ref/tags/v$VERSION')
-    expect(run).toContain('author.login')
-    expect(JSON.stringify(steps)).toContain(
-      "vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]'",
-    )
-    expect(run).toContain('GITHUB_STEP_SUMMARY')
-  })
-})
-
 describe('job timeouts', () => {
   test.each([
     ['publish', 20],
     ['refresh', 10],
-    ['confirm', 10],
     ['verify', 10],
   ])('%s declares timeout-minutes %d', (id, minutes) => {
     expect(getJob(id)['timeout-minutes']).toBe(minutes)
@@ -720,12 +616,9 @@ describe('job timeouts', () => {
 
 describe('ref guard', () => {
   test.each(['verify', 'publish', 'refresh'])(
-    '%s only runs on refs/heads/main and keeps its other conditions',
+    '%s only runs on refs/heads/main',
     (id) => {
       expect(String(getJob(id).if)).toContain("github.ref == 'refs/heads/main'")
-      expect(String(getJob(id).if)).toContain(
-        "needs.mode.outputs.mode == 'gated'",
-      )
     },
   )
 
@@ -807,10 +700,9 @@ describe('render job', () => {
 
   test('runs after publish unless publish failed or was cancelled', () => {
     const job = getJob('render')
-    expect(job.needs).toEqual(['mode', 'publish'])
+    expect(job.needs).toBe('publish')
     const condition = String(job.if)
     expect(condition).toContain('always()')
-    expect(condition).toContain("needs.mode.result == 'success'")
     expect(condition).toContain("needs.publish.result != 'failure'")
     expect(condition).toContain("needs.publish.result != 'cancelled'")
   })
@@ -971,7 +863,7 @@ describe('render job', () => {
     })
   })
 
-  test('writes the dark-launch preview to the job summary', () => {
+  test('writes the pending release to the job summary', () => {
     const step = findStep('render', 'Write job summary')
     const run = runOf(step)
     expect(run).toContain('GITHUB_STEP_SUMMARY')
@@ -1019,10 +911,10 @@ describe('refresh job', () => {
   const BOT = 'systematic-release[bot]'
   const BASE = 'b'.repeat(40)
 
-  test('is gated on gated mode and a successful render', () => {
+  test('is gated on the main ref and a successful render', () => {
     const job = getJob('refresh')
-    expect(job.needs).toEqual(['mode', 'render'])
-    expect(String(job.if)).toContain("needs.mode.outputs.mode == 'gated'")
+    expect(job.needs).toBe('render')
+    expect(String(job.if)).toContain("github.ref == 'refs/heads/main'")
     expect(String(job.if)).toContain("needs.render.result == 'success'")
   })
 

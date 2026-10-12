@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
@@ -8,10 +7,7 @@ import yaml from 'js-yaml'
  * Locks the release-related shape of .github/workflows/main.yaml:
  *
  * - `Release` is a credential-free check that reports on every PR and push.
- * - The credentialed publish lives in `legacy-release`, behind
- *   `vars.RELEASE_MODE == 'legacy'`, the `release` environment, and the
- *   `release-state` concurrency group.
- * - `release-mode` fails red on any value other than exactly `legacy`/`gated`.
+ * - main.yaml never publishes: publishing lives in release.yaml only.
  * - No dry-run input or flag survives anywhere.
  */
 
@@ -46,20 +42,10 @@ function getJobs(): RecordValue {
   return asRecord(readWorkflow().jobs, 'jobs')
 }
 
-function getJob(id: string): RecordValue {
-  return asRecord(getJobs()[id], `job ${id}`)
-}
-
 function getSteps(job: RecordValue): readonly RecordValue[] {
   return asArray(job.steps, 'steps').map((step, i) =>
     asRecord(step, `step ${i}`),
   )
-}
-
-function findStep(job: RecordValue, name: string): RecordValue {
-  const step = getSteps(job).find((candidate) => candidate.name === name)
-  if (!step) throw new Error(`step not found: ${name}`)
-  return step
 }
 
 function runOf(step: RecordValue): string {
@@ -221,134 +207,56 @@ describe('main workflow: Release check job', () => {
   })
 })
 
-describe('main workflow: legacy-release job', () => {
-  const job = () => getJob('legacy-release')
-
-  test('runs only on push in legacy mode', () => {
-    const condition = normalize(String(job().if ?? ''))
-    expect(condition).toContain("vars.RELEASE_MODE == 'legacy'")
-    expect(condition).toContain("github.event_name == 'push'")
-    expect(runsOnPullRequest(job())).toBe(false)
-  })
-
-  test('needs the same jobs the old release job needed', () => {
-    expect(job().needs).toEqual([
+describe('main workflow: no publish path', () => {
+  test('the only release job is the credential-free Release check', () => {
+    expect(getJobs()).not.toHaveProperty('legacy-release')
+    expect(getJobs()).not.toHaveProperty('release-mode')
+    expect(Object.keys(getJobs()).sort()).toEqual([
       'build',
-      'typecheck',
-      'lint',
-      'test',
+      'docs',
       'host-contract',
+      'lint',
+      'registry',
+      'release',
+      'test',
+      'typecheck',
     ])
   })
 
-  test('declares environment release and the release-state concurrency group', () => {
-    expect(job().environment).toBe('release')
-    expect(job().concurrency).toEqual({
-      group: 'release-state',
-      'cancel-in-progress': false,
-    })
-  })
-
-  test('has contents: read and id-token: write only', () => {
-    expect(job().permissions).toEqual({
-      contents: 'read',
-      'id-token': 'write',
-    })
-  })
-
-  test('uses the RELEASE App credentials, not the old application secrets', () => {
-    const serialized = JSON.stringify(job())
-    expect(serialized).toContain('secrets.RELEASE_APP_ID')
-    expect(serialized).toContain('secrets.RELEASE_APP_PRIVATE_KEY')
-    expect(serialized).not.toContain('APPLICATION_ID')
-    expect(serialized).not.toContain('APPLICATION_PRIVATE_KEY')
-    expect(readSource()).not.toContain('APPLICATION_ID')
-  })
-
-  test('keeps the build step and the release outputs', () => {
-    expect(getSteps(job()).some((s) => runOf(s) === 'bun run build')).toBe(true)
-    const outputs = asRecord(job().outputs, 'outputs')
-    expect(Object.keys(outputs).sort()).toEqual([
-      'new-release-published',
-      'new-release-version',
-    ])
-  })
-
-  test('runs semantic-release for real, with no dry-run flag', () => {
-    const step = findStep(job(), 'Semantic Release')
-    expect(step.id).toBe('semantic-release')
-    expect(runOf(step)).toContain('npx semantic-release')
-    expect(runOf(step)).not.toContain('dry-run')
-  })
-
-  test('NPM_TOKEN and NODE_AUTH_TOKEN appear only in the semantic-release step', () => {
-    for (const step of getSteps(job())) {
-      const serialized = JSON.stringify(step)
-      if (step.name === 'Semantic Release') {
-        expect(serialized).toContain('secrets.NPM_TOKEN')
-        continue
-      }
-      expect(serialized).not.toContain('NPM_TOKEN')
-      expect(serialized).not.toContain('NODE_AUTH_TOKEN')
-    }
-    const { steps: _steps, ...rest } = job()
-    expect(JSON.stringify(rest)).not.toContain('NPM_TOKEN')
-    expect(JSON.stringify(rest)).not.toContain('NODE_AUTH_TOKEN')
-    // And nowhere else in the workflow.
-    for (const [id, other] of Object.entries(getJobs())) {
-      if (id === 'legacy-release') continue
-      expect(JSON.stringify(other)).not.toContain('NPM_TOKEN')
+  test('no job holds the release environment, an OIDC grant or the release App', () => {
+    for (const [id, raw] of Object.entries(getJobs())) {
+      const job = asRecord(raw, id)
+      expect(job, `${id} environment`).not.toHaveProperty('environment')
+      expect(permissionsOf(job)['id-token'], `${id} id-token`).toBeUndefined()
+      expect(JSON.stringify(job), `${id} App`).not.toContain('RELEASE_APP')
     }
   })
-})
 
-describe('main workflow: release-mode guard job', () => {
-  test('runs on push only', () => {
-    const job = getJob('release-mode')
-    expect(normalize(String(job.if ?? ''))).toBe("github.event_name == 'push'")
-    expect(runsOnPullRequest(job)).toBe(false)
+  test('RELEASE_MODE, NPM_TOKEN and NODE_AUTH_TOKEN appear nowhere', () => {
+    for (const needle of ['RELEASE_MODE', 'NPM_TOKEN', 'NODE_AUTH_TOKEN']) {
+      expect(readSource()).not.toContain(needle)
+    }
   })
 
-  test('reads vars.RELEASE_MODE through env', () => {
-    const job = getJob('release-mode')
-    const step = getSteps(job).find((s) => runOf(s).includes('RELEASE_MODE'))
-    expect(step).toBeDefined()
-    const env = asRecord(step?.env, 'guard env')
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
-    expect(env.RELEASE_MODE).toBe('${{ vars.RELEASE_MODE }}')
-    expect(runOf(step as RecordValue)).not.toContain('${{')
+  test('semantic-release and npm publish never run from main.yaml', () => {
+    expect(readSource()).not.toContain('semantic-release')
+    expect(readSource()).not.toContain('npm publish')
   })
 
-  describe('guard script (executed)', () => {
-    function runGuard(mode: string) {
-      const job = getJob('release-mode')
-      const step = getSteps(job).find((s) => runOf(s).includes('RELEASE_MODE'))
-      const result = spawnSync(
-        'bash',
-        ['-e', '-c', runOf(step as RecordValue)],
-        {
-          encoding: 'utf8',
-          env: { PATH: process.env.PATH ?? '', RELEASE_MODE: mode },
-        },
-      )
-      return {
-        status: result.status,
-        output: `${result.stdout}${result.stderr}`,
+  test('no job depends on a removed release job', () => {
+    for (const [id, raw] of Object.entries(getJobs())) {
+      const needs = asRecord(raw, id).needs
+      const list = Array.isArray(needs)
+        ? needs
+        : needs === undefined
+          ? []
+          : [needs]
+      for (const dependency of list) {
+        expect(getJobs(), `${id} needs ${String(dependency)}`).toHaveProperty(
+          String(dependency),
+        )
       }
     }
-
-    test.each(['', 'Gated', 'prod', 'LEGACY', ' gated', 'gated '])(
-      'exits 1 with ::error:: for %j',
-      (mode) => {
-        const r = runGuard(mode)
-        expect(r.status).toBe(1)
-        expect(r.output).toContain('::error::')
-      },
-    )
-
-    test.each(['legacy', 'gated'])('exits 0 for %j', (mode) => {
-      expect(runGuard(mode).status).toBe(0)
-    })
   })
 })
 

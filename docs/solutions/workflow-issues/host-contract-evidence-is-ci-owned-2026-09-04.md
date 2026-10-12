@@ -49,12 +49,13 @@ on `PATH` and never `npx` (#928). `probeOpencodeAvailability()`
 memoizes. Every fixture-consuming suite wraps it in a memoizing
 `isOpencodeAvailable()` (`tests/integration/fixtures/receipt-workflow-host.ts:199`).
 
-The evidence itself is the required `host-contract` job in
+The evidence itself is the `host-contract` job in
 `.github/workflows/main.yaml`. Its "Run host contract suite" step sets
 `SYSTEMATIC_REQUIRE_OPENCODE=1` and runs `bun test tests/integration` with a
-JUnit reporter. `host-contract` is a required entry in the `release` job's
-`needs` key, so a red `host-contract` job blocks release the same way a red
-`test` or `typecheck` job does. For pull requests the job is path-gated on
+JUnit reporter. `release.yaml` does not depend on `main.yaml` jobs, and
+`Host Contract` is not in the `main` ruleset's required status checks
+(`.github/settings.yml`), so a red `host-contract` job does not block the
+release PR by itself. For pull requests the job is path-gated on
 `src/**`, `tests/**`, `scripts/**`, `evals/**`, `skills/**`, `agents/**`,
 `registry/**`, `package.json`, `bun.lock`, and the workflow file itself, via
 the job's "Detect relevant path changes" step; on push to `main` it always
