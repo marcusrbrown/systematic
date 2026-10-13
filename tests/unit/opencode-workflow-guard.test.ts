@@ -417,6 +417,14 @@ async function observeSkill(
   )
 }
 
+// Operations are observed only while an epoch is active, so tests that need
+// observed operations activate one first.
+async function activateWorkEpoch(
+  adapter: OpencodeWorkflowGuard,
+): Promise<void> {
+  await observeSkill(adapter, 'systematic_skill', 'ce:work')
+}
+
 async function observeQuestionEvent(
   adapter: OpencodeWorkflowGuard,
   type: 'question.asked' | 'question.replied' | 'question.rejected',
@@ -7126,7 +7134,7 @@ describe('OpenCode workflow guard adapter', () => {
       const adapter = createAdapter('observe', false, counted.observer, [
         'implementation',
       ])
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       expect(status(adapter).state).toBe('waiting')
       const baseline = counted.snapshotCount()
       await observeOperationTool(
@@ -7192,7 +7200,7 @@ describe('OpenCode workflow guard adapter', () => {
         { tool: 'bash', sessionID: SESSION_A, callID: 'skipped-then-active' },
         { args },
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       expect(status(adapter).epoch).not.toBeNull()
       const baseline = counted.snapshotCount()
       await adapter.hooks['tool.execute.after'](
@@ -7216,7 +7224,7 @@ describe('OpenCode workflow guard adapter', () => {
     test('disabled mode takes no snapshot', async () => {
       const counted = countingObserver()
       const adapter = createAdapter('disabled', false, counted.observer)
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await observeOperationTool(
         adapter,
         'bash',
@@ -7237,7 +7245,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
       const adapter = createAdapter('observe', false, counted.observer)
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await observeOperationTool(
         adapter,
         'bash',
@@ -7270,7 +7278,7 @@ describe('OpenCode workflow guard adapter', () => {
     test('an epoch-completed session takes no snapshot', async () => {
       const counted = countingObserver()
       const adapter = createAdapter('observe', false, counted.observer)
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
       mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
       await completeTarget(adapter, 'gate-unit-complete', 'unit')
@@ -7297,7 +7305,7 @@ describe('OpenCode workflow guard adapter', () => {
         sequenceObserver([operationSnapshot(), operationSnapshot()]),
       )
       const adapter = createAdapter('observe', false, counted.observer)
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       adapter.observeReceipt(SESSION_A, { not: 'a receipt' })
       expect(status(adapter).state).toBe('rejected')
       expect(status(adapter).epoch?.status).toBe('active')
@@ -7312,10 +7320,119 @@ describe('OpenCode workflow guard adapter', () => {
       expect(counted.snapshotCount() - baseline).toBe(2)
     })
 
+    test('a duplicate after-hook for a skipped call stays silent', async () => {
+      const counted = countingObserver()
+      const adapter = createAdapter('observe', false, counted.observer)
+      const args = { command: 'git status --short' }
+      const input = {
+        tool: 'bash',
+        sessionID: SESSION_A,
+        callID: 'skipped-dup',
+      }
+      await adapter.hooks['tool.execute.before'](input, { args })
+      await adapter.hooks['tool.execute.after']({ ...input, args }, BASH_OUTPUT)
+      await adapter.hooks['tool.execute.after']({ ...input, args }, BASH_OUTPUT)
+      expect(status(adapter)).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+      await expectNoCause(adapter)
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(counted.snapshotCount()).toBe(0)
+    })
+
+    test('a skipped call stays silent in its after-hook after the request boundary', async () => {
+      const counted = countingObserver()
+      const adapter = createAdapter('observe', false, counted.observer)
+      const args = { command: 'git status --short' }
+      const input = {
+        tool: 'bash',
+        sessionID: SESSION_A,
+        callID: 'skipped-late',
+      }
+      await adapter.hooks['tool.execute.before'](input, { args })
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['request boundary'] },
+      )
+      await adapter.hooks['tool.execute.after']({ ...input, args }, BASH_OUTPUT)
+      await adapter.hooks['tool.execute.after']({ ...input, args }, BASH_OUTPUT)
+      expect(status(adapter)).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+      await expectNoCause(adapter)
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(counted.snapshotCount()).toBe(0)
+    })
+
+    test('a skipped call with unfingerprintable arguments stays silent after the request boundary', async () => {
+      const counted = countingObserver()
+      const adapter = createAdapter('observe', false, counted.observer)
+      const args = { filePath: 'big.txt', content: 'x'.repeat(9 * 1024) }
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'skipped-big',
+      }
+      const output = { title: 'write', output: 'written', metadata: {} }
+      await adapter.hooks['tool.execute.before'](input, { args })
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['request boundary'] },
+      )
+      await adapter.hooks['tool.execute.after']({ ...input, args }, output)
+      expect(status(adapter).state).toBe('inactive')
+      await expectNoCause(adapter)
+      expect(counted.snapshotCount()).toBe(0)
+    })
+
+    test('an active epoch whose guard is later disabled takes no snapshot', async () => {
+      const counted = countingObserver()
+      const adapter = createAdapter('observe', false, counted.observer)
+      await activateWorkEpoch(adapter)
+      expect(status(adapter).epoch?.status).toBe('active')
+
+      const control = getTool(adapter, 'systematic_workflow_control')
+      await control.execute({ mode: 'disabled' }, toolContext())
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'question', sessionID: SESSION_A, callID: 'disable-question' },
+        { args: {} },
+      )
+      await observeQuestionEvent(adapter, 'question.asked', {
+        id: 'disable-request',
+        sessionID: SESSION_A,
+        questions: [],
+        tool: { callID: 'disable-question' },
+      })
+      await observeQuestionEvent(adapter, 'question.replied', {
+        sessionID: SESSION_A,
+        requestID: 'disable-request',
+        answers: [['confirm']],
+      })
+      const disabled = await control.execute(
+        { mode: 'disabled' },
+        toolContext(),
+      )
+      expect(expectToolOutput(disabled).output).toContain('disabled')
+      expect(status(adapter).state).toBe('disabled')
+
+      const baseline = counted.snapshotCount()
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'disabled-active-epoch-bash',
+      )
+      expect(counted.snapshotCount()).toBe(baseline)
+      expect(status(adapter).state).toBe('disabled')
+    })
+
     test('with an active epoch, a missing pending entry for an unskipped call still records call-lifecycle-mismatch', async () => {
       const counted = countingObserver()
       const adapter = createAdapter('observe', false, counted.observer)
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       const args = { command: 'bun test' }
       await adapter.hooks['tool.execute.after'](
         { tool: 'bash', sessionID: SESSION_A, callID: 'never-prepared', args },
@@ -9468,7 +9585,7 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'file-output-limit',
         })),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-file-output-limit')
       const parsed = await causeOf(adapter)
       expect(parsed.state).toBe('unavailable')
@@ -9489,7 +9606,7 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-timeout',
         })),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-timeout')
       expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
         site: 'tool-before',
@@ -9507,7 +9624,7 @@ describe('OpenCode workflow guard adapter', () => {
           throw new Error('snapshot exploded with /secret/path')
         }),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-throws')
       const parsed = await causeOf(adapter)
       expect(parsed.firstUnavailableCause).toEqual({
@@ -9530,7 +9647,7 @@ describe('OpenCode workflow guard adapter', () => {
           },
         })),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-digest-mismatch')
       expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
         site: 'tool-before',
@@ -9579,7 +9696,7 @@ describe('OpenCode workflow guard adapter', () => {
             ...base,
             validateRegisteredWorktree: validationCase.validate,
           })
-          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await activateWorkEpoch(adapter)
           await beforeOperation(adapter, 'before-validation')
           const parsed = await causeOf(adapter)
           expect(parsed.state).toBe('unavailable')
@@ -9601,7 +9718,7 @@ describe('OpenCode workflow guard adapter', () => {
         false,
         sequenceObserver([operationSnapshot()]),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-no-fingerprint', {
         command: 'bun test',
         unserializable: undefined,
@@ -9619,7 +9736,7 @@ describe('OpenCode workflow guard adapter', () => {
         false,
         sequenceObserver([operationSnapshot()]),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(
         adapter,
         'before-git-admin-target',
@@ -9649,7 +9766,7 @@ describe('OpenCode workflow guard adapter', () => {
           classifier: createReceiptClassifier(),
           runtimeRequiredOperations: [],
         })
-        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await activateWorkEpoch(adapter)
         await beforeOperation(adapter, 'before-non-git')
         const parsed = await causeOf(adapter)
         expect(parsed.state).toBe('unavailable')
@@ -9673,7 +9790,7 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-failed',
         })),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-snapshot-command-failed')
       expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
         site: 'tool-before',
@@ -9764,7 +9881,7 @@ describe('OpenCode workflow guard adapter', () => {
           return { status: 'unavailable', reasonCode: 'file-output-limit' }
         }),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'first-wins-1')
       const first = (await causeOf(adapter)).firstUnavailableCause
       expect(first).toEqual({
@@ -10309,7 +10426,7 @@ describe('OpenCode workflow guard adapter', () => {
         }),
       }
       const adapter = createAdapter('observe', false, failingBefore)
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await beforeThenAfter(adapter, 'first-wins-after')
       expect(await causeOf(adapter)).toEqual({
         site: 'tool-before',
@@ -10408,7 +10525,7 @@ describe('OpenCode workflow guard adapter', () => {
         false,
         sequenceObserver([operationSnapshot()]),
       )
-      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await activateWorkEpoch(adapter)
       await throwInAfter(adapter)
       const { parsed } = await statusOutput(adapter)
       expect(parsed.state).toBe('unavailable')
@@ -10703,7 +10820,7 @@ describe('OpenCode workflow guard adapter', () => {
           classifier: createReceiptClassifier(),
           runtimeRequiredOperations: [],
         })
-        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await activateWorkEpoch(adapter)
         const args = { filePath: 'secret-AKIA0000.env', content: 'k=v\n' }
         await adapter.hooks['tool.execute.before'](
           { tool: 'write', sessionID: SESSION_A, callID: 'secret-write' },
