@@ -829,14 +829,18 @@ function findClosingBacktickRun(
 }
 
 /**
- * Extract inline code span contents the CommonMark way: a span opens with a
- * backtick run of length N and closes at the next run of exactly length N.
- * An opening run with no matching close is literal text and is skipped, so it
- * cannot swallow later spans. Backtick-run delimiters of any length are
- * handled, so a double-backtick span is judged like a single-backtick one.
+ * Split a line into inline code span contents and the remaining prose, the
+ * CommonMark way: a span opens with a backtick run of length N and closes at
+ * the next run of exactly length N. An opening run with no matching close is
+ * literal text and stays in the prose, so it cannot swallow later spans.
+ * Delimiters of any length are handled, so a double-backtick span is judged
+ * like a single-backtick one. Each span (delimiters included) is replaced by a
+ * single space in `prose`, so prose tokens never touch a span boundary.
  */
-function extractCodeSpans(text: string): string[] {
+function splitCodeSpans(text: string): { spans: string[]; prose: string } {
   const spans: string[] = []
+  let prose = ''
+  let cursor = 0
   let index = text.indexOf('`')
   while (index !== -1) {
     const length = backtickRunLength(text, index)
@@ -845,10 +849,12 @@ function extractCodeSpans(text: string): string[] {
       index = text.indexOf('`', index + length)
       continue
     }
+    prose += `${text.slice(cursor, index)} `
     spans.push(text.slice(index + length, close))
-    index = text.indexOf('`', close + length)
+    cursor = close + length
+    index = text.indexOf('`', cursor)
   }
-  return spans
+  return { spans, prose: prose + text.slice(cursor) }
 }
 
 /**
@@ -859,6 +865,18 @@ function extractCodeSpans(text: string): string[] {
  * without a separate skip list.
  */
 const STALE_SKILL_TOKEN_REGEX = /^(\/?)ce-([a-z][a-z0-9-]*)$/
+
+/**
+ * The same token in unbackticked prose: `ce-<name>` or `/ce-<name>` not
+ * adjacent to a word character, `-`, `/`, `.`, `_`, `:` or a backtick on either
+ * side. That keeps paths (`skills/ce-plan/`), temp names
+ * (`ce-plan-deepen-XXXXXX`), qualified IDs and YAML-ish `ce-plan:` keys
+ * unflagged, while `ce-plan's` (a possessive) is still caught. A trailing `.`
+ * only counts as adjacent when a word character follows it (`ce-plan.md`), so
+ * a sentence-final `ce-plan.` is flagged.
+ */
+const STALE_SKILL_PROSE_REGEX =
+  /(?<![\w\-/.:_`])(\/?)ce-([a-z][a-z0-9-]*)(?![\w\-/:_`]|\.\w)/g
 
 /**
  * Directory-form names whose frontmatter name is not simply `ce:<name>`.
@@ -874,16 +892,18 @@ function suggestSkillLoadName(slash: string, name: string): string {
 }
 
 /**
- * Stale skill load names: a backticked `ce-<name>` or `/ce-<name>` span,
- * optionally followed by a space and arguments. Bundled `ce-*` skill
- * directories are named `ce:*` in frontmatter and the resolver loads
- * frontmatter names, so the directory form never resolves.
+ * Stale skill load names: `ce-<name>` or `/ce-<name>` used to name a skill,
+ * either as a backticked code span (optionally followed by a space and
+ * arguments) or as unbackticked prose. Bundled `ce-*` skill directories are
+ * named `ce:*` in frontmatter and the resolver loads frontmatter names, so the
+ * directory form never resolves, and a model that reads it in either form may
+ * try to load it.
  *
- * Only the token before the first space is judged; arguments may contain
- * `.`, `:` or `/` (`ce-doc-review mode:headless` is still stale). Spans inside
- * fenced blocks are skipped, as is unbackticked prose. Known limit: a
- * lowercase `ce-<word>` span that is not a skill (a hypothetical temp-dir
- * name) is flagged; none exist in the bundled content.
+ * Code spans: only the token before the first space is judged; arguments may
+ * contain `.`, `:` or `/` (`ce-doc-review mode:headless` is still stale).
+ * Prose: see `STALE_SKILL_PROSE_REGEX` for the adjacency rule. Fenced blocks
+ * are skipped. Known limit: a lowercase `ce-<word>` that is not a skill (a
+ * hypothetical temp-dir name) is flagged; none exist in the bundled content.
  */
 export function checkStaleSkillLoadNames(
   rootDir: string,
@@ -914,19 +934,22 @@ function scanLineForStaleSkillLoadNames(
   line: number,
   text: string,
 ): StaleSkillLoadNameViolation[] {
-  const violations: StaleSkillLoadNameViolation[] = []
-  for (const span of extractCodeSpans(text)) {
+  const { spans, prose } = splitCodeSpans(text)
+  const tokens: Array<{ slash: string; name: string }> = []
+  for (const span of spans) {
     const token = span.trim().split(/\s+/, 1)[0] ?? ''
     const match = STALE_SKILL_TOKEN_REGEX.exec(token)
-    if (!match) continue
-    violations.push({
-      file,
-      line,
-      token,
-      suggestion: suggestSkillLoadName(match[1] ?? '', match[2] ?? ''),
-    })
+    if (match) tokens.push({ slash: match[1] ?? '', name: match[2] ?? '' })
   }
-  return violations
+  for (const match of prose.matchAll(STALE_SKILL_PROSE_REGEX)) {
+    tokens.push({ slash: match[1] ?? '', name: match[2] ?? '' })
+  }
+  return tokens.map(({ slash, name }) => ({
+    file,
+    line,
+    token: `${slash}ce-${name}`,
+    suggestion: suggestSkillLoadName(slash, name),
+  }))
 }
 
 // ---------------------------------------------------------------------------

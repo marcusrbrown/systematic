@@ -94,7 +94,7 @@ topic: <kebab-case-topic>
 
 <!-- Include ONLY in non-interactive (headless) mode when the agent had Inferred bets that
      were not user-confirmed in chat. Lists the un-validated agent inferences explicitly so
-     downstream review (ce-doc-review, ce-plan, human PR review) can scrutinize them as bets,
+     downstream review (document-review, ce:plan, human PR review) can scrutinize them as bets,
      not as authoritative requirements. Omit entirely in interactive mode — Inferred bets get
      user-corrected in chat and either become decisions or are revised away. -->
 ## Assumptions

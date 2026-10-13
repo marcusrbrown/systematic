@@ -1532,13 +1532,127 @@ describe('checkStaleSkillLoadNames', () => {
     ])
   })
 
-  test('does not flag unbackticked prose', () => {
-    const body = [
-      "ce-plan's deepening workflow dispatches reviewers.",
-      'When ce-brainstorm detects a non-software task, ce-doc-review is skipped.',
-      '',
-    ].join('\n')
-    expect(scan(body)).toEqual([])
+  describe('unbackticked prose', () => {
+    const FILE = 'skills/foo/references/guide.md'
+
+    test.each([
+      {
+        text: 'The confidence check and ce-doc-review are complementary.',
+        token: 'ce-doc-review',
+        suggestion: 'document-review',
+      },
+      {
+        text: "ce-plan's deepening workflow dispatches reviewers.",
+        token: 'ce-plan',
+        suggestion: 'ce:plan',
+      },
+      {
+        text: 'Then dispatch /ce-work for execution.',
+        token: '/ce-work',
+        suggestion: '/ce:work',
+      },
+      {
+        text: 'Load it (ce-brainstorm), then stop.',
+        token: 'ce-brainstorm',
+        suggestion: 'ce:brainstorm',
+      },
+      {
+        text: 'Stop ce-compound.',
+        token: 'ce-compound',
+        suggestion: 'ce:compound',
+      },
+      {
+        text: 'description: "Dispatched by ce-plan, then ce-work"',
+        token: 'ce-plan',
+        suggestion: 'ce:plan',
+      },
+    ])('flags the prose token in "$text"', ({ text, token, suggestion }) => {
+      const violations = scan(`Intro.\n${text}\n`)
+      expect(violations[0]).toEqual({
+        file: FILE,
+        line: 2,
+        token,
+        suggestion,
+      })
+    })
+
+    test('flags every prose token on a line alongside code-span tokens', () => {
+      const violations = scan(
+        'When ce-doc-review runs inside ce-brainstorm or `ce-plan`.\n',
+      )
+      expect(violations.map((v) => v.token).sort()).toEqual([
+        'ce-brainstorm',
+        'ce-doc-review',
+        'ce-plan',
+      ])
+    })
+
+    test('judges prose outside code spans only, once per token', () => {
+      // The span is judged by the span rule; the surrounding prose by the
+      // prose rule. A token inside a span is never reported twice.
+      const violations = scan('Run `ce-work` after ce-plan finishes.\n')
+      expect(violations.map((v) => v.token).sort()).toEqual([
+        'ce-plan',
+        'ce-work',
+      ])
+    })
+
+    test.each([
+      'Read skills/ce-plan/SKILL.md first.',
+      'See skills/ce-plan/ for details.',
+      'Open ce-plan/SKILL.md first.',
+      'Open ce-plan.md first.',
+      'Open ce-plan.json or ce-work.ts first.',
+      'Created ce-plan-deepen-XXXXXX in the temp dir.',
+      'Created ce-plan-deepen-abc123_x in the temp dir.',
+      'Dispatch systematic:review:architecture-strategist now.',
+      'Dispatch systematic:review:ce-plan-reviewer now.',
+      'Load ce:plan then ce:work.',
+      'The ce-plan: key is a YAML-ish label.',
+      'The ce_plan helper is unrelated.',
+      'The skills/ce-review/<run-id> directory.',
+      'The .context/systematic/ce-review/ directory.',
+      'A cache-plan and force-work are unrelated.',
+      'A bare ce- prefix is not a name.',
+    ])('does not flag path, ID or valid prose: %s', (text) => {
+      expect(scan(`${text}\n`)).toEqual([])
+    })
+
+    test.each([
+      { name: 'backtick fence', open: '```', close: '```' },
+      { name: 'tilde fence', open: '~~~', close: '~~~' },
+      { name: 'indented list fence', open: '   ```', close: '   ```' },
+    ])('ignores prose tokens inside a $name', ({ open, close }) => {
+      const body = `${open}markdown\nWhen ce-doc-review runs, /ce-work and ce-plan's job.\n${close}\n`
+      expect(scan(body)).toEqual([])
+    })
+
+    test('resumes prose scanning after a fenced block closes', () => {
+      const body = '```\nce-plan inside\n```\nAfter the fence: ce-work.\n'
+      expect(scan(body)).toEqual([
+        {
+          file: FILE,
+          line: 4,
+          token: 'ce-work',
+          suggestion: 'ce:work',
+        },
+      ])
+    })
+
+    test('scans agent frontmatter descriptions', () => {
+      const violations = scan(
+        '---\nname: x\ndescription: "Used by ce-plan\'s deepening workflow."\n---\nbody\n',
+        'agents/review/x.md',
+      )
+      expect(violations).toEqual([
+        {
+          file: 'agents/review/x.md',
+          line: 3,
+          token: 'ce-plan',
+          suggestion: 'ce:plan',
+        },
+      ])
+    })
   })
 
   test('is wired into checkContentIntegrity and fails the CLI', () => {

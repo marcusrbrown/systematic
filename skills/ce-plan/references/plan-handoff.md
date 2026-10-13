@@ -6,13 +6,13 @@ This file contains post-plan-writing instructions: document review, post-generat
 
 After the confidence check (and any deepening), run the `document-review` skill on the plan file. Pass the plan path as the argument. When this step is reached, it is mandatory — do not skip it because the confidence check already ran. The two tools catch different classes of issues.
 
-The confidence check and ce-doc-review are complementary:
+The confidence check and document-review are complementary:
 - The confidence check strengthens rationale, sequencing, risk treatment, and grounding
 - Document-review checks coherence, feasibility, scope alignment, and surfaces role-specific issues
 
-If ce-doc-review returns findings that were auto-applied, note them briefly when presenting handoff options. If residual P0/P1 findings were surfaced, mention them so the user can decide whether to address them before proceeding.
+If document-review returns findings that were auto-applied, note them briefly when presenting handoff options. If residual P0/P1 findings were surfaced, mention them so the user can decide whether to address them before proceeding.
 
-When ce-doc-review returns "Review complete", proceed to Final Checks.
+When document-review returns "Review complete", proceed to Final Checks.
 
 **Pipeline mode:** If invoked from an automated workflow such as LFG or any `disable-model-invocation` context, run `document-review` with `mode:headless` and the plan path. Headless mode applies auto-fixes silently and returns structured findings without interactive prompts. Address any P0/P1 findings before returning control to the caller.
 
@@ -29,7 +29,7 @@ If artifact-backed mode was used:
 
 ## 5.4 Post-Generation Options
 
-**Pipeline mode:** If invoked from an automated workflow such as LFG or any `disable-model-invocation` context, skip the interactive menu below and return control to the caller immediately. The plan file has already been written, the confidence check has already run, and ce-doc-review has already run — the caller (e.g., lfg) determines the next step.
+**Pipeline mode:** If invoked from an automated workflow such as LFG or any `disable-model-invocation` context, skip the interactive menu below and return control to the caller immediately. The plan file has already been written, the confidence check has already run, and document-review has already run — the caller (e.g., lfg) determines the next step.
 
 After document-review completes, present the options using the platform's blocking question tool: `question` in OpenCode (call `ToolSearch` with `select:question` first if its schema isn't loaded), `request_user_input` in Codex, `ask_user` in Gemini, `ask_user` in Pi (requires the `pi-ask-user` extension). Fall back to numbered options in chat only when no blocking tool exists in the harness or the call errors (e.g., Codex edit modes) — not because a schema load is required. Never silently skip the question.
 
