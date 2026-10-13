@@ -1,7 +1,7 @@
 ---
 title: "fix: Bundled skills name only skills that resolve"
 type: fix
-status: active
+status: completed
 date: 2026-10-13
 ---
 
@@ -66,7 +66,7 @@ Bundled skill text still names some skills by their directory form (`ce-plan`, `
 
 ## Implementation Units
 
-- [ ] **Unit 1: Rename the remaining references**
+- [x] **Unit 1: Rename the remaining references**
 
 **Goal:** Every backticked skill reference in `skills/` and `agents/` uses a name that resolves.
 
@@ -96,7 +96,7 @@ Bundled skill text still names some skills by their directory form (`ce-plan`, `
 - `bun run registry:drift` and `bun scripts/generate-pi-subagents-personas.ts --check` are clean.
 - The Claude Code plugin build succeeds.
 
-- [ ] **Unit 2: Gate the `ce-<name>` form**
+- [x] **Unit 2: Gate the `ce-<name>` form**
 
 **Goal:** Content integrity fails on a backticked `ce-<name>` skill reference.
 
