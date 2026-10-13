@@ -127,7 +127,7 @@ Run this step after 3.5b (recommended_action normalized) and before 3.6 (auto-pr
 - Severity is `P0` or `P1` (premise-level issues carry high priority by nature)
 - `autofix_class` is `manual` (the root itself requires judgment — a safe/gated root is acted on, not cascaded)
 - `why_it_matters` or `title` challenges a foundational premise, not a detail. Signal phrases (shape, not vocabulary): "premise unsupported", "justification missing", "do-nothing baseline not evaluated", "is X justified", "unsupported by evidence", "is the proposed solution the right approach"
-- The finding's `section` is framing-level (Problem Frame, Summary, Overview, Why, Motivation, Goals — `Summary` is the new ce-plan / ce-brainstorm template heading; `Overview` retained as legacy) OR the finding explicitly questions whether a named component should exist
+- The finding's `section` is framing-level (Problem Frame, Summary, Overview, Why, Motivation, Goals — `Summary` is the new systematic:ce-plan / systematic:ce-brainstorm template heading; `Overview` retained as legacy) OR the finding explicitly questions whether a named component should exist
 
 If multiple candidates match the criteria, elevate ALL of them. The criteria above (P0/P1, manual, framing-level section, premise-challenge signal phrases) are restrictive enough that this list will be short for any well-formed document; do not impose a further numerical cap. Picking only one root when two valid roots exist leaves the second root's natural dependents stranded as independent manual findings — the exact UX problem chains are meant to solve.
 
@@ -380,12 +380,12 @@ B. Exit without further action
 
 The `<next stage>` substitution uses the document type from Phase 1:
 
-- Requirements document → `ce-plan`
-- Plan document → `ce-work`
+- Requirements document → `systematic:ce-plan`
+- Plan document → `systematic:ce-work`
 
 **Label adaptation:** when no decisions are queued to apply, the primary option drops the `Apply decisions and` prefix — the label should match what the system is doing. `Apply decisions and proceed` when fixes are queued; `Proceed` when nothing is queued.
 
-**Caller-context handling (implicit):** the terminal question's "Proceed to <next stage>" option is interpreted contextually by the agent from the visible conversation state. When ce-doc-review is invoked from inside another skill's flow (e.g., ce-brainstorm Phase 4 re-review, ce-plan phase 5.3.8), the agent does not fire a nested `/ce-plan` or `/ce-work` dispatch — it returns control to the caller's flow which continues its own logic. When invoked standalone, "Proceed" dispatches the appropriate next skill. No explicit caller-hint argument is required; if this implicit handling proves unreliable in practice, an explicit `nested:true` flag can be added as a follow-up.
+**Caller-context handling (implicit):** the terminal question's "Proceed to <next stage>" option is interpreted contextually by the agent from the visible conversation state. When document-review is invoked from inside another skill's flow (e.g., systematic:ce-brainstorm Phase 4 re-review, systematic:ce-plan phase 5.3.8), the agent does not fire a nested `/systematic:ce-plan` or `/systematic:ce-work` dispatch — it returns control to the caller's flow which continues its own logic. When invoked standalone, "Proceed" dispatches the appropriate next skill. No explicit caller-hint argument is required; if this implicit handling proves unreliable in practice, an explicit `nested:true` flag can be added as a follow-up.
 
 ### Iteration limit
 
@@ -399,7 +399,7 @@ Return "Review complete" as the terminal signal for callers, regardless of which
 - Do not add new sections or requirements the user didn't discuss
 - Do not over-engineer or add complexity
 - Do not create separate review files or add metadata sections
-- Do not modify caller skills (ce-brainstorm, ce-plan, or external plugin skills that invoke ce-doc-review)
+- Do not modify caller skills (systematic:ce-brainstorm, systematic:ce-plan, or external plugin skills that invoke document-review)
 
 ## Iteration Guidance
 

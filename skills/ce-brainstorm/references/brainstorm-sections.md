@@ -21,14 +21,14 @@ session produced the brainstorm.
   Used in the filename (`docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md`).
 - **`topic`** — kebab-case slug identifying the brainstorm subject (e.g.,
   `surface-scope-earlier`, `demo-reel-local-save`). Used in the filename
-  alongside `date` and as the resume-detection key when `ce-brainstorm`'s
+  alongside `date` and as the resume-detection key when `systematic:ce-brainstorm`'s
   Phase 0.1 scans `docs/brainstorms/` for an existing artifact to continue.
 
 ### Status flip does not apply to brainstorm
 
 Unlike plans, brainstorm artifacts have no `status` field — there is no
 `active → completed` lifecycle. A brainstorm is a one-time output that
-downstream consumers (`ce-plan`, `document-review`) reference via the plan's
+downstream consumers (`systematic:ce-plan`, `document-review`) reference via the plan's
 `origin:` field.
 
 ### Field-name stability

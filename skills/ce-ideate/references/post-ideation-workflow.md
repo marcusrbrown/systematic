@@ -60,7 +60,7 @@ When the user picks an option in Phase 6 that requires a durable record (Brainst
 | Action | Repo mode default | Elsewhere mode default |
 |---|---|---|
 | Save | `docs/ideation/YYYY-MM-DD-<topic>-ideation.md` | Local file (custom path if no repo context) |
-| Brainstorm handoff | `ce-brainstorm` | `ce-brainstorm` (universal-brainstorming) |
+| Brainstorm handoff | `systematic:ce-brainstorm` | `systematic:ce-brainstorm` (universal-brainstorming) |
 | End | Conversation only is fine | Conversation only is fine |
 
 Both modes persist via local file save. Elsewhere mode without an obvious repo path should ask the user for a save location (current working directory, `/tmp`, or a custom path) using the same file structure as repo mode.
@@ -120,7 +120,7 @@ Ask what should happen next using the platform's blocking question tool: `questi
 Offer these three options (labels are self-contained with the distinguishing word front-loaded so options stay distinct when truncated):
 
 1. **Refine the ideation in conversation (or stop here — no save)** — add ideas, re-evaluate, or deepen analysis. No file side effects; ending the conversation at any point after this pick is a valid no-save exit.
-2. **Brainstorm a selected idea** — load `ce-brainstorm` with the chosen idea as the seed. The orchestrator first writes a durable record using the mode default in Phase 5.
+2. **Brainstorm a selected idea** — load `systematic:ce-brainstorm` with the chosen idea as the seed. The orchestrator first writes a durable record using the mode default in Phase 5.
 3. **Save and end** — persist the ideation to a local file using the mode default (Phase 5.1), then end.
 
 No-save exit is supported without a dedicated menu option. Pick option 1 and stop the conversation, or use the question tool's free-text escape to say so directly — persistence is opt-in and the terminal review loop is already a complete ideation cycle.
@@ -143,9 +143,9 @@ Ending after refinement — or without any refinement at all — is a valid no-s
 
 - Write or update the durable record per the mode default in Phase 5 (5.1 file save)
 - Mark the chosen idea as `Explored` in the saved record
-- Load the `ce-brainstorm` skill with the chosen idea as the seed
+- Load the `systematic:ce-brainstorm` skill with the chosen idea as the seed
 
-**Repo mode only:** do **not** skip brainstorming and go straight to `ce-plan` from ideation output — `ce-plan` wants brainstorm-grounded requirements. In elsewhere modes, ideation is a legitimate terminal state; brainstorming is optional deeper development of one idea, not a required next rung on an implementation ladder that does not exist in these modes.
+**Repo mode only:** do **not** skip brainstorming and go straight to `systematic:ce-plan` from ideation output — `systematic:ce-plan` wants brainstorm-grounded requirements. In elsewhere modes, ideation is a legitimate terminal state; brainstorming is optional deeper development of one idea, not a required next rung on an implementation ladder that does not exist in these modes.
 
 ### 6.3 Save and End
 
@@ -173,4 +173,4 @@ Before finishing, check:
 - survivors are materially better than a naive "give me ideas" list
 - persistence followed user choice — terminal-only sessions did not write a file
 - when persistence did trigger, the mode default was respected unless the user explicitly overrode it
-- acting on an idea routes to `ce-brainstorm`, not directly to implementation
+- acting on an idea routes to `systematic:ce-brainstorm`, not directly to implementation
