@@ -630,6 +630,12 @@ describe('ref guard', () => {
       "needs.render.result == 'success'",
     )
   })
+
+  // Without a status function GitHub adds an implicit success(), which is
+  // false when any upstream job (publish) was skipped.
+  test('refresh still runs when publish is skipped', () => {
+    expect(String(getJob('refresh').if)).toMatch(/^always\(\) && /)
+  })
 })
 
 describe('release App login', () => {
