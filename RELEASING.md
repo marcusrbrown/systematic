@@ -74,7 +74,7 @@ There is no scheduled retry. If a merge's push run failed or did not publish or 
 gh workflow run release.yaml
 ```
 
-Both work only while `main` still points at the release merge. A run on a later `main` refuses the stale release merge (`superseded`).
+Retrying a publish works only while `main` still points at the release merge. A publish run on a later `main` refuses the stale release merge (`superseded`). Refreshing the release PR works on any `main`: a run on an ordinary merge skips publishing and still renders and refreshes the PR.
 
 ## Re-narrate, redeploy docs, republish the Claude plugin
 
