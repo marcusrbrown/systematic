@@ -1806,6 +1806,10 @@ function createSessionRuntime(
   const callBindings = new Map<string, { kind: string; fingerprint: string }>()
   const pendingOperations = new Map<string, PendingOperation>()
   const sealedOperations = new Map<string, SealedOperation>()
+  // Digests of operation calls whose before-hook decided not to observe.
+  // The after-hook consults this first and stays silent, whatever the guard
+  // state has become in between.
+  const skippedOperations = new Set<string>()
   const abandonedOperations = new Map<string, SealedOperation>()
   const rolledUpChildren = new Set<string>()
   const questionAttestation = createQuestionAttestation()
@@ -3017,6 +3021,17 @@ function createSessionRuntime(
     }
   }
 
+  // Operations are observed only while guarded work can use the evidence: an
+  // active epoch, or an allowlisted skill call still pending that may activate
+  // one. Disabled and unavailable guards never consume operation evidence.
+  function operationObservationApplies(): boolean {
+    const current = readStatus()
+    if (current.state === 'disabled' || current.state === 'unavailable') {
+      return false
+    }
+    return current.epoch?.status === 'active' || pendingSkills.size > 0
+  }
+
   // Without an epoch there is nothing to protect with observer readback:
   // skip every observer read, identity update, and unavailable transition.
   function observerReadbackApplies(): boolean {
@@ -3567,6 +3582,12 @@ function createSessionRuntime(
     args: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
+    // Decided before any argument work: fingerprinting can fail on large
+    // arguments, and a skipped call must not depend on it.
+    if (!operationObservationApplies()) {
+      skippedOperations.add(digestCall(ledger, host.callID))
+      return
+    }
     // Captured before the first await: the unit can change while the
     // snapshot and remote probes are in flight.
     const initiator = currentInitiator()
@@ -5032,21 +5053,32 @@ function createSessionRuntime(
     }
   }
 
+  // The pending record for an after-hook, or undefined when the call must be
+  // silent: skipped by the observation gate, or a replay of a sealed call.
+  function takeOperationToFinish(
+    callDigest: string,
+    host: HostToolAfter,
+    tool: LocalOperationTool,
+  ): PendingOperation | undefined {
+    if (skippedOperations.delete(callDigest)) return undefined
+    const { sessionLocation } = effectiveTargetContext()
+    const fingerprint = argsFingerprint(
+      ledger,
+      tool,
+      host.args,
+      sessionLocation,
+    )
+    if (isSealedOperationReplay(callDigest, host, fingerprint)) return undefined
+    return takePendingOperation(callDigest, host, fingerprint)
+  }
+
   async function finishOperation(
     host: HostToolAfter,
     output: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
     const callDigest = digestCall(ledger, host.callID)
-    const { sessionLocation } = effectiveTargetContext()
-    const fingerprint = argsFingerprint(
-      ledger,
-      host.tool,
-      host.args,
-      sessionLocation,
-    )
-    if (isSealedOperationReplay(callDigest, host, fingerprint)) return
-    const pending = takePendingOperation(callDigest, host, fingerprint)
+    const pending = takeOperationToFinish(callDigest, host, host.tool)
     if (!pending) return
     const result = await completeOperationObservation(
       callDigest,
