@@ -11,9 +11,6 @@ name: Release
   push:
     branches:
       - main
-  schedule:
-    # Hourly reconcile: retries a release the push event missed or lost.
-    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -395,7 +392,7 @@ jobs:
           fi
 
           # Arms auto-merge pinned to a head commit. A failure is not fatal: the
-          # hourly reconcile and a manual merge remain available.
+          # manual merge and a re-run of this workflow remain available.
           arm_auto_merge() {
             local pr="$1" head="$2" armed=false
             for _ in 1 2 3; do
@@ -407,7 +404,7 @@ jobs:
               sleep "${MERGE_RETRY_DELAY:-5}"
             done
             if [ "$armed" != "true" ]; then
-              echo "::warning::could not arm auto-merge on PR #$pr; merge it manually or wait for the hourly reconcile"
+              echo "::warning::could not arm auto-merge on PR #$pr; merge it manually or re-run the workflow"
             fi
           }
 
