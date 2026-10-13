@@ -869,6 +869,7 @@ describe.skipIf(!isOpencodeAvailable())(
             epochFamily: epochMarker?.family,
           })}`,
         )
+        expect(outputLength).toBeGreaterThan(32_768)
         expect(epochMarker).toBeDefined()
         expect(epochMarker?.family).toBe('work')
       },
