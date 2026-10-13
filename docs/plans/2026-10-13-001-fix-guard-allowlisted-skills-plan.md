@@ -1,7 +1,7 @@
 ---
 title: "fix: Only allowlisted skills activate a workflow guard epoch"
 type: fix
-status: active
+status: completed
 date: 2026-10-13
 ---
 
@@ -139,7 +139,7 @@ Consequences today:
 
 ## Implementation Units
 
-- [ ] **Unit 1: Allowlist-only normalization**
+- [x] **Unit 1: Allowlist-only normalization**
 
 **Goal:** Only allowlisted names activate. Every other skill load is a no-op.
 
@@ -175,7 +175,7 @@ Consequences today:
 - The guard and workflow-guard unit suites pass.
 - Restoring the fallback by hand fails the no-op tests. Deleting a policy row by hand fails the required-operations assertion for that name.
 
-- [ ] **Unit 2: Integration coverage for activation size and other skill loads**
+- [x] **Unit 2: Integration coverage for activation size and other skill loads**
 
 **Goal:** Keep the real-host proof that a large allowlisted load activates, and add a real-host proof that a large other skill load does not.
 
@@ -199,7 +199,7 @@ Consequences today:
 **Verification:**
 - The skill-delivery suite passes on the pinned host, and no opencode processes are left behind.
 
-- [ ] **Unit 3: Documentation**
+- [x] **Unit 3: Documentation**
 
 **Goal:** The docs match allowlist-only activation and its limits.
 
