@@ -733,22 +733,31 @@ describe.skipIf(!isOpencodeAvailable())(
       TIMEOUT_MS * 3,
     )
 
-    function systematicSkillParts(
+    function toolPartsNamed(
       messages: readonly unknown[],
+      tool: string,
     ): Record<string, unknown>[] {
       return messages.flatMap((message) => {
         if (!isRecord(message) || !Array.isArray(message.parts)) return []
         return message.parts.filter(
           (part): part is Record<string, unknown> =>
-            isRecord(part) && part.tool === 'systematic_skill',
+            isRecord(part) && part.tool === tool,
         )
       })
     }
 
-    function readSkillPartMarkers(skillPart: Record<string, unknown>): {
+    interface SkillLoadReadback {
       readonly markers: readonly unknown[]
       readonly outputLength: number | undefined
-    } {
+      /** `state.status` of the `systematic_skill` tool part. */
+      readonly skillStatus: unknown
+      /** Parsed `systematic_workflow_status` output, when requested. */
+      readonly guardStatus: Record<string, unknown> | undefined
+    }
+
+    function readSkillPart(
+      skillPart: Record<string, unknown>,
+    ): Pick<SkillLoadReadback, 'markers' | 'outputLength' | 'skillStatus'> {
       const state = isRecord(skillPart.state) ? skillPart.state : {}
       const metadata = isRecord(state.metadata) ? state.metadata : {}
       const markers = metadata.systematic_workflow_receipt
@@ -756,7 +765,44 @@ describe.skipIf(!isOpencodeAvailable())(
         markers: Array.isArray(markers) ? markers : markers ? [markers] : [],
         outputLength:
           typeof state.output === 'string' ? state.output.length : undefined,
+        skillStatus: state.status,
       }
+    }
+
+    /** `systematic_workflow_status` reports its JSON document as tool output. */
+    function readGuardStatusPart(
+      statusPart: Record<string, unknown> | undefined,
+    ): Record<string, unknown> | undefined {
+      const state = isRecord(statusPart?.state) ? statusPart.state : {}
+      if (typeof state.output !== 'string') return undefined
+      const parsed: unknown = JSON.parse(state.output)
+      return isRecord(parsed) ? parsed : undefined
+    }
+
+    function scriptedSkillLoadSteps(
+      label: string,
+      skillName: string,
+      skillArguments: string | undefined,
+      readGuardStatus: boolean,
+    ): ScriptedStep[] {
+      const skillCall: ScriptedToolCall = {
+        id: `skill-delivery-${label}-guard-call`,
+        name: 'systematic_skill',
+        arguments:
+          skillArguments === undefined
+            ? { name: skillName }
+            : { name: skillName, arguments: skillArguments },
+      }
+      const statusCall: ScriptedToolCall = {
+        id: `skill-delivery-${label}-status-call`,
+        name: 'systematic_workflow_status',
+        arguments: {},
+      }
+      return [
+        { toolCalls: [skillCall] },
+        ...(readGuardStatus ? [{ toolCalls: [statusCall] }] : []),
+        { text: 'done' },
+      ]
     }
 
     /**
@@ -764,34 +810,29 @@ describe.skipIf(!isOpencodeAvailable())(
      * session and reads back, via `session.messages()`, the progression
      * markers the workflow guard merged into the tool part's own metadata.
      * Host-side metadata is never sent to the provider, so this cannot use a
-     * captured request body.
+     * captured request body. With `readGuardStatus`, the scripted model also
+     * calls `systematic_workflow_status` after the skill load so the guard's
+     * resulting state can be asserted.
      */
     async function loadSkillAndReadMarkers(
       label: string,
       skillName: string,
-      skillArguments?: string,
-    ): Promise<{
-      readonly markers: readonly unknown[]
-      readonly outputLength: number | undefined
-    }> {
+      options: {
+        readonly skillArguments?: string
+        readonly readGuardStatus?: boolean
+      } = {},
+    ): Promise<SkillLoadReadback> {
       const fixture: IsolatedFixture = createIsolatedFixture()
       initializeRepository(fixture.projectDir)
       const packaged = extractPackagedPlugin(fixture)
-      const model = startScriptedModel([
-        {
-          toolCalls: [
-            {
-              id: `skill-delivery-${label}-guard-call`,
-              name: 'systematic_skill',
-              arguments:
-                skillArguments === undefined
-                  ? { name: skillName }
-                  : { name: skillName, arguments: skillArguments },
-            },
-          ],
-        },
-        { text: 'done' },
-      ])
+      const model = startScriptedModel(
+        scriptedSkillLoadSteps(
+          label,
+          skillName,
+          options.skillArguments,
+          options.readGuardStatus === true,
+        ),
+      )
       const host = await startOpencodeServer(
         fixture,
         buildProviderConfig([packaged.pluginUrl], model.url),
@@ -822,13 +863,19 @@ describe.skipIf(!isOpencodeAvailable())(
             `session messages failed: ${JSON.stringify(messagesResult.error)}`,
           )
         }
-        const skillParts = systematicSkillParts(
-          messagesResult.data as unknown[],
-        )
+        const messages = messagesResult.data as unknown[]
+        const skillParts = toolPartsNamed(messages, 'systematic_skill')
         expect(skillParts).toHaveLength(1)
         const [skillPart] = skillParts
         if (!skillPart) throw new Error('unreachable: skillParts checked above')
-        return readSkillPartMarkers(skillPart)
+        const [statusPart] = toolPartsNamed(
+          messages,
+          'systematic_workflow_status',
+        )
+        return {
+          ...readSkillPart(skillPart),
+          guardStatus: readGuardStatusPart(statusPart),
+        }
       } finally {
         await host.stop()
         model.stop()
@@ -855,20 +902,21 @@ describe.skipIf(!isOpencodeAvailable())(
         // ce:work's SKILL.md is ~26KB; ~12KB of `arguments` is substituted into
         // its `$ARGUMENTS` line, pushing the delivered output past the guard's
         // 32KB (`MAX_HOST_OUTPUT_LENGTH`) threshold.
-        const { markers, outputLength } = await loadSkillAndReadMarkers(
-          'f',
-          CE_WORK_NAME,
-          'x'.repeat(12_288),
-        )
+        const { markers, outputLength, skillStatus } =
+          await loadSkillAndReadMarkers('f', CE_WORK_NAME, {
+            skillArguments: 'x'.repeat(12_288),
+          })
         const epochMarker = findEpochStartedMarker(markers)
         console.log(
           `SKILL_DELIVERY_F ${JSON.stringify({
             outputLength,
+            skillStatus,
             markerCount: markers.length,
             epochMarkerPresent: epochMarker !== undefined,
             epochFamily: epochMarker?.family,
           })}`,
         )
+        expect(skillStatus).toBe('completed')
         expect(outputLength).toBeGreaterThan(32_768)
         expect(epochMarker).toBeDefined()
         expect(epochMarker?.family).toBe('work')
@@ -879,16 +927,24 @@ describe.skipIf(!isOpencodeAvailable())(
     test(
       'g) loading a non-allowlisted skill over 32KB activates nothing',
       async () => {
-        const { markers, outputLength } = await loadSkillAndReadMarkers(
-          'g',
-          CE_PLAN_NAME,
-        )
+        // Guard against a vacuous pass: a failed or truncated skill load also
+        // yields no markers, so require a completed load, an over-threshold
+        // output, and an `inactive` guard status read back afterwards.
+        const { markers, outputLength, skillStatus, guardStatus } =
+          await loadSkillAndReadMarkers('g', CE_PLAN_NAME, {
+            readGuardStatus: true,
+          })
         console.log(
           `SKILL_DELIVERY_G ${JSON.stringify({
             outputLength,
+            skillStatus,
             markerCount: markers.length,
+            guardState: guardStatus?.state,
           })}`,
         )
+        expect(skillStatus).toBe('completed')
+        expect(outputLength).toBeGreaterThan(32_768)
+        expect(guardStatus?.state).toBe('inactive')
         expect(findEpochStartedMarker(markers)).toBeUndefined()
         expect(markers).toHaveLength(0)
       },
