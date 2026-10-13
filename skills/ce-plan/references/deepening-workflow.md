@@ -245,4 +245,4 @@ Do **not**:
 If research reveals a product-level ambiguity that should change behavior or scope:
 - Do not silently decide it here
 - Record it under `Open Questions`
-- Recommend `ce-brainstorm` if the gap is truly product-defining
+- Recommend `ce:brainstorm` if the gap is truly product-defining
