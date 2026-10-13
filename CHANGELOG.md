@@ -4,6 +4,18 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.22.2](https://github.com/marcusrbrown/systematic/compare/v3.22.1...v3.22.2) (2026-10-13)
+
+### Bug Fixes
+
+* **guard:** only allowlisted skills activate a workflow epoch ([#1107](https://github.com/marcusrbrown/systematic/issues/1107)) ([3fb1b4b](https://github.com/marcusrbrown/systematic/commit/3fb1b4b916ee5b568d8dcde90bf310083eef1042))
+* **skills:** name only skills the resolver can load ([#1111](https://github.com/marcusrbrown/systematic/issues/1111)) ([f6e6cad](https://github.com/marcusrbrown/systematic/commit/f6e6cad5a2482fb91b03ca9021123d64c9b429bc))
+* **skills:** resolve bundled workflow handoff targets ([#1110](https://github.com/marcusrbrown/systematic/issues/1110)) ([a501c5a](https://github.com/marcusrbrown/systematic/commit/a501c5a68720a9638277c7303c45f7b07f872343))
+
+### Tests
+
+* **guard:** prove the large non-allowlisted skill load succeeded ([#1109](https://github.com/marcusrbrown/systematic/issues/1109)) ([63f09d8](https://github.com/marcusrbrown/systematic/commit/63f09d803b94065027aec457a183e7d1b898582a))
+
 ## [3.22.1](https://github.com/marcusrbrown/systematic/compare/v3.22.0...v3.22.1) (2026-10-13)
 
 ### Bug Fixes
