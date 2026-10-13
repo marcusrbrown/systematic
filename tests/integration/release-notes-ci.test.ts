@@ -1045,11 +1045,8 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       expect(result.exitCode).toBe(0)
       expect(fs.existsSync(promptCapturePath)).toBe(true)
       const capturedPrompt = fs.readFileSync(promptCapturePath, 'utf8')
-      expect(capturedPrompt).toMatch(
-        new RegExp(
-          `^Scratch directory: ${SCRATCH_LITERAL.replace(/[$]/g, '\\$&')}$`,
-          'm',
-        ),
+      expect(capturedPrompt.split('\n')).toContain(
+        `Scratch directory: ${SCRATCH_LITERAL}`,
       )
       expect(capturedPrompt).toContain(`SCRATCH_DIR="${SCRATCH_LITERAL}"`)
       expect(capturedPrompt).toMatch(/only directory/i)
