@@ -185,6 +185,15 @@ export interface PhantomSkillRef {
   name: string
 }
 
+export interface StaleSkillLoadNameViolation {
+  file: string
+  line: number
+  /** The skill token as written, without arguments (e.g. `/ce-work`). */
+  token: string
+  /** The name the resolver loads (e.g. `/ce:work`, `document-review`). */
+  suggestion: string
+}
+
 export interface BrokenSubfileRef {
   file: string
   line: number
@@ -341,6 +350,7 @@ export interface CheckResult {
   allowlistWarnings: AllowlistWarning[]
   phantomRefs: PhantomRef[]
   phantomSkillRefs: PhantomSkillRef[]
+  staleSkillLoadNameViolations: StaleSkillLoadNameViolation[]
   brokenSubfileRefs: BrokenSubfileRef[]
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
@@ -789,6 +799,89 @@ export function checkSkillReferenceIntegrity(
   }
 
   return phantoms
+}
+
+/**
+ * Match one single-backtick code span and capture its content.
+ */
+const CODE_SPAN_REGEX = /`([^`]+)`/g
+
+/**
+ * A skill token in directory form: `ce-<name>` or `/ce-<name>`, kebab-case
+ * lowercase only. Anchoring the whole token rejects paths (`ce-plan/SKILL.md`,
+ * `ce-plan.md`), qualified IDs (`systematic:review:...`), underscored names
+ * (`ce_plan`), and placeholder or temp-name tokens (`ce-plan-deepen-XXXXXX`)
+ * without a separate skip list.
+ */
+const STALE_SKILL_TOKEN_REGEX = /^(\/?)ce-([a-z][a-z0-9-]*)$/
+
+/**
+ * Directory-form names whose frontmatter name is not simply `ce:<name>`.
+ * Everything else maps to `ce:<name>`.
+ */
+const STALE_SKILL_RENAMES: Readonly<Record<string, string>> = {
+  'doc-review': 'document-review',
+}
+
+function suggestSkillLoadName(slash: string, name: string): string {
+  const renamed = STALE_SKILL_RENAMES[name]
+  return renamed !== undefined ? `${slash}${renamed}` : `${slash}ce:${name}`
+}
+
+/**
+ * Stale skill load names: a backticked `ce-<name>` or `/ce-<name>` span,
+ * optionally followed by a space and arguments. Bundled `ce-*` skill
+ * directories are named `ce:*` in frontmatter and the resolver loads
+ * frontmatter names, so the directory form never resolves.
+ *
+ * Only the token before the first space is judged; arguments may contain
+ * `.`, `:` or `/` (`ce-doc-review mode:headless` is still stale). Spans inside
+ * fenced blocks are skipped, as is unbackticked prose. Known limit: a
+ * lowercase `ce-<word>` span that is not a skill (a hypothetical temp-dir
+ * name) is flagged; none exist in the bundled content.
+ */
+export function checkStaleSkillLoadNames(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): StaleSkillLoadNameViolation[] {
+  const violations: StaleSkillLoadNameViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+
+    const lines = content.split('\n')
+    let fenceMarker: FenceMarker | null = null
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? ''
+      const fence = updateFenceMarker(line, fenceMarker)
+      fenceMarker = fence.marker
+      if (fence.isFence || fenceMarker !== null) continue
+      violations.push(...scanLineForStaleSkillLoadNames(relPath, i + 1, line))
+    }
+  }
+
+  return violations
+}
+
+function scanLineForStaleSkillLoadNames(
+  file: string,
+  line: number,
+  text: string,
+): StaleSkillLoadNameViolation[] {
+  const violations: StaleSkillLoadNameViolation[] = []
+  for (const span of text.matchAll(CODE_SPAN_REGEX)) {
+    const token = (span[1] ?? '').trim().split(/\s+/, 1)[0] ?? ''
+    const match = STALE_SKILL_TOKEN_REGEX.exec(token)
+    if (!match) continue
+    violations.push({
+      file,
+      line,
+      token,
+      suggestion: suggestSkillLoadName(match[1] ?? '', match[2] ?? ''),
+    })
+  }
+  return violations
 }
 
 // ---------------------------------------------------------------------------
@@ -2877,6 +2970,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.markdown,
   )
+  const staleSkillLoadNameViolations = checkStaleSkillLoadNames(
+    rootDir,
+    targets.markdown,
+  )
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
   const parseSafetyViolations = checkFrontmatterParseSafety(
@@ -2935,6 +3032,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     allowlistWarnings,
     phantomRefs,
     phantomSkillRefs,
+    staleSkillLoadNameViolations,
     brokenSubfileRefs,
     bannedPatterns,
     frontmatterViolations,
@@ -2992,6 +3090,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
 
   printPhantomRefs(result.phantomRefs)
   printPhantomSkillRefs(result.phantomSkillRefs)
+  printStaleSkillLoadNames(result.staleSkillLoadNameViolations)
   printBrokenSubfileRefs(result.brokenSubfileRefs)
   printBannedPatterns(result.bannedPatterns)
   printFrontmatterViolations(result.frontmatterViolations)
@@ -3072,6 +3171,18 @@ function printPhantomSkillRefs(
   for (const p of phantomSkillRefs) {
     process.stderr.write(
       `  ${p.file}:${p.line}  ${p.reference}  (no such skill: skills/ce-${p.name}/)\n`,
+    )
+  }
+}
+
+function printStaleSkillLoadNames(
+  violations: readonly StaleSkillLoadNameViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nStale skill load names (${violations.length}):\n`)
+  for (const v of violations) {
+    process.stderr.write(
+      `  ${v.file}:${v.line}  \`${v.token}\`  (use \`${v.suggestion}\`)\n`,
     )
   }
 }
@@ -3284,6 +3395,7 @@ function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
     result.phantomSkillRefs.length +
+    result.staleSkillLoadNameViolations.length +
     result.brokenSubfileRefs.length +
     result.bannedPatterns.length +
     result.frontmatterViolations.length +

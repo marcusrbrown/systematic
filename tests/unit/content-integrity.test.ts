@@ -27,6 +27,7 @@ import {
   checkSkillReferenceIntegrity,
   checkSolutionSchema,
   checkStalePlanStatus,
+  checkStaleSkillLoadNames,
   checkSubfileReferences,
   collectScanTargets,
   discoverCategories,
@@ -1347,6 +1348,184 @@ describe('checkSkillReferenceIntegrity', () => {
       const targets = collectScanTargets(root)
       const phantoms = checkSkillReferenceIntegrity(root, targets.markdown)
       expect(phantoms).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkStaleSkillLoadNames', () => {
+  function scan(
+    body: string,
+    relPath = 'skills/foo/references/guide.md',
+  ): ReturnType<typeof checkStaleSkillLoadNames> {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, relPath, body)
+      return checkStaleSkillLoadNames(root, collectScanTargets(root).markdown)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  test.each([
+    { span: 'ce-plan', token: 'ce-plan', suggestion: 'ce:plan' },
+    { span: 'ce-work', token: 'ce-work', suggestion: 'ce:work' },
+    {
+      span: 'ce-brainstorm',
+      token: 'ce-brainstorm',
+      suggestion: 'ce:brainstorm',
+    },
+    { span: 'ce-compound', token: 'ce-compound', suggestion: 'ce:compound' },
+    { span: '/ce-plan', token: '/ce-plan', suggestion: '/ce:plan' },
+    { span: '/ce-work', token: '/ce-work', suggestion: '/ce:work' },
+    {
+      span: 'ce-doc-review',
+      token: 'ce-doc-review',
+      suggestion: 'document-review',
+    },
+    {
+      span: 'ce-doc-review mode:headless',
+      token: 'ce-doc-review',
+      suggestion: 'document-review',
+    },
+    {
+      span: 'ce-plan docs/plans/x.md',
+      token: 'ce-plan',
+      suggestion: 'ce:plan',
+    },
+  ])(
+    'flags the backticked span `$span` with file, line, token and suggestion',
+    ({ span, token, suggestion }) => {
+      const violations = scan(`Intro line.\nRun \`${span}\` next.\n`)
+      expect(violations).toEqual([
+        {
+          file: 'skills/foo/references/guide.md',
+          line: 2,
+          token,
+          suggestion,
+        },
+      ])
+    },
+  )
+
+  test('flags every offending span on a line and scans agents/ markdown', () => {
+    const violations = scan(
+      'Dispatched by `ce-plan` and `ce-compound`.\n',
+      'agents/review/README.md',
+    )
+    expect(violations.map((v) => [v.file, v.line, v.token])).toEqual([
+      ['agents/review/README.md', 1, 'ce-plan'],
+      ['agents/review/README.md', 1, 'ce-compound'],
+    ])
+  })
+
+  test.each([
+    'skills/ce-plan/SKILL.md',
+    'ce-plan/SKILL.md',
+    '.context/systematic/ce-review/<run-id>',
+    '.context/systematic/ce-review/<run-id>/summary.json',
+    'systematic:review:architecture-strategist',
+    'ce:plan',
+    '/ce:work',
+    'document-review',
+    'ce-plan-deepen-XXXXXX',
+    'ce_plan',
+    'ce-plan.md',
+    'ce-',
+    'cache-plan',
+  ])('does not flag the path, ID or valid span `%s`', (span) => {
+    expect(scan(`See \`${span}\` for details.\n`)).toEqual([])
+  })
+
+  test.each([
+    { name: 'backtick fence', open: '```', close: '```' },
+    { name: 'tilde fence', open: '~~~', close: '~~~' },
+    { name: 'longer backtick fence', open: '````', close: '````' },
+    { name: 'indented list fence', open: '   ```', close: '   ```' },
+  ])('ignores a bad name inside a $name', ({ open, close }) => {
+    const body = `${open}text\nRun \`ce-plan\` and \`/ce-work\`.\n${close}\n`
+    expect(scan(body)).toEqual([])
+  })
+
+  test('resumes scanning after a fenced block closes', () => {
+    const body = '```\n`ce-plan`\n```\nAfter the fence: `ce-work`.\n'
+    expect(scan(body)).toEqual([
+      {
+        file: 'skills/foo/references/guide.md',
+        line: 4,
+        token: 'ce-work',
+        suggestion: 'ce:work',
+      },
+    ])
+  })
+
+  test('does not flag unbackticked prose', () => {
+    const body = [
+      "ce-plan's deepening workflow dispatches reviewers.",
+      'When ce-brainstorm detects a non-software task, ce-doc-review is skipped.',
+      '',
+    ].join('\n')
+    expect(scan(body)).toEqual([])
+  })
+
+  test('is wired into checkContentIntegrity and fails the CLI', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(root, 'foo', 'Load `ce-plan` next.\n')
+      const result = checkContentIntegrity(root)
+      expect(result.staleSkillLoadNameViolations).toHaveLength(1)
+      expect(result.phantomSkillRefs).toEqual([])
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+      const stderr = new TextDecoder().decode(proc.stderr)
+      expect(stderr).toContain('Stale skill load names')
+      expect(stderr).toContain('skills/foo/SKILL.md:5')
+      expect(stderr).toContain('ce:plan')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('the real tree has no stale skill load names', () => {
+    const violations = checkStaleSkillLoadNames(
+      REPO_ROOT,
+      collectScanTargets(REPO_ROOT).markdown,
+    )
+    expect(
+      violations.map(
+        (v) => `${v.file}:${v.line} ${v.token} -> ${v.suggestion}`,
+      ),
+    ).toEqual([])
+  })
+
+  test('re-injecting `ce-plan` into a copy of a real skill file fails', () => {
+    const relPath = 'skills/ce-plan/references/universal-planning.md'
+    const original = fs.readFileSync(path.join(REPO_ROOT, relPath), 'utf8')
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, relPath, original)
+      expect(
+        checkStaleSkillLoadNames(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+
+      const injected = `${original.trimEnd()}\n\nThe user invoked \`ce-plan\` here.\n`
+      writeFile(root, relPath, injected)
+      const violations = checkStaleSkillLoadNames(
+        root,
+        collectScanTargets(root).markdown,
+      )
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: relPath,
+        token: 'ce-plan',
+        suggestion: 'ce:plan',
+      })
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
