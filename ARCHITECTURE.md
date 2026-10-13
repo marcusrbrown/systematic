@@ -24,10 +24,9 @@ these hooks:
 - **`tool.execute.before`** — workflow-guard observation of pending operations. Blocks execution by
   rethrowing a guard error when a guarded transition is unsatisfied.
 - **`tool.execute.after`** — workflow-guard observation of completed operations, feeding receipt
-  classification; then restores the full `systematic_skill` output when OpenCode truncated it,
+  classification, and epoch activation for allowlisted `skill` / `systematic_skill` loads; then restores the full `systematic_skill` output when OpenCode truncated it,
   unless the user set `tool_output` limits. Fail-closed; never blocks the host.
-- **`event`** — workflow-guard observation of host events, including skill loads that activate an
-  epoch. Fail-closed; never blocks the host.
+- **`event`** — workflow-guard observation of host events. Fail-closed; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 
@@ -242,7 +241,7 @@ change. Must pass before any release.
 validates each claim against observed workspace state, and mints integrity-checked receipts. Local
 snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
 command output; remote readback payloads have their own 4096-item cap. Exceeding a local limit
-fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. A session with no epoch reports
+fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
 seeding, session initialization, marker recovery, observer readback, a completion readback, or a
 hook or tool wrapper (`tool-before`, `tool-after`, `event`, `transform`, `tool-execute`) flips mode to `unavailable`, the runtime
@@ -277,7 +276,7 @@ or digests. A completion readback timeout rejects that attempt as `readback-time
 consuming anything or making the guard unavailable; the next completion call prepares fresh and
 surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
 records a `complete-readback` cause. Known limits: a dual registration running an older build
-rejects the `inactive` marker state and fails closed until both upgrade; if host history loses every
+rejects the `inactive` marker state and fails closed until both upgrade; activation covers skill-tool loads only, so reading a skill file directly or running a skill as a slash command does not activate the guard; an older Systematic registration loaded alongside still maps unknown skills to a work epoch, and the merged prompt marker shows the most restrictive state (`waiting`) while it is loaded; a plugin that rewrites `args.name` between the skill call's before-hook and after-hook can suppress activation; if host history loses every
 marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
 from a turn that began before this runtime started fail closed; `missing-resource` cannot
 distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream

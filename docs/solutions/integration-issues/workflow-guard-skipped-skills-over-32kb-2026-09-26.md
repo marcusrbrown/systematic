@@ -6,7 +6,7 @@ module: workflow-guard
 problem_type: integration_issue
 component: development_workflow
 symptoms:
-  - "Loading ce:plan (63 KB) or ce:review (71 KB) through systematic_skill never starts the guarded epoch or unit"
+  - "Loading an allowlisted skill (such as ce:work) over 32 KB through systematic_skill never starts the guarded epoch or unit"
   - "No error or warning; activation is simply skipped"
 root_cause: logic_error
 resolution_type: code_fix
@@ -18,11 +18,11 @@ tags: [workflow-guard, skill-activation, output-cap, receipts, epoch]
 
 ## Problem
 
-Skill loads larger than 32 KB never activated their guarded workflow. The skill loaded, but `systematic_workflow_status` showed no epoch, and the tool metadata had no progression markers.
+Allowlisted skill loads (`ce:work`, `git-commit`, `git-commit-push-pr`) larger than 32 KB never activated their guarded workflow. The skill loaded, but `systematic_workflow_status` showed no epoch, and the tool metadata had no progression markers.
 
 ## Symptoms
 
-- `ce:plan` or `ce:review` loaded through `systematic_skill` never started a guarded epoch or unit.
+- A large activating skill loaded through `systematic_skill` never started a guarded epoch or unit.
 - Nothing failed visibly, because the guard's after hook returns early rather than throwing.
 
 ## What Didn't Work
@@ -62,7 +62,7 @@ The cap and the success check were combined in one parser. Splitting the length 
 
 - Put a size cap on the path whose evidence it bounds, not on a shared success check.
 - Test the large-payload success path, not only the rejection path. Unit tests now cover: a 60 KB success activates and merges markers; a ~51 KB truncated preview activates; 60 KB with `status: 'error'` does not activate; an operation over the cap is still rejected.
-- The real-host `tests/integration/skill-delivery.test.ts` loads `ce:plan` and asserts that the epoch progression marker is merged into the `systematic_skill` tool part's metadata.
+- The real-host `tests/integration/skill-delivery.test.ts` pads a `ce:work` load past 32 KB through the skill tool's `arguments` and asserts that the epoch progression marker is merged into the `systematic_skill` tool part's metadata. It separately checks that a large `ce:plan` load activates nothing, because only allowlisted skills activate.
 
 ## Related Issues
 
