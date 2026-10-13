@@ -322,7 +322,7 @@ jobs:
   refresh:
     name: Refresh release PR
     needs: render
-    if: github.ref == 'refs/heads/main' && needs.render.result == 'success'
+    if: always() && github.ref == 'refs/heads/main' && needs.render.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release
