@@ -1401,12 +1401,80 @@ describe('OpenCode operation observer', () => {
         reasonCode: 'remote-missing-field',
       })
 
-      const oversizedChecks = createOpencodeOperationObserver({
+      // The PR view has three keys, so a limit of three lets PR parsing pass
+      // and the limit is enforced on the checks array itself.
+      const checksCap = (checkCount: number) => {
+        let checksFetched = 0
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+          limits: { maxFiles: 1_000_000, maxRemoteItems: 3 },
+          remoteCommandRunner: (executable, args) => {
+            if (executable === 'git') {
+              return { status: 0, stdout: gitStdout(args), stderr: '' }
+            }
+            if (args[0] === 'pr' && args[1] === 'view') {
+              return {
+                status: 0,
+                stdout: JSON.stringify({
+                  number: 42,
+                  state: 'OPEN',
+                  headRefOid: 'b'.repeat(40),
+                }),
+                stderr: '',
+              }
+            }
+            checksFetched += 1
+            return {
+              status: 0,
+              stdout: JSON.stringify(
+                Array.from({ length: checkCount }, () => ({
+                  state: 'SUCCESS',
+                })),
+              ),
+              stderr: '',
+            }
+          },
+        })
+        return { observer, fetched: () => checksFetched }
+      }
+
+      const overLimit = checksCap(4)
+      await expect(
+        callRemoteSnapshot(overLimit.observer, 'check-readback', 'after'),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-missing-field',
+      })
+      expect(overLimit.fetched()).toBe(1)
+
+      const atLimit = checksCap(3)
+      const accepted = await callRemoteSnapshot(
+        atLimit.observer,
+        'check-readback',
+        'after',
+      )
+      expect(atLimit.fetched()).toBe(1)
+      expect(accepted.status).toBe('available')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('accepts 4096 checks and rejects 4097 with the default remote item limit', async () => {
+    const fixture = createGitFixture()
+    const observerWithChecks = (checkCount: number) =>
+      createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        limits,
         remoteCommandRunner: (executable, args) => {
           if (executable === 'git') {
-            return { status: 0, stdout: gitStdout(args), stderr: '' }
+            return {
+              status: 0,
+              stdout:
+                args[0] === 'rev-parse' && args[1] === 'HEAD'
+                  ? 'a'.repeat(40)
+                  : 'origin/main\n',
+              stderr: '',
+            }
           }
           if (args[0] === 'pr' && args[1] === 'view') {
             return {
@@ -1421,17 +1489,22 @@ describe('OpenCode operation observer', () => {
           }
           return {
             status: 0,
-            stdout: JSON.stringify([
-              { state: 'SUCCESS' },
-              { state: 'SUCCESS' },
-              { state: 'SUCCESS' },
-            ]),
+            stdout: JSON.stringify(
+              Array.from({ length: checkCount }, () => ({ state: 'SUCCESS' })),
+            ),
             stderr: '',
           }
         },
       })
+    try {
+      const accepted = await callRemoteSnapshot(
+        observerWithChecks(4096),
+        'check-readback',
+        'after',
+      )
+      expect(accepted.status).toBe('available')
       await expect(
-        callRemoteSnapshot(oversizedChecks, 'check-readback', 'after'),
+        callRemoteSnapshot(observerWithChecks(4097), 'check-readback', 'after'),
       ).resolves.toEqual({
         status: 'unavailable',
         reasonCode: 'remote-missing-field',

@@ -143,6 +143,8 @@ export type OperationObserverRemoteResult =
       readonly reasonCode: OperationObserverReasonCode
     }
 
+// The local limits (`maxCommandOutputBytes`, `maxFiles`) do not control remote
+// bounds; those are set by `maxRemoteCommandOutputBytes` and `maxRemoteItems`.
 export interface OperationObserverLimits {
   readonly maxCommandOutputBytes?: number
   readonly maxCommandTimeoutMs?: number

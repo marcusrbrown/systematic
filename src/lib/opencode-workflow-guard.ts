@@ -2335,13 +2335,14 @@ function createSessionRuntime(
     initialized = true
   }
 
-  // Applies the pending cause to the newly published guard; a fresh publish
-  // clears stale causes but not this one.
+  // Applies the pending cause to the newly published guard and cancels the
+  // provisional-history retry, so a later fresh publish cannot clear it.
   function commitPendingUnavailable(): void {
     const cause = pendingUnavailableCause
     pendingUnavailableCause = undefined
     if (cause && options.config.mode !== 'disabled') {
       recordUnavailable(requireGuard(), cause)
+      retryableEmptyHistory = false
     }
   }
 

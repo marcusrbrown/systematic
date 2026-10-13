@@ -9849,6 +9849,52 @@ describe('OpenCode workflow guard adapter', () => {
         expect(status(adapter).state).toBe('unavailable')
       })
 
+      test.each(['protected', 'observe'] as const)(
+        'a pending event failure survives provisional-history confirmation (%s)',
+        async (mode) => {
+          let reads = 0
+          const adapter = createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: 'pending-survives-registration',
+            sessionSalt: new Uint8Array(32).fill(8),
+            hostReadback: {
+              readSessionParts: async () => {
+                reads += 1
+                return []
+              },
+              listChildren: async () => [],
+            },
+          })
+          // 1. The first event throws before the guard exists: queued.
+          await adapter.hooks.event({
+            event: {
+              get type(): unknown {
+                return boom()
+              },
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          // 2. The transform publishes a provisional guard and commits it.
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+          expect(status(adapter).state).toBe('unavailable')
+          // 3. A normal event must not republish an inactive guard over it.
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          const { parsed } = await statusOutput(adapter)
+          expect(parsed.state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+          expect(reads).toBe(1)
+        },
+      )
+
       test('a deferred empty-history initialization stays retryable and records no cause', async () => {
         let reads = 0
         const adapter = createOpencodeWorkflowGuard({
