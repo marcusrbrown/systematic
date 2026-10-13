@@ -20,7 +20,7 @@ This file contains the shipping workflow (Phase 3-4). Load it only when all Phas
 
    Every change gets reviewed before shipping. The depth scales with the change's risk profile, but review itself is never skipped.
 
-   **Tier 2: Full review (default)** -- REQUIRED unless Tier 1 criteria are explicitly met. Invoke the `ce-code-review` skill with `mode:autofix` to run specialized reviewer agents, auto-apply safe fixes, and record residual downstream work in the per-run artifact. When the plan file path is known, pass it as `plan:<path>`. This is the mandatory default -- proceed to Tier 1 only after confirming every criterion below.
+   **Tier 2: Full review (default)** -- REQUIRED unless Tier 1 criteria are explicitly met. Invoke the `ce:review` skill with `mode:autofix` to run specialized reviewer agents, auto-apply safe fixes, and record residual downstream work in the per-run artifact. When the plan file path is known, pass it as `plan:<path>`. This is the mandatory default -- proceed to Tier 1 only after confirming every criterion below.
 
    **Tier 1: Inline self-review** -- A lighter alternative permitted only when **all four** criteria are true. Before choosing Tier 1, explicitly state which criteria apply and why. If any criterion is uncertain, use Tier 2.
    - Purely additive (new files only, no existing behavior modified)
@@ -39,7 +39,7 @@ This file contains the shipping workflow (Phase 3-4). Load it only when all Phas
    Options (four or fewer, self-contained labels):
    - `Apply/fix now` — loop back into review with focused fixes; the agent investigates each finding, applies changes where safe, and re-runs review.
    - `File tickets via project tracker` — load `references/tracker-defer.md` in Interactive mode; the agent files tickets in the project's detected tracker (or `gh` fallback, or leaves them in the report if no sink exists) and proceeds to Final Validation.
-   - `Accept and proceed` — record the residual findings verbatim in a durable "Known Residuals" sink before shipping. If a PR will be created or updated in Phase 4, include them in the PR description's "Known Residuals" section (the agent owns this when calling `ce-commit-push-pr`). If the user later chooses the no-PR `ce-commit` path, create `docs/residual-review-findings/<branch-or-head-sha>.md`, include the accepted findings and source review-run context, stage it with the implementation commit, and mention the file path in the final summary. The user has acknowledged the risk, but the findings must not live only in the transient session.
+   - `Accept and proceed` — record the residual findings verbatim in a durable "Known Residuals" sink before shipping. If a PR will be created or updated in Phase 4, include them in the PR description's "Known Residuals" section (the agent owns this when calling `systematic:git-commit-push-pr`). If the user later chooses the no-PR `systematic:git-commit` path, create `docs/residual-review-findings/<branch-or-head-sha>.md`, include the accepted findings and source review-run context, stage it with the implementation commit, and mention the file path in the final summary. The user has acknowledged the risk, but the findings must not live only in the transient session.
    - `Stop — do not ship` — abort the shipping workflow. The user will handle findings manually before re-invoking.
 
    Skip this gate entirely when the review reported `Residual actionable work: none.` or when only Tier 1 (inline self-review) was used. Do not proceed past this gate on an `Accept and proceed` decision until the agent has recorded whether the durable sink is `PR Known Residuals` or `docs/residual-review-findings/<branch-or-head-sha>.md`.
@@ -68,9 +68,9 @@ This file contains the shipping workflow (Phase 3-4). Load it only when all Phas
 
 1. **Prepare Evidence Context**
 
-   Do not invoke `feature-video` directly in this step. Evidence capture belongs to the PR creation or PR description update flow, where the final PR diff and description context are available.
+   Do not capture evidence directly in this step. Evidence capture belongs to the PR creation or PR description update flow, where the final PR diff and description context are available.
 
-   Note whether the completed work has observable behavior (UI rendering, CLI output, API/library behavior with a runnable example, generated artifacts, or workflow output). The `ce-commit-push-pr` skill will ask whether to capture evidence only when evidence is possible.
+   Note whether the completed work has observable behavior (UI rendering, CLI output, API/library behavior with a runnable example, generated artifacts, or workflow output). The `systematic:git-commit-push-pr` skill will ask whether to capture evidence only when evidence is possible.
 
 2. **Update Plan Status**
 
@@ -81,17 +81,17 @@ This file contains the shipping workflow (Phase 3-4). Load it only when all Phas
 
 3. **Commit and Create Pull Request**
 
-   Load the `ce-commit-push-pr` skill to handle committing, pushing, and PR creation. The skill handles convention detection, branch safety, logical commit splitting, adaptive PR descriptions, and attribution badges.
+   Load the `systematic:git-commit-push-pr` skill to handle committing, pushing, and PR creation. The skill handles convention detection, branch safety, logical commit splitting, adaptive PR descriptions, and attribution badges.
 
    When providing context for the PR description, include:
    - The plan's summary and key decisions
    - Testing notes (tests added/modified, manual testing performed)
-   - Evidence context from step 1, so `ce-commit-push-pr` can decide whether to ask about capturing evidence
+   - Evidence context from step 1, so `systematic:git-commit-push-pr` can decide whether to ask about capturing evidence
    - Figma design link (if applicable)
    - The Post-Deploy Monitoring & Validation section (see Phase 3 Step 5)
    - Any "Known Residuals" accepted in the Phase 3 Residual Work Gate, rendered as a dedicated section in the PR body with severity, file:line, and title per finding
 
-   If the user prefers to commit without creating a PR, load the `ce-commit` skill instead.
+   If the user prefers to commit without creating a PR, load the `systematic:git-commit` skill instead.
 
 4. **Notify User**
    - Summarize what was completed
@@ -109,10 +109,10 @@ Before creating PR, verify:
 - [ ] Linting passes (use linting-agent)
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
-- [ ] Evidence decision handled by `ce-commit-push-pr` when the change has observable behavior
+- [ ] Evidence decision handled by `systematic:git-commit-push-pr` when the change has observable behavior
 - [ ] Commit messages follow conventional format
 - [ ] PR description includes Post-Deploy Monitoring & Validation section (or explicit no-impact rationale)
-- [ ] Code review completed (inline self-review or full `ce-code-review`)
+- [ ] Code review completed (inline self-review or full `ce:review`)
 - [ ] PR description includes summary, testing notes, and evidence when captured
 - [ ] PR description includes Compound Engineered badge with accurate model and harness
 
@@ -120,7 +120,7 @@ Before creating PR, verify:
 
 Every change gets reviewed. The tier determines depth, not whether review happens.
 
-**Tier 2 (full review)** -- REQUIRED default. Invoke `ce-code-review mode:autofix` with `plan:<path>` when available. Safe fixes are applied automatically; residual work is recorded in the run artifact for downstream routing. Always use this tier unless all four Tier 1 criteria are explicitly confirmed.
+**Tier 2 (full review)** -- REQUIRED default. Invoke `ce:review mode:autofix` with `plan:<path>` when available. Safe fixes are applied automatically; residual work is recorded in the run artifact for downstream routing. Always use this tier unless all four Tier 1 criteria are explicitly confirmed.
 
 **Tier 1 (inline self-review)** -- permitted only when all four are true (state each explicitly before choosing):
 - Purely additive (new files only, no existing behavior modified)
