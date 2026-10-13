@@ -266,6 +266,23 @@ function markerKinds(messages: unknown[]): string[] {
   })
 }
 
+/**
+ * `systematic_workflow_status` reports `firstUnavailableCause` only in its
+ * JSON tool output (not metadata). Surface it so a flaking scenario's log
+ * records why the guard went unavailable.
+ */
+function firstUnavailableCause(output: unknown): unknown {
+  if (typeof output !== 'string') return undefined
+  try {
+    const parsed: unknown = JSON.parse(output)
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>).firstUnavailableCause
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function resultSummary(messages: unknown[]): Array<Record<string, unknown>> {
   return toolParts(messages).map((part) => {
     const state = part.state
@@ -288,6 +305,10 @@ function resultSummary(messages: unknown[]): Array<Record<string, unknown>> {
       error: value.error,
       workflowGuardStatus: workflowGuard?.status,
       workflowGuardReasonCode: workflowGuard?.reasonCode,
+      firstUnavailableCause:
+        part.tool === 'systematic_workflow_status'
+          ? firstUnavailableCause(value.output)
+          : undefined,
       exit: metadata?.exit,
     }
   })
@@ -355,6 +376,46 @@ function callsFor(name: string, index: number): ToolCall[] {
       { id: 'push-push', name: 'bash', arguments: { command: 'git push' } },
       {
         id: 'push-status',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+    ]
+  }
+  if (name === 'status-first') {
+    // First guard call of the session is a status read (no epoch yet), then a
+    // guarded skill activates the epoch, then status is read again.
+    return [
+      {
+        id: 'status-first-before',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+      skill,
+      {
+        id: 'status-first-after',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+    ]
+  }
+  if (name === 'start-first') {
+    // First guard call is a start with no skill loaded (no epoch): the guard
+    // owns the rejection. Status must then stay inactive (not unavailable)
+    // even though a start part now sits in history, until a skill activates.
+    return [
+      {
+        id: 'start-first-start',
+        name: 'systematic_workflow_start',
+        arguments: {},
+      },
+      {
+        id: 'start-first-status-inactive',
+        name: 'systematic_workflow_status',
+        arguments: {},
+      },
+      skill,
+      {
+        id: 'start-first-status-active',
         name: 'systematic_workflow_status',
         arguments: {},
       },
@@ -524,6 +585,70 @@ describe.skipIf(!isOpencodeAvailable())('focused real-host dogfood', () => {
   })
 
   test(
+    'reports inactive / no-active-epoch for a status-first session, then waiting / missing-evidence after activation',
+    async () => {
+      const statusFirst = await runScenario('observe', 'status-first', 20)
+      const before = statusFirst.results.find(
+        (r) =>
+          r.callID === 'status-first-before' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(before).toBeDefined()
+      expect(before?.status).toBe('completed')
+      expect(before?.state).toBe('inactive')
+      expect(before?.reasonCode).toBe('no-active-epoch')
+
+      const after = statusFirst.results.find(
+        (r) =>
+          r.callID === 'status-first-after' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(after).toBeDefined()
+      expect(after?.status).toBe('completed')
+      expect(after?.state).toBe('waiting')
+      expect(after?.reasonCode).toBe('missing-evidence')
+    },
+    TIMEOUT_MS * 4,
+  )
+
+  test(
+    'rejects a start-first session as no-active-epoch, stays inactive (not unavailable), then waits after activation',
+    async () => {
+      const startFirst = await runScenario('observe', 'start-first', 21)
+      const start = startFirst.results.find(
+        (r) =>
+          r.callID === 'start-first-start' &&
+          r.tool === 'systematic_workflow_start',
+      )
+      expect(start).toBeDefined()
+      expect(start?.status).toBe('completed')
+      expect(start?.workflowGuardStatus).toBe('rejected')
+      expect(start?.workflowGuardReasonCode).toBe('no-active-epoch')
+
+      const inactive = startFirst.results.find(
+        (r) =>
+          r.callID === 'start-first-status-inactive' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(inactive).toBeDefined()
+      expect(inactive?.status).toBe('completed')
+      expect(inactive?.state).toBe('inactive')
+      expect(inactive?.reasonCode).toBe('no-active-epoch')
+
+      const active = startFirst.results.find(
+        (r) =>
+          r.callID === 'start-first-status-active' &&
+          r.tool === 'systematic_workflow_status',
+      )
+      expect(active).toBeDefined()
+      expect(active?.status).toBe('completed')
+      expect(active?.state).toBe('waiting')
+      expect(active?.reasonCode).toBe('missing-evidence')
+    },
+    TIMEOUT_MS * 4,
+  )
+
+  test(
     'proves decisive shipping flows in isolated observe/protected hosts',
     async () => {
       const started = performance.now()
@@ -559,6 +684,18 @@ describe.skipIf(!isOpencodeAvailable())('focused real-host dogfood', () => {
       )
 
       const push = observe.find((entry) => entry.scenario === 'push')
+      // Records the cause in the log if this scenario flakes (issue #1005).
+      const pushStatusDiagnostic = push?.results.find(
+        (r) => r.callID === 'push-status',
+      )
+      console.log(
+        'PUSH_STATUS_DIAGNOSTIC',
+        JSON.stringify({
+          state: pushStatusDiagnostic?.state,
+          reasonCode: pushStatusDiagnostic?.reasonCode,
+          firstUnavailableCause: pushStatusDiagnostic?.firstUnavailableCause,
+        }),
+      )
       expect(
         push?.markerKinds.filter((kind) => kind === 'mint').length,
       ).toBeGreaterThanOrEqual(4)

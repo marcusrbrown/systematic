@@ -94,7 +94,7 @@ topic: <kebab-case-topic>
 
 <!-- Include ONLY in non-interactive (headless) mode when the agent had Inferred bets that
      were not user-confirmed in chat. Lists the un-validated agent inferences explicitly so
-     downstream review (ce-doc-review, ce-plan, human PR review) can scrutinize them as bets,
+     downstream review (document-review, ce:plan, human PR review) can scrutinize them as bets,
      not as authoritative requirements. Omit entirely in interactive mode — Inferred bets get
      user-corrected in chat and either become decisions or are revised away. -->
 ## Assumptions
@@ -232,7 +232,7 @@ Include a visual aid when the requirements would be significantly easier to unde
 
 Before finalizing:
 
-- What would `ce-plan` still have to invent if this brainstorm ended now?
+- What would `ce:plan` still have to invent if this brainstorm ended now?
 - Does every Standard/Deep requirement have either an observable behavior or a stated reason it is structural?
 - Do Success Criteria cover both human outcome and downstream-agent handoff quality?
 - If Actors are named, is each actor mentioned in the problem represented in at least one requirement, flow, or scope boundary?

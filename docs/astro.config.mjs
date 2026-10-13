@@ -167,6 +167,14 @@ export default defineConfig({
               label: 'Configuration',
               link: '/reference/configuration/',
             },
+            {
+              label: 'Release notes',
+              link: '/reference/release-notes/',
+            },
+            {
+              label: 'Changelog',
+              link: '/reference/changelog/',
+            },
           ],
         },
       ],

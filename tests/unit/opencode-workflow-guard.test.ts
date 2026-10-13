@@ -11,8 +11,10 @@ import { z } from 'zod'
 
 import type {
   OpencodeOperationObserver,
+  OperationObserverReasonCode,
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
+  RemoteOperation,
 } from '../../src/lib/opencode-operation-observer.js'
 import { createOpencodeOperationObserver } from '../../src/lib/opencode-operation-observer.js'
 import {
@@ -544,12 +546,23 @@ function buildPinnedRecoveryMarkers(
   return [epochStart, unitStart, mint]
 }
 
-async function createPinnedRecoveryAdapter(): Promise<{
+async function createPinnedRecoveryAdapter(
+  mode: 'observe' | 'protected' = 'observe',
+): Promise<{
   readonly fixture: TargetDerivationFixture
   readonly adapter: OpencodeWorkflowGuard
   readonly targetRoot: string
   readonly targetIdentity: string
-  setTargetValidationAvailable(value: boolean): void
+  setTargetValidationAvailable(
+    value: boolean,
+    reasonCode?: OperationObserverReasonCode,
+  ): void
+  // Targeted one-shot timeouts, counted from the moment they are armed: the
+  // Nth upcoming call of that kind returns `command-timeout`.
+  timeoutParentSnapshotOnCall(n: number): void
+  timeoutPinnedSnapshotOnCall(n: number): void
+  timeoutPinnedValidationOnCall(n: number): void
+  throwParentSnapshotOnCall(n: number): void
 }> {
   const fixture = createTargetDerivationFixture()
   const targetRoot = fs.realpathSync(fixture.linkedRoot)
@@ -570,21 +583,58 @@ async function createPinnedRecoveryAdapter(): Promise<{
     throw new Error('target unavailable')
   }
   let targetValidationAvailable = true
+  let targetValidationReason: OperationObserverReasonCode = 'target-unavailable'
+  const calls = { parent: 0, pinned: 0, validation: 0 }
+  const timeoutOn: Record<keyof typeof calls, number | undefined> = {
+    parent: undefined,
+    pinned: undefined,
+    validation: undefined,
+  }
+  let parentThrowOn: number | undefined
+  const commandTimeout = {
+    status: 'unavailable' as const,
+    reasonCode: 'command-timeout' as const,
+  }
   const observer: OpencodeOperationObserver = {
     targetDigest: baseObserver.targetDigest,
     validateRegisteredWorktree: (candidateDirectory) => {
-      if (!targetValidationAvailable && candidateDirectory === targetRoot) {
-        return { status: 'error', reasonCode: 'target-unavailable' }
+      if (candidateDirectory === targetRoot) {
+        calls.validation += 1
+        if (calls.validation === timeoutOn.validation) {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (!targetValidationAvailable) {
+          return { status: 'error', reasonCode: targetValidationReason }
+        }
       }
       return baseObserver.validateRegisteredWorktree(candidateDirectory)
     },
-    snapshot: () => baseObserver.snapshot(),
+    snapshot: async () => {
+      calls.parent += 1
+      if (calls.parent === parentThrowOn) throw new Error('parent exploded')
+      if (calls.parent === timeoutOn.parent) return commandTimeout
+      return baseObserver.snapshot()
+    },
+  }
+  const createTargetObserver = (
+    targetDirectory: string,
+  ): OpencodeOperationObserver => {
+    const real = createOpencodeOperationObserver({ targetDirectory })
+    if (targetDirectory !== targetRoot) return real
+    return {
+      ...real,
+      snapshot: async () => {
+        calls.pinned += 1
+        if (calls.pinned === timeoutOn.pinned) return commandTimeout
+        return real.snapshot()
+      },
+    }
   }
   const registrationIdentity = 'pinned-completion-registration'
   const sessionSalt = new Uint8Array(32).fill(137)
   let parentMarkers: readonly unknown[] = []
   const adapter = createOpencodeWorkflowGuard({
-    config: { mode: 'observe', debug: false },
+    config: { mode, debug: false },
     workspaceIdentity: initial.snapshot.targetDigest,
     repositoryIdentity: targetInitial.snapshot.repositoryRevisionDigest,
     worktreeIdentity: targetInitial.snapshot.worktreeRevisionDigest,
@@ -593,6 +643,7 @@ async function createPinnedRecoveryAdapter(): Promise<{
     registrationIdentity,
     sessionSalt,
     observer,
+    createTargetObserver,
     classifier: createReceiptClassifier(),
     hostReadback: {
       readSessionParts: async (sessionID) =>
@@ -644,8 +695,21 @@ async function createPinnedRecoveryAdapter(): Promise<{
     adapter,
     targetRoot,
     targetIdentity: targetObserver.targetDigest,
-    setTargetValidationAvailable(value) {
+    setTargetValidationAvailable(value, reasonCode = 'target-unavailable') {
       targetValidationAvailable = value
+      targetValidationReason = reasonCode
+    },
+    timeoutParentSnapshotOnCall(n) {
+      timeoutOn.parent = calls.parent + n
+    },
+    timeoutPinnedSnapshotOnCall(n) {
+      timeoutOn.pinned = calls.pinned + n
+    },
+    timeoutPinnedValidationOnCall(n) {
+      timeoutOn.validation = calls.validation + n
+    },
+    throwParentSnapshotOnCall(n) {
+      parentThrowOn = calls.parent + n
     },
   }
 }
@@ -1405,13 +1469,375 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(restored).reasonCode).not.toBe('guard-unavailable')
   })
 
-  test('falls back to the mandatory floor for unknown guarded skills', async () => {
-    const adapter = createAdapter('observe')
-    await observeSkill(adapter, 'systematic_skill', 'ce:brainstorm')
-    expect(status(adapter).unit?.requiredOperations).toEqual([
-      'implementation',
-      'verification',
-    ])
+  describe('guarded skill allowlist', () => {
+    const SKILL_TOOLS = ['skill', 'systematic_skill'] as const
+
+    interface AllowlistedSkill {
+      readonly name: string
+      readonly family: 'work' | 'shipping'
+      readonly requiredOperations: readonly ReceiptOperation[]
+    }
+
+    // Literal expectations, deliberately not derived from the production
+    // TRUSTED_SKILL_POLICIES table so that a drifted policy row fails here.
+    const ALLOWLISTED_SKILLS: readonly AllowlistedSkill[] = [
+      {
+        name: 'ce:work',
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+      },
+      {
+        name: 'systematic:ce:work',
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+      },
+      {
+        name: 'git-commit',
+        family: 'shipping',
+        requiredOperations: ['implementation', 'verification', 'commit'],
+      },
+      {
+        name: 'systematic:git-commit',
+        family: 'shipping',
+        requiredOperations: ['implementation', 'verification', 'commit'],
+      },
+      {
+        name: 'git-commit-push-pr',
+        family: 'shipping',
+        requiredOperations: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+          'pr-creation',
+          'check-readback',
+          'review-readback',
+        ],
+      },
+      {
+        name: 'systematic:git-commit-push-pr',
+        family: 'shipping',
+        requiredOperations: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+          'pr-creation',
+          'check-readback',
+          'review-readback',
+        ],
+      },
+    ]
+
+    function receiptMarkers(output: RecordedToolOutput): unknown {
+      return output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    }
+
+    async function loadSkill(
+      adapter: OpencodeWorkflowGuard,
+      tool: 'systematic_skill' | 'skill',
+      name: string,
+      callID = `${tool}-${name}`,
+      output: RecordedToolOutput = {
+        title: 'Loaded skill',
+        output: 'skill result',
+        metadata: {},
+      },
+    ): Promise<RecordedToolOutput> {
+      await observeSkill(adapter, tool, name, callID, SESSION_A, output)
+      return output
+    }
+
+    async function statusDocument(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      return JSON.parse(expectToolOutput(result).output)
+    }
+
+    test.each(
+      ['ce:brainstorm', 'ce:review'].flatMap((name) =>
+        SKILL_TOOLS.map((tool) => ({ name, tool })),
+      ),
+    )(
+      '$tool loading non-allowlisted $name in an inactive session is a no-op',
+      async ({ name, tool }) => {
+        const adapter = createAdapter('observe')
+        const output = await loadSkill(adapter, tool, name)
+
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+          unit: null,
+        })
+        expect(receiptMarkers(output)).toBeUndefined()
+        const document = await statusDocument(adapter)
+        expect(document.seedDeferrals).toBeUndefined()
+        expect(document.firstUnavailableCause).toBeUndefined()
+      },
+    )
+
+    test.each(
+      ALLOWLISTED_SKILLS.flatMap((skill) =>
+        SKILL_TOOLS.map((tool) => ({ ...skill, tool })),
+      ),
+    )(
+      '$tool loading allowlisted $name activates the $family family with its literal operations',
+      async ({ name, tool, family, requiredOperations }) => {
+        const adapter = createAdapter('observe')
+        const output = await loadSkill(adapter, tool, name)
+
+        expect(status(adapter).epoch?.family).toBe(family)
+        expect(status(adapter).unit?.requiredOperations).toEqual(
+          requiredOperations,
+        )
+        expect(receiptMarkers(output)).toBeDefined()
+      },
+    )
+
+    test('loading ce:review mid-work with a completed unit starts no new unit', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      await completeUnit(adapter, 'allowlist-complete-unit')
+      const before = status(adapter)
+      expect(before.unit?.status).toBe('completed')
+
+      for (const tool of SKILL_TOOLS) {
+        const output = await loadSkill(adapter, tool, 'ce:review')
+        expect(receiptMarkers(output)).toBeUndefined()
+      }
+
+      expect(status(adapter)).toEqual(before)
+    })
+
+    test('loading ce:review during an active shipping epoch is not a family conflict', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'skill', 'git-commit-push-pr')
+      const before = status(adapter)
+      const beforeDocument = await statusDocument(adapter)
+      expect(before.epoch?.family).toBe('shipping')
+
+      for (const tool of SKILL_TOOLS) {
+        const output = await loadSkill(adapter, tool, 'ce:review')
+        expect(receiptMarkers(output)).toBeUndefined()
+      }
+
+      expect(status(adapter)).toEqual(before)
+      expect(status(adapter).reasonCode).not.toBe('family-conflict')
+      expect(await statusDocument(adapter)).toEqual(beforeDocument)
+    })
+
+    test.each([
+      {
+        label: 'protected',
+        state: 'protected',
+        build: async () => {
+          const adapter = createAdapter('protected')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          mintReceipt(adapter, 'implementation')
+          mintReceipt(adapter, 'verification')
+          return adapter
+        },
+      },
+      {
+        label: 'waiting',
+        state: 'waiting',
+        build: async () => {
+          const adapter = createAdapter('observe')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          return adapter
+        },
+      },
+      {
+        label: 'rejected',
+        state: 'rejected',
+        build: async () => {
+          const adapter = createAdapter('observe')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          adapter.observeReceipt(SESSION_A, { not: 'a receipt' })
+          return adapter
+        },
+      },
+      {
+        label: 'unavailable',
+        state: 'unavailable',
+        build: async () => {
+          const adapter = createAdapter('observe')
+          await adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_skill',
+              sessionID: SESSION_A,
+              callID: 'unavailable-swap',
+            },
+            { args: { name: 'ce:work' } },
+          )
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool: 'systematic_skill',
+              sessionID: SESSION_A,
+              callID: 'unavailable-swap',
+              args: { name: 'git-commit' },
+            },
+            { title: 'x', output: 'y', metadata: {} },
+          )
+          return adapter
+        },
+      },
+    ] as const)(
+      'loading ce:review leaves the $label state and unavailable cause unchanged',
+      async ({ state, build }) => {
+        const adapter = await build()
+        const before = status(adapter)
+        const beforeDocument = await statusDocument(adapter)
+        expect(before.state).toBe(state)
+
+        for (const tool of SKILL_TOOLS) {
+          const output = await loadSkill(adapter, tool, 'ce:review')
+          expect(receiptMarkers(output)).toBeUndefined()
+        }
+
+        expect(status(adapter)).toEqual(before)
+        const afterDocument = await statusDocument(adapter)
+        expect(afterDocument.firstUnavailableCause).toEqual(
+          beforeDocument.firstUnavailableCause,
+        )
+        expect(afterDocument).toEqual(beforeDocument)
+      },
+    )
+
+    test.each(
+      ['constructor', 'toString', '__proto__'].flatMap((name) =>
+        SKILL_TOOLS.map((tool) => ({ name, tool })),
+      ),
+    )(
+      '$tool loading inherited-property name $name activates nothing',
+      async ({ name, tool }) => {
+        const adapter = createAdapter('observe')
+        const output = await loadSkill(adapter, tool, name)
+
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+          unit: null,
+        })
+        expect(receiptMarkers(output)).toBeUndefined()
+      },
+    )
+
+    test('an allowlisted ce:work load whose after output exceeds 32 KB still activates', async () => {
+      const adapter = createAdapter('observe')
+      const output = await loadSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'oversized-ce-work',
+        { title: 'Loaded skill', output: 'x'.repeat(32_769), metadata: {} },
+      )
+
+      expect(status(adapter).epoch?.family).toBe('work')
+      expect(status(adapter).unit?.requiredOperations).toEqual([
+        'implementation',
+        'verification',
+      ])
+      expect(receiptMarkers(output)).toBeDefined()
+    })
+
+    test('a session that only loads ce:review is rejected by workflow start with no-active-epoch', async () => {
+      const adapter = createAdapter('observe')
+      await loadSkill(adapter, 'systematic_skill', 'ce:review')
+
+      const startOutput = {
+        title: 'pending',
+        output: 'pending',
+        metadata: {},
+      }
+      const startInput = {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'start-after-review-only',
+      }
+      await adapter.hooks['tool.execute.before'](startInput, { args: {} })
+      await adapter.hooks['tool.execute.after'](
+        { ...startInput, args: {} },
+        startOutput,
+      )
+
+      expect(startOutput.output).toContain('no-active-epoch')
+      expect(startOutput.metadata).toMatchObject({
+        state: 'inactive',
+        workflowGuard: {
+          status: 'rejected',
+          reasonCode: 'no-active-epoch',
+        },
+      })
+      expect(status(adapter)).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+        epoch: null,
+      })
+    })
+
+    test('a callID whose before-hook names ce:work and after-hook names git-commit still records call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('observe')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-swap',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-swap',
+          args: { name: 'git-commit' },
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+
+      expect((await statusDocument(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-after',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+      expect(status(adapter).state).toBe('unavailable')
+    })
+
+    test('a callID whose before-hook names ce:work and after-hook names ce:review fails closed with call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('protected')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-to-unlisted-swap',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-to-unlisted-swap',
+          args: { name: 'ce:review' },
+        },
+        { title: 'Loaded skill', output: 'skill result', metadata: {} },
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).epoch).toBeNull()
+      expect(
+        (await statusDocument(adapter)).firstUnavailableCause,
+      ).toMatchObject({ site: 'tool-after', kind: 'call-lifecycle-mismatch' })
+    })
   })
 
   test('activates from successful systematic and native skill after events only', async () => {
@@ -1984,7 +2410,7 @@ describe('OpenCode workflow guard adapter', () => {
         callId: 'shared-transition',
         target: 'unit',
       }),
-    ).toMatchObject({ status: 'unavailable' })
+    ).toMatchObject({ status: 'rejected', reasonCode: 'no-active-epoch' })
   })
 
   test('requires valid session identities and does not alias missing tool contexts', async () => {
@@ -2210,7 +2636,7 @@ describe('OpenCode workflow guard adapter', () => {
     expect(rejectedOutput.output).toContain('no-active-epoch')
     expect(rejectedOutput.metadata).toMatchObject({
       protocolVersion: expect.any(Number),
-      state: 'unavailable',
+      state: 'inactive',
       workflowGuard: {
         status: 'rejected',
         reasonCode: 'no-active-epoch',
@@ -2257,6 +2683,2058 @@ describe('OpenCode workflow guard adapter', () => {
       workflowGuard: { status: 'started' },
     })
     expect(status(subsequent).unit?.status).toBe('active')
+  })
+
+  describe('completion requested with no epoch', () => {
+    interface HostOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    function freshOutput(): HostOutput {
+      return { title: 'pending', output: 'pending', metadata: {} }
+    }
+
+    async function completeBeforeAndAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      target: 'unit' | 'epoch' = 'unit',
+    ): Promise<HostOutput> {
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID,
+      }
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.before'](input, { args: { target } })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target } },
+        output,
+      )
+      return output
+    }
+
+    for (const mode of ['observe', 'protected'] as const) {
+      test(`${mode} mode writes a guard-owned rejected / no-active-epoch result and stays inactive`, async () => {
+        const adapter = createAdapter(mode)
+        const output = await completeBeforeAndAfter(
+          adapter,
+          `no-epoch-complete-${mode}`,
+        )
+        expect(output.metadata).toMatchObject({
+          workflowGuard: {
+            status: 'rejected',
+            reasonCode: 'no-active-epoch',
+            target: 'unit',
+          },
+        })
+        expect(output.title).not.toContain('unavailable')
+        expect(output.output).not.toContain('unavailable')
+        expect(output.title).toBe('Workflow transition rejected')
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+        })
+      })
+    }
+
+    test('protected mode still throws for other blocked reasons', async () => {
+      const adapter = createAdapter('protected')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      await completeBeforeAndAfter(adapter, 'unit-complete', 'unit')
+      await completeBeforeAndAfter(adapter, 'epoch-complete', 'epoch')
+      expect(status(adapter).reasonCode).toBe('epoch-completed')
+
+      await expect(
+        adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID: 'epoch-complete-again',
+          },
+          { args: { target: 'epoch' } },
+        ),
+      ).rejects.toMatchObject({
+        code: 'workflow-guard-blocked',
+        reasonCode: 'epoch-completed',
+      })
+    })
+
+    test('a same-batch skill activation is not recorded as no-active-epoch', async () => {
+      const adapter = createAdapter('protected')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'batch-skill',
+      }
+      const completeInput = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'batch-complete',
+      }
+      const skillOutput = freshOutput()
+      const completeOutput = freshOutput()
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        skillOutput,
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        completeOutput,
+      )
+      const guardMetadata = completeOutput.metadata.workflowGuard as
+        | { status: string; reasonCode: string }
+        | undefined
+      expect(guardMetadata?.reasonCode).not.toBe('no-active-epoch')
+      expect(status(adapter).unit?.status).not.toBe('completed')
+    })
+
+    async function completeAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<HostOutput> {
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: SESSION_A,
+          callID,
+          args: { target: 'unit' },
+        },
+        output,
+      )
+      return output
+    }
+
+    for (const mode of ['observe', 'protected'] as const) {
+      test(`a duplicate after-hook replays the identical no-epoch rejection without a second before-hook and leaves the session inactive (${mode})`, async () => {
+        const adapter = createAdapter(mode)
+        const callID = `replay-no-epoch-${mode}`
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID,
+          },
+          { args: { target: 'unit' } },
+        )
+        const first = await completeAfter(adapter, callID)
+        const second = await completeAfter(adapter, callID)
+        expect(first.metadata).toMatchObject({
+          workflowGuard: {
+            status: 'rejected',
+            reasonCode: 'no-active-epoch',
+            target: 'unit',
+          },
+        })
+        expect(second.metadata.workflowGuard).toEqual(
+          first.metadata.workflowGuard,
+        )
+        expect(second.title).toBe(first.title)
+        expect(second.output).toBe(first.output)
+        expect(second.title).not.toContain('unavailable')
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+        })
+      })
+    }
+
+    test('a duplicate after-hook replays the write-time recheck outcome, not a false no-active-epoch', async () => {
+      const adapter = createAdapter('protected')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'replay-batch-skill',
+      }
+      const completeInput = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'replay-batch-complete',
+      }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        freshOutput(),
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+
+      const first = await completeAfter(adapter, completeInput.callID)
+      const second = await completeAfter(adapter, completeInput.callID)
+      const firstGuard = first.metadata.workflowGuard as {
+        status: string
+        reasonCode: string
+      }
+      expect(firstGuard.reasonCode).not.toBe('no-active-epoch')
+      expect(second.metadata.workflowGuard).toEqual(
+        first.metadata.workflowGuard,
+      )
+      expect(second.title).toBe(first.title)
+      expect(second.output).toBe(first.output)
+      expect(status(adapter).epoch).not.toBeNull()
+      expect(status(adapter).unit?.status).not.toBe('completed')
+      expect(status(adapter).reasonCode).not.toBe('guard-unavailable')
+    })
+
+    test('an after-hook for a callID that never had a before-hook still takes the unreplayable path', async () => {
+      const adapter = createAdapter('observe')
+      const output = await completeAfter(adapter, 'never-prepared')
+      expect(output.metadata).toMatchObject({
+        workflowGuard: {
+          status: 'unavailable',
+          reasonCode: 'guard-unavailable',
+        },
+      })
+      expect(status(adapter).state).toBe('unavailable')
+    })
+
+    test('never finalizes a transition or mints a receipt', async () => {
+      for (const mode of ['observe', 'protected'] as const) {
+        const adapter = createAdapter(mode)
+        await completeBeforeAndAfter(adapter, `no-finalize-${mode}`)
+        await completeBeforeAndAfter(adapter, `no-finalize-${mode}`)
+        expect(adapter.ledger(SESSION_A)?.listReceipts() ?? []).toEqual([])
+        expect(status(adapter).epoch).toBeNull()
+        expect(status(adapter).state).toBe('inactive')
+      }
+    })
+  })
+
+  describe('status path isolation', () => {
+    interface HostOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    function freshOutput(): HostOutput {
+      return { title: 'pending', output: 'pending', metadata: {} }
+    }
+
+    async function statusTool(adapter: OpencodeWorkflowGuard): Promise<void> {
+      await getTool(adapter, 'systematic_workflow_status').execute(
+        {},
+        toolContext(SESSION_A),
+      )
+    }
+
+    async function transformPass(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<void> {
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+    }
+
+    function startBefore(adapter: OpencodeWorkflowGuard, callID: string) {
+      return adapter.hooks['tool.execute.before'](
+        { tool: 'systematic_workflow_start', sessionID: SESSION_A, callID },
+        { args: {} },
+      )
+    }
+
+    async function startAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<HostOutput> {
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID,
+          args: {},
+        },
+        output,
+      )
+      return output
+    }
+
+    async function completeFirstUnit(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<void> {
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'complete-first-unit',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        freshOutput(),
+      )
+      expect(status(adapter).unit?.status).toBe('completed')
+    }
+
+    test('a: a status call between a sibling start before- and after-hook does not discard the start', async () => {
+      const adapter = createAdapter('observe')
+      await completeFirstUnit(adapter)
+      const ledgerBefore = ledger(adapter)
+
+      await Promise.all([
+        startBefore(adapter, 'batch-start'),
+        adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_status',
+            sessionID: SESSION_A,
+            callID: 'batch-status',
+          },
+          { args: {} },
+        ),
+      ])
+      await statusTool(adapter)
+      const output = await startAfter(adapter, 'batch-start')
+
+      expect(output.metadata).toMatchObject({
+        workflowGuard: { status: 'started' },
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+      expect(ledger(adapter)).toBe(ledgerBefore)
+    })
+
+    test('b: a status call between a sibling guarded skill before- and after-hook does not lose the activation', async () => {
+      const adapter = createAdapter('observe')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'batch-skill',
+      }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: { name: 'ce:work' },
+      })
+      await statusTool(adapter)
+      await adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: { name: 'ce:work' } },
+        { title: 'Loaded skill', output: 'skill result', metadata: {} },
+      )
+      expect(status(adapter).epoch).not.toBeNull()
+      expect(status(adapter)).toMatchObject({
+        state: 'waiting',
+        reasonCode: 'missing-evidence',
+      })
+    })
+
+    test('c: a status call between a sibling complete before- and after-hook does not lose or poison the completion', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'batch-complete',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      await statusTool(adapter)
+      const output = freshOutput()
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        output,
+      )
+      expect(output.metadata).toMatchObject({
+        workflowGuard: { status: 'completed', target: 'unit' },
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('completed')
+    })
+
+    test('d: a before-hook that never gets an after-hook keeps its pending entry across status calls; the next transform clears it', async () => {
+      const adapter = createAdapter('observe')
+      await completeFirstUnit(adapter)
+
+      await startBefore(adapter, 'orphan-start')
+      await statusTool(adapter)
+      await statusTool(adapter)
+      // Status left the entry alone, so a late after-hook still completes it.
+      expect(
+        (await startAfter(adapter, 'orphan-start')).metadata,
+      ).toMatchObject({ workflowGuard: { status: 'started' } })
+
+      const second = createAdapter('observe')
+      await completeFirstUnit(second)
+      await startBefore(second, 'orphan-start')
+      await transformPass(second)
+      await startAfter(second, 'orphan-start')
+      expect(status(second).state).toBe('unavailable')
+    })
+
+    describe('observer readback without an epoch', () => {
+      function countingObserver(behavior: 'unavailable' | 'throws'): {
+        observer: OpencodeOperationObserver
+        calls: () => number
+      } {
+        const base = sequenceObserver([operationSnapshot()])
+        let calls = 0
+        return {
+          observer: {
+            ...base,
+            snapshot: async () => {
+              calls += 1
+              if (behavior === 'throws') throw new Error('observer exploded')
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+          },
+          calls: () => calls,
+        }
+      }
+
+      for (const behavior of ['unavailable', 'throws'] as const) {
+        test(`e: status in an inactive session with a ${behavior} observer stays inactive and never reads the observer`, async () => {
+          const { observer, calls } = countingObserver(behavior)
+          const adapter = createAdapter('observe', false, observer)
+          await statusTool(adapter)
+          await statusTool(adapter)
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect(calls()).toBe(0)
+        })
+      }
+
+      test('e: status in an inactive session with no observer stays inactive', async () => {
+        const adapter = createAdapter('observe')
+        await statusTool(adapter)
+        expect(status(adapter).state).toBe('inactive')
+      })
+
+      for (const behavior of ['unavailable', 'throws'] as const) {
+        test(`f: status during an active epoch with a ${behavior} observer still goes unavailable with the observer-readback-failed cause`, async () => {
+          const base = sequenceObserver([operationSnapshot()])
+          let failing = false
+          const observer: OpencodeOperationObserver = {
+            ...base,
+            snapshot: async () => {
+              if (!failing) return base.snapshot()
+              if (behavior === 'throws') throw new Error('observer exploded')
+              return { status: 'unavailable', reasonCode: 'target-unavailable' }
+            },
+          }
+          const adapter = createAdapter('observe', false, observer)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).state).not.toBe('unavailable')
+          failing = true
+          const result = await getTool(
+            adapter,
+            'systematic_workflow_status',
+          ).execute({}, toolContext(SESSION_A))
+          const parsed = JSON.parse(expectToolOutput(result).output)
+          expect(parsed.state).toBe('unavailable')
+          // A thrown observer has no reason code; an unavailable result
+          // carries the observer's own reason code through to the cause.
+          expect(parsed.firstUnavailableCause).toEqual(
+            behavior === 'throws'
+              ? {
+                  site: 'refresh-readback',
+                  kind: 'observer-readback-failed',
+                  timedOut: false,
+                }
+              : {
+                  site: 'refresh-readback',
+                  kind: 'observer-readback-failed',
+                  reasonCode: 'target-unavailable',
+                  timedOut: false,
+                },
+          )
+        })
+      }
+    })
+
+    describe('status-refresh timeouts skip the probe and are reported', () => {
+      const D = 'd'.repeat(64)
+      const E = 'e'.repeat(64)
+      const FRESH = 'f'.repeat(64)
+      const DRIFT = '9'.repeat(64)
+      const TIMEOUT = {
+        status: 'unavailable' as const,
+        reasonCode: 'command-timeout' as const,
+      }
+      const MISSING = { status: 'missing-resource' as const }
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const prAvailable = remoteAvailable(D, E, {
+        pullRequest: { identity: D, state: 'open' },
+      })
+      const prDrifted = remoteAvailable(DRIFT, E, {
+        pullRequest: { identity: DRIFT, state: 'open' },
+      })
+
+      interface SkipFixture {
+        readonly adapter: OpencodeWorkflowGuard
+        setLocalTimeout(value: boolean): void
+        failRemote(
+          operation: RemoteOperation,
+          result: OperationObserverRemoteResult | undefined,
+        ): void
+        resetRemoteCalls(): void
+        remoteCalls(): number
+        localCalls(): number
+        // The Nth upcoming local snapshot call (counted from now) times out.
+        timeoutLocalSnapshotOnCall(n: number): void
+        // The Nth upcoming local snapshot call reports a drifted revision.
+        driftLocalSnapshotOnCall(n: number): void
+        // Every upcoming local snapshot fails without a timeout.
+        failLocalSnapshot(how: LocalFailure | undefined): void
+        // The next remote 'after' read of `operation` is held until released.
+        holdRemote(operation: RemoteOperation): {
+          readonly reached: Promise<void>
+          release(result: OperationObserverRemoteResult): void
+        }
+      }
+
+      async function runRemoteOperations(
+        adapter: OpencodeWorkflowGuard,
+        withPullRequest: boolean,
+        pushOutput: RecordedToolOutput = {
+          title: 'push',
+          output: 'pushed',
+          metadata: { exit: 0 },
+        },
+      ): Promise<void> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          pushOutput,
+          'skip-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        if (!withPullRequest) return
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'skip-pr',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('pr-creation')
+      }
+
+      type LocalFailure = 'throw' | 'target-unavailable' | 'target-mismatch'
+
+      function failedSnapshot(
+        how: LocalFailure,
+      ): Awaited<ReturnType<OpencodeOperationObserver['snapshot']>> {
+        if (how === 'throw') throw new Error('snapshot exploded')
+        if (how === 'target-mismatch') {
+          return {
+            status: 'available',
+            snapshot: { ...operationSnapshot(), targetDigest: 'f'.repeat(64) },
+          }
+        }
+        return { status: 'unavailable', reasonCode: how }
+      }
+
+      // Targeted failure wrappers over a healthy observer: nothing fails until
+      // a test flips a flag after setup, so setup reads are always healthy.
+      async function skipFixture(
+        mode: 'observe' | 'protected',
+        withPullRequest = false,
+        sink?: { push?: RecordedToolOutput },
+      ): Promise<SkipFixture> {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let localTimeout = false
+        let snapshotCalls = 0
+        let timeoutOnCall: number | undefined
+        let driftOnCall: number | undefined
+        let localFailure: LocalFailure | undefined
+        let remoteCalls = 0
+        const overrides = new Map<
+          RemoteOperation,
+          OperationObserverRemoteResult
+        >()
+        const holds = new Map<
+          RemoteOperation,
+          () => Promise<OperationObserverRemoteResult>
+        >()
+        const forcedSnapshot = (
+          call: number,
+        ):
+          | Awaited<ReturnType<OpencodeOperationObserver['snapshot']>>
+          | undefined => {
+          if (localTimeout || call === timeoutOnCall) return TIMEOUT
+          if (call !== driftOnCall) return undefined
+          return {
+            status: 'available',
+            snapshot: operationSnapshot('e'.repeat(64), 'd'.repeat(64)),
+          }
+        }
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () => {
+            snapshotCalls += 1
+            return (
+              forcedSnapshot(snapshotCalls) ??
+              (localFailure ? failedSnapshot(localFailure) : base.snapshot())
+            )
+          },
+          remoteSnapshot: async (operation, phase) => {
+            remoteCalls += 1
+            const hold = holds.get(operation)
+            if (hold && phase === 'after') {
+              holds.delete(operation)
+              return hold()
+            }
+            const override = overrides.get(operation)
+            if (override && phase === 'after') return override
+            return reader.call(base, operation, phase)
+          },
+        }
+        const adapter = createAdapter(
+          mode,
+          false,
+          observer,
+          withPullRequest ? ['push', 'pr-creation'] : ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await runRemoteOperations(adapter, withPullRequest, sink?.push)
+        expect(status(adapter).state).not.toBe('unavailable')
+        return {
+          adapter,
+          setLocalTimeout(value) {
+            localTimeout = value
+          },
+          failRemote(operation, result) {
+            if (result) overrides.set(operation, result)
+            else overrides.delete(operation)
+          },
+          resetRemoteCalls() {
+            remoteCalls = 0
+          },
+          remoteCalls: () => remoteCalls,
+          localCalls: () => snapshotCalls,
+          timeoutLocalSnapshotOnCall(n) {
+            timeoutOnCall = snapshotCalls + n
+          },
+          driftLocalSnapshotOnCall(n) {
+            driftOnCall = snapshotCalls + n
+          },
+          failLocalSnapshot(how) {
+            localFailure = how
+          },
+          holdRemote(operation) {
+            let release: (result: OperationObserverRemoteResult) => void =
+              () => {}
+            const reached = new Promise<void>((resolveReached) => {
+              holds.set(
+                operation,
+                () =>
+                  new Promise<OperationObserverRemoteResult>((resolve) => {
+                    release = resolve
+                    resolveReached()
+                  }),
+              )
+            })
+            return { reached, release: (result) => release(result) }
+          },
+        }
+      }
+
+      async function refreshed(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      test.each(['observe', 'protected'] as const)(
+        'a: a push readback timeout after a satisfied push is skipped; the receipt stays valid and the next healthy status is clean (%s)',
+        async (mode) => {
+          const fx = await skipFixture(mode)
+          const before = status(fx.adapter)
+          fx.failRemote('push', TIMEOUT)
+
+          const parsed = await refreshed(fx.adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.state).toBe(before.state)
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'push', reasonCode: 'command-timeout' },
+          ])
+          expect(status(fx.adapter).satisfiedOperations).toContain('push')
+          expect(status(fx.adapter).reasonCode).toBe(before.reasonCode)
+          expect(status(fx.adapter).reasonCode).not.toBe('stale-receipt')
+
+          fx.failRemote('push', undefined)
+          const healthy = await refreshed(fx.adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+          expect(healthy.state).toBe(before.state)
+          expect(status(fx.adapter).satisfiedOperations).toContain('push')
+          expect(status(fx.adapter).reasonCode).not.toBe('stale-receipt')
+        },
+      )
+
+      test('b: a local snapshot timeout is skipped: no remote probe runs, nothing changes, and the list is [local, then each satisfied remote operation]', async () => {
+        const fx = await skipFixture('observe', true)
+        const before = status(fx.adapter)
+        fx.resetRemoteCalls()
+        fx.setLocalTimeout(true)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+          { probe: 'push', reasonCode: 'command-timeout' },
+          { probe: 'pr-creation', reasonCode: 'command-timeout' },
+        ])
+        expect(fx.remoteCalls()).toBe(0)
+        const after = status(fx.adapter)
+        expect(after.state).toBe(before.state)
+        expect(after.reasonCode).toBe(before.reasonCode)
+        expect(after.satisfiedOperations).toEqual(before.satisfiedOperations)
+        expect(after.missingOperations).toEqual(before.missingOperations)
+      })
+
+      test('b: a local snapshot timeout with no satisfied remote operation lists exactly [local]', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let remoteCalls = 0
+        let timeout = false
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          snapshot: async () => (timeout ? TIMEOUT : base.snapshot()),
+          remoteSnapshot: async (operation, phase) => {
+            remoteCalls += 1
+            return (
+              base.remoteSnapshot?.(operation, phase) ?? {
+                status: 'missing-resource',
+              }
+            )
+          },
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).satisfiedOperations).toEqual([])
+        timeout = true
+
+        const parsed = await refreshed(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+        ])
+        expect(remoteCalls).toBe(0)
+      })
+
+      test('c: a pinned snapshot timeout is skipped and the list is [pinned]', async () => {
+        const setup = await createPinnedRecoveryAdapter()
+        try {
+          const { adapter } = setup
+          const before = status(adapter)
+          setup.timeoutPinnedSnapshotOnCall(1)
+
+          const parsed = await refreshed(adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'pinned', reasonCode: 'command-timeout' },
+          ])
+          expect(status(adapter).state).toBe(before.state)
+
+          const healthy = await refreshed(adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+        } finally {
+          setup.fixture.cleanup()
+        }
+      })
+
+      // The pinned recovery fixture has no satisfied remote operation, so the
+      // pinned skips list only [pinned]; the remote tail is covered by b above.
+      test('c: a pinned lookup timeout is skipped and the list is [pinned]', async () => {
+        const setup = await createPinnedRecoveryAdapter()
+        try {
+          const { adapter } = setup
+          const before = status(adapter)
+          setup.setTargetValidationAvailable(false, 'command-timeout')
+
+          const parsed = await refreshed(adapter)
+          expect(parsed.state).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(parsed.unconfirmedReadbacks).toEqual([
+            { probe: 'pinned', reasonCode: 'command-timeout' },
+          ])
+          expect(status(adapter).state).toBe(before.state)
+
+          setup.setTargetValidationAvailable(true)
+          const healthy = await refreshed(adapter)
+          expect('unconfirmedReadbacks' in healthy).toBe(false)
+          expect(healthy.state).not.toBe('unavailable')
+        } finally {
+          setup.fixture.cleanup()
+        }
+      })
+
+      test('d: with two satisfied remote operations, the timed-out one stays valid, the drifted one goes stale, and only the timed-out one is listed', async () => {
+        const fx = await skipFixture('observe', true)
+        fx.failRemote('push', TIMEOUT)
+        fx.failRemote('pr-creation', prDrifted)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+        expect(status(fx.adapter).satisfiedOperations).toContain('push')
+        expect(status(fx.adapter).satisfiedOperations).not.toContain(
+          'pr-creation',
+        )
+        expect(status(fx.adapter).missingOperations).toContain('pr-creation')
+        expect(status(fx.adapter).missingOperations).not.toContain('push')
+
+        // A later refresh never clears the staleness: the stale operation is
+        // no longer satisfied, so it is not probed again, and the timed-out
+        // push is still listed on its own.
+        fx.failRemote('pr-creation', TIMEOUT)
+        const again = await refreshed(fx.adapter)
+        expect(again.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+        expect(status(fx.adapter).satisfiedOperations).not.toContain(
+          'pr-creation',
+        )
+        expect(status(fx.adapter).missingOperations).toContain('pr-creation')
+      })
+
+      test('e: a timeout followed by a non-timeout failure is fatal with the typed cause, and the skipped probe is still listed', async () => {
+        const fx = await skipFixture('observe', true)
+        fx.failRemote('push', TIMEOUT)
+        fx.failRemote('pr-creation', {
+          status: 'unavailable',
+          reasonCode: 'remote-command-failed',
+        })
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'remote-command-failed',
+          timedOut: false,
+        })
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('e: a non-timeout failure before a timeout stops the loop and lists nothing', async () => {
+        const fx = await skipFixture('observe', true)
+        fx.failRemote('push', MISSING)
+        fx.failRemote('pr-creation', TIMEOUT)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'missing-resource',
+          timedOut: false,
+        })
+        expect(parsed.unconfirmedReadbacks).toBeUndefined()
+      })
+
+      test('f: when every attempted probe times out, state is unchanged and the list is in fixed order', async () => {
+        const fx = await skipFixture('observe', true)
+        const before = status(fx.adapter)
+        fx.failRemote('push', TIMEOUT)
+        fx.failRemote('pr-creation', TIMEOUT)
+
+        const parsed = await refreshed(fx.adapter)
+        expect(parsed.state).toBe(before.state)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+          { probe: 'pr-creation', reasonCode: 'command-timeout' },
+        ])
+        const after = status(fx.adapter)
+        expect(after.satisfiedOperations).toEqual(before.satisfiedOperations)
+        expect(after.missingOperations).toEqual(before.missingOperations)
+      })
+
+      test('g: the unconfirmed list never enters markers, receipts, tool metadata, or digests', async () => {
+        const pushOutput: RecordedToolOutput = {
+          title: 'push',
+          output: 'pushed',
+          metadata: { exit: 0 },
+        }
+        const fx = await skipFixture('observe', false, { push: pushOutput })
+        fx.failRemote('push', TIMEOUT)
+        const statusResult = expectToolOutput(
+          await getTool(fx.adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        )
+        expect(
+          JSON.parse(statusResult.output).unconfirmedReadbacks,
+        ).toBeDefined()
+        const transformed = { system: ['base'] }
+        await fx.adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          transformed,
+        )
+        const everything = JSON.stringify([
+          pushOutput,
+          statusResult.metadata,
+          transformed.system,
+          ledger(fx.adapter).listReceipts(),
+          status(fx.adapter),
+        ])
+        expect(everything).not.toContain('unconfirmedReadbacks')
+        expect(everything).not.toContain('command-timeout')
+      })
+
+      test('h: with no epoch the refresh is skipped and the list is empty', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let reads = 0
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          snapshot: async () => {
+            reads += 1
+            return TIMEOUT
+          },
+        })
+        const parsed = await refreshed(adapter)
+        expect(parsed.state).toBe('inactive')
+        expect('unconfirmedReadbacks' in parsed).toBe(false)
+        expect(reads).toBe(0)
+      })
+
+      describe('completion readback timeouts are retryable', () => {
+        const RETRY_TITLE = 'Workflow readback timed out'
+        const FATAL_TITLE = 'Workflow transition unavailable'
+
+        type CompletionOutput = {
+          title: string
+          output: string
+          metadata: Record<string, unknown>
+        }
+
+        const freshCompletionOutput = (): CompletionOutput => ({
+          title: 'complete',
+          output: 'done',
+          metadata: {},
+        })
+
+        async function beforeComplete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID,
+            },
+            { args: { target: 'unit' } },
+          )
+        }
+
+        function afterComplete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+          output: CompletionOutput,
+        ): Promise<void> {
+          return adapter.hooks['tool.execute.after'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID,
+              args: { target: 'unit' },
+            },
+            output,
+          )
+        }
+
+        async function complete(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<CompletionOutput> {
+          await beforeComplete(adapter, callID)
+          const output = freshCompletionOutput()
+          await afterComplete(adapter, callID, output)
+          return output
+        }
+
+        function expectRetryable(output: CompletionOutput): void {
+          expect(output.title).toBe(RETRY_TITLE)
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'rejected',
+            reasonCode: 'readback-timeout',
+          })
+          expect(output.metadata).toMatchObject({
+            workflowGuard: {
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'readback-timeout',
+            },
+          })
+        }
+
+        function expectFatal(output: CompletionOutput): void {
+          expect(output.title).toBe(FATAL_TITLE)
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'unavailable',
+            reasonCode: 'finalization-failed',
+          })
+        }
+
+        function consumedReceipts(adapter: OpencodeWorkflowGuard): number {
+          return ledger(adapter)
+            .listReceipts()
+            .filter((receipt) => receipt.canonical.consumption === 'consumed')
+            .length
+        }
+
+        function expectUntouched(adapter: OpencodeWorkflowGuard): void {
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter).unit?.status).toBe('active')
+          expect(consumedReceipts(adapter)).toBe(0)
+        }
+
+        interface StageFixture {
+          readonly adapter: OpencodeWorkflowGuard
+          // Arms a command-timeout at exactly this stage.
+          arm(): void
+          // Restores healthy probes (a no-op for the one-shot timeouts).
+          disarm(): void
+          cleanup(): void
+        }
+
+        interface Stage {
+          readonly name: string
+          build(mode: 'observe' | 'protected'): Promise<StageFixture>
+        }
+
+        // Snapshot calls on the completion path, counted per path (prepare is
+        // synchronous and reads nothing): parent #1 initial / #2 final, pinned
+        // #1 initial / #2 final; pinned lookups #1 initial / #2 revalidation.
+        function localStage(
+          name: string,
+          arm: (fx: SkipFixture) => void,
+          disarm: (fx: SkipFixture) => void = () => {},
+        ): Stage {
+          return {
+            name,
+            build: async (mode) => {
+              const fx = await skipFixture(mode)
+              return {
+                adapter: fx.adapter,
+                arm: () => arm(fx),
+                disarm: () => disarm(fx),
+                cleanup() {},
+              }
+            },
+          }
+        }
+
+        function pinnedStage(
+          name: string,
+          arm: (
+            setup: Awaited<ReturnType<typeof createPinnedRecoveryAdapter>>,
+          ) => void,
+        ): Stage {
+          return {
+            name,
+            build: async (mode) => {
+              const setup = await createPinnedRecoveryAdapter(mode)
+              return {
+                adapter: setup.adapter,
+                arm: () => arm(setup),
+                disarm() {},
+                cleanup: () => setup.fixture.cleanup(),
+              }
+            },
+          }
+        }
+
+        const stages: Stage[] = [
+          localStage('initial parent snapshot', (fx) =>
+            fx.timeoutLocalSnapshotOnCall(1),
+          ),
+          pinnedStage('pinned initial lookup', (s) =>
+            s.timeoutPinnedValidationOnCall(1),
+          ),
+          pinnedStage('pinned initial snapshot', (s) =>
+            s.timeoutPinnedSnapshotOnCall(1),
+          ),
+          localStage(
+            'remote readback',
+            (fx) => fx.failRemote('push', TIMEOUT),
+            (fx) => fx.failRemote('push', undefined),
+          ),
+          localStage('final parent snapshot', (fx) =>
+            fx.timeoutLocalSnapshotOnCall(2),
+          ),
+          pinnedStage('pinned revalidation lookup', (s) =>
+            s.timeoutPinnedValidationOnCall(2),
+          ),
+          pinnedStage('pinned final snapshot', (s) =>
+            s.timeoutPinnedSnapshotOnCall(2),
+          ),
+        ]
+        const retryStages = stages.filter((stage) =>
+          [
+            'remote readback',
+            'pinned initial snapshot',
+            'pinned revalidation lookup',
+          ].includes(stage.name),
+        )
+
+        for (const mode of ['observe', 'protected'] as const) {
+          test.each(stages)(
+            `a: a command-timeout at the $name stage is rejected as retryable and consumes nothing (${mode})`,
+            async (stage) => {
+              const fx = await stage.build(mode)
+              try {
+                fx.arm()
+                const output = await complete(fx.adapter, 'timeout-complete')
+                expectRetryable(output)
+                expectUntouched(fx.adapter)
+              } finally {
+                fx.cleanup()
+              }
+            },
+          )
+        }
+
+        test.each(retryStages)(
+          'b: after a timeout at the $name stage, a new call ID with healthy probes completes the unit and consumes each receipt once',
+          async (stage) => {
+            const fx = await stage.build('observe')
+            try {
+              const receipts = ledger(fx.adapter).listReceipts().length
+              fx.arm()
+              expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+              expectUntouched(fx.adapter)
+              fx.disarm()
+              const retry = await complete(fx.adapter, 'healthy-complete')
+              expect(retry.output).toContain('completed')
+              expect(status(fx.adapter).unit?.status).toBe('completed')
+              expect(receipts).toBeGreaterThan(0)
+              expect(consumedReceipts(fx.adapter)).toBe(receipts)
+            } finally {
+              fx.cleanup()
+            }
+          },
+        )
+
+        test.each(retryStages)(
+          'c: a duplicate after-hook for the timed-out call at the $name stage replays an identical result and changes no session state',
+          async (stage) => {
+            const fx = await stage.build('observe')
+            try {
+              fx.arm()
+              const first = await complete(fx.adapter, 'timeout-complete')
+              expectRetryable(first)
+              const before = JSON.stringify(status(fx.adapter))
+              const replay = freshCompletionOutput()
+              await afterComplete(fx.adapter, 'timeout-complete', replay)
+              expect(replay).toEqual(first)
+              expect(JSON.stringify(status(fx.adapter))).toBe(before)
+              expectUntouched(fx.adapter)
+            } finally {
+              fx.cleanup()
+            }
+          },
+        )
+
+        test('d: a session made unavailable while the probe is held takes the fatal path when the probe then times out', async () => {
+          const fx = await skipFixture('observe')
+          const hold = fx.holdRemote('push')
+          await beforeComplete(fx.adapter, 'held-complete')
+          const output = freshCompletionOutput()
+          const done = afterComplete(fx.adapter, 'held-complete', output)
+          await hold.reached
+          fx.failLocalSnapshot('target-unavailable')
+          expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+          fx.failLocalSnapshot(undefined)
+          hold.release(TIMEOUT)
+          await done
+          expectFatal(output)
+          expect(status(fx.adapter).state).toBe('unavailable')
+          expect(consumedReceipts(fx.adapter)).toBe(0)
+        })
+
+        describe('e: non-timeout failures stay fatal', () => {
+          const localCases: Array<{
+            name: string
+            arm: (fx: SkipFixture) => void
+          }> = [
+            {
+              name: 'a remote missing-resource',
+              arm: (fx) => fx.failRemote('push', MISSING),
+            },
+            {
+              name: 'a remote command-failed reason',
+              arm: (fx) =>
+                fx.failRemote('push', {
+                  status: 'unavailable',
+                  reasonCode: 'remote-command-failed',
+                }),
+            },
+            {
+              name: 'a throwing parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('throw'),
+            },
+            {
+              name: 'a non-timeout unavailable parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('target-unavailable'),
+            },
+          ]
+
+          test.each(localCases)('$name', async ({ arm }) => {
+            const fx = await skipFixture('observe')
+            arm(fx)
+            const output = await complete(fx.adapter, 'fatal-complete')
+            expectFatal(output)
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+
+          test.each([
+            {
+              name: 'a pinned lookup that is invalid',
+              reason: 'target-unavailable',
+            },
+            {
+              name: 'a pinned lookup that is invalid (command-failed)',
+              reason: 'command-failed',
+            },
+          ] as const)('$name', async ({ reason }) => {
+            const setup = await createPinnedRecoveryAdapter()
+            try {
+              setup.setTargetValidationAvailable(false, reason)
+              const output = await complete(setup.adapter, 'fatal-pinned')
+              expectFatal(output)
+              expect(status(setup.adapter).state).toBe('unavailable')
+              expect(consumedReceipts(setup.adapter)).toBe(0)
+            } finally {
+              setup.fixture.cleanup()
+            }
+          })
+
+          test('a throwing pinned-flow parent snapshot', async () => {
+            const setup = await createPinnedRecoveryAdapter()
+            try {
+              setup.throwParentSnapshotOnCall(1)
+              const output = await complete(setup.adapter, 'fatal-pinned-throw')
+              expectFatal(output)
+              expect(status(setup.adapter).state).toBe('unavailable')
+            } finally {
+              setup.fixture.cleanup()
+            }
+          })
+        })
+
+        // CHARACTERIZATION TESTS: these pin what the guard does TODAY when two
+        // independent registrations share one after-hook output; they are not
+        // requirements. OpenCode hands the same output reference to every
+        // plugin hook in sequence, and each registration decides completion
+        // independently from its own readbacks. Completion is therefore not
+        // atomic across registrations, and the final output depends on hook
+        // order. The same divergence already exists for fatal readbacks.
+        describe('characterization: two registrations sharing one completion output', () => {
+          type Failure = 'timeout' | 'fatal'
+          type Order = 'failing-first' | 'healthy-first'
+
+          const cases = (['observe', 'protected'] as const).flatMap((mode) =>
+            (['failing-first', 'healthy-first'] as const).flatMap((order) =>
+              (['timeout', 'fatal'] as const).map((failure) => ({
+                mode,
+                order,
+                failure,
+                name: `${mode} / ${order} / ${failure}`,
+              })),
+            ),
+          )
+
+          const callID = 'shared-complete'
+
+          async function pair(mode: 'observe' | 'protected', failure: Failure) {
+            const failing = await skipFixture(mode)
+            const healthy = await skipFixture(mode)
+            failing.failRemote(
+              'push',
+              failure === 'timeout' ? TIMEOUT : MISSING,
+            )
+            return { failing, healthy }
+          }
+
+          function expectGuardResult(
+            output: CompletionOutput,
+            expected: Record<string, unknown>,
+          ): void {
+            expect(output.metadata.workflowGuard).toMatchObject(expected)
+          }
+
+          function failingResult(failure: Failure): Record<string, unknown> {
+            return failure === 'timeout'
+              ? {
+                  status: 'rejected',
+                  target: 'unit',
+                  reasonCode: 'readback-timeout',
+                }
+              : {
+                  status: 'unavailable',
+                  target: 'unit',
+                  reasonCode: 'finalization-failed',
+                }
+          }
+
+          // Duplicate after-hooks consume nothing more. The failing registration
+          // replays its own terminal outcome; the healthy one has none and leaves
+          // the host output untouched.
+          async function expectReplays(
+            failing: SkipFixture,
+            healthy: SkipFixture,
+            failure: Failure,
+            receipts: number,
+          ): Promise<void> {
+            const failingReplay = freshCompletionOutput()
+            await afterComplete(failing.adapter, callID, failingReplay)
+            if (failure === 'timeout') expectRetryable(failingReplay)
+            else expectFatal(failingReplay)
+            const healthyReplay = freshCompletionOutput()
+            await afterComplete(healthy.adapter, callID, healthyReplay)
+            expect(healthyReplay).toEqual(freshCompletionOutput())
+            expect(consumedReceipts(healthy.adapter)).toBe(receipts)
+            expect(consumedReceipts(failing.adapter)).toBe(0)
+          }
+
+          function hookOrder(
+            order: Order,
+            failing: SkipFixture,
+            healthy: SkipFixture,
+          ): SkipFixture[] {
+            return order === 'failing-first'
+              ? [failing, healthy]
+              : [healthy, failing]
+          }
+
+          function finalResult(
+            order: Order,
+            failure: Failure,
+          ): Record<string, unknown> {
+            return order === 'failing-first'
+              ? { status: 'completed', target: 'unit' }
+              : failingResult(failure)
+          }
+
+          test.each(cases)(
+            '$name: the healthy registration completes, the failing one consumes nothing, and the final output follows hook order',
+            async ({ mode, order, failure }) => {
+              const { failing, healthy } = await pair(mode, failure)
+              const receipts = ledger(healthy.adapter).listReceipts().length
+              expect(receipts).toBeGreaterThan(0)
+              await beforeComplete(failing.adapter, callID)
+              await beforeComplete(healthy.adapter, callID)
+              const shared = freshCompletionOutput()
+              for (const fx of hookOrder(order, failing, healthy)) {
+                await afterComplete(fx.adapter, callID, shared)
+              }
+
+              // Final output: whichever registration wrote last.
+              expectGuardResult(shared, finalResult(order, failure))
+
+              // Per-registration state and consumption.
+              expect(status(healthy.adapter).unit?.status).toBe('completed')
+              expect(consumedReceipts(healthy.adapter)).toBe(receipts)
+              expect(status(failing.adapter).unit?.status).toBe('active')
+              expect(consumedReceipts(failing.adapter)).toBe(0)
+              expect(status(failing.adapter).state === 'unavailable').toBe(
+                failure === 'fatal',
+              )
+              await expectReplays(failing, healthy, failure, receipts)
+            },
+          )
+
+          test.each(
+            (['observe', 'protected'] as const).map((mode) => ({ mode })),
+          )(
+            'after a timeout, a new call ID with healthy probes completes the failing registration ($mode)',
+            async ({ mode }) => {
+              const { failing, healthy } = await pair(mode, 'timeout')
+              await beforeComplete(failing.adapter, callID)
+              await beforeComplete(healthy.adapter, callID)
+              const shared = freshCompletionOutput()
+              await afterComplete(failing.adapter, callID, shared)
+              await afterComplete(healthy.adapter, callID, shared)
+              expect(consumedReceipts(failing.adapter)).toBe(0)
+
+              failing.failRemote('push', undefined)
+              const retry = await complete(failing.adapter, 'shared-retry')
+              expect(retry.output).toContain('completed')
+              expect(status(failing.adapter).unit?.status).toBe('completed')
+              const total = ledger(failing.adapter).listReceipts().length
+              expect(consumedReceipts(failing.adapter)).toBe(total)
+              expect(consumedReceipts(healthy.adapter)).toBe(total)
+            },
+          )
+        })
+
+        // CHARACTERIZATION TEST: an earlier completion timeout can mask drift
+        // that a previous probe already saw. Completion collects remote
+        // readbacks and applies them only when every probe succeeds, so a later
+        // timeout discards the drifted evidence; the next attempt re-reads it.
+        describe('characterization: late drift, then a later timeout', () => {
+          test('the timed-out attempt applies nothing, its replay probes nothing, and a fresh attempt with restored probes detects the drift', async () => {
+            const fx = await skipFixture('observe', true)
+            const drifted = remoteAvailable(DRIFT, FRESH, {
+              pullRequest: { identity: DRIFT, state: 'open' },
+            })
+            // Probes run in satisfied order: push (drifted) then pr-creation.
+            fx.failRemote('push', drifted)
+            fx.failRemote('pr-creation', TIMEOUT)
+            const snapshot = () => ({
+              status: JSON.parse(JSON.stringify(status(fx.adapter))),
+              receipts: JSON.parse(
+                JSON.stringify(ledger(fx.adapter).listReceipts()),
+              ),
+            })
+            const before = snapshot()
+            const remoteBefore = fx.remoteCalls()
+
+            const first = await complete(fx.adapter, 'drift-timeout')
+            expectRetryable(first)
+            expect(fx.remoteCalls()).toBeGreaterThan(remoteBefore)
+            expect(snapshot()).toEqual(before)
+
+            // A duplicate after-hook replays the stored outcome and probes nothing.
+            const remoteAfterFirst = fx.remoteCalls()
+            const localAfterFirst = fx.localCalls()
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'drift-timeout', replay)
+            expectRetryable(replay)
+            expect(fx.remoteCalls()).toBe(remoteAfterFirst)
+            expect(fx.localCalls()).toBe(localAfterFirst)
+            expect(snapshot()).toEqual(before)
+
+            // Probes restored (pr-creation healthy); the drift on push persists.
+            fx.failRemote('pr-creation', undefined)
+            const second = await complete(fx.adapter, 'drift-fresh')
+            // Today's path: the drifted push evidence is applied at
+            // finalization, which rejects the transition with the core's
+            // `resource-mismatch`, and the adapter then marks the session
+            // unavailable (finalizeComplete's non-completed branch).
+            expect(second.metadata.workflowGuard).toMatchObject({
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'resource-mismatch',
+            })
+            expect(second.output).not.toContain('completed')
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(status(fx.adapter).unit?.status).toBe('active')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+        })
+
+        describe('fatal completion readbacks are replayable and caused', () => {
+          const causeOf = async (adapter: OpencodeWorkflowGuard) =>
+            (await refreshed(adapter)).firstUnavailableCause
+
+          const fatalCases: Array<{
+            name: string
+            arm: (fx: SkipFixture) => void
+            reasonCode?: string
+          }> = [
+            {
+              name: 'a remote missing-resource',
+              arm: (fx) => fx.failRemote('push', MISSING),
+              reasonCode: 'missing-resource',
+            },
+            {
+              name: 'a non-timeout unavailable parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('target-unavailable'),
+              reasonCode: 'target-unavailable',
+            },
+            {
+              name: 'a throwing parent snapshot',
+              arm: (fx) => fx.failLocalSnapshot('throw'),
+            },
+            {
+              name: 'a parent snapshot target mismatch',
+              arm: (fx) => fx.failLocalSnapshot('target-mismatch'),
+            },
+          ]
+
+          test.each(fatalCases)(
+            'a: $name writes finalization-failed, and a duplicate after-hook replays it instead of leaving the raw output',
+            async ({ arm }) => {
+              const fx = await skipFixture('observe')
+              arm(fx)
+              const first = await complete(fx.adapter, 'fatal-complete')
+              expectFatal(first)
+              const raw: CompletionOutput = {
+                title: 'host title',
+                output: 'raw pending output',
+                metadata: {},
+              }
+              await afterComplete(fx.adapter, 'fatal-complete', raw)
+              expectFatal(raw)
+              expect(raw.title).toBe(first.title)
+              expect(raw.output).toBe(first.output)
+              expect(raw.metadata.workflowGuard).toEqual(
+                first.metadata.workflowGuard,
+              )
+            },
+          )
+
+          test.each(fatalCases)(
+            'b: $name records a complete-readback cause',
+            async ({ arm, reasonCode }) => {
+              const fx = await skipFixture('observe')
+              arm(fx)
+              expectFatal(await complete(fx.adapter, 'fatal-complete'))
+              expect(await causeOf(fx.adapter)).toEqual({
+                site: 'complete-readback',
+                kind: 'observer-readback-failed',
+                ...(reasonCode === undefined ? {} : { reasonCode }),
+                timedOut: false,
+              })
+            },
+          )
+
+          test.each([
+            { name: 'a non-timeout failure', result: MISSING },
+            { name: 'a timeout', result: TIMEOUT },
+          ])(
+            'c: $name that lands after a fatal status refresh keeps the earlier cause',
+            async ({ result }) => {
+              const fx = await skipFixture('observe')
+              const hold = fx.holdRemote('push')
+              await beforeComplete(fx.adapter, 'held-complete')
+              const output = freshCompletionOutput()
+              const done = afterComplete(fx.adapter, 'held-complete', output)
+              await hold.reached
+              fx.failLocalSnapshot('target-unavailable')
+              expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+              fx.failLocalSnapshot(undefined)
+              hold.release(result)
+              await done
+              expectFatal(output)
+              expect(await causeOf(fx.adapter)).toEqual({
+                site: 'refresh-readback',
+                kind: 'observer-readback-failed',
+                reasonCode: 'target-unavailable',
+                timedOut: false,
+              })
+            },
+          )
+
+          test('d: a mismatched completion target still goes through finishMismatchedTarget as invalid-transition', async () => {
+            const fx = await skipFixture('observe')
+            await beforeComplete(fx.adapter, 'mismatch-complete')
+            const output = freshCompletionOutput()
+            await fx.adapter.hooks['tool.execute.after'](
+              {
+                tool: 'systematic_workflow_complete',
+                sessionID: SESSION_A,
+                callID: 'mismatch-complete',
+                args: { target: 'epoch' },
+              },
+              output,
+            )
+            expect(JSON.parse(output.output)).toEqual({
+              status: 'unavailable',
+              reasonCode: 'invalid-transition',
+            })
+            expect(status(fx.adapter).state).toBe('unavailable')
+          })
+
+          test('e: a retryable timeout records no cause; a later fatal refresh records its own', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            expect(await causeOf(fx.adapter)).toBeUndefined()
+            fx.failRemote('push', undefined)
+            fx.failLocalSnapshot('target-unavailable')
+            expect(await causeOf(fx.adapter)).toEqual({
+              site: 'refresh-readback',
+              kind: 'observer-readback-failed',
+              reasonCode: 'target-unavailable',
+              timedOut: false,
+            })
+          })
+        })
+
+        describe('interleaving with other activity', () => {
+          // Holds the first completion's remote probe, runs `during`, then times
+          // the probe out and returns the first completion's output.
+          async function timeoutWhileHeld(
+            fx: SkipFixture,
+            during: () => Promise<void>,
+            callID = 'held-complete',
+          ): Promise<CompletionOutput> {
+            const hold = fx.holdRemote('push')
+            await beforeComplete(fx.adapter, callID)
+            const output = freshCompletionOutput()
+            const done = afterComplete(fx.adapter, callID, output)
+            await hold.reached
+            await during()
+            hold.release(TIMEOUT)
+            await done
+            return output
+          }
+
+          async function caughtBefore(
+            adapter: OpencodeWorkflowGuard,
+            callID: string,
+          ): Promise<unknown> {
+            try {
+              await beforeComplete(adapter, callID)
+            } catch (error) {
+              return error
+            }
+            return undefined
+          }
+
+          test.each(['observe', 'protected'] as const)(
+            '1: a repairable global evidence issue set while the probe is held does not make the timeout fatal, and later completions are refused by prepare (%s)',
+            async (mode) => {
+              const fx = await skipFixture(mode)
+              const output = await timeoutWhileHeld(fx, async () => {
+                expect(
+                  fx.adapter.observeReceipt(SESSION_A, { not: 'a receipt' }),
+                ).toMatchObject({
+                  status: 'rejected',
+                  reasonCode: 'invalid-receipt',
+                })
+                expect(status(fx.adapter).state).toBe('rejected')
+                expect(status(fx.adapter).repair).toBe('fresh-readback')
+              })
+              expectRetryable(output)
+              expect(status(fx.adapter).state).toBe('rejected')
+              expect(status(fx.adapter).reasonCode).toBe('invalid-receipt')
+              expect(consumedReceipts(fx.adapter)).toBe(0)
+              expect(
+                fx.adapter.prepareTransition(SESSION_A, {
+                  callId: 'after-issue',
+                  target: 'unit',
+                }),
+              ).toEqual({ status: 'rejected', reasonCode: 'invalid-receipt' })
+              if (mode === 'protected') {
+                const caught = await caughtBefore(
+                  fx.adapter,
+                  'after-issue-hook',
+                )
+                expect(isWorkflowGuardBlockedError(caught)).toBe(true)
+                expect(caught).toMatchObject({ reasonCode: 'invalid-receipt' })
+              }
+            },
+          )
+
+          test('2: a second completion that finishes the unit while the first probe is held leaves the first rejected as retryable, and a retry gets the completed-unit reason without a second consumption', async () => {
+            const fx = await skipFixture('observe')
+            let second: CompletionOutput | undefined
+            const first = await timeoutWhileHeld(fx, async () => {
+              second = await complete(fx.adapter, 'second-complete')
+            })
+            expect(second?.output).toContain('completed')
+            expect(status(fx.adapter).unit?.status).toBe('completed')
+            const consumed = consumedReceipts(fx.adapter)
+            expect(consumed).toBeGreaterThan(0)
+            expectRetryable(first)
+            expect(status(fx.adapter).unit?.status).toBe('completed')
+            expect(status(fx.adapter).state).not.toBe('unavailable')
+            expect(
+              fx.adapter.prepareTransition(SESSION_A, {
+                callId: 'third-complete',
+                target: 'unit',
+              }),
+            ).toMatchObject({
+              status: 'rejected',
+              reasonCode: 'unit-completed',
+            })
+            expect(consumedReceipts(fx.adapter)).toBe(consumed)
+          })
+
+          test('3: a fatal status refresh after a timeout leaves the duplicate after-hook replaying readback-timeout, and new completions are refused as unavailable', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            const first = await complete(fx.adapter, 'timeout-complete')
+            expectRetryable(first)
+            fx.failLocalSnapshot('target-unavailable')
+            expect((await refreshed(fx.adapter)).state).toBe('unavailable')
+
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'timeout-complete', replay)
+            expectRetryable(replay)
+            expect(replay.title).toBe(first.title)
+            expect(replay.output).toBe(first.output)
+            expect(replay.metadata.workflowGuard).toEqual(
+              first.metadata.workflowGuard,
+            )
+            // Everything but the live guard-state fields in metadata() replays
+            // identically; those three track the session's current state.
+            const liveFields = ['state', 'reasonCode', 'statusDigest']
+            const stable = (metadata: Record<string, unknown>) =>
+              Object.fromEntries(
+                Object.entries(metadata).filter(
+                  ([key]) => !liveFields.includes(key),
+                ),
+              )
+            expect(stable(replay.metadata)).toEqual(stable(first.metadata))
+            expect(replay.metadata.state).toBe('unavailable')
+            expect(
+              fx.adapter.prepareTransition(SESSION_A, {
+                callId: 'after-unavailable',
+                target: 'unit',
+              }),
+            ).toEqual({
+              // The core reports an unavailable guard as a rejected prepare.
+              status: 'rejected',
+              reasonCode: 'guard-unavailable',
+            })
+          })
+
+          test('4: a new call ID whose readbacks show drift after a timeout takes the fatal path, and the timed-out attempt applied nothing', async () => {
+            const fx = await skipFixture('observe')
+            const receiptsBefore = JSON.stringify(
+              ledger(fx.adapter).listReceipts(),
+            )
+            const statusBefore = JSON.stringify(status(fx.adapter))
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            expect(JSON.stringify(ledger(fx.adapter).listReceipts())).toBe(
+              receiptsBefore,
+            )
+            expect(JSON.stringify(status(fx.adapter))).toBe(statusBefore)
+
+            fx.failRemote('push', undefined)
+            fx.driftLocalSnapshotOnCall(2)
+            const second = await complete(fx.adapter, 'drift-complete')
+            expectFatal(second)
+            expect(status(fx.adapter).state).toBe('unavailable')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+
+          test('5: replaying the before-hook with the timed-out call ID throws abandoned-transition in protected mode', async () => {
+            const fx = await skipFixture('protected')
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+            const caught = await caughtBefore(fx.adapter, 'timeout-complete')
+            expect(isWorkflowGuardBlockedError(caught)).toBe(true)
+            expect(caught).toMatchObject({ reasonCode: 'abandoned-transition' })
+            expectUntouched(fx.adapter)
+          })
+
+          test('5: replaying the before-hook with the timed-out call ID in observe mode records it, and the after-hook replays the stored result', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            const first = await complete(fx.adapter, 'timeout-complete')
+            expectRetryable(first)
+            await beforeComplete(fx.adapter, 'timeout-complete')
+            const replay = freshCompletionOutput()
+            await afterComplete(fx.adapter, 'timeout-complete', replay)
+            expectRetryable(replay)
+            expect(replay.title).toBe(first.title)
+            expect(replay.output).toBe(first.output)
+            expectUntouched(fx.adapter)
+          })
+
+          test('6: readback-timeout never enters a marker, and a fresh guard recovering from the same history restores the active unit', async () => {
+            const timeoutNow = { value: false }
+            const base = sequenceObserver([
+              operationSnapshot(),
+              operationSnapshot(undefined, 'd'.repeat(64)),
+            ])
+            const observer: OpencodeOperationObserver = {
+              ...base,
+              snapshot: async () =>
+                timeoutNow.value ? TIMEOUT : base.snapshot(),
+            }
+            const source = createAdapter(
+              'observe',
+              false,
+              observer,
+              [],
+              [],
+              undefined,
+              true,
+            )
+            const skillOutput = freshCompletionOutput()
+            const writeOutput = freshCompletionOutput()
+            const verifyOutput: CompletionOutput = {
+              ...freshCompletionOutput(),
+              metadata: { exit: 0 },
+            }
+            await observeSkill(
+              source,
+              'systematic_skill',
+              'ce:work',
+              'recovery-skill',
+              SESSION_A,
+              skillOutput,
+            )
+            await observeOperationTool(
+              source,
+              'write',
+              { filePath: 'recovered.ts', content: 'x' },
+              writeOutput,
+              'recovery-write',
+            )
+            await observeOperationTool(
+              source,
+              'bash',
+              { command: 'bun test tests/unit/example.test.ts' },
+              verifyOutput,
+              'recovery-verify',
+            )
+            expect(status(source).satisfiedOperations).toEqual(
+              expect.arrayContaining(['implementation', 'verification']),
+            )
+
+            timeoutNow.value = true
+            const completed = await complete(source, 'recovery-complete')
+            expectRetryable(completed)
+            expectUntouched(source)
+
+            // Only the guard's own status key may name the reason; no marker
+            // (receipt, progression, or system prompt) may.
+            const { workflowGuard: _status, ...markerMetadata } =
+              completed.metadata
+            const transformed = { system: ['base'] }
+            await source.hooks['experimental.chat.system.transform'](
+              { sessionID: SESSION_A },
+              transformed,
+            )
+            expect(JSON.stringify(markerMetadata)).not.toContain(
+              'readback-timeout',
+            )
+            expect(JSON.stringify(transformed.system)).not.toContain(
+              'readback-timeout',
+            )
+            expect(JSON.stringify(ledger(source).listReceipts())).not.toContain(
+              'readback-timeout',
+            )
+
+            const parts = [
+              skillOutput,
+              writeOutput,
+              verifyOutput,
+              completed,
+            ].map((part) => ({
+              info: {},
+              parts: [{ state: { metadata: part.metadata } }],
+            }))
+            const restored = createAdapter(
+              'observe',
+              false,
+              sequenceObserver([operationSnapshot(undefined, 'd'.repeat(64))]),
+              [],
+              [],
+              {
+                readSessionParts: async () => parts,
+                listChildren: async () => [],
+              },
+              true,
+            )
+            await refreshed(restored)
+            expect(status(restored).state).not.toBe('unavailable')
+            expect(status(restored).epoch).not.toBeNull()
+            expect(status(restored).unit?.status).toBe('active')
+            expect(status(restored).satisfiedOperations).toEqual(
+              expect.arrayContaining(['implementation', 'verification']),
+            )
+          })
+        })
+      })
+    })
+
+    describe('refresh-readback cause carries the observer reason code', () => {
+      const D = 'd'.repeat(64)
+      const E = 'e'.repeat(64)
+      const FRESH = 'f'.repeat(64)
+
+      async function refreshedStatus(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      test('a: a local snapshot command-timeout during status refresh is skipped, not fatal', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let failing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () => {
+            if (!failing) return base.snapshot()
+            return { status: 'unavailable', reasonCode: 'command-timeout' }
+          },
+        }
+        const adapter = createAdapter('observe', false, observer)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        failing = true
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      async function satisfiedPushAdapter(): Promise<{
+        adapter: OpencodeWorkflowGuard
+        failRemoteWith(result: OperationObserverRemoteResult): void
+      }> {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let override: OperationObserverRemoteResult | undefined
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) =>
+            override ?? reader.call(base, operation, phase),
+        }
+        const adapter = createAdapter('observe', false, observer, ['push'])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'cause-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        return {
+          adapter,
+          failRemoteWith(result) {
+            override = result
+          },
+        }
+      }
+
+      test('b: a remote readback command-timeout after a satisfied push is skipped, not fatal', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({ status: 'unavailable', reasonCode: 'command-timeout' })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('c: a remote missing-resource after a satisfied push goes unavailable with a non-timeout cause', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({ status: 'missing-resource' })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'missing-resource',
+          timedOut: false,
+        })
+      })
+
+      test('d: a non-timeout remote unavailable reason is recorded verbatim and is not a timeout', async () => {
+        const { adapter, failRemoteWith } = await satisfiedPushAdapter()
+        failRemoteWith({
+          status: 'unavailable',
+          reasonCode: 'remote-command-failed',
+        })
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          reasonCode: 'remote-command-failed',
+          timedOut: false,
+        })
+      })
+
+      test('d: a throwing remote reader has no reason code and is not a timeout', async () => {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        let throwing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) => {
+            if (throwing) throw new Error('remote exploded')
+            return reader.call(base, operation, phase)
+          },
+        }
+        const adapter = createAdapter('observe', false, observer, ['push'])
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'throw-push',
+        )
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        throwing = true
+        const parsed = await refreshedStatus(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          timedOut: false,
+        })
+      })
+    })
   })
 
   test('partial registration finalization fails closed and remains replay-idempotent', async () => {
@@ -2991,7 +5469,10 @@ describe('OpenCode workflow guard adapter', () => {
     expect((firstPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length).toBe(
       1,
     )
-    expect(firstPass).toContain('unavailable')
+    // The epoch-less second adapter is `inactive`; the active first adapter is
+    // `waiting`, which outranks it in the aggregate.
+    expect(firstPass).toContain('"state":"inactive"')
+    expect(firstPass).toContain('"aggregate":{"state":"waiting"')
 
     await first.hooks['experimental.chat.system.transform'](
       { sessionID: 'session-1' },
@@ -3001,7 +5482,8 @@ describe('OpenCode workflow guard adapter', () => {
     expect(
       (secondPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length,
     ).toBe(1)
-    expect(secondPass).toContain('unavailable')
+    expect(secondPass).toContain('"state":"inactive"')
+    expect(secondPass).toContain('"aggregate":{"state":"waiting"')
   })
 
   test('round-trips operation-target-mismatch in prior guard marker sources', async () => {
@@ -3038,6 +5520,138 @@ describe('OpenCode workflow guard adapter', () => {
       sources: Array<{ source: string; reasonCode: string }>
     }
     expect(document.sources).toContainEqual(priorSource)
+  })
+
+  describe('inactive guard state', () => {
+    interface MarkerDoc {
+      sources: Array<{ source: string; state: string; reasonCode: string }>
+      aggregate: { state: string; reasonCode: string }
+    }
+
+    function priorMarker(sources: readonly object[]): string {
+      return `<SYSTEMATIC_WORKFLOW_GUARD>${JSON.stringify({
+        protocolVersion: 2,
+        sources,
+        aggregate: sources[0],
+      })}</SYSTEMATIC_WORKFLOW_GUARD>`
+    }
+
+    function readMarker(system: readonly string[]): MarkerDoc {
+      const body = system
+        .join('\n')
+        .match(
+          /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
+        )?.[1]
+      if (!body) throw new Error('guard marker missing')
+      return JSON.parse(body) as MarkerDoc
+    }
+
+    const inactiveSource = {
+      source: 'prior-inactive',
+      state: 'inactive',
+      reasonCode: 'no-active-epoch',
+      enforcement: 'protected',
+      statusDigest: 'prior-inactive-digest',
+    }
+
+    test('a fresh session reports inactive / no-active-epoch in protected and observe mode', () => {
+      for (const mode of ['protected', 'observe'] as const) {
+        const adapter = createAdapter(mode)
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+        })
+      }
+    })
+
+    test('activation from inactive creates an epoch and projects waiting / missing-evidence', async () => {
+      const adapter = createAdapter('protected')
+      expect(status(adapter).state).toBe('inactive')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter)).toMatchObject({
+        state: 'waiting',
+        reasonCode: 'missing-evidence',
+      })
+      expect(status(adapter).epoch).not.toBeNull()
+    })
+
+    test('disabled mode never projects inactive', () => {
+      const adapter = createAdapter('disabled')
+      expect(status(adapter).state).toBe('disabled')
+      expect(status(adapter).state).not.toBe('inactive')
+    })
+
+    test('marker aggregate: inactive alone aggregates to inactive', async () => {
+      const adapter = createAdapter('protected')
+      const output = { system: ['base', priorMarker([inactiveSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        output,
+      )
+      const document = readMarker(output.system)
+      expect(document.sources).toContainEqual(inactiveSource)
+      expect(document.aggregate).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+    })
+
+    for (const blocking of [
+      { state: 'waiting', reasonCode: 'missing-evidence' },
+      { state: 'rejected', reasonCode: 'operation-target-mismatch' },
+      { state: 'unavailable', reasonCode: 'guard-unavailable' },
+    ] as const) {
+      test(`marker aggregate: inactive mixed with ${blocking.state} aggregates to ${blocking.state}`, async () => {
+        const adapter = createAdapter('protected')
+        const blockingSource = {
+          source: `prior-${blocking.state}`,
+          ...blocking,
+          enforcement: 'protected',
+          statusDigest: `prior-${blocking.state}-digest`,
+        }
+        const output = {
+          system: ['base', priorMarker([inactiveSource, blockingSource])],
+        }
+        await adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          output,
+        )
+        const document = readMarker(output.system)
+        expect(document.sources.map((source) => source.state)).toContain(
+          'inactive',
+        )
+        expect(document.aggregate).toMatchObject(blocking)
+      })
+    }
+
+    test('a marker source with state inactive parses and an unknown state is rejected', async () => {
+      const adapter = createAdapter('protected')
+      const accepted = { system: ['base', priorMarker([inactiveSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        accepted,
+      )
+      expect(readMarker(accepted.system).sources).toContainEqual(inactiveSource)
+      expect(readMarker(accepted.system).aggregate.reasonCode).not.toBe(
+        'guard-unavailable',
+      )
+
+      const unknownSource = { ...inactiveSource, state: 'dormant' }
+      const rejected = { system: ['base', priorMarker([unknownSource])] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        rejected,
+      )
+      const document = readMarker(rejected.system)
+      expect(document.sources.map((source) => source.state)).not.toContain(
+        'dormant',
+      )
+      expect(document.aggregate).toMatchObject({
+        state: 'unavailable',
+        reasonCode: 'guard-unavailable',
+      })
+    })
   })
 
   test('recovers a persisted legacy (v1) guard marker under v2 parsing', async () => {
@@ -3125,11 +5739,9 @@ describe('OpenCode workflow guard adapter', () => {
     expect(document.sources.some((source) => source.debug !== undefined)).toBe(
       true,
     )
-    const worst = document.sources.find(
-      (source) => source.state === 'unavailable',
-    )
-    if (!worst) throw new Error('expected an unavailable source')
-    expect(document.aggregate.state).toBe('unavailable')
+    const worst = document.sources.find((source) => source.state === 'waiting')
+    if (!worst) throw new Error('expected a waiting source')
+    expect(document.aggregate.state).toBe('waiting')
     expect(document.aggregate.statusDigest).toBe(worst.statusDigest)
   })
 
@@ -4368,6 +6980,1534 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(unavailable).state).toBe('unavailable')
   })
 
+  describe('remote seeding deferrals', () => {
+    const D = 'd'.repeat(64)
+    const E = 'e'.repeat(64)
+    const TIMEOUT = {
+      status: 'unavailable' as const,
+      reasonCode: 'command-timeout' as const,
+    }
+    const prAvailable = remoteAvailable(D, E, {
+      pullRequest: { identity: D, state: 'open' },
+    })
+    const checkAvailable = remoteAvailable(D, E, {
+      pullRequest: { identity: D, state: 'open' },
+      checkState: 'pending',
+    })
+
+    function deferralAdapter(
+      mode: 'observe' | 'protected',
+      required: readonly ReceiptOperation[],
+      remote: Record<string, readonly OperationObserverRemoteResult[]>,
+    ): OpencodeWorkflowGuard {
+      return createAdapter(
+        mode,
+        false,
+        sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          remote,
+        ),
+        required,
+      )
+    }
+
+    async function statusParsed(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      return JSON.parse(expectToolOutput(result).output)
+    }
+
+    test.each([
+      { mode: 'observe', reason: 'command-timeout', result: TIMEOUT },
+      {
+        mode: 'protected',
+        reason: 'command-timeout',
+        result: TIMEOUT,
+      },
+      {
+        mode: 'observe',
+        reason: 'missing-resource',
+        result: { status: 'missing-resource' as const },
+      },
+      {
+        mode: 'protected',
+        reason: 'missing-resource',
+        result: { status: 'missing-resource' as const },
+      },
+    ] as const)(
+      'b/c/k: a push $reason defers only push; the session stays active ($mode)',
+      async ({ mode, reason, result }) => {
+        const adapter = deferralAdapter(mode, ['push', 'check-readback'], {
+          'push:before': [result],
+          'check-readback:before': [checkAvailable],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const current = status(adapter)
+        expect(current.state).not.toBe('unavailable')
+        expect(current.epoch).not.toBeNull()
+        expect(current.unit?.status).toBe('active')
+        expect(current.missingOperations).toContain('push')
+        const parsed = await statusParsed(adapter)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: reason },
+        ])
+      },
+    )
+
+    test.each(['check-readback', 'review-readback'] as const)(
+      'd: a %s seeding timeout defers that operation while the others seed',
+      async (operation) => {
+        const adapter = deferralAdapter('observe', ['push', operation], {
+          'push:before': [remoteAvailable(D, E)],
+          [`${operation}:before`]: [TIMEOUT],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        const parsed = await statusParsed(adapter)
+        expect(parsed.seedDeferrals).toEqual([
+          { operation, reasonCode: 'command-timeout' },
+        ])
+      },
+    )
+
+    test('e: a local snapshot timeout at seeding is still fatal', async () => {
+      const base = sequenceObserver([operationSnapshot()], {
+        'push:before': [remoteAvailable(D, E)],
+      })
+      const adapter = createAdapter(
+        'observe',
+        false,
+        { ...base, snapshot: async () => TIMEOUT },
+        ['push'],
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-timeout',
+        timedOut: true,
+      })
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('f: a deferred operation that is never performed leaves completion blocked on missing evidence', async () => {
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      expect(status(adapter).missingOperations).toEqual(['push'])
+      expect(
+        adapter.prepareTransition(SESSION_A, {
+          callId: 'deferred-complete',
+          target: 'unit',
+        }),
+      ).toMatchObject({ status: 'waiting', reasonCode: 'missing-evidence' })
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
+    test('g: a check timeout after pr-creation seeded records no check deferral', async () => {
+      const adapter = deferralAdapter(
+        'observe',
+        ['pr-creation', 'check-readback'],
+        {
+          'pr-creation:before': [prAvailable],
+          'check-readback:before': [TIMEOUT],
+        },
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('h: a timeout for an operation whose resource the unit declared records no deferral', async () => {
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [remoteAvailable(D, E), remoteAvailable(D, E), TIMEOUT],
+        'push:after': [remoteAvailable(D, 'f'.repeat(64))],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'git push origin main' },
+        { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+        'declared-push',
+      )
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      await completeUnit(adapter, 'declared-complete-unit1')
+      expect(status(adapter).unit?.status).toBe('completed')
+      const firstUnitId = status(adapter).unit?.unitId
+
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'declared-start',
+        },
+        { args: startArgs },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'declared-start',
+          args: startArgs,
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('i: a deferral is cleared when the next unit start runs', async () => {
+      // A deferred operation cannot reach a completed first unit: its receipt
+      // is admitted only after its own before-read binds a baseline, and that
+      // clears the deferral. So the next start is a re-declaration on the
+      // still-pristine unit; it runs through the same start path that clears
+      // the deferral before seeding.
+      const adapter = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT, remoteAvailable(D, E)],
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'command-timeout' },
+      ])
+      const unitId = status(adapter).unit?.unitId
+
+      const startArgs = { resource_scopes: { push: 'remote-resource' } }
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'next-unit-start',
+        },
+        { args: startArgs },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'next-unit-start',
+          args: startArgs,
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+      expect(status(adapter).unit?.unitId).toBe(unitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+    })
+
+    describe('binding a deferred baseline at the operation before-hook', () => {
+      const FRESH = 'f'.repeat(64)
+
+      function counted(
+        base: OpencodeOperationObserver,
+        counts: Record<string, number>,
+      ): OpencodeOperationObserver {
+        const reader = base.remoteSnapshot
+        if (!reader) throw new Error('sequenceObserver has a remote reader')
+        return {
+          ...base,
+          remoteSnapshot: async (operation, phase) => {
+            const key = `${operation}:${phase}`
+            counts[key] = (counts[key] ?? 0) + 1
+            return reader.call(base, operation, phase)
+          },
+        }
+      }
+
+      function pushAdapter(
+        remote: Record<string, readonly OperationObserverRemoteResult[]>,
+        counts: Record<string, number> = {},
+        required: readonly ReceiptOperation[] = ['push'],
+      ): OpencodeWorkflowGuard {
+        return createAdapter(
+          'observe',
+          false,
+          counted(
+            sequenceObserver(
+              [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+              remote,
+            ),
+            counts,
+          ),
+          required,
+        )
+      }
+
+      async function pushOperation(
+        adapter: OpencodeWorkflowGuard,
+        callID = 'bind-push',
+      ): Promise<void> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          callID,
+        )
+      }
+
+      function operations(adapter: OpencodeWorkflowGuard): string[] {
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+      }
+
+      test('a: an available before-read binds the deferred push baseline and the push receipt is admitted', async () => {
+        const adapter = pushAdapter({
+          'push:before': [TIMEOUT, remoteAvailable(D, E)],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        await pushOperation(adapter)
+        expect(operations(adapter)).toContain('push')
+        expect(status(adapter).missingOperations).toEqual([])
+        expect(status(adapter).satisfiedOperations).toEqual(
+          expect.arrayContaining(['implementation', 'verification', 'push']),
+        )
+        expect(status(adapter).state).toBe('protected')
+        expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+      })
+
+      test('b: a before-read that times out once is retried once and then binds', async () => {
+        const counts: Record<string, number> = {}
+        const adapter = pushAdapter(
+          {
+            'push:before': [TIMEOUT, TIMEOUT, remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+          counts,
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(counts['push:before']).toBe(3)
+        expect(operations(adapter)).toContain('push')
+        expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+      })
+
+      test('c: two before-read timeouts bind nothing; the push runs unadmitted and the session stays up', async () => {
+        const counts: Record<string, number> = {}
+        const adapter = pushAdapter(
+          {
+            'push:before': [TIMEOUT, TIMEOUT, TIMEOUT, remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+          counts,
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await pushOperation(adapter)
+        expect(counts['push:before']).toBe(3)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(status(adapter).missingOperations).toEqual(['push'])
+        expect(status(adapter)).toMatchObject({
+          state: 'rejected',
+          reasonCode: 'resource-mismatch',
+        })
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('d: a push before-read of missing-resource binds nothing and keeps the deferral', async () => {
+        const adapter = pushAdapter({
+          'push:before': [TIMEOUT, { status: 'missing-resource' }],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('e: a deferred pr-creation whose before-read is missing-resource clears the deferral and creation is admitted', async () => {
+        const adapter = pushAdapter(
+          {
+            'pr-creation:before': [TIMEOUT, { status: 'missing-resource' }],
+            'pr-creation:after': [prAvailable],
+          },
+          {},
+          ['pr-creation'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'pr-creation', reasonCode: 'command-timeout' },
+        ])
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'bind-pr' },
+          { args: { command: 'gh pr create --title t --body b' } },
+        )
+        expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'bind-pr',
+            args: { command: 'gh pr create --title t --body b' },
+          },
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+        )
+        expect(operations(adapter)).toContain('pr-creation')
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test('f: a before-read from a different registered worktree observer does not bind', async () => {
+        const fixture = createTargetDerivationFixture()
+        try {
+          expect(
+            runTargetFixtureGit(fixture.linkedRoot, [
+              'branch',
+              '--set-upstream-to=master',
+              'linked',
+            ]).status === 0 ||
+              runTargetFixtureGit(fixture.linkedRoot, [
+                'branch',
+                '--set-upstream-to=main',
+                'linked',
+              ]).status === 0,
+          ).toBe(true)
+          const linkedRemote = await createOpencodeOperationObserver({
+            targetDirectory: fixture.linkedRoot,
+          }).remoteSnapshot?.('push', 'before')
+          // The other worktree's observer would bind if the identity check
+          // were missing.
+          expect(linkedRemote?.status).toBe('available')
+
+          const adapter = pushAdapter({
+            'push:before': [TIMEOUT],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: SESSION_A, callID: 'other-worktree' },
+            {
+              args: {
+                command: 'git push origin linked',
+                workdir: fixture.linkedRoot,
+              },
+            },
+          )
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+            { operation: 'push', reasonCode: 'command-timeout' },
+          ])
+        } finally {
+          fixture.cleanup()
+        }
+      })
+
+      test('g: a push binding names its operation and leaves the pr-creation and check baselines alone', async () => {
+        const PR = '1'.repeat(64)
+        const adapter = pushAdapter(
+          {
+            'push:before': [TIMEOUT, remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [
+              remoteAvailable(PR, E, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'pr-creation:after': [
+              remoteAvailable(PR, FRESH, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'check-readback:before': [
+              remoteAvailable(PR, E, {
+                pullRequest: { identity: PR, state: 'open' },
+                checkState: 'pending',
+              }),
+            ],
+            'check-readback:after': [
+              remoteAvailable(PR, FRESH, {
+                pullRequest: { identity: PR, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+          },
+          {},
+          ['push', 'pr-creation', 'check-readback'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).toContain('push')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr create --title t --body b' },
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'g-pr',
+        )
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr checks 42' },
+          { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+          'g-checks',
+        )
+        // A global (unnamed) binding would have rewritten the pr-creation and
+        // check baselines to the push resource and rejected these receipts.
+        expect(operations(adapter)).toEqual(
+          expect.arrayContaining(['push', 'pr-creation', 'check-readback']),
+        )
+      })
+
+      test('h: a pr-creation binding leaves the check baseline unset and its deferral in place', async () => {
+        const PR = '1'.repeat(64)
+        const adapter = pushAdapter(
+          {
+            'pr-creation:before': [
+              TIMEOUT,
+              remoteAvailable(PR, E, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'pr-creation:after': [
+              remoteAvailable(PR, FRESH, {
+                pullRequest: { identity: PR, state: 'open' },
+              }),
+            ],
+            'check-readback:before': [TIMEOUT, TIMEOUT, TIMEOUT],
+          },
+          {},
+          ['pr-creation', 'check-readback'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'pr-creation', reasonCode: 'command-timeout' },
+          { operation: 'check-readback', reasonCode: 'command-timeout' },
+        ])
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'h-pr' },
+          { args: { command: 'gh pr create --title t --body b' } },
+        )
+        // pr-creation is bound and cleared; check was not propagated to, so
+        // its deferral is still in place.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'check-readback', reasonCode: 'command-timeout' },
+        ])
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'h-pr',
+            args: { command: 'gh pr create --title t --body b' },
+          },
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+        )
+        expect(operations(adapter)).toContain('pr-creation')
+      })
+
+      test('m: an available before-read that observeReadback rejects binds nothing and keeps the deferral', async () => {
+        const adapter = pushAdapter({
+          'push:before': [
+            TIMEOUT,
+            {
+              status: 'available',
+              snapshot: {
+                resourceIdentity: '',
+                resourceRevisionIdentity: E,
+              },
+            },
+          ],
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await pushOperation(adapter)
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      describe.each([
+        [
+          'check-readback',
+          'gh pr checks 42',
+          'checkState',
+          'completed-success',
+        ],
+        [
+          'review-readback',
+          'gh pr view 42 --json reviewDecision',
+          'reviewDecision',
+          'approved',
+        ],
+      ] as const)(
+        '%s deferral on a missing-resource before-read',
+        (operation, command, field, finalValue) => {
+          const PR = '1'.repeat(64)
+          const pullRequest = { identity: PR, state: 'open' as const }
+          const pendingValue = field === 'checkState' ? 'pending' : 'required'
+          const before = remoteAvailable(PR, E, {
+            pullRequest,
+            [field]: pendingValue,
+          })
+          const after = remoteAvailable(PR, FRESH, {
+            pullRequest,
+            [field]: finalValue,
+          })
+
+          function adapterFor(
+            beforeReads: readonly OperationObserverRemoteResult[],
+          ): OpencodeWorkflowGuard {
+            return pushAdapter(
+              {
+                [`${operation}:before`]: [TIMEOUT, ...beforeReads],
+                [`${operation}:after`]: [after],
+              },
+              {},
+              [operation],
+            )
+          }
+
+          function runOperation(
+            adapter: OpencodeWorkflowGuard,
+            callID: string,
+          ): Promise<void> {
+            return observeOperationTool(
+              adapter,
+              'bash',
+              { command },
+              { title: operation, output: 'ok', metadata: { exit: 0 } },
+              callID,
+            )
+          }
+
+          test('a missing-resource before-read keeps the deferral and admits nothing', async () => {
+            const adapter = adapterFor([{ status: 'missing-resource' }])
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            await runOperation(adapter, 'missing-before')
+            expect(operations(adapter)).not.toContain(operation)
+            expect(status(adapter).state).not.toBe('unavailable')
+            expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+              { operation, reasonCode: 'command-timeout' },
+            ])
+          })
+
+          test('a later available before-read from the same observer binds it and the receipt is admitted', async () => {
+            const adapter = adapterFor([{ status: 'missing-resource' }, before])
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            await runOperation(adapter, 'missing-before')
+            expect(operations(adapter)).not.toContain(operation)
+            await runOperation(adapter, 'available-before')
+            expect(operations(adapter)).toContain(operation)
+            expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+            expect(status(adapter).state).not.toBe('unavailable')
+          })
+        },
+      )
+
+      test('l: a push before-hook that runs while the push seed is in flight binds nothing', async () => {
+        let releaseSeed: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        const base = sequenceObserver([operationSnapshot()], {
+          'push:after': [remoteAvailable(D, FRESH)],
+        })
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 1) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseSeed = resolve
+                    },
+                  )
+                }
+                return Promise.resolve(remoteAvailable(D, E))
+              }
+              return Promise.resolve({
+                status: 'unavailable',
+                reasonCode: 'remote-missing-field',
+              })
+            },
+          },
+          ['push'],
+        )
+        const skillDone = observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        // The seed read is suspended; the unit exists but nothing is deferred.
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'in-flight-push' },
+          { args: { command: 'git push origin main' } },
+        )
+        releaseSeed(TIMEOUT)
+        await skillDone
+        expect(pushBeforeReads).toBe(2)
+        // Had the in-flight before-hook bound a baseline, the seed's timeout
+        // would have recorded no deferral.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('n: a before-read suspended across unit completion and the next unit start cannot bind or mint evidence for the new unit', async () => {
+        // Push P's before-read samples revision E and is held. Another push
+        // advances the remote and completes unit 1. Unit 2 starts with a
+        // timed-out (deferred) push seed. Releasing P's old read must neither
+        // bind unit 2's deferral with that unit-1 era revision nor let P's
+        // up-to-date push count as a mutation for unit 2.
+        let releaseStale: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        // The held read (the second push before-read, stale push P) bypasses
+        // the sequence, so the base serves: unit-1 seed, unit-1 push Q, then
+        // the unit-2 seed (timeout).
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [
+              remoteAvailable(D, E),
+              remoteAvailable(D, E),
+              TIMEOUT,
+            ],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 2) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseStale = resolve
+                    },
+                  )
+                }
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+        const staleCommand = { command: 'git push origin HEAD' }
+        const staleBefore = adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-push' },
+          { args: staleCommand },
+        )
+        for (let tick = 0; tick < 50 && pushBeforeReads < 2; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(pushBeforeReads).toBe(2)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'stale-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        const firstUnitId = status(adapter).unit?.unitId
+
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'stale-start-unit2',
+          },
+          { args: {} },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'stale-start-unit2',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        const pushReceiptsBefore = operations(adapter).filter(
+          (operation) => operation === 'push',
+        ).length
+
+        releaseStale(remoteAvailable(D, E))
+        await staleBefore
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-push',
+            args: staleCommand,
+          },
+          { title: 'push', output: 'up-to-date', metadata: { exit: 0 } },
+        )
+
+        expect(
+          operations(adapter).filter((operation) => operation === 'push'),
+        ).toHaveLength(pushReceiptsBefore)
+        expect(status(adapter).missingOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        // The stale read bound nothing, so unit 2's deferral is untouched.
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+
+      test('o: a before-read suspended across a same-ID active-unit redeclaration cannot bind the replacement deferral or mint evidence', async () => {
+        // The unit keeps both IDs through a successful redeclaration, but the
+        // start resets and reseeds the deferrals. P's read of revision E
+        // predates that declaration and must not bind the replacement.
+        let releaseStale: (result: OperationObserverRemoteResult) => void =
+          () => {}
+        let pushBeforeReads = 0
+        // The held read (the second push before-read, stale push P) bypasses
+        // the sequence, so the base serves the initial seed and then the
+        // redeclaration seed, both timing out.
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [TIMEOUT, TIMEOUT],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: (operation, phase) => {
+              if (operation === 'push' && phase === 'before') {
+                pushBeforeReads += 1
+                if (pushBeforeReads === 2) {
+                  return new Promise<OperationObserverRemoteResult>(
+                    (resolve) => {
+                      releaseStale = resolve
+                    },
+                  )
+                }
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+        const unitId = status(adapter).unit?.unitId
+
+        const staleCommand = { command: 'git push origin HEAD' }
+        const staleBefore = adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-push' },
+          { args: staleCommand },
+        )
+        for (let tick = 0; tick < 50 && pushBeforeReads < 2; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(pushBeforeReads).toBe(2)
+
+        const startArgs = { expected_operations: ['pr-creation'] }
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'redeclare-start',
+          },
+          { args: startArgs },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'redeclare-start',
+            args: startArgs,
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(pushBeforeReads).toBe(3)
+        expect(status(adapter).unit?.unitId).toBe(unitId)
+        expect(status(adapter).unit?.requiredOperations).toContain(
+          'pr-creation',
+        )
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+
+        releaseStale(remoteAvailable(D, E))
+        await staleBefore
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-push',
+            args: staleCommand,
+          },
+          { title: 'push', output: 'up-to-date', metadata: { exit: 0 } },
+        )
+
+        expect(operations(adapter)).not.toContain('push')
+        expect(status(adapter).missingOperations).toContain('push')
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+          { operation: 'push', reasonCode: 'command-timeout' },
+        ])
+      })
+    })
+
+    describe('after-hook ownership across a unit change', () => {
+      const FRESH = 'f'.repeat(64)
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const MISSING = { status: 'missing-resource' as const }
+      type HoldPoint = 'local-after' | 'remote-after'
+
+      interface HeldAfter {
+        readonly adapter: OpencodeWorkflowGuard
+        arm(point: HoldPoint): void
+        hasHeld(): boolean
+        release(): void
+      }
+
+      function heldAfterAdapter(): HeldAfter {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+            'check-readback:before': [checkAvailable],
+            'check-readback:after': [
+              remoteAvailable(D, FRESH, {
+                pullRequest: { identity: D, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+          },
+        )
+        let armed: HoldPoint | undefined
+        let held = false
+        let release: () => void = () => {}
+        const gate = (): Promise<void> | undefined => {
+          held = true
+          armed = undefined
+          return new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        const adapter = createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            snapshot: async () => {
+              if (armed === 'local-after') await gate()
+              return base.snapshot()
+            },
+            remoteSnapshot: async (operation, phase) => {
+              if (armed === 'remote-after' && phase === 'after') await gate()
+              return (
+                base.remoteSnapshot?.(operation, phase) ??
+                Promise.resolve(TIMEOUT)
+              )
+            },
+          },
+          ['push'],
+        )
+        return {
+          adapter,
+          arm: (point) => {
+            armed = point
+          },
+          hasHeld: () => held,
+          release: () => release(),
+        }
+      }
+
+      async function untilHeld(held: HeldAfter): Promise<void> {
+        for (let tick = 0; tick < 50 && !held.hasHeld(); tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(held.hasHeld()).toBe(true)
+      }
+
+      // Unit 2 also requires pr-creation and check-readback, so a leaked
+      // self-seed, propagation, or receipt would be admitted rather than
+      // rejected as not required.
+      async function startSuccessorUnit(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<void> {
+        const args = { expected_operations: ['pr-creation', 'check-readback'] }
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'ownership-start-unit2',
+          },
+          { args },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'ownership-start-unit2',
+            args,
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+      }
+
+      // Runs `staleCommand` to completion of its before-hook in unit 1,
+      // suspends its after-hook at `point`, completes unit 1 with another
+      // push, starts unit 2, then releases the suspended after-hook.
+      async function runAcrossUnitChange(
+        held: HeldAfter,
+        point: HoldPoint,
+        staleCommand: Record<string, unknown>,
+      ): Promise<void> {
+        const { adapter } = held
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const firstUnitId = status(adapter).unit?.unitId
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-after' },
+          { args: staleCommand },
+        )
+        held.arm(point)
+        const staleAfter = adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-after',
+            args: staleCommand,
+          },
+          { title: 'op', output: 'ok', metadata: { exit: 0 } },
+        )
+        await untilHeld(held)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'ownership-unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'ownership-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        await startSuccessorUnit(adapter)
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+
+        held.release()
+        await staleAfter
+      }
+
+      function operationsOf(adapter: OpencodeWorkflowGuard): string[] {
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+      }
+
+      test.each([
+        ['captureAfterOperation', 'local-after'],
+        ['captureRemoteAfter', 'remote-after'],
+      ] as const)(
+        'a push whose after-hook is suspended in %s cannot mint evidence for the successor unit',
+        async (_name, point) => {
+          const held = heldAfterAdapter()
+          await runAcrossUnitChange(held, point, {
+            command: 'git push origin HEAD',
+          })
+          const { adapter } = held
+          // Only unit 1's own push (the completing one) holds a receipt.
+          expect(
+            operationsOf(adapter).filter((operation) => operation === 'push'),
+          ).toHaveLength(1)
+          expect(status(adapter).missingOperations).toContain('push')
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
+
+      test.each([
+        ['captureAfterOperation', 'local-after'],
+        ['captureRemoteAfter', 'remote-after'],
+      ] as const)(
+        'a pr-creation whose after-hook is suspended in %s neither self-seeds nor propagates into the successor unit',
+        async (_name, point) => {
+          const held = heldAfterAdapter()
+          await runAcrossUnitChange(held, point, PR_CREATE)
+          const { adapter } = held
+          expect(operationsOf(adapter)).not.toContain('pr-creation')
+          // A self-seed would have set the successor unit's pr-creation
+          // baseline and propagated it to check; the same PR would then be
+          // admitted. Without a baseline it is a resource-mismatch.
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command: 'gh pr checks 42' },
+            { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+            'ownership-probe-check',
+          )
+          expect(operationsOf(adapter)).not.toContain('check-readback')
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
+
+      test('a push whose held classifier rejects after the unit changed neither disables the successor nor mints evidence', async () => {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'push:before': [remoteAvailable(D, E)],
+            'push:after': [remoteAvailable(D, FRESH)],
+          },
+        )
+        const classifier = createReceiptClassifier()
+        const realClassify = classifier.classifyOperation
+        if (!realClassify) throw new Error('classifier implements it')
+        let armed = false
+        let held = false
+        let rejectHeld: (reason: Error) => void = () => {}
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          observer: base,
+          runtimeRequiredOperations: ['push'],
+          classifier: {
+            ...classifier,
+            classifyOperation: (input: unknown) => {
+              if (!armed) return realClassify(input)
+              armed = false
+              held = true
+              return new Promise((_resolve, reject) => {
+                rejectHeld = reject
+              })
+            },
+          },
+        })
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        const firstUnitId = status(adapter).unit?.unitId
+        const staleCommand = { command: 'git push origin HEAD' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'stale-classify' },
+          { args: staleCommand },
+        )
+        armed = true
+        const staleAfter = adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'stale-classify',
+            args: staleCommand,
+          },
+          { title: 'op', output: 'ok', metadata: { exit: 0 } },
+        )
+        for (let tick = 0; tick < 50 && !held; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(held).toBe(true)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git push origin main' },
+          { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+          'classify-unit-1-push',
+        )
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        await completeUnit(adapter, 'classify-complete-unit1')
+        expect(status(adapter).unit?.status).toBe('completed')
+        await startSuccessorUnit(adapter)
+        expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+        expect(status(adapter).missingOperations).toContain('push')
+
+        rejectHeld(new Error('classifier failed'))
+        await staleAfter
+
+        expect(status(adapter).state).not.toBe('unavailable')
+        // Only unit 1's own completing push holds a push receipt.
+        expect(
+          operationsOf(adapter).filter((operation) => operation === 'push'),
+        ).toHaveLength(1)
+        expect(status(adapter).missingOperations).toContain('push')
+      })
+    })
+
+    describe.each([
+      [
+        'check-readback',
+        'gh pr checks 42',
+        'checkState',
+        'pending',
+        'completed-success',
+      ],
+      [
+        'review-readback',
+        'gh pr view 42 --json reviewDecision',
+        'reviewDecision',
+        'required',
+        'approved',
+      ],
+    ] as const)(
+      'lingering %s deferral after a pr-creation self-seed propagated the baseline',
+      (operation, command, field, pendingValue, finalValue) => {
+        const FRESH = 'f'.repeat(64)
+        const PR_A = D
+        const PR_B = '2'.repeat(64)
+
+        function pullRequestRead(
+          identity: string,
+          revision: string,
+          value: string,
+        ): OperationObserverRemoteResult {
+          return remoteAvailable(identity, revision, {
+            pullRequest: { identity, state: 'open' },
+            [field]: value,
+          })
+        }
+
+        // Every seed times out; the pr-creation operation's own before-read
+        // is missing-resource, so creation self-seeds PR A from the after-read
+        // and propagates it to check and review while their deferrals remain.
+        function adapterAfterSelfSeed(
+          operationBefore: OperationObserverRemoteResult,
+        ): OpencodeWorkflowGuard {
+          const base = sequenceObserver(
+            [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+            {
+              'pr-creation:before': [TIMEOUT, { status: 'missing-resource' }],
+              'pr-creation:after': [prAvailable],
+              [`${operation}:before`]: [TIMEOUT, operationBefore],
+              [`${operation}:after`]: [
+                pullRequestRead(
+                  operationBefore.status === 'available'
+                    ? operationBefore.snapshot.resourceIdentity
+                    : PR_A,
+                  FRESH,
+                  finalValue,
+                ),
+              ],
+            },
+          )
+          return createAdapter('observe', false, base, [
+            'pr-creation',
+            operation,
+          ])
+        }
+
+        async function createPullRequestA(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command: 'gh pr create --title t --body b' },
+            { title: 'pr', output: 'created', metadata: { exit: 0 } },
+            'lingering-pr',
+          )
+        }
+
+        function operationReceipts(adapter: OpencodeWorkflowGuard): number {
+          return ledger(adapter)
+            .listReceipts()
+            .filter((receipt) => receipt.canonical.operation === operation)
+            .length
+        }
+
+        test('a different PR cannot overwrite the propagated baseline or mint evidence', async () => {
+          const adapter = adapterAfterSelfSeed(
+            pullRequestRead(PR_B, E, pendingValue),
+          )
+          await createPullRequestA(adapter)
+          expect(
+            ledger(adapter)
+              .listReceipts()
+              .map((receipt) => receipt.canonical.operation),
+          ).toContain('pr-creation')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+            { operation, reasonCode: 'command-timeout' },
+          ])
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command },
+            { title: operation, output: 'ok', metadata: { exit: 0 } },
+            'lingering-other-pr',
+          )
+          expect(operationReceipts(adapter)).toBe(0)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter)).toMatchObject({
+            state: 'rejected',
+            reasonCode: 'resource-mismatch',
+          })
+          // The deferral was obsolete once the baseline existed.
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+
+        test('the same PR is still admitted and the obsolete deferral is cleared', async () => {
+          const adapter = adapterAfterSelfSeed(
+            pullRequestRead(PR_A, E, pendingValue),
+          )
+          await createPullRequestA(adapter)
+          await observeOperationTool(
+            adapter,
+            'bash',
+            { command },
+            { title: operation, output: 'ok', metadata: { exit: 0 } },
+            'lingering-same-pr',
+          )
+          expect(operationReceipts(adapter)).toBe(1)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+      },
+    )
+
+    describe('pr-creation after-read self-seed', () => {
+      const PR_CREATE = { command: 'gh pr create --title t --body b' }
+      const MISSING = { status: 'missing-resource' as const }
+      const UNREADABLE = {
+        status: 'unavailable' as const,
+        reasonCode: 'remote-missing-field' as const,
+      }
+
+      // Seeding reads pr-creation:before first (missing-resource, tolerated);
+      // the operation's own before-hook read is the second call.
+      function prAdapter(
+        hookBefore: OperationObserverRemoteResult | 'throw',
+      ): OpencodeWorkflowGuard {
+        const base = sequenceObserver(
+          [operationSnapshot(), operationSnapshot(), operationSnapshot()],
+          {
+            'pr-creation:before': [MISSING],
+            'pr-creation:after': [prAvailable],
+            // Seeding tolerates a missing check/review resource, so neither
+            // has a baseline until pr-creation propagates one.
+            'check-readback:before': [MISSING, checkAvailable],
+            'check-readback:after': [
+              remoteAvailable(D, 'f'.repeat(64), {
+                pullRequest: { identity: D, state: 'open' },
+                checkState: 'completed-success',
+              }),
+            ],
+            'review-readback:before': [
+              MISSING,
+              remoteAvailable(D, E, {
+                pullRequest: { identity: D, state: 'open' },
+                reviewDecision: 'required',
+              }),
+            ],
+            'review-readback:after': [
+              remoteAvailable(D, 'f'.repeat(64), {
+                pullRequest: { identity: D, state: 'open' },
+                reviewDecision: 'approved',
+              }),
+            ],
+          },
+        )
+        let beforeReads = 0
+        return createAdapter(
+          'observe',
+          false,
+          {
+            ...base,
+            remoteSnapshot: async (operation, phase) => {
+              const isHookRead =
+                operation === 'pr-creation' &&
+                phase === 'before' &&
+                ++beforeReads >= 2
+              if (!isHookRead)
+                return base.remoteSnapshot?.(operation, phase) ?? UNREADABLE
+              if (hookBefore === 'throw') throw new Error('probe failed')
+              return hookBefore
+            },
+          },
+          ['pr-creation', 'check-readback', 'review-readback'],
+        )
+      }
+
+      // The guard exposes no baseline accessor through the adapter, so probe
+      // the downstream baselines behaviorally: with no baseline a check or
+      // review before-read for any PR is a resource-mismatch and mints
+      // nothing; with the PR propagated from creation it is admitted.
+      async function admittedDownstream(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<string[]> {
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr checks 42' },
+          { title: 'checks', output: 'ok', metadata: { exit: 0 } },
+          'probe-check',
+        )
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'gh pr view 42 --json reviewDecision' },
+          { title: 'review', output: 'ok', metadata: { exit: 0 } },
+          'probe-review',
+        )
+        return ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation)
+          .filter(
+            (operation) =>
+              operation === 'check-readback' || operation === 'review-readback',
+          )
+          .sort()
+      }
+
+      function prReceipts(adapter: OpencodeWorkflowGuard): number {
+        return ledger(adapter)
+          .listReceipts()
+          .filter((receipt) => receipt.canonical.operation === 'pr-creation')
+          .length
+      }
+
+      test.each([
+        ['a: unavailable/command-timeout', TIMEOUT],
+        [
+          'b: another unavailable reason',
+          { status: 'unavailable', reasonCode: 'remote-missing-field' },
+        ],
+        ['c: a before-read that throws', 'throw'],
+      ] as const)(
+        '%s never seeds from the after-read and is not admitted',
+        async (_name, hookBefore) => {
+          const adapter = prAdapter(hookBefore)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          await observeOperationTool(
+            adapter,
+            'bash',
+            PR_CREATE,
+            { title: 'pr', output: 'created', metadata: { exit: 0 } },
+            'pr-self-seed',
+          )
+          expect(prReceipts(adapter)).toBe(0)
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(status(adapter).missingOperations).toContain('pr-creation')
+          // No self-seed happened, so nothing was propagated downstream.
+          expect(await admittedDownstream(adapter)).toEqual([])
+        },
+      )
+
+      test('d: a missing-resource before-read still seeds from the after-read and mints', async () => {
+        const adapter = prAdapter(MISSING)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'created', metadata: { exit: 0 } },
+          'pr-self-seed',
+        )
+        expect(prReceipts(adapter)).toBe(1)
+        expect(status(adapter).state).not.toBe('unavailable')
+        // Positive control: the self-seed set the pr-creation baseline and
+        // propagated it, so the same PR is admitted downstream.
+        expect(await admittedDownstream(adapter)).toEqual([
+          'check-readback',
+          'review-readback',
+        ])
+      })
+
+      test('e: a PR present before, with an unchanged head after, is a no-op', async () => {
+        const adapter = prAdapter(prAvailable)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await observeOperationTool(
+          adapter,
+          'bash',
+          PR_CREATE,
+          { title: 'pr', output: 'exists', metadata: { exit: 1 } },
+          'pr-self-seed',
+        )
+        expect(prReceipts(adapter)).toBe(0)
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(await admittedDownstream(adapter)).toEqual([])
+      })
+    })
+
+    test('j: the deferral list never enters markers, receipts, tool metadata, or digests', async () => {
+      const deferred = deferralAdapter('observe', ['push'], {
+        'push:before': [TIMEOUT],
+      })
+      const skillOutput = { title: 'Loaded skill', output: 'ok', metadata: {} }
+      await observeSkill(
+        deferred,
+        'systematic_skill',
+        'ce:work',
+        'deferral-skill',
+        SESSION_A,
+        skillOutput,
+      )
+      const statusResult = expectToolOutput(
+        await getTool(deferred, 'systematic_workflow_status').execute(
+          {},
+          toolContext(),
+        ),
+      )
+      expect(JSON.parse(statusResult.output).seedDeferrals).toBeDefined()
+      const transformed = { system: ['base'] }
+      await deferred.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        transformed,
+      )
+      const everything = JSON.stringify([
+        skillOutput,
+        statusResult.metadata,
+        transformed.system,
+        ledger(deferred).listReceipts(),
+        status(deferred),
+      ])
+      expect(everything).not.toContain('seedDeferrals')
+      expect(everything).not.toContain('command-timeout')
+    })
+  })
+
   describe('guard-unavailable first-cause diagnostic (seedRemoteScopes)', () => {
     // sequenceObserver's default remoteResults is `{}`: any operation/phase
     // key not supplied resolves to `{status:'unavailable', reasonCode:
@@ -4598,7 +8738,7 @@ describe('OpenCode workflow guard adapter', () => {
       await enteredRemoteSnapshot.promise
 
       // While unit 1's seeding is still suspended, a wholly unrelated
-      // markUnavailable() (bindCall conflict, no cause) wins the transition.
+      // markUnavailable() (bindCall conflict) wins the transition.
       await adapter.hooks['tool.execute.before'](
         {
           tool: 'systematic_skill',
@@ -4629,11 +8769,18 @@ describe('OpenCode workflow guard adapter', () => {
         'systematic_workflow_status',
       ).execute({}, toolContext())
       const parsed = JSON.parse(expectToolOutput(result).output)
-      expect(parsed.firstUnavailableCause).toBeUndefined()
+      // The competing bindCall conflict won the transition and now carries a
+      // call-lifecycle-mismatch cause; the resumed seeding failure must not
+      // replace it.
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
     })
 
     test('table: every GuardUnavailableCauseKind reports the correct site, operation, and reasonCode', async () => {
-      interface CauseCase {
+      interface UnavailableCase {
         readonly name: string
         readonly observer: OpencodeOperationObserver
         readonly expected: {
@@ -4644,6 +8791,15 @@ describe('OpenCode workflow guard adapter', () => {
           readonly timedOut: boolean
         }
       }
+      interface DeferredCase {
+        readonly name: string
+        readonly observer: OpencodeOperationObserver
+        readonly deferred: {
+          readonly operation: 'push'
+          readonly reasonCode: 'command-timeout' | 'missing-resource'
+        }
+      }
+      type CauseCase = UnavailableCase | DeferredCase
 
       const validateRegisteredWorktree = (candidateDirectory: string) => ({
         status: 'ok' as const,
@@ -4754,16 +8910,11 @@ describe('OpenCode workflow guard adapter', () => {
           },
         },
         {
-          name: 'remote-scope-missing-resource',
+          name: 'push missing-resource defers the operation',
           observer: sequenceObserver([operationSnapshot()], {
             'push:before': [{ status: 'missing-resource' }],
           }),
-          expected: {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-missing-resource',
-            operation: 'push',
-            timedOut: false,
-          },
+          deferred: { operation: 'push', reasonCode: 'missing-resource' },
         },
         {
           name: 'remote-scope-unavailable, non-timeout reasonCode',
@@ -4781,19 +8932,13 @@ describe('OpenCode workflow guard adapter', () => {
           },
         },
         {
-          name: 'remote-scope-unavailable, command-timeout',
+          name: 'remote command-timeout defers the operation',
           observer: sequenceObserver([operationSnapshot()], {
             'push:before': [
               { status: 'unavailable', reasonCode: 'command-timeout' },
             ],
           }),
-          expected: {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-unavailable',
-            operation: 'push',
-            reasonCode: 'command-timeout',
-            timedOut: true,
-          },
+          deferred: { operation: 'push', reasonCode: 'command-timeout' },
         },
         {
           name: 'remote-readback-rejected',
@@ -4823,12 +8968,20 @@ describe('OpenCode workflow guard adapter', () => {
           'push',
         ])
         await observeSkill(adapter, 'systematic_skill', 'ce:work')
-        expect(status(adapter).state).toBe('unavailable')
         const result = await getTool(
           adapter,
           'systematic_workflow_status',
         ).execute({}, toolContext())
         const parsed = JSON.parse(expectToolOutput(result).output)
+        if ('deferred' in causeCase) {
+          expect(status(adapter).state, causeCase.name).not.toBe('unavailable')
+          expect(parsed.firstUnavailableCause, causeCase.name).toBeUndefined()
+          expect(parsed.seedDeferrals, causeCase.name).toEqual([
+            causeCase.deferred,
+          ])
+          continue
+        }
+        expect(status(adapter).state, causeCase.name).toBe('unavailable')
         expect(parsed.firstUnavailableCause, causeCase.name).toEqual(
           causeCase.expected,
         )
@@ -4919,7 +9072,7 @@ describe('OpenCode workflow guard adapter', () => {
         'systematic_workflow_status',
       ).execute({}, toolContext(otherSessionID))
       const otherParsed = JSON.parse(expectToolOutput(otherResult).output)
-      // An untouched session reports state 'unavailable'/reasonCode
+      // An untouched session reports state 'inactive'/reasonCode
       // 'no-active-epoch' (nothing has happened yet) — distinct from the
       // mode-level 'guard-unavailable' session A hit. Assert on the
       // mode-level reasonCode and the cause itself, not on `state`.
@@ -4928,7 +9081,1436 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
-  test('before-only operation is abandoned at the next status boundary', async () => {
+  describe('guard-unavailable first-cause diagnostic (operation before-hook)', () => {
+    const BEFORE_CAUSE_SESSION = SESSION_A
+
+    function observerWithSnapshot(
+      snapshot: OpencodeOperationObserver['snapshot'],
+    ): OpencodeOperationObserver {
+      return { ...sequenceObserver([operationSnapshot()]), snapshot }
+    }
+
+    async function beforeOperation(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      args: unknown = { command: 'bun test' },
+      tool: 'bash' | 'write' = 'bash',
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool, sessionID: BEFORE_CAUSE_SESSION, callID },
+        { args },
+      )
+    }
+
+    async function causeOf(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext(BEFORE_CAUSE_SESSION))
+      return JSON.parse(expectToolOutput(result).output)
+    }
+
+    test('a before snapshot that is unavailable records its observer reasonCode', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        observerWithSnapshot(async () => ({
+          status: 'unavailable',
+          reasonCode: 'file-output-limit',
+        })),
+      )
+      await beforeOperation(adapter, 'before-file-output-limit')
+      const parsed = await causeOf(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'file-output-limit',
+        timedOut: false,
+      })
+    })
+
+    test('a before snapshot command-timeout records timedOut', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        observerWithSnapshot(async () => ({
+          status: 'unavailable',
+          reasonCode: 'command-timeout',
+        })),
+      )
+      await beforeOperation(adapter, 'before-timeout')
+      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-timeout',
+        timedOut: true,
+      })
+    })
+
+    test('a before snapshot that throws records local-snapshot-error without a reasonCode', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        observerWithSnapshot(async () => {
+          throw new Error('snapshot exploded with /secret/path')
+        }),
+      )
+      await beforeOperation(adapter, 'before-throws')
+      const parsed = await causeOf(adapter)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-error',
+        timedOut: false,
+      })
+      expect(JSON.stringify(parsed)).not.toContain('/secret/path')
+    })
+
+    test('a before snapshot for a different target digest records operation-target-mismatch', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        observerWithSnapshot(async () => ({
+          status: 'available',
+          snapshot: {
+            ...operationSnapshot(),
+            targetDigest: 'f'.repeat(64),
+          },
+        })),
+      )
+      await beforeOperation(adapter, 'before-digest-mismatch')
+      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'operation-target-mismatch',
+        timedOut: false,
+      })
+    })
+
+    describe('registered-worktree validation failures record operation-input-invalid', () => {
+      const base = sequenceObserver([operationSnapshot()])
+      const cases: ReadonlyArray<{
+        readonly name: string
+        readonly validate: OpencodeOperationObserver['validateRegisteredWorktree']
+        readonly reasonCode?: OperationObserverReasonCode
+      }> = [
+        {
+          name: 'unregistered worktree with a validation reason',
+          validate: () => ({ status: 'error', reasonCode: 'command-failed' }),
+          reasonCode: 'command-failed',
+        },
+        {
+          name: 'validation timeout',
+          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
+          reasonCode: 'command-timeout',
+        },
+        {
+          name: 'ok validation for a different target root',
+          validate: (candidateDirectory) => ({
+            status: 'ok',
+            targetRoot: path.join(candidateDirectory, 'elsewhere'),
+            gitDir: '/git',
+            commonDir: '/git',
+          }),
+        },
+        {
+          name: 'validation that throws',
+          validate: () => {
+            throw new Error('validation exploded')
+          },
+        },
+      ]
+
+      for (const validationCase of cases) {
+        test(validationCase.name, async () => {
+          const adapter = createAdapter('observe', false, {
+            ...base,
+            validateRegisteredWorktree: validationCase.validate,
+          })
+          await beforeOperation(adapter, 'before-validation')
+          const parsed = await causeOf(adapter)
+          expect(parsed.state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toEqual({
+            site: 'tool-before',
+            kind: 'operation-input-invalid',
+            ...(validationCase.reasonCode === undefined
+              ? {}
+              : { reasonCode: validationCase.reasonCode }),
+            timedOut: validationCase.reasonCode === 'command-timeout',
+          })
+        })
+      }
+    })
+
+    test('arguments that cannot be fingerprinted record operation-input-invalid', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await beforeOperation(adapter, 'before-no-fingerprint', {
+        command: 'bun test',
+        unserializable: undefined,
+      })
+      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'operation-input-invalid',
+        timedOut: false,
+      })
+    })
+
+    test('a target that cannot be derived records operation-input-invalid', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await beforeOperation(
+        adapter,
+        'before-git-admin-target',
+        { filePath: '.git/config', content: 'x' },
+        'write',
+      )
+      const parsed = await causeOf(adapter)
+      expect(parsed.firstUnavailableCause).toMatchObject({
+        site: 'tool-before',
+        kind: 'operation-input-invalid',
+        timedOut: false,
+      })
+    })
+
+    test('a real non-git workspace records operation-input-invalid with command-failed on the first operation', async () => {
+      const worktree = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-non-git-')),
+      )
+      try {
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          targetDirectory: worktree,
+          observer: createOpencodeOperationObserver({
+            targetDirectory: worktree,
+          }),
+          classifier: createReceiptClassifier(),
+          runtimeRequiredOperations: [],
+        })
+        await beforeOperation(adapter, 'before-non-git')
+        const parsed = await causeOf(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+          reasonCode: 'command-failed',
+          timedOut: false,
+        })
+      } finally {
+        fs.rmSync(worktree, { recursive: true, force: true })
+      }
+    })
+
+    test('a registered worktree whose snapshot fails with command-failed records local-snapshot-unavailable', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        observerWithSnapshot(async () => ({
+          status: 'unavailable',
+          reasonCode: 'command-failed',
+        })),
+      )
+      await beforeOperation(adapter, 'before-snapshot-command-failed')
+      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-failed',
+        timedOut: false,
+      })
+    })
+
+    test('a callID reused across call kinds records call-lifecycle-mismatch on an operation call', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: BEFORE_CAUSE_SESSION,
+          callID: 'reused-operation-call',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      expect(status(adapter).state).not.toBe('unavailable')
+      await beforeOperation(adapter, 'reused-operation-call')
+      const parsed = await causeOf(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+    })
+
+    test('a callID reused across skill and start calls records call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('observe')
+      for (const tool of ['systematic_skill', 'systematic_workflow_start']) {
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool,
+            sessionID: BEFORE_CAUSE_SESSION,
+            callID: 'reused-skill-start-call',
+          },
+          { args: tool === 'systematic_skill' ? { name: 'ce:work' } : {} },
+        )
+      }
+      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+    })
+
+    test('a callID reused across skill and complete calls records call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('observe')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: BEFORE_CAUSE_SESSION,
+          callID: 'reused-skill-complete-call',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: BEFORE_CAUSE_SESSION,
+          callID: 'reused-skill-complete-call',
+        },
+        { args: { target: 'unit' } },
+      )
+      const parsed = await causeOf(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-before',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+    })
+
+    test('the first before-hook cause wins over a later failing operation', async () => {
+      let mode: 'unavailable' | 'throws' = 'unavailable'
+      const adapter = createAdapter(
+        'observe',
+        false,
+        observerWithSnapshot(async () => {
+          if (mode === 'throws') throw new Error('later failure')
+          return { status: 'unavailable', reasonCode: 'file-output-limit' }
+        }),
+      )
+      await beforeOperation(adapter, 'first-wins-1')
+      const first = (await causeOf(adapter)).firstUnavailableCause
+      expect(first).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'file-output-limit',
+        timedOut: false,
+      })
+      mode = 'throws'
+      await beforeOperation(adapter, 'first-wins-2', { command: 'bun lint' })
+      expect((await causeOf(adapter)).firstUnavailableCause).toEqual(first)
+    })
+  })
+
+  describe('guard-unavailable first-cause diagnostic (operation after-hook)', () => {
+    const D = 'd'.repeat(64)
+    const E = 'e'.repeat(64)
+    const COMMAND = { command: 'bun test' }
+    const OUTPUT = { title: 'run', output: 'ok', metadata: { exit: 0 } }
+
+    interface ArmedOverrides {
+      readonly snapshot?: OpencodeOperationObserver['snapshot']
+      readonly validate?: OpencodeOperationObserver['validateRegisteredWorktree']
+    }
+
+    // Behaves normally through the before-hook; `arm()` switches the supplied
+    // overrides on for the after-hook.
+    function armable(
+      overrides: ArmedOverrides,
+      remoteResults: Readonly<
+        Record<string, readonly OperationObserverRemoteResult[]>
+      > = {},
+    ): { observer: OpencodeOperationObserver; arm: () => void } {
+      let armed = false
+      const base = sequenceObserver([operationSnapshot()], remoteResults)
+      const observer: OpencodeOperationObserver = {
+        ...base,
+        snapshot: () =>
+          armed && overrides.snapshot ? overrides.snapshot() : base.snapshot(),
+        validateRegisteredWorktree: (candidateDirectory) =>
+          armed && overrides.validate
+            ? overrides.validate(candidateDirectory)
+            : base.validateRegisteredWorktree(candidateDirectory),
+      }
+      return {
+        observer,
+        arm: () => {
+          armed = true
+        },
+      }
+    }
+
+    async function afterHook(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      args: Record<string, unknown> = COMMAND,
+      output: unknown = OUTPUT,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](
+        { tool: 'bash', sessionID: SESSION_A, callID, args },
+        output,
+      )
+    }
+
+    async function beforeThenAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      arm?: () => void,
+      output: unknown = OUTPUT,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID },
+        { args: COMMAND },
+      )
+      arm?.()
+      await afterHook(adapter, callID, COMMAND, output)
+    }
+
+    async function causeOf(adapter: OpencodeWorkflowGuard): Promise<unknown> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      return parsed.state === 'unavailable'
+        ? parsed.firstUnavailableCause
+        : 'not-unavailable'
+    }
+
+    async function activatedAdapter(
+      observer: OpencodeOperationObserver,
+      runtimeRequired: readonly ReceiptOperation[] = [],
+      classifierOverride?: Record<string, unknown>,
+    ): Promise<OpencodeWorkflowGuard> {
+      const adapter = classifierOverride
+        ? createOpencodeWorkflowGuard({
+            config: { mode: 'observe', debug: false },
+            ...OPERATION_SCOPE,
+            observer,
+            ...(classifierOverride.classifier === undefined
+              ? {}
+              : {
+                  classifier: classifierOverride.classifier as ReturnType<
+                    typeof createReceiptClassifier
+                  >,
+                }),
+            runtimeRequiredOperations: runtimeRequired,
+          })
+        : createAdapter('observe', false, observer, runtimeRequired)
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+      return adapter
+    }
+
+    function afterCause(
+      kind: string,
+      reasonCode?: string,
+      timedOut = false,
+    ): Record<string, unknown> {
+      return {
+        site: 'tool-after',
+        kind,
+        ...(reasonCode === undefined ? {} : { reasonCode }),
+        timedOut,
+      }
+    }
+
+    test('a completion the guard refuses to finalize records transition-finalize-rejected with the guard reason', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      const input = {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'finalize-rejected',
+      }
+      await adapter.hooks['tool.execute.before'](input, {
+        args: { target: 'unit' },
+      })
+      // Consume a receipt out-of-band after the transition was prepared, so
+      // the guard refuses to finalize it.
+      const current = status(adapter)
+      const receipt = ledger(adapter)
+        .listReceipts()
+        .find((candidate) => candidate.canonical.operation === 'implementation')
+      if (!receipt || !current.epoch || !current.unit) {
+        throw new Error('finalize rejection fixture missing')
+      }
+      ledger(adapter).consumeReceipt(receipt.canonical.receiptId, {
+        epochId: current.epoch.epochId,
+        unitId: current.unit.unitId,
+        workspaceIdentity: SCOPE.workspaceIdentity,
+        repositoryIdentity: SCOPE.repositoryIdentity,
+        worktreeIdentity: SCOPE.worktreeIdentity,
+        operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+      })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: { target: 'unit' } },
+        { title: 'complete', output: 'done', metadata: {} },
+      )
+      expect(await causeOf(adapter)).toEqual({
+        site: 'tool-after',
+        kind: 'transition-finalize-rejected',
+        reasonCode: 'consumed-receipt',
+        timedOut: false,
+      })
+    })
+
+    test('an after hook with no pending operation records call-lifecycle-mismatch', async () => {
+      const adapter = await activatedAdapter(
+        sequenceObserver([operationSnapshot()]),
+      )
+      await afterHook(adapter, 'after-no-pending')
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('call-lifecycle-mismatch'),
+      )
+    })
+
+    test('an after hook whose args differ from the pending operation records call-lifecycle-mismatch', async () => {
+      const adapter = await activatedAdapter(
+        sequenceObserver([operationSnapshot()]),
+      )
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID: 'after-mismatch' },
+        { args: COMMAND },
+      )
+      await afterHook(adapter, 'after-mismatch', { command: 'bun lint' })
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('call-lifecycle-mismatch'),
+      )
+    })
+
+    test.each([
+      ['missing metadata', { title: 'run', output: 'ok' }],
+      ['oversized title', { title: 'x'.repeat(100_000), metadata: {} }],
+      ['non-record output', 'not a record'],
+    ] as const)(
+      'an unparseable host output (%s) records operation-input-invalid',
+      async (_name, output) => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+        )
+        await beforeThenAfter(adapter, 'after-bad-output', undefined, output)
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-input-invalid'),
+        )
+      },
+    )
+
+    describe('after-hook registered-worktree validation', () => {
+      const cases: ReadonlyArray<{
+        readonly name: string
+        readonly validate: OpencodeOperationObserver['validateRegisteredWorktree']
+        readonly reasonCode?: OperationObserverReasonCode
+      }> = [
+        {
+          name: 'an error with a reason',
+          validate: () => ({ status: 'error', reasonCode: 'command-failed' }),
+          reasonCode: 'command-failed',
+        },
+        {
+          name: 'a timeout',
+          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
+          reasonCode: 'command-timeout',
+        },
+        {
+          name: 'a different target root',
+          validate: (candidateDirectory) => ({
+            status: 'ok',
+            targetRoot: path.join(candidateDirectory, 'elsewhere'),
+            gitDir: '/git',
+            commonDir: '/git',
+          }),
+        },
+        {
+          name: 'a different registered identity',
+          validate: (candidateDirectory) => ({
+            status: 'ok',
+            targetRoot: candidateDirectory,
+            gitDir: '/other-git',
+            commonDir: '/other-git',
+          }),
+        },
+        {
+          name: 'a throw',
+          validate: () => {
+            throw new Error('validation exploded')
+          },
+        },
+      ]
+      for (const validationCase of cases) {
+        test(`${validationCase.name} records operation-input-invalid`, async () => {
+          const { observer, arm } = armable({
+            validate: validationCase.validate,
+          })
+          const adapter = await activatedAdapter(observer)
+          await beforeThenAfter(adapter, 'after-validation', arm)
+          expect(await causeOf(adapter)).toEqual(
+            afterCause(
+              'operation-input-invalid',
+              validationCase.reasonCode,
+              validationCase.reasonCode === 'command-timeout',
+            ),
+          )
+        })
+      }
+    })
+
+    test('an after snapshot that is unavailable records its observer reasonCode', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => ({
+          status: 'unavailable',
+          reasonCode: 'file-output-limit',
+        }),
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-file-output-limit', arm)
+      expect(await causeOf(adapter)).toEqual({
+        site: 'tool-after',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'file-output-limit',
+        timedOut: false,
+      })
+    })
+
+    test('an after snapshot command-timeout records timedOut', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => ({
+          status: 'unavailable',
+          reasonCode: 'command-timeout',
+        }),
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-timeout', arm)
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('local-snapshot-unavailable', 'command-timeout', true),
+      )
+    })
+
+    test('an after snapshot that throws records local-snapshot-error', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => {
+          throw new Error('after snapshot exploded')
+        },
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-throws', arm)
+      expect(await causeOf(adapter)).toEqual(afterCause('local-snapshot-error'))
+    })
+
+    test('an after snapshot for a different target digest records operation-target-mismatch', async () => {
+      const { observer, arm } = armable({
+        snapshot: async () => ({
+          status: 'available',
+          snapshot: { ...operationSnapshot(), targetDigest: 'f'.repeat(64) },
+        }),
+      })
+      const adapter = await activatedAdapter(observer)
+      await beforeThenAfter(adapter, 'after-digest-mismatch', arm)
+      expect(await causeOf(adapter)).toEqual(
+        afterCause('operation-target-mismatch'),
+      )
+    })
+
+    describe('classifier not ready', () => {
+      const realClassifier = createReceiptClassifier()
+
+      test('a missing classifier records operation-classifier-unavailable', async () => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {},
+        )
+        await beforeThenAfter(adapter, 'after-no-classifier')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-classifier-unavailable'),
+        )
+      })
+
+      test('a classifier that throws records operation-classifier-unavailable', async () => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {
+            classifier: {
+              ...realClassifier,
+              classifyOperation: async () => {
+                throw new Error('classifier exploded')
+              },
+            },
+          },
+        )
+        await beforeThenAfter(adapter, 'after-classifier-throws')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-classifier-unavailable'),
+        )
+      })
+
+      test('a classifier that returns an unexpected category records operation-classifier-unavailable', async () => {
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {
+            classifier: {
+              ...realClassifier,
+              classifyOperation: async () => ({
+                outcome: 'accepted',
+                category: 'bogus-category',
+              }),
+            },
+          },
+        )
+        await beforeThenAfter(adapter, 'after-classifier-bogus')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-classifier-unavailable'),
+        )
+      })
+    })
+
+    describe('operation-observation-rejected', () => {
+      const PUSH = { command: 'git push origin main' }
+
+      async function pushAfter(
+        adapter: OpencodeWorkflowGuard,
+        callID: string,
+      ): Promise<void> {
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID },
+          { args: PUSH },
+        )
+        await afterHook(adapter, callID, PUSH)
+      }
+
+      const pushCases: ReadonlyArray<{
+        readonly name: string
+        readonly after: OperationObserverRemoteResult | 'throw'
+        readonly reasonCode?: string
+      }> = [
+        {
+          name: 'a remote after-read that is unavailable',
+          after: { status: 'unavailable', reasonCode: 'remote-missing-field' },
+          reasonCode: 'remote-missing-field',
+        },
+        {
+          name: 'a remote after-read that times out',
+          after: { status: 'unavailable', reasonCode: 'command-timeout' },
+          reasonCode: 'command-timeout',
+        },
+        {
+          name: 'a remote after-read with a missing resource',
+          after: { status: 'missing-resource' },
+          reasonCode: 'missing-resource',
+        },
+        { name: 'a remote after-read that throws', after: 'throw' },
+      ]
+
+      for (const pushCase of pushCases) {
+        test(`${pushCase.name} records operation-observation-rejected`, async () => {
+          const base = sequenceObserver([operationSnapshot()], {
+            'push:before': [remoteAvailable(D, E), remoteAvailable(D, E)],
+          })
+          const observer: OpencodeOperationObserver = {
+            ...base,
+            remoteSnapshot: async (operation, phase) => {
+              if (operation === 'push' && phase === 'after') {
+                if (pushCase.after === 'throw') throw new Error('probe failed')
+                return pushCase.after
+              }
+              return (
+                base.remoteSnapshot?.(operation, phase) ?? {
+                  status: 'unavailable',
+                  reasonCode: 'remote-missing-field',
+                }
+              )
+            },
+          }
+          const adapter = await activatedAdapter(observer, ['push'])
+          await pushAfter(adapter, 'after-remote')
+          expect(await causeOf(adapter)).toEqual(
+            afterCause(
+              'operation-observation-rejected',
+              pushCase.reasonCode,
+              pushCase.reasonCode === 'command-timeout',
+            ),
+          )
+        })
+      }
+
+      test('a pr-creation self-seed readback the guard rejects records operation-observation-rejected with the guard reason', async () => {
+        const MISSING = { status: 'missing-resource' as const }
+        const base = sequenceObserver([operationSnapshot()], {
+          'pr-creation:before': [MISSING],
+          // An empty resource identity cannot be seeded as a baseline.
+          'pr-creation:after': [
+            remoteAvailable('', E, {
+              pullRequest: { identity: D, state: 'open' },
+            }),
+          ],
+        })
+        const adapter = await activatedAdapter(base, ['pr-creation'])
+        const create = { command: 'gh pr create --title t --body b' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'after-pr-seed' },
+          { args: create },
+        )
+        await afterHook(adapter, 'after-pr-seed', create)
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-observation-rejected', 'invalid-receipt'),
+        )
+      })
+
+      test('a guard observeOperation that throws records operation-observation-rejected', async () => {
+        const realClassifier = createReceiptClassifier()
+        const classify = realClassifier.classifyOperation
+        if (!classify)
+          throw new Error('classifier implements classifyOperation')
+        let calls = 0
+        const adapter = await activatedAdapter(
+          sequenceObserver([operationSnapshot()]),
+          [],
+          {
+            classifier: {
+              ...realClassifier,
+              classifyOperation: async (input: unknown) => {
+                calls += 1
+                const classification = await classify(input)
+                if (calls === 1) return classification
+                return {
+                  ...classification,
+                  get outcome(): never {
+                    throw new Error('guard admission exploded')
+                  },
+                }
+              },
+            },
+          },
+        )
+        await beforeThenAfter(adapter, 'after-observe-throws')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause('operation-observation-rejected'),
+        )
+      })
+
+      test('a guard observeOperation that returns unavailable carries the guard reasonCode', async () => {
+        // The first accepted local operation pins the unit's operation target;
+        // a second operation under a different target digest makes the guard
+        // itself answer unavailable/operation-target-mismatch.
+        let targetDigest = OPERATION_SCOPE.workspaceIdentity
+        const base = sequenceObserver([operationSnapshot()])
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          get targetDigest() {
+            return targetDigest
+          },
+          snapshot: async () => ({
+            status: 'available',
+            snapshot: { ...operationSnapshot(), targetDigest },
+          }),
+        }
+        const adapter = await activatedAdapter(observer)
+        await beforeThenAfter(adapter, 'after-pin-target')
+        expect(await causeOf(adapter)).toBe('not-unavailable')
+        targetDigest = 'f'.repeat(64)
+        await beforeThenAfter(adapter, 'after-guard-unavailable')
+        expect(await causeOf(adapter)).toEqual(
+          afterCause(
+            'operation-observation-rejected',
+            'operation-target-mismatch',
+          ),
+        )
+      })
+    })
+
+    test('a before-hook cause keeps winning over a later after-hook failure', async () => {
+      const { observer } = armable({})
+      const failingBefore: OpencodeOperationObserver = {
+        ...observer,
+        snapshot: async () => ({
+          status: 'unavailable',
+          reasonCode: 'file-output-limit',
+        }),
+      }
+      const adapter = createAdapter('observe', false, failingBefore)
+      await beforeThenAfter(adapter, 'first-wins-after')
+      expect(await causeOf(adapter)).toEqual({
+        site: 'tool-before',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'file-output-limit',
+        timedOut: false,
+      })
+    })
+  })
+
+  describe('guard-unavailable first-cause diagnostic (hook-threw)', () => {
+    const BOOM = 'boom /path/secret-AKIA0000.env token=abc'
+    const FORBIDDEN = ['secret', 'AKIA', 'boom', '/path', 'token']
+    const ALLOWED_CAUSE_KEYS = [
+      'site',
+      'kind',
+      'reasonCode',
+      'operation',
+      'timedOut',
+    ]
+
+    function boom(): never {
+      throw new Error(BOOM)
+    }
+
+    async function statusOutput(adapter: OpencodeWorkflowGuard): Promise<{
+      raw: string
+      parsed: Record<string, unknown>
+    }> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const raw = expectToolOutput(result).output
+      return { raw, parsed: JSON.parse(raw) }
+    }
+
+    function hookThrew(site: string): Record<string, unknown> {
+      return { site, kind: 'hook-threw', timedOut: false }
+    }
+
+    // An exception raised while the runtime before-hook prepares the call (a
+    // host payload accessor that throws) is caught by the runtime before().
+    async function throwInBefore(
+      adapter: OpencodeWorkflowGuard,
+      callID = 'throw-before',
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID },
+        {
+          get args(): unknown {
+            return boom()
+          },
+        },
+      )
+    }
+
+    // A successful before-hook, then a host output whose accessor throws while
+    // the after-hook parses it: caught by the runtime after().
+    async function throwInAfter(
+      adapter: OpencodeWorkflowGuard,
+      callID = 'throw-after',
+      args: Record<string, unknown> = { command: 'bun test' },
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: SESSION_A, callID },
+        { args },
+      )
+      await adapter.hooks['tool.execute.after'](
+        { tool: 'bash', sessionID: SESSION_A, callID, args },
+        {
+          get title(): unknown {
+            return boom()
+          },
+          output: 'ok',
+          metadata: {},
+        },
+      )
+    }
+
+    test('an exception escaping the before hook records hook-threw at tool-before', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await throwInBefore(adapter)
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-before'))
+    })
+
+    test('an exception escaping the after hook records hook-threw at tool-after', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await throwInAfter(adapter)
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-after'))
+    })
+
+    test('an exception escaping the event hook records hook-threw at event', async () => {
+      const adapter = createAdapter('observe')
+      // Initialize the session first so the throw reaches the recording path
+      // (the pre-initialization case is covered by the next test).
+      await adapter.hooks.event({
+        event: {
+          type: 'message.updated',
+          properties: { sessionID: SESSION_A },
+        },
+      })
+      await adapter.hooks.event({
+        event: {
+          get type(): unknown {
+            return boom()
+          },
+          properties: { sessionID: SESSION_A },
+        },
+      })
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+    })
+
+    test('a first-ever event that throws before the session guard exists does not leak out of the hook', async () => {
+      const adapter = createAdapter('observe')
+      await expect(
+        adapter.hooks.event({
+          event: {
+            get type(): unknown {
+              return boom()
+            },
+            properties: { sessionID: SESSION_A },
+          },
+        }),
+      ).resolves.toBeUndefined()
+      // The failure is held pending and committed when the session's guard is
+      // published, so the hook's failure is not forgotten.
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+    })
+
+    describe('initialization that throws after the host read', () => {
+      const INIT_CAUSE = {
+        site: 'initialize-session',
+        kind: 'initialization-threw',
+        timedOut: false,
+      }
+
+      // A history part whose every property read throws makes marker
+      // classification throw inside initializeSession.
+      function throwingHistoryAdapter(
+        mode: 'protected' | 'observe',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode, debug: false },
+          workspaceIdentity: 'workspace',
+          registrationIdentity: 'init-threw-registration',
+          sessionSalt: new Uint8Array(32).fill(5),
+          hostReadback: {
+            readSessionParts: async () => [
+              new Proxy({}, { get: () => boom() }),
+            ],
+            listChildren: async () => [],
+          },
+        })
+      }
+
+      // A ledger that cannot be minted: no guard can be published at all.
+      function unpublishableAdapter(
+        mode: 'protected' | 'observe',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode, debug: false },
+          workspaceIdentity: 'workspace',
+          registrationIdentity: 'init-unpublishable-registration',
+          sessionSalt: {
+            get length(): number {
+              return boom()
+            },
+          } as unknown as Uint8Array,
+          hostReadback: {
+            readSessionParts: async () => [],
+            listChildren: async () => [],
+          },
+        })
+      }
+
+      async function beforeBash(
+        adapter: OpencodeWorkflowGuard,
+        callID: string,
+      ): Promise<void> {
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID },
+          { args: { command: 'bun test' } },
+        )
+      }
+
+      async function caught(run: () => Promise<unknown>): Promise<unknown> {
+        try {
+          await run()
+        } catch (error) {
+          return error
+        }
+        return undefined
+      }
+
+      test('protected: marker classification that throws publishes unavailable with initialization-threw and later completions are rejected', async () => {
+        const adapter = throwingHistoryAdapter('protected')
+        await beforeBash(adapter, 'init-throws-1')
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual(INIT_CAUSE)
+        const error = await caught(() =>
+          adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID: 'init-throws-complete',
+            },
+            { args: { target: 'unit' } },
+          ),
+        )
+        expect(isWorkflowGuardBlockedError(error)).toBe(true)
+      })
+
+      test('observe: marker classification that throws does not throw out of the hook and status shows the cause', async () => {
+        const adapter = throwingHistoryAdapter('observe')
+        await expect(beforeBash(adapter, 'init-throws-obs')).resolves.toBe(
+          undefined,
+        )
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual(INIT_CAUSE)
+      })
+
+      test('protected: a before hook that throws while no guard can be published rejects the call', async () => {
+        const adapter = unpublishableAdapter('protected')
+        const error = await caught(() => beforeBash(adapter, 'no-guard-1'))
+        expect(isWorkflowGuardBlockedError(error)).toBe(true)
+        // Still no guard on the next hook: still rejected, never run unobserved.
+        const again = await caught(() => beforeBash(adapter, 'no-guard-2'))
+        expect(isWorkflowGuardBlockedError(again)).toBe(true)
+        expect(status(adapter).state).toBe('unavailable')
+      })
+
+      test('observe: a before hook that throws while no guard can be published does not throw', async () => {
+        const adapter = unpublishableAdapter('observe')
+        await expect(beforeBash(adapter, 'no-guard-obs')).resolves.toBe(
+          undefined,
+        )
+        expect(status(adapter).state).toBe('unavailable')
+      })
+
+      test.each(['protected', 'observe'] as const)(
+        'a pending event failure survives provisional-history confirmation (%s)',
+        async (mode) => {
+          let reads = 0
+          const adapter = createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: 'pending-survives-registration',
+            sessionSalt: new Uint8Array(32).fill(8),
+            hostReadback: {
+              readSessionParts: async () => {
+                reads += 1
+                return []
+              },
+              listChildren: async () => [],
+            },
+          })
+          // 1. The first event throws before the guard exists: queued.
+          await adapter.hooks.event({
+            event: {
+              get type(): unknown {
+                return boom()
+              },
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          // 2. The transform publishes a provisional guard and commits it.
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+          expect(status(adapter).state).toBe('unavailable')
+          // 3. A normal event must not republish an inactive guard over it.
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          const { parsed } = await statusOutput(adapter)
+          expect(parsed.state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toEqual(hookThrew('event'))
+          expect(reads).toBe(1)
+        },
+      )
+
+      test('a deferred empty-history initialization stays retryable and records no cause', async () => {
+        let reads = 0
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          workspaceIdentity: 'workspace',
+          registrationIdentity: 'init-deferred-registration',
+          sessionSalt: new Uint8Array(32).fill(6),
+          hostReadback: {
+            readSessionParts: async () => {
+              reads += 1
+              return []
+            },
+            listChildren: async () => [],
+          },
+        })
+        // The transform may not confirm a fresh session: provisional inactive.
+        await adapter.hooks['experimental.chat.system.transform'](
+          { sessionID: SESSION_A },
+          { system: ['base'] },
+        )
+        expect(status(adapter).state).not.toBe('unavailable')
+        // The next allow-fresh recovery re-reads the history and confirms it.
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        expect(reads).toBe(2)
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      })
+    })
+
+    test('an exception escaping the transform hook records hook-threw at transform', async () => {
+      const adapter = createAdapter('observe')
+      const system = Object.assign(['base prompt'], {
+        filter: () => boom(),
+      })
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system },
+      )
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('transform'))
+    })
+
+    test('an earlier typed cause wins over a later hook-threw', async () => {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'bash',
+          sessionID: SESSION_A,
+          callID: 'typed-first',
+          args: { command: 'bun test' },
+        },
+        { title: 'run', output: 'ok', metadata: {} },
+      )
+      await throwInBefore(adapter, 'typed-first-then-throw')
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'tool-after',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+    })
+
+    test('the cause never carries the error message, a path, or a file name', async () => {
+      const worktree = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-hook-threw-')),
+      )
+      try {
+        fs.writeFileSync(path.join(worktree, 'secret-AKIA0000.env'), 'k=v\n')
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          ...OPERATION_SCOPE,
+          targetDirectory: worktree,
+          observer: sequenceObserver([operationSnapshot()]),
+          classifier: createReceiptClassifier(),
+          runtimeRequiredOperations: [],
+        })
+        const args = { filePath: 'secret-AKIA0000.env', content: 'k=v\n' }
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'write', sessionID: SESSION_A, callID: 'secret-write' },
+          { args },
+        )
+        await adapter.hooks['tool.execute.after'](
+          { tool: 'write', sessionID: SESSION_A, callID: 'secret-write', args },
+          {
+            get title(): unknown {
+              return boom()
+            },
+            output: 'ok',
+            metadata: {},
+          },
+        )
+        const { raw, parsed } = await statusOutput(adapter)
+        expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-after'))
+        const cause = parsed.firstUnavailableCause as Record<string, unknown>
+        for (const key of Object.keys(cause)) {
+          expect(ALLOWED_CAUSE_KEYS).toContain(key)
+        }
+        for (const forbidden of FORBIDDEN) {
+          expect(raw).not.toContain(forbidden)
+        }
+      } finally {
+        fs.rmSync(worktree, { recursive: true, force: true })
+      }
+    })
+
+    describe('hook paths that already had a typed result now carry a cause', () => {
+      test('a start after-hook with no pending start records call-lifecycle-mismatch', async () => {
+        const adapter = createAdapter('observe')
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'start-no-pending',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(
+          (await statusOutput(adapter)).parsed.firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
+
+      test('a unit start the guard rejects records unit-start-rejected with the guard reason', async () => {
+        // The guard validates the required operations when it is created, so
+        // an invalid runtime policy is reached by corrupting the shared list
+        // after initialization and before the skill rebuilds the policy.
+        const required: ReceiptOperation[] = []
+        const adapter = createAdapter(
+          'observe',
+          false,
+          sequenceObserver([operationSnapshot()]),
+          required,
+        )
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        required.push('bogus-operation' as ReceiptOperation)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'start-invalid-policy',
+          },
+          { args: {} },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_start',
+            sessionID: SESSION_A,
+            callID: 'start-invalid-policy',
+            args: {},
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        const { parsed } = await statusOutput(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          kind: 'unit-start-rejected',
+          reasonCode: 'invalid-configuration',
+          timedOut: false,
+        })
+      })
+
+      test('a skill after-hook for a different skill than the before-hook records call-lifecycle-mismatch', async () => {
+        const adapter = createAdapter('observe')
+        await adapter.hooks['tool.execute.before'](
+          {
+            tool: 'systematic_skill',
+            sessionID: SESSION_A,
+            callID: 'skill-swap',
+          },
+          { args: { name: 'ce:work' } },
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_skill',
+            sessionID: SESSION_A,
+            callID: 'skill-swap',
+            args: { name: 'git-commit' },
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(
+          (await statusOutput(adapter)).parsed.firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
+
+      test('a complete after-hook with no pending completion records call-lifecycle-mismatch', async () => {
+        const adapter = createAdapter('observe')
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'systematic_workflow_complete',
+            sessionID: SESSION_A,
+            callID: 'complete-no-pending',
+            args: { target: 'unit' },
+          },
+          { title: 'x', output: 'y', metadata: {} },
+        )
+        expect(
+          (await statusOutput(adapter)).parsed.firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
+    })
+
+    // The type system now requires a cause on every `markUnavailable` call, so
+    // the old source-text completeness guard is gone. `makeWorkflowTool`'s
+    // `runtime.metadata()` catch has no reachable seam (it only throws if the
+    // marker projection itself throws), so only the `context.metadata` catch
+    // is exercised.
+    test('a tool whose host metadata callback throws records hook-threw at tool-execute', async () => {
+      const adapter = createAdapter('observe')
+      const throwingContext = {
+        ...toolContext(),
+        metadata: () => boom(),
+      }
+      await getTool(adapter, 'systematic_workflow_status').execute(
+        {},
+        throwingContext,
+      )
+      const { parsed } = await statusOutput(adapter)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual(hookThrew('tool-execute'))
+    })
+  })
+
+  test('before-only operation is abandoned at the next request boundary (transform), not by a status call', async () => {
     const adapter = createAdapter(
       'observe',
       false,
@@ -4942,9 +10524,14 @@ describe('OpenCode workflow guard adapter', () => {
       { tool: 'write', sessionID: SESSION_A, callID: 'before-only' },
       { args: { filePath: 'pending.ts', content: 'pending' } },
     )
+    // A status call is a sibling tool call and must not discard the entry.
     await getTool(adapter, 'systematic_workflow_status').execute(
       {},
       toolContext(),
+    )
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      { system: ['base'] },
     )
     await adapter.hooks['tool.execute.after'](
       {
@@ -5512,6 +11099,61 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
+  test('a pinned worktree target whose validation times out rejects completion as retryable', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      setup.setTargetValidationAvailable(false, 'command-timeout')
+
+      const completeInput = {
+        tool: 'systematic_workflow_complete' as const,
+        sessionID: SESSION_A,
+        callID: 'timeout-pinned-completion',
+      }
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      const output = { title: 'complete', output: 'done', metadata: {} }
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        output,
+      )
+
+      expect(output.title).toBe('Workflow readback timed out')
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'readback-timeout',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test('a pinned worktree validation target-unavailable during status refresh goes unavailable and records it', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      setup.setTargetValidationAvailable(false, 'target-unavailable')
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext(SESSION_A))
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      expect(parsed.state).toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'refresh-readback',
+        kind: 'observer-readback-failed',
+        reasonCode: 'target-unavailable',
+        timedOut: false,
+      })
+      expect(parsed.unconfirmedReadbacks).toBeUndefined()
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
   test('operation evidence remains isolated across sessions and registrations', async () => {
     const first = createAdapter(
       'observe',
@@ -5939,7 +11581,7 @@ describe('OpenCode workflow guard adapter', () => {
       // This is effectively the foreign-only case: after filtering there are no own markers.
       // The guard should treat this as a fresh start (allowFresh path in initializeSession),
       // NOT as guard-unavailable. A fresh guard without an active epoch has state
-      // 'unavailable' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
+      // 'inactive' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
       const ownIdentity = 'empty-after-filter-reg'
       const ownSalt = new Uint8Array(32).fill(55)
       const foreignIdentity = 'unrelated-foreign-reg'
@@ -5981,10 +11623,11 @@ describe('OpenCode workflow guard adapter', () => {
         toolContext(SESSION_A),
       )
 
-      // A fresh guard (no epoch activated yet) has state 'unavailable' / 'no-active-epoch'.
+      // A fresh guard (no epoch activated yet) has state 'inactive' / 'no-active-epoch'.
       // The key invariant: it must NOT be 'guard-unavailable' (which publishUnavailable sets).
       const s = restored.status(SESSION_A)
       expect(s.reasonCode).not.toBe('guard-unavailable')
+      expect(s.state).toBe('inactive')
       expect(s.reasonCode).toBe('no-active-epoch')
     })
 
@@ -6226,8 +11869,1274 @@ describe('OpenCode workflow guard adapter', () => {
 
       const s = adapter.status(SESSION_A)
       // Foreign-only → publishFresh → no-active-epoch (NOT guard-unavailable).
+      expect(s.state).toBe('inactive')
       expect(s.reasonCode).toBe('no-active-epoch')
       expect(s.epoch).toBeNull()
+    })
+
+    describe('initialization and observer-readback unavailable causes', () => {
+      const OWN_IDENTITY = 'cause-own-registration'
+      const OWN_SALT = new Uint8Array(32).fill(71)
+      const GUARD_HISTORY_PARTS: readonly unknown[] = [
+        {
+          info: {},
+          parts: [
+            {
+              type: 'tool',
+              tool: 'systematic_workflow_control',
+              state: { status: 'completed', metadata: {} },
+            },
+          ],
+        },
+      ]
+
+      function adapterWithHistory(
+        readSessionParts: () => Promise<readonly unknown[]>,
+        workspaceIdentity = 'workspace',
+      ): OpencodeWorkflowGuard {
+        return createOpencodeWorkflowGuard({
+          config: { mode: 'protected', debug: false },
+          workspaceIdentity,
+          registrationIdentity: OWN_IDENTITY,
+          sessionSalt: OWN_SALT,
+          hostReadback: { readSessionParts, listChildren: async () => [] },
+        })
+      }
+
+      async function statusJson(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<Record<string, unknown>> {
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext(SESSION_A))
+        return JSON.parse(expectToolOutput(result).output)
+      }
+
+      async function expectCause(
+        adapter: OpencodeWorkflowGuard,
+        site: string,
+        kind: string,
+        reasonCode?: string,
+      ): Promise<void> {
+        const parsed = await statusJson(adapter)
+        expect(parsed.state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toEqual({
+          site,
+          kind,
+          ...(reasonCode === undefined ? {} : { reasonCode }),
+          timedOut: false,
+        })
+      }
+
+      test('history read failure records history-read-failed', async () => {
+        const adapter = adapterWithHistory(async () => {
+          throw new Error('read failed')
+        })
+        await expectCause(adapter, 'initialize-session', 'history-read-failed')
+      })
+
+      test('markerless guard history records markerless-guard-history and keeps it across unavailable retries', async () => {
+        const adapter = adapterWithHistory(async () => GUARD_HISTORY_PARTS)
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('ambiguous markers record markers-ambiguous', async () => {
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+        )
+        await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
+      })
+
+      test('a corrupted own marker records markers-malformed-or-incompatible', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        const corrupted = {
+          ...(ownMarkers[0] as Record<string, unknown>),
+          integrity: 'a'.repeat(64),
+        }
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers([corrupted, ...ownMarkers.slice(1)]),
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markers-malformed-or-incompatible',
+        )
+      })
+
+      test('own markers that fail to reconstruct record recovery-rejected', async () => {
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        // Unit start and receipt without the epoch start: valid markers that
+        // cannot be folded into a coherent guard state.
+        const adapter = adapterWithHistory(async () =>
+          wrapMarkers(ownMarkers.slice(1)),
+        )
+        await expectCause(adapter, 'initialize-session', 'recovery-rejected')
+      })
+
+      test('an observer readback failure during an active epoch records observer-readback-failed', async () => {
+        const base = sequenceObserver([operationSnapshot()])
+        let failing = false
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          snapshot: async () =>
+            failing
+              ? { status: 'unavailable', reasonCode: 'target-unavailable' }
+              : base.snapshot(),
+        }
+        const adapter = createAdapter('observe', false, observer)
+        await observeSkill(adapter, 'systematic_skill', 'ce:work')
+        expect(status(adapter).state).not.toBe('unavailable')
+        failing = true
+        await expectCause(
+          adapter,
+          'refresh-readback',
+          'observer-readback-failed',
+          'target-unavailable',
+        )
+      })
+
+      test('markerless-guard-history is final: history that later looks empty neither retries nor clears the cause, and a cause-less transition keeps the first cause', async () => {
+        // Previously this history was retryable, so a later fresh publication
+        // cleared the cause. It is now final, so the first cause must persist.
+        let historyPresent = true
+        const adapter = adapterWithHistory(async () =>
+          historyPresent ? GUARD_HISTORY_PARTS : [],
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+
+        historyPresent = false
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'read', sessionID: SESSION_A, callID: 'no-fresh-retry' },
+          { args: {} },
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+
+        // A cause-less markUnavailable(): reusing a callID across call kinds.
+        for (const tool of ['systematic_skill', 'systematic_workflow_start']) {
+          await adapter.hooks['tool.execute.before'](
+            { tool, sessionID: SESSION_A, callID: 'reused-call' },
+            { args: tool === 'systematic_skill' ? { name: 'ce:work' } : {} },
+          )
+        }
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('markerless-guard-history is final: markers that later become restorable are not re-read', async () => {
+        // Previously retryable, so a later successful restoration cleared the
+        // cause. It is now final.
+        const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+        let mode: 'history' | 'markers' = 'history'
+        const adapter = adapterWithHistory(
+          async () =>
+            mode === 'history' ? GUARD_HISTORY_PARTS : wrapMarkers(ownMarkers),
+          'workspace-a',
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+        mode = 'markers'
+        await adapter.hooks.event({
+          event: {
+            type: 'message.updated',
+            properties: { sessionID: SESSION_A },
+          },
+        })
+        await adapter.hooks['tool.execute.before'](
+          { tool: 'read', sessionID: SESSION_A, callID: 'no-restore-retry' },
+          { args: {} },
+        )
+        await expectCause(
+          adapter,
+          'initialize-session',
+          'markerless-guard-history',
+        )
+      })
+
+      test('causes never enter markers, tool metadata, receipts, or digests', async () => {
+        const markerSource = async (
+          readSessionParts: () => Promise<readonly unknown[]>,
+        ) => {
+          const adapter = adapterWithHistory(readSessionParts)
+          const skillOutput = {
+            title: 'Loaded skill',
+            output: 'ok',
+            metadata: {},
+          }
+          await observeSkill(
+            adapter,
+            'systematic_skill',
+            'ce:work',
+            'cause-skill',
+            SESSION_A,
+            skillOutput,
+          )
+          const output = { system: ['base'] }
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            output,
+          )
+          const parsed = await statusJson(adapter)
+          expect(parsed.firstUnavailableCause).toBeDefined()
+          const serialized = [
+            JSON.stringify(skillOutput),
+            output.system.join('\n'),
+            JSON.stringify(adapter.status(SESSION_A)),
+            JSON.stringify(adapter.ledger(SESSION_A)?.listReceipts() ?? []),
+          ].join('\n')
+          for (const forbidden of [
+            'firstUnavailableCause',
+            'initialize-session',
+            'history-read-failed',
+            'markerless-guard-history',
+            'observer-readback-failed',
+          ]) {
+            expect(serialized).not.toContain(forbidden)
+          }
+          return output.system.join('\n')
+        }
+
+        const withReadFailure = await markerSource(async () => {
+          throw new Error('read failed')
+        })
+        const withMarkerlessHistory = await markerSource(
+          async () => GUARD_HISTORY_PARTS,
+        )
+        // Same pinned registration + same state/reason: digests and markers are
+        // identical regardless of which cause was recorded.
+        expect(withReadFailure).toBe(withMarkerlessHistory)
+      })
+
+      describe('exempt guard-owned history', () => {
+        function toolPart(
+          tool: string,
+          state: Record<string, unknown> | undefined,
+          extra: Record<string, unknown> = {},
+        ): readonly unknown[] {
+          return [
+            {
+              info: {},
+              parts: [
+                {
+                  type: 'tool',
+                  tool,
+                  callID: 'prior-call',
+                  ...(state ? { state } : {}),
+                  ...extra,
+                },
+              ],
+            },
+          ]
+        }
+
+        const NO_EPOCH_REJECTION = {
+          workflowGuard: { status: 'rejected', reasonCode: 'no-active-epoch' },
+        }
+
+        async function expectInactive(
+          parts: readonly unknown[],
+        ): Promise<void> {
+          const adapter = adapterWithHistory(async () => parts)
+          const parsed = await statusJson(adapter)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        }
+
+        async function expectMarkerless(
+          parts: readonly unknown[],
+        ): Promise<void> {
+          await expectCause(
+            adapterWithHistory(async () => parts),
+            'initialize-session',
+            'markerless-guard-history',
+          )
+        }
+
+        test('a: an in-flight status part does not poison a fresh session; a guarded skill then activates', async () => {
+          const adapter = adapterWithHistory(async () =>
+            toolPart('systematic_workflow_status', { status: 'running' }),
+          )
+          expect((await statusJson(adapter)).state).toBe('inactive')
+          expect((await statusJson(adapter)).state).toBe('inactive')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter)).toMatchObject({
+            state: 'waiting',
+            reasonCode: 'missing-evidence',
+          })
+        })
+
+        test('b: restart with only completed markerless status parts is inactive', async () => {
+          await expectInactive(
+            toolPart('systematic_workflow_status', {
+              status: 'completed',
+              metadata: {},
+            }),
+          )
+        })
+
+        test('c: restart with a completed start rejected / no-active-epoch is inactive', async () => {
+          await expectInactive(
+            toolPart('systematic_workflow_start', {
+              status: 'completed',
+              metadata: NO_EPOCH_REJECTION,
+            }),
+          )
+        })
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`d: restart after a real ${mode}-mode no-epoch completion is inactive`, async () => {
+            const first = createAdapter(mode)
+            const output = {
+              title: 'pending',
+              output: 'pending',
+              metadata: {},
+            }
+            const input = {
+              tool: 'systematic_workflow_complete',
+              sessionID: SESSION_A,
+              callID: `restart-no-epoch-${mode}`,
+            }
+            await first.hooks['tool.execute.before'](input, {
+              args: { target: 'unit' },
+            })
+            await first.hooks['tool.execute.after'](
+              { ...input, args: { target: 'unit' } },
+              output,
+            )
+            expect(output.metadata).toMatchObject({
+              workflowGuard: {
+                status: 'rejected',
+                reasonCode: 'no-active-epoch',
+              },
+            })
+            await expectInactive(
+              toolPart('systematic_workflow_complete', {
+                status: 'completed',
+                metadata: output.metadata,
+              }),
+            )
+          })
+        }
+
+        test('e: restart histories that stay closed publish markerless-guard-history', async () => {
+          const closed: ReadonlyArray<{
+            name: string
+            parts: readonly unknown[]
+          }> = [
+            {
+              name: 'completed markerless control',
+              parts: toolPart('systematic_workflow_control', {
+                status: 'completed',
+                metadata: {},
+              }),
+            },
+            {
+              name: 'completed start that started a unit',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: { workflowGuard: { status: 'started' } },
+              }),
+            },
+            {
+              name: 'completed start rejected with epoch-completed',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: {
+                  workflowGuard: {
+                    status: 'rejected',
+                    reasonCode: 'epoch-completed',
+                  },
+                },
+              }),
+            },
+            {
+              name: 'completed complete without rejected / no-active-epoch metadata',
+              parts: toolPart('systematic_workflow_complete', {
+                status: 'completed',
+                metadata: {},
+              }),
+            },
+            {
+              name: 'guard part missing state.status',
+              parts: toolPart('systematic_workflow_start', undefined, {
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'guard part with state but no status',
+              parts: toolPart('systematic_workflow_complete', {
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'running start from a prior process',
+              parts: toolPart('systematic_workflow_start', {
+                status: 'running',
+              }),
+            },
+            {
+              name: 'errored complete',
+              parts: toolPart('systematic_workflow_complete', {
+                status: 'error',
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            },
+            {
+              name: 'pending control',
+              parts: toolPart('systematic_workflow_control', {
+                status: 'pending',
+              }),
+            },
+          ]
+          for (const entry of closed) {
+            const adapter = adapterWithHistory(async () => entry.parts)
+            const parsed = await statusJson(adapter)
+            expect(parsed.state, entry.name).toBe('unavailable')
+            expect(parsed.firstUnavailableCause, entry.name).toEqual({
+              site: 'initialize-session',
+              kind: 'markerless-guard-history',
+              timedOut: false,
+            })
+          }
+        })
+
+        test('f: malformed or ambiguous markers stay closed even when every guard part is exempt', async () => {
+          const exempt = toolPart('systematic_workflow_status', {
+            status: 'completed',
+            metadata: {},
+          })
+          await expectCause(
+            adapterWithHistory(async () => [
+              ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+              ...exempt,
+            ]),
+            'initialize-session',
+            'markers-ambiguous',
+          )
+
+          const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+          const corrupted = {
+            ...(ownMarkers[0] as Record<string, unknown>),
+            integrity: 'a'.repeat(64),
+          }
+          await expectCause(
+            adapterWithHistory(async () => [
+              ...wrapMarkers([corrupted, ...ownMarkers.slice(1)]),
+              ...toolPart('systematic_workflow_start', {
+                status: 'completed',
+                metadata: NO_EPOCH_REJECTION,
+              }),
+            ]),
+            'initialize-session',
+            'markers-malformed-or-incompatible',
+          )
+        })
+
+        test('g: markerless-guard-history unavailable is not retried by later hooks', async () => {
+          let reads = 0
+          const adapter = adapterWithHistory(async () => {
+            reads += 1
+            return GUARD_HISTORY_PARTS
+          })
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+          expect(reads).toBe(1)
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID: 'no-retry' },
+            { args: {} },
+          )
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+          await statusJson(adapter)
+          expect(reads).toBe(1)
+          expect(adapter.status(SESSION_A).state).toBe('unavailable')
+        })
+
+        test('h: valid foreign-only markers keep current behavior', async () => {
+          const foreignMarkers = buildMarkersForRegistration(
+            'cause-foreign-registration',
+            new Uint8Array(32).fill(72),
+          )
+          await expectInactive(wrapMarkers(foreignMarkers))
+          await expectMarkerless([
+            ...wrapMarkers(foreignMarkers),
+            ...GUARD_HISTORY_PARTS,
+          ])
+        })
+      })
+
+      describe('transform-first provisional inactive and re-initialization waiters', () => {
+        type GuardMode = 'protected' | 'observe'
+
+        function adapterFor(
+          mode: GuardMode,
+          readSessionParts: () => Promise<readonly unknown[]>,
+          workspaceIdentity = 'workspace',
+        ): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity,
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: { readSessionParts, listChildren: async () => [] },
+          })
+        }
+
+        async function transformText(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<string> {
+          const output = { system: ['base'] }
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            output,
+          )
+          return output.system.join('\n')
+        }
+
+        async function eventHook(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await adapter.hooks.event({
+            event: {
+              type: 'message.updated',
+              properties: { sessionID: SESSION_A },
+            },
+          })
+        }
+
+        async function beforeHook(
+          adapter: OpencodeWorkflowGuard,
+          callID = 'ordering-read',
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'read', sessionID: SESSION_A, callID },
+            { args: {} },
+          )
+        }
+
+        for (const mode of ['protected', 'observe'] as const) {
+          test(`a/f: every first-hook ordering on a fresh empty-history session ends inactive / no-active-epoch with identical marker text (${mode})`, async () => {
+            const orderings: ReadonlyArray<{
+              name: string
+              run: (adapter: OpencodeWorkflowGuard) => Promise<void>
+            }> = [
+              { name: 'event-first', run: eventHook },
+              {
+                name: 'transform-first',
+                run: async (adapter) => {
+                  await transformText(adapter)
+                  await beforeHook(adapter)
+                },
+              },
+              { name: 'before-hook-first', run: (a) => beforeHook(a) },
+              {
+                name: 'direct-tool',
+                run: async (adapter) => {
+                  await statusJson(adapter)
+                },
+              },
+            ]
+            const finals: string[] = []
+            for (const ordering of orderings) {
+              const adapter = adapterFor(mode, async () => [])
+              await ordering.run(adapter)
+              expect(status(adapter), ordering.name).toMatchObject({
+                state: 'inactive',
+                reasonCode: 'no-active-epoch',
+              })
+              finals.push(await transformText(adapter))
+            }
+            expect(new Set(finals).size).toBe(1)
+          })
+
+          test(`a/f: the transform marker is identical across the provisional and confirmed passes (${mode})`, async () => {
+            const adapter = adapterFor(mode, async () => [])
+            const provisional = await transformText(adapter)
+            expect(status(adapter)).toMatchObject({
+              state: 'inactive',
+              reasonCode: 'no-active-epoch',
+            })
+            await beforeHook(adapter)
+            const confirmed = await transformText(adapter)
+            expect(provisional).toContain('"state":"inactive"')
+            expect(confirmed).toBe(provisional)
+          })
+        }
+
+        test('b: a late own marker found by the confirming re-read is restored, not overwritten fresh', async () => {
+          const ownMarkers = buildMarkersForRegistration(OWN_IDENTITY, OWN_SALT)
+          let reads = 0
+          const adapter = adapterFor(
+            'protected',
+            async () => {
+              reads += 1
+              return reads === 1 ? [] : wrapMarkers(ownMarkers)
+            },
+            'workspace-a',
+          )
+          await transformText(adapter)
+          expect(status(adapter).epoch).toBeNull()
+          await beforeHook(adapter)
+          expect(reads).toBe(2)
+          expect(status(adapter).epoch).not.toBeNull()
+          expect(status(adapter).state).not.toBe('unavailable')
+        })
+
+        test('c: a confirming re-read that finds non-exempt guard history becomes final markerless-guard-history', async () => {
+          let reads = 0
+          const adapter = adapterFor('protected', async () => {
+            reads += 1
+            return reads === 1 ? [] : GUARD_HISTORY_PARTS
+          })
+          await transformText(adapter)
+          await beforeHook(adapter)
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+          await eventHook(adapter)
+          await beforeHook(adapter, 'ordering-read-2')
+          expect(reads).toBe(2)
+        })
+
+        test('d: concurrent hooks never run against, or observe, a guard whose re-initialization is in flight', async () => {
+          let reads = 0
+          let releaseRead: (parts: readonly unknown[]) => void = () => {}
+          const adapter = adapterFor('protected', () => {
+            reads += 1
+            if (reads === 1) return Promise.resolve([])
+            return new Promise<readonly unknown[]>((resolve) => {
+              releaseRead = resolve
+            })
+          })
+          await transformText(adapter)
+          expect(reads).toBe(1)
+
+          // Invoked in the same tick, before any microtask runs: every hook
+          // sees the settled provisional initialization promise.
+          const settled = { event: false, before: false }
+          const eventDone = eventHook(adapter).then(() => {
+            settled.event = true
+          })
+          const beforeDone = beforeHook(adapter, 'race-read').then(() => {
+            settled.before = true
+          })
+          const statusDone = statusJson(adapter)
+
+          // Give every continuation a chance to run while the read is held.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          expect(reads).toBe(2)
+          expect(settled).toEqual({ event: false, before: false })
+
+          releaseRead([])
+          await Promise.all([eventDone, beforeDone])
+          const observed = await statusDone
+          expect(observed.state).toBe('inactive')
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect(reads).toBe(2)
+        })
+
+        test('e: a guarded skill and a bash hook racing the confirming re-read activate exactly one epoch', async () => {
+          let reads = 0
+          let releaseRead: (parts: readonly unknown[]) => void = () => {}
+          const adapter = adapterFor('protected', () => {
+            reads += 1
+            if (reads === 1) return Promise.resolve([])
+            return new Promise<readonly unknown[]>((resolve) => {
+              releaseRead = resolve
+            })
+          })
+          await transformText(adapter)
+
+          const skillDone = observeSkill(adapter, 'systematic_skill', 'ce:work')
+          const bashDone = adapter.hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: SESSION_A, callID: 'race-bash' },
+            { args: { command: 'git status --short' } },
+          )
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          expect(status(adapter).epoch).toBeNull()
+
+          releaseRead([])
+          await Promise.all([skillDone, bashDone])
+          expect(reads).toBe(2)
+          const after = status(adapter)
+          expect(after.epoch).not.toBeNull()
+          expect(after).toMatchObject({
+            state: 'waiting',
+            reasonCode: 'missing-evidence',
+          })
+          const epochId = after.epoch?.epochId
+          await eventHook(adapter)
+          expect(status(adapter).epoch?.epochId).toBe(epochId)
+        })
+      })
+
+      describe('current-turn exemption on first initialization', () => {
+        type MutationTool =
+          | 'systematic_workflow_start'
+          | 'systematic_workflow_complete'
+          | 'systematic_workflow_control'
+
+        // The injected runtime clock: messages created at or after this
+        // instant belong to this process's lifetime.
+        const RUNTIME_START = 1_000
+        const CALL = 'call_0'
+
+        function adapterFor(
+          mode: 'protected' | 'observe',
+          readSessionParts: () => Promise<readonly unknown[]>,
+        ): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode, debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            now: () => RUNTIME_START,
+            hostReadback: {
+              readSessionParts,
+              listChildren: async () => [],
+            },
+          })
+        }
+
+        function hostPart(
+          tool: string,
+          callID: string,
+          state: Record<string, unknown>,
+        ): Record<string, unknown> {
+          return { type: 'tool', tool, callID, state }
+        }
+
+        let messageSequence = 0
+        function message(
+          role: string,
+          time: Record<string, unknown> | undefined,
+          ...parts: Record<string, unknown>[]
+        ): Record<string, unknown> {
+          messageSequence += 1
+          return {
+            info: {
+              id: `msg_${messageSequence}`,
+              sessionID: SESSION_A,
+              role,
+              ...(time ? { time } : {}),
+            },
+            parts,
+          }
+        }
+
+        function turn(
+          ...parts: Record<string, unknown>[]
+        ): Record<string, unknown> {
+          return message('assistant', { created: 2_000 }, ...parts)
+        }
+
+        // First read (transform) is empty; every later read is `confirming`.
+        function transformThen(
+          confirming: readonly unknown[],
+        ): () => Promise<readonly unknown[]> {
+          let reads = 0
+          return async () => {
+            reads += 1
+            return reads === 1 ? [] : confirming
+          }
+        }
+
+        async function transformPass(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await adapter.hooks['experimental.chat.system.transform'](
+            { sessionID: SESSION_A },
+            { system: ['base'] },
+          )
+        }
+
+        function beforeHook(
+          adapter: OpencodeWorkflowGuard,
+          tool: string,
+          callID = CALL,
+        ): Promise<void> {
+          return adapter.hooks['tool.execute.before'](
+            { tool, sessionID: SESSION_A, callID },
+            {
+              args:
+                tool === 'systematic_workflow_complete'
+                  ? { target: 'unit' }
+                  : {},
+            },
+          )
+        }
+
+        async function expectClosed(
+          adapter: OpencodeWorkflowGuard,
+        ): Promise<void> {
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'markerless-guard-history',
+          )
+        }
+
+        const mutationTools: ReadonlyArray<{
+          tool: MutationTool
+          modes: ReadonlyArray<'protected' | 'observe'>
+        }> = [
+          { tool: 'systematic_workflow_start', modes: ['protected'] },
+          {
+            tool: 'systematic_workflow_complete',
+            modes: ['protected', 'observe'],
+          },
+          { tool: 'systematic_workflow_control', modes: ['protected'] },
+        ]
+
+        async function expectNoEpochRejection(
+          adapter: OpencodeWorkflowGuard,
+          tool: MutationTool,
+        ): Promise<void> {
+          const output = { title: 'pending', output: 'pending', metadata: {} }
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool,
+              sessionID: SESSION_A,
+              callID: CALL,
+              args:
+                tool === 'systematic_workflow_complete'
+                  ? { target: 'unit' }
+                  : {},
+            },
+            output,
+          )
+          expect(output.metadata).toMatchObject({
+            workflowGuard: {
+              status: 'rejected',
+              reasonCode: 'no-active-epoch',
+            },
+          })
+        }
+
+        async function runCurrentTurnCase(
+          tool: MutationTool,
+          mode: 'protected' | 'observe',
+          transformFirst: boolean,
+        ): Promise<void> {
+          const history = [
+            message('user', { created: 1_900 }),
+            turn(hostPart(tool, CALL, { status: 'running' })),
+          ]
+          const adapter = adapterFor(
+            mode,
+            transformFirst ? transformThen(history) : async () => history,
+          )
+          if (transformFirst) await transformPass(adapter)
+          await beforeHook(adapter, tool)
+          expect(status(adapter).state).toBe('inactive')
+          if (tool !== 'systematic_workflow_control') {
+            await expectNoEpochRejection(adapter, tool)
+          }
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+          expect((await statusJson(adapter)).state).toBe('inactive')
+        }
+
+        const currentTurnCases = mutationTools.flatMap(({ tool, modes }) =>
+          modes.flatMap((mode) =>
+            [true, false].map((transformFirst) => ({
+              tool,
+              mode,
+              transformFirst,
+            })),
+          ),
+        )
+        test.each(currentTurnCases)(
+          'a: the current-turn running $tool part does not poison initialization ($mode, transformFirst=$transformFirst)',
+          (c) => runCurrentTurnCase(c.tool, c.mode, c.transformFirst),
+        )
+
+        test.each(['pending', 'running'])(
+          'a: a %s current-turn part is accepted',
+          async (exempt) => {
+            const adapter = adapterFor('protected', async () => [
+              turn(
+                hostPart('systematic_workflow_start', CALL, { status: exempt }),
+              ),
+            ])
+            await beforeHook(adapter, 'systematic_workflow_start')
+            expect((await statusJson(adapter)).state).toBe('inactive')
+          },
+        )
+
+        test('b (P1-a): an old running start whose callID is reused by a new call is not exempt and no epoch is minted over it', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 1_500 },
+              hostPart('systematic_workflow_start', 'call_0', {
+                status: 'running',
+              }),
+            ),
+            message('user', { created: 1_800 }),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start', 'call_0')
+          await expectClosed(adapter)
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).epoch).toBeNull()
+          expect(status(adapter).state).toBe('unavailable')
+        })
+
+        test('c: an unfinished assistant turn created before the runtime started is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 500 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        async function raceStatusAndStart(statusFirst: boolean): Promise<void> {
+          let reads = 0
+          const history = [
+            turn(
+              hostPart('systematic_workflow_status', 'call_status', {
+                status: 'running',
+              }),
+              hostPart('systematic_workflow_start', 'call_start', {
+                status: 'running',
+              }),
+            ),
+          ]
+          const adapter = adapterFor('protected', async () => {
+            reads += 1
+            return reads === 1 ? [] : history
+          })
+          await transformPass(adapter)
+          const statusCall = () =>
+            beforeHook(adapter, 'systematic_workflow_status', 'call_status')
+          const startCall = () =>
+            beforeHook(adapter, 'systematic_workflow_start', 'call_start')
+          await Promise.all(
+            statusFirst
+              ? [statusCall(), startCall()]
+              : [startCall(), statusCall()],
+          )
+          expect(reads).toBe(2)
+          expect(status(adapter)).toMatchObject({
+            state: 'inactive',
+            reasonCode: 'no-active-epoch',
+          })
+        }
+
+        test.each([true, false])(
+          'd (P1-b): status and start before-hooks racing the confirming read both end inactive (statusFirst=%s)',
+          raceStatusAndStart,
+        )
+
+        test('e: a completed newest assistant message is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 2_000, completed: 2_500 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('e: a newest user message is not the current turn', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'user',
+              { created: 2_000 },
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        const malformedInfo: ReadonlyArray<{
+          name: string
+          history: readonly unknown[]
+        }> = [
+          {
+            name: 'missing info.time',
+            history: [
+              message(
+                'assistant',
+                undefined,
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+          {
+            name: 'non-numeric info.time.created',
+            history: [
+              message(
+                'assistant',
+                { created: 'now' },
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+          {
+            name: 'missing info',
+            history: [
+              {
+                parts: [
+                  hostPart('systematic_workflow_start', CALL, {
+                    status: 'running',
+                  }),
+                ],
+              },
+            ],
+          },
+          {
+            name: 'two messages sharing the newest created time',
+            history: [
+              message('user', { created: 2_000 }),
+              turn(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: 'running',
+                }),
+              ),
+            ],
+          },
+        ]
+        test.each([...malformedInfo])(
+          'e: $name is not the current turn',
+          async (entry) => {
+            const adapter = adapterFor('protected', async () => entry.history)
+            await beforeHook(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          },
+        )
+
+        test.each(['completed', 'error'])(
+          'e: a %s current-turn part is never exempt through this rule',
+          async (closedState) => {
+            const adapter = adapterFor('protected', async () => [
+              turn(
+                hostPart('systematic_workflow_start', CALL, {
+                  status: closedState,
+                  metadata: {},
+                }),
+              ),
+            ])
+            await beforeHook(adapter, 'systematic_workflow_start')
+            await expectClosed(adapter)
+          },
+        )
+
+        test('e: a non-current-turn running part next to a current-turn one keeps history closed', async () => {
+          const adapter = adapterFor('protected', async () => [
+            message(
+              'assistant',
+              { created: 1_500, completed: 1_600 },
+              hostPart('systematic_workflow_start', 'call_prior', {
+                status: 'running',
+              }),
+            ),
+            turn(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectClosed(adapter)
+        })
+
+        test('f: an ambiguous marker plus a current-turn running part is still markers-ambiguous', async () => {
+          const adapter = adapterFor('protected', async () => [
+            ...wrapMarkers([{ kind: 'corrupt-unknown', data: 'x' }]),
+            turn(
+              hostPart('systematic_workflow_start', CALL, {
+                status: 'running',
+              }),
+            ),
+          ])
+          await beforeHook(adapter, 'systematic_workflow_start')
+          await expectCause(adapter, 'initialize-session', 'markers-ambiguous')
+        })
+      })
+
+      describe('strict own-history read versus lenient child-rollup read', () => {
+        function adapterWithReaders(readers: {
+          lenient: (sessionID: string) => Promise<readonly unknown[]>
+          strict?: (sessionID: string) => Promise<readonly unknown[]>
+        }): OpencodeWorkflowGuard {
+          return createOpencodeWorkflowGuard({
+            config: { mode: 'observe', debug: false },
+            workspaceIdentity: 'workspace',
+            registrationIdentity: OWN_IDENTITY,
+            sessionSalt: OWN_SALT,
+            hostReadback: {
+              readSessionParts: readers.lenient,
+              ...(readers.strict
+                ? { readSessionPartsStrict: readers.strict }
+                : {}),
+              listChildren: async (sessionID) =>
+                sessionID === SESSION_A
+                  ? [{ sessionId: 'child-session', parentID: SESSION_A }]
+                  : [],
+            },
+          })
+        }
+
+        async function fireTask(adapter: OpencodeWorkflowGuard): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'task', sessionID: SESSION_A, callID: 'strict-task' },
+            { args: {} },
+          )
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool: 'task',
+              sessionID: SESSION_A,
+              callID: 'strict-task',
+              args: {},
+            },
+            {
+              title: 'task result',
+              output: 'done',
+              metadata: { sessionId: 'child-session' },
+            },
+          )
+        }
+
+        test('a thrown strict read is unavailable / history-read-failed even when the lenient read would return []', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => {
+              throw new Error('strict read failed')
+            },
+          })
+          await expectCause(
+            adapter,
+            'initialize-session',
+            'history-read-failed',
+          )
+          expect(adapter.status(SESSION_A).state).toBe('unavailable')
+        })
+
+        test('a successful empty strict read is inactive, not unavailable', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => [],
+          })
+          const parsed = await statusJson(adapter)
+          expect(parsed.state).toBe('inactive')
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+        })
+
+        test('initialization uses the strict read and never the lenient one', async () => {
+          const lenientCalls: string[] = []
+          const adapter = adapterWithReaders({
+            lenient: async (sessionID) => {
+              lenientCalls.push(sessionID)
+              return []
+            },
+            strict: async () => [],
+          })
+          await statusJson(adapter)
+          expect(lenientCalls).toEqual([])
+        })
+
+        test('a child rollup read returning no parts rolls up nothing and leaves the parent unchanged', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async () => [],
+            strict: async () => [],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          const before = status(adapter)
+          await fireTask(adapter)
+          const after = status(adapter)
+          expect(after.state).toBe(before.state)
+          expect(after.state).not.toBe('unavailable')
+          expect(after.epoch?.epochId).toBe(before.epoch?.epochId)
+          expect(adapter.ledger(SESSION_A)?.listReceipts() ?? []).toEqual([])
+        })
+
+        test('a thrown child rollup read still marks the parent unavailable', async () => {
+          const adapter = adapterWithReaders({
+            lenient: async (sessionID) => {
+              if (sessionID === 'child-session') {
+                throw new Error('child read failed')
+              }
+              return []
+            },
+            strict: async () => [],
+          })
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(status(adapter).state).not.toBe('unavailable')
+          await fireTask(adapter)
+          expect(status(adapter).state).toBe('unavailable')
+        })
+      })
     })
   })
 

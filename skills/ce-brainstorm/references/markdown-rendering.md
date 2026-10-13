@@ -180,7 +180,7 @@ Per-skill frontmatter fields are defined in each skill's section contract
   `Status`, `CreatedAt`).
 - **Status lifecycle is per-contract.** When the section contract
   defines a `status` field with a lifecycle (plans use
-  `active → completed`, flipped by ce-work at shipping time via direct
+  `active → completed`, flipped by ce:work at shipping time via direct
   YAML edit), it is editable in place. When the section contract does
   not define a status lifecycle (brainstorms have no `active → completed`
   flip — they are upstream of plans and referenced via the plan's

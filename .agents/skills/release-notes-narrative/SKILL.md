@@ -8,9 +8,11 @@ argument-hint: <tag-or-range>
 
 ## CI Automation
 
-This skill also runs automatically post-publish via `@semantic-release/exec`'s `successCmd` in `.releaserc.yaml`. The hook dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the 13-step procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI automation handles forward-going releases without operator intervention.
+This skill also runs automatically post-publish via `.github/workflows/release-notes.yaml` (triggered by `release: published`, or a manual dispatch with a `tag` input to re-narrate). That workflow runs `scripts/dispatch-release-notes.sh`, which dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the 13-step procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI automation handles forward-going releases without operator intervention.
 
 If you are reading this as the dispatched Fro Bot run, the prompt embedded the target tag and a correlation token. Echo the correlation token as your first log line, then proceed with the procedure below.
+
+In CI the prompt also names a `Scratch directory`, `$RUNNER_TEMP/fro-bot-response/release-notes` — the ONLY directory you may write to (the agent runtime denies every external path except `$RUNNER_TEMP/fro-bot-response/*`, including `/tmp` and `/tmp/opencode`). `$RUNNER_TEMP` is unexpanded in the prompt: run `echo "$RUNNER_TEMP"` first, because file tools need absolute paths, then `mkdir -p` the directory. Export the resolved path as `SCRATCH_DIR`; Steps 3, 12, and 13 use it in place of their local default paths. Local, non-CI runs leave `SCRATCH_DIR` unset and keep the defaults.
 
 ## Overview
 
@@ -101,9 +103,10 @@ This returns the most recent ancestor tag of the target's parent commit — the 
 ### Step 3 — Capture the pre-edit snapshot
 
 ```bash
-mkdir -p .context/pr-evidence/release-notes-narrative
+EVIDENCE_DIR="${SCRATCH_DIR:-.context/pr-evidence/release-notes-narrative}"
+mkdir -p "${EVIDENCE_DIR}"
 gh release view "${TARGET}" --json body --jq .body \
-  > ".context/pr-evidence/release-notes-narrative/${TARGET}-before.md"
+  > "${EVIDENCE_DIR}/${TARGET}-before.md"
 ```
 
 This snapshot is the rollback source for procedure step 13. The `.context/` directory is gitignored; the file is PR evidence only.
@@ -183,7 +186,7 @@ Before calling `gh release edit`, assert all of the following against the render
 Write the rendered body to a temp file and apply:
 
 ```bash
-TMPFILE=$(mktemp /tmp/release-notes-XXXXXX.md)
+TMPFILE=$(mktemp "${SCRATCH_DIR:-/tmp}/release-notes-XXXXXX.md")
 # ... write rendered body to $TMPFILE ...
 gh release edit "${TARGET}" --notes-file "${TMPFILE}"
 rm -f "${TMPFILE}"
@@ -214,7 +217,7 @@ If any assertion fails, restore the pre-edit snapshot:
 
 ```bash
 gh release edit "${TARGET}" \
-  --notes-file ".context/pr-evidence/release-notes-narrative/${TARGET}-before.md"
+  --notes-file "${SCRATCH_DIR:-.context/pr-evidence/release-notes-narrative}/${TARGET}-before.md"
 ```
 
 Then report the failure. Do not silently leave a broken release body in place.
@@ -271,7 +274,7 @@ The normalized forms of two runs against the same range must be byte-identical.
 - [ ] All bucket headings match the bucket map exactly (title-case, no abbreviations)
 - [ ] The Compare link uses the correct `v<PREV>...v<TARGET>` format and points at `github.com/marcusrbrown/systematic`
 - [ ] No spurious `closes [URL-fragment]` autolinks remain after step 10
-- [ ] The pre-edit snapshot exists at `.context/pr-evidence/release-notes-narrative/${TARGET}-before.md` before `gh release edit` is called
+- [ ] The pre-edit snapshot exists at `${SCRATCH_DIR:-.context/pr-evidence/release-notes-narrative}/${TARGET}-before.md` before `gh release edit` is called
 - [ ] Post-edit verification (step 13) ran and passed — structural checks, never length comparison; if it failed, the snapshot was restored
 
 ## Common Mistakes
