@@ -796,19 +796,24 @@ function parseHostOutput(
   }
 }
 
+// Allowlist of skill names that activate a guard epoch. A Map keeps lookups
+// to own entries, so inherited names such as `constructor` or `__proto__`
+// never resolve. Unlisted skills are deliberately not guarded.
+const GUARDED_SKILL_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['ce:work', 'ce-work'],
+  ['systematic:ce:work', 'ce-work'],
+  ['git-commit', 'git-commit'],
+  ['systematic:git-commit', 'git-commit'],
+  ['git-commit-push-pr', 'git-commit-push-pr'],
+  ['systematic:git-commit-push-pr', 'git-commit-push-pr'],
+])
+
 function normalizeSkill(tool: string, args: unknown): string | undefined {
   if (tool !== 'systematic_skill' && tool !== 'skill') return undefined
   if (!isRecord(args) || !boundedString(args.name, MAX_SKILL_LENGTH)) {
     return undefined
   }
-  const names: Record<string, string> = {
-    'ce:work': 'ce-work',
-    'git-commit': 'git-commit',
-    'systematic:git-commit': 'git-commit',
-    'git-commit-push-pr': 'git-commit-push-pr',
-    'systematic:git-commit-push-pr': 'git-commit-push-pr',
-  }
-  return names[args.name] ?? 'ce-work'
+  return GUARDED_SKILL_ALIASES.get(args.name)
 }
 
 function trustedSkillPolicy(

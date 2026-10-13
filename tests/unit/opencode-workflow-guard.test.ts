@@ -1469,13 +1469,375 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(restored).reasonCode).not.toBe('guard-unavailable')
   })
 
-  test('falls back to the mandatory floor for unknown guarded skills', async () => {
-    const adapter = createAdapter('observe')
-    await observeSkill(adapter, 'systematic_skill', 'ce:brainstorm')
-    expect(status(adapter).unit?.requiredOperations).toEqual([
-      'implementation',
-      'verification',
-    ])
+  describe('guarded skill allowlist', () => {
+    const SKILL_TOOLS = ['skill', 'systematic_skill'] as const
+
+    interface AllowlistedSkill {
+      readonly name: string
+      readonly family: 'work' | 'shipping'
+      readonly requiredOperations: readonly ReceiptOperation[]
+    }
+
+    // Literal expectations, deliberately not derived from the production
+    // TRUSTED_SKILL_POLICIES table so that a drifted policy row fails here.
+    const ALLOWLISTED_SKILLS: readonly AllowlistedSkill[] = [
+      {
+        name: 'ce:work',
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+      },
+      {
+        name: 'systematic:ce:work',
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+      },
+      {
+        name: 'git-commit',
+        family: 'shipping',
+        requiredOperations: ['implementation', 'verification', 'commit'],
+      },
+      {
+        name: 'systematic:git-commit',
+        family: 'shipping',
+        requiredOperations: ['implementation', 'verification', 'commit'],
+      },
+      {
+        name: 'git-commit-push-pr',
+        family: 'shipping',
+        requiredOperations: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+          'pr-creation',
+          'check-readback',
+          'review-readback',
+        ],
+      },
+      {
+        name: 'systematic:git-commit-push-pr',
+        family: 'shipping',
+        requiredOperations: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+          'pr-creation',
+          'check-readback',
+          'review-readback',
+        ],
+      },
+    ]
+
+    function receiptMarkers(output: RecordedToolOutput): unknown {
+      return output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    }
+
+    async function loadSkill(
+      adapter: OpencodeWorkflowGuard,
+      tool: 'systematic_skill' | 'skill',
+      name: string,
+      callID = `${tool}-${name}`,
+      output: RecordedToolOutput = {
+        title: 'Loaded skill',
+        output: 'skill result',
+        metadata: {},
+      },
+    ): Promise<RecordedToolOutput> {
+      await observeSkill(adapter, tool, name, callID, SESSION_A, output)
+      return output
+    }
+
+    async function statusDocument(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      return JSON.parse(expectToolOutput(result).output)
+    }
+
+    test.each(
+      ['ce:brainstorm', 'ce:review'].flatMap((name) =>
+        SKILL_TOOLS.map((tool) => ({ name, tool })),
+      ),
+    )(
+      '$tool loading non-allowlisted $name in an inactive session is a no-op',
+      async ({ name, tool }) => {
+        const adapter = createAdapter('observe')
+        const output = await loadSkill(adapter, tool, name)
+
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+          unit: null,
+        })
+        expect(receiptMarkers(output)).toBeUndefined()
+        const document = await statusDocument(adapter)
+        expect(document.seedDeferrals).toBeUndefined()
+        expect(document.firstUnavailableCause).toBeUndefined()
+      },
+    )
+
+    test.each(
+      ALLOWLISTED_SKILLS.flatMap((skill) =>
+        SKILL_TOOLS.map((tool) => ({ ...skill, tool })),
+      ),
+    )(
+      '$tool loading allowlisted $name activates the $family family with its literal operations',
+      async ({ name, tool, family, requiredOperations }) => {
+        const adapter = createAdapter('observe')
+        const output = await loadSkill(adapter, tool, name)
+
+        expect(status(adapter).epoch?.family).toBe(family)
+        expect(status(adapter).unit?.requiredOperations).toEqual(
+          requiredOperations,
+        )
+        expect(receiptMarkers(output)).toBeDefined()
+      },
+    )
+
+    test('loading ce:review mid-work with a completed unit starts no new unit', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      mintReceipt(adapter, 'implementation')
+      mintReceipt(adapter, 'verification')
+      await completeUnit(adapter, 'allowlist-complete-unit')
+      const before = status(adapter)
+      expect(before.unit?.status).toBe('completed')
+
+      for (const tool of SKILL_TOOLS) {
+        const output = await loadSkill(adapter, tool, 'ce:review')
+        expect(receiptMarkers(output)).toBeUndefined()
+      }
+
+      expect(status(adapter)).toEqual(before)
+    })
+
+    test('loading ce:review during an active shipping epoch is not a family conflict', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'skill', 'git-commit-push-pr')
+      const before = status(adapter)
+      const beforeDocument = await statusDocument(adapter)
+      expect(before.epoch?.family).toBe('shipping')
+
+      for (const tool of SKILL_TOOLS) {
+        const output = await loadSkill(adapter, tool, 'ce:review')
+        expect(receiptMarkers(output)).toBeUndefined()
+      }
+
+      expect(status(adapter)).toEqual(before)
+      expect(status(adapter).reasonCode).not.toBe('family-conflict')
+      expect(await statusDocument(adapter)).toEqual(beforeDocument)
+    })
+
+    test.each([
+      {
+        label: 'protected',
+        state: 'protected',
+        build: async () => {
+          const adapter = createAdapter('protected')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          mintReceipt(adapter, 'implementation')
+          mintReceipt(adapter, 'verification')
+          return adapter
+        },
+      },
+      {
+        label: 'waiting',
+        state: 'waiting',
+        build: async () => {
+          const adapter = createAdapter('observe')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          return adapter
+        },
+      },
+      {
+        label: 'rejected',
+        state: 'rejected',
+        build: async () => {
+          const adapter = createAdapter('observe')
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          adapter.observeReceipt(SESSION_A, { not: 'a receipt' })
+          return adapter
+        },
+      },
+      {
+        label: 'unavailable',
+        state: 'unavailable',
+        build: async () => {
+          const adapter = createAdapter('observe')
+          await adapter.hooks['tool.execute.before'](
+            {
+              tool: 'systematic_skill',
+              sessionID: SESSION_A,
+              callID: 'unavailable-swap',
+            },
+            { args: { name: 'ce:work' } },
+          )
+          await adapter.hooks['tool.execute.after'](
+            {
+              tool: 'systematic_skill',
+              sessionID: SESSION_A,
+              callID: 'unavailable-swap',
+              args: { name: 'git-commit' },
+            },
+            { title: 'x', output: 'y', metadata: {} },
+          )
+          return adapter
+        },
+      },
+    ] as const)(
+      'loading ce:review leaves the $label state and unavailable cause unchanged',
+      async ({ state, build }) => {
+        const adapter = await build()
+        const before = status(adapter)
+        const beforeDocument = await statusDocument(adapter)
+        expect(before.state).toBe(state)
+
+        for (const tool of SKILL_TOOLS) {
+          const output = await loadSkill(adapter, tool, 'ce:review')
+          expect(receiptMarkers(output)).toBeUndefined()
+        }
+
+        expect(status(adapter)).toEqual(before)
+        const afterDocument = await statusDocument(adapter)
+        expect(afterDocument.firstUnavailableCause).toEqual(
+          beforeDocument.firstUnavailableCause,
+        )
+        expect(afterDocument).toEqual(beforeDocument)
+      },
+    )
+
+    test.each(
+      ['constructor', 'toString', '__proto__'].flatMap((name) =>
+        SKILL_TOOLS.map((tool) => ({ name, tool })),
+      ),
+    )(
+      '$tool loading inherited-property name $name activates nothing',
+      async ({ name, tool }) => {
+        const adapter = createAdapter('observe')
+        const output = await loadSkill(adapter, tool, name)
+
+        expect(status(adapter)).toMatchObject({
+          state: 'inactive',
+          reasonCode: 'no-active-epoch',
+          epoch: null,
+          unit: null,
+        })
+        expect(receiptMarkers(output)).toBeUndefined()
+      },
+    )
+
+    test('an allowlisted ce:work load whose after output exceeds 32 KB still activates', async () => {
+      const adapter = createAdapter('observe')
+      const output = await loadSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'oversized-ce-work',
+        { title: 'Loaded skill', output: 'x'.repeat(32_769), metadata: {} },
+      )
+
+      expect(status(adapter).epoch?.family).toBe('work')
+      expect(status(adapter).unit?.requiredOperations).toEqual([
+        'implementation',
+        'verification',
+      ])
+      expect(receiptMarkers(output)).toBeDefined()
+    })
+
+    test('a session that only loads ce:review is rejected by workflow start with no-active-epoch', async () => {
+      const adapter = createAdapter('observe')
+      await loadSkill(adapter, 'systematic_skill', 'ce:review')
+
+      const startOutput = {
+        title: 'pending',
+        output: 'pending',
+        metadata: {},
+      }
+      const startInput = {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'start-after-review-only',
+      }
+      await adapter.hooks['tool.execute.before'](startInput, { args: {} })
+      await adapter.hooks['tool.execute.after'](
+        { ...startInput, args: {} },
+        startOutput,
+      )
+
+      expect(startOutput.output).toContain('no-active-epoch')
+      expect(startOutput.metadata).toMatchObject({
+        state: 'inactive',
+        workflowGuard: {
+          status: 'rejected',
+          reasonCode: 'no-active-epoch',
+        },
+      })
+      expect(status(adapter)).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+        epoch: null,
+      })
+    })
+
+    test('a callID whose before-hook names ce:work and after-hook names git-commit still records call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('observe')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-swap',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-swap',
+          args: { name: 'git-commit' },
+        },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+
+      expect((await statusDocument(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-after',
+        kind: 'call-lifecycle-mismatch',
+        timedOut: false,
+      })
+      expect(status(adapter).state).toBe('unavailable')
+    })
+
+    test('a callID whose before-hook names ce:work and after-hook names ce:review fails closed with call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('protected')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-to-unlisted-swap',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-to-unlisted-swap',
+          args: { name: 'ce:review' },
+        },
+        { title: 'Loaded skill', output: 'skill result', metadata: {} },
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).epoch).toBeNull()
+      expect(
+        (await statusDocument(adapter)).firstUnavailableCause,
+      ).toMatchObject({ site: 'tool-after', kind: 'call-lifecycle-mismatch' })
+    })
   })
 
   test('activates from successful systematic and native skill after events only', async () => {
