@@ -114,15 +114,11 @@ const DIGEST_PIPELINE =
   /find dist -type f -print0 \| LC_ALL=C sort -z \| xargs -0 sha256sum \| sha256sum \| cut -d' ' -f1/
 
 describe('release.yaml triggers and top-level settings', () => {
-  test('triggers on push to main, hourly schedule, and dispatch without inputs', () => {
+  test('triggers on push to main and dispatch without inputs, with no schedule', () => {
     const on = asRecord(readWorkflow().on, 'on')
-    expect(Object.keys(on).sort()).toEqual([
-      'push',
-      'schedule',
-      'workflow_dispatch',
-    ])
+    expect(Object.keys(on).sort()).toEqual(['push', 'workflow_dispatch'])
     expect(asRecord(on.push, 'push').branches).toEqual(['main'])
-    expect(on.schedule).toEqual([{ cron: '17 * * * *' }])
+    expect(on).not.toHaveProperty('schedule')
     const dispatch = on.workflow_dispatch
     expect(
       dispatch === null || dispatch === undefined || isRecord(dispatch),

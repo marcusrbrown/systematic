@@ -145,9 +145,9 @@ function findApproval(
 
 /**
  * Rule 5. Returns the fresh, untagged version that was added, or the decision
- * that ends the run. A tag with a release is a finished publish (the hourly
- * reconcile lands here while main's tip is still the release merge); a tag
- * alone is a partial publish.
+ * that ends the run. A tag with a release is a finished publish (a re-run or
+ * dispatched run on the same merge lands here while main's tip is still the
+ * release merge); a tag alone is a partial publish.
  */
 function checkAddedVersion(
   facts: PublishFacts,

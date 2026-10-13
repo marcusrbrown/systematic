@@ -237,7 +237,7 @@ describe('gatherPublishFacts', () => {
       expect(facts.pr?.addedEntryVersion).toBe('3.22.0')
     })
 
-    test('replacement, then tag and release exist: reconcile on the same merge skips', async () => {
+    test('replacement, then tag and release exist: a re-run on the same merge skips', async () => {
       const { api } = fake({
         tags: ['v3.22.0', 'v3.21.8'],
         release: true,

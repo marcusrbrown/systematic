@@ -15,13 +15,13 @@ Merging a feature PR never publishes.
 
 If `main` moves after a release merge but before `publish` runs, publish refuses (`superseded`) and the next release PR carries the change.
 
-A publish that fails before it creates the tag is retried by the hourly reconcile while `main` is unchanged. Once `main` moves, the next release PR re-proposes the commits and needs a fresh approval.
+A publish that fails before it creates the tag can be retried while `main` still points at the release merge: re-run the failed `Release` run, or dispatch `release.yaml` (see Recovery). Once `main` moves, the next release PR re-proposes the commits and needs a fresh approval.
 
 ## Publish path
 
 Publishing happens only by merging the release PR. There is no other publish path, no mode switch and no npm token: the `publish` job in `release.yaml` authenticates to npm through OIDC alone (`id-token: write` plus the `release` environment).
 
-If the npm trusted publisher is misconfigured, the publish fails before it tags. Correct the trusted-publisher config on npmjs.com, then re-run the pipeline (see Reconcile).
+If the npm trusted publisher is misconfigured, the publish fails before it tags. Correct the trusted-publisher config on npmjs.com, then re-run the pipeline (see Recovery).
 
 The follow-on workflows (`release-notes.yaml`, `docs.yaml`, `publish-claude-code-plugin.yaml`) do not query npm. They require a release authored by the release App, and that release is created only after the npm publish.
 
@@ -66,15 +66,15 @@ gh workflow run release-gate.yaml
 
 Only the maintainer's dispatch proceeds; a dispatch by anyone else is skipped. The gate approves only when the required checks are green on the release PR.
 
-## Reconcile
+## Recovery
 
-If a merge's push run did not publish or refresh the PR, re-run the pipeline against the current `main`:
+There is no scheduled retry. If a merge's push run failed or did not publish or refresh the PR, re-run the failed `Release` run, or dispatch the pipeline against the current `main`:
 
 ```bash
 gh workflow run release.yaml
 ```
 
-The pipeline also reconciles itself hourly.
+Both work only while `main` still points at the release merge. A run on a later `main` refuses the stale release merge (`superseded`).
 
 ## Re-narrate, redeploy docs, republish the Claude plugin
 
@@ -104,7 +104,7 @@ Admin only. semantic-release runs in this order: `verifyConditions` (the npm OID
 
 ### Tag pushed, npm upload failed
 
-The tag exists, but npm has no `X.Y.Z` and there is no GitHub release. The hourly reconcile refuses this state rather than publish over an existing tag.
+The tag exists, but npm has no `X.Y.Z` and there is no GitHub release. A re-run or dispatch refuses this state rather than publish over an existing tag.
 
 1. Confirm npm has no such version: `npm view @fro.bot/systematic@X.Y.Z version` must fail with a 404. If it returns the version, this is the next state; stop.
 2. Delete the stranded tag: `git push origin :refs/tags/vX.Y.Z`.
