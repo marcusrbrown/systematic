@@ -102,6 +102,42 @@ describe('settings: main ruleset', () => {
     expect(new Set(contexts).size).toBe(contexts.length)
   })
 
+  test('Host Contract is a required check in both the ruleset and the classic protection', () => {
+    const check = rulesetChecks().find((c) => c.context === 'Host Contract')
+    expect(check).toBeDefined()
+    expect(check?.integration_id).toBe(GITHUB_ACTIONS_INTEGRATION_ID)
+    expect(classicContexts()).toContain('Host Contract')
+  })
+
+  test('the required Host Contract check is reported on every pull request and push', () => {
+    // A required check that never reports blocks merges forever. The job must
+    // keep that display name, have no job-level `if:`, and the workflow must
+    // have no workflow-level path filter (which would suppress the whole run).
+    const workflow = asRecord(
+      yaml.load(
+        fs.readFileSync(
+          path.resolve(process.cwd(), '.github/workflows/main.yaml'),
+          'utf8',
+        ),
+        { schema: yaml.JSON_SCHEMA },
+      ),
+      'main.yaml',
+    )
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const named = Object.entries(jobs).filter(
+      ([, job]) => asRecord(job, 'job').name === 'Host Contract',
+    )
+    expect(named.map(([id]) => id)).toEqual(['host-contract'])
+    expect(asRecord(named[0]?.[1], 'job')).not.toHaveProperty('if')
+
+    const on = asRecord(workflow.on, 'on')
+    for (const event of ['pull_request', 'push']) {
+      const trigger = asRecord(on[event], event)
+      expect(trigger, event).not.toHaveProperty('paths')
+      expect(trigger, event).not.toHaveProperty('paths-ignore')
+    }
+  })
+
   test('every check has an integration_id, and CodeQL maps to 57789', () => {
     for (const check of rulesetChecks()) {
       const expected =

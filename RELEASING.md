@@ -1,6 +1,6 @@
 # Releasing
 
-Maintainer runbook for `@fro.bot/systematic`. Workflows: `release.yaml` (pipeline), `release-gate.yaml` (scheduled approval), `main.yaml` (`legacy-release`, `release-mode`).
+Maintainer runbook for `@fro.bot/systematic`. Workflows: `release.yaml` (pipeline), `release-gate.yaml` (scheduled approval). `main.yaml` runs checks only and never publishes.
 
 ## How a release happens
 
@@ -10,26 +10,20 @@ Merging a feature PR never publishes.
 2. The PR ships when it merges with an approval on its exact head. The approval comes from either:
    - the maintainer (`marcusrbrown`), or
    - the release gate (`release-gate.yaml`, Fro Bot), Wednesday and Sunday at 15:00 UTC, once required checks pass.
-3. The merge push runs `publish`: it re-verifies the merge and the approval, then runs semantic-release with the approved changelog entry as the notes. It publishes to npm with trusted publishing, then `confirm` checks the result.
+3. The merge push runs `publish`: it re-verifies the merge and the approval, then runs semantic-release with the approved changelog entry as the notes. It publishes to npm with trusted publishing (OIDC), then creates the GitHub release. The release exists only if the npm publish succeeded.
 4. The published release then triggers `release-notes.yaml` (narrative), `docs.yaml` (docs deploy) and `publish-claude-code-plugin.yaml` (the `claude-code-plugin` branch).
 
 If `main` moves after a release merge but before `publish` runs, publish refuses (`superseded`) and the next release PR carries the change.
 
 A publish that fails before it creates the tag is retried by the hourly reconcile while `main` is unchanged. Once `main` moves, the next release PR re-proposes the commits and needs a fresh approval.
 
-## Release mode
+## Publish path
 
-`RELEASE_MODE` selects the publish path. It must be exactly `legacy` or `gated`; any other value (unset, empty, `Gated`) fails the run and nothing publishes.
+Publishing happens only by merging the release PR. There is no other publish path, no mode switch and no npm token: the `publish` job in `release.yaml` authenticates to npm through OIDC alone (`id-token: write` plus the `release` environment).
 
-```bash
-gh variable set RELEASE_MODE --body gated    # approval-gated pipeline
-gh variable set RELEASE_MODE --body legacy   # rollback: publish on every releasable push to main
-gh variable get RELEASE_MODE
-```
+If the npm trusted publisher is misconfigured, the publish fails before it tags. Correct the trusted-publisher config on npmjs.com, then re-run the pipeline (see Reconcile).
 
-Assumption: only repository admins can set repository variables. Verify that in the repository settings before relying on it as a control.
-
-In `legacy` mode the `legacy-release` job in `main.yaml` publishes, and `release.yaml` only writes a preview to its job summary.
+The follow-on workflows (`release-notes.yaml`, `docs.yaml`, `publish-claude-code-plugin.yaml`) do not query npm. They require a release authored by the release App, and that release is created only after the npm publish.
 
 ## Main branch ruleset
 
@@ -53,7 +47,7 @@ To recover:
 
 If that does not work, an admin removes the stale entry from `CHANGELOG.md` in a normal PR.
 
-If the tag exists but npm does not have the package, use the break-glass section below instead.
+If the tag exists but npm does not have the package, use the break-glass sections below instead.
 
 ## Hold and unhold
 
@@ -94,7 +88,7 @@ gh workflow run publish-claude-code-plugin.yaml -f tag=vX.Y.Z
 
 ## Verify a publish
 
-A green job alone is not proof. The `confirm` job runs these checks; run them by hand when in doubt.
+A green job alone is not proof. Run these checks by hand when in doubt.
 
 ```bash
 npm view @fro.bot/systematic@X.Y.Z version
@@ -104,39 +98,40 @@ gh release view vX.Y.Z --json author,tagName
 
 `_npmUser.email` must be `npm-oidc-no-reply@github.com`. That means npm trusted publishing was used; any other value means the package was published with a token.
 
-## Break-glass: tag created, npm publish failed
+## Break-glass: partial publishes
 
-Admin only. Use this when the `vX.Y.Z` tag and release exist but the package is not on npm.
+Admin only. semantic-release runs in this order: `verifyConditions` (the npm OIDC exchange), then it creates and pushes the `vX.Y.Z` tag, then npm publishes, then the GitHub release is created. A failed OIDC exchange stops before the tag, so nothing is left behind; correct the trusted-publisher config and re-run. Two partial states remain.
 
-1. Confirm the version is absent. This must fail with a 404:
+### Tag pushed, npm upload failed
+
+The tag exists, but npm has no `X.Y.Z` and there is no GitHub release. The hourly reconcile refuses this state rather than publish over an existing tag.
+
+1. Confirm npm has no such version: `npm view @fro.bot/systematic@X.Y.Z version` must fail with a 404. If it returns the version, this is the next state; stop.
+2. Delete the stranded tag: `git push origin :refs/tags/vX.Y.Z`.
+3. Re-run the failed `release.yaml` run, or land a new commit so the refresh opens a new release PR.
+
+Never delete a tag whose version is on npm.
+
+### npm published, GitHub release missing
+
+npm accepted the package and creating the GitHub release then failed. The version cannot be published again, and re-running the pipeline cannot create the release. Do not delete the tag, and do not try to republish.
+
+1. Confirm the state. The version must be on npm with the OIDC publisher, and the release must be absent:
 
    ```bash
-   npm view @fro.bot/systematic@X.Y.Z version
+   npm view @fro.bot/systematic@X.Y.Z _npmUser --json
+   gh release view vX.Y.Z --json author,tagName
+   git ls-remote --tags origin vX.Y.Z
    ```
 
-2. Delete the GitHub release and its tag:
+   If `gh release view` finds a release, this is not the partial state; stop.
+
+2. If the tag is missing, create it on the `chore(release): vX.Y.Z` merge commit and push it.
+
+3. Create the release from the existing tag, using the `X.Y.Z` entry of `CHANGELOG.md` as the notes:
 
    ```bash
-   gh release delete vX.Y.Z --cleanup-tag
+   gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <notes>
    ```
 
-3. Reconcile (see above). If `main` has moved past the release merge, publish refuses as superseded; the next release PR then carries the same changes, and the version is recomputed because the tag is gone.
-
-Never delete a release whose version is on npm.
-
-## Cutover checklist
-
-Before setting `RELEASE_MODE` to `gated`:
-
-- [ ] The `main` ruleset requiring one approving review, provided by `.github/settings.yml`, is active under Settings → Rules.
-- [ ] Fro Bot has been seen approving a maintainer PR.
-- [ ] `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY` and the `release` environment are in place; `NPM_TOKEN` is only a fallback.
-- [ ] The release App has the Variables: read repository permission, so publish can read the live `RELEASE_HOLD`.
-
-After the first gated release, check:
-
-- [ ] `confirm` is green.
-- [ ] `_npmUser.email` is `npm-oidc-no-reply@github.com`.
-- [ ] The `claude-code-plugin` branch points at the new version.
-- [ ] The docs site shows the new version.
-- [ ] The release body starts with `## What's new` (the narrative landed).
+4. The release is now authored by you, not the release App. `release-notes.yaml`, `docs.yaml` and `publish-claude-code-plugin.yaml` act only on a release authored by `vars.RELEASE_AUTHOR_LOGIN` (default `systematic-release[bot]`), so a release event skips them and a dispatch fails. To run them, set `RELEASE_AUTHOR_LOGIN` to your login, dispatch each (see above), then restore the variable. Otherwise leave them unrun and the next release covers them.

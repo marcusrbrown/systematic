@@ -14,17 +14,19 @@
 #   GH_TOKEN           token for `gh`
 #   GITHUB_REPOSITORY  owner/name
 #   GITHUB_OUTPUT      step output file
-#   NPM_RETRY_DELAY    seconds between the 6 npm lookups (default 10)
 #
 # Outputs (GITHUB_OUTPUT): `proceed`, and when proceeding `tag` and `version`.
 #
 # A release event is automatic, so an untrusted author or a non-latest tag ends
 # cleanly with proceed=false. A workflow_dispatch is a deliberate request, so
 # the same conditions fail the job with ::error:: where someone will see them.
+#
+# There is no npm lookup. semantic-release runs @semantic-release/npm before
+# @semantic-release/github, so a release authored by the trusted release App
+# implies the npm publish completed. A tag left behind by a failed publish has
+# no GitHub release, which the release checks here refuse.
 
 set -euo pipefail
-
-PACKAGE='@fro.bot/systematic'
 
 fail() {
   echo "::error::$*"
@@ -95,23 +97,6 @@ if [ "$REQUIRE_LATEST" = true ]; then
 fi
 
 version="${tag#v}"
-# The registry can lag a publish by a few seconds, so retry before giving up.
-# npm's own stderr stays visible so a registry outage is not mistaken for a
-# missing version.
-published=false
-for attempt in 1 2 3 4 5 6; do
-  if npm view "${PACKAGE}@${version}" version; then
-    published=true
-    break
-  fi
-  if [ "$attempt" -lt 6 ]; then
-    echo "${PACKAGE}@${version} not on npm yet (attempt ${attempt}/6)"
-    sleep "${NPM_RETRY_DELAY:-10}"
-  fi
-done
-if [ "$published" != true ]; then
-  fail "${PACKAGE}@${version} is not published to npm; refusing to continue"
-fi
 
 {
   echo "proceed=true"

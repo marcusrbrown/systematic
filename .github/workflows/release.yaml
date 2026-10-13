@@ -19,35 +19,11 @@ name: Release
 permissions: {}
 
 jobs:
-  # Fails closed: only the exact values `legacy` and `gated` select a path.
-  mode:
-    name: Select release mode
-    runs-on: ubuntu-latest
-    permissions: {}
-    outputs:
-      mode: ${{ steps.check.outputs.mode }}
-    steps:
-      - name: Validate RELEASE_MODE
-        id: check
-        env:
-          RELEASE_MODE: ${{ vars.RELEASE_MODE }}
-        run: |
-          case "$RELEASE_MODE" in
-            legacy|gated)
-              echo "mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "::error::RELEASE_MODE must be exactly legacy or gated"
-              exit 1
-              ;;
-          esac
-
   # Credential-free: decides whether the merge at github.sha is an approved
   # release merge. Runs repository code, so it holds only read scopes.
   verify:
     name: Verify release merge
-    needs: mode
-    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -94,8 +70,6 @@ jobs:
   # Credential-free: builds dist/ once; publish re-checks the digest.
   build:
     name: Build
-    needs: mode
-    if: needs.mode.outputs.mode == 'gated'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -132,8 +106,8 @@ jobs:
   # release App token. Runs no repository code.
   publish:
     name: Publish
-    needs: [mode, verify, build]
-    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main' && needs.verify.outputs.kind == 'publish'
+    needs: [verify, build]
+    if: github.ref == 'refs/heads/main' && needs.verify.outputs.kind == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: release
@@ -249,72 +223,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           npm_config_ignore_scripts: 'true'
         run: npx --no-install semantic-release --ci
 
-  # Read-only: proves the registry, tag and GitHub release match what was approved.
-  confirm:
-    name: Confirm release
-    needs: [verify, publish]
-    if: needs.publish.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Confirm published release
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
-        run: |
-          set -euo pipefail
-
-          # The registry can lag the publish by a few seconds.
-          retry() {
-            for _ in 1 2 3 4 5 6; do
-              if "$@"; then return 0; fi
-              sleep 10
-            done
-            return 1
-          }
-
-          published=$(retry npm view "@fro.bot/systematic@$VERSION" version)
-          if [ "$published" != "$VERSION" ]; then
-            echo "::error::npm has $published, expected $VERSION"
-            exit 1
-          fi
-
-          email=$(npm view "@fro.bot/systematic@$VERSION" _npmUser --json | jq -r '.email')
-          if [ "$email" != "npm-oidc-no-reply@github.com" ]; then
-            echo "::error::published with a token, not trusted publishing"
-            exit 1
-          fi
-
-          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" --jq .object.sha > /dev/null
-
-          author=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" --jq '.author.login')
-          if [ "$author" != "$EXPECTED_AUTHOR" ]; then
-            echo "::error::release v$VERSION was authored by $author, expected $EXPECTED_AUTHOR"
-            exit 1
-          fi
-
-          {
-            echo "## Release v$VERSION confirmed"
-            echo
-            echo "- npm: \`@fro.bot/systematic@$VERSION\` published via trusted publishing"
-            echo "- tag: \`v$VERSION\`"
-            echo "- release author: \`$author\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   # Credential-free: renders the pending release from the CURRENT main tip, so
-  # a run right after a publish sees the new tag. In legacy mode the job
-  # summary is the dark-launch preview.
+  # a run right after a publish sees the new tag.
   render:
     name: Render pending release
-    needs: [mode, publish]
-    if: always() && needs.mode.result == 'success' && needs.publish.result != 'failure' && needs.publish.result != 'cancelled'
+    needs: publish
+    if: always() && needs.publish.result != 'failure' && needs.publish.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -404,8 +321,8 @@ jobs:
   # untrusted text never reaches a command line.
   refresh:
     name: Refresh release PR
-    needs: [mode, render]
-    if: needs.mode.outputs.mode == 'gated' && github.ref == 'refs/heads/main' && needs.render.result == 'success'
+    needs: render
+    if: github.ref == 'refs/heads/main' && needs.render.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release

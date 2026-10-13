@@ -12,7 +12,7 @@ This skill also runs automatically post-publish via `.github/workflows/release-n
 
 If you are reading this as the dispatched Fro Bot run, the prompt embedded the target tag and a correlation token. Echo the correlation token as your first log line, then proceed with the procedure below.
 
-In CI the prompt also names a `Scratch directory` — the ONLY directory you may write to (writes to `/tmp` or `/tmp/opencode` are denied). Export it as `SCRATCH_DIR`; Steps 3, 12, and 13 use it in place of their local default paths. Local, non-CI runs leave `SCRATCH_DIR` unset and keep the defaults.
+In CI the prompt also names a `Scratch directory`, `$RUNNER_TEMP/fro-bot-response/release-notes` — the ONLY directory you may write to (the agent runtime denies every external path except `$RUNNER_TEMP/fro-bot-response/*`, including `/tmp` and `/tmp/opencode`). `$RUNNER_TEMP` is unexpanded in the prompt: run `echo "$RUNNER_TEMP"` first, because file tools need absolute paths, then `mkdir -p` the directory. Export the resolved path as `SCRATCH_DIR`; Steps 3, 12, and 13 use it in place of their local default paths. Local, non-CI runs leave `SCRATCH_DIR` unset and keep the defaults.
 
 ## Overview
 

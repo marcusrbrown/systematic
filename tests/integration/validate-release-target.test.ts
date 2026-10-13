@@ -6,13 +6,14 @@ import path from 'node:path'
 
 /**
  * Executes scripts/validate-release-target.sh against stub `gh` and `npm`
- * binaries (first on PATH) and checks each row of its contract:
+ * binaries (first on PATH) and checks each row of its contract. The `npm` stub
+ * exits 1 and logs its call: a trusted-author release already proves the npm
+ * publish completed, so the script must never consult npm:
  *
  * | Check                      | Release event          | Dispatch |
  * | Author mismatch            | proceed=false, exit 0  | exit 1   |
  * | Bad tag shape              | exit 1                 | exit 1   |
  * | Missing/draft/prerelease   | n/a                    | exit 1   |
- * | npm version missing        | exit 1                 | exit 1   |
  * | Not latest (REQUIRE_LATEST)| proceed=false, exit 0  | exit 1   |
  *
  * The stubs answer with what the script's `--jq` filters would print, and log
@@ -42,12 +43,8 @@ exit 99
 
 const NPM_STUB = `#!/usr/bin/env bash
 echo "npm $*" >> "$STUB_LOG"
-attempts=$(grep -c '^npm ' "$STUB_LOG")
-if [ "\${STUB_NPM_OK:-1}" != "1" ] || [ "$attempts" -lt "\${STUB_NPM_OK_ON:-1}" ]; then
-  echo "npm error registry outage" >&2
-  exit 1
-fi
-echo "\${2:-}"
+echo "npm error registry outage" >&2
+exit 1
 `
 
 const BOT = 'mrbro-bot[bot]'
@@ -91,7 +88,6 @@ function run(env: Record<string, string>): Run {
       STUB_LOG: logFile,
       EXPECTED_AUTHOR: BOT,
       REQUIRE_LATEST: 'false',
-      NPM_RETRY_DELAY: '0',
       ...env,
     },
   })
@@ -137,7 +133,25 @@ describe('validate-release-target.sh: release events', () => {
       tag: 'v1.2.3',
       version: '1.2.3',
     })
-    expect(r.calls).toEqual(['npm view @fro.bot/systematic@1.2.3 version'])
+    expect(r.calls).toEqual([])
+  })
+
+  test('a trusted-author release proceeds without ever calling npm', () => {
+    // The stub dir's npm exits 1; the script must not reach it.
+    const r = run(releaseEvent())
+
+    expect(r.status).toBe(0)
+    expect(r.outputs.proceed).toBe('true')
+    expect(r.calls.some((c) => c.startsWith('npm '))).toBe(false)
+    expect(combined(r)).not.toContain('npm')
+  })
+
+  test('a trusted-author release proceeds when npm is absent from PATH', () => {
+    fs.rmSync(path.join(workdir, 'bin', 'npm'))
+    const r = run(releaseEvent())
+
+    expect(r.status).toBe(0)
+    expect(r.outputs.proceed).toBe('true')
   })
 
   test('an author mismatch ends cleanly with proceed=false and a notice', () => {
@@ -180,43 +194,6 @@ describe('validate-release-target.sh: release events', () => {
     expect(r.calls).toEqual([])
   })
 
-  test('a missing npm version exits 1', () => {
-    const r = run(releaseEvent({ STUB_NPM_OK: '0' }))
-
-    expect(r.status).toBe(1)
-    expect(combined(r)).toContain('::error::')
-    expect(combined(r)).toContain('1.2.3')
-    expect(r.outputs).toEqual({})
-  })
-
-  test('npm lag: a version that appears on the 3rd attempt passes', () => {
-    const r = run(releaseEvent({ STUB_NPM_OK_ON: '3' }))
-
-    expect(r.status).toBe(0)
-    expect(r.outputs.proceed).toBe('true')
-    expect(r.calls.filter((c) => c.startsWith('npm view '))).toHaveLength(3)
-  })
-
-  test('npm lag on a dispatch also retries', () => {
-    const r = run(dispatchEvent({ STUB_NPM_OK_ON: '2' }))
-
-    expect(r.status).toBe(0)
-    expect(r.outputs.proceed).toBe('true')
-    expect(r.calls.filter((c) => c.startsWith('npm view '))).toHaveLength(2)
-  })
-
-  test('a version that never appears fails after 6 attempts with the same message and visible npm errors', () => {
-    const r = run(releaseEvent({ STUB_NPM_OK: '0' }))
-
-    expect(r.status).toBe(1)
-    expect(r.calls.filter((c) => c.startsWith('npm view '))).toHaveLength(6)
-    expect(combined(r)).toContain(
-      '::error::@fro.bot/systematic@1.2.3 is not published to npm; refusing to continue',
-    )
-    expect(combined(r)).toContain('npm error registry outage')
-    expect(r.outputs).toEqual({})
-  })
-
   test('a release event needs no release lookup when the latest is not required', () => {
     const r = run(releaseEvent())
 
@@ -232,7 +209,6 @@ describe('validate-release-target.sh: release events', () => {
     expect(r.outputs).toEqual({ proceed: 'false' })
     expect(combined(r)).toContain('::notice::')
     expect(combined(r)).toContain('v2.0.0')
-    // No npm lookup for a release we are not going to build.
     expect(r.calls.some((c) => c.startsWith('npm '))).toBe(false)
   })
 
@@ -337,12 +313,11 @@ describe('validate-release-target.sh: workflow_dispatch', () => {
     expect(combined(r)).toContain('::error::')
   })
 
-  test('a missing npm version exits 1', () => {
-    const r = run(dispatchEvent({ STUB_NPM_OK: '0' }))
+  test('a valid dispatch proceeds without ever calling npm', () => {
+    const r = run(dispatchEvent())
 
-    expect(r.status).toBe(1)
-    expect(combined(r)).toContain('::error::')
-    expect(r.outputs).toEqual({})
+    expect(r.status).toBe(0)
+    expect(r.calls.some((c) => c.startsWith('npm '))).toBe(false)
   })
 
   test('REQUIRE_LATEST=true: a non-latest tag fails with ::error::', () => {

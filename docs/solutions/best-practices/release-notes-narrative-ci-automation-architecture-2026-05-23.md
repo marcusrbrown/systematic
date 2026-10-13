@@ -43,7 +43,7 @@ The v1 skill's procedure (`.agents/skills/release-notes-narrative/SKILL.md`) is 
 The narrative runs in its own workflow, triggered by the `release: published` event that semantic-release's publish causes. It is not part of the publish job, so a failed narrative is a red `release-notes.yaml` run rather than a failure buried in (or hidden from) the publish job. All coordination still happens through GitHub-native primitives (no external queues, no broker, no shared state):
 
 ```
-.github/workflows/release.yaml: publish job (RELEASE_MODE=gated, after the approved release PR merges)
+.github/workflows/release.yaml: publish job (after the approved release PR merges; npm OIDC only)
   └─ npx --no-install semantic-release (gated config; the approved CHANGELOG.md entry is the notes)
       ├─ @semantic-release/commit-analyzer
       ├─ @semantic-release/exec (notes = approved entry; fails unless the version matches)
@@ -51,13 +51,10 @@ The narrative runs in its own workflow, triggered by the `release: published` ev
       ├─ @semantic-release/github (creates GitHub release; body is live)
       └─ semantic-release-export-data (emits final outputs)
 
-.github/workflows/main.yaml: legacy-release job (only while RELEASE_MODE is legacy)
-  └─ npx semantic-release (.releaserc.yaml, including release-notes-generator)
-
 .github/workflows/release-notes.yaml (release: published, or workflow_dispatch with a tag)
   └─ narrate job (contents: read + actions: write; references no secrets, uses github.token)
       ├─ check release author (vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]'); mismatch ends cleanly
-      ├─ validate tag shape (and, on dispatch, an existing published release); npm view
+      ├─ validate tag shape (and, on dispatch, an existing published release)
       ├─ checkout (persist-credentials: false)
       ├─ scripts/dispatch-release-notes.sh "$TAG":
       │   ├─ RELEASE_VERSION = $1
@@ -101,7 +98,7 @@ Security-relevant failures exit 1 with `::error::`: an unexpected `gh run watch`
 
 The split between 1 and 2 keeps security signals distinguishable from "the narrative just did not land". Because `release-notes.yaml` triggers the docs rebuild only after this script exits 0, both classes leave the run red and skip the docs dispatch. The release itself has already shipped to npm and GitHub, so a red run never affects publishing; re-narrate with a manual dispatch of `release-notes.yaml` for the tag.
 
-The agent is also told a single scratch directory (`$RUNNER_TEMP/release-notes`, or a `mktemp -d` directory) that it may write to, since `/tmp/opencode` is not writable in CI.
+The agent is also told a single scratch directory, `$RUNNER_TEMP/fro-bot-response/release-notes`, that it may write to. The Fro Bot runtime (fro-bot/agent v0.122.0, `src/services/setup/ci-config.ts`) denies every external path except `$RUNNER_TEMP/fro-bot-response/*`, for both the edit/write tools and bash redirects, so `/tmp/opencode` and any other `$RUNNER_TEMP` subdirectory are not writable. The agent runs on a different runner than the dispatcher, so the prompt keeps `$RUNNER_TEMP` literal and tells the agent to resolve it with `echo "$RUNNER_TEMP"` before using file tools, which need absolute paths. The dispatcher creates nothing; the agent runs `mkdir -p`. A scratch path outside that prefix fails the narration with "file-edit access to the required scratch directory was denied".
 
 ### `FRO_BOT_PAT` is the write credential, not `GITHUB_TOKEN`
 
