@@ -6,7 +6,7 @@
 // than the host's `session.messages()` readback, so what is asserted is
 // exactly what the wire carries.
 //
-// Six scenarios (a-f), matching the "skill-delivery" verification plan:
+// Seven scenarios (a-g), matching the "skill-delivery" verification plan:
 //   a) a small bundled skill (well under any truncation threshold) --
 //      its final body line reaches the provider verbatim.
 //   b) `ce:review` (skills/ce-review/SKILL.md, ~71KB, wrapped output >50KiB)
@@ -28,14 +28,18 @@
 //      (src/lib/config-handler.ts's `loadDiscoveredSkillAsCommand`) neither
 //      truncates nor drops the tail, and OpenCode's own command-argument
 //      substitution still reaches the provider.
-//   f) loading a guarded skill (`ce:plan`, >32KB) activates its epoch --
-//      observed via the `systematic_workflow_receipt` progression marker the
+//   f) loading an allowlisted skill over 32KB (`ce:work` with ~12KB of
+//      `arguments`, so the delivered output exceeds 32KB) activates its
+//      epoch -- observed via the `systematic_workflow_receipt` progression marker the
 //      workflow guard merges directly into the `systematic_skill` tool
 //      part's own `state.metadata` (src/lib/opencode-workflow-guard.ts's
 //      `finishSkill`/`mergeProgressionMarker`). This is host-side metadata,
 //      never sent to the provider, so it is read back via
 //      `session.messages()` rather than a captured request body -- the only
-//      scenario in this file that does.
+//      scenario in this file (with g) that does.
+//   g) loading a non-allowlisted skill over 32KB (`ce:plan`, no arguments)
+//      activates nothing -- no epoch progression marker at all, since only
+//      `ce:work`, `git-commit` and `git-commit-push-pr` open an epoch.
 //
 // Process hygiene: this file is invoked directly, never through the full
 // suite, per the pgrep/bun-test/comm sequence documented for real-host
@@ -297,7 +301,8 @@ const CE_REVIEW_NAME = 'ce:review'
 const CE_REVIEW_FINAL_LINE = '@./references/review-output-template.md'
 
 /** skills/ce-plan/SKILL.md is ~63KB, over the workflow guard's 32KB
- * (`MAX_HOST_OUTPUT_LENGTH`) skill-activation threshold. */
+ * (`MAX_HOST_OUTPUT_LENGTH`) threshold, but `ce:plan` is NOT an allowlisted
+ * guarded skill, so loading it must activate no epoch (scenario g). */
 const CE_PLAN_NAME = 'ce:plan'
 
 /** skills/ce-work/SKILL.md line 17 is exactly
@@ -728,95 +733,220 @@ describe.skipIf(!isOpencodeAvailable())(
       TIMEOUT_MS * 3,
     )
 
-    test(
-      'f) loading a guarded skill over 32KB activates its epoch, observed via the progression marker merged into the tool part metadata',
-      async () => {
-        const fixture: IsolatedFixture = createIsolatedFixture()
-        initializeRepository(fixture.projectDir)
-        const packaged = extractPackagedPlugin(fixture)
-        const model = startScriptedModel([
-          {
-            toolCalls: [
-              {
-                id: 'ce-plan-guard-call',
-                name: 'systematic_skill',
-                arguments: { name: CE_PLAN_NAME },
-              },
-            ],
-          },
-          { text: 'done' },
-        ])
-        const host = await startOpencodeServer(
-          fixture,
-          buildProviderConfig([packaged.pluginUrl], model.url),
+    function toolPartsNamed(
+      messages: readonly unknown[],
+      tool: string,
+    ): Record<string, unknown>[] {
+      return messages.flatMap((message) => {
+        if (!isRecord(message) || !Array.isArray(message.parts)) return []
+        return message.parts.filter(
+          (part): part is Record<string, unknown> =>
+            isRecord(part) && part.tool === tool,
         )
-        try {
-          const client = createOpencodeClient({
-            baseUrl: host.url,
-            directory: fixture.projectDir,
-          })
-          const sessionID = await createAllowAllSession(
-            client,
-            fixture,
-            'skill-delivery f',
-          )
-          await client.session.prompt({
-            sessionID,
-            directory: fixture.projectDir,
-            model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
-            parts: [{ type: 'text', text: 'Load the requested skill.' }],
-          })
+      })
+    }
 
-          const messagesResult = await client.session.messages({
-            sessionID,
-            directory: fixture.projectDir,
-          })
-          if (messagesResult.data === undefined) {
-            throw new Error(
-              `session messages failed: ${JSON.stringify(messagesResult.error)}`,
-            )
-          }
-          const messages = messagesResult.data as unknown[]
-          const skillParts = messages.flatMap((message) => {
-            if (!isRecord(message) || !Array.isArray(message.parts)) return []
-            return message.parts.filter(
-              (part): part is Record<string, unknown> =>
-                isRecord(part) && part.tool === 'systematic_skill',
-            )
-          })
-          expect(skillParts).toHaveLength(1)
-          const [skillPart] = skillParts
-          if (!skillPart)
-            throw new Error('unreachable: skillParts checked above')
-          const state = isRecord(skillPart.state) ? skillPart.state : {}
-          const metadata = isRecord(state.metadata) ? state.metadata : {}
-          const markers = metadata.systematic_workflow_receipt
-          const markerArray = Array.isArray(markers)
-            ? markers
-            : markers
-              ? [markers]
-              : []
-          const epochMarker = markerArray.find(
-            (marker): marker is Record<string, unknown> =>
-              isRecord(marker) &&
-              marker.kind === 'control' &&
-              marker.control === 'progression' &&
-              marker.target === 'epoch' &&
-              marker.state === 'started',
+    interface SkillLoadReadback {
+      readonly markers: readonly unknown[]
+      readonly outputLength: number | undefined
+      /** `state.status` of the `systematic_skill` tool part. */
+      readonly skillStatus: unknown
+      /** Parsed `systematic_workflow_status` output, when requested. */
+      readonly guardStatus: Record<string, unknown> | undefined
+    }
+
+    function readSkillPart(
+      skillPart: Record<string, unknown>,
+    ): Pick<SkillLoadReadback, 'markers' | 'outputLength' | 'skillStatus'> {
+      const state = isRecord(skillPart.state) ? skillPart.state : {}
+      const metadata = isRecord(state.metadata) ? state.metadata : {}
+      const markers = metadata.systematic_workflow_receipt
+      return {
+        markers: Array.isArray(markers) ? markers : markers ? [markers] : [],
+        outputLength:
+          typeof state.output === 'string' ? state.output.length : undefined,
+        skillStatus: state.status,
+      }
+    }
+
+    /** `systematic_workflow_status` reports its JSON document as tool output. */
+    function readGuardStatusPart(
+      statusPart: Record<string, unknown> | undefined,
+    ): Record<string, unknown> | undefined {
+      const state = isRecord(statusPart?.state) ? statusPart.state : {}
+      if (typeof state.output !== 'string') return undefined
+      const parsed: unknown = JSON.parse(state.output)
+      return isRecord(parsed) ? parsed : undefined
+    }
+
+    function scriptedSkillLoadSteps(
+      label: string,
+      skillName: string,
+      skillArguments: string | undefined,
+      readGuardStatus: boolean,
+    ): ScriptedStep[] {
+      const skillCall: ScriptedToolCall = {
+        id: `skill-delivery-${label}-guard-call`,
+        name: 'systematic_skill',
+        arguments:
+          skillArguments === undefined
+            ? { name: skillName }
+            : { name: skillName, arguments: skillArguments },
+      }
+      const statusCall: ScriptedToolCall = {
+        id: `skill-delivery-${label}-status-call`,
+        name: 'systematic_workflow_status',
+        arguments: {},
+      }
+      return [
+        { toolCalls: [skillCall] },
+        ...(readGuardStatus ? [{ toolCalls: [statusCall] }] : []),
+        { text: 'done' },
+      ]
+    }
+
+    /**
+     * Loads `skillName` through `systematic_skill` in a scripted real-host
+     * session and reads back, via `session.messages()`, the progression
+     * markers the workflow guard merged into the tool part's own metadata.
+     * Host-side metadata is never sent to the provider, so this cannot use a
+     * captured request body. With `readGuardStatus`, the scripted model also
+     * calls `systematic_workflow_status` after the skill load so the guard's
+     * resulting state can be asserted.
+     */
+    async function loadSkillAndReadMarkers(
+      label: string,
+      skillName: string,
+      options: {
+        readonly skillArguments?: string
+        readonly readGuardStatus?: boolean
+      } = {},
+    ): Promise<SkillLoadReadback> {
+      const fixture: IsolatedFixture = createIsolatedFixture()
+      initializeRepository(fixture.projectDir)
+      const packaged = extractPackagedPlugin(fixture)
+      const model = startScriptedModel(
+        scriptedSkillLoadSteps(
+          label,
+          skillName,
+          options.skillArguments,
+          options.readGuardStatus === true,
+        ),
+      )
+      const host = await startOpencodeServer(
+        fixture,
+        buildProviderConfig([packaged.pluginUrl], model.url),
+      )
+      try {
+        const client = createOpencodeClient({
+          baseUrl: host.url,
+          directory: fixture.projectDir,
+        })
+        const sessionID = await createAllowAllSession(
+          client,
+          fixture,
+          `skill-delivery ${label}`,
+        )
+        await client.session.prompt({
+          sessionID,
+          directory: fixture.projectDir,
+          model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
+          parts: [{ type: 'text', text: 'Load the requested skill.' }],
+        })
+
+        const messagesResult = await client.session.messages({
+          sessionID,
+          directory: fixture.projectDir,
+        })
+        if (messagesResult.data === undefined) {
+          throw new Error(
+            `session messages failed: ${JSON.stringify(messagesResult.error)}`,
           )
-          console.log(
-            `SKILL_DELIVERY_F ${JSON.stringify({
-              markerCount: markerArray.length,
-              epochMarkerPresent: epochMarker !== undefined,
-              epochFamily: epochMarker?.family,
-            })}`,
-          )
-          expect(epochMarker).toBeDefined()
-        } finally {
-          await host.stop()
-          model.stop()
-          destroyIsolatedFixture(fixture)
         }
+        const messages = messagesResult.data as unknown[]
+        const skillParts = toolPartsNamed(messages, 'systematic_skill')
+        expect(skillParts).toHaveLength(1)
+        const [skillPart] = skillParts
+        if (!skillPart) throw new Error('unreachable: skillParts checked above')
+        const [statusPart] = toolPartsNamed(
+          messages,
+          'systematic_workflow_status',
+        )
+        return {
+          ...readSkillPart(skillPart),
+          guardStatus: readGuardStatusPart(statusPart),
+        }
+      } finally {
+        await host.stop()
+        model.stop()
+        destroyIsolatedFixture(fixture)
+      }
+    }
+
+    function findEpochStartedMarker(
+      markers: readonly unknown[],
+    ): Record<string, unknown> | undefined {
+      return markers.find(
+        (marker): marker is Record<string, unknown> =>
+          isRecord(marker) &&
+          marker.kind === 'control' &&
+          marker.control === 'progression' &&
+          marker.target === 'epoch' &&
+          marker.state === 'started',
+      )
+    }
+
+    test(
+      'f) loading an allowlisted skill over 32KB activates its epoch, observed via the progression marker merged into the tool part metadata',
+      async () => {
+        // ce:work's SKILL.md is ~26KB; ~12KB of `arguments` is substituted into
+        // its `$ARGUMENTS` line, pushing the delivered output past the guard's
+        // 32KB (`MAX_HOST_OUTPUT_LENGTH`) threshold.
+        const { markers, outputLength, skillStatus } =
+          await loadSkillAndReadMarkers('f', CE_WORK_NAME, {
+            skillArguments: 'x'.repeat(12_288),
+          })
+        const epochMarker = findEpochStartedMarker(markers)
+        console.log(
+          `SKILL_DELIVERY_F ${JSON.stringify({
+            outputLength,
+            skillStatus,
+            markerCount: markers.length,
+            epochMarkerPresent: epochMarker !== undefined,
+            epochFamily: epochMarker?.family,
+          })}`,
+        )
+        expect(skillStatus).toBe('completed')
+        expect(outputLength).toBeGreaterThan(32_768)
+        expect(epochMarker).toBeDefined()
+        expect(epochMarker?.family).toBe('work')
+      },
+      TIMEOUT_MS * 3,
+    )
+
+    test(
+      'g) loading a non-allowlisted skill over 32KB activates nothing',
+      async () => {
+        // Guard against a vacuous pass: a failed or truncated skill load also
+        // yields no markers, so require a completed load, an over-threshold
+        // output, and an `inactive` guard status read back afterwards.
+        const { markers, outputLength, skillStatus, guardStatus } =
+          await loadSkillAndReadMarkers('g', CE_PLAN_NAME, {
+            readGuardStatus: true,
+          })
+        console.log(
+          `SKILL_DELIVERY_G ${JSON.stringify({
+            outputLength,
+            skillStatus,
+            markerCount: markers.length,
+            guardState: guardStatus?.state,
+          })}`,
+        )
+        expect(skillStatus).toBe('completed')
+        expect(outputLength).toBeGreaterThan(32_768)
+        expect(guardStatus?.state).toBe('inactive')
+        expect(findEpochStartedMarker(markers)).toBeUndefined()
+        expect(markers).toHaveLength(0)
       },
       TIMEOUT_MS * 3,
     )

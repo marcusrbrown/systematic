@@ -17,16 +17,16 @@ these hooks:
 
 - **`config`** — discovers bundled agents, skills, and commands, then merges them into the OpenCode
   config. Existing user config wins; Systematic fills in what's missing.
-- **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand,
-  alongside the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`,
-  `_control`).
+- **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand
+  (an optional `arguments` string is text-substituted into `$ARGUMENTS`/`$N` placeholders via
+  `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist), alongside
+  the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`, `_control`).
 - **`tool.execute.before`** — workflow-guard observation of pending operations. Blocks execution by
   rethrowing a guard error when a guarded transition is unsatisfied.
 - **`tool.execute.after`** — workflow-guard observation of completed operations, feeding receipt
-  classification; then restores the full `systematic_skill` output when OpenCode truncated it,
+  classification, and epoch activation for allowlisted `skill` / `systematic_skill` loads; then restores the full `systematic_skill` output when OpenCode truncated it,
   unless the user set `tool_output` limits. Fail-closed; never blocks the host.
-- **`event`** — workflow-guard observation of host events, including skill loads that activate an
-  epoch. Fail-closed; never blocks the host.
+- **`event`** — workflow-guard observation of host events. Fail-closed; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 
@@ -109,7 +109,7 @@ Pi adapter
   src/lib/setup.ts                 — atomically configure project-local OpenCode or Pi harness settings
 
 Workflow guard and evidence
-  src/lib/opencode-operation-observer.ts — snapshot local and remote operation evidence for guard readback
+  src/lib/opencode-operation-observer.ts — snapshot local and remote operation evidence for guard readback, within fixed size limits
   src/lib/opencode-workflow-guard.ts     — OpenCode hook and tool adapter for the receipt-backed workflow guard
   src/lib/receipt-classifier.ts          — classify observed tool commands into receipt operations
   src/lib/receipt-ledger.ts              — mint, validate, and consume integrity-checked operation receipts
@@ -238,13 +238,58 @@ change. Must pass before any release.
 / `receipt-ledger.ts` / `receipt-readback.ts`) — observes tool executions through the
 `tool.execute.before` / `tool.execute.after` / `event` hooks, classifies them into operations
 (implementation, verification, commit, push, pr-creation, check-readback, review-readback),
-validates each claim against observed workspace state, and mints integrity-checked receipts. A
-guarded transition that lacks its required receipts is rejected. When remote-scope seeding fails and
-flips mode to `unavailable`, the runtime binds a bounded `GuardUnavailableCause` (site, failure kind,
-operation, reason code) to that specific transition — never to whichever concurrent caller finished
-computing a cause first — and surfaces it only as `firstUnavailableCause` on
-`systematic_workflow_status` tool output while the state remains `unavailable`; it never appears on a
-receipt envelope, marker envelope, or anything covered by an integrity digest. OpenCode only —
+validates each claim against observed workspace state, and mints integrity-checked receipts. Local
+snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
+command output; remote readback payloads have their own 4096-item cap. Exceeding a local limit
+fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
+`inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
+seeding, session initialization, marker recovery, observer readback, a completion readback, or a
+hook or tool wrapper (`tool-before`, `tool-after`, `event`, `transform`, `tool-execute`) flips mode to `unavailable`, the runtime
+binds a bounded `GuardUnavailableCause` (site, failure kind, and where known the operation and
+reason code; every field is an enum, never a message, path, call ID, or digest) to that specific
+transition — never to whichever
+concurrent caller finished computing a cause first — and surfaces it only as `firstUnavailableCause`
+on `systematic_workflow_status` tool output while the state remains `unavailable`; it never appears
+on a receipt envelope, marker envelope, or anything covered by an integrity digest. Hook
+causes use the kinds `local-snapshot-error`, `local-snapshot-unavailable` (carrying the observer's
+reason code), `operation-input-invalid`, `operation-target-mismatch`, `call-lifecycle-mismatch`,
+`operation-classifier-unavailable`, `operation-observation-rejected`,
+`transition-finalize-rejected` (the guard refused to finalize a prepared completion, carrying its
+reason code), `unit-start-rejected` (the guard rejected a unit start, carrying its reason code), and `hook-threw` (an exception no helper classified). A hook that fails before the
+session's guard exists is held and committed when the guard is published, and protected mode
+rejects the call if no guard can be published. An exception during session initialization after
+the host read publishes `unavailable` with `initialization-threw` at `initialize-session`. At
+initialization the session's own status calls, guard-owned `no-active-epoch` rejections, and an
+in-flight guard call in the current, unfinished assistant turn do not count as unrecoverable
+history; any other markerless guard history fails closed. At activation, a remote probe timeout, or
+a push `missing-resource`, defers that one operation instead of making the guard unavailable;
+deferrals are listed on status output as an enum-only `seedDeferrals` list and never appear in
+receipts, markers, or digests. A deferred operation is admitted only after its own before-read is
+available (retried once on a timeout) from the same observer and target as the seed, and PR creation
+seeds its baseline from the after-read only when its before-read reported `missing-resource`. After
+an operation is satisfied, a probe timeout during a status refresh skips that probe instead of
+making the guard unavailable: a remote timeout skips only that operation and the rest still run, a
+local or pinned-worktree timeout skips every remote probe and lists the satisfied remote operations
+it left unprobed too, nothing is applied for a skipped probe, and skipped probes are listed on
+status output as an enum-only `unconfirmedReadbacks` list that never appears in receipts, markers,
+or digests. A completion readback timeout rejects that attempt as `readback-timeout` without
+consuming anything or making the guard unavailable; the next completion call prepares fresh and
+surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
+records a `complete-readback` cause. Known limits: a dual registration running an older build
+rejects the `inactive` marker state and fails closed until both upgrade; activation covers skill-tool loads only, so reading a skill file directly or running a skill as a slash command does not activate the guard; an older Systematic registration loaded alongside still maps unknown skills to a work epoch, and the merged prompt marker shows the most restrictive state (`waiting`) while it is loaded; a plugin that rewrites `args.name` between the skill call's before-hook and after-hook changes the outcome: an unlisted before-name with an allowlisted after-name activates nothing, while an allowlisted before-name with an unlisted after-name fails closed (`call-lifecycle-mismatch`, guard `unavailable`); if host history loses every
+marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
+from a turn that began before this runtime started fail closed; `missing-resource` cannot
+distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
+defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
+in child rollup still make the guard unavailable (#1084); a snapshot can report unchanged after
+real changes, and files can change while a snapshot reads them (#1099); a worktree that grows past
+a snapshot limit makes the guard unavailable for the session; an earlier completion timeout can mask
+later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
+completion throws `abandoned-transition` in protected mode; completion is confirmed independently
+per registration, not atomically across registrations, so when two registrations share one tool
+output and their readbacks differ, one can complete while the other rejects or becomes unavailable,
+the final output depends on hook order, and a compound retry is not guaranteed; and with a degraded
+remote a status call can wait one probe timeout per satisfied remote operation. OpenCode only —
 `src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
@@ -423,6 +468,8 @@ a field whose value survived from an earlier merge step than whichever source to
 a real OpenCode host pinned to the `@opencode-ai/sdk` devDependency version
 (`SYSTEMATIC_REQUIRE_OPENCODE=1`), then guards the run's JUnit output and console log against a
 fixed expected-suite-file list, an exempt-skip list, and a pass floor
-(`scripts/host-contract-guard.ts`). `host-contract` is a
-required predecessor of `release`; evidence gathered at one pinned OpenCode version is not evidence
-at another, so a Renovate OpenCode bump is only complete when this job is green on that bump.
+(`scripts/host-contract-guard.ts`). `host-contract` runs on pull requests and on pushes to `main`
+and is a required status check (`Host Contract`) in the `main` ruleset and classic branch
+protection, so a red run blocks the merge; evidence gathered at one pinned OpenCode version is not
+evidence at another, so a Renovate OpenCode bump is only complete when this job is green on that
+bump.

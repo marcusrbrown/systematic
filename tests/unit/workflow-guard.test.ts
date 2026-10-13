@@ -370,10 +370,114 @@ describe('workflow guard', () => {
     expect(
       guard.prepareTransition({ callId: 'inactive-call', target: 'unit' }),
     ).toMatchObject({
-      status: 'unavailable',
+      status: 'rejected',
       reasonCode: 'no-active-epoch',
     })
     expect(guard.status().epoch).toBeNull()
+  })
+
+  test('a fresh guard with no epoch projects inactive / no-active-epoch', () => {
+    const { guard } = createGuard()
+    expect(guard.status()).toMatchObject({
+      state: 'inactive',
+      reasonCode: 'no-active-epoch',
+      epoch: null,
+      unit: null,
+    })
+  })
+
+  test('activation from inactive creates an epoch and projects waiting / missing-evidence', () => {
+    const { guard } = createGuard()
+    expect(guard.status().state).toBe('inactive')
+    activateWork(guard)
+    startUnit(guard)
+    expect(guard.status()).toMatchObject({
+      state: 'waiting',
+      reasonCode: 'missing-evidence',
+    })
+    expect(guard.status().epoch).not.toBeNull()
+  })
+
+  test('a completed epoch projects protected / epoch-completed, not inactive, and re-activation starts a new epoch', () => {
+    const { guard, ledger } = createGuard()
+    activateWork(guard)
+    startUnit(guard)
+    completeUnit(guard, ledger)
+    const callId = 'inactive-epoch-complete'
+    const prepared = guard.prepareTransition({ callId, target: 'epoch' })
+    if (prepared.status !== 'allowed') throw new Error('epoch not allowed')
+    guard.finalizeTransition({ callId, transitionId: prepared.transitionId })
+    const completedEpochId = guard.status().epoch?.epochId
+    expect(guard.status()).toMatchObject({
+      state: 'protected',
+      reasonCode: 'epoch-completed',
+    })
+    expect(guard.status().state).not.toBe('inactive')
+
+    activateWork(guard)
+    expect(guard.status().epoch?.status).toBe('active')
+    expect(guard.status().epoch?.epochId).not.toBe(completedEpochId)
+  })
+
+  test('disabled mode projects disabled, never inactive', () => {
+    const { guard } = createGuard({ mode: 'disabled' })
+    expect(guard.status()).toMatchObject({
+      state: 'disabled',
+      reasonCode: 'disabled',
+    })
+  })
+
+  describe('operation-scoped readback propagation', () => {
+    const PR = 'a'.repeat(64)
+
+    function prUnit() {
+      const { guard } = createGuard()
+      activateWork(guard)
+      startUnit(guard, ['pr-creation', 'check-readback', 'review-readback'])
+      return guard
+    }
+
+    test('a pr-creation readback propagates its resource to undeclared check and review by default', () => {
+      const guard = prUnit()
+      expect(guard.hasResourceBaseline('check-readback')).toBe(false)
+      expect(
+        guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: GUARD_SCOPE.workspaceIdentity,
+          resourceIdentity: PR,
+        }),
+      ).toMatchObject({ status: 'accepted' })
+      expect(guard.hasResourceBaseline('pr-creation')).toBe(true)
+      expect(guard.hasResourceBaseline('check-readback')).toBe(true)
+      expect(guard.hasResourceBaseline('review-readback')).toBe(true)
+    })
+
+    test('propagate: false binds only the named operation', () => {
+      const guard = prUnit()
+      expect(
+        guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: GUARD_SCOPE.workspaceIdentity,
+          resourceIdentity: PR,
+          propagate: false,
+        }),
+      ).toMatchObject({ status: 'accepted' })
+      expect(guard.hasResourceBaseline('pr-creation')).toBe(true)
+      expect(guard.hasResourceBaseline('check-readback')).toBe(false)
+      expect(guard.hasResourceBaseline('review-readback')).toBe(false)
+    })
+
+    test('a non-boolean propagate is rejected', () => {
+      const guard = prUnit()
+      expect(
+        guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: GUARD_SCOPE.workspaceIdentity,
+          resourceIdentity: PR,
+          propagate: 'no',
+        }),
+      ).toMatchObject({ status: 'rejected' })
+    })
   })
 
   test('starts immutable units with mandatory minima that optional input cannot lower', () => {

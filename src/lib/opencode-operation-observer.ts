@@ -4,10 +4,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const DEFAULT_LIMITS = {
-  maxCommandOutputBytes: 1_048_576,
+  maxCommandOutputBytes: 8_388_608,
   maxCommandTimeoutMs: 5_000,
-  maxFiles: 4096,
-  maxTotalFileBytes: 16_777_216,
+  maxFiles: 20_000,
+  maxRemoteCommandOutputBytes: 1_048_576,
+  maxRemoteItems: 4096,
+  maxTotalFileBytes: 134_217_728,
   maxPathBytes: 4096,
 } as const
 
@@ -141,10 +143,14 @@ export type OperationObserverRemoteResult =
       readonly reasonCode: OperationObserverReasonCode
     }
 
+// The local limits (`maxCommandOutputBytes`, `maxFiles`) do not control remote
+// bounds; those are set by `maxRemoteCommandOutputBytes` and `maxRemoteItems`.
 export interface OperationObserverLimits {
   readonly maxCommandOutputBytes?: number
   readonly maxCommandTimeoutMs?: number
   readonly maxFiles?: number
+  readonly maxRemoteCommandOutputBytes?: number
+  readonly maxRemoteItems?: number
   readonly maxTotalFileBytes?: number
   readonly maxPathBytes?: number
 }
@@ -184,6 +190,8 @@ interface Limits {
   readonly maxCommandOutputBytes: number
   readonly maxCommandTimeoutMs: number
   readonly maxFiles: number
+  readonly maxRemoteCommandOutputBytes: number
+  readonly maxRemoteItems: number
   readonly maxTotalFileBytes: number
   readonly maxPathBytes: number
 }
@@ -301,6 +309,10 @@ function mergeLimits(input?: OperationObserverLimits): Limits {
     maxCommandTimeoutMs:
       input?.maxCommandTimeoutMs ?? DEFAULT_LIMITS.maxCommandTimeoutMs,
     maxFiles: input?.maxFiles ?? DEFAULT_LIMITS.maxFiles,
+    maxRemoteCommandOutputBytes:
+      input?.maxRemoteCommandOutputBytes ??
+      DEFAULT_LIMITS.maxRemoteCommandOutputBytes,
+    maxRemoteItems: input?.maxRemoteItems ?? DEFAULT_LIMITS.maxRemoteItems,
     maxTotalFileBytes:
       input?.maxTotalFileBytes ?? DEFAULT_LIMITS.maxTotalFileBytes,
     maxPathBytes: input?.maxPathBytes ?? DEFAULT_LIMITS.maxPathBytes,
@@ -980,7 +992,7 @@ function runRemoteCommand(
       executable,
       args,
       root,
-      limits.maxCommandOutputBytes,
+      limits.maxRemoteCommandOutputBytes,
       limits.maxCommandTimeoutMs,
     )
   } catch {
@@ -990,8 +1002,8 @@ function runRemoteCommand(
     return { status: 'error', reasonCode: 'command-timeout' }
   }
   if (
-    outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
-    outputBytes(result.stderr) > limits.maxCommandOutputBytes
+    outputBytes(result.stdout) > limits.maxRemoteCommandOutputBytes ||
+    outputBytes(result.stderr) > limits.maxRemoteCommandOutputBytes
   ) {
     return { status: 'error', reasonCode: 'remote-command-output-limit' }
   }
@@ -1074,7 +1086,7 @@ function parsePullRequest(
     state === undefined ||
     typeof headRefOid !== 'string' ||
     !isHexRevision(headRefOid) ||
-    Object.keys(record).length > limits.maxFiles
+    Object.keys(record).length > limits.maxRemoteItems
   ) {
     return { status: 'error', reasonCode: 'remote-missing-field' }
   }
@@ -1104,7 +1116,7 @@ function checkState(
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
-    value.length > limits.maxFiles
+    value.length > limits.maxRemoteItems
   )
     return undefined
   let pending = false
