@@ -1,7 +1,7 @@
 ---
 title: "fix: Observe operations only while guarded work can use them"
 type: fix
-status: active
+status: completed
 date: 2026-10-13
 ---
 
@@ -96,7 +96,7 @@ After this change, the guard observes an operation only when an epoch is active 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Gate operation observation**
+- [x] **Unit 1: Gate operation observation**
 
 **Goal:** Shell and edit calls in sessions with no guarded work take no snapshot and cannot change guard state.
 
@@ -140,7 +140,7 @@ After this change, the guard observes an operation only when an epoch is active 
 - The guard, workflow-guard and observer unit suites pass.
 - Removing the gate by hand fails the inactive no-snapshot tests.
 
-- [ ] **Unit 2: Latency evidence and documentation**
+- [x] **Unit 2: Latency evidence and documentation**
 
 **Goal:** Show the cost removed, and document when operations are observed.
 
