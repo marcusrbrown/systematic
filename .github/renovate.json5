@@ -1,7 +1,11 @@
 {
   $schema: 'https://docs.renovatebot.com/renovate-schema.json',
   description: ['Use the config preset for the @fro.bot/systematic repository'],
-  extends: ['local>marcusrbrown/renovate-config', 'github>sanity-io/renovate-config:semantic-commit-type'],
+  extends: [
+    'local>marcusrbrown/renovate-config',
+    'github>sanity-io/renovate-config:semantic-commit-type',
+    'customManagers:biomeVersions',
+  ],
   // Test fixtures (e.g. the with/without-eval seed app) declare arbitrary,
   // intentionally-fixed dependency versions and are never shipped or installed
   // in CI — Renovate must not try to manage them. Preserves Renovate's default
@@ -73,6 +77,15 @@
       // arrive as one reviewable PR.
       matchPackageNames: ['tree-sitter-bash', 'web-tree-sitter'],
       groupName: 'tree-sitter',
+    },
+    {
+      // customManagers:biomeVersions reads the version out of biome.json's
+      // $schema URL and reports it as the npm package @biomejs/biome, the same
+      // dependency the npm manager tracks in package.json. Grouping them puts
+      // both bumps in one PR so the schema never drifts from the installed
+      // release.
+      matchPackageNames: ['@biomejs/biome'],
+      groupName: 'Biome',
     },
   ],
   postUpgradeTasks: {
