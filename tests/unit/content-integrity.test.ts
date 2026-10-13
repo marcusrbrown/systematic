@@ -1448,6 +1448,78 @@ describe('checkStaleSkillLoadNames', () => {
     expect(scan(body)).toEqual([])
   })
 
+  describe('code span tokenization', () => {
+    const FILE = 'skills/foo/references/guide.md'
+    const flagged = (token: string, suggestion: string, line = 1) => ({
+      file: FILE,
+      line,
+      token,
+      suggestion,
+    })
+
+    test('flags a single-backtick span that follows a double-backtick span on the same line', () => {
+      expect(scan('Use ``ce:plan`` then `ce-work`.\n')).toEqual([
+        flagged('ce-work', 'ce:work'),
+      ])
+    })
+
+    test('flags a double-backtick span whose content is stale', () => {
+      expect(scan('Use ``ce-plan`` here.\n')).toEqual([
+        flagged('ce-plan', 'ce:plan'),
+      ])
+    })
+
+    test('judges spans of different run lengths independently, in order', () => {
+      expect(
+        scan('`ce-plan` and ``/ce-work`` and ```ce-compound```\n'),
+      ).toEqual([
+        flagged('ce-plan', 'ce:plan'),
+        flagged('/ce-work', '/ce:work'),
+        flagged('ce-compound', 'ce:compound'),
+      ])
+    })
+
+    test('an unmatched backtick run does not swallow later spans', () => {
+      // No later run of length 2 exists, so the opening `` is literal text.
+      expect(scan('A stray `` tick, then `ce-work` later.\n')).toEqual([
+        flagged('ce-work', 'ce:work'),
+      ])
+      // The unmatched run's trailing text is literal too, not a stale span.
+      expect(scan('Opens ``ce-plan then `ce-work` ok.\n')).toEqual([
+        flagged('ce-work', 'ce:work'),
+      ])
+    })
+
+    test('a lone backtick pairs with the next single run, as in CommonMark', () => {
+      // The stray tick opens a span closed by the tick before `ce-work`, so
+      // the text between them is the span and `ce-work` is left literal.
+      expect(scan('A stray ` tick, then `ce-work` later.\n')).toEqual([])
+    })
+
+    test('a run is closed only by a run of exactly the same length', () => {
+      // The double-backtick span contains a lone backtick; only the content
+      // between the two double runs is judged, so nothing here is stale.
+      expect(scan('Quote ``a ` ce-plan b`` end.\n')).toEqual([])
+    })
+
+    test('a triple-backtick inline span containing a single backtick is one span', () => {
+      // Content `x ` ce-plan` begins with `x`, so it is not a stale token.
+      expect(scan('Run ```x ` ce-plan``` now.\n')).toEqual([])
+      // Content begins with the stale token; the inner backtick must not
+      // open a second span or hide a later one.
+      expect(scan('Run ```ce-plan ` arg``` then `ce-work`.\n')).toEqual([
+        flagged('ce-plan', 'ce:plan'),
+        flagged('ce-work', 'ce:work'),
+      ])
+    })
+
+    test('trims padding spaces before judging the span', () => {
+      expect(scan('Use `` ce-plan `` here.\n')).toEqual([
+        flagged('ce-plan', 'ce:plan'),
+      ])
+    })
+  })
+
   test('resumes scanning after a fenced block closes', () => {
     const body = '```\n`ce-plan`\n```\nAfter the fence: `ce-work`.\n'
     expect(scan(body)).toEqual([

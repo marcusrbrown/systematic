@@ -802,9 +802,54 @@ export function checkSkillReferenceIntegrity(
 }
 
 /**
- * Match one single-backtick code span and capture its content.
+ * Length of the run of backticks that starts at `index` in `text`.
  */
-const CODE_SPAN_REGEX = /`([^`]+)`/g
+function backtickRunLength(text: string, index: number): number {
+  let end = index
+  while (text[end] === '`') end++
+  return end - index
+}
+
+/**
+ * Index of the next backtick run of exactly `length` at or after `from`, or -1.
+ * Longer or shorter runs are skipped whole, as in CommonMark.
+ */
+function findClosingBacktickRun(
+  text: string,
+  from: number,
+  length: number,
+): number {
+  let index = text.indexOf('`', from)
+  while (index !== -1) {
+    const run = backtickRunLength(text, index)
+    if (run === length) return index
+    index = text.indexOf('`', index + run)
+  }
+  return -1
+}
+
+/**
+ * Extract inline code span contents the CommonMark way: a span opens with a
+ * backtick run of length N and closes at the next run of exactly length N.
+ * An opening run with no matching close is literal text and is skipped, so it
+ * cannot swallow later spans. Backtick-run delimiters of any length are
+ * handled, so a double-backtick span is judged like a single-backtick one.
+ */
+function extractCodeSpans(text: string): string[] {
+  const spans: string[] = []
+  let index = text.indexOf('`')
+  while (index !== -1) {
+    const length = backtickRunLength(text, index)
+    const close = findClosingBacktickRun(text, index + length, length)
+    if (close === -1) {
+      index = text.indexOf('`', index + length)
+      continue
+    }
+    spans.push(text.slice(index + length, close))
+    index = text.indexOf('`', close + length)
+  }
+  return spans
+}
 
 /**
  * A skill token in directory form: `ce-<name>` or `/ce-<name>`, kebab-case
@@ -870,8 +915,8 @@ function scanLineForStaleSkillLoadNames(
   text: string,
 ): StaleSkillLoadNameViolation[] {
   const violations: StaleSkillLoadNameViolation[] = []
-  for (const span of text.matchAll(CODE_SPAN_REGEX)) {
-    const token = (span[1] ?? '').trim().split(/\s+/, 1)[0] ?? ''
+  for (const span of extractCodeSpans(text)) {
+    const token = span.trim().split(/\s+/, 1)[0] ?? ''
     const match = STALE_SKILL_TOKEN_REGEX.exec(token)
     if (!match) continue
     violations.push({
