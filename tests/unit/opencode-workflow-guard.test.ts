@@ -1811,6 +1811,33 @@ describe('OpenCode workflow guard adapter', () => {
       })
       expect(status(adapter).state).toBe('unavailable')
     })
+
+    test('a callID whose before-hook names ce:work and after-hook names ce:review fails closed with call-lifecycle-mismatch', async () => {
+      const adapter = createAdapter('protected')
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-to-unlisted-swap',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'allowlist-to-unlisted-swap',
+          args: { name: 'ce:review' },
+        },
+        { title: 'Loaded skill', output: 'skill result', metadata: {} },
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).epoch).toBeNull()
+      expect(
+        (await statusDocument(adapter)).firstUnavailableCause,
+      ).toMatchObject({ site: 'tool-after', kind: 'call-lifecycle-mismatch' })
+    })
   })
 
   test('activates from successful systematic and native skill after events only', async () => {
