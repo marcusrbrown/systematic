@@ -47,7 +47,7 @@ To recover:
 
 If that does not work, an admin removes the stale entry from `CHANGELOG.md` in a normal PR.
 
-If the tag exists but npm does not have the package, use the break-glass section below instead.
+If the tag exists but npm does not have the package, use the break-glass sections below instead.
 
 ## Hold and unhold
 
@@ -98,13 +98,23 @@ gh release view vX.Y.Z --json author,tagName
 
 `_npmUser.email` must be `npm-oidc-no-reply@github.com`. That means npm trusted publishing was used; any other value means the package was published with a token.
 
-## Break-glass: npm published, GitHub release missing
+## Break-glass: partial publishes
 
-Admin only. This is the one partial state a publish can leave behind.
+Admin only. semantic-release runs in this order: `verifyConditions` (the npm OIDC exchange), then it creates and pushes the `vX.Y.Z` tag, then npm publishes, then the GitHub release is created. A failed OIDC exchange stops before the tag, so nothing is left behind; correct the trusted-publisher config and re-run. Two partial states remain.
 
-Ordering: npm publishes before the GitHub release. With no npm token, a failed OIDC exchange fails in `verifyConditions`, before semantic-release creates any tag, so nothing is left behind and the fix is to correct the trusted-publisher config and re-run. The partial state arises only when npm accepted the package and creating the GitHub release then failed. The `vX.Y.Z` tag may exist without a release.
+### Tag pushed, npm upload failed
 
-The version is on npm and cannot be published again, and re-running the pipeline cannot create the release. Do not delete the tag, and do not try to republish.
+The tag exists, but npm has no `X.Y.Z` and there is no GitHub release. The hourly reconcile refuses this state rather than publish over an existing tag.
+
+1. Confirm npm has no such version: `npm view @fro.bot/systematic@X.Y.Z version` must fail with a 404. If it returns the version, this is the next state; stop.
+2. Delete the stranded tag: `git push origin :refs/tags/vX.Y.Z`.
+3. Re-run the failed `release.yaml` run, or land a new commit so the refresh opens a new release PR.
+
+Never delete a tag whose version is on npm.
+
+### npm published, GitHub release missing
+
+npm accepted the package and creating the GitHub release then failed. The version cannot be published again, and re-running the pipeline cannot create the release. Do not delete the tag, and do not try to republish.
 
 1. Confirm the state. The version must be on npm with the OIDC publisher, and the release must be absent:
 
