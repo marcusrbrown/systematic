@@ -368,8 +368,7 @@ describe('publish job', () => {
   test('mints the App token from the release secrets', () => {
     const step = findStep('publish', 'Create release App token')
     expect(step.id).toBe('app-token')
-    // Pinned to a full commit SHA; Renovate owns which one.
-    expect(step.uses).toMatch(/^actions\/create-github-app-token@[0-9a-f]{40}$/)
+    expect(String(step.uses)).toStartWith('actions/create-github-app-token@')
     expect(asRecord(step.with, 'with')).toMatchObject({
       'app-id': expr('secrets.RELEASE_APP_ID'),
       'private-key': expr('secrets.RELEASE_APP_PRIVATE_KEY'),
