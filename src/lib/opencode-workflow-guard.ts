@@ -128,6 +128,7 @@ const REASON_CODES = new Set([
   'no-op-operation',
   'operation-not-required',
   'operation-target-mismatch',
+  'readback-timeout',
   'receipt-mismatch',
   'rejected-operation',
   'resource-mismatch',
@@ -199,6 +200,16 @@ export interface OpencodeWorkflowGuardOptions {
   readonly sessionSalt?: Uint8Array
   readonly targetDirectory?: string
   readonly sessionLocation?: string
+  /** Injectable clock (epoch milliseconds); defaults to `Date.now`. */
+  readonly now?: () => number
+  /**
+   * Injectable factory for the observer of a registered linked-worktree target;
+   * defaults to `createOpencodeOperationObserver`. A test seam: it lets tests
+   * control a pinned worktree observer's snapshots.
+   */
+  readonly createTargetObserver?: (
+    targetDirectory: string,
+  ) => OpencodeOperationObserver
 }
 
 export interface OpencodeWorkflowChildSession {
@@ -207,7 +218,21 @@ export interface OpencodeWorkflowChildSession {
 }
 
 export interface OpencodeWorkflowHostReadback {
+  /**
+   * Lenient read, used for child-session rollup: a host error or malformed
+   * payload may be reported as `[]` (nothing to roll up), and only a thrown
+   * read marks the parent unavailable.
+   */
   readSessionParts(sessionID: string): Promise<ReadonlyArray<unknown>>
+  /**
+   * Strict read of the session's OWN history, used for initialization and
+   * recovery. Must throw on a host error or malformed payload so a failed read
+   * can never be mistaken for empty history. Optional only so injected readers
+   * need no mass edits; when absent, initialization falls back to
+   * `readSessionParts`, which then carries the same obligation to throw on
+   * failure.
+   */
+  readSessionPartsStrict?(sessionID: string): Promise<ReadonlyArray<unknown>>
   listChildren(
     sessionID: string,
   ): Promise<ReadonlyArray<OpencodeWorkflowChildSession>>
@@ -237,6 +262,43 @@ export interface OpencodeWorkflowGuard {
   ): unknown
 }
 
+function defaultTargetObserver(
+  targetDirectory: string,
+): OpencodeOperationObserver {
+  return createOpencodeOperationObserver({ targetDirectory })
+}
+
+// The one ok/timeout/fatal split shared by every probe read (snapshots and
+// effective-observer lookups) in both status refresh and completion. `timeout`
+// is a `command-timeout` per `isProbeTimeout`; `fatal` is every other failure
+// and carries the observer's reason code when one is known (a throw, target
+// mismatch, or drift has none).
+type ProbeFailure =
+  | { readonly status: 'timeout' }
+  | {
+      readonly status: 'fatal'
+      readonly reasonCode?: GuardUnavailableCause['reasonCode']
+    }
+
+type ProbeRead<T> = { readonly status: 'ok'; readonly value: T } | ProbeFailure
+
+type CompletionRemoteOutcome =
+  | {
+      readonly status: 'ready'
+      readonly readbacks: readonly {
+        operation: RemoteOperation
+        snapshot: OperationObserverRemoteSnapshot
+      }[]
+    }
+  | ProbeFailure
+
+// `none`: no observer. `timeout`: a probe timed out, so the attempt is
+// retryable. `fatal`: any other readback failure.
+type CompletionReadbackOutcome =
+  | { readonly status: 'none' }
+  | { readonly status: 'ready'; readonly readbacks: readonly unknown[] }
+  | ProbeFailure
+
 interface SessionRuntime {
   readonly ledger?: ReceiptLedger
   initialize(sessionID: string, allowFresh?: boolean): Promise<void>
@@ -244,12 +306,13 @@ interface SessionRuntime {
   status(): WorkflowStatus
   readStatus(): WorkflowStatus
   unavailableCause(): GuardUnavailableCause | undefined
-  refreshReadback(): Promise<void>
+  seedDeferrals(): readonly SeedDeferral[]
+  refreshReadback(): Promise<readonly UnconfirmedReadback[]>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
   control(sessionID: string, input: unknown): ToolResultContent
-  markUnavailable(): void
+  markUnavailable(cause: GuardUnavailableCause): void
   metadata(): Record<string, unknown>
   recover(sessionID: string, allowFresh?: boolean): Promise<void>
 }
@@ -296,8 +359,21 @@ interface PendingOperation {
   registeredWorktreeIdentity: string
   observer: OpencodeOperationObserver
   before: OperationObserverSnapshot
+  /** Epoch and unit active when the before-hook began, before any await. */
+  initiator?: OperationInitiator
   remoteOperation?: RemoteOperation
   remoteBefore?: OperationObserverRemoteResult
+}
+
+/**
+ * Identifies the declaration an operation began under. The IDs alone cannot:
+ * a redeclaration of a pristine active unit keeps both while resetting its
+ * deferrals, so `generation` counts every successful unit start.
+ */
+interface OperationInitiator {
+  readonly epochId: string
+  readonly unitId: string
+  readonly generation: number
 }
 
 interface OperationObserverRegistration {
@@ -311,6 +387,34 @@ interface EffectiveOperationObserver {
   readonly targetIdentity: string
   readonly pinned: boolean
 }
+
+// A status-refresh probe that timed out and was skipped instead of failing
+// the session. Status-only and enum-only: never carried in markers, receipts,
+// tool metadata, or digests. At most six entries (local/pinned + four remote).
+interface UnconfirmedReadback {
+  readonly probe: 'local' | 'pinned' | RemoteOperation
+  readonly reasonCode: 'command-timeout'
+}
+
+function unconfirmedReadback(
+  probe: UnconfirmedReadback['probe'],
+): UnconfirmedReadback {
+  return { probe, reasonCode: 'command-timeout' }
+}
+
+// Remote probes that were skipped on a timeout. `fatal` is the first
+// non-timeout failure, which stops the loop; the probes skipped before it are
+// still reported.
+type RemoteReadbackOutcome =
+  | {
+      readonly kind: 'ok'
+      readonly unconfirmed: readonly UnconfirmedReadback[]
+    }
+  | {
+      readonly kind: 'fatal'
+      readonly unconfirmed: readonly UnconfirmedReadback[]
+      readonly reasonCode?: GuardUnavailableCause['reasonCode']
+    }
 
 type OperationObserverRegistry = Map<string, OperationObserverRegistration>
 
@@ -336,6 +440,17 @@ interface SealedOperation {
   argsFingerprint: string
 }
 
+// A call the observation gate skipped. It never took a snapshot or computed
+// a fingerprint, so a replay is recognized by its call digest alone.
+interface SkippedOperation {
+  readonly skipped: true
+}
+
+interface BlockedComplete {
+  target: TransitionTarget
+  reasonCode: WorkflowReasonCode
+}
+
 interface TerminalComplete {
   // Optional: some terminal outcomes (see `finishUnreplayableComplete()`)
   // are recorded without ever having observed a real target. `target` is
@@ -352,6 +467,9 @@ interface TerminalComplete {
   // tool result's title/output. Set for outcomes where the host tool's
   // own title/output is evidence that must survive replay untouched.
   metadataOnly?: boolean
+  // Title the first write used, when it was not the generic one, so a
+  // replay reproduces the identical result.
+  title?: string
 }
 
 type OperationCompletionResult =
@@ -360,7 +478,15 @@ type OperationCompletionResult =
       operation: ReceiptOperation
       after: OperationObserverSnapshot
     }
-  | { status: 'deferred' | 'ignored' | 'unavailable' }
+  | { status: 'deferred' | 'ignored' }
+  | OperationFailure
+
+// A typed after-hook failure: the pipeline stopped and says why. The cause is
+// enum-only and is committed by `finishOperation` via `markUnavailable`.
+interface OperationFailure {
+  status: 'unavailable'
+  cause: GuardUnavailableCause
+}
 
 interface MarkerSource {
   source: string
@@ -390,8 +516,10 @@ interface MarkerDocument {
   }
 }
 
-// Bounded first-cause diagnostic for a `seedRemoteScopes`/`seedRemoteScope`
-// failure that led to `markUnavailable()`. Side-channel only: surfaced on
+// Bounded first-cause diagnostic for a failure that led to the guard going
+// `unavailable`: a `seedRemoteScopes`/`seedRemoteScope` failure, a session
+// initialization/recovery failure, or an observer readback failure.
+// Enum-only: no call IDs, tool names, paths, or free text. Side-channel only: surfaced on
 // `systematic_workflow_status` tool output (see `statusForTool`), never on a
 // receipt envelope, marker envelope, or anything covered by an integrity
 // digest. Never carries raw command output, paths, or tokens.
@@ -400,16 +528,188 @@ type GuardUnavailableCauseKind =
   | 'local-snapshot-error'
   | 'local-snapshot-unavailable'
   | 'remote-scope-unreadable'
-  | 'remote-scope-missing-resource'
   | 'remote-scope-unavailable'
   | 'remote-readback-rejected'
+  | 'history-read-failed'
+  | 'markers-malformed-or-incompatible'
+  | 'markers-ambiguous'
+  | 'recovery-rejected'
+  | 'markerless-guard-history'
+  | 'observer-readback-failed'
+  | 'operation-input-invalid'
+  | 'operation-target-mismatch'
+  | 'call-lifecycle-mismatch'
+  | 'operation-classifier-unavailable'
+  | 'operation-observation-rejected'
+  | 'hook-threw'
+  | 'transition-finalize-rejected'
+  | 'initialization-threw'
+  | 'unit-start-rejected'
+
+// A remote operation whose activation seeding was deferred instead of
+// failing the session. Status-only, enum-only, and bound to the unit that
+// recorded it; never carried in markers, receipts, tool metadata, or digests.
+type SeedDeferralReason = 'command-timeout' | 'missing-resource'
+
+interface SeedDeferral {
+  readonly operation: RemoteOperation
+  readonly reasonCode: SeedDeferralReason
+}
+
+// A recorded deferral plus the observer and target the seed read from. Only a
+// before-read from that same observer and target may bind the baseline.
+interface DeferredSeed extends SeedDeferral {
+  readonly observer: OpencodeOperationObserver
+  readonly targetIdentity: string
+}
+
+type RemoteSeedOutcome =
+  | { readonly kind: 'seeded' }
+  | { readonly kind: 'tolerated' }
+  | { readonly kind: 'deferred'; readonly reasonCode: SeedDeferralReason }
+  | { readonly kind: 'fatal'; readonly cause: GuardUnavailableCause }
+
+type GuardHookCauseSite =
+  | 'tool-before'
+  | 'tool-after'
+  | 'event'
+  | 'transform'
+  | 'tool-execute'
 
 interface GuardUnavailableCause {
-  readonly site: 'seed-remote-scopes' | 'seed-remote-scope'
+  readonly site:
+    | 'seed-remote-scopes'
+    | 'seed-remote-scope'
+    | 'initialize-session'
+    | 'refresh-readback'
+    | 'complete-readback'
+    | GuardHookCauseSite
   readonly kind: GuardUnavailableCauseKind
   readonly operation?: RemoteOperation
-  readonly reasonCode?: OperationObserverReasonCode | WorkflowReasonCode
+  readonly reasonCode?:
+    | OperationObserverReasonCode
+    | WorkflowReasonCode
+    | SeedDeferralReason
   readonly timedOut: boolean
+}
+
+function initializationCause(
+  kind: Extract<
+    GuardUnavailableCauseKind,
+    | 'history-read-failed'
+    | 'markers-malformed-or-incompatible'
+    | 'markers-ambiguous'
+    | 'recovery-rejected'
+    | 'markerless-guard-history'
+    | 'initialization-threw'
+  >,
+): GuardUnavailableCause {
+  return { site: 'initialize-session', kind, timedOut: false }
+}
+
+// Builds the refresh-path cause. `reasonCode` is the observer's own reason when
+// one is known; a throw has none. `timedOut` mirrors a `command-timeout`.
+function observerReadbackFailedCause(
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+  site: 'refresh-readback' | 'complete-readback' = 'refresh-readback',
+): GuardUnavailableCause {
+  return {
+    site,
+    kind: 'observer-readback-failed',
+    ...(reasonCode !== undefined ? { reasonCode } : {}),
+    timedOut: reasonCode === 'command-timeout',
+  }
+}
+
+// Builds a hook-path cause. `reasonCode` is an enum the failing check itself
+// supplied (an observer or validation reason); a throw or a pure mismatch has
+// none. `timedOut` mirrors a `command-timeout`.
+function hookCause(
+  site: GuardHookCauseSite,
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return {
+    site,
+    kind,
+    ...(reasonCode !== undefined ? { reasonCode } : {}),
+    timedOut: reasonCode === 'command-timeout',
+  }
+}
+
+function beforeCause(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return hookCause('tool-before', kind, reasonCode)
+}
+
+function afterCause(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return hookCause('tool-after', kind, reasonCode)
+}
+
+function afterFailure(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): OperationFailure {
+  return { status: 'unavailable', cause: afterCause(kind, reasonCode) }
+}
+
+// A throw (`undefined`) has no reason code.
+function remoteFailureReason(
+  result: OperationObserverRemoteResult | undefined,
+): GuardUnavailableCause['reasonCode'] {
+  if (result?.status === 'missing-resource') return 'missing-resource'
+  if (result?.status === 'unavailable') return result.reasonCode
+  return undefined
+}
+
+// Reads one observer's local snapshot as a `ProbeRead`. When an expected
+// target identity is given, a snapshot for any other target is fatal. A
+// failure carries the observer's reason code when it supplied one; a throw or
+// a target mismatch has none.
+async function readSnapshot(
+  observer: OpencodeOperationObserver,
+  expectedTargetIdentity?: string,
+): Promise<ProbeRead<OperationObserverSnapshot>> {
+  let result: OperationObserverResult
+  try {
+    result = await observer.snapshot()
+  } catch {
+    return { status: 'fatal' }
+  }
+  if (isProbeTimeout(result)) return { status: 'timeout' }
+  if (result.status === 'unavailable') {
+    return { status: 'fatal', reasonCode: result.reasonCode }
+  }
+  if (
+    expectedTargetIdentity !== undefined &&
+    result.snapshot.targetDigest !== expectedTargetIdentity
+  ) {
+    return { status: 'fatal' }
+  }
+  return { status: 'ok', value: result.snapshot }
+}
+
+// The only probe outcomes that count as a transient timeout: an observer
+// snapshot or remote readback that is `unavailable` with `command-timeout`, or
+// a worktree-registration lookup that is an `error` with `command-timeout`.
+// Everything else (other reasons, `missing-resource`, `undefined`) is not.
+function isProbeTimeout(
+  result:
+    | OperationObserverResult
+    | OperationObserverRemoteResult
+    | RegisteredWorktreeValidationResult
+    | undefined,
+): boolean {
+  if (result === undefined) return false
+  if (result.status !== 'unavailable' && result.status !== 'error') {
+    return false
+  }
+  return result.reasonCode === 'command-timeout'
 }
 
 const startToolShape = {
@@ -502,19 +802,24 @@ function parseHostOutput(
   }
 }
 
+// Allowlist of skill names that activate a guard epoch. A Map keeps lookups
+// to own entries, so inherited names such as `constructor` or `__proto__`
+// never resolve. Unlisted skills are deliberately not guarded.
+const GUARDED_SKILL_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['ce:work', 'ce-work'],
+  ['systematic:ce:work', 'ce-work'],
+  ['git-commit', 'git-commit'],
+  ['systematic:git-commit', 'git-commit'],
+  ['git-commit-push-pr', 'git-commit-push-pr'],
+  ['systematic:git-commit-push-pr', 'git-commit-push-pr'],
+])
+
 function normalizeSkill(tool: string, args: unknown): string | undefined {
   if (tool !== 'systematic_skill' && tool !== 'skill') return undefined
   if (!isRecord(args) || !boundedString(args.name, MAX_SKILL_LENGTH)) {
     return undefined
   }
-  const names: Record<string, string> = {
-    'ce:work': 'ce-work',
-    'git-commit': 'git-commit',
-    'systematic:git-commit': 'git-commit',
-    'git-commit-push-pr': 'git-commit-push-pr',
-    'systematic:git-commit-push-pr': 'git-commit-push-pr',
-  }
-  return names[args.name] ?? 'ce-work'
+  return GUARDED_SKILL_ALIASES.get(args.name)
 }
 
 function trustedSkillPolicy(
@@ -553,6 +858,14 @@ function digestCall(
 }
 
 export type LocalOperationTool = 'write' | 'edit' | 'apply_patch' | 'bash'
+
+type LocalOperationAfter = HostToolAfter & { tool: LocalOperationTool }
+
+function isLocalOperationAfter(
+  host: HostToolAfter,
+): host is LocalOperationAfter {
+  return isLocalOperationTool(host.tool)
+}
 
 function isLocalOperationTool(tool: string): tool is LocalOperationTool {
   return (
@@ -1213,6 +1526,8 @@ function isSuccessfulSkillAfter(output: unknown): output is HostOutput {
 function statusForTool(
   status: WorkflowStatus,
   unavailableCause?: GuardUnavailableCause,
+  seedDeferrals: readonly SeedDeferral[] = [],
+  unconfirmedReadbacks: readonly UnconfirmedReadback[] = [],
 ): string {
   return JSON.stringify({
     state: status.state,
@@ -1226,6 +1541,12 @@ function statusForTool(
     ...(unavailableCause && status.state === 'unavailable'
       ? { firstUnavailableCause: unavailableCause }
       : {}),
+    // Operations whose activation seeding was deferred for the current unit;
+    // shown in any state.
+    ...(seedDeferrals.length > 0 ? { seedDeferrals } : {}),
+    // Status-refresh probes skipped on a timeout in this call; shown in any
+    // state, never persisted.
+    ...(unconfirmedReadbacks.length > 0 ? { unconfirmedReadbacks } : {}),
   })
 }
 
@@ -1242,13 +1563,15 @@ interface ToolResultContent {
 }
 
 function markerStatusRank(state: WorkflowStatus['state']): number {
-  return {
+  const ranks = {
     disabled: 0,
-    protected: 1,
-    waiting: 2,
-    rejected: 3,
-    unavailable: 4,
-  }[state]
+    inactive: 1,
+    protected: 2,
+    waiting: 3,
+    rejected: 4,
+    unavailable: 5,
+  } satisfies Record<WorkflowStatus['state'], number>
+  return ranks[state]
 }
 
 function isWorkflowState(value: unknown): value is WorkflowStatus['state'] {
@@ -1257,7 +1580,8 @@ function isWorkflowState(value: unknown): value is WorkflowStatus['state'] {
     value === 'waiting' ||
     value === 'rejected' ||
     value === 'disabled' ||
-    value === 'unavailable'
+    value === 'unavailable' ||
+    value === 'inactive'
   )
 }
 
@@ -1478,9 +1802,10 @@ function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
   operationObservers: OperationObserverRegistry,
   recoveredOperationContexts: RecoveredOperationRegistry,
+  runtimeStartedAt: number,
 ): SessionRuntime {
   let ledger!: ReceiptLedger
-  let guard!: WorkflowGuard
+  let guard: WorkflowGuard | undefined
   let initialized = false
   let initializationPromise: Promise<void> | undefined
   let retryableEmptyHistory = false
@@ -1490,18 +1815,37 @@ function createSessionRuntime(
   const pendingCompletes = new Map<string, PendingComplete>()
   const finalizedCompletes = new Map<string, PendingComplete>()
   const abandonedCompletes = new Map<string, TransitionTarget>()
-  const blockedCompletes = new Map<string, TransitionTarget>()
+  const blockedCompletes = new Map<string, BlockedComplete>()
   const terminalCompletes = new Map<string, TerminalComplete>()
   const callBindings = new Map<string, { kind: string; fingerprint: string }>()
   const pendingOperations = new Map<string, PendingOperation>()
   const sealedOperations = new Map<string, SealedOperation>()
-  const abandonedOperations = new Map<string, SealedOperation>()
+  // Digests of operation calls whose before-hook decided not to observe.
+  // The after-hook consults this first and stays silent, whatever the guard
+  // state has become in between. Entries outlive their first after-hook so a
+  // duplicate stays silent, and move to `abandonedOperations` at the transform.
+  const skippedOperations = new Set<string>()
+  const abandonedOperations = new Map<
+    string,
+    SealedOperation | SkippedOperation
+  >()
   const rolledUpChildren = new Set<string>()
   const questionAttestation = createQuestionAttestation()
   const pendingQuestionChallenges = new Map<string, PendingQuestionChallenge>()
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
   let firstUnavailableCause: GuardUnavailableCause | undefined
+  // Cause from a `markUnavailable` that arrived before a guard was published;
+  // committed first-wins on publish.
+  let pendingUnavailableCause: GuardUnavailableCause | undefined
+  // Deferred activation seedings, keyed by the unit that recorded them and
+  // cleared at every unit start. Runtime-only; never persisted.
+  let seedDeferralRecord:
+    | { readonly unitId: string; readonly entries: DeferredSeed[] }
+    | undefined
+  // Incremented on every successful unit start or declaration (see
+  // `startFreshUnit`); operations capture it to prove they are still current.
+  let unitStartGeneration = 0
 
   // Single choke point for every `guard.startUnit()` call. The reset below is
   // currently unreachable: mode has no path back to 'protected' ('disabled'
@@ -1511,9 +1855,27 @@ function createSessionRuntime(
     input: unknown,
     policy?: RuntimeUnitPolicy,
   ): StartUnitResult {
-    const result = guard.startUnit(input, policy)
-    if (result.status === 'started') firstUnavailableCause = undefined
+    const result = requireGuard().startUnit(input, policy)
+    if (result.status === 'started') {
+      unitStartGeneration += 1
+      firstUnavailableCause = undefined
+      seedDeferralRecord = undefined
+    }
     return result
+  }
+
+  // Shared first-cause-wins recorder: the cause is stored only when THIS call
+  // flips `target`'s mode to 'unavailable' and none is stored yet. Both
+  // `markUnavailable` and `publishUnavailable` commit through here so the
+  // runtime and initialization paths cannot disagree.
+  function recordUnavailable(
+    target: WorkflowGuard,
+    cause: GuardUnavailableCause,
+  ): void {
+    const result = target.setMode({ mode: 'unavailable' })
+    if (result.status === 'changed' && !firstUnavailableCause) {
+      firstUnavailableCause = cause
+    }
   }
 
   function effectiveTargetContext(): {
@@ -1576,51 +1938,73 @@ function createSessionRuntime(
     return parentObserverRegistration()
   }
 
-  function effectiveOperationObserver():
-    | EffectiveOperationObserver
-    | undefined {
+  // Typed lookup of the observer for the pinned (or parent) target. A pinned
+  // worktree validation that times out is `timeout`; every other failure,
+  // including a throw, is `fatal` (with the observer's reason code if any).
+  function resolveEffectiveObserver(): ProbeRead<EffectiveOperationObserver> {
     const parentObserver = options.observer
-    if (!parentObserver) return undefined
+    if (!parentObserver) return { status: 'fatal' }
     const pinnedTargetIdentity =
-      guard.status().unit?.pinnedOperationTargetIdentity
+      requireGuard().status().unit?.pinnedOperationTargetIdentity
     if (
       pinnedTargetIdentity === undefined ||
       pinnedTargetIdentity === options.workspaceIdentity
     ) {
       return {
-        observer: parentObserver,
-        targetIdentity: options.workspaceIdentity,
-        pinned: false,
+        status: 'ok',
+        value: {
+          observer: parentObserver,
+          targetIdentity: options.workspaceIdentity,
+          pinned: false,
+        },
       }
     }
     const registration = operationObserverRegistration(pinnedTargetIdentity)
-    if (!registration) return undefined
+    if (!registration) return { status: 'fatal' }
+    return resolvePinnedObserver(
+      parentObserver,
+      registration,
+      pinnedTargetIdentity,
+    )
+  }
+
+  function resolvePinnedObserver(
+    parentObserver: OpencodeOperationObserver,
+    registration: OperationObserverRegistration,
+    pinnedTargetIdentity: string,
+  ): ProbeRead<EffectiveOperationObserver> {
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = parentObserver.validateRegisteredWorktree(
         registration.targetRoot,
       )
     } catch {
-      return undefined
+      return { status: 'fatal' }
+    }
+    if (isProbeTimeout(validation)) return { status: 'timeout' }
+    if (validation.status !== 'ok') {
+      return { status: 'fatal', reasonCode: validation.reasonCode }
     }
     if (
-      validation.status !== 'ok' ||
       validation.targetRoot !== registration.targetRoot ||
       registeredWorktreeIdentity(validation) !==
         registration.registeredWorktreeIdentity ||
       registration.observer.targetDigest !== pinnedTargetIdentity
     ) {
-      return undefined
+      return { status: 'fatal' }
     }
     return {
-      observer: registration.observer,
-      targetIdentity: pinnedTargetIdentity,
-      pinned: true,
+      status: 'ok',
+      value: {
+        observer: registration.observer,
+        targetIdentity: pinnedTargetIdentity,
+        pinned: true,
+      },
     }
   }
 
   function questionResource(target: TransitionTarget): string {
-    const status = guard.status()
+    const status = requireGuard().status()
     return `workflow/${target}/${status.unit?.unitId ?? status.epoch?.epochId ?? 'unknown'}`
   }
 
@@ -1785,7 +2169,127 @@ function createSessionRuntime(
     }
   }
 
-  function containsGuardHistory(value: unknown): boolean {
+  // True when the guard itself recorded a no-epoch rejection on this part.
+  // Structured fields only; the guard writes `workflowGuard` onto the tool
+  // result metadata, which the host persists on `state.metadata`. The
+  // part-level `metadata` is checked too.
+  function hasNoEpochRejection(part: Record<string, unknown>): boolean {
+    const carriers = [
+      part.metadata,
+      isRecord(part.state) && part.state.metadata,
+    ]
+    return carriers.some(
+      (carrier) =>
+        isRecord(carrier) &&
+        isRecord(carrier.workflowGuard) &&
+        carrier.workflowGuard.status === 'rejected' &&
+        carrier.workflowGuard.reasonCode === 'no-active-epoch',
+    )
+  }
+
+  // Chronology is established from `info.time.created`, not array position:
+  // the newest message is the one with the greatest created time. Any entry
+  // without a finite created time, or a tie for the newest, means the newest
+  // message cannot be identified and nothing is exempt.
+  function newestMessage(
+    history: ReadonlyArray<unknown>,
+  ): Record<string, unknown> | undefined {
+    let newest: Record<string, unknown> | undefined
+    let newestCreated = Number.NEGATIVE_INFINITY
+    let tied = false
+    for (const entry of history) {
+      const created = messageCreated(entry)
+      if (!isRecord(entry) || created === undefined) return undefined
+      if (created > newestCreated) {
+        newest = entry
+        newestCreated = created
+        tied = false
+      } else if (created === newestCreated) {
+        tied = true
+      }
+    }
+    return tied ? undefined : newest
+  }
+
+  function messageInfo(entry: unknown): Record<string, unknown> | undefined {
+    return isRecord(entry) && isRecord(entry.info) ? entry.info : undefined
+  }
+
+  function messageCreated(entry: unknown): number | undefined {
+    const info = messageInfo(entry)
+    const time = info && isRecord(info.time) ? info.time : undefined
+    return typeof time?.created === 'number' && Number.isFinite(time.created)
+      ? time.created
+      : undefined
+  }
+
+  // The current turn is the newest message, provided it is an unfinished
+  // assistant message created during this process's lifetime.
+  function isCurrentTurn(message: Record<string, unknown>): boolean {
+    const info = messageInfo(message)
+    const time = info && isRecord(info.time) ? info.time : undefined
+    const created = messageCreated(message)
+    return (
+      info?.role === 'assistant' &&
+      (time?.completed === undefined || time.completed === null) &&
+      created !== undefined &&
+      created >= runtimeStartedAt
+    )
+  }
+
+  // Pending/running guard mutation parts of the current turn, by identity.
+  // These belong to the call now executing, whose host part is persisted
+  // before its before-hook runs; they carry no evidence yet.
+  function currentTurnExemptParts(
+    history: ReadonlyArray<unknown>,
+  ): ReadonlySet<unknown> {
+    const exempt = new Set<unknown>()
+    const newest = newestMessage(history)
+    if (!newest || !isCurrentTurn(newest) || !Array.isArray(newest.parts)) {
+      return exempt
+    }
+    for (const part of newest.parts) {
+      if (
+        isRecord(part) &&
+        (part.tool === 'systematic_workflow_start' ||
+          part.tool === 'systematic_workflow_complete' ||
+          part.tool === 'systematic_workflow_control') &&
+        isRecord(part.state) &&
+        (part.state.status === 'pending' || part.state.status === 'running')
+      ) {
+        exempt.add(part)
+      }
+    }
+    return exempt
+  }
+
+  // Guard-owned parts that carry no evidence and never mutate guard state:
+  // status reads (any state), COMPLETED start/complete calls the guard
+  // itself rejected with `no-active-epoch`, and the pending/running guard
+  // mutation parts of the current turn. Everything else stays history.
+  function isExemptGuardPart(
+    part: Record<string, unknown>,
+    currentTurn: ReadonlySet<unknown>,
+  ): boolean {
+    if (part.tool === 'systematic_workflow_status') return true
+    if (currentTurn.has(part)) return true
+    if (
+      part.tool !== 'systematic_workflow_start' &&
+      part.tool !== 'systematic_workflow_complete'
+    ) {
+      return false
+    }
+    return (
+      isRecord(part.state) &&
+      part.state.status === 'completed' &&
+      hasNoEpochRejection(part)
+    )
+  }
+
+  function containsGuardHistory(
+    value: unknown,
+    currentTurn: ReadonlySet<unknown>,
+  ): boolean {
     if (!isRecord(value)) return false
     if (
       value.tool === 'systematic_workflow_start' ||
@@ -1793,11 +2297,11 @@ function createSessionRuntime(
       value.tool === 'systematic_workflow_complete' ||
       value.tool === 'systematic_workflow_control'
     ) {
-      return true
+      return !isExemptGuardPart(value, currentTurn)
     }
     return (
       Array.isArray(value.parts) &&
-      value.parts.some((part) => containsGuardHistory(part))
+      value.parts.some((part) => containsGuardHistory(part, currentTurn))
     )
   }
 
@@ -1845,17 +2349,35 @@ function createSessionRuntime(
     return emptyHistoryLedger
   }
 
-  function publishUnavailable(reusableLedger?: ReceiptLedger): void {
+  // The publish's own cause wins over a pending one.
+  function publishUnavailable(
+    cause: GuardUnavailableCause,
+    reusableLedger?: ReceiptLedger,
+  ): void {
     ledger = reusableLedger ?? mintLedger()
-    guard = createGuard(ledger)
-    if (options.config.mode !== 'disabled')
-      guard.setMode({ mode: 'unavailable' })
+    const published = createGuard(ledger)
+    guard = published
+    if (options.config.mode !== 'disabled') recordUnavailable(published, cause)
+    pendingUnavailableCause = undefined
     initialized = true
+  }
+
+  // Applies the pending cause to the newly published guard and cancels the
+  // provisional-history retry, so a later fresh publish cannot clear it.
+  function commitPendingUnavailable(): void {
+    const cause = pendingUnavailableCause
+    pendingUnavailableCause = undefined
+    if (cause && options.config.mode !== 'disabled') {
+      recordUnavailable(requireGuard(), cause)
+      retryableEmptyHistory = false
+    }
   }
 
   function publishFresh(reusableLedger?: ReceiptLedger): void {
     ledger = reusableLedger ?? mintLedger()
     guard = createGuard(ledger)
+    firstUnavailableCause = undefined
+    commitPendingUnavailable()
     initialized = true
   }
 
@@ -1943,10 +2465,15 @@ function createSessionRuntime(
     return undefined
   }
 
-  function recoverPersistedMarkers(markers: readonly unknown[]): boolean {
+  // Returns undefined on success, otherwise the cause of the failure.
+  function recoverPersistedMarkers(
+    markers: readonly unknown[],
+  ): GuardUnavailableCause | undefined {
     // Callers must pass pre-filtered (own-registration) markers.
     const seed = extractReceiptReadbackSeed(markers)
-    if (seed.status !== 'ready') return false
+    if (seed.status !== 'ready') {
+      return initializationCause('markers-malformed-or-incompatible')
+    }
     let recoveredLedger: ReceiptLedger
     try {
       recoveredLedger = createReceiptLedger({
@@ -1955,14 +2482,14 @@ function createSessionRuntime(
         sessionSalt: seed.sessionSalt,
       })
     } catch {
-      return false
+      return initializationCause('markers-malformed-or-incompatible')
     }
     if (!seedAgrees(recoveredLedger, seed)) {
-      return false
+      return initializationCause('markers-malformed-or-incompatible')
     }
     const recovered = recoveredLedger.recoverReadback(markers)
     if (recovered.status === 'rejected') {
-      return false
+      return initializationCause('recovery-rejected')
     }
     const recoveredGuard = createGuard(recoveredLedger)
     const restored = recoveredGuard.restore({
@@ -1974,12 +2501,14 @@ function createSessionRuntime(
       },
     })
     if (restored.status === 'rejected') {
-      return false
+      return initializationCause('recovery-rejected')
     }
     ledger = recoveredLedger
     guard = recoveredGuard
+    firstUnavailableCause = undefined
+    commitPendingUnavailable()
     initialized = true
-    return true
+    return undefined
   }
 
   type OwnMarkersClassification =
@@ -2053,19 +2582,49 @@ function createSessionRuntime(
     allowFresh: boolean,
   ): void {
     const reusableLedger = emptyHistoryLedgerForRetry()
-    if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
-      publishFresh(reusableLedger)
-    } else {
-      retryableEmptyHistory = true
-      publishUnavailable(reusableLedger)
+    const currentTurn = currentTurnExemptParts(parts)
+    if (parts.some((part) => containsGuardHistory(part, currentTurn))) {
+      // Evidence-bearing guard history without markers can never become
+      // recoverable, so this unavailable is final (not retryable).
+      publishUnavailable(
+        initializationCause('markerless-guard-history'),
+        reusableLedger,
+      )
+      return
     }
+    if (allowFresh) {
+      publishFresh(reusableLedger)
+      return
+    }
+    // Deferred fresh: no guard history, but this pass may not confirm fresh.
+    // Publish a provisional inactive guard (same ledger, so the marker is
+    // stable) and stay retryable: the next allow-fresh recovery re-reads the
+    // history and either confirms it, restores from late own markers, or
+    // fails closed on guard history.
+    retryableEmptyHistory = true
+    publishFresh(reusableLedger)
   }
 
+  // A throw after the host read publishes `unavailable` with `initialization-threw`.
   async function initializeSession(
     sessionID: string,
     allowFresh: boolean,
   ): Promise<void> {
-    const reader = options.hostReadback?.readSessionParts
+    try {
+      await initializeSessionSteps(sessionID, allowFresh)
+    } catch {
+      retryableEmptyHistory = false
+      publishUnavailable(initializationCause('initialization-threw'))
+    }
+  }
+
+  async function initializeSessionSteps(
+    sessionID: string,
+    allowFresh: boolean,
+  ): Promise<void> {
+    const reader =
+      options.hostReadback?.readSessionPartsStrict ??
+      options.hostReadback?.readSessionParts
     if (!reader) {
       publishFresh()
       return
@@ -2074,7 +2633,7 @@ function createSessionRuntime(
     try {
       parts = await reader(sessionID)
     } catch {
-      publishUnavailable()
+      publishUnavailable(initializationCause('history-read-failed'))
       return
     }
     const classification = classifyMarkersFromParts(parts)
@@ -2082,7 +2641,7 @@ function createSessionRuntime(
       // Cannot determine whether markers include corrupted own state → fail closed.
       // Do NOT use retryableEmptyHistory here; this is a corruption signal, not a
       // transient empty-history state.
-      publishUnavailable()
+      publishUnavailable(initializationCause('markers-ambiguous'))
       return
     }
     if (classification.kind === 'foreign-empty') {
@@ -2093,22 +2652,33 @@ function createSessionRuntime(
       return
     }
     // kind === 'own': recover from filtered own markers.
-    if (!recoverPersistedMarkers(classification.markers)) publishUnavailable()
+    const failure = recoverPersistedMarkers(classification.markers)
+    if (failure) publishUnavailable(failure)
   }
 
   async function recoverFromHost(
     sessionID: string,
     allowFresh = true,
   ): Promise<void> {
-    if (initializationPromise) {
-      await initializationPromise
+    // Waiter protocol: no hook proceeds while an initialization is in flight.
+    // After awaiting promise P a waiter re-checks that P is still the current
+    // initialization; if another waiter already started a newer one, this
+    // waiter awaits that one too. Only the waiter that STARTS a re-init
+    // resets the retry state and the published guard.
+    let reinitialize = false
+    while (initializationPromise) {
+      const seen = initializationPromise
+      await seen
+      if (initializationPromise !== seen) continue
       if (!retryableEmptyHistory || !allowFresh) return
-      initializationPromise = undefined
-      initialized = false
+      reinitialize = true
+      break
     }
+    if (reinitialize) initialized = false
     retryableEmptyHistory = false
-    initializationPromise = initializeSession(sessionID, allowFresh)
-    await initializationPromise
+    const next = initializeSession(sessionID, allowFresh)
+    initializationPromise = next
+    await next
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: lineage verification and parent minting must remain atomic
@@ -2128,7 +2698,7 @@ function createSessionRuntime(
     if (rolledUpChildren.has(rollupKey)) return
     // Capture the parent's operation-before identities before reading child
     // history. These are guard-owned digests, not boot-time path values.
-    const parentBefore = guard.currentOperationContext()
+    const parentBefore = requireGuard().currentOperationContext()
     const children = await options.hostReadback.listChildren(host.sessionID)
     if (
       !children.some(
@@ -2137,14 +2707,14 @@ function createSessionRuntime(
           child.parentID === host.sessionID,
       )
     ) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     let parts: ReadonlyArray<unknown>
     try {
       parts = await options.hostReadback.readSessionParts(childSessionID)
     } catch {
-      markUnavailable()
+      markUnavailable(afterCause('history-read-failed'))
       return
     }
     // Classify child session markers: own (filter and recover), foreign-empty
@@ -2153,13 +2723,13 @@ function createSessionRuntime(
     const classification = classifyMarkersFromParts(parts)
     if (classification.kind === 'foreign-empty') return
     if (classification.kind === 'ambiguous') {
-      markUnavailable()
+      markUnavailable(afterCause('markers-ambiguous'))
       return
     }
     const ownMarkers = classification.markers
     const seed = extractReceiptReadbackSeed(ownMarkers)
     if (seed.status !== 'ready') {
-      markUnavailable()
+      markUnavailable(afterCause('recovery-rejected'))
       return
     }
     const childLedger = createReceiptLedger({
@@ -2168,12 +2738,12 @@ function createSessionRuntime(
       sessionSalt: seed.sessionSalt,
     })
     if (!seedAgrees(childLedger, seed)) {
-      markUnavailable()
+      markUnavailable(afterCause('recovery-rejected'))
       return
     }
     const recovered = childLedger.recoverReadback(ownMarkers)
     if (recovered.status === 'rejected') {
-      markUnavailable()
+      markUnavailable(afterCause('recovery-rejected'))
       return
     }
     // Touch the fixed parent observer for the stable workspace path, but do
@@ -2185,7 +2755,7 @@ function createSessionRuntime(
     } catch {
       // Target-specific validation below remains authoritative.
     }
-    const currentStatus = guard.status()
+    const currentStatus = requireGuard().status()
     if (!currentStatus.epoch || !currentStatus.unit) return
     const expectedWorkspace = childLedger.digestIdentity(
       'workspace',
@@ -2201,27 +2771,27 @@ function createSessionRuntime(
       const operation = childReceipt.canonical.operation
       if (!localOperation(operation)) continue
       if (childReceipt.canonical.workspaceDigest !== expectedWorkspace) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-observation-rejected'))
         return
       }
 
       const targetIdentity = childReceipt.canonical.operationTargetIdentity
       if (!targetIdentity) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-input-invalid'))
         return
       }
       if (
         batchTargetIdentity !== undefined &&
         targetIdentity !== batchTargetIdentity
       ) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-target-mismatch'))
         return
       }
       batchTargetIdentity = targetIdentity
 
       const registration = operationObserverRegistration(targetIdentity)
       if (!registration || !options.observer) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-input-invalid'))
         return
       }
       let validation: RegisteredWorktreeValidationResult
@@ -2230,7 +2800,7 @@ function createSessionRuntime(
           registration.targetRoot,
         )
       } catch {
-        markUnavailable()
+        markUnavailable(afterCause('operation-input-invalid'))
         return
       }
       if (
@@ -2240,7 +2810,12 @@ function createSessionRuntime(
           registration.registeredWorktreeIdentity ||
         registration.observer.targetDigest !== targetIdentity
       ) {
-        markUnavailable()
+        markUnavailable(
+          afterCause(
+            'operation-input-invalid',
+            validation.status === 'error' ? validation.reasonCode : undefined,
+          ),
+        )
         return
       }
 
@@ -2248,14 +2823,17 @@ function createSessionRuntime(
       try {
         targetResult = await registration.observer.snapshot()
       } catch {
-        markUnavailable()
+        markUnavailable(afterCause('local-snapshot-error'))
         return
       }
-      if (
-        targetResult.status === 'unavailable' ||
-        targetResult.snapshot.targetDigest !== targetIdentity
-      ) {
-        markUnavailable()
+      if (targetResult.status === 'unavailable') {
+        markUnavailable(
+          afterCause('local-snapshot-unavailable', targetResult.reasonCode),
+        )
+        return
+      }
+      if (targetResult.snapshot.targetDigest !== targetIdentity) {
+        markUnavailable(afterCause('operation-target-mismatch'))
         return
       }
 
@@ -2267,7 +2845,7 @@ function createSessionRuntime(
           recoveredContext.targetIdentity !== targetIdentity) ||
         (targetIdentity !== options.observer.targetDigest && !recoveredContext)
       ) {
-        markUnavailable()
+        markUnavailable(afterCause('operation-target-mismatch'))
         return
       }
 
@@ -2301,7 +2879,7 @@ function createSessionRuntime(
       const childReceipt = candidate.receipt
       const targetSnapshot = candidate.snapshot
       const operation = childReceipt.canonical.operation
-      const parentContext = guard.currentOperationContext()
+      const parentContext = requireGuard().currentOperationContext()
       const beforeSnapshot = candidate.before
       const callID = `task-${host.callID}-${childReceipt.canonical.receiptId}`
       const observation = {
@@ -2336,7 +2914,8 @@ function createSessionRuntime(
           noOp: false,
         },
       }
-      const result = await guard.observeTrustedRecoveredOperation(observation)
+      const result =
+        await requireGuard().observeTrustedRecoveredOperation(observation)
       if (result.status === 'accepted') {
         const receipt = receiptForOperation(callID, operation)
         if (receipt) mergeReceiptMarker(output, receipt)
@@ -2357,12 +2936,24 @@ function createSessionRuntime(
   // instead of to whichever concurrent caller finished computing a cause
   // first, so a failure suspended mid-seed can never overwrite (or follow)
   // an unrelated cause that already won the race.
-  function markUnavailable(cause?: GuardUnavailableCause): void {
+  function markUnavailable(cause: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
-    const result = guard.setMode({ mode: 'unavailable' })
-    if (cause && result.status === 'changed' && !firstUnavailableCause) {
-      firstUnavailableCause = cause
+    const published = guard
+    if (!published) {
+      // No guard yet: hold the cause until one is published.
+      pendingUnavailableCause ??= cause
+      return
     }
+    recordUnavailable(published, cause)
+  }
+
+  function guardPublished(): boolean {
+    return guard !== undefined
+  }
+
+  function requireGuard(): WorkflowGuard {
+    if (!guard) throw new Error('workflow guard used before it was published')
+    return guard
   }
 
   function bindCall(
@@ -2378,13 +2969,13 @@ function createSessionRuntime(
     if (existing.kind === kind && existing.fingerprint === fingerprint) {
       return 'duplicate'
     }
-    markUnavailable()
+    markUnavailable(beforeCause('call-lifecycle-mismatch'))
     return 'conflict'
   }
 
   function abandonPending(): void {
     for (const [callDigest, pending] of pendingCompletes) {
-      guard.abandonTransition({
+      requireGuard().abandonTransition({
         callId: pending.callID,
         transitionId: pending.transitionId,
       })
@@ -2400,11 +2991,16 @@ function createSessionRuntime(
       })
       pendingOperations.delete(callDigest)
     }
+    for (const callDigest of skippedOperations) {
+      abandonedOperations.set(callDigest, { skipped: true })
+    }
+    skippedOperations.clear()
   }
 
+  // A status read must not touch sibling calls' pending work: pending
+  // entries are only cleared at the request boundary (the transform).
   function readStatus(): WorkflowStatus {
-    abandonPending()
-    return guard.status()
+    return guard ? guard.status() : unavailableWorkflowStatus()
   }
 
   function control(sessionID: string, input: unknown): ToolResultContent {
@@ -2427,7 +3023,7 @@ function createSessionRuntime(
     if (!pending) return questionUnavailableResult()
     if (pending.requestID && questionProjection().status === 'attested') {
       if (consumeQuestion(pending)) {
-        guard.setMode({ mode: 'disabled' })
+        requireGuard().setMode({ mode: 'disabled' })
         return {
           title: 'Workflow guard disabled',
           output: JSON.stringify({ status: 'disabled' }),
@@ -2447,59 +3043,117 @@ function createSessionRuntime(
     }
   }
 
-  async function refreshReadback(): Promise<void> {
-    abandonPending()
-    if (!options.observer) return
-    const effective = effectiveOperationObserver()
-    if (!effective) {
-      markUnavailable()
-      return
+  // Operations are observed only while guarded work can use the evidence: an
+  // active epoch, or an allowlisted skill call still pending that may activate
+  // one. Disabled and unavailable guards never consume operation evidence.
+  function operationObservationApplies(): boolean {
+    const current = readStatus()
+    if (current.state === 'disabled' || current.state === 'unavailable') {
+      return false
     }
-    let result: OperationObserverResult
-    try {
-      result = await effective.observer.snapshot()
-    } catch {
-      markUnavailable()
-      return
+    return current.epoch?.status === 'active' || pendingSkills.size > 0
+  }
+
+  // Without an epoch there is nothing to protect with observer readback:
+  // skip every observer read, identity update, and unavailable transition.
+  function observerReadbackApplies(): boolean {
+    return (
+      options.observer !== undefined && requireGuard().status().epoch !== null
+    )
+  }
+
+  // The local or pinned probe was skipped, so no remote probe runs either. List
+  // it first, then every satisfied remote operation that was left unprobed (in
+  // the same order a refresh would have probed them), so none looks verified.
+  function skippedWithRemoteTail(
+    head: 'local' | 'pinned',
+  ): readonly UnconfirmedReadback[] {
+    return [
+      unconfirmedReadback(head),
+      ...requireGuard()
+        .status()
+        .satisfiedOperations.filter(remoteOperation)
+        .map((operation) => unconfirmedReadback(operation)),
+    ]
+  }
+
+  // A probe that times out is skipped: no readback is applied for it and no
+  // existing staleness is cleared. The skipped probes are returned by value for
+  // the status tool. Every non-timeout failure stays fatal.
+  async function refreshReadback(): Promise<readonly UnconfirmedReadback[]> {
+    if (!observerReadbackApplies()) return []
+    const lookup = resolveEffectiveObserver()
+    if (lookup.status === 'timeout') return skippedWithRemoteTail('pinned')
+    if (lookup.status === 'fatal') {
+      markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
+      return []
     }
-    if (
-      result.status === 'unavailable' ||
-      result.snapshot.targetDigest !== effective.targetIdentity
-    ) {
-      markUnavailable()
-      return
+    const effective = lookup.value
+    const read = await readSnapshot(
+      effective.observer,
+      effective.targetIdentity,
+    )
+    if (read.status === 'timeout') {
+      return skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
     }
-    const observed = guard.observeReadback({
+    if (read.status === 'fatal') {
+      markUnavailable(observerReadbackFailedCause(read.reasonCode))
+      return []
+    }
+    return applyReadbackAndProbeRemote(effective, read.value)
+  }
+
+  async function applyReadbackAndProbeRemote(
+    effective: EffectiveOperationObserver,
+    snapshot: OperationObserverSnapshot,
+  ): Promise<readonly UnconfirmedReadback[]> {
+    const observed = requireGuard().observeReadback({
       workspaceIdentity: options.workspaceIdentity,
-      repositoryIdentity: result.snapshot.repositoryRevisionDigest,
-      worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+      repositoryIdentity: snapshot.repositoryRevisionDigest,
+      worktreeIdentity: snapshot.worktreeRevisionDigest,
       ...(effective.pinned
         ? { operationTargetIdentity: effective.targetIdentity }
         : {}),
     })
     if (
-      (observed.status === 'rejected' &&
-        observed.reasonCode === 'workspace-mismatch') ||
-      !(await refreshRemoteReadbacks(effective.observer, result.snapshot))
+      observed.status === 'rejected' &&
+      observed.reasonCode === 'workspace-mismatch'
     ) {
-      markUnavailable()
+      markUnavailable(observerReadbackFailedCause())
+      return []
     }
+    const remote = await refreshRemoteReadbacks(effective.observer, snapshot)
+    if (remote.kind === 'fatal') {
+      markUnavailable(observerReadbackFailedCause(remote.reasonCode))
+    }
+    return remote.unconfirmed
   }
 
   async function refreshRemoteReadbacks(
     observer: OpencodeOperationObserver,
     local: OperationObserverSnapshot,
-  ): Promise<boolean> {
-    const remoteOperations = guard
+  ): Promise<RemoteReadbackOutcome> {
+    const remoteOperations = requireGuard()
       .status()
       .satisfiedOperations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return true
+    if (remoteOperations.length === 0) return { kind: 'ok', unconfirmed: [] }
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return false
+    if (!remoteSnapshot) return { kind: 'fatal', unconfirmed: [] }
+    const unconfirmed: UnconfirmedReadback[] = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
-      if (result?.status !== 'available') return false
-      const observed = guard.observeReadback(
+      if (isProbeTimeout(result)) {
+        unconfirmed.push(unconfirmedReadback(operation))
+        continue
+      }
+      if (result?.status !== 'available') {
+        return {
+          kind: 'fatal',
+          unconfirmed,
+          reasonCode: remoteFailureReason(result),
+        }
+      }
+      const observed = requireGuard().observeReadback(
         remoteReadbackInput(
           operation,
           local,
@@ -2507,13 +3161,13 @@ function createSessionRuntime(
           result.snapshot,
         ),
       )
-      if (observed.status === 'rejected') return false
+      if (observed.status === 'rejected') return { kind: 'fatal', unconfirmed }
     }
-    return true
+    return { kind: 'ok', unconfirmed }
   }
 
   function currentMarkerSource(): MarkerSource {
-    const status = guard.status()
+    const status = requireGuard().status()
     const statusDigest = ledger.digestIdentity(
       'resource',
       JSON.stringify({
@@ -2697,10 +3351,11 @@ function createSessionRuntime(
     output: unknown,
     result: TerminalComplete,
     target: TransitionTarget | undefined,
+    title = 'Workflow transition unavailable',
   ): void {
     if (!isRecord(output)) return
     const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
-    output.title = 'Workflow transition unavailable'
+    output.title = title
     output.output = JSON.stringify({
       status: result.status,
       reasonCode: result.reasonCode,
@@ -2713,6 +3368,49 @@ function createSessionRuntime(
         ...targetMetadataField(target),
         reasonCode: result.reasonCode,
       },
+    }
+  }
+
+  // Writes the guard-owned result for a completion that was requested with no
+  // epoch. The guard is re-read at write time: a skill earlier in the same
+  // message batch may have activated an epoch since the before-hook, in which
+  // case claiming `no-active-epoch` would be false and the current status is
+  // reported instead. The outcome is recorded as this call's terminal result,
+  // so a duplicate after-hook replays exactly what was written here.
+  function writeNoEpochBlockedResult(
+    callDigest: string,
+    output: unknown,
+    target: TransitionTarget,
+  ): void {
+    const current = requireGuard().status()
+    const terminal: TerminalComplete = !current.epoch
+      ? {
+          target,
+          status: 'rejected',
+          reasonCode: 'no-active-epoch',
+          title: 'Workflow transition rejected',
+        }
+      : current.state === 'unavailable'
+        ? { target, status: 'unavailable', reasonCode: current.reasonCode }
+        : {
+            target,
+            status: 'rejected',
+            reasonCode: current.reasonCode,
+            title: 'Workflow transition rejected',
+          }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
+  }
+
+  // Only the no-epoch block is guard-owned output; every other blocked
+  // reason keeps writing nothing here.
+  function writeBlockedCompleteResult(
+    callDigest: string,
+    output: unknown,
+    blocked: BlockedComplete | undefined,
+  ): void {
+    if (blocked?.reasonCode === 'no-active-epoch') {
+      writeNoEpochBlockedResult(callDigest, output, blocked.target)
     }
   }
 
@@ -2809,13 +3507,16 @@ function createSessionRuntime(
     }
     const challenge = challengeForTransition(host.sessionID, target)
     if (!challenge) {
-      markUnavailable()
+      markUnavailable(hookCause('tool-before', 'call-lifecycle-mismatch'))
       return true
     }
     if (options.config.mode === 'protected') {
       throw createWorkflowGuardBlockedError('guard-unavailable')
     }
-    blockedCompletes.set(callDigest, target)
+    blockedCompletes.set(callDigest, {
+      target,
+      reasonCode: status.reasonCode,
+    })
     blockedQuestionCalls.set(callDigest, challenge.challenge.challengeId)
     return true
   }
@@ -2830,9 +3531,12 @@ function createSessionRuntime(
       }
       return
     }
-    const status = guard.status()
+    const status = requireGuard().status()
     if (gateCompleteWithQuestion(host, target, callDigest, status)) return
-    const prepared = guard.prepareTransition({ callId: host.callID, target })
+    const prepared = requireGuard().prepareTransition({
+      callId: host.callID,
+      target,
+    })
     if (prepared.status === 'allowed') {
       pendingCompletes.set(callDigest, {
         callID: host.callID,
@@ -2841,10 +3545,19 @@ function createSessionRuntime(
       })
       return
     }
-    if (options.config.mode === 'protected') {
+    // A completion requested before any epoch exists is a guard-owned
+    // rejection recorded for the after-hook, in protected mode too. Every
+    // other blocked reason keeps the protected-mode throw.
+    if (
+      options.config.mode === 'protected' &&
+      prepared.reasonCode !== 'no-active-epoch'
+    ) {
       throw createWorkflowGuardBlockedError(prepared.reasonCode)
     }
-    blockedCompletes.set(callDigest, target)
+    blockedCompletes.set(callDigest, {
+      target,
+      reasonCode: prepared.reasonCode,
+    })
   }
 
   async function remoteIntentForOperation(
@@ -2870,10 +3583,16 @@ function createSessionRuntime(
     const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return { operation: classification.category }
     try {
-      return {
-        operation: classification.category,
-        before: await remoteSnapshot(classification.category, 'before'),
+      let before = await remoteSnapshot(classification.category, 'before')
+      // A deferred operation gets one immediate retry on a probe timeout.
+      if (
+        before.status === 'unavailable' &&
+        before.reasonCode === 'command-timeout' &&
+        deferredSeedFor(classification.category)
+      ) {
+        before = await remoteSnapshot(classification.category, 'before')
       }
+      return { operation: classification.category, before }
     } catch {
       return { operation: classification.category }
     }
@@ -2885,6 +3604,15 @@ function createSessionRuntime(
     args: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
+    // Decided before any argument work: fingerprinting can fail on large
+    // arguments, and a skipped call must not depend on it.
+    if (!operationObservationApplies()) {
+      skippedOperations.add(digestCall(ledger, host.callID))
+      return
+    }
+    // Captured before the first await: the unit can change while the
+    // snapshot and remote probes are in flight.
+    const initiator = currentInitiator()
     const { parentTargetRoot, sessionLocation } = effectiveTargetContext()
     const fingerprint = argsFingerprint(
       ledger,
@@ -2893,7 +3621,7 @@ function createSessionRuntime(
       sessionLocation,
     )
     if (!fingerprint) {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid'))
       return
     }
     const callDigest = digestCall(ledger, host.callID)
@@ -2908,7 +3636,7 @@ function createSessionRuntime(
       validateRegisteredWorktree: options.observer.validateRegisteredWorktree,
     })
     if (target.status === 'unavailable') {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid', target.reasonCode))
       return
     }
     let registeredTarget: RegisteredWorktreeValidationResult
@@ -2917,7 +3645,7 @@ function createSessionRuntime(
         target.targetRoot,
       )
     } catch {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid'))
       return
     }
     const registeredIdentity = registeredWorktreeIdentity(registeredTarget)
@@ -2926,7 +3654,14 @@ function createSessionRuntime(
       registeredIdentity === undefined ||
       registeredTarget.targetRoot !== target.targetRoot
     ) {
-      markUnavailable()
+      markUnavailable(
+        beforeCause(
+          'operation-input-invalid',
+          registeredTarget.status === 'error'
+            ? registeredTarget.reasonCode
+            : undefined,
+        ),
+      )
       return
     }
     const canonicalParentTargetRoot = canonicalExistingPath(
@@ -2934,7 +3669,7 @@ function createSessionRuntime(
       fs.realpathSync,
     )
     if (!canonicalParentTargetRoot) {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-input-invalid'))
       return
     }
     const operationObserver =
@@ -2943,22 +3678,24 @@ function createSessionRuntime(
         : ([...operationObservers.values()].find(
             (registration) => registration.targetRoot === target.targetRoot,
           )?.observer ??
-          createOpencodeOperationObserver({
-            targetDirectory: target.targetRoot,
-          }))
+          (options.createTargetObserver ?? defaultTargetObserver)(
+            target.targetRoot,
+          ))
     let result: OperationObserverResult
     try {
       result = await operationObserver.snapshot()
     } catch {
-      markUnavailable()
+      markUnavailable(beforeCause('local-snapshot-error'))
       return
     }
     if (result.status === 'unavailable') {
-      markUnavailable()
+      markUnavailable(
+        beforeCause('local-snapshot-unavailable', result.reasonCode),
+      )
       return
     }
     if (result.snapshot.targetDigest !== operationObserver.targetDigest) {
-      markUnavailable()
+      markUnavailable(beforeCause('operation-target-mismatch'))
       return
     }
     rememberOperationObserver({
@@ -2967,6 +3704,14 @@ function createSessionRuntime(
       observer: operationObserver,
     })
     const remote = await remoteIntentForOperation(host, args, operationObserver)
+    if (remote) {
+      bindDeferredBaseline(
+        remote.operation,
+        remote.before,
+        operationObserver,
+        initiator,
+      )
+    }
     pendingOperations.set(callDigest, {
       callID: host.callID,
       tool: host.tool,
@@ -2976,6 +3721,7 @@ function createSessionRuntime(
       registeredWorktreeIdentity: registeredIdentity,
       observer: operationObserver,
       before: result.snapshot,
+      ...(initiator ? { initiator } : {}),
       ...(remote
         ? { remoteOperation: remote.operation, remoteBefore: remote.before }
         : {}),
@@ -3105,7 +3851,12 @@ function createSessionRuntime(
       await prepareHostCall(host, output.args)
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
-      markUnavailable()
+      markUnavailable(hookCause('tool-before', 'hook-threw'))
+      // With no guard there is nothing to enforce or observe the call, so
+      // protected mode must not let it run.
+      if (options.config.mode === 'protected' && !guardPublished()) {
+        throw createWorkflowGuardBlockedError('guard-unavailable')
+      }
     }
   }
 
@@ -3144,55 +3895,207 @@ function createSessionRuntime(
         timedOut: local.reasonCode === 'command-timeout',
       }
     }
-    for (const operation of remoteOperations) {
-      const cause = await seedRemoteScope(
-        remoteSnapshot,
-        operation,
-        local.snapshot,
-      )
-      if (cause) return cause
+    return seedEachRemoteScope(remoteOperations, remoteSnapshot, local.snapshot)
+  }
+
+  // Continues past deferrals; only a fatal outcome stops seeding.
+  async function seedEachRemoteScope(
+    operations: readonly RemoteOperation[],
+    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+    local: OperationObserverSnapshot,
+  ): Promise<GuardUnavailableCause | undefined> {
+    for (const operation of operations) {
+      const outcome = await seedRemoteScope(reader, operation, local)
+      if (outcome.kind === 'fatal') return outcome.cause
+      if (outcome.kind === 'deferred') {
+        recordSeedDeferral(operation, outcome.reasonCode)
+      }
     }
     return undefined
+  }
+
+  // A deferral is recorded only when the core has no baseline for the
+  // operation yet (neither declared on the unit nor propagated from PR
+  // creation): with a baseline there is nothing left to defer.
+  function recordSeedDeferral(
+    operation: RemoteOperation,
+    reasonCode: SeedDeferralReason,
+  ): void {
+    if (requireGuard().hasResourceBaseline(operation)) return
+    const observer = options.observer
+    if (!observer) return
+    seedDeferralEntries(true).push({
+      operation,
+      reasonCode,
+      observer,
+      targetIdentity: observer.targetDigest,
+    })
+  }
+
+  // The active unit's deferral entries. A record left by another unit is
+  // never returned; with `reset` it is replaced by an empty one for the
+  // active unit. With no active unit nothing is recorded: the returned array
+  // is a throwaway.
+  function seedDeferralEntries(reset = false): DeferredSeed[] {
+    const unitId = requireGuard().status().unit?.unitId
+    if (!unitId) return []
+    if (seedDeferralRecord?.unitId === unitId) return seedDeferralRecord.entries
+    if (!reset) return []
+    seedDeferralRecord = { unitId, entries: [] }
+    return seedDeferralRecord.entries
+  }
+
+  function deferredSeedFor(
+    operation: RemoteOperation,
+  ): DeferredSeed | undefined {
+    return seedDeferralEntries().find((entry) => entry.operation === operation)
+  }
+
+  function clearSeedDeferral(operation: RemoteOperation): void {
+    if (!seedDeferralRecord) return
+    const index = seedDeferralRecord.entries.findIndex(
+      (entry) => entry.operation === operation,
+    )
+    if (index !== -1) seedDeferralRecord.entries.splice(index, 1)
+  }
+
+  // Binds a deferred baseline from the operation's own before-read, and only
+  // from the observer and target the seed used. The readback names its
+  // operation and carries the resource identity (plus revision for push)
+  // only: no repository or worktree identities, and no PR-scope propagation.
+  // The one exception is a `missing-resource` before-read for pr-creation,
+  // which clears the deferral without binding because creation seeds its
+  // baseline from the after-read. For every other operation, including
+  // push, check-readback, and review-readback, anything that does not bind
+  // leaves the deferral in place; nothing here marks the session unavailable
+  // (the receipt fails closed instead).
+  function bindDeferredBaseline(
+    operation: RemoteOperation,
+    before: OperationObserverRemoteResult | undefined,
+    observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
+  ): void {
+    // A read that began under another unit (or none) must not satisfy the
+    // deferral of the unit that is active now.
+    if (!initiator || !isCurrentInitiator(initiator)) return
+    const deferred = deferredSeedFor(operation)
+    if (!deferred) return
+    // A baseline established since the deferral was recorded (for example
+    // propagated from a PR-creation self-seed) makes it obsolete. Never
+    // overwrite it; admission compares the operation against it.
+    if (requireGuard().hasResourceBaseline(operation)) {
+      clearSeedDeferral(operation)
+      return
+    }
+    if (!before || !sameSeedObserver(deferred, observer)) return
+    bindFromBeforeRead(operation, before)
+  }
+
+  function bindFromBeforeRead(
+    operation: RemoteOperation,
+    before: OperationObserverRemoteResult,
+  ): void {
+    if (before.status === 'missing-resource') {
+      if (operation === 'pr-creation') clearSeedDeferral(operation)
+      return
+    }
+    if (before.status !== 'available') return
+    const observed = requireGuard().observeReadback(
+      deferredBaselineReadback(operation, before.snapshot),
+    )
+    if (observed.status !== 'rejected') clearSeedDeferral(operation)
+  }
+
+  function currentInitiator(): OperationInitiator | undefined {
+    const current = requireGuard().status()
+    return current.epoch && current.unit
+      ? {
+          epochId: current.epoch.epochId,
+          unitId: current.unit.unitId,
+          generation: unitStartGeneration,
+        }
+      : undefined
+  }
+
+  function isCurrentInitiator(initiator: OperationInitiator): boolean {
+    const current = currentInitiator()
+    return (
+      current !== undefined &&
+      current.epochId === initiator.epochId &&
+      current.unitId === initiator.unitId &&
+      current.generation === initiator.generation
+    )
+  }
+
+  function sameSeedObserver(
+    deferred: DeferredSeed,
+    observer: OpencodeOperationObserver,
+  ): boolean {
+    return (
+      observer === deferred.observer &&
+      observer.targetDigest === deferred.targetIdentity
+    )
+  }
+
+  function deferredBaselineReadback(
+    operation: RemoteOperation,
+    snapshot: OperationObserverRemoteSnapshot,
+  ): Record<string, unknown> {
+    return {
+      operation,
+      workspaceIdentity: options.workspaceIdentity,
+      resourceIdentity: snapshot.resourceIdentity,
+      ...(operation === 'push'
+        ? { resourceRevisionIdentity: snapshot.resourceRevisionIdentity }
+        : {}),
+      ...(operation === 'pr-creation' ? { propagate: false } : {}),
+    }
+  }
+
+  function currentSeedDeferrals(): readonly SeedDeferral[] {
+    return seedDeferralEntries().map(({ operation, reasonCode }) => ({
+      operation,
+      reasonCode,
+    }))
+  }
+
+  function fatalSeed(cause: GuardUnavailableCause): RemoteSeedOutcome {
+    return { kind: 'fatal', cause }
   }
 
   async function seedRemoteScope(
     reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
     operation: RemoteOperation,
     local: OperationObserverSnapshot,
-  ): Promise<GuardUnavailableCause | undefined> {
+  ): Promise<RemoteSeedOutcome> {
     const result = await readRemoteScope(reader, operation, 'before')
     if (!result) {
-      return {
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-scope-unreadable',
         operation,
         timedOut: false,
-      }
+      })
     }
     if (result.status === 'missing-resource') {
-      const allowed =
-        operation === 'pr-creation' ||
-        operation === 'check-readback' ||
-        operation === 'review-readback'
-      return allowed
-        ? undefined
-        : {
-            site: 'seed-remote-scope',
-            kind: 'remote-scope-missing-resource',
-            operation,
-            timedOut: false,
-          }
+      if (operation === 'push') {
+        return { kind: 'deferred', reasonCode: 'missing-resource' }
+      }
+      return { kind: 'tolerated' }
     }
     if (result.status !== 'available') {
-      return {
+      if (result.reasonCode === 'command-timeout') {
+        return { kind: 'deferred', reasonCode: 'command-timeout' }
+      }
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-scope-unavailable',
         operation,
         reasonCode: result.reasonCode,
-        timedOut: result.reasonCode === 'command-timeout',
-      }
+        timedOut: false,
+      })
     }
-    const observed = guard.observeReadback(
+    const observed = requireGuard().observeReadback(
       remoteReadbackInput(
         operation,
         local,
@@ -3202,15 +4105,15 @@ function createSessionRuntime(
       ),
     )
     if (observed.status === 'rejected') {
-      return {
+      return fatalSeed({
         site: 'seed-remote-scope',
         kind: 'remote-readback-rejected',
         operation,
         reasonCode: observed.reasonCode,
         timedOut: false,
-      }
+      })
     }
-    return undefined
+    return { kind: 'seeded' }
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host skill completion preserves ordering and marker projection
@@ -3222,20 +4125,22 @@ function createSessionRuntime(
     const finalSkill = normalizeSkill(host.tool, host.args)
     const completedSkill = completedSkillCalls.get(callDigest)
     if (completedSkill) {
-      if (completedSkill !== finalSkill) markUnavailable()
+      if (completedSkill !== finalSkill) {
+        markUnavailable(afterCause('call-lifecycle-mismatch'))
+      }
       return
     }
     const pending = pendingSkills.get(callDigest)
     if (!pending) return
     pendingSkills.delete(callDigest)
     if (!finalSkill || finalSkill !== pending.skill) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     if (!isSuccessfulSkillAfter(output)) return
     completedSkillCalls.set(callDigest, pending.skill)
     await activateCompletedSkill(pending.skill)
-    const status = guard.status()
+    const status = requireGuard().status()
     if (status.epoch) {
       mergeProgressionMarker(
         output,
@@ -3266,7 +4171,7 @@ function createSessionRuntime(
   }
 
   async function activateCompletedSkill(skill: string): Promise<void> {
-    const activation = guard.activate({
+    const activation = requireGuard().activate({
       event: 'guarded-skill',
       skill,
       outcome: 'success',
@@ -3280,7 +4185,7 @@ function createSessionRuntime(
         skill,
         options.runtimeRequiredOperations ?? [],
       )
-      const status = guard.status()
+      const status = requireGuard().status()
       if (!status.unit || status.unit.status === 'completed') {
         startFreshUnit({}, runtimePolicy)
         const cause = await seedRemoteScopes(
@@ -3300,7 +4205,7 @@ function createSessionRuntime(
     const pending = pendingStarts.get(callDigest)
     pendingStarts.delete(callDigest)
     if (!pending) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     const normalized = normalizeStartInput(host.args)
@@ -3308,7 +4213,7 @@ function createSessionRuntime(
       normalized === undefined ||
       JSON.stringify(normalized) !== pending.fingerprint
     ) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
     if (!isSuccessfulAfter(output)) return
@@ -3318,7 +4223,7 @@ function createSessionRuntime(
       (result.reasonCode === 'guard-unavailable' ||
         result.reasonCode === 'invalid-configuration')
     ) {
-      markUnavailable()
+      markUnavailable(afterCause('unit-start-rejected', result.reasonCode))
     }
     if (result.status === 'started') {
       const cause = await seedRemoteScopes(
@@ -3327,7 +4232,7 @@ function createSessionRuntime(
       if (cause) markUnavailable(cause)
     }
     if (result.status === 'started') {
-      const startedStatus = guard.status()
+      const startedStatus = requireGuard().status()
       const epoch = startedStatus.epoch
       const unit = startedStatus.unit
       if (!epoch || !unit) return
@@ -3351,7 +4256,7 @@ function createSessionRuntime(
   function replayComplete(callDigest: string): boolean {
     const replay = finalizedCompletes.get(callDigest)
     if (!replay) return false
-    guard.finalizeTransition({
+    requireGuard().finalizeTransition({
       callId: replay.callID,
       transitionId: replay.transitionId,
     })
@@ -3366,7 +4271,7 @@ function createSessionRuntime(
   ): void {
     pendingCompletes.delete(callDigest)
     if (!isSuccessfulAfter(output)) {
-      guard.abandonTransition({
+      requireGuard().abandonTransition({
         callId: pending.callID,
         transitionId: pending.transitionId,
       })
@@ -3390,7 +4295,7 @@ function createSessionRuntime(
       })
       return
     }
-    const result = guard.finalizeTransition({
+    const result = requireGuard().finalizeTransition({
       callId: pending.callID,
       transitionId: pending.transitionId,
       ...(readbacks ? { readbacks } : {}),
@@ -3400,9 +4305,9 @@ function createSessionRuntime(
       writeSuccessfulCompletionResult(output, pending.target)
       return
     }
-    markUnavailable()
     const reasonCode =
       'reasonCode' in result ? result.reasonCode : 'guard-unavailable'
+    markUnavailable(afterCause('transition-finalize-rejected', reasonCode))
     const terminal: TerminalComplete = {
       target: pending.target,
       status: result.status === 'waiting' ? 'unavailable' : result.status,
@@ -3426,7 +4331,7 @@ function createSessionRuntime(
       writeAbandonedCompletionMetadata(output, target, terminal.reasonCode)
       return
     }
-    writeTerminalCompletionResult(output, terminal, target)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
   }
 
   function replayTerminalComplete(
@@ -3461,15 +4366,16 @@ function createSessionRuntime(
     }
     const replay = finalizedCompletes.get(callDigest)
     const abandonedTarget = abandonedCompletes.get(callDigest)
-    const blockedTarget = blockedCompletes.get(callDigest)
-    const expectedTarget = replay?.target ?? abandonedTarget ?? blockedTarget
+    const blocked = blockedCompletes.get(callDigest)
+    const expectedTarget = replay?.target ?? abandonedTarget ?? blocked?.target
     if (!expectedTarget) return false
     if (finalTarget !== expectedTarget) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return true
     }
     if (replay) replayComplete(callDigest)
     blockedCompletes.delete(callDigest)
+    writeBlockedCompleteResult(callDigest, output, blocked)
     return true
   }
 
@@ -3479,119 +4385,59 @@ function createSessionRuntime(
     remember: boolean,
   ): void {
     pendingCompletes.delete(callDigest)
-    guard.abandonTransition({
+    requireGuard().abandonTransition({
       callId: pending.callID,
       transitionId: pending.transitionId,
     })
     if (remember) abandonedCompletes.set(callDigest, pending.target)
   }
 
+  // The first stage that is not ok ends the attempt. A `command-timeout` at
+  // any stage is `timeout` (retryable); throws, `undefined`, target mismatch,
+  // revision drift, an invalid pinned lookup, and every other reason are
+  // `fatal`.
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fail-closed effective-observer selection and readback bundle construction must remain a single ordered pipeline
-  async function completionReadbacks(): Promise<
-    | { status: 'none' }
-    | { status: 'unavailable' }
-    | { status: 'ready'; readbacks: readonly unknown[] }
-  > {
-    if (!options.observer) return { status: 'none' }
-    let parentResult: OperationObserverResult
-    try {
-      parentResult = await options.observer.snapshot()
-    } catch {
-      return { status: 'unavailable' }
-    }
-    if (
-      parentResult.status === 'unavailable' ||
-      parentResult.snapshot.targetDigest !== options.workspaceIdentity
-    ) {
-      return { status: 'unavailable' }
-    }
-    const effective = effectiveOperationObserver()
-    if (!effective) return { status: 'unavailable' }
-    let effectiveSnapshot = parentResult.snapshot
+  async function completionReadbacks(): Promise<CompletionReadbackOutcome> {
+    const observer = options.observer
+    if (!observer) return { status: 'none' }
+    const parent = await readSnapshot(observer, options.workspaceIdentity)
+    if (parent.status !== 'ok') return parent
+    const lookup = resolveEffectiveObserver()
+    if (lookup.status !== 'ok') return lookup
+    const effective = lookup.value
+    let initialEffective = parent.value
     if (effective.pinned) {
-      let pinnedResult: OperationObserverResult
-      try {
-        pinnedResult = await effective.observer.snapshot()
-      } catch {
-        return { status: 'unavailable' }
-      }
-      if (
-        pinnedResult.status === 'unavailable' ||
-        pinnedResult.snapshot.targetDigest !== effective.targetIdentity
-      ) {
-        return { status: 'unavailable' }
-      }
-      effectiveSnapshot = pinnedResult.snapshot
+      const pinned = await readSnapshot(
+        effective.observer,
+        effective.targetIdentity,
+      )
+      if (pinned.status !== 'ok') return pinned
+      initialEffective = pinned.value
     }
-    const initialEffectiveSnapshot = effectiveSnapshot
-    const remoteReadbacks = await completionRemoteReadbacks(effective.observer)
-    if (!remoteReadbacks) return { status: 'unavailable' }
-    let finalParentResult: OperationObserverResult
-    try {
-      finalParentResult = await options.observer.snapshot()
-    } catch {
-      return { status: 'unavailable' }
+    const remote = await completionRemoteReadbacks(effective.observer)
+    if (remote.status !== 'ready') return remote
+    const finalParent = await readSnapshot(observer)
+    if (finalParent.status !== 'ok') return finalParent
+    if (completionParentDrifted(parent.value, finalParent.value)) {
+      return { status: 'fatal' }
     }
-    if (
-      finalParentResult.status === 'unavailable' ||
-      finalParentResult.snapshot.targetDigest !==
-        parentResult.snapshot.targetDigest ||
-      finalParentResult.snapshot.repositoryRevisionDigest !==
-        parentResult.snapshot.repositoryRevisionDigest ||
-      finalParentResult.snapshot.worktreeRevisionDigest !==
-        parentResult.snapshot.worktreeRevisionDigest
-    ) {
-      return { status: 'unavailable' }
-    }
-    let finalEffective = effective
-    if (effective.pinned) {
-      const revalidated = effectiveOperationObserver()
-      if (!revalidated) return { status: 'unavailable' }
-      finalEffective = revalidated
-      if (
-        finalEffective.observer !== effective.observer ||
-        finalEffective.targetIdentity !== effective.targetIdentity ||
-        !finalEffective.pinned
-      ) {
-        return { status: 'unavailable' }
-      }
-      let pinnedResult: OperationObserverResult
-      try {
-        pinnedResult = await finalEffective.observer.snapshot()
-      } catch {
-        return { status: 'unavailable' }
-      }
-      if (
-        pinnedResult.status === 'unavailable' ||
-        pinnedResult.snapshot.targetDigest !== finalEffective.targetIdentity
-      ) {
-        return { status: 'unavailable' }
-      }
-      effectiveSnapshot = pinnedResult.snapshot
-      if (
-        effectiveSnapshot.repositoryRevisionDigest !==
-          initialEffectiveSnapshot.repositoryRevisionDigest ||
-        effectiveSnapshot.worktreeRevisionDigest !==
-          initialEffectiveSnapshot.worktreeRevisionDigest
-      ) {
-        return { status: 'unavailable' }
-      }
-    } else {
-      effectiveSnapshot = finalParentResult.snapshot
-    }
+    const final = effective.pinned
+      ? await revalidatePinnedCompletion(effective, initialEffective)
+      : { status: 'ready' as const, effective, snapshot: finalParent.value }
+    if (final.status !== 'ready') return final
     return {
       status: 'ready',
       readbacks: [
         {
           workspaceIdentity: options.workspaceIdentity,
-          repositoryIdentity: effectiveSnapshot.repositoryRevisionDigest,
-          worktreeIdentity: effectiveSnapshot.worktreeRevisionDigest,
-          operationTargetIdentity: finalEffective.targetIdentity,
+          repositoryIdentity: final.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: final.snapshot.worktreeRevisionDigest,
+          operationTargetIdentity: final.effective.targetIdentity,
         },
-        ...remoteReadbacks.map(({ operation, snapshot }) =>
+        ...remote.readbacks.map(({ operation, snapshot }) =>
           remoteReadbackInput(
             operation,
-            effectiveSnapshot,
+            final.snapshot,
             options.workspaceIdentity,
             snapshot,
           ),
@@ -3600,31 +4446,81 @@ function createSessionRuntime(
     }
   }
 
+  function completionParentDrifted(
+    initial: OperationObserverSnapshot,
+    final: OperationObserverSnapshot,
+  ): boolean {
+    return (
+      final.targetDigest !== initial.targetDigest ||
+      final.repositoryRevisionDigest !== initial.repositoryRevisionDigest ||
+      final.worktreeRevisionDigest !== initial.worktreeRevisionDigest
+    )
+  }
+
+  // Second lookup and snapshot of the pinned target. The observer, target, and
+  // revision digests must be exactly what the first pass saw.
+  async function revalidatePinnedCompletion(
+    effective: EffectiveOperationObserver,
+    initial: OperationObserverSnapshot,
+  ): Promise<
+    | {
+        readonly status: 'ready'
+        readonly effective: EffectiveOperationObserver
+        readonly snapshot: OperationObserverSnapshot
+      }
+    | ProbeFailure
+  > {
+    const lookup = resolveEffectiveObserver()
+    if (lookup.status !== 'ok') return lookup
+    const revalidated = lookup.value
+    if (
+      revalidated.observer !== effective.observer ||
+      revalidated.targetIdentity !== effective.targetIdentity ||
+      !revalidated.pinned
+    ) {
+      return { status: 'fatal' }
+    }
+    const pinned = await readSnapshot(
+      revalidated.observer,
+      revalidated.targetIdentity,
+    )
+    if (pinned.status !== 'ok') return pinned
+    if (
+      pinned.value.repositoryRevisionDigest !==
+        initial.repositoryRevisionDigest ||
+      pinned.value.worktreeRevisionDigest !== initial.worktreeRevisionDigest
+    ) {
+      return { status: 'fatal' }
+    }
+    return {
+      status: 'ready',
+      effective: revalidated,
+      snapshot: pinned.value,
+    }
+  }
+
   async function completionRemoteReadbacks(
     observer: OpencodeOperationObserver,
-  ): Promise<
-    | readonly {
-        operation: RemoteOperation
-        snapshot: OperationObserverRemoteSnapshot
-      }[]
-    | undefined
-  > {
-    const remoteOperations = guard
+  ): Promise<CompletionRemoteOutcome> {
+    const remoteOperations = requireGuard()
       .status()
       .satisfiedOperations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return []
+    if (remoteOperations.length === 0) return { status: 'ready', readbacks: [] }
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return undefined
+    if (!remoteSnapshot) return { status: 'fatal' }
     const readbacks: Array<{
       operation: RemoteOperation
       snapshot: OperationObserverRemoteSnapshot
     }> = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
-      if (result?.status !== 'available') return undefined
+      if (isProbeTimeout(result)) return { status: 'timeout' }
+      if (result?.status !== 'available') {
+        return { status: 'fatal', reasonCode: remoteFailureReason(result) }
+      }
       readbacks.push({ operation, snapshot: result.snapshot })
     }
-    return readbacks
+    return { status: 'ready', readbacks }
   }
 
   function finishMismatchedTarget(
@@ -3642,7 +4538,7 @@ function createSessionRuntime(
       status: 'unavailable',
       reasonCode: 'invalid-transition',
     })
-    markUnavailable()
+    markUnavailable(afterCause('call-lifecycle-mismatch'))
     writeAbandonedCompletionResult(output, pending.target, 'invalid-transition')
   }
 
@@ -3650,7 +4546,7 @@ function createSessionRuntime(
     finalTarget: TransitionTarget | undefined,
     output: unknown,
   ): void {
-    markUnavailable()
+    markUnavailable(afterCause('call-lifecycle-mismatch'))
     // No pending transition and nothing replayable: `finalTarget` is
     // whatever normalizeTarget() could read out of this call's own args
     // (real, when the args named a valid target) and is passed through
@@ -3660,17 +4556,67 @@ function createSessionRuntime(
     writeAbandonedCompletionResult(output, finalTarget, 'guard-unavailable')
   }
 
+  // A fatal completion readback. The terminal entry makes a duplicate
+  // after-hook replay exactly the result written here, and the transition
+  // records its cause (first-wins: a session that was already unavailable keeps
+  // its earlier cause).
   function finishUnavailableReadback(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+    reasonCode?: GuardUnavailableCause['reasonCode'],
+  ): void {
+    abandonComplete(callDigest, pending, true)
+    terminalCompletes.set(callDigest, {
+      target: pending.target,
+      status: 'unavailable',
+      reasonCode: 'finalization-failed',
+    })
+    markUnavailable(
+      observerReadbackFailedCause(reasonCode, 'complete-readback'),
+    )
+    writeAbandonedCompletionResult(
+      output,
+      pending.target,
+      'finalization-failed',
+    )
+  }
+
+  // A session that went unavailable while the probe was in flight is not
+  // retryable: it takes the fatal path.
+  function finishReadbackTimeout(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+  ): void {
+    if (requireGuard().status().state === 'unavailable') {
+      finishUnavailableReadback(callDigest, pending, output, 'command-timeout')
+    } else {
+      finishRetryableReadback(callDigest, pending, output)
+    }
+  }
+
+  // A probe timed out: reject this attempt as retryable. Nothing is consumed
+  // and the session is NOT marked unavailable. The terminal entry makes a
+  // duplicate after-hook replay exactly what is written here.
+  function finishRetryableReadback(
     callDigest: string,
     pending: PendingComplete,
     output: unknown,
   ): void {
     abandonComplete(callDigest, pending, true)
-    markUnavailable()
-    writeAbandonedCompletionResult(
+    const terminal: TerminalComplete = {
+      target: pending.target,
+      status: 'rejected',
+      reasonCode: 'readback-timeout',
+      title: 'Workflow readback timed out',
+    }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(
       output,
+      terminal,
       pending.target,
-      'finalization-failed',
+      terminal.title,
     )
   }
 
@@ -3690,13 +4636,18 @@ function createSessionRuntime(
       finishUnreplayableComplete(finalTarget, output)
       return
     }
-    if (!options.observer) {
-      finalizeComplete(callDigest, pending, output)
+    const readbacks = await completionReadbacks()
+    if (readbacks.status === 'fatal') {
+      finishUnavailableReadback(
+        callDigest,
+        pending,
+        output,
+        readbacks.reasonCode,
+      )
       return
     }
-    const readbacks = await completionReadbacks()
-    if (readbacks.status === 'unavailable') {
-      finishUnavailableReadback(callDigest, pending, output)
+    if (readbacks.status === 'timeout') {
+      finishReadbackTimeout(callDigest, pending, output)
       return
     }
     finalizeComplete(
@@ -3728,6 +4679,7 @@ function createSessionRuntime(
     const sealed = sealedOperations.get(callDigest)
     const abandoned = abandonedOperations.get(callDigest)
     const prior = sealed ?? abandoned
+    if (prior !== undefined && 'skipped' in prior) return true
     return (
       prior !== undefined &&
       fingerprint !== undefined &&
@@ -3743,7 +4695,7 @@ function createSessionRuntime(
   ): PendingOperation | undefined {
     const pending = pendingOperations.get(callDigest)
     if (!pending) {
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return undefined
     }
     pendingOperations.delete(callDigest)
@@ -3753,23 +4705,23 @@ function createSessionRuntime(
       fingerprint !== pending.argsFingerprint
     ) {
       sealOperation(callDigest, pending, true)
-      markUnavailable()
+      markUnavailable(afterCause('call-lifecycle-mismatch'))
       return undefined
     }
     return pending
   }
 
-  async function captureAfterOperation(
+  // Re-validates the registered worktree the operation began under. Returns
+  // the typed failure when it no longer matches.
+  function afterTargetFailure(
+    observer: OpencodeOperationObserver,
     pending: PendingOperation,
-  ): Promise<OperationObserverSnapshot | undefined> {
-    if (!options.observer) return undefined
+  ): OperationFailure | undefined {
     let validation: RegisteredWorktreeValidationResult
     try {
-      validation = options.observer.validateRegisteredWorktree(
-        pending.targetRoot,
-      )
+      validation = observer.validateRegisteredWorktree(pending.targetRoot)
     } catch {
-      return undefined
+      return afterFailure('operation-input-invalid')
     }
     if (
       validation.status === 'error' ||
@@ -3777,33 +4729,58 @@ function createSessionRuntime(
       registeredWorktreeIdentity(validation) !==
         pending.registeredWorktreeIdentity
     ) {
-      return undefined
+      return afterFailure(
+        'operation-input-invalid',
+        validation.status === 'error' ? validation.reasonCode : undefined,
+      )
     }
+    return undefined
+  }
+
+  async function captureAfterOperation(
+    pending: PendingOperation,
+  ): Promise<
+    | { status: 'available'; snapshot: OperationObserverSnapshot }
+    | OperationFailure
+  > {
+    if (!options.observer) return afterFailure('operation-input-invalid')
+    const targetFailure = afterTargetFailure(options.observer, pending)
+    if (targetFailure) return targetFailure
     let result: OperationObserverResult
     try {
       result = await pending.observer.snapshot()
     } catch {
-      return undefined
+      return afterFailure('local-snapshot-error')
     }
-    return result.status === 'available' &&
-      result.snapshot.targetDigest === pending.targetIdentity
-      ? result.snapshot
-      : undefined
+    if (result.status === 'unavailable') {
+      return afterFailure('local-snapshot-unavailable', result.reasonCode)
+    }
+    return result.snapshot.targetDigest === pending.targetIdentity
+      ? { status: 'available', snapshot: result.snapshot }
+      : afterFailure('operation-target-mismatch')
   }
 
   async function captureRemoteAfter(
     operation: RemoteOperation,
     observer: OpencodeOperationObserver,
-  ): Promise<OperationObserverRemoteSnapshot | undefined> {
+  ): Promise<
+    | { status: 'available'; snapshot: OperationObserverRemoteSnapshot }
+    | OperationFailure
+  > {
     const remoteSnapshot = observer.remoteSnapshot
-    if (!remoteSnapshot) return undefined
+    if (!remoteSnapshot) return afterFailure('operation-observation-rejected')
     let result: OperationObserverRemoteResult
     try {
       result = await remoteSnapshot(operation, 'after')
     } catch {
-      return undefined
+      return afterFailure('operation-observation-rejected')
     }
-    return result.status === 'available' ? result.snapshot : undefined
+    return result.status === 'available'
+      ? { status: 'available', snapshot: result.snapshot }
+      : afterFailure(
+          'operation-observation-rejected',
+          remoteFailureReason(result),
+        )
   }
 
   async function readRemoteScope(
@@ -3838,8 +4815,9 @@ function createSessionRuntime(
       tool: host.tool,
       ...(command ? { command } : {}),
       context: {
-        epochId: current.epoch.epochId,
-        unitId: current.unit.unitId,
+        // The unit the operation began under, not whichever is current now.
+        epochId: pending.initiator?.epochId ?? current.epoch.epochId,
+        unitId: pending.initiator?.unitId ?? current.unit.unitId,
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: pending.before.repositoryRevisionDigest,
         worktreeIdentity: pending.before.worktreeRevisionDigest,
@@ -3852,7 +4830,9 @@ function createSessionRuntime(
               resourceRevisionIdentity:
                 pending.remoteBefore.snapshot.resourceRevisionIdentity,
             }
-          : operation === 'pr-creation' && remoteAfter
+          : operation === 'pr-creation' &&
+              remoteAfter &&
+              pending.remoteBefore?.status === 'missing-resource'
             ? { resourceIdentity: remoteAfter.resourceIdentity }
             : {}),
       },
@@ -3887,17 +4867,17 @@ function createSessionRuntime(
   async function classifyLocalObservation(
     observation: ReceiptOperationObservation,
   ): Promise<
-    | { status: 'unavailable' }
+    | OperationFailure
     | { status: 'deferred' }
     | { status: 'ready'; observation: ReceiptOperationObservation }
   > {
     const classify = options.classifier?.classifyOperation
-    if (!classify) return { status: 'unavailable' }
+    if (!classify) return afterFailure('operation-classifier-unavailable')
     let classification: ReceiptClassification
     try {
       classification = await classify(observation)
     } catch {
-      return { status: 'unavailable' }
+      return afterFailure('operation-classifier-unavailable')
     }
     if (!localOperation(classification.category)) {
       if (remoteOperation(classification.category)) {
@@ -3911,7 +4891,7 @@ function createSessionRuntime(
       }
       return classification.category === null
         ? { status: 'deferred' }
-        : { status: 'unavailable' }
+        : afterFailure('operation-classifier-unavailable')
     }
     return {
       status: 'ready',
@@ -3923,10 +4903,29 @@ function createSessionRuntime(
     observation: ReceiptOperationObservation,
   ): Promise<EvidenceObservationResult | undefined> {
     try {
-      return await guard.observeOperation(observation)
+      return await requireGuard().observeOperation(observation)
     } catch {
       return undefined
     }
+  }
+
+  // True while the unit the operation began under is still the current
+  // declaration. An operation with no captured initiator (it began before any
+  // unit existed) is not tied to one.
+  function ownsOperation(pending: PendingOperation): boolean {
+    return !pending.initiator || isCurrentInitiator(pending.initiator)
+  }
+
+  // Ownership is revalidated after every await in the pipeline below and
+  // before any self-seed or admission: the unit can complete and a successor
+  // (or a redeclaration) can start while an after-read is in flight. A lost
+  // operation mints nothing, seeds nothing, and propagates nothing.
+  function sealLostOperation(
+    callDigest: string,
+    pending: PendingOperation,
+  ): OperationCompletionResult {
+    sealOperation(callDigest, pending, true)
+    return { status: 'ignored' }
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
@@ -3936,21 +4935,24 @@ function createSessionRuntime(
     pending: PendingOperation,
     output: unknown,
   ): Promise<OperationCompletionResult> {
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)
-      return { status: 'unavailable' }
+      return afterFailure('operation-input-invalid')
     }
-    const afterSnapshot = await captureAfterOperation(pending)
-    if (!afterSnapshot) {
+    const capture = await captureAfterOperation(pending)
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
-      return { status: 'unavailable' }
+      return capture
     }
+    const afterSnapshot = capture.snapshot
     const observation = buildOperationObservation(
       host,
       pending,
       afterSnapshot,
-      guard.status(),
+      requireGuard().status(),
       parsedOutput,
     )
     if (!observation) {
@@ -3958,25 +4960,30 @@ function createSessionRuntime(
       return { status: 'ignored' }
     }
     const classification = await classifyLocalObservation(observation)
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     if (classification.status !== 'ready') {
       sealOperation(callDigest, pending, true)
-      return { status: classification.status }
+      return classification
     }
     let finalObservation = classification.observation
     if (remoteOperation(finalObservation.operation)) {
-      const remoteAfter = await captureRemoteAfter(
+      const remoteCapture = await captureRemoteAfter(
         finalObservation.operation,
         pending.observer,
       )
-      if (!remoteAfter) {
-        sealOperation(callDigest, pending, true)
-        return { status: 'unavailable' }
+      if (!ownsOperation(pending)) {
+        return sealLostOperation(callDigest, pending)
       }
+      if (remoteCapture.status === 'unavailable') {
+        sealOperation(callDigest, pending, true)
+        return remoteCapture
+      }
+      const remoteAfter = remoteCapture.snapshot
       const rebuilt = buildOperationObservation(
         host,
         pending,
         afterSnapshot,
-        guard.status(),
+        requireGuard().status(),
         parsedOutput,
         finalObservation.operation,
         remoteAfter,
@@ -3988,9 +4995,9 @@ function createSessionRuntime(
       finalObservation = rebuilt
       if (
         finalObservation.operation === 'pr-creation' &&
-        pending.remoteBefore?.status !== 'available'
+        pending.remoteBefore?.status === 'missing-resource'
       ) {
-        const seeded = guard.observeReadback({
+        const seeded = requireGuard().observeReadback({
           operation: 'pr-creation',
           workspaceIdentity: options.workspaceIdentity,
           repositoryIdentity: afterSnapshot.repositoryRevisionDigest,
@@ -4002,18 +5009,24 @@ function createSessionRuntime(
         })
         if (seeded.status === 'rejected') {
           sealOperation(callDigest, pending, true)
-          return { status: 'unavailable' }
+          return afterFailure(
+            'operation-observation-rejected',
+            seeded.reasonCode,
+          )
         }
       }
     }
+    // No await separates the last ownership check from the admission call
+    // below, whose synchronous prefix reads the guard state.
+    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)
-      return { status: 'unavailable' }
+      return afterFailure('operation-observation-rejected')
     }
     sealOperation(callDigest, pending, observed.status !== 'accepted')
     if (observed.status === 'unavailable') {
-      return { status: 'unavailable' }
+      return afterFailure('operation-observation-rejected', observed.reasonCode)
     }
     if (observed.status !== 'accepted') return { status: 'ignored' }
     return {
@@ -4063,12 +5076,13 @@ function createSessionRuntime(
     }
   }
 
-  async function finishOperation(
-    host: HostToolAfter,
-    output: unknown,
-  ): Promise<void> {
-    if (!options.observer || !isLocalOperationTool(host.tool)) return
-    const callDigest = digestCall(ledger, host.callID)
+  // The pending record for an after-hook, or undefined when the call must be
+  // silent: skipped by the observation gate, or a replay of a sealed call.
+  function takeOperationToFinish(
+    callDigest: string,
+    host: LocalOperationAfter,
+  ): PendingOperation | undefined {
+    if (skippedOperations.has(callDigest)) return undefined
     const { sessionLocation } = effectiveTargetContext()
     const fingerprint = argsFingerprint(
       ledger,
@@ -4076,8 +5090,17 @@ function createSessionRuntime(
       host.args,
       sessionLocation,
     )
-    if (isSealedOperationReplay(callDigest, host, fingerprint)) return
-    const pending = takePendingOperation(callDigest, host, fingerprint)
+    if (isSealedOperationReplay(callDigest, host, fingerprint)) return undefined
+    return takePendingOperation(callDigest, host, fingerprint)
+  }
+
+  async function finishOperation(
+    host: HostToolAfter,
+    output: unknown,
+  ): Promise<void> {
+    if (!options.observer || !isLocalOperationAfter(host)) return
+    const callDigest = digestCall(ledger, host.callID)
+    const pending = takeOperationToFinish(callDigest, host)
     if (!pending) return
     const result = await completeOperationObservation(
       callDigest,
@@ -4086,7 +5109,7 @@ function createSessionRuntime(
       output,
     )
     if (result.status === 'unavailable') {
-      markUnavailable()
+      markUnavailable(result.cause)
       return
     }
     if (result.status !== 'accepted') return
@@ -4119,7 +5142,7 @@ function createSessionRuntime(
         await finishOperation(host, output)
       }
     } catch {
-      markUnavailable()
+      markUnavailable(hookCause('tool-after', 'hook-threw'))
     }
   }
 
@@ -4175,21 +5198,22 @@ function createSessionRuntime(
     },
     status: () => {
       ensureSynchronousRuntime()
-      return initialized ? guard.status() : unavailableWorkflowStatus()
+      return initialized ? requireGuard().status() : unavailableWorkflowStatus()
     },
     readStatus,
-    unavailableCause: () => firstUnavailableCause,
+    unavailableCause: () => firstUnavailableCause ?? pendingUnavailableCause,
+    seedDeferrals: currentSeedDeferrals,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
       return initialized
-        ? guard.observeReceipt(input)
+        ? requireGuard().observeReceipt(input)
         : { status: 'unavailable', reasonCode: 'guard-unavailable' }
     },
     prepareTransition: (input) => {
       ensureSynchronousRuntime()
       return initialized
-        ? guard.prepareTransition(input)
+        ? requireGuard().prepareTransition(input)
         : { status: 'unavailable', reasonCode: 'guard-unavailable' }
     },
     startUnit: (input, policy) => {
@@ -4266,13 +5290,13 @@ function makeWorkflowTool(
             metadata: runtime.metadata(),
           })
         } catch {
-          runtime.markUnavailable()
+          runtime.markUnavailable(hookCause('tool-execute', 'hook-threw'))
         }
       }
       try {
         metadata = runtime.metadata()
       } catch {
-        runtime.markUnavailable()
+        runtime.markUnavailable(hookCause('tool-execute', 'hook-threw'))
         metadata = {
           protocolVersion: MARKER_PROTOCOL_VERSION,
           state: 'unavailable',
@@ -4294,6 +5318,10 @@ export function createOpencodeWorkflowGuard(
   const sessions = new Map<string, SessionRuntime>()
   const operationObservers: OperationObserverRegistry = new Map()
   const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
+  // Captured once per guard instance (the process's registration), not per
+  // lazily created session runtime, so a turn the host created before the
+  // first hook for a session ran still counts as this process's turn.
+  const runtimeStartedAt = (options.now ?? Date.now)()
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
@@ -4306,6 +5334,7 @@ export function createOpencodeWorkflowGuard(
       },
       operationObservers,
       recoveredOperationContexts,
+      runtimeStartedAt,
     )
     sessions.set(sessionID, runtime)
     return runtime
@@ -4332,11 +5361,16 @@ export function createOpencodeWorkflowGuard(
       statusToolShape,
       sessionRuntimeFor,
       async (runtime, input) => {
-        await runtime.refreshReadback()
+        const unconfirmed = await runtime.refreshReadback()
         return {
           title: 'Workflow guard status',
           output: statusToolSchema.safeParse(input).success
-            ? statusForTool(runtime.readStatus(), runtime.unavailableCause())
+            ? statusForTool(
+                runtime.readStatus(),
+                runtime.unavailableCause(),
+                runtime.seedDeferrals(),
+                unconfirmed,
+              )
             : unavailableToolResult(),
         }
       },
@@ -4376,24 +5410,23 @@ export function createOpencodeWorkflowGuard(
   async function before(input: unknown, output: unknown): Promise<void> {
     const host = parseHostBefore(input)
     if (!host) return
-    const runtime = sessionRuntimeFor(host.sessionID)
-    try {
-      await runtime.hooks['tool.execute.before'](input, output)
-    } catch (error) {
-      if (isWorkflowGuardBlockedError(error)) throw error
-      runtime.markUnavailable()
-    }
+    // The runtime hook already converts every non-blocked exception into a
+    // `hook-threw` cause; a blocked error propagates to the host unchanged.
+    await sessionRuntimeFor(host.sessionID).hooks['tool.execute.before'](
+      input,
+      output,
+    )
   }
 
   async function after(input: unknown, output: unknown): Promise<void> {
     const host = parseHostAfter(input)
     if (!host) return
-    const runtime = sessionRuntimeFor(host.sessionID)
-    try {
-      await runtime.hooks['tool.execute.after'](input, output)
-    } catch {
-      runtime.markUnavailable()
-    }
+    // The runtime hook already converts every exception into a `hook-threw`
+    // cause.
+    await sessionRuntimeFor(host.sessionID).hooks['tool.execute.after'](
+      input,
+      output,
+    )
   }
 
   async function event(input: unknown): Promise<void> {
@@ -4410,7 +5443,7 @@ export function createOpencodeWorkflowGuard(
     try {
       await runtime.hooks.event(input)
     } catch {
-      runtime.markUnavailable()
+      runtime.markUnavailable(hookCause('event', 'hook-threw'))
     }
   }
 
@@ -4420,7 +5453,7 @@ export function createOpencodeWorkflowGuard(
     try {
       await runtime.hooks['experimental.chat.system.transform'](input, output)
     } catch {
-      runtime.markUnavailable()
+      runtime.markUnavailable(hookCause('transform', 'hook-threw'))
     }
   }
 

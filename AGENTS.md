@@ -18,6 +18,7 @@ Systematic is a plugin providing compound-engineering loops (brainstorm, plan, w
 | What does each directory contain? | [`STRUCTURE.md`](STRUCTURE.md) |
 | What are the naming conventions? | [`STRUCTURE.md`](STRUCTURE.md) |
 | What harnesses and compatibility evidence are verified? | [`HARNESSES.md`](HARNESSES.md) |
+| How do I run, hold, or recover a release? | [`RELEASING.md`](RELEASING.md) |
 | What conventions apply to my code? | This file (Conventions section below) |
 | What patterns should I follow? | This file (Conventions + Anti-Patterns below) |
 

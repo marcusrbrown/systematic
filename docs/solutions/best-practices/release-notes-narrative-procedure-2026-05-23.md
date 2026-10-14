@@ -102,6 +102,6 @@ Every sentence in the after-state traces to the commit log. The PR body for #425
 
 ## Update: 2026-05-23 — CI automation
 
-The skill now runs automatically post-publish via `@semantic-release/exec`'s `successCmd` in `.releaserc.yaml`. The hook dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI handles forward-going releases without operator intervention.
+The skill now runs automatically post-publish from `.github/workflows/release-notes.yaml` (on `release: published`, or a manual `workflow_dispatch` with a `tag`), which calls `scripts/dispatch-release-notes.sh`. That script dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI handles forward-going releases without operator intervention.
 
 See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the trigger chain, fail-soft contract, and security signal classification.

@@ -116,13 +116,11 @@ describe('host-contract workflow structural invariants', () => {
     expect(hostContract).not.toHaveProperty('if')
   })
 
-  test('release.needs includes host-contract', () => {
+  test('main.yaml has no publish job that could depend on host-contract', () => {
     const workflow = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
-    const release = asRecord(jobs.release, 'release job')
-    const needs = asArray(release.needs, 'release.needs')
 
-    expect(needs).toContain('host-contract')
+    expect(jobs).not.toHaveProperty('legacy-release')
   })
 
   test('the "Run host contract suite" step sets SYSTEMATIC_REQUIRE_OPENCODE=1', () => {

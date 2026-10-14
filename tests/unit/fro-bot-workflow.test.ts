@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 
@@ -113,6 +114,29 @@ describe('Fro Bot workflow contracts', () => {
 
     expect(dispatchInputs).toHaveProperty('correlation-id')
     expect(callInputs).toHaveProperty('correlation-id')
+  })
+
+  test('embeds the correlation-id in run-name so dispatchers can match their own run', () => {
+    const { workflow } = readWorkflow()
+    const runName = asString(workflow['run-name'], 'run-name')
+
+    // scripts/dispatch-release-notes.sh selects its run by displayTitle containing
+    // the correlation id it sent; without this, concurrent dispatches can pick
+    // each other's runs.
+    expect(runName).toContain('inputs.correlation-id')
+    expect(runName).toContain(
+      "format('Fro Bot narrative {0}', inputs.correlation-id)",
+    )
+    // Empty on non-dispatch events (and dispatches without an id): plain title.
+    expect(runName).toMatch(/\|\|\s*'Fro Bot'\s*\}\}\s*$/)
+  })
+
+  test('keeps the job name `Fro Bot` (a required status-check context)', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+
+    expect(froBot.name).toBe('Fro Bot')
   })
 
   test('defines review, triage, and autoheal prompts without maintenance state', () => {
@@ -377,5 +401,554 @@ describe('Fro Bot workflow contracts', () => {
       'change issue metadata',
       'maintain more than the one marked triage comment',
     ])
+  })
+})
+
+const APPROVAL_RULE_STEP = 'Decide whether Fro Bot may approve'
+const BACKSTOP_STEP = 'Dismiss disallowed Fro Bot approvals'
+const ALLOWED_RULE =
+  'Approval is permitted for this pull request if your review finds no blocking issues.'
+const DENIED_RULE =
+  'Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
+
+function froBotSteps(): readonly unknown[] {
+  const { workflow } = readWorkflow()
+  const jobs = asRecord(workflow.jobs, 'jobs')
+  const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+  return asArray(froBot.steps, 'fro-bot steps')
+}
+
+function stepIndex(steps: readonly unknown[], name: string): number {
+  return steps.findIndex(
+    (candidate) => isRecord(candidate) && candidate.name === name,
+  )
+}
+
+describe('Fro Bot approval rule (R23)', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  interface Sandbox {
+    dir: string
+    log: string
+    outputs: string
+  }
+
+  /** A temp dir with a stub `gh` first on PATH; fixtures are plain JSON files. */
+  function sandbox(fixtures: {
+    pr?: unknown
+    commits?: unknown
+    reviews?: unknown
+  }): Sandbox {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fro-bot-rule-'))
+    dirs.push(dir)
+    const write = (name: string, value: unknown) =>
+      fs.writeFileSync(path.join(dir, name), JSON.stringify(value ?? null))
+    write('pr.json', fixtures.pr)
+    write('commits.json', fixtures.commits)
+    write('reviews.json', fixtures.reviews)
+    const stub = `#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+[ -z "\${GH_FAIL:-}" ] || exit 1
+if [ -n "\${GH_FAIL_AT:-}" ] && [[ "$*" == *"\${GH_FAIL_AT}"* ]]; then exit 1; fi
+case "$*" in
+  *"-X PUT"*dismissals*)
+    if [ -n "\${GH_FAIL_DISMISS_ID:-}" ] && [[ "$*" == */reviews/\${GH_FAIL_DISMISS_ID}/* ]]; then exit 1; fi
+    exit 0 ;;
+  */commits\\?per_page=100*) cat "$GH_FIXTURES/commits.json" ;;
+  */reviews\\?per_page=100*) cat "$GH_FIXTURES/reviews.json" ;;
+  */pulls/*) cat "$GH_FIXTURES/pr.json" ;;
+  *) exit 1 ;;
+esac
+`
+    const bin = path.join(dir, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(bin, 'gh'), stub, { mode: 0o755 })
+    return {
+      dir,
+      log: path.join(dir, 'gh.log'),
+      outputs: path.join(dir, 'output.txt'),
+    }
+  }
+
+  function runStep(
+    name: string,
+    box: Sandbox,
+    extraEnv: Record<string, string> = {},
+  ): { exitCode: number; stdout: string; outputs: Map<string, string> } {
+    const step = findStep(froBotSteps(), name)
+    const script = asString(step.run, `${name} run`)
+    // Mirror the runner: an explicit `shell: bash` adds pipefail, the default does not.
+    const shellFlags = step.shell === 'bash' ? '-eo' : '-e'
+    const shellArgs =
+      step.shell === 'bash'
+        ? ['--noprofile', '--norc', shellFlags, 'pipefail']
+        : [shellFlags]
+    const result = Bun.spawnSync(['bash', ...shellArgs, '-c', script], {
+      env: {
+        PATH: `${path.join(box.dir, 'bin')}:${process.env.PATH ?? ''}`,
+        GH_LOG: box.log,
+        GH_FIXTURES: box.dir,
+        GH_TOKEN: 'stub-token',
+        GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+        GITHUB_OUTPUT: box.outputs,
+        PR: '42',
+        ...extraEnv,
+      },
+    })
+    const outputs = new Map<string, string>()
+    if (fs.existsSync(box.outputs)) {
+      for (const line of fs.readFileSync(box.outputs, 'utf8').split('\n')) {
+        const eq = line.indexOf('=')
+        if (eq > 0) outputs.set(line.slice(0, eq), line.slice(eq + 1))
+      }
+    }
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.toString(),
+      outputs,
+    }
+  }
+
+  const commit = (author: string | null, committer: string | null) => ({
+    author: author === null ? null : { login: author },
+    committer: committer === null ? null : { login: committer },
+  })
+
+  function calls(box: Sandbox): string[] {
+    return fs.existsSync(box.log)
+      ? fs.readFileSync(box.log, 'utf8').split('\n').filter(Boolean)
+      : []
+  }
+
+  describe('approval-rule pre-step', () => {
+    test('runs before "Run Fro Bot" with id approval-rule', () => {
+      const steps = froBotSteps()
+      const rule = findStep(steps, APPROVAL_RULE_STEP)
+
+      expect(rule.id).toBe('approval-rule')
+      expect(stepIndex(steps, APPROVAL_RULE_STEP)).toBeGreaterThanOrEqual(0)
+      expect(stepIndex(steps, APPROVAL_RULE_STEP)).toBeLessThan(
+        stepIndex(steps, 'Run Fro Bot'),
+      )
+    })
+
+    test('runs only on pull request review paths with the read-only workflow token', () => {
+      const rule = findStep(froBotSteps(), APPROVAL_RULE_STEP)
+      const condition = asString(rule.if, 'approval-rule if')
+      const env = asRecord(rule.env, 'approval-rule env')
+
+      expect(condition).toContain("github.event_name == 'pull_request'")
+      expect(condition).toContain('github.event.issue.pull_request')
+      for (const other of ['schedule', 'workflow_dispatch', 'workflow_call']) {
+        expect(condition).not.toContain(other)
+      }
+      expect(env.GH_TOKEN).toBe(`${EXPRESSION_PREFIX}{{ github.token }}`)
+    })
+
+    test('the job grants pull-requests: read for the rule, keeping contents read-only', () => {
+      const { workflow } = readWorkflow()
+      const jobs = asRecord(workflow.jobs, 'jobs')
+      const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+
+      expect(froBot.permissions).toEqual({
+        contents: 'read',
+        'pull-requests': 'read',
+      })
+    })
+
+    test('allows a marcusrbrown PR whose commits are all marcusrbrown', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [
+          commit('marcusrbrown', 'marcusrbrown'),
+          commit('marcusrbrown', 'web-flow'),
+        ],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box)
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('true')
+      expect(result.outputs.get('rule')).toBe(ALLOWED_RULE)
+    })
+
+    test('denies when a commit is committed by fro-bot', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [
+          commit('marcusrbrown', 'marcusrbrown'),
+          commit('marcusrbrown', 'fro-bot'),
+        ],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box)
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('false')
+      expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('denies when a commit is authored by fro-bot', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('fro-bot', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box)
+      expect(result.outputs.get('allowed')).toBe('false')
+      expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('denies another author even with clean commits', () => {
+      const box = sandbox({
+        pr: { user: { login: 'someone-else' } },
+        commits: [commit('someone-else', 'someone-else')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box)
+      expect(result.outputs.get('allowed')).toBe('false')
+      expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('fails closed when gh exits non-zero', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box, { GH_FAIL: '1' })
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('false')
+      expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('fails closed when only the commits call fails inside its pipeline', () => {
+      // gh fails while the pipeline's last command (`tr`) still succeeds; a
+      // pipeline without pipefail would see no fro-bot logins and allow.
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box, {
+        GH_FAIL_AT: '/commits',
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('false')
+      expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    test('fails closed when only the PR author call fails', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box, {
+        GH_FAIL_AT: 'pulls/42',
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('allowed')).toBe('false')
+    })
+
+    test('runs under pipefail', () => {
+      for (const name of [APPROVAL_RULE_STEP, BACKSTOP_STEP]) {
+        const step = findStep(froBotSteps(), name)
+        expect(
+          step.shell === 'bash' || /set -\w*o pipefail/.test(String(step.run)),
+        ).toBe(true)
+      }
+    })
+
+    test('fails closed when the PR payload has no author', () => {
+      const box = sandbox({
+        pr: { user: null },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      const result = runStep(APPROVAL_RULE_STEP, box)
+      expect(result.outputs.get('allowed')).toBe('false')
+    })
+
+    test('reads the PR author and commits for the requested PR number', () => {
+      const box = sandbox({
+        pr: { user: { login: 'marcusrbrown' } },
+        commits: [commit('marcusrbrown', 'marcusrbrown')],
+      })
+      runStep(APPROVAL_RULE_STEP, box, { PR: '77' })
+      const seen = calls(box)
+      expect(
+        seen.some((c) => c.includes('repos/marcusrbrown/systematic/pulls/77')),
+      ).toBe(true)
+      expect(
+        seen.some((c) => c.includes('pulls/77/commits?per_page=100')),
+      ).toBe(true)
+    })
+  })
+
+  describe('PR review prompt', () => {
+    test('appends the rule output to PR_REVIEW_PROMPT on the pull_request branch only', () => {
+      const routing = promptRouting(readWorkflow().source)
+      const branch = routing
+        .split('\n')
+        .find((line) => line.includes('env.PR_REVIEW_PROMPT'))
+
+      expect(branch).toBeDefined()
+      expect(branch).toContain("github.event_name == 'pull_request'")
+      expect(branch).toContain('steps.approval-rule.outputs.rule')
+      expect(
+        routing.match(/steps\.approval-rule\.outputs\.rule/g),
+      ).toHaveLength(1)
+    })
+
+    test('keeps the PROMPT ladder ordering intact', () => {
+      const routing = promptRouting(readWorkflow().source)
+      const order = [
+        "github.event_name == 'workflow_call'",
+        "github.event_name == 'workflow_dispatch' && inputs.prompt",
+        "github.event_name == 'issues'",
+        "github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal'",
+        "github.event_name == 'schedule'",
+        'env.PR_REVIEW_PROMPT',
+      ].map((fragment) => routing.indexOf(fragment))
+
+      expect(order.every((index) => index >= 0)).toBe(true)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+    })
+  })
+
+  describe('approval backstop step', () => {
+    const review = (id: number, user: string, state: string) => ({
+      id,
+      user: { login: user },
+      state,
+    })
+
+    test('runs after "Run Fro Bot", always(), only when approval is not allowed', () => {
+      const steps = froBotSteps()
+      const backstop = findStep(steps, BACKSTOP_STEP)
+      const condition = asString(backstop.if, 'backstop if')
+      const env = asRecord(backstop.env, 'backstop env')
+
+      expect(stepIndex(steps, BACKSTOP_STEP)).toBeGreaterThan(
+        stepIndex(steps, 'Run Fro Bot'),
+      )
+      expect(condition).toContain('always()')
+      expect(condition).toContain(
+        "steps.approval-rule.outputs.allowed != 'true'",
+      )
+      expect(condition).toContain("github.event_name == 'pull_request'")
+      expect(condition).toContain('github.event.issue.pull_request')
+      for (const other of ['schedule', 'workflow_dispatch', 'workflow_call']) {
+        expect(condition).not.toContain(other)
+      }
+      expect(env.GH_TOKEN).toBe(`${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_PAT }}`)
+    })
+
+    test('dismisses only fro-bot APPROVED reviews', () => {
+      const box = sandbox({
+        reviews: [
+          review(1, 'fro-bot', 'APPROVED'),
+          review(2, 'fro-bot', 'COMMENTED'),
+          review(3, 'fro-bot', 'CHANGES_REQUESTED'),
+          review(4, 'marcusrbrown', 'APPROVED'),
+          review(5, 'someone-else', 'APPROVED'),
+          review(6, 'fro-bot', 'APPROVED'),
+          review(7, 'fro-bot', 'DISMISSED'),
+        ],
+      })
+      const result = runStep(BACKSTOP_STEP, box)
+      expect(result.exitCode).toBe(0)
+      const dismissals = calls(box).filter((c) => c.includes('dismissals'))
+      expect(dismissals).toHaveLength(2)
+      expect(dismissals[0]).toContain(
+        '-X PUT repos/marcusrbrown/systematic/pulls/42/reviews/1/dismissals',
+      )
+      expect(dismissals[1]).toContain('/reviews/6/dismissals')
+      for (const line of dismissals) {
+        expect(line).toContain(
+          'message=Fro Bot may not approve this pull request.',
+        )
+        expect(line).toContain('event=DISMISS')
+      }
+    })
+
+    test('never touches other users reviews', () => {
+      const box = sandbox({
+        reviews: [
+          review(4, 'marcusrbrown', 'APPROVED'),
+          review(5, 'fro-botx', 'APPROVED'),
+          review(8, 'not-fro-bot', 'APPROVED'),
+        ],
+      })
+      const result = runStep(BACKSTOP_STEP, box)
+      expect(result.exitCode).toBe(0)
+      expect(calls(box).some((c) => c.includes('dismissals'))).toBe(false)
+    })
+
+    test('a failing dismissal warns and keeps going, exiting 0', () => {
+      const box = sandbox({
+        reviews: [
+          review(1, 'fro-bot', 'APPROVED'),
+          review(2, 'fro-bot', 'APPROVED'),
+        ],
+      })
+      const result = runStep(BACKSTOP_STEP, box, { GH_FAIL_DISMISS_ID: '1' })
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('::warning::')
+      expect(result.stdout).toContain('1')
+      const dismissals = calls(box).filter((c) => c.includes('dismissals'))
+      expect(dismissals).toHaveLength(2)
+      expect(dismissals[1]).toContain('/reviews/2/dismissals')
+    })
+
+    test('fails loudly when only the reviews call fails inside its pipeline', () => {
+      const box = sandbox({ reviews: [review(1, 'fro-bot', 'APPROVED')] })
+      const result = runStep(BACKSTOP_STEP, box, { GH_FAIL_AT: '/reviews?' })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('::error::')
+      expect(calls(box).some((c) => c.includes('dismissals'))).toBe(false)
+    })
+
+    test('fails loudly when reviews cannot be listed', () => {
+      const box = sandbox({ reviews: [] })
+      const result = runStep(BACKSTOP_STEP, box, { GH_FAIL: '1' })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('::error::')
+    })
+  })
+})
+
+const PREHEAD_STEP = 'Refuse fork PR heads from comment triggers'
+const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567'
+
+describe('Fro Bot brokered push anchor (trusted same-repo PR head)', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /** Runs the real resolver shell against a stubbed `gh` that serves `pr`. */
+  function resolve(pr: unknown): {
+    exitCode: number
+    stdout: string
+    sha: string | undefined
+  } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fro-bot-prehead-'))
+    dirs.push(dir)
+    const bin = path.join(dir, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(dir, 'pr.json'), JSON.stringify(pr))
+    fs.writeFileSync(
+      path.join(bin, 'gh'),
+      '#!/usr/bin/env bash\ncat "$GH_FIXTURES/pr.json"\n',
+      { mode: 0o755 },
+    )
+    const outputs = path.join(dir, 'output.txt')
+    const step = findStep(froBotSteps(), PREHEAD_STEP)
+    const result = Bun.spawnSync(
+      ['bash', '-e', '-c', asString(step.run, `${PREHEAD_STEP} run`)],
+      {
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          GH_FIXTURES: dir,
+          GH_TOKEN: 'stub-token',
+          GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+          REPO: 'marcusrbrown/systematic',
+          PR_NUMBER: '42',
+          GITHUB_OUTPUT: outputs,
+        },
+      },
+    )
+    const line = fs.existsSync(outputs)
+      ? fs
+          .readFileSync(outputs, 'utf8')
+          .split('\n')
+          .find((l) => l.startsWith('sha='))
+      : undefined
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.toString(),
+      sha: line?.slice('sha='.length),
+    }
+  }
+
+  test('the fork-guard step is the resolver, with id prehead, before checkout', () => {
+    const steps = froBotSteps()
+    const resolver = findStep(steps, PREHEAD_STEP)
+
+    expect(resolver.id).toBe('prehead')
+    expect(stepIndex(steps, PREHEAD_STEP)).toBeLessThan(
+      stepIndex(steps, 'Checkout repository'),
+    )
+  })
+
+  test('checks out the resolved SHA on issue_comment and the PR head SHA on pull_request', () => {
+    const checkout = findStep(froBotSteps(), 'Checkout repository')
+    const checkoutWith = asRecord(checkout.with, 'checkout options')
+    const ref = asString(checkoutWith.ref, 'checkout ref').replace(/\s+/g, ' ')
+
+    expect(ref).toContain('steps.prehead.outputs.sha')
+    expect(ref).toContain('github.event.pull_request.head.sha')
+    expect(ref).not.toContain('refs/pull/')
+    expect(ref.indexOf('steps.prehead.outputs.sha')).toBeLessThan(
+      ref.indexOf('github.event.pull_request.head.sha'),
+    )
+    expect(checkoutWith['persist-credentials']).toBe(false)
+  })
+
+  test('passes the resolved SHA and the content paths to the agent', () => {
+    const runFroBot = findStep(froBotSteps(), 'Run Fro Bot')
+    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
+
+    expect(runFroBotWith['trusted-head-sha']).toBe(
+      `${EXPRESSION_PREFIX}{{ steps.prehead.outputs.sha }}`,
+    )
+    expect(runFroBotWith['brokered-push-extra-paths']).toBe(
+      'skills,agents,tests,registry',
+    )
+  })
+
+  test('emits the head SHA for a same-repo PR', () => {
+    const result = resolve({
+      head: {
+        sha: HEAD_SHA,
+        repo: { full_name: 'marcusrbrown/systematic', fork: false },
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.sha).toBe(HEAD_SHA)
+  })
+
+  test('emits an empty SHA when the head repo differs without being flagged a fork', () => {
+    const result = resolve({
+      head: {
+        sha: HEAD_SHA,
+        repo: { full_name: 'someone/systematic', fork: false },
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.sha).toBe('')
+  })
+
+  test('still refuses fork PR heads and emits no SHA', () => {
+    const result = resolve({
+      head: {
+        sha: HEAD_SHA,
+        repo: { full_name: 'someone/systematic', fork: true },
+      },
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain(
+      '::error::Refusing to check out fork PR head',
+    )
+    expect(result.sha).toBeUndefined()
+  })
+
+  test('refuses a PR whose head repo is unknown (deleted fork)', () => {
+    const result = resolve({ head: { sha: HEAD_SHA, repo: null } })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.sha).toBeUndefined()
   })
 })

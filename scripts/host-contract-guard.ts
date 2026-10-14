@@ -62,6 +62,7 @@ export const EXPECTED_SUITE_FILES: readonly string[] = [
   'tests/integration/release-notes-ci.test.ts',
   'tests/integration/skill-command-probe.test.ts',
   'tests/integration/skill-delivery.test.ts',
+  'tests/integration/validate-release-target.test.ts',
 ]
 
 /**
