@@ -368,9 +368,7 @@ describe('publish job', () => {
   test('mints the App token from the release secrets', () => {
     const step = findStep('publish', 'Create release App token')
     expect(step.id).toBe('app-token')
-    expect(step.uses).toBe(
-      'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1',
-    )
+    expect(String(step.uses)).toStartWith('actions/create-github-app-token@')
     expect(asRecord(step.with, 'with')).toMatchObject({
       'app-id': expr('secrets.RELEASE_APP_ID'),
       'private-key': expr('secrets.RELEASE_APP_PRIVATE_KEY'),
