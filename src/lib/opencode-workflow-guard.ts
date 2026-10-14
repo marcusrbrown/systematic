@@ -1289,15 +1289,12 @@ export function deriveOpencodeOperationTarget(
 function serializeStableArray(
   value: readonly unknown[],
   depth: number,
-  budget: number,
 ): string | undefined {
   const entries: string[] = []
-  let remaining = budget
   for (const entry of value) {
-    const serialized = stableSerialize(entry, depth + 1, remaining)
+    const serialized = stableSerialize(entry, depth + 1)
     if (serialized === undefined) return undefined
     entries.push(serialized)
-    remaining -= serialized.length
   }
   return `[${entries.join(',')}]`
 }
@@ -1305,37 +1302,34 @@ function serializeStableArray(
 function serializeStableRecord(
   value: Record<string, unknown>,
   depth: number,
-  budget: number,
 ): string | undefined {
   const entries: string[] = []
-  let remaining = budget
   for (const key of Object.keys(value).sort()) {
-    const serialized = stableSerialize(value[key], depth + 1, remaining)
+    const serialized = stableSerialize(value[key], depth + 1)
     if (serialized === undefined) return undefined
-    const entry = `${JSON.stringify(key)}:${serialized}`
-    entries.push(entry)
-    remaining -= entry.length
+    entries.push(`${JSON.stringify(key)}:${serialized}`)
   }
   return `{${entries.join(',')}}`
 }
 
-function stableSerialize(
-  value: unknown,
-  depth = 0,
-  budget = 8192,
-): string | undefined {
-  if (budget <= 0 || depth > 8) return undefined
+// Plain means a null prototype or a prototype whose own prototype is null,
+// which also accepts plain objects from another realm. Date, Map, Set and
+// class instances serialize as `{}` and would collide, so they are rejected.
+function isPlainObject(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === null || Object.getPrototypeOf(prototype) === null
+}
+
+function stableSerialize(value: unknown, depth = 0): string | undefined {
+  if (depth > 8) return undefined
   if (value === null) return 'null'
-  if (typeof value === 'string') {
-    if (value.length > budget) return undefined
-    return JSON.stringify(value)
-  }
+  if (typeof value === 'string') return JSON.stringify(value)
   if (typeof value === 'number' || typeof value === 'boolean') {
     return JSON.stringify(value)
   }
-  if (Array.isArray(value)) return serializeStableArray(value, depth, budget)
-  if (!isRecord(value)) return undefined
-  return serializeStableRecord(value, depth, budget)
+  if (Array.isArray(value)) return serializeStableArray(value, depth)
+  if (!isRecord(value) || !isPlainObject(value)) return undefined
+  return serializeStableRecord(value, depth)
 }
 
 function canonicalPatchText(
