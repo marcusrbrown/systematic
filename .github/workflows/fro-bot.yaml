@@ -635,17 +635,30 @@ jobs:
       #
       # This step exists ONLY for the issue_comment case. Verified against
       # GitHub webhook docs for each event type's payload shape.
+      #
+      # It also resolves the same-repository PR head SHA (output `sha`) that
+      # the checkout uses and that anchors the action's brokered push, so a
+      # comment-triggered fix can be delivered. The output is empty when the
+      # head repository is not this repository.
       - name: Refuse fork PR heads from comment triggers
+        id: prehead
         if: github.event_name == 'issue_comment' && github.event.issue.pull_request
         env:
           GH_TOKEN: ${{ secrets.FRO_BOT_PAT }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
         run: |
-          pr_number="${{ github.event.issue.number }}"
-          is_fork=$(gh api "repos/${{ github.repository }}/pulls/${pr_number}" --jq 'if .head.repo.fork == null then "unknown" else (.head.repo.fork | tostring) end')
+          pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+          is_fork=$(printf '%s' "$pr_json" | jq -r 'if .head.repo.fork == null then "unknown" else (.head.repo.fork | tostring) end')
           if [ "$is_fork" != "false" ]; then
-            echo "::error::Refusing to check out fork PR head from comment trigger (PR #${pr_number}, fork=${is_fork})."
+            echo "::error::Refusing to check out fork PR head from comment trigger (PR #${PR_NUMBER}, fork=${is_fork})."
             exit 1
           fi
+          sha=""
+          if [ "$(printf '%s' "$pr_json" | jq -r '.head.repo.full_name // empty')" = "${REPO}" ]; then
+            sha=$(printf '%s' "$pr_json" | jq -r '.head.sha // empty')
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
       - name: Detect Sunday UTC for upstream modernization cadence
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -710,7 +723,7 @@ jobs:
           fetch-depth: 0
           ref: >-
             ${{
-              (github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number))
+              steps.prehead.outputs.sha
               || github.event.pull_request.head.sha
               || ''
             }}
@@ -765,6 +778,10 @@ jobs:
         with:
           auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
           github-token: ${{ secrets.FRO_BOT_PAT }}
+          trusted-head-sha: ${{ steps.prehead.outputs.sha }}
+          # Default brokered-push paths are src/, packages/*/src/ and docs/.
+          # .github, scripts, package.json and lockfiles stay denied by the action.
+          brokered-push-extra-paths: skills,agents,tests,registry
           model: ${{ vars.FRO_BOT_MODEL }}
           omo-providers: ${{ secrets.OMO_PROVIDERS }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}

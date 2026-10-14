@@ -813,3 +813,142 @@ esac
     })
   })
 })
+
+const PREHEAD_STEP = 'Refuse fork PR heads from comment triggers'
+const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567'
+
+describe('Fro Bot brokered push anchor (trusted same-repo PR head)', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /** Runs the real resolver shell against a stubbed `gh` that serves `pr`. */
+  function resolve(pr: unknown): {
+    exitCode: number
+    stdout: string
+    sha: string | undefined
+  } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fro-bot-prehead-'))
+    dirs.push(dir)
+    const bin = path.join(dir, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(dir, 'pr.json'), JSON.stringify(pr))
+    fs.writeFileSync(
+      path.join(bin, 'gh'),
+      '#!/usr/bin/env bash\ncat "$GH_FIXTURES/pr.json"\n',
+      { mode: 0o755 },
+    )
+    const outputs = path.join(dir, 'output.txt')
+    const step = findStep(froBotSteps(), PREHEAD_STEP)
+    const result = Bun.spawnSync(
+      ['bash', '-e', '-c', asString(step.run, `${PREHEAD_STEP} run`)],
+      {
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          GH_FIXTURES: dir,
+          GH_TOKEN: 'stub-token',
+          GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+          REPO: 'marcusrbrown/systematic',
+          PR_NUMBER: '42',
+          GITHUB_OUTPUT: outputs,
+        },
+      },
+    )
+    const line = fs.existsSync(outputs)
+      ? fs
+          .readFileSync(outputs, 'utf8')
+          .split('\n')
+          .find((l) => l.startsWith('sha='))
+      : undefined
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.toString(),
+      sha: line?.slice('sha='.length),
+    }
+  }
+
+  test('the fork-guard step is the resolver, with id prehead, before checkout', () => {
+    const steps = froBotSteps()
+    const resolver = findStep(steps, PREHEAD_STEP)
+
+    expect(resolver.id).toBe('prehead')
+    expect(stepIndex(steps, PREHEAD_STEP)).toBeLessThan(
+      stepIndex(steps, 'Checkout repository'),
+    )
+  })
+
+  test('checks out the resolved SHA on issue_comment and the PR head SHA on pull_request', () => {
+    const checkout = findStep(froBotSteps(), 'Checkout repository')
+    const checkoutWith = asRecord(checkout.with, 'checkout options')
+    const ref = asString(checkoutWith.ref, 'checkout ref').replace(/\s+/g, ' ')
+
+    expect(ref).toContain('steps.prehead.outputs.sha')
+    expect(ref).toContain('github.event.pull_request.head.sha')
+    expect(ref).not.toContain('refs/pull/')
+    expect(ref.indexOf('steps.prehead.outputs.sha')).toBeLessThan(
+      ref.indexOf('github.event.pull_request.head.sha'),
+    )
+    expect(checkoutWith['persist-credentials']).toBe(false)
+  })
+
+  test('passes the resolved SHA and the content paths to the agent', () => {
+    const runFroBot = findStep(froBotSteps(), 'Run Fro Bot')
+    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
+
+    expect(runFroBotWith['trusted-head-sha']).toBe(
+      `${EXPRESSION_PREFIX}{{ steps.prehead.outputs.sha }}`,
+    )
+    expect(runFroBotWith['brokered-push-extra-paths']).toBe(
+      'skills,agents,tests,registry',
+    )
+  })
+
+  test('emits the head SHA for a same-repo PR', () => {
+    const result = resolve({
+      head: {
+        sha: HEAD_SHA,
+        repo: { full_name: 'marcusrbrown/systematic', fork: false },
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.sha).toBe(HEAD_SHA)
+  })
+
+  test('emits an empty SHA when the head repo differs without being flagged a fork', () => {
+    const result = resolve({
+      head: {
+        sha: HEAD_SHA,
+        repo: { full_name: 'someone/systematic', fork: false },
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.sha).toBe('')
+  })
+
+  test('still refuses fork PR heads and emits no SHA', () => {
+    const result = resolve({
+      head: {
+        sha: HEAD_SHA,
+        repo: { full_name: 'someone/systematic', fork: true },
+      },
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain(
+      '::error::Refusing to check out fork PR head',
+    )
+    expect(result.sha).toBeUndefined()
+  })
+
+  test('refuses a PR whose head repo is unknown (deleted fork)', () => {
+    const result = resolve({ head: { sha: HEAD_SHA, repo: null } })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.sha).toBeUndefined()
+  })
+})
