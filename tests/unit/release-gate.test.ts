@@ -8,6 +8,12 @@ const HEAD = 'a'.repeat(40)
 const REPO = 'marcusrbrown/systematic'
 const APP = 'systematic-release[bot]'
 
+type GateCommit = GatePr['headCommits'][number]
+
+function commit(overrides: Partial<GateCommit> = {}): GateCommit {
+  return { author: APP, committer: APP, verified: false, ...overrides }
+}
+
 function basePr(overrides: Partial<GatePr> = {}): GatePr {
   return {
     number: 42,
@@ -23,7 +29,7 @@ function basePr(overrides: Partial<GatePr> = {}): GatePr {
     changedFiles: ['CHANGELOG.md'],
     addedEntryVersion: '3.22.0',
     removedEntryVersions: [],
-    headCommitAuthors: [APP],
+    headCommits: [commit()],
     ...overrides,
   }
 }
@@ -48,6 +54,21 @@ function withPr(overrides: Partial<GatePr>): GateFacts {
 }
 
 describe('decideGate', () => {
+  test('an API-created release commit (App author, verified web-flow committer) approves', () => {
+    expect(
+      decideGate(
+        withPr({
+          headCommits: [commit({ committer: 'web-flow', verified: true })],
+        }),
+      ),
+    ).toEqual({
+      kind: 'approve',
+      pr: 42,
+      headSha: HEAD,
+      version: '3.22.0',
+    })
+  })
+
   test('base facts approve', () => {
     expect(decideGate(baseFacts())).toEqual({
       kind: 'approve',
@@ -73,18 +94,55 @@ describe('decideGate', () => {
     ['base repo differs', withPr({ baseRepo: 'evil/systematic' }), 'identity'],
     ['author is someone else', withPr({ author: 'mallory' }), 'identity'],
     ['PR is a draft', withPr({ draft: true }), 'identity'],
-    // Rule 4: commit authors
+    // Rule 4: commit authors and committers
     [
       'an extra commit author',
-      withPr({ headCommitAuthors: [APP, 'fro-bot'] }),
+      withPr({ headCommits: [commit(), commit({ author: 'fro-bot' })] }),
       'commit author',
     ],
     [
       'only a foreign author',
-      withPr({ headCommitAuthors: ['mallory'] }),
+      withPr({ headCommits: [commit({ author: 'mallory' })] }),
       'commit author',
     ],
-    ['no commit authors', withPr({ headCommitAuthors: [] }), 'commit author'],
+    [
+      'a human author via the web UI (verified web-flow committer)',
+      withPr({
+        headCommits: [
+          commit({
+            author: 'marcusrbrown',
+            committer: 'web-flow',
+            verified: true,
+          }),
+        ],
+      }),
+      'found: marcusrbrown',
+    ],
+    [
+      'a missing author',
+      withPr({ headCommits: [commit({ author: '' })] }),
+      'commit author',
+    ],
+    [
+      'an unverified web-flow committer',
+      withPr({
+        headCommits: [commit({ committer: 'web-flow', verified: false })],
+      }),
+      'found: unverified web-flow',
+    ],
+    [
+      'a foreign committer',
+      withPr({
+        headCommits: [commit({ committer: 'mallory', verified: true })],
+      }),
+      'found: mallory',
+    ],
+    [
+      'a missing committer',
+      withPr({ headCommits: [commit({ committer: '', verified: true })] }),
+      'commit committer',
+    ],
+    ['no commits', withPr({ headCommits: [] }), 'commit author'],
     // Rule 5: currency
     [
       'head parent is not the main tip',

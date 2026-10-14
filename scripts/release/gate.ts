@@ -1,3 +1,15 @@
+export interface GateCommit {
+  /** Author login; empty when GitHub did not link the author to an account. */
+  author: string
+  /** Committer login; empty when GitHub did not link the committer. */
+  committer: string
+  /** `commit.verification.verified` from the PR commits API; false if absent. */
+  verified: boolean
+}
+
+/** GitHub's web-flow account is the committer of API/web-UI created commits. */
+const WEB_FLOW_LOGIN = 'web-flow'
+
 export interface GateFacts {
   hold: boolean
   pr: null | {
@@ -14,8 +26,8 @@ export interface GateFacts {
     changedFiles: readonly string[]
     addedEntryVersion: string | null
     removedEntryVersions: readonly string[]
-    /** Logins of every commit author/committer in the PR (base..head). */
-    headCommitAuthors: readonly string[]
+    /** Per-commit identity facts for every commit in the PR (base..head). */
+    headCommits: readonly GateCommit[]
   }
   /** Required checks on the head sha. */
   requiredChecks: ReadonlyArray<{
@@ -58,11 +70,32 @@ function prIdentityProblem(facts: GateFacts, pr: GatePr): string | null {
     return `Release PR identity check failed: author ${pr.author} is not ${facts.releaseAppLogin}.`
   }
   if (pr.draft) return 'Release PR identity check failed: it is a draft.'
-  if (
-    pr.headCommitAuthors.length === 0 ||
-    pr.headCommitAuthors.some((login) => login !== facts.releaseAppLogin)
-  ) {
-    return `Release PR commit authors must all be ${facts.releaseAppLogin}, found: ${pr.headCommitAuthors.join(', ') || 'none'}.`
+  return commitIdentityProblem(facts, pr)
+}
+
+/**
+ * Every commit must be authored by the release app. The committer is the app,
+ * or `web-flow` on a verified commit: the refresh job creates the release
+ * commit through the GitHub API, which records `web-flow` as committer.
+ */
+function commitIdentityProblem(facts: GateFacts, pr: GatePr): string | null {
+  const app = facts.releaseAppLogin
+  if (pr.headCommits.length === 0) {
+    return `Release PR has no commits; commit author must be ${app}, found: none.`
+  }
+  for (const commit of pr.headCommits) {
+    if (commit.author !== app) {
+      return `Release PR commit author must be ${app}, found: ${commit.author || 'none'}.`
+    }
+    const trusted =
+      commit.committer === app ||
+      (commit.committer === WEB_FLOW_LOGIN && commit.verified)
+    if (!trusted) {
+      const found = commit.committer || 'none'
+      return commit.committer === WEB_FLOW_LOGIN
+        ? `Release PR commit committer must be ${app} or a verified ${WEB_FLOW_LOGIN} commit, found: unverified ${found}.`
+        : `Release PR commit committer must be ${app} or a verified ${WEB_FLOW_LOGIN} commit, found: ${found}.`
+    }
   }
   return null
 }

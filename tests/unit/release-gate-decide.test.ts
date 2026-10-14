@@ -50,6 +50,18 @@ function run(
   return { name, status, conclusion, started_at: startedAt }
 }
 
+function apiCommit(
+  author: string | null,
+  committer: string | null,
+  verified?: unknown,
+) {
+  return {
+    author: author === null ? null : { login: author },
+    committer: committer === null ? null : { login: committer },
+    commit: { verification: verified === undefined ? {} : { verified } },
+  }
+}
+
 interface FakeOptions {
   list?: unknown[]
   deletedFork?: boolean
@@ -90,7 +102,7 @@ function fake(options: FakeOptions = {}) {
   )
   set(
     `repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100`,
-    options.commits ?? [{ author: { login: APP }, committer: { login: APP } }],
+    options.commits ?? [apiCommit(APP, APP)],
   )
   set(CHECK_RUNS_PATH, {
     check_runs: options.checkRuns ?? [
@@ -139,7 +151,7 @@ describe('gatherGateFacts', () => {
       changedFiles: ['CHANGELOG.md'],
       addedEntryVersion: '3.22.0',
       removedEntryVersions: [],
-      headCommitAuthors: [APP, APP],
+      headCommits: [{ author: APP, committer: APP, verified: false }],
     })
     expect(facts.requiredChecks).toEqual([
       { name: 'Test', status: 'completed', conclusion: 'success' },
@@ -217,28 +229,82 @@ describe('gatherGateFacts', () => {
     expect(decideGate(facts).kind).toBe('skip')
   })
 
-  test.each(['web-flow', 'fro-bot'])(
-    'a commit by %s lands in headCommitAuthors and skips',
-    async (login) => {
-      const { api } = fake({
-        commits: [
-          { author: { login: APP }, committer: { login: APP } },
-          { author: { login: APP }, committer: { login } },
-        ],
-      })
+  test('an API-created release commit (App author, verified web-flow committer) is approved', async () => {
+    const { api } = fake({ commits: [apiCommit(APP, 'web-flow', true)] })
+    const facts = await gatherGateFacts(baseOptions(api))
+    expect(facts.pr?.headCommits).toEqual([
+      { author: APP, committer: 'web-flow', verified: true },
+    ])
+    expect(decideGate(facts).kind).toBe('approve')
+  })
+
+  test('a human-authored web-UI commit (verified web-flow committer) skips naming the author', async () => {
+    const { api } = fake({
+      commits: [apiCommit('marcusrbrown', 'web-flow', true)],
+    })
+    const decision = decideGate(await gatherGateFacts(baseOptions(api)))
+    expect(decision.kind).toBe('skip')
+    expect(decision.kind === 'skip' && decision.reason).toContain(
+      'marcusrbrown',
+    )
+  })
+
+  test('an unverified web-flow committer skips', async () => {
+    const { api } = fake({ commits: [apiCommit(APP, 'web-flow', false)] })
+    const decision = decideGate(await gatherGateFacts(baseOptions(api)))
+    expect(decision.kind).toBe('skip')
+    expect(decision.kind === 'skip' && decision.reason).toContain('web-flow')
+  })
+
+  test.each([
+    ['missing', undefined],
+    ['a string', 'true'],
+    ['null', null],
+  ])(
+    'a web-flow commit whose verification.verified is %s counts as unverified and skips',
+    async (_label, verified) => {
+      const { api } = fake({ commits: [apiCommit(APP, 'web-flow', verified)] })
       const facts = await gatherGateFacts(baseOptions(api))
-      expect(facts.pr?.headCommitAuthors).toContain(login)
+      expect(facts.pr?.headCommits[0]?.verified).toBe(false)
       expect(decideGate(facts).kind).toBe('skip')
     },
   )
 
-  test('a commit with a null author or committer yields an empty login and skips', async () => {
+  test('a commit with no verification object at all counts as unverified', async () => {
     const { api } = fake({
-      commits: [{ author: null, committer: { login: APP } }],
+      commits: [
+        {
+          author: { login: APP },
+          committer: { login: 'web-flow' },
+          commit: {},
+        },
+      ],
     })
     const facts = await gatherGateFacts(baseOptions(api))
-    expect(facts.pr?.headCommitAuthors).toEqual(['', APP])
+    expect(facts.pr?.headCommits[0]?.verified).toBe(false)
     expect(decideGate(facts).kind).toBe('skip')
+  })
+
+  test('a fro-bot committer skips even when verified', async () => {
+    const { api } = fake({
+      commits: [apiCommit(APP, APP), apiCommit(APP, 'fro-bot', true)],
+    })
+    const facts = await gatherGateFacts(baseOptions(api))
+    expect(decideGate(facts).kind).toBe('skip')
+  })
+
+  test('a commit with a null author or committer yields an empty login and skips', async () => {
+    const { api } = fake({ commits: [apiCommit(null, APP)] })
+    const facts = await gatherGateFacts(baseOptions(api))
+    expect(facts.pr?.headCommits).toEqual([
+      { author: '', committer: APP, verified: false },
+    ])
+    expect(decideGate(facts).kind).toBe('skip')
+
+    const missingCommitter = fake({ commits: [apiCommit(APP, null, true)] })
+    const facts2 = await gatherGateFacts(baseOptions(missingCommitter.api))
+    expect(facts2.pr?.headCommits[0]?.committer).toBe('')
+    expect(decideGate(facts2).kind).toBe('skip')
   })
 
   test('a null head.repo (deleted fork) becomes an empty string and skips', async () => {

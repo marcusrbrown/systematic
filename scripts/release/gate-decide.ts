@@ -93,7 +93,7 @@ async function gatherPr(
       changedFiles: [],
       addedEntryVersion: null,
       removedEntryVersions: [],
-      headCommitAuthors: [],
+      headCommits: [],
     }
   }
 
@@ -114,10 +114,12 @@ async function gatherPr(
     ),
     addedEntryVersion: delta.addedEntryVersion,
     removedEntryVersions: delta.removedEntryVersions,
-    headCommitAuthors: requireArray(commits, 'PR commits').flatMap((commit) => [
-      stringOrEmpty(dig(commit, 'author', 'login')),
-      stringOrEmpty(dig(commit, 'committer', 'login')),
-    ]),
+    headCommits: requireArray(commits, 'PR commits').map((commit) => ({
+      author: stringOrEmpty(dig(commit, 'author', 'login')),
+      committer: stringOrEmpty(dig(commit, 'committer', 'login')),
+      // Fail closed: anything but a literal boolean true is unverified.
+      verified: dig(commit, 'commit', 'verification', 'verified') === true,
+    })),
   }
 }
 
