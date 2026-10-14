@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { runInNewContext } from 'node:vm'
 import type {
   ToolContext,
   ToolDefinition,
@@ -7680,6 +7681,105 @@ describe('OpenCode workflow guard adapter', () => {
         } finally {
           cleanup()
         }
+      })
+
+      async function expectInputInvalidWithoutReceipt(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<void> {
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      }
+
+      const PATCH_OUTPUT = {
+        title: 'apply_patch',
+        output: 'patched',
+        metadata: {},
+      }
+
+      test('an apply_patch whose hunks hold a class-instance hunk records operation-input-invalid', async () => {
+        class Hunk {
+          readonly path = 'sub/x.ts'
+          readonly move_path = 'sub/y.ts'
+        }
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          await observeOperationTool(
+            adapter,
+            'apply_patch',
+            { hunks: [new Hunk()] },
+            PATCH_OUTPUT,
+            'class-hunk-apply-patch',
+          )
+          await expectInputInvalidWithoutReceipt(adapter)
+        } finally {
+          cleanup()
+        }
+      })
+
+      test('an apply_patch whose args carry a non-enumerable symbol property records operation-input-invalid', async () => {
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          const args: Record<string, unknown> = {
+            patchText: [
+              '*** Begin Patch',
+              '*** Add File: sub/x.ts',
+              '+content',
+              '*** End Patch',
+            ].join('\n'),
+          }
+          Object.defineProperty(args, Symbol('x'), {
+            value: 1,
+            enumerable: false,
+          })
+          await observeOperationTool(
+            adapter,
+            'apply_patch',
+            args,
+            PATCH_OUTPUT,
+            'hidden-symbol-apply-patch',
+          )
+          await expectInputInvalidWithoutReceipt(adapter)
+        } finally {
+          cleanup()
+        }
+      })
+
+      test('a write whose args contain an array with an own symbol key records operation-input-invalid', async () => {
+        const adapter = await activeAdapter()
+        const tags: unknown[] = ['a']
+        Object.defineProperty(tags, Symbol('x'), { value: 1, enumerable: true })
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: 'plain', tags },
+          WRITE_OUTPUT,
+          'symbol-array-write',
+        )
+        await expectInputInvalidWithoutReceipt(adapter)
+      })
+
+      test('a write whose args are a cross-realm plain object is observed normally', async () => {
+        const adapter = await activeAdapter()
+        const args = runInNewContext(
+          '({ filePath: "big.txt", content: "plain" })',
+        ) as Record<string, unknown>
+        await observeOperationTool(
+          adapter,
+          'write',
+          args,
+          WRITE_OUTPUT,
+          'cross-realm-write',
+        )
+        expectObservedReceipt(adapter)
+        await expectNoCause(adapter)
       })
 
       test('a write whose args record has a null prototype is observed normally', async () => {

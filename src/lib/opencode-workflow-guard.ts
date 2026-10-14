@@ -1290,6 +1290,7 @@ function serializeStableArray(
   value: readonly unknown[],
   depth: number,
 ): string | undefined {
+  if (Object.getOwnPropertySymbols(value).length > 0) return undefined
   const entries: string[] = []
   for (const entry of value) {
     const serialized = stableSerialize(entry, depth + 1)
@@ -1407,6 +1408,9 @@ function argsFingerprint(
   args: unknown,
   sessionLocation: string,
 ): string | undefined {
+  // Canonicalization copies into fresh plain objects, which would launder
+  // non-plain hunks and hidden symbol keys; reject those on the original first.
+  if (stableSerialize(args) === undefined) return undefined
   const serialized = stableSerialize(
     canonicalOperationArgs(tool, args, sessionLocation),
   )
