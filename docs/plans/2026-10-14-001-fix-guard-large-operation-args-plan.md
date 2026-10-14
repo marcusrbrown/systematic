@@ -1,7 +1,7 @@
 ---
 title: "fix: Digest identities and operation arguments of any size"
 type: fix
-status: active
+status: completed
 date: 2026-10-14
 ---
 
@@ -147,7 +147,7 @@ A push or PR-creation composite (`<resource>:<revision>`) over 1024 characters i
 
 ## Implementation Units
 
-- [ ] **Unit 1: Digest identities of any length**
+- [x] **Unit 1: Digest identities of any length**
 
 **Goal:** `digestIdentity` no longer collapses long identities.
 
@@ -184,7 +184,7 @@ A push or PR-creation composite (`<resource>:<revision>`) over 1024 characters i
 - The new tests fail before the change and pass after it.
 - Every existing ledger, readback and workflow-guard test passes unchanged.
 
-- [ ] **Unit 2: Fingerprint operation arguments of any size**
+- [x] **Unit 2: Fingerprint operation arguments of any size**
 
 **Goal:** Large operation arguments are observed in an active epoch, and rewrites of them are detected.
 
@@ -223,7 +223,7 @@ A push or PR-creation composite (`<resource>:<revision>`) over 1024 characters i
 - Reverting Unit 1 alone makes the last-character rewrite test fail. This shows both fixes are needed.
 - Guard, workflow-guard and observer unit suites pass. `typecheck:all` and Biome are clean.
 
-- [ ] **Unit 3: Record the identity and fingerprint rules**
+- [x] **Unit 3: Record the identity and fingerprint rules**
 
 **Goal:** `ARCHITECTURE.md` states that identity digests and argument fingerprints cover their full input, and lists which arguments stay unfingerprintable.
 
