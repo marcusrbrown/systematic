@@ -1325,7 +1325,9 @@ export function createWorkflowGuard(
     operation: ReceiptOperation,
     state: ReceiptOperationAfter,
   ): string {
-    const value = [
+    // JSON encoding keeps field boundaries unambiguous; a `|` join lets
+    // different field splits produce the same text.
+    const value = JSON.stringify([
       operation,
       state.workspaceIdentity,
       state.repositoryIdentity ?? '-',
@@ -1336,7 +1338,7 @@ export function createWorkflowGuard(
       state.pullRequest?.state ?? '-',
       state.checkState ?? '-',
       state.reviewDecision ?? '-',
-    ].join('|')
+    ])
     return options.ledger.digestIdentity('resource', value)
   }
 
