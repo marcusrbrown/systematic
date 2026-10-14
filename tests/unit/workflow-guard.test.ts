@@ -480,6 +480,50 @@ describe('workflow guard', () => {
     })
   })
 
+  describe('remote state fingerprint', () => {
+    const LONG_RESOURCE = 'r'.repeat(1000)
+
+    function checkReadback(checkState: 'completed-success' | 'pending') {
+      return {
+        operation: 'check-readback' as const,
+        ...GUARD_SCOPE,
+        resourceIdentity: LONG_RESOURCE,
+        checkState,
+      }
+    }
+
+    test('marks a check-readback receipt stale when only check state changes under a long joined state', () => {
+      const { guard, ledger } = createGuard()
+      activateWork(guard)
+      startUnit(guard, ['check-readback'], { 'check-readback': LONG_RESOURCE })
+      expect(
+        guard.observeReadback(checkReadback('completed-success')),
+      ).toMatchObject({ status: 'accepted' })
+
+      const receipt = mintReceiptWithContext(
+        ledger,
+        'check-readback',
+        {
+          ...receiptContext(guard),
+          resourceIdentity: LONG_RESOURCE,
+        },
+        { ...RECEIPT_AFTER_SCOPE, resourceIdentity: LONG_RESOURCE },
+      )
+      expect(guard.observeReceipt(receipt)).toMatchObject({
+        status: 'accepted',
+      })
+
+      expect(guard.observeReadback(checkReadback('pending'))).toEqual({
+        status: 'accepted',
+        changed: true,
+      })
+      expect(guard.observeReceipt(receipt)).toMatchObject({
+        status: 'rejected',
+        reasonCode: 'stale-receipt',
+      })
+    })
+  })
+
   test('starts immutable units with mandatory minima that optional input cannot lower', () => {
     const { guard } = createGuard()
     activateWork(guard)

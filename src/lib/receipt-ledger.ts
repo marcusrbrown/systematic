@@ -1131,11 +1131,14 @@ export function createReceiptLedger(
   }
 
   function digestIdentity(domain: DigestDomain, identity: string): string {
-    const normalized = normalizedIdentity(identity)
-    if (!normalized || !DIGEST_DOMAIN_SET.has(domain)) {
+    // Hashing has no length bound: MAX_IDENTITY_LENGTH only limits identities
+    // that are parsed or stored, and a bound here would make every longer
+    // value compare equal.
+    const trimmed = typeof identity === 'string' ? identity.trim() : ''
+    if (!trimmed || !DIGEST_DOMAIN_SET.has(domain)) {
       return digestReceiptIdentity(domain, 'invalid', sessionSaltBytes)
     }
-    return digestReceiptIdentity(domain, normalized, sessionSaltBytes)
+    return digestReceiptIdentity(domain, trimmed, sessionSaltBytes)
   }
 
   function digestContext(

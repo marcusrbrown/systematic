@@ -258,7 +258,7 @@ causes use the kinds `local-snapshot-error`, `local-snapshot-unavailable` (carry
 reason code), `operation-input-invalid`, `operation-target-mismatch`, `call-lifecycle-mismatch`,
 `operation-classifier-unavailable`, `operation-observation-rejected`,
 `transition-finalize-rejected` (the guard refused to finalize a prepared completion, carrying its
-reason code), `unit-start-rejected` (the guard rejected a unit start, carrying its reason code), and `hook-threw` (an exception no helper classified). A hook that fails before the
+reason code), `unit-start-rejected` (the guard rejected a unit start, carrying its reason code), and `hook-threw` (an exception no helper classified). An operation's arguments are fingerprinted in full at any size; only arguments nested beyond 8 levels or carrying `undefined`, functions, symbols, bigint, or objects that are not plain record `operation-input-invalid`. Identity digests likewise cover the full trimmed identity at any length; the 1024-character bound applies only to identities the receipt ledger parses or stores. A hook that fails before the
 session's guard exists is held and committed when the guard is published, and protected mode
 rejects the call if no guard can be published. An exception during session initialization after
 the host read publishes `unavailable` with `initialization-threw` at `initialize-session`. At

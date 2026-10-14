@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { runInNewContext } from 'node:vm'
 import type {
   ToolContext,
   ToolDefinition,
@@ -370,18 +371,19 @@ async function observeOperationTool(
 
 async function observeOperationToolWithArgs(
   adapter: OpencodeWorkflowGuard,
+  tool: 'write' | 'edit' | 'apply_patch' | 'bash',
   beforeArgs: Record<string, unknown>,
   afterArgs: Record<string, unknown>,
   output: Record<string, unknown>,
-  callID = 'apply_patch-operation',
+  callID = `${tool}-operation`,
   sessionID = SESSION_A,
 ): Promise<void> {
   await adapter.hooks['tool.execute.before'](
-    { tool: 'apply_patch', sessionID, callID },
+    { tool, sessionID, callID },
     { args: beforeArgs },
   )
   await adapter.hooks['tool.execute.after'](
-    { tool: 'apply_patch', sessionID, callID, args: afterArgs },
+    { tool, sessionID, callID, args: afterArgs },
     output,
   )
 }
@@ -6096,6 +6098,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -6143,6 +6146,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         { hunks: [{ path: 'sub/x.ts', move_path: 'sub/y.ts' }] },
         {
           hunks: [{ path: absolutePath, move_path: absoluteMovePath }],
@@ -6181,6 +6185,7 @@ describe('OpenCode workflow guard adapter', () => {
     await expect(
       observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         { patchText: malformedPatch },
         { patchText: malformedPatch },
         { title: 'apply_patch complete', output: 'local result', metadata: {} },
@@ -6207,6 +6212,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -6249,6 +6255,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -6292,6 +6299,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -7124,6 +7132,25 @@ describe('OpenCode workflow guard adapter', () => {
       expect(ledger(adapter).listReceipts()).toHaveLength(0)
     })
 
+    test('an inactive session skips an unfingerprintable write before fingerprinting, silently', async () => {
+      const counted = countingObserver()
+      const adapter = createAdapter('observe', false, counted.observer)
+      await observeOperationTool(
+        adapter,
+        'write',
+        { filePath: 'date.txt', content: new Date() },
+        { title: 'write', output: 'written', metadata: {} },
+        'inactive-date-write',
+      )
+      expect(counted.snapshotCount()).toBe(0)
+      expect(status(adapter)).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+      await expectNoCause(adapter)
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    })
+
     test('an active waiting epoch still observes: one before and one after snapshot, and the receipt counts', async () => {
       const counted = countingObserver(
         sequenceObserver([
@@ -7366,7 +7393,7 @@ describe('OpenCode workflow guard adapter', () => {
       expect(counted.snapshotCount()).toBe(0)
     })
 
-    test('a skipped call with unfingerprintable arguments stays silent after the request boundary', async () => {
+    test('a skipped call with large arguments stays silent after the request boundary', async () => {
       const counted = countingObserver()
       const adapter = createAdapter('observe', false, counted.observer)
       const args = { filePath: 'big.txt', content: 'x'.repeat(9 * 1024) }
@@ -7441,6 +7468,358 @@ describe('OpenCode workflow guard adapter', () => {
       expect(
         (await causeDocument(adapter)).firstUnavailableCause,
       ).toMatchObject({ site: 'tool-after', kind: 'call-lifecycle-mismatch' })
+    })
+
+    describe('large and non-plain operation arguments in an active epoch', () => {
+      const LARGE = 64 * 1024
+      const WRITE_OUTPUT = { title: 'write', output: 'written', metadata: {} }
+
+      function changingObserver(): OpencodeOperationObserver {
+        return sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ])
+      }
+
+      async function activeAdapter(): Promise<OpencodeWorkflowGuard> {
+        const adapter = createAdapter('observe', false, changingObserver())
+        await activateWorkEpoch(adapter)
+        return adapter
+      }
+
+      function expectObservedReceipt(adapter: OpencodeWorkflowGuard): void {
+        const receipts = ledger(adapter).listReceipts()
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]?.canonical.operation).toBe('implementation')
+        expect(status(adapter).state).not.toBe('unavailable')
+      }
+
+      test('a 64 KiB write is observed and mints an implementation receipt', async () => {
+        const adapter = await activeAdapter()
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: 'x'.repeat(LARGE) },
+          WRITE_OUTPUT,
+          'large-write',
+        )
+        expectObservedReceipt(adapter)
+        await expectNoCause(adapter)
+      })
+
+      test('an edit with a 64 KiB newString is observed and mints an implementation receipt', async () => {
+        const adapter = await activeAdapter()
+        await observeOperationTool(
+          adapter,
+          'edit',
+          {
+            filePath: 'big.txt',
+            oldString: 'a',
+            newString: 'y'.repeat(LARGE),
+          },
+          { title: 'edit', output: 'edited', metadata: {} },
+          'large-edit',
+        )
+        expectObservedReceipt(adapter)
+        await expectNoCause(adapter)
+      })
+
+      test('an apply_patch with 64 KiB of patch text is observed and mints an implementation receipt', async () => {
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          const patchText = [
+            '*** Begin Patch',
+            '*** Add File: sub/big.ts',
+            `+${'z'.repeat(LARGE)}`,
+            '*** End Patch',
+          ].join('\n')
+          await observeOperationToolWithArgs(
+            adapter,
+            'apply_patch',
+            { patchText },
+            { patchText },
+            { title: 'apply_patch', output: 'patched', metadata: {} },
+            'large-apply-patch',
+          )
+          expectObservedReceipt(adapter)
+          await expectNoCause(adapter)
+        } finally {
+          cleanup()
+        }
+      })
+
+      test('a 64 KiB write rewritten only in its last character fails closed with call-lifecycle-mismatch', async () => {
+        const adapter = await activeAdapter()
+        const prefix = 'x'.repeat(LARGE - 1)
+        await observeOperationToolWithArgs(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: `${prefix}a` },
+          { filePath: 'big.txt', content: `${prefix}b` },
+          WRITE_OUTPUT,
+          'large-rewrite',
+        )
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+        })
+      })
+
+      test('a write whose content is a Date records operation-input-invalid', async () => {
+        const adapter = await activeAdapter()
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: new Date() },
+          WRITE_OUTPUT,
+          'date-write',
+        )
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+      })
+
+      test('a write whose content is a class instance records operation-input-invalid', async () => {
+        class Payload {
+          readonly value = 'x'
+        }
+        const adapter = await activeAdapter()
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: new Payload() },
+          WRITE_OUTPUT,
+          'class-write',
+        )
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+      })
+
+      test('arguments nested deeper than 8 levels record operation-input-invalid', async () => {
+        const adapter = await activeAdapter()
+        let nested: unknown = 'leaf'
+        for (let level = 0; level < 10; level += 1) nested = { nested }
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: nested },
+          WRITE_OUTPUT,
+          'deep-write',
+        )
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+      })
+
+      test('a write whose args carry a symbol-keyed property records operation-input-invalid', async () => {
+        const adapter = await activeAdapter()
+        const args: Record<string | symbol, unknown> = {
+          filePath: 'big.txt',
+          content: 'plain',
+          [Symbol('hidden')]: 'value',
+        }
+        await observeOperationTool(
+          adapter,
+          'write',
+          args,
+          WRITE_OUTPUT,
+          'symbol-write',
+        )
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+      })
+
+      test('an apply_patch with class-instance top-level args records operation-input-invalid', async () => {
+        class PatchArgs {
+          readonly patchText = [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+content',
+            '*** End Patch',
+          ].join('\n')
+        }
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          await observeOperationTool(
+            adapter,
+            'apply_patch',
+            new PatchArgs() as unknown as Record<string, unknown>,
+            { title: 'apply_patch', output: 'patched', metadata: {} },
+            'class-args-apply-patch',
+          )
+          expect(status(adapter).state).toBe('unavailable')
+          expect(
+            (await causeDocument(adapter)).firstUnavailableCause,
+          ).toMatchObject({
+            site: 'tool-before',
+            kind: 'operation-input-invalid',
+          })
+        } finally {
+          cleanup()
+        }
+      })
+
+      async function expectInputInvalidWithoutReceipt(
+        adapter: OpencodeWorkflowGuard,
+      ): Promise<void> {
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      }
+
+      const PATCH_OUTPUT = {
+        title: 'apply_patch',
+        output: 'patched',
+        metadata: {},
+      }
+
+      test('an apply_patch whose hunks hold a class-instance hunk records operation-input-invalid', async () => {
+        class Hunk {
+          readonly path = 'sub/x.ts'
+          readonly move_path = 'sub/y.ts'
+        }
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          await observeOperationTool(
+            adapter,
+            'apply_patch',
+            { hunks: [new Hunk()] },
+            PATCH_OUTPUT,
+            'class-hunk-apply-patch',
+          )
+          await expectInputInvalidWithoutReceipt(adapter)
+        } finally {
+          cleanup()
+        }
+      })
+
+      test('an apply_patch whose args carry a non-enumerable symbol property records operation-input-invalid', async () => {
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          const args: Record<string, unknown> = {
+            patchText: [
+              '*** Begin Patch',
+              '*** Add File: sub/x.ts',
+              '+content',
+              '*** End Patch',
+            ].join('\n'),
+          }
+          Object.defineProperty(args, Symbol('x'), {
+            value: 1,
+            enumerable: false,
+          })
+          await observeOperationTool(
+            adapter,
+            'apply_patch',
+            args,
+            PATCH_OUTPUT,
+            'hidden-symbol-apply-patch',
+          )
+          await expectInputInvalidWithoutReceipt(adapter)
+        } finally {
+          cleanup()
+        }
+      })
+
+      test('a write whose args contain an array with an own symbol key records operation-input-invalid', async () => {
+        const adapter = await activeAdapter()
+        const tags: unknown[] = ['a']
+        Object.defineProperty(tags, Symbol('x'), { value: 1, enumerable: true })
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'big.txt', content: 'plain', tags },
+          WRITE_OUTPUT,
+          'symbol-array-write',
+        )
+        await expectInputInvalidWithoutReceipt(adapter)
+      })
+
+      test('a write whose args are a cross-realm plain object is observed normally', async () => {
+        const adapter = await activeAdapter()
+        const args = runInNewContext(
+          '({ filePath: "big.txt", content: "plain" })',
+        ) as Record<string, unknown>
+        await observeOperationTool(
+          adapter,
+          'write',
+          args,
+          WRITE_OUTPUT,
+          'cross-realm-write',
+        )
+        expectObservedReceipt(adapter)
+        await expectNoCause(adapter)
+      })
+
+      test('a write whose args record has a null prototype is observed normally', async () => {
+        const adapter = await activeAdapter()
+        const args: Record<string, unknown> = Object.create(null)
+        args.filePath = 'big.txt'
+        args.content = 'plain'
+        await observeOperationTool(
+          adapter,
+          'write',
+          args,
+          WRITE_OUTPUT,
+          'null-proto-write',
+        )
+        expectObservedReceipt(adapter)
+        await expectNoCause(adapter)
+      })
+
+      test('a duplicate after-hook for an observed 64 KiB write replays silently', async () => {
+        const adapter = await activeAdapter()
+        const args = { filePath: 'big.txt', content: 'x'.repeat(LARGE) }
+        await observeOperationTool(
+          adapter,
+          'write',
+          args,
+          WRITE_OUTPUT,
+          'large-write-dup',
+        )
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'write',
+            sessionID: SESSION_A,
+            callID: 'large-write-dup',
+            args,
+          },
+          WRITE_OUTPUT,
+        )
+        expectObservedReceipt(adapter)
+        await expectNoCause(adapter)
+      })
     })
   })
 

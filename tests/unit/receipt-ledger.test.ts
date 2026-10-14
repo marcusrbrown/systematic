@@ -2,12 +2,14 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   createReceiptLedger,
+  type DigestDomain,
   type FinalizeObservationResult,
   type PrepareObservationResult,
   type ReceiptClassification,
   type ReceiptContext,
   type ReceiptOperation,
 } from '../../src/lib/receipt-ledger.js'
+import { digestReceiptIdentity } from '../../src/lib/receipt-readback.js'
 
 const RAW_REPOSITORY = '/private/repos/receipt-demo/.git'
 const RAW_WORKTREE = '/private/repos/receipt-demo'
@@ -911,6 +913,77 @@ describe('receipt ledger', () => {
     expect(first.metadata.registrationDigest).not.toBe(
       second.metadata.registrationDigest,
     )
+  })
+
+  describe('identity digest length', () => {
+    function digestFixture() {
+      const ledger = createLedgerWithSalt(new Uint8Array(SUPPLIED_SALT))
+      const salt = getSessionSalt(ledger)
+      if (!salt) throw new Error('ledger did not expose its session salt')
+      return { ledger, salt }
+    }
+
+    test.each(['call', 'resource'] as const)(
+      'distinguishes %s identities over 1024 characters that differ only at the end',
+      (domain) => {
+        const { ledger } = digestFixture()
+        const prefix = 'x'.repeat(1999)
+
+        expect(ledger.digestIdentity(domain, `${prefix}a`)).not.toBe(
+          ledger.digestIdentity(domain, `${prefix}b`),
+        )
+      },
+    )
+
+    test('digests long identities of any length against the salted full-input derivation', () => {
+      const { ledger, salt } = digestFixture()
+      const long = 'y'.repeat(5000)
+
+      expect(ledger.digestIdentity('resource', long)).toBe(
+        digestReceiptIdentity('resource', long, salt),
+      )
+    })
+
+    test('keeps digests of identities up to 1024 characters unchanged', () => {
+      const { ledger, salt } = digestFixture()
+      const atBound = 'z'.repeat(1024)
+
+      expect(ledger.digestIdentity('resource', atBound)).toBe(
+        digestReceiptIdentity('resource', atBound, salt),
+      )
+      expect(ledger.digestIdentity('call', RAW_REPOSITORY)).toBe(
+        digestReceiptIdentity('call', RAW_REPOSITORY, salt),
+      )
+    })
+
+    test('digests the trimmed form regardless of surrounding whitespace', () => {
+      const { ledger, salt } = digestFixture()
+      const trimmed = 'w'.repeat(1020)
+
+      expect(
+        ledger.digestIdentity('resource', `${' '.repeat(10)}${trimmed}`),
+      ).toBe(digestReceiptIdentity('resource', trimmed, salt))
+    })
+
+    test('digests empty, whitespace-only, non-string and unknown-domain input as invalid', () => {
+      const { ledger, salt } = digestFixture()
+      const invalid = digestReceiptIdentity('resource', 'invalid', salt)
+
+      expect(ledger.digestIdentity('resource', '')).toBe(invalid)
+      expect(ledger.digestIdentity('resource', ' '.repeat(2000))).toBe(invalid)
+      expect(ledger.digestIdentity('resource', 42 as unknown as string)).toBe(
+        invalid,
+      )
+      expect(
+        ledger.digestIdentity('bogus' as unknown as DigestDomain, 'identity'),
+      ).toBe(
+        digestReceiptIdentity(
+          'bogus' as unknown as DigestDomain,
+          'invalid',
+          salt,
+        ),
+      )
+    })
   })
 
   test('restores supplied session salts without exposing or sharing mutable bytes', () => {

@@ -1289,15 +1289,13 @@ export function deriveOpencodeOperationTarget(
 function serializeStableArray(
   value: readonly unknown[],
   depth: number,
-  budget: number,
 ): string | undefined {
+  if (Object.getOwnPropertySymbols(value).length > 0) return undefined
   const entries: string[] = []
-  let remaining = budget
   for (const entry of value) {
-    const serialized = stableSerialize(entry, depth + 1, remaining)
+    const serialized = stableSerialize(entry, depth + 1)
     if (serialized === undefined) return undefined
     entries.push(serialized)
-    remaining -= serialized.length
   }
   return `[${entries.join(',')}]`
 }
@@ -1305,37 +1303,37 @@ function serializeStableArray(
 function serializeStableRecord(
   value: Record<string, unknown>,
   depth: number,
-  budget: number,
 ): string | undefined {
   const entries: string[] = []
-  let remaining = budget
   for (const key of Object.keys(value).sort()) {
-    const serialized = stableSerialize(value[key], depth + 1, remaining)
+    const serialized = stableSerialize(value[key], depth + 1)
     if (serialized === undefined) return undefined
-    const entry = `${JSON.stringify(key)}:${serialized}`
-    entries.push(entry)
-    remaining -= entry.length
+    entries.push(`${JSON.stringify(key)}:${serialized}`)
   }
   return `{${entries.join(',')}}`
 }
 
-function stableSerialize(
-  value: unknown,
-  depth = 0,
-  budget = 8192,
-): string | undefined {
-  if (budget <= 0 || depth > 8) return undefined
+// Accepts an object whose prototype is null or whose prototype's prototype is
+// null (ordinary and cross-realm plain objects). A prototype that is itself a
+// null-prototype object also passes; its inherited keys are not fingerprinted.
+function isPlainObject(value: object): boolean {
+  const prototype: object | null = Object.getPrototypeOf(value)
+  if (prototype === null) return true
+  const parent: object | null = Object.getPrototypeOf(prototype)
+  return parent === null
+}
+
+function stableSerialize(value: unknown, depth = 0): string | undefined {
+  if (depth > 8) return undefined
   if (value === null) return 'null'
-  if (typeof value === 'string') {
-    if (value.length > budget) return undefined
-    return JSON.stringify(value)
-  }
+  if (typeof value === 'string') return JSON.stringify(value)
   if (typeof value === 'number' || typeof value === 'boolean') {
     return JSON.stringify(value)
   }
-  if (Array.isArray(value)) return serializeStableArray(value, depth, budget)
-  if (!isRecord(value)) return undefined
-  return serializeStableRecord(value, depth, budget)
+  if (Array.isArray(value)) return serializeStableArray(value, depth)
+  if (!isRecord(value) || !isPlainObject(value)) return undefined
+  if (Object.getOwnPropertySymbols(value).length > 0) return undefined
+  return serializeStableRecord(value, depth)
 }
 
 function canonicalPatchText(
@@ -1387,7 +1385,9 @@ function canonicalOperationArgs(
   args: unknown,
   sessionLocation: string,
 ): unknown {
-  if (tool !== 'apply_patch' || !isRecord(args)) return args
+  if (tool !== 'apply_patch' || !isRecord(args) || !isPlainObject(args)) {
+    return args
+  }
   const patchPaths = patchFileTargets(args)
   if (patchPaths === undefined) return args
   const patchValue = args.patchText ?? args.patch
@@ -1408,6 +1408,9 @@ function argsFingerprint(
   args: unknown,
   sessionLocation: string,
 ): string | undefined {
+  // Canonicalization copies into fresh plain objects, which would launder
+  // non-plain hunks and hidden symbol keys; reject those on the original first.
+  if (stableSerialize(args) === undefined) return undefined
   const serialized = stableSerialize(
     canonicalOperationArgs(tool, args, sessionLocation),
   )
