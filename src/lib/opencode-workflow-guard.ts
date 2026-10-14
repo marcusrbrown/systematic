@@ -1312,12 +1312,14 @@ function serializeStableRecord(
   return `{${entries.join(',')}}`
 }
 
-// Plain means a null prototype or a prototype whose own prototype is null,
-// which also accepts plain objects from another realm. Date, Map, Set and
-// class instances serialize as `{}` and would collide, so they are rejected.
+// Accepts an object whose prototype is null or whose prototype's prototype is
+// null (ordinary and cross-realm plain objects). A prototype that is itself a
+// null-prototype object also passes; its inherited keys are not fingerprinted.
 function isPlainObject(value: object): boolean {
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === null || Object.getPrototypeOf(prototype) === null
+  const prototype: object | null = Object.getPrototypeOf(value)
+  if (prototype === null) return true
+  const parent: object | null = Object.getPrototypeOf(prototype)
+  return parent === null
 }
 
 function stableSerialize(value: unknown, depth = 0): string | undefined {
@@ -1329,6 +1331,7 @@ function stableSerialize(value: unknown, depth = 0): string | undefined {
   }
   if (Array.isArray(value)) return serializeStableArray(value, depth)
   if (!isRecord(value) || !isPlainObject(value)) return undefined
+  if (Object.getOwnPropertySymbols(value).length > 0) return undefined
   return serializeStableRecord(value, depth)
 }
 
@@ -1381,7 +1384,9 @@ function canonicalOperationArgs(
   args: unknown,
   sessionLocation: string,
 ): unknown {
-  if (tool !== 'apply_patch' || !isRecord(args)) return args
+  if (tool !== 'apply_patch' || !isRecord(args) || !isPlainObject(args)) {
+    return args
+  }
   const patchPaths = patchFileTargets(args)
   if (patchPaths === undefined) return args
   const patchValue = args.patchText ?? args.patch

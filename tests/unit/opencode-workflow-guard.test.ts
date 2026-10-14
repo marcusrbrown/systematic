@@ -370,12 +370,12 @@ async function observeOperationTool(
 
 async function observeOperationToolWithArgs(
   adapter: OpencodeWorkflowGuard,
+  tool: 'write' | 'edit' | 'apply_patch' | 'bash',
   beforeArgs: Record<string, unknown>,
   afterArgs: Record<string, unknown>,
   output: Record<string, unknown>,
-  callID = 'apply_patch-operation',
+  callID = `${tool}-operation`,
   sessionID = SESSION_A,
-  tool: 'write' | 'edit' | 'apply_patch' | 'bash' = 'apply_patch',
 ): Promise<void> {
   await adapter.hooks['tool.execute.before'](
     { tool, sessionID, callID },
@@ -6097,6 +6097,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -6144,6 +6145,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         { hunks: [{ path: 'sub/x.ts', move_path: 'sub/y.ts' }] },
         {
           hunks: [{ path: absolutePath, move_path: absoluteMovePath }],
@@ -6182,6 +6184,7 @@ describe('OpenCode workflow guard adapter', () => {
     await expect(
       observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         { patchText: malformedPatch },
         { patchText: malformedPatch },
         { title: 'apply_patch complete', output: 'local result', metadata: {} },
@@ -6208,6 +6211,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -6250,6 +6254,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -6293,6 +6298,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await observeOperationToolWithArgs(
         adapter,
+        'apply_patch',
         {
           patchText: [
             '*** Begin Patch',
@@ -7125,6 +7131,25 @@ describe('OpenCode workflow guard adapter', () => {
       expect(ledger(adapter).listReceipts()).toHaveLength(0)
     })
 
+    test('an inactive session skips an unfingerprintable write before fingerprinting, silently', async () => {
+      const counted = countingObserver()
+      const adapter = createAdapter('observe', false, counted.observer)
+      await observeOperationTool(
+        adapter,
+        'write',
+        { filePath: 'date.txt', content: new Date() },
+        { title: 'write', output: 'written', metadata: {} },
+        'inactive-date-write',
+      )
+      expect(counted.snapshotCount()).toBe(0)
+      expect(status(adapter)).toMatchObject({
+        state: 'inactive',
+        reasonCode: 'no-active-epoch',
+      })
+      await expectNoCause(adapter)
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    })
+
     test('an active waiting epoch still observes: one before and one after snapshot, and the receipt counts', async () => {
       const counted = countingObserver(
         sequenceObserver([
@@ -7510,6 +7535,7 @@ describe('OpenCode workflow guard adapter', () => {
           ].join('\n')
           await observeOperationToolWithArgs(
             adapter,
+            'apply_patch',
             { patchText },
             { patchText },
             { title: 'apply_patch', output: 'patched', metadata: {} },
@@ -7527,12 +7553,11 @@ describe('OpenCode workflow guard adapter', () => {
         const prefix = 'x'.repeat(LARGE - 1)
         await observeOperationToolWithArgs(
           adapter,
+          'write',
           { filePath: 'big.txt', content: `${prefix}a` },
           { filePath: 'big.txt', content: `${prefix}b` },
           WRITE_OUTPUT,
           'large-rewrite',
-          SESSION_A,
-          'write',
         )
         expect(ledger(adapter).listReceipts()).toHaveLength(0)
         expect(status(adapter).state).toBe('unavailable')
@@ -7601,6 +7626,60 @@ describe('OpenCode workflow guard adapter', () => {
           site: 'tool-before',
           kind: 'operation-input-invalid',
         })
+      })
+
+      test('a write whose args carry a symbol-keyed property records operation-input-invalid', async () => {
+        const adapter = await activeAdapter()
+        const args: Record<string | symbol, unknown> = {
+          filePath: 'big.txt',
+          content: 'plain',
+          [Symbol('hidden')]: 'value',
+        }
+        await observeOperationTool(
+          adapter,
+          'write',
+          args,
+          WRITE_OUTPUT,
+          'symbol-write',
+        )
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await causeDocument(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+        })
+      })
+
+      test('an apply_patch with class-instance top-level args records operation-input-invalid', async () => {
+        class PatchArgs {
+          readonly patchText = [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+content',
+            '*** End Patch',
+          ].join('\n')
+        }
+        const cleanup = prepareApplyPatchTargetDirectory()
+        try {
+          const adapter = await activeAdapter()
+          await observeOperationTool(
+            adapter,
+            'apply_patch',
+            new PatchArgs() as unknown as Record<string, unknown>,
+            { title: 'apply_patch', output: 'patched', metadata: {} },
+            'class-args-apply-patch',
+          )
+          expect(status(adapter).state).toBe('unavailable')
+          expect(
+            (await causeDocument(adapter)).firstUnavailableCause,
+          ).toMatchObject({
+            site: 'tool-before',
+            kind: 'operation-input-invalid',
+          })
+        } finally {
+          cleanup()
+        }
       })
 
       test('a write whose args record has a null prototype is observed normally', async () => {
