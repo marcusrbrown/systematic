@@ -4,6 +4,31 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.22.3](https://github.com/marcusrbrown/systematic/compare/v3.22.2...v3.22.3) (2026-10-14)
+
+### Bug Fixes
+
+* **guard:** fingerprint operations and identities of any size ([#1119](https://github.com/marcusrbrown/systematic/issues/1119)) ([d3b9234](https://github.com/marcusrbrown/systematic/commit/d3b923418d7cc032d753cf0b3643b0ab184edc75))
+* **guard:** observe operations only while guarded work can use them ([#1116](https://github.com/marcusrbrown/systematic/issues/1116)) ([3632fb2](https://github.com/marcusrbrown/systematic/commit/3632fb2f85676f5e0ded567b8ee2001faf79f941))
+* **release:** accept GitHub-signed release commits in the scheduled gate ([#1120](https://github.com/marcusrbrown/systematic/issues/1120)) ([3499d23](https://github.com/marcusrbrown/systematic/commit/3499d23b0bd6668f16c8dc7200d465bc4505d3f0))
+* **security:** bound indexed source-map processing ([#1060](https://github.com/marcusrbrown/systematic/issues/1060)) ([6bb89a8](https://github.com/marcusrbrown/systematic/commit/6bb89a8dfc91b70822ea7f277cbf2ce75fb24991))
+* **security:** patch Sharp librsvg vulnerability ([#1059](https://github.com/marcusrbrown/systematic/issues/1059)) ([bfcc401](https://github.com/marcusrbrown/systematic/commit/bfcc401bf23ffba32b963dc50541a5a63cd87176))
+* **security:** reject injected URI authority components ([#1052](https://github.com/marcusrbrown/systematic/issues/1052)) ([68960f5](https://github.com/marcusrbrown/systematic/commit/68960f5f95da874d837338ab184ba03ed3e8a971))
+
+### Build System
+
+* **dev:** update OpenCode to v1.19.0 ([#1118](https://github.com/marcusrbrown/systematic/issues/1118)) ([f9ffc50](https://github.com/marcusrbrown/systematic/commit/f9ffc5037a9e9d7fdd68f0dad2d51403a2b3da06))
+
+### Continuous Integration
+
+* **fro-bot:** let trusted PR comments deliver fixes through the brokered push ([#1117](https://github.com/marcusrbrown/systematic/issues/1117)) ([15b1ec8](https://github.com/marcusrbrown/systematic/commit/15b1ec85b75fdc8fe5556ffc3d5fd05076527d12))
+* **release:** drop the hourly release reconcile ([#1112](https://github.com/marcusrbrown/systematic/issues/1112)) ([6cd8a43](https://github.com/marcusrbrown/systematic/commit/6cd8a43cec3ee3df41f3e50cf956cf82715d220f))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.122.1 ([#1114](https://github.com/marcusrbrown/systematic/issues/1114)) ([ccc204d](https://github.com/marcusrbrown/systematic/commit/ccc204d39ef8509cc890b791ccafc0e34e769d9e))
+* **lint:** align Biome schema with installed release ([#1056](https://github.com/marcusrbrown/systematic/issues/1056)) ([113a0e3](https://github.com/marcusrbrown/systematic/commit/113a0e32150abb7fb0740ff41cf32cc5bff26fad))
+
 ## [3.22.2](https://github.com/marcusrbrown/systematic/compare/v3.22.1...v3.22.2) (2026-10-13)
 
 ### Bug Fixes
