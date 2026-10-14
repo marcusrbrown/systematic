@@ -50,7 +50,7 @@ A push or PR-creation composite (`<resource>:<revision>`) over 1024 characters i
   - nesting beyond 8 levels;
   - `undefined` values, functions, symbols and bigint;
   - objects that aren't plain, such as `Date`, `Map` and `Set`.
-- R6. A remote state change is detected, and marks receipts stale, when the joined state text exceeds 1024 characters or when field boundaries shift.
+- R6. A remote state change is detected, and marks receipts stale, when the joined state text exceeds 1024 characters. The JSON field encoding removes boundary ambiguity as defense in depth; every boundary shift also changes a separately compared identity, so no public-API test can isolate it.
 
 ## Scope Boundaries
 
@@ -178,7 +178,6 @@ A push or PR-creation composite (`<resource>:<revision>`) over 1024 characters i
 - Edge case: an identity of 1030 characters with 10 leading spaces digests like its trimmed 1020-character form.
 - Edge case: empty input, 2000 spaces, non-string input and an unknown domain all digest to the `'invalid'` value.
 - Integration: through `observeReadback`, a check-readback unit with a 1000-character declared resource identity is read back with `checkState` changing from success to pending. Its receipt is marked stale. Vary the check state, not the resource, because resource changes are detected separately.
-- Edge case: two readbacks whose state fields differ only in where a `|` falls produce different fingerprints and mark receipts stale.
 
 **Verification:**
 - The new tests fail before the change and pass after it.
