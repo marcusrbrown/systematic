@@ -20,7 +20,7 @@ applies_when:
   - Writing any commit subject, commit body, or PR description that will land between two releases
 ---
 
-> **Note (2026-05-23):** The manual `gh release edit` workflow described here is now automated for this repo. As of v2.23.4, `scripts/dispatch-release-notes.sh` (wired via `@semantic-release/exec` in `.releaserc.yaml`) dispatches the `release-notes-narrative` skill on every successful publish from `main`. See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](../best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the v2 CI automation architecture and [`docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md`](../best-practices/release-notes-narrative-procedure-2026-05-23.md) for the v1 manual procedure both modes inherit. Manual `gh release edit` is still the right answer when the automation fails-soft or for backfilling historical releases.
+> **Note (2026-05-23):** The manual `gh release edit` workflow described here is now automated for this repo. As of v2.23.4, `scripts/dispatch-release-notes.sh` (run from `.github/workflows/release-notes.yaml` on `release: published`, or a manual `workflow_dispatch` with a `tag`) dispatches the `release-notes-narrative` skill for each published release. See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](../best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the v2 CI automation architecture and [`docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md`](../best-practices/release-notes-narrative-procedure-2026-05-23.md) for the v1 manual procedure both modes inherit. Manual `gh release edit` is still the right answer when the automation fails-soft or for backfilling historical releases.
 
 > **Correction (2026-08-17):** The 2026-05-23 note above originally ended "The myth itself — that release-notes-generator ignores commit bodies — remains true." That is true of the *plugin* and false of the *pipeline*, and the difference is not academic — see [Stage 2 reversed the ingestion rule](#stage-2-reversed-the-ingestion-rule-2026-08-17) below. Reading only the original claim leads to "commit bodies are internal," which published internal planning vocabulary to a real release.
 
@@ -82,7 +82,7 @@ what makes this doc's original framing dangerous rather than merely incomplete.
 | Stage | Mechanism | Reads |
 |---|---|---|
 | 1 | `@semantic-release/release-notes-generator` | commit **subjects** only |
-| 2 | `release-notes-narrative` skill via `successCmd` | commit **bodies** (`%b`) and PR descriptions |
+| 2 | `release-notes-narrative` skill via `release-notes.yaml` | commit **bodies** (`%b`) and PR descriptions |
 
 Stage 2 is dispatched by `scripts/dispatch-release-notes.sh` on every successful
 publish and pulls the full body of every commit in the range:

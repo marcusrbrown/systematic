@@ -1,0 +1,91 @@
+name: Release Notes
+
+# Rewrites a published release's notes into a narrative (via the Fro Bot
+# workflow), verifies the rewrite landed, then triggers the docs rebuild for the
+# latest release. Runs in its own job so a failed narrative leaves a red run here
+# instead of being hidden inside semantic-release's publish job. Re-run for a
+# given tag with a manual dispatch.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published release tag to narrate (e.g. v3.21.7)
+        required: true
+        type: string
+
+concurrency:
+  group: release-notes-${{ github.event.release.tag_name || github.event.inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  narrate:
+    name: Narrate Release Notes
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
+    permissions:
+      contents: read
+      # Dispatch fro-bot.yaml and docs.yaml, and read their runs. Writes to the
+      # release itself are done by the dispatched Fro Bot run with its own PAT.
+      actions: write
+    steps:
+      # Checks out the trusted default branch explicitly. On a release event the
+      # default checkout would be the tagged commit, whose code must not run here:
+      # the validator and scripts/dispatch-release-notes.sh both execute with an
+      # `actions: write` token. No release tag is ever checked out.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      # Everything below is gated on `proceed`: an untrusted release author on a
+      # release event ends the job cleanly without dispatching anything, and the
+      # same on a manual dispatch fails loudly. Narration is allowed for any
+      # published release, so the latest-release requirement is off here.
+      - name: Validate release target
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_AUTHOR: ${{ github.event.release.author.login }}
+          EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
+          REQUIRE_LATEST: 'false'
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/validate-release-target.sh
+
+      # Exits 0 only when the release body starts with `## What's new` afterwards
+      # (2 = narrative-not-applied, 1 = security-class failure). A non-zero exit
+      # fails this step, which skips the docs rebuild below and leaves the run red.
+      - name: Narrate release notes
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/dispatch-release-notes.sh "$TAG"
+
+      # Docs deploy only the latest release, so the rebuild is requested for the
+      # latest tag, never the narrated one: narrating a historical release must not
+      # replace the live site with old content.
+      - name: Trigger docs rebuild
+        if: ${{ steps.target.outputs.proceed == 'true' }}
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh release view --repo "$GH_REPO" --json tagName --jq .tagName)
+          if ! [[ "$LATEST" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not resolve a vX.Y.Z latest release (got '${LATEST}')"
+            exit 1
+          fi
+          echo "Narrated ${TAG}; rebuilding docs from the latest release ${LATEST}"
+          gh workflow run docs.yaml --ref main -f tag="$LATEST"

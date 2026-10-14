@@ -185,6 +185,15 @@ export interface PhantomSkillRef {
   name: string
 }
 
+export interface StaleSkillLoadNameViolation {
+  file: string
+  line: number
+  /** The skill token as written, without arguments (e.g. `/ce-work`). */
+  token: string
+  /** The name the resolver loads (e.g. `/ce:work`, `document-review`). */
+  suggestion: string
+}
+
 export interface BrokenSubfileRef {
   file: string
   line: number
@@ -341,6 +350,7 @@ export interface CheckResult {
   allowlistWarnings: AllowlistWarning[]
   phantomRefs: PhantomRef[]
   phantomSkillRefs: PhantomSkillRef[]
+  staleSkillLoadNameViolations: StaleSkillLoadNameViolation[]
   brokenSubfileRefs: BrokenSubfileRef[]
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
@@ -789,6 +799,157 @@ export function checkSkillReferenceIntegrity(
   }
 
   return phantoms
+}
+
+/**
+ * Length of the run of backticks that starts at `index` in `text`.
+ */
+function backtickRunLength(text: string, index: number): number {
+  let end = index
+  while (text[end] === '`') end++
+  return end - index
+}
+
+/**
+ * Index of the next backtick run of exactly `length` at or after `from`, or -1.
+ * Longer or shorter runs are skipped whole, as in CommonMark.
+ */
+function findClosingBacktickRun(
+  text: string,
+  from: number,
+  length: number,
+): number {
+  let index = text.indexOf('`', from)
+  while (index !== -1) {
+    const run = backtickRunLength(text, index)
+    if (run === length) return index
+    index = text.indexOf('`', index + run)
+  }
+  return -1
+}
+
+/**
+ * Split a line into inline code span contents and the remaining prose, the
+ * CommonMark way: a span opens with a backtick run of length N and closes at
+ * the next run of exactly length N. An opening run with no matching close is
+ * literal text and stays in the prose, so it cannot swallow later spans.
+ * Delimiters of any length are handled, so a double-backtick span is judged
+ * like a single-backtick one. Each span (delimiters included) is replaced by a
+ * single space in `prose`, so prose tokens never touch a span boundary.
+ */
+function splitCodeSpans(text: string): { spans: string[]; prose: string } {
+  const spans: string[] = []
+  let prose = ''
+  let cursor = 0
+  let index = text.indexOf('`')
+  while (index !== -1) {
+    const length = backtickRunLength(text, index)
+    const close = findClosingBacktickRun(text, index + length, length)
+    if (close === -1) {
+      index = text.indexOf('`', index + length)
+      continue
+    }
+    prose += `${text.slice(cursor, index)} `
+    spans.push(text.slice(index + length, close))
+    cursor = close + length
+    index = text.indexOf('`', cursor)
+  }
+  return { spans, prose: prose + text.slice(cursor) }
+}
+
+/**
+ * A skill token in directory form: `ce-<name>` or `/ce-<name>`, kebab-case
+ * lowercase only. Anchoring the whole token rejects paths (`ce-plan/SKILL.md`,
+ * `ce-plan.md`), qualified IDs (`systematic:review:...`), underscored names
+ * (`ce_plan`), and placeholder or temp-name tokens (`ce-plan-deepen-XXXXXX`)
+ * without a separate skip list.
+ */
+const STALE_SKILL_TOKEN_REGEX = /^(\/?)ce-([a-z][a-z0-9-]*)$/
+
+/**
+ * The same token in unbackticked prose: `ce-<name>` or `/ce-<name>` not
+ * adjacent to a word character, `-`, `/`, `.`, `_`, `:` or a backtick on either
+ * side. That keeps paths (`skills/ce-plan/`), temp names
+ * (`ce-plan-deepen-XXXXXX`), qualified IDs and YAML-ish `ce-plan:` keys
+ * unflagged, while `ce-plan's` (a possessive) is still caught. A trailing `.`
+ * only counts as adjacent when a word character follows it (`ce-plan.md`), so
+ * a sentence-final `ce-plan.` is flagged.
+ */
+const STALE_SKILL_PROSE_REGEX =
+  /(?<![\w\-/.:_`])(\/?)ce-([a-z][a-z0-9-]*)(?![\w\-/:_`]|\.\w)/g
+
+/**
+ * Directory-form names whose frontmatter name is not simply `ce:<name>`.
+ * Everything else maps to `ce:<name>`.
+ */
+const STALE_SKILL_RENAMES: Readonly<Record<string, string>> = {
+  'doc-review': 'document-review',
+}
+
+function suggestSkillLoadName(slash: string, name: string): string {
+  const renamed = STALE_SKILL_RENAMES[name]
+  return renamed !== undefined ? `${slash}${renamed}` : `${slash}ce:${name}`
+}
+
+/**
+ * Stale skill load names: `ce-<name>` or `/ce-<name>` used to name a skill,
+ * either as a backticked code span (optionally followed by a space and
+ * arguments) or as unbackticked prose. Bundled `ce-*` skill directories are
+ * named `ce:*` in frontmatter and the resolver loads frontmatter names, so the
+ * directory form never resolves, and a model that reads it in either form may
+ * try to load it.
+ *
+ * Code spans: only the token before the first space is judged; arguments may
+ * contain `.`, `:` or `/` (`ce-doc-review mode:headless` is still stale).
+ * Prose: see `STALE_SKILL_PROSE_REGEX` for the adjacency rule. Fenced blocks
+ * are skipped. Known limit: a lowercase `ce-<word>` that is not a skill (a
+ * hypothetical temp-dir name) is flagged; none exist in the bundled content.
+ */
+export function checkStaleSkillLoadNames(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): StaleSkillLoadNameViolation[] {
+  const violations: StaleSkillLoadNameViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+
+    const lines = content.split('\n')
+    let fenceMarker: FenceMarker | null = null
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? ''
+      const fence = updateFenceMarker(line, fenceMarker)
+      fenceMarker = fence.marker
+      if (fence.isFence || fenceMarker !== null) continue
+      violations.push(...scanLineForStaleSkillLoadNames(relPath, i + 1, line))
+    }
+  }
+
+  return violations
+}
+
+function scanLineForStaleSkillLoadNames(
+  file: string,
+  line: number,
+  text: string,
+): StaleSkillLoadNameViolation[] {
+  const { spans, prose } = splitCodeSpans(text)
+  const tokens: Array<{ slash: string; name: string }> = []
+  for (const span of spans) {
+    const token = span.trim().split(/\s+/, 1)[0] ?? ''
+    const match = STALE_SKILL_TOKEN_REGEX.exec(token)
+    if (match) tokens.push({ slash: match[1] ?? '', name: match[2] ?? '' })
+  }
+  for (const match of prose.matchAll(STALE_SKILL_PROSE_REGEX)) {
+    tokens.push({ slash: match[1] ?? '', name: match[2] ?? '' })
+  }
+  return tokens.map(({ slash, name }) => ({
+    file,
+    line,
+    token: `${slash}ce-${name}`,
+    suggestion: suggestSkillLoadName(slash, name),
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -2877,6 +3038,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.markdown,
   )
+  const staleSkillLoadNameViolations = checkStaleSkillLoadNames(
+    rootDir,
+    targets.markdown,
+  )
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
   const parseSafetyViolations = checkFrontmatterParseSafety(
@@ -2935,6 +3100,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     allowlistWarnings,
     phantomRefs,
     phantomSkillRefs,
+    staleSkillLoadNameViolations,
     brokenSubfileRefs,
     bannedPatterns,
     frontmatterViolations,
@@ -2992,6 +3158,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
 
   printPhantomRefs(result.phantomRefs)
   printPhantomSkillRefs(result.phantomSkillRefs)
+  printStaleSkillLoadNames(result.staleSkillLoadNameViolations)
   printBrokenSubfileRefs(result.brokenSubfileRefs)
   printBannedPatterns(result.bannedPatterns)
   printFrontmatterViolations(result.frontmatterViolations)
@@ -3072,6 +3239,18 @@ function printPhantomSkillRefs(
   for (const p of phantomSkillRefs) {
     process.stderr.write(
       `  ${p.file}:${p.line}  ${p.reference}  (no such skill: skills/ce-${p.name}/)\n`,
+    )
+  }
+}
+
+function printStaleSkillLoadNames(
+  violations: readonly StaleSkillLoadNameViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nStale skill load names (${violations.length}):\n`)
+  for (const v of violations) {
+    process.stderr.write(
+      `  ${v.file}:${v.line}  \`${v.token}\`  (use \`${v.suggestion}\`)\n`,
     )
   }
 }
@@ -3284,6 +3463,7 @@ function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
     result.phantomSkillRefs.length +
+    result.staleSkillLoadNameViolations.length +
     result.brokenSubfileRefs.length +
     result.bannedPatterns.length +
     result.frontmatterViolations.length +
