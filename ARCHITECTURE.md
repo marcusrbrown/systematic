@@ -21,9 +21,9 @@ these hooks:
   (an optional `arguments` string is text-substituted into `$ARGUMENTS`/`$N` placeholders via
   `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist), alongside
   the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`, `_control`).
-- **`tool.execute.before`** — workflow-guard observation of pending operations. Blocks execution by
+- **`tool.execute.before`** — workflow-guard observation of pending shell and edit operations while guarded work is live. Blocks execution by
   rethrowing a guard error when a guarded transition is unsatisfied.
-- **`tool.execute.after`** — workflow-guard observation of completed operations, feeding receipt
+- **`tool.execute.after`** — workflow-guard observation of completed shell and edit operations, feeding receipt
   classification, and epoch activation for allowlisted `skill` / `systematic_skill` loads; then restores the full `systematic_skill` output when OpenCode truncated it,
   unless the user set `tool_output` limits. Fail-closed; never blocks the host.
 - **`event`** — workflow-guard observation of host events. Fail-closed; never blocks the host.
@@ -238,7 +238,10 @@ change. Must pass before any release.
 / `receipt-ledger.ts` / `receipt-readback.ts`) — observes tool executions through the
 `tool.execute.before` / `tool.execute.after` / `event` hooks, classifies them into operations
 (implementation, verification, commit, push, pr-creation, check-readback, review-readback),
-validates each claim against observed workspace state, and mints integrity-checked receipts. Local
+validates each claim against observed workspace state, and mints integrity-checked receipts. Shell and
+edit calls are observed only while an epoch is active or an allowlisted skill call is pending; any
+other call takes no snapshot and cannot change guard state, and disabled and unavailable guards never
+observe. A skipped call's after-hook is silent even if an epoch activates in between. Local
 snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
 command output; remote readback payloads have their own 4096-item cap. Exceeding a local limit
 fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
@@ -275,7 +278,7 @@ status output as an enum-only `unconfirmedReadbacks` list that never appears in 
 or digests. A completion readback timeout rejects that attempt as `readback-timeout` without
 consuming anything or making the guard unavailable; the next completion call prepares fresh and
 surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
-records a `complete-readback` cause. Known limits: a dual registration running an older build
+records a `complete-readback` cause. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build
 rejects the `inactive` marker state and fails closed until both upgrade; activation covers skill-tool loads only, so reading a skill file directly or running a skill as a slash command does not activate the guard; an older Systematic registration loaded alongside still maps unknown skills to a work epoch, and the merged prompt marker shows the most restrictive state (`waiting`) while it is loaded; a plugin that rewrites `args.name` between the skill call's before-hook and after-hook changes the outcome: an unlisted before-name with an allowlisted after-name activates nothing, while an allowlisted before-name with an unlisted after-name fails closed (`call-lifecycle-mismatch`, guard `unavailable`); if host history loses every
 marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
 from a turn that began before this runtime started fail closed; `missing-resource` cannot
