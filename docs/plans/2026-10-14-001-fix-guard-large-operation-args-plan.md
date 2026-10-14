@@ -31,29 +31,31 @@ Issue #1113: a `write`, `edit` or `apply_patch` call whose arguments exceed 8192
 
 In an active epoch, a `ce:work` unit that writes a file over about 8 KiB can't mint any further receipts. Since PR #1116, inactive sessions skip observation before fingerprinting, so this now affects only sessions with guarded work.
 
-Research and plan review found a second defect behind the first, with a wider reach. In `src/lib/receipt-ledger.ts`, `digestIdentity` digests the literal `'invalid'` in place of any identity longer than `MAX_IDENTITY_LENGTH` (1024). It doesn't reject the identity. Three callers can exceed that length:
+Research and plan review found a second defect behind the first. In `src/lib/receipt-ledger.ts`, `digestIdentity` digests the literal `'invalid'` in place of any identity whose trimmed length exceeds `MAX_IDENTITY_LENGTH` (1024). It doesn't reject the identity. Receipt context identities are bounded when they are parsed (`parseContext`), so no stored receipt ever held a collapsed digest. Two in-memory comparisons can exceed the cap:
 
 - **Args fingerprint.** Every argument set between 1025 and 8192 characters gets the same fingerprint. A before/after rewrite of such arguments goes undetected.
-- **`stateFingerprint`** in `src/lib/workflow-guard.ts`. It joins nine fields of remote operation state. When the joined text exceeds the cap, different states compare equal.
-- **`ledgerResourceIdentity`** in `src/lib/workflow-guard.ts`. It builds `<resource>:<revision>` for push and PR creation. A declared resource identity may be up to 1024 characters, so the composite can exceed the cap, and different resources or revisions then match.
+- **`stateFingerprint`** in `src/lib/workflow-guard.ts`. It joins remote operation state fields with `|`. When the joined text exceeds the cap, different states compare equal and receipts are not marked stale. A declared resource identity may be up to 1024 characters, so a long resource plus the other fields reaches the cap.
 
-Each collapse fails open. A comparison that should report a difference reports none.
+Each collapse fails open. A comparison that should report a difference reports none. The status digest also goes through `digestIdentity`, but its input stays small in practice.
+
+A push or PR-creation composite (`<resource>:<revision>`) over 1024 characters is rejected when the receipt is minted, so it fails closed already. It stays that way.
 
 ## Requirements Trace
 
-- R1. `digestIdentity` produces a digest that depends on the full identity at any length. Two different identities over 1024 characters produce different digests.
-- R2. `digestIdentity` keeps today's digest for every identity of 1024 characters or fewer, and keeps the `'invalid'` result for empty, whitespace-only, non-string or unknown-domain input.
+- R1. `digestIdentity` produces a digest that depends on the full trimmed identity at any length. Two different identities over 1024 characters produce different digests.
+- R2. `digestIdentity` keeps today's digest for every identity whose trimmed length is 1024 or less. It keeps the `'invalid'` result for empty, whitespace-only (of any length), non-string or unknown-domain input.
 - R3. A `write`, `edit` or `apply_patch` call whose arguments exceed 8192 characters is observed in an active epoch and mints its receipt. The guard stays available.
 - R4. A before/after rewrite of large arguments fails closed with `call-lifecycle-mismatch`, wherever the difference falls.
 - R5. These arguments stay unfingerprintable and keep the `operation-input-invalid` outcome:
   - nesting beyond 8 levels;
   - `undefined` values, functions, symbols and bigint;
   - objects that aren't plain, such as `Date`, `Map` and `Set`.
-- R6. Remote state changes and resource mismatches are detected when their composite identity exceeds 1024 characters.
+- R6. A remote state change is detected, and marks receipts stale, when the joined state text exceeds 1024 characters or when field boundaries shift.
 
 ## Scope Boundaries
 
 - `MAX_IDENTITY_LENGTH` stays as the bound on identities that are parsed or stored (`normalizedIdentity` on envelope and readback paths). Only the hashing path stops applying it.
+- Push and PR-creation composites over 1024 characters keep failing at mint.
 - No change to snapshot limits, the operation observation gate, receipt schema or protocol versions.
 - `NaN` and `Infinity` still serialize as `null`. Host tool arguments are parsed JSON and can't contain them.
 
@@ -76,7 +78,7 @@ Each collapse fails open. A comparison that should report a difference reports n
   - `argsFingerprint`.
   - The callers `prepareOperation` (`operation-input-invalid`) and `takeOperationToFinish`.
   - `isRecord`, which accepts any non-array object.
-- `src/lib/workflow-guard.ts`: `stateFingerprint` and `ledgerResourceIdentity`.
+- `src/lib/workflow-guard.ts`: `stateFingerprint` (a closure in `createWorkflowGuard`; observable through `observeReadback` → `observeState` → `markStaleReceipts`), `ledgerResourceIdentity` (bounded at mint).
 - Tests and helpers:
   - `tests/unit/opencode-workflow-guard.test.ts`:
     - helpers `activateWorkEpoch`, `observeOperationTool` and `observeOperationToolWithArgs`;
@@ -140,7 +142,8 @@ Each collapse fails open. A comparison that should report a difference reports n
 - **Fix the collapse in the ledger, not in each caller.** `digestIdentity` is the one place every comparison passes through. Hashing the full trimmed identity fixes the args fingerprint and both composites at once, and the next caller can't collapse either. The cap keeps bounding parsed and stored identities, where a length limit is meaningful. (Decided by Marcus.)
 - **Keep identities of 1024 characters or fewer byte-identical.** Short digests are unchanged, so live receipts and markers keep validating across the upgrade. Only identities that used to collapse get a new digest.
 - **Drop the serializer's size budget and keep its depth limit.** The canonical text only feeds a digest. The arguments are already in the host's memory, so the cost is one serialization plus a hash. (Decided by Marcus.)
-- **Reject objects that aren't plain.** Today `Date`, `Map` and `Set` serialize as `{}` and collide. Rejecting them makes them unfingerprintable, which fails closed. Parsed JSON never contains them, so real calls are unaffected.
+- **Reject objects that aren't plain.** Today `Date`, `Map` and `Set` serialize as `{}` and collide. Rejecting them makes them unfingerprintable, which fails closed. An object is plain when its prototype is `null` or its prototype's prototype is `null`, which also accepts plain objects from another realm. Parsed JSON never contains anything else, so real calls are unaffected.
+- **Encode the state fields unambiguously.** `stateFingerprint` joins unescaped fields with `|`, so different field splits can produce the same text. It digests the JSON encoding of the field list instead. This fingerprint is in-memory only, so nothing persisted changes.
 
 ## Implementation Units
 
@@ -154,26 +157,28 @@ Each collapse fails open. A comparison that should report a difference reports n
 
 **Files:**
 - Modify: `src/lib/receipt-ledger.ts`
+- Modify: `src/lib/workflow-guard.ts`
 - Test: `tests/unit/receipt-ledger.test.ts`
 - Test: `tests/unit/workflow-guard.test.ts`
 
 **Approach:**
-- In `digestIdentity`, trim the identity and digest it whenever it is a non-empty string and the domain is known. Otherwise digest `'invalid'` as today.
+- In `digestIdentity`, trim the identity. Digest the trimmed string, with no length bound, when it is non-empty and the domain is known. Otherwise digest `'invalid'` as today.
 - Leave `normalizedIdentity` and its other callers unchanged.
+- In `stateFingerprint`, digest the JSON encoding of the field list instead of the `|`-joined text.
 
 **Execution note:** Test-first. The over-cap tests must fail on the current code.
 
 **Patterns to follow:**
-- Existing ledger digest tests in `tests/unit/receipt-ledger.test.ts`.
-- Core state-change and resource-mismatch tests in `tests/unit/workflow-guard.test.ts`.
+- Ledger tests: `createLedgerWithSalt`, `getSessionSalt`, and the salt-correlation test in `tests/unit/receipt-ledger.test.ts`. Import `digestReceiptIdentity` from `receipt-readback`, and pin with trimmed input because it does not trim.
+- Core tests: `activateWork`, `startUnit`, the `prUnit()` pattern and the operation-scoped readback propagation tests in `tests/unit/workflow-guard.test.ts`.
 
 **Test scenarios:**
 - Happy path: two 2000-character identities that differ only in their last character produce different digests, in the `call` domain and the `resource` domain.
-- Happy path: a 2000-character identity digests the same value twice in one session.
-- Edge case: a 1024-character identity and a short identity digest exactly as they do on the current code. Pin each against `digestReceiptIdentity` with the session salt.
-- Edge case: empty, whitespace-only and non-string identities, and an unknown domain, all digest to the `'invalid'` value.
-- Integration: a remote operation with a declared resource identity near 1024 characters is observed in two different states. `stateFingerprint` reports a change.
-- Integration: a push whose `<resource>:<revision>` composite exceeds 1024 characters is checked against a different revision. It reports a resource mismatch.
+- Edge case: a 1024-character identity and a short identity digest exactly as they do on the current code, pinned against `digestReceiptIdentity` with the session salt.
+- Edge case: an identity of 1030 characters with 10 leading spaces digests like its trimmed 1020-character form.
+- Edge case: empty input, 2000 spaces, non-string input and an unknown domain all digest to the `'invalid'` value.
+- Integration: through `observeReadback`, a check-readback unit with a 1000-character declared resource identity is read back with `checkState` changing from success to pending. Its receipt is marked stale. Vary the check state, not the resource, because resource changes are detected separately.
+- Edge case: two readbacks whose state fields differ only in where a `|` falls produce different fingerprints and mark receipts stale.
 
 **Verification:**
 - The new tests fail before the change and pass after it.
@@ -193,8 +198,8 @@ Each collapse fails open. A comparison that should report a difference reports n
 
 **Approach:**
 - Remove the budget parameter and its threading from `stableSerialize` and its two helpers. Keep the depth check and every existing undefined case.
-- Return undefined for an object whose prototype is neither `Object.prototype` nor `null`.
-- Let `observeOperationToolWithArgs` take the tool, defaulting to `apply_patch`, so the write and edit rewrite tests can use it. The alternative is hoisting `expectNoCause` and its cause helper, or placing the new tests in the describe block that owns them.
+- Return undefined for an object that isn't plain, as defined in Key Technical Decisions.
+- Add `tool` as a trailing optional parameter of `observeOperationToolWithArgs`, defaulting to `apply_patch`, so existing positional calls keep working. Place the new tests inside the `operation observation gate` describe block, or hoist `expectNoCause` and its cause helper.
 
 **Execution note:** Test-first. The large-argument and rewrite tests must fail on the current code.
 
@@ -208,7 +213,8 @@ Each collapse fails open. A comparison that should report a difference reports n
 - Happy path: the same holds for an `edit` whose `newString` is 64 KiB.
 - Happy path: the same holds for an `apply_patch` whose patch text is 64 KiB, targeting a file under a directory that exists.
 - Error path: a 64 KiB `write` whose after-hook content differs from the before-hook's only in its last character fails closed with `call-lifecycle-mismatch`. The difference sits past index 8192, so a truncating hash would miss it.
-- Error path: a `write` whose `content` is a `Date` records `operation-input-invalid`.
+- Error path: a `write` whose `content` is a `Date` records `operation-input-invalid` as its first unavailable cause. So does a class instance.
+- Edge case: a `write` whose args are an `Object.create(null)` record is fingerprinted and observed normally.
 - Edge case: arguments nested deeper than 8 levels still record `operation-input-invalid`. The existing test with an `undefined`-valued key passes unchanged.
 - Integration: a duplicate after-hook for an observed 64 KiB `write` replays silently.
 
@@ -240,14 +246,12 @@ Each collapse fails open. A comparison that should report a difference reports n
 ## System-Wide Impact
 
 - **Interaction graph:**
-  - Every `digestIdentity` caller: call IDs, args fingerprints, context digests, state fingerprints, resource identities, and status digests.
-  - Only inputs over 1024 characters change result.
+  - Every `digestIdentity` caller. Receipt context and observation identities are bounded at parse, so their digests never change. Only in-memory inputs over 1024 characters change result: args fingerprints, state fingerprints and the status digest.
 - **State lifecycle risks:**
-  - A receipt or marker minted before the upgrade from an identity over 1024 characters stored the collapsed digest. After the upgrade its recomputed digest differs, so it reads as stale or mismatched and fails closed.
-  - Short identities, which are almost all of them, are unaffected.
-- **Behavior change that fails closed:**
+  - Args and state fingerprints live in memory only. No stored receipt or marker held a collapsed digest, so nothing persisted needs migration.
+- **Behavior changes that fail closed:**
   - A large `apply_patch` whose session location changes between hooks now records a mismatch. Before, it passed because both fingerprints collapsed.
-  - A long composite identity that actually changed now reports the change.
+  - A long or boundary-shifted remote state that actually changed now marks receipts stale.
 - **Unchanged invariants:**
   - Call correlation stays keyed by call ID.
   - Receipt schema and protocol versions and `normalizedIdentity` bounds on parsed input are unchanged.
@@ -258,7 +262,6 @@ Each collapse fails open. A comparison that should report a difference reports n
 |------|------------|
 | A short identity's digest changes by accident and invalidates live receipts | The Unit 1 edge case pins short-identity digests against the current derivation |
 | Very large arguments cost one serialization and one SHA-256 per hook | Linear, and small next to the snapshots the same hook already takes |
-| Pre-upgrade markers that held a collapsed digest now mismatch | Fails closed, and only for identities over 1024 characters, which previously compared wrongly |
 
 ## Sources & References
 
@@ -270,4 +273,4 @@ Each collapse fails open. A comparison that should report a difference reports n
 - Related code:
   - `src/lib/receipt-ledger.ts`: `digestIdentity`.
   - `src/lib/opencode-workflow-guard.ts`: `stableSerialize`, `argsFingerprint`.
-  - `src/lib/workflow-guard.ts`: `stateFingerprint`, `ledgerResourceIdentity`.
+  - `src/lib/workflow-guard.ts`: `stateFingerprint`.
