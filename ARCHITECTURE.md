@@ -284,9 +284,9 @@ marker, a previously activated session cannot be told apart from a fresh one; in
 from a turn that began before this runtime started fail closed; `missing-resource` cannot
 distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
 defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
-in child rollup still make the guard unavailable (#1084); a snapshot can report unchanged after
-real changes, and files can change while a snapshot reads them (#1099); a worktree that grows past
-a snapshot limit makes the guard unavailable for the session; an earlier completion timeout can mask
+in child rollup still make the guard unavailable (#1084); a worktree that grows past a snapshot
+limit, or changes while a snapshot runs (`worktree-unstable`), makes the guard unavailable for the
+session (#1124); an earlier completion timeout can mask
 later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
 completion throws `abandoned-transition` in protected mode; completion is confirmed independently
 per registration, not atomically across registrations, so when two registrations share one tool
@@ -294,6 +294,36 @@ output and their readbacks differ, one can complete while the other rejects or b
 the final output depends on hook order, and a compound retry is not guaranteed; and with a degraded
 remote a status call can wait one probe timeout per satisfied remote operation. OpenCode only —
 `src/pi.ts` registers no guard, and the Claude Code bundle ships no runtime.
+
+**Local observer snapshot** (`src/lib/opencode-operation-observer.ts`) — every local git call carries
+`--no-replace-objects -c core.ignorecase=false -c core.fsmonitor=false`, so repository config and
+refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot identity covers:
+
+- **Paths** — the union of the index, the `HEAD` tree, and untracked files, so a `HEAD` path stays
+  observed after `git rm --cached` or an ignore rule.
+- **Contents** — raw bytes read without following symlinks or blocking on special files. Symlink
+  targets compare as bytes, and non-UTF-8 git output fails closed.
+- **Ignore sources** — the bytes of `info/exclude`, `core.excludesFile` (or its XDG default), and
+  every untracked `.gitignore`, including self-ignored ones. An absent source differs from an empty
+  one, and a FIFO, device, or file over 1 MiB fails closed. Content that those rules hide is not
+  hashed.
+- **Gitlinks** — an initialized submodule contributes its `HEAD` id. An empty or missing directory
+  is recorded as uninitialized, and a non-empty uninitialized one fails closed. More than 32
+  gitlinks fail with `file-limit` before any submodule is read.
+- **Root pin** — the repository root and git directory are compared with the values captured when
+  the observer was created. A mismatch fails closed as `target-unavailable`.
+
+`commitClosure` compares the same raw records with `HEAD`'s tree by path, kind, mode, and object
+id. Git's `diff`, clean filters, and the index are not consulted, and an unborn `HEAD` reads not
+closed. A final pass re-stats every path, re-lists the index, untracked files, and discovered
+`.gitignore` files, and re-reads the ignore sources and `HEAD`. Any difference fails the snapshot as
+`worktree-unstable`; this and the limit failures make the guard `unavailable` today (#1124).
+
+A snapshot does not see ignored content, dirty submodule contents, a redirect or ignore rule
+installed before the observer started (#1126), a write that lands after the final pass, or a
+same-second rewrite on a volume with 1-second timestamps. Some trees read not closed by design:
+files git normalizes (CRLF conversion), `core.filemode=false` mounts, and case-only renames on
+case-insensitive volumes.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
