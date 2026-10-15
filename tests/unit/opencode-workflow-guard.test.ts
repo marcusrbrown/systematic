@@ -10781,11 +10781,6 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-failed',
         },
         {
-          name: 'a timeout',
-          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
-          reasonCode: 'command-timeout',
-        },
-        {
           name: 'a different target root',
           validate: (candidateDirectory) => ({
             status: 'ok',
@@ -10818,14 +10813,19 @@ describe('OpenCode workflow guard adapter', () => {
           const adapter = await activatedAdapter(observer)
           await beforeThenAfter(adapter, 'after-validation', arm)
           expect(await causeOf(adapter)).toEqual(
-            afterCause(
-              'operation-input-invalid',
-              validationCase.reasonCode,
-              validationCase.reasonCode === 'command-timeout',
-            ),
+            afterCause('operation-input-invalid', validationCase.reasonCode),
           )
         })
       }
+
+      test('a timeout seals the call without recording a cause', async () => {
+        const { observer, arm } = armable({
+          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
+        })
+        const adapter = await activatedAdapter(observer)
+        await beforeThenAfter(adapter, 'after-validation-timeout', arm)
+        expect(await causeOf(adapter)).toBe('not-unavailable')
+      })
     })
 
     test('an after snapshot that is unavailable records its observer reasonCode', async () => {
@@ -10845,7 +10845,7 @@ describe('OpenCode workflow guard adapter', () => {
       })
     })
 
-    test('an after snapshot command-timeout records timedOut', async () => {
+    test('an after snapshot command-timeout seals the call without recording a cause', async () => {
       const { observer, arm } = armable({
         snapshot: async () => ({
           status: 'unavailable',
@@ -10854,9 +10854,7 @@ describe('OpenCode workflow guard adapter', () => {
       })
       const adapter = await activatedAdapter(observer)
       await beforeThenAfter(adapter, 'after-timeout', arm)
-      expect(await causeOf(adapter)).toEqual(
-        afterCause('local-snapshot-unavailable', 'command-timeout', true),
-      )
+      expect(await causeOf(adapter)).toBe('not-unavailable')
     })
 
     test('an after snapshot that throws records local-snapshot-error', async () => {
@@ -10964,11 +10962,6 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'remote-missing-field',
         },
         {
-          name: 'a remote after-read that times out',
-          after: { status: 'unavailable', reasonCode: 'command-timeout' },
-          reasonCode: 'command-timeout',
-        },
-        {
           name: 'a remote after-read with a missing resource',
           after: { status: 'missing-resource' },
           reasonCode: 'missing-resource',
@@ -10999,14 +10992,29 @@ describe('OpenCode workflow guard adapter', () => {
           const adapter = await activatedAdapter(observer, ['push'])
           await pushAfter(adapter, 'after-remote')
           expect(await causeOf(adapter)).toEqual(
-            afterCause(
-              'operation-observation-rejected',
-              pushCase.reasonCode,
-              pushCase.reasonCode === 'command-timeout',
-            ),
+            afterCause('operation-observation-rejected', pushCase.reasonCode),
           )
         })
       }
+
+      test('a remote after-read that times out seals the call without recording a cause', async () => {
+        const base = sequenceObserver([operationSnapshot()], {
+          'push:before': [remoteAvailable(D, E), remoteAvailable(D, E)],
+        })
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) =>
+            operation === 'push' && phase === 'after'
+              ? { status: 'unavailable', reasonCode: 'command-timeout' }
+              : (base.remoteSnapshot?.(operation, phase) ?? {
+                  status: 'unavailable',
+                  reasonCode: 'remote-missing-field',
+                }),
+        }
+        const adapter = await activatedAdapter(observer, ['push'])
+        await pushAfter(adapter, 'after-remote-timeout')
+        expect(await causeOf(adapter)).toBe('not-unavailable')
+      })
 
       test('a pr-creation self-seed readback the guard rejects records operation-observation-rejected with the guard reason', async () => {
         const MISSING = { status: 'missing-resource' as const }
@@ -16388,6 +16396,13 @@ describe('snapshot block record', () => {
     'command-timeout',
     'file-read-failed',
   ] as const
+  // The reasons that still make the guard unavailable when the call's own
+  // after-snapshot fails with them. A timeout seals the call instead.
+  const FATAL_AFTER_SNAPSHOT_REASONS = [
+    'target-unavailable',
+    'command-failed',
+    'file-read-failed',
+  ] as const
   const TIMEOUT = {
     status: 'unavailable' as const,
     reasonCode: 'command-timeout' as const,
@@ -17711,7 +17726,7 @@ describe('snapshot block record', () => {
       }
     })
 
-    test.each([...FATAL_AFTER_REASONS])(
+    test.each([...FATAL_AFTER_SNAPSHOT_REASONS])(
       'an after snapshot failing with %s still makes the guard unavailable and sets no block',
       async (reasonCode) => {
         const steered = steeredObserver()
@@ -17727,7 +17742,7 @@ describe('snapshot block record', () => {
           site: 'tool-after',
           kind: 'local-snapshot-unavailable',
           reasonCode,
-          timedOut: reasonCode === 'command-timeout',
+          timedOut: false,
         })
         expect(parsed.snapshotBlock).toBeUndefined()
       },
@@ -19202,6 +19217,174 @@ describe('snapshot block record', () => {
           expect(status(adapter).unit?.status).toBe('completed')
         })
       })
+    })
+  })
+
+  describe('a timeout in the operation after-hook', () => {
+    const PUSH = 'git push origin main'
+    const TIMED_OUT = sequenceObserver([unavailableStep('command-timeout')])
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    interface Call {
+      readonly tool: 'bash'
+      readonly sessionID: string
+      readonly callID: string
+      readonly args: Record<string, unknown>
+    }
+
+    function call(callID: string, args: Record<string, unknown>): Call {
+      return { tool: 'bash', sessionID: SESSION_A, callID, args }
+    }
+
+    async function begin(
+      adapter: OpencodeWorkflowGuard,
+      input: Call,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+    }
+
+    async function end(
+      adapter: OpencodeWorkflowGuard,
+      input: Call,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](input, BASH_OUTPUT)
+    }
+
+    // A sealed call mints nothing, leaves the earlier receipts as they were,
+    // records no cause and no block, and its duplicate after-hook is silent.
+    async function expectSealed(
+      adapter: OpencodeWorkflowGuard,
+      input: Call,
+      receiptsBefore: string[],
+      work: () => number,
+    ): Promise<void> {
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual(receiptsBefore)
+      const workDone = work()
+      await end(adapter, input)
+      expect(work()).toBe(workDone)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+      expect(receiptOperations(adapter)).toEqual(receiptsBefore)
+    }
+
+    test('a local after-snapshot that times out seals the call and leaves earlier receipts alone', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'earlier-verification',
+      )
+      const receipts = receiptOperations(adapter)
+      expect(receipts).toContain('verification')
+      const input = call('timed-out-after-snapshot', { command: 'bun test' })
+      await begin(adapter, input)
+      steered.queueSnapshot(TIMED_OUT)
+
+      await end(adapter, input)
+
+      await expectSealed(adapter, input, receipts, steered.snapshotCalls)
+    })
+
+    test('a remote after-read that times out seals the push and leaves earlier receipts alone', async () => {
+      const steered = steeredObserver({
+        'push:before': [remoteAvailable(D, E)],
+        'push:after': [TIMEOUT],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'earlier-verification',
+      )
+      const receipts = receiptOperations(adapter)
+      const input = call('timed-out-remote-after', { command: PUSH })
+      await begin(adapter, input)
+      const remoteReads = steered.remoteCalls()
+
+      await end(adapter, input)
+
+      expect(steered.remoteCalls()).toBeGreaterThan(remoteReads)
+      await expectSealed(adapter, input, receipts, steered.remoteCalls)
+      expect(receiptOperations(adapter)).not.toContain('push')
+    })
+
+    test('a registered-worktree validation that times out in the after-hook seals the call and leaves earlier receipts alone', async () => {
+      const target = await targetAdapter()
+      try {
+        await observeOperationTool(
+          target.adapter,
+          'bash',
+          { command: 'bun test', workdir: target.linkedRoot },
+          BASH_OUTPUT,
+          'earlier-verification',
+        )
+        const receipts = receiptOperations(target.adapter)
+        expect(receipts).toContain('verification')
+        const input = call('timed-out-after-validation', {
+          command: 'bun test',
+          workdir: target.linkedRoot,
+        })
+        await begin(target.adapter, input)
+        target.scriptLinkedValidation('timeout')
+
+        await end(target.adapter, input)
+
+        await expectSealed(target.adapter, input, receipts, () =>
+          target.linkedSnapshots(),
+        )
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('a call whose unit was redeclared during a timing-out after-read is handled as a lost call', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const input = call('lost-then-timeout', { command: 'bun test' })
+      await begin(adapter, input)
+      const slow = deferredStep(operationSnapshot(), {
+        status: 'unavailable',
+        reasonCode: 'command-timeout',
+      })
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+      const finishing = end(adapter, input)
+      for (
+        let tick = 0;
+        tick < 50 && slowObserver.snapshotCalls() < 1;
+        tick++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(slowObserver.snapshotCalls()).toBe(1)
+      expect(
+        adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+      ).toMatchObject({ status: 'started' })
+
+      slow.release()
+      await finishing
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual([])
+      expect(
+        (await refreshStatus(adapter)).firstUnavailableCause,
+      ).toBeUndefined()
     })
   })
 

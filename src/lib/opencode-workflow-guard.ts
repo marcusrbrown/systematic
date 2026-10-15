@@ -524,6 +524,14 @@ interface OperationFailure {
   cause: GuardUnavailableCause
 }
 
+// A read that timed out: no verdict yet. Only a typed timeout (never a cause)
+// produces one.
+interface TimedOutRead {
+  status: 'timeout'
+}
+
+const TIMED_OUT_READ: TimedOutRead = { status: 'timeout' }
+
 interface MarkerSource {
   source: string
   state: WorkflowStatus['state']
@@ -5707,17 +5715,19 @@ function createSessionRuntime(
   }
 
   // Re-validates the registered worktree the operation began under. Returns
-  // the typed failure when it no longer matches.
+  // the typed failure when it no longer matches, or `timeout` when the
+  // validation itself timed out (no verdict yet).
   function afterTargetFailure(
     observer: OpencodeOperationObserver,
     pending: PendingOperation,
-  ): OperationFailure | undefined {
+  ): OperationFailure | TimedOutRead | undefined {
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = observer.validateRegisteredWorktree(pending.targetRoot)
     } catch {
       return afterFailure('operation-input-invalid')
     }
+    if (isProbeTimeout(validation)) return TIMED_OUT_READ
     if (
       validation.status === 'error' ||
       validation.targetRoot !== pending.targetRoot ||
@@ -5734,11 +5744,13 @@ function createSessionRuntime(
 
   // `blocked`: the after snapshot hit a blocking reason. The call mints
   // nothing, and `setBlockFromAfterSnapshot` decides whether the unit is blocked.
+  // `timeout`: a typed timeout, so the call is sealed and mints nothing.
   async function captureAfterOperation(
     pending: PendingOperation,
   ): Promise<
     | { status: 'available'; snapshot: OperationObserverSnapshot }
     | { status: 'blocked'; reasonCode: SnapshotBlockReason }
+    | TimedOutRead
     | OperationFailure
   > {
     if (!options.observer) return afterFailure('operation-input-invalid')
@@ -5750,6 +5762,7 @@ function createSessionRuntime(
     if (read.status === 'ok') {
       return settleCleanAfterSnapshot(blockCapture, pending, read.value)
     }
+    if (read.status === 'timeout') return TIMED_OUT_READ
     const reasonCode = probeFailureReason(read)
     if (isSnapshotBlockingReason(reasonCode)) {
       return { status: 'blocked', reasonCode }
@@ -5810,6 +5823,7 @@ function createSessionRuntime(
     observer: OpencodeOperationObserver,
   ): Promise<
     | { status: 'available'; snapshot: OperationObserverRemoteSnapshot }
+    | TimedOutRead
     | OperationFailure
   > {
     const remoteSnapshot = observer.remoteSnapshot
@@ -5820,6 +5834,7 @@ function createSessionRuntime(
     } catch {
       return afterFailure('operation-observation-rejected')
     }
+    if (isProbeTimeout(result)) return TIMED_OUT_READ
     return result.status === 'available'
       ? { status: 'available', snapshot: result.snapshot }
       : afterFailure(
@@ -5973,6 +5988,19 @@ function createSessionRuntime(
     return { status: 'ignored' }
   }
 
+  // A typed timeout in the after-hook means no verdict on this one call: it
+  // is sealed as abandoned, so nothing is minted and a duplicate after-hook is
+  // silent. The guard is not marked unavailable and the block is untouched.
+  // Whatever the call changed is picked up by the next readback. The caller
+  // has already checked that the call's unit still owns it.
+  function sealTimedOutOperation(
+    callDigest: string,
+    pending: PendingOperation,
+  ): OperationCompletionResult {
+    sealOperation(callDigest, pending, true)
+    return { status: 'ignored' }
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
   async function completeOperationObservation(
     callDigest: string,
@@ -5992,6 +6020,9 @@ function createSessionRuntime(
       sealOperation(callDigest, pending, true)
       setBlockFromAfterSnapshot(pending, capture.reasonCode)
       return { status: 'ignored' }
+    }
+    if (capture.status === 'timeout') {
+      return sealTimedOutOperation(callDigest, pending)
     }
     if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
@@ -6023,6 +6054,9 @@ function createSessionRuntime(
       )
       if (!ownsOperation(pending)) {
         return sealLostOperation(callDigest, pending)
+      }
+      if (remoteCapture.status === 'timeout') {
+        return sealTimedOutOperation(callDigest, pending)
       }
       if (remoteCapture.status === 'unavailable') {
         sealOperation(callDigest, pending, true)
