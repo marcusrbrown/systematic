@@ -3674,6 +3674,165 @@ function createSessionRuntime(
     }
   }
 
+  // `skip`: the call runs unobserved (nothing is bound, no pending entry, and
+  // its after-hook stays silent). `stop`: the guard was marked unavailable.
+  type BeforeSnapshotOutcome =
+    | {
+        readonly kind: 'snapshot'
+        readonly snapshot: OperationObserverSnapshot
+      }
+    | { readonly kind: 'skip' }
+    | { readonly kind: 'stop' }
+
+  const beforeSnapshotFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
+    reasonCode === undefined
+      ? beforeCause('local-snapshot-error')
+      : beforeCause('local-snapshot-unavailable', reasonCode)
+
+  function isEffectiveTarget(observer: OpencodeOperationObserver): boolean {
+    return observer.targetDigest === currentEffectiveTargetIdentity()
+  }
+
+  // The call's own local snapshot, decided against the unit's snapshot block.
+  // Only a snapshot of the effective target sets or clears the block; one of
+  // any other target never does. A call whose target is not the effective one
+  // first clears the block through a snapshot of the effective target. No call
+  // is refused: a blocked call is skipped.
+  async function takeBeforeSnapshot(
+    observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
+  ): Promise<BeforeSnapshotOutcome> {
+    const gated = await gateOtherTarget(observer, initiator)
+    if (gated) return gated
+    // Captured in the same synchronous segment as the snapshot call.
+    const capture = captureSnapshotBlock()
+    if (capture && !isEffectiveTarget(observer)) return { kind: 'skip' }
+    const read = await readBeforeSnapshot(observer, initiator)
+    if (read.kind !== 'snapshot' || !capture) return read
+    return settleBeforeClear(capture, observer, read.snapshot)
+  }
+
+  async function gateOtherTarget(
+    observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
+  ): Promise<BeforeSnapshotOutcome | undefined> {
+    if (!captureSnapshotBlock() || isEffectiveTarget(observer)) return undefined
+    const gate = await clearBlockForOtherTarget(initiator)
+    return gate === 'continue' ? undefined : { kind: gate }
+  }
+
+  async function readBeforeSnapshot(
+    observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
+  ): Promise<BeforeSnapshotOutcome> {
+    let result: OperationObserverResult
+    try {
+      result = await observer.snapshot()
+    } catch {
+      markUnavailable(beforeCause('local-snapshot-error'))
+      return { kind: 'stop' }
+    }
+    if (result.status === 'unavailable') {
+      return settleFailedBeforeSnapshot(result.reasonCode, observer, initiator)
+    }
+    if (result.snapshot.targetDigest !== observer.targetDigest) {
+      markUnavailable(beforeCause('operation-target-mismatch'))
+      return { kind: 'stop' }
+    }
+    return { kind: 'snapshot', snapshot: result.snapshot }
+  }
+
+  // A clean snapshot of the effective target while blocked clears the block
+  // and lets the call be observed; a stale one skips the call.
+  function settleBeforeClear(
+    capture: SnapshotBlockCapture,
+    observer: OpencodeOperationObserver,
+    snapshot: OperationObserverSnapshot,
+  ): BeforeSnapshotOutcome {
+    const cleared = commitSnapshotBlockClear(
+      capture,
+      {
+        targetIdentity: observer.targetDigest,
+        pinned: observer.targetDigest !== options.workspaceIdentity,
+      },
+      snapshot,
+      beforeSnapshotFailureCause,
+    )
+    if (cleared.status === 'fatal') return { kind: 'stop' }
+    return cleared.status === 'cleared'
+      ? { kind: 'snapshot', snapshot }
+      : { kind: 'skip' }
+  }
+
+  // A blocking reason skips the call, and blocks the unit only when the
+  // snapshot is of the effective target and the unit is still the one that
+  // started the call. Every other reason is fatal.
+  function settleFailedBeforeSnapshot(
+    reasonCode: OperationObserverReasonCode,
+    observer: OpencodeOperationObserver,
+    initiator: OperationInitiator | undefined,
+  ): BeforeSnapshotOutcome {
+    if (!isSnapshotBlockingReason(reasonCode)) {
+      markUnavailable(beforeCause('local-snapshot-unavailable', reasonCode))
+      return { kind: 'stop' }
+    }
+    if (
+      initiator &&
+      isCurrentInitiator(initiator) &&
+      isEffectiveTarget(observer)
+    ) {
+      setSnapshotBlock(reasonCode, observer.targetDigest)
+    }
+    return { kind: 'skip' }
+  }
+
+  // The call targets something other than the effective target while the unit
+  // is blocked: only a clean snapshot of the effective target can clear it.
+  async function clearBlockForOtherTarget(
+    initiator: OperationInitiator | undefined,
+  ): Promise<'continue' | 'skip' | 'stop'> {
+    const lookup = resolveEffectiveObserver()
+    if (lookup.status !== 'ok') {
+      markUnavailable(
+        beforeCause(
+          'operation-input-invalid',
+          lookup.status === 'timeout' ? 'command-timeout' : lookup.reasonCode,
+        ),
+      )
+      return 'stop'
+    }
+    const result = await clearSnapshotBlock(
+      lookup.value,
+      beforeSnapshotFailureCause,
+    )
+    return settleOtherTargetClear(
+      result,
+      lookup.value.targetIdentity,
+      initiator,
+    )
+  }
+
+  function settleOtherTargetClear(
+    result: SnapshotBlockClearResult,
+    effectiveTargetIdentity: string,
+    initiator: OperationInitiator | undefined,
+  ): 'continue' | 'skip' | 'stop' {
+    if (result.status === 'timeout') {
+      markUnavailable(
+        beforeCause('local-snapshot-unavailable', 'command-timeout'),
+      )
+      return 'stop'
+    }
+    if (result.status === 'fatal') return 'stop'
+    if (result.status === 'still-blocked') {
+      if (initiator && isCurrentInitiator(initiator)) {
+        setSnapshotBlock(result.reasonCode, effectiveTargetIdentity)
+      }
+      return 'skip'
+    }
+    return result.status === 'stale' ? 'skip' : 'continue'
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: target derivation, registered-worktree validation, and observer registration must stay atomic on the before hook
   async function prepareOperation(
     host: HostToolBefore,
@@ -3757,23 +3916,12 @@ function createSessionRuntime(
           (options.createTargetObserver ?? defaultTargetObserver)(
             target.targetRoot,
           ))
-    let result: OperationObserverResult
-    try {
-      result = await operationObserver.snapshot()
-    } catch {
-      markUnavailable(beforeCause('local-snapshot-error'))
+    const taken = await takeBeforeSnapshot(operationObserver, initiator)
+    if (taken.kind === 'skip') {
+      skippedOperations.add(callDigest)
       return
     }
-    if (result.status === 'unavailable') {
-      markUnavailable(
-        beforeCause('local-snapshot-unavailable', result.reasonCode),
-      )
-      return
-    }
-    if (result.snapshot.targetDigest !== operationObserver.targetDigest) {
-      markUnavailable(beforeCause('operation-target-mismatch'))
-      return
-    }
+    if (taken.kind === 'stop') return
     rememberOperationObserver({
       targetRoot: target.targetRoot,
       registeredWorktreeIdentity: registeredIdentity,
@@ -3796,7 +3944,7 @@ function createSessionRuntime(
       targetIdentity: operationObserver.targetDigest,
       registeredWorktreeIdentity: registeredIdentity,
       observer: operationObserver,
-      before: result.snapshot,
+      before: taken.snapshot,
       ...(initiator ? { initiator } : {}),
       ...(remote
         ? { remoteOperation: remote.operation, remoteBefore: remote.before }
@@ -4169,13 +4317,26 @@ function createSessionRuntime(
     readonly generation: number
   }
 
+  // Taken in the same synchronous segment as the `snapshot()` call whose
+  // result may clear the block.
+  function captureSnapshotBlock(): SnapshotBlockCapture | undefined {
+    const record = currentSnapshotBlock()
+    return record ? { record, generation: unitStartGeneration } : undefined
+  }
+
   // A set replaces the record object and a unit start bumps the generation,
-  // so a clear that began before either cannot commit afterwards.
-  function snapshotBlockStillCurrent(capture: SnapshotBlockCapture): boolean {
+  // so a clear that began before either cannot commit afterwards. The
+  // snapshot's target, the record's target and the effective target must all
+  // be the same.
+  function snapshotBlockStillCurrent(
+    capture: SnapshotBlockCapture,
+    snapshotTargetIdentity: string,
+  ): boolean {
     return (
       snapshotBlockRecord === capture.record &&
       unitStartGeneration === capture.generation &&
-      currentEffectiveTargetIdentity() === capture.record.targetIdentity
+      capture.record.targetIdentity === snapshotTargetIdentity &&
+      currentEffectiveTargetIdentity() === snapshotTargetIdentity
     )
   }
 
@@ -4192,31 +4353,37 @@ function createSessionRuntime(
     effective: EffectiveOperationObserver,
     failureCause: SnapshotBlockFailureCause,
   ): Promise<SnapshotBlockClearResult> {
-    const record = currentSnapshotBlock()
-    if (!record) return { status: 'not-blocked' }
-    const capture = { record, generation: unitStartGeneration }
-    if (record.targetIdentity !== effective.targetIdentity) {
-      return { status: 'stale' }
-    }
+    const capture = captureSnapshotBlock()
+    if (!capture) return { status: 'not-blocked' }
     const read = await readSnapshot(
       effective.observer,
       effective.targetIdentity,
     )
     if (read.status === 'timeout') return { status: 'timeout' }
     if (read.status === 'fatal') {
-      return settleFailedBlockSnapshot(read.reasonCode, capture, failureCause)
+      return settleFailedBlockSnapshot(
+        read.reasonCode,
+        capture,
+        effective.targetIdentity,
+        failureCause,
+      )
     }
-    if (!snapshotBlockStillCurrent(capture)) return { status: 'stale' }
-    return commitSnapshotBlockClear(effective, read.value, failureCause)
+    return commitSnapshotBlockClear(
+      capture,
+      effective,
+      read.value,
+      failureCause,
+    )
   }
 
   function settleFailedBlockSnapshot(
     reasonCode: GuardUnavailableCause['reasonCode'],
     capture: SnapshotBlockCapture,
+    targetIdentity: string,
     failureCause: SnapshotBlockFailureCause,
   ): SnapshotBlockClearResult {
     if (isSnapshotBlockingReason(reasonCode)) {
-      return snapshotBlockStillCurrent(capture)
+      return snapshotBlockStillCurrent(capture, targetIdentity)
         ? { status: 'still-blocked', reasonCode }
         : { status: 'stale' }
     }
@@ -4224,20 +4391,25 @@ function createSessionRuntime(
     return { status: 'fatal' }
   }
 
-  // One synchronous segment: the readback applies to the core locally (no
-  // remote probe) so drift made while blocked marks receipts stale, then the
-  // record is deleted.
+  // One synchronous segment: the currency check, the local readback (no
+  // remote probe, so drift made while blocked marks receipts stale), and the
+  // deletion of the record. `snapshot` was read from `target` after
+  // `capture` was taken.
   function commitSnapshotBlockClear(
-    effective: EffectiveOperationObserver,
+    capture: SnapshotBlockCapture,
+    target: Pick<EffectiveOperationObserver, 'targetIdentity' | 'pinned'>,
     snapshot: OperationObserverSnapshot,
     failureCause: SnapshotBlockFailureCause,
   ): SnapshotBlockClearResult {
+    if (!snapshotBlockStillCurrent(capture, target.targetIdentity)) {
+      return { status: 'stale' }
+    }
     const observed = requireGuard().observeReadback({
       workspaceIdentity: options.workspaceIdentity,
       repositoryIdentity: snapshot.repositoryRevisionDigest,
       worktreeIdentity: snapshot.worktreeRevisionDigest,
-      ...(effective.pinned
-        ? { operationTargetIdentity: effective.targetIdentity }
+      ...(target.pinned
+        ? { operationTargetIdentity: target.targetIdentity }
         : {}),
     })
     if (
