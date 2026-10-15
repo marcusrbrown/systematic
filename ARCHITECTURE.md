@@ -288,7 +288,8 @@ unit drops it, and a same-unit redeclaration keeps it. While blocked no call is 
 run unobserved and leave no receipts, and remote baselines that cannot be seeded are deferred as
 `snapshot-blocked` seed deferrals. Completion is rejected as `snapshot-blocked`, which is retryable
 and consumes nothing; the rejection carries an enum-only `blockReason`, and a parent-checkout block
-on a pinned unit rejects the same way without recording a block. A later clean snapshot of the effective target clears the block and applies
+on a pinned unit rejects the same way without recording a block, naming `blockTarget:
+parent-checkout` in the rejection so the agent fixes that checkout and retries completion. A later clean snapshot of the effective target clears the block and applies
 the local readback, so anything that moved while blocked marks its receipts stale and those
 operations are rerun. Revision drift between completion snapshots is the same retryable rejection
 (`worktree-unstable`); a target change, an observer or registration change, and every other

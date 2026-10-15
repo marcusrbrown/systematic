@@ -494,6 +494,10 @@ interface TerminalComplete {
   // The blocking reason behind a `snapshot-blocked` rejection. Enum-only, and
   // written to the tool output only: never to metadata, markers, or digests.
   blockReason?: SnapshotBlockReason
+  // Set only when that block is of the parent checkout while the unit is
+  // pinned to a worktree: status shows no block then, so the rejection names
+  // what to fix. Enum-only, and written to the tool output only.
+  blockTarget?: 'parent-checkout'
   // When true, a replay of this terminal outcome must only correct the
   // metadata (`writeAbandonedCompletionMetadata()`), never rewrite the
   // tool result's title/output. Set for outcomes where the host tool's
@@ -683,6 +687,7 @@ interface DeferredSeed extends SeedDeferral {
 }
 
 type RemoteSeedOutcome =
+  | { readonly kind: 'superseded' }
   | { readonly kind: 'seeded' }
   | { readonly kind: 'tolerated' }
   | { readonly kind: 'deferred'; readonly reasonCode: SeedDeferralReason }
@@ -3372,6 +3377,10 @@ function createSessionRuntime(
   // A clean snapshot while blocked clears the block through the shared
   // commit, which applies the local readback. The remote probes then run
   // against that snapshot without applying the local readback a second time.
+  // A snapshot the block overtook applies and probes nothing: either its clear
+  // came back stale (the block or unit changed while it was in flight), or no
+  // block was captured at its start and one has been set since. Its probes are
+  // reported as skipped, so none looks verified.
   async function applyRefreshSnapshot(
     effective: EffectiveOperationObserver,
     snapshot: OperationObserverSnapshot,
@@ -3386,6 +3395,12 @@ function createSessionRuntime(
         )
       : undefined
     if (cleared?.status === 'fatal') return []
+    const overtaken = cleared
+      ? cleared.status === 'stale'
+      : currentSnapshotBlock() !== undefined
+    if (overtaken) {
+      return skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
+    }
     return applyReadbackAndProbeRemote(
       effective,
       snapshot,
@@ -3653,6 +3668,7 @@ function createSessionRuntime(
       status: result.status,
       reasonCode: result.reasonCode,
       ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+      ...(result.blockTarget ? { blockTarget: result.blockTarget } : {}),
     })
     output.metadata = {
       ...withoutStaleConditionalMetadata(existingMetadata),
@@ -4301,7 +4317,12 @@ function createSessionRuntime(
       )
       return undefined
     }
-    return seedEachRemoteScope(remoteOperations, remoteSnapshot, local.snapshot)
+    return seedEachRemoteScope(
+      remoteOperations,
+      remoteSnapshot,
+      local.snapshot,
+      generation,
+    )
   }
 
   type SeedLocalRead =
@@ -4351,14 +4372,23 @@ function createSessionRuntime(
     setSnapshotBlock(reasonCode, targetIdentity, { generation })
   }
 
-  // Continues past deferrals; only a fatal outcome stops seeding.
+  // Continues past deferrals; only a fatal outcome stops seeding. `generation`
+  // is the unit start generation the seed began under: once a later start has
+  // replaced it the seed owns nothing, and stops without changing anything.
   async function seedEachRemoteScope(
     operations: readonly RemoteOperation[],
     reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
     local: OperationObserverSnapshot,
+    generation: number,
   ): Promise<GuardUnavailableCause | undefined> {
     for (const operation of operations) {
-      const outcome = await seedRemoteScope(reader, operation, local)
+      const outcome = await seedRemoteScope(
+        reader,
+        operation,
+        local,
+        generation,
+      )
+      if (outcome.kind === 'superseded') return undefined
       if (outcome.kind === 'fatal') return outcome.cause
       // A redeclaration of the same unit keeps its deferral record, so each
       // fresh seed of an operation supersedes what an earlier seed recorded.
@@ -4723,12 +4753,17 @@ function createSessionRuntime(
     return { kind: 'fatal', cause }
   }
 
-  async function seedRemoteScope(
-    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+  // Classifies a remote seed read: `read` carries the snapshot whose baseline
+  // is still to be applied; every other result is already a seed outcome.
+  function classifyRemoteSeedRead(
     operation: RemoteOperation,
-    local: OperationObserverSnapshot,
-  ): Promise<RemoteSeedOutcome> {
-    const result = await readRemoteScope(reader, operation, 'before')
+    result: OperationObserverRemoteResult | undefined,
+  ):
+    | RemoteSeedOutcome
+    | {
+        readonly kind: 'read'
+        readonly snapshot: OperationObserverRemoteSnapshot
+      } {
     if (!result) {
       return fatalSeed({
         site: 'seed-remote-scope',
@@ -4738,29 +4773,44 @@ function createSessionRuntime(
       })
     }
     if (result.status === 'missing-resource') {
-      if (operation === 'push') {
-        return { kind: 'deferred', reasonCode: 'missing-resource' }
-      }
-      return { kind: 'tolerated' }
+      return operation === 'push'
+        ? { kind: 'deferred', reasonCode: 'missing-resource' }
+        : { kind: 'tolerated' }
     }
-    if (result.status !== 'available') {
-      if (result.reasonCode === 'command-timeout') {
-        return { kind: 'deferred', reasonCode: 'command-timeout' }
-      }
-      return fatalSeed({
-        site: 'seed-remote-scope',
-        kind: 'remote-scope-unavailable',
-        operation,
-        reasonCode: result.reasonCode,
-        timedOut: false,
-      })
+    if (result.status === 'available') {
+      return { kind: 'read', snapshot: result.snapshot }
     }
+    if (result.reasonCode === 'command-timeout') {
+      return { kind: 'deferred', reasonCode: 'command-timeout' }
+    }
+    return fatalSeed({
+      site: 'seed-remote-scope',
+      kind: 'remote-scope-unavailable',
+      operation,
+      reasonCode: result.reasonCode,
+      timedOut: false,
+    })
+  }
+
+  async function seedRemoteScope(
+    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+    operation: RemoteOperation,
+    local: OperationObserverSnapshot,
+    generation: number,
+  ): Promise<RemoteSeedOutcome> {
+    const result = await readRemoteScope(reader, operation, 'before')
+    // Checked before anything is classified or applied: a seed that a later
+    // start has replaced must not apply a baseline, mutate a deferral, or fail
+    // the guard. The newer start seeds for itself.
+    if (generation !== unitStartGeneration) return { kind: 'superseded' }
+    const read = classifyRemoteSeedRead(operation, result)
+    if (read.kind !== 'read') return read
     const observed = requireGuard().observeReadback(
       remoteReadbackInput(
         operation,
         local,
         options.workspaceIdentity,
-        result.snapshot,
+        read.snapshot,
         operation !== 'pr-creation',
       ),
     )
@@ -5386,6 +5436,7 @@ function createSessionRuntime(
     pending: PendingComplete,
     output: unknown,
     reasonCode: SnapshotBlockReason,
+    blockTarget?: 'parent-checkout',
   ): void {
     if (requireGuard().status().state === 'unavailable') {
       finishUnavailableReadback(callDigest, pending, output, reasonCode)
@@ -5400,6 +5451,7 @@ function createSessionRuntime(
         status: 'rejected',
         reasonCode: 'snapshot-blocked',
         blockReason: reasonCode,
+        ...(blockTarget ? { blockTarget } : {}),
         title: 'Workflow snapshot blocked',
       },
       { abandon: true },
@@ -5486,7 +5538,17 @@ function createSessionRuntime(
   ): void {
     if (readbacks.status === 'blocked') {
       blockForCompletion(readbacks, generation)
-      finishBlockedComplete(callDigest, pending, output, readbacks.reasonCode)
+      finishBlockedComplete(
+        callDigest,
+        pending,
+        output,
+        readbacks.reasonCode,
+        // The block was of the parent checkout, but the unit is pinned to a
+        // worktree: no record is set, so the rejection names the target.
+        readbacks.targetIdentity === currentEffectiveTargetIdentity()
+          ? undefined
+          : 'parent-checkout',
+      )
       return
     }
     if (readbacks.status === 'fatal') {

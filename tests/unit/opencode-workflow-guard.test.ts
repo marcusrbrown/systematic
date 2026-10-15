@@ -16227,6 +16227,14 @@ describe('snapshot block record', () => {
     snapshotCalls(): number
     /** From now on an unscripted `snapshot()` returns this one. */
     setDefault(snapshot: OperationObserverSnapshot): void
+    /** The next remote read of `operation` is held until `release` runs. */
+    holdRemote(
+      operation: RemoteOperation,
+      phase: 'before' | 'after',
+    ): {
+      readonly reached: Promise<void>
+      release(result: OperationObserverRemoteResult): void
+    }
     remoteCalls(): number
   }
 
@@ -16240,6 +16248,10 @@ describe('snapshot block record', () => {
     const queue: OpencodeOperationObserver[] = []
     let snapshotCalls = 0
     let remoteCalls = 0
+    const holds = new Map<
+      string,
+      () => Promise<OperationObserverRemoteResult>
+    >()
     const observer: OpencodeOperationObserver = {
       ...base,
       snapshot: () => {
@@ -16248,6 +16260,11 @@ describe('snapshot block record', () => {
       },
       async remoteSnapshot(operation, phase) {
         remoteCalls += 1
+        const hold = holds.get(`${operation}:${phase}`)
+        if (hold) {
+          holds.delete(`${operation}:${phase}`)
+          return hold()
+        }
         if (!base.remoteSnapshot) {
           return { status: 'unavailable', reasonCode: 'remote-missing-field' }
         }
@@ -16264,6 +16281,20 @@ describe('snapshot block record', () => {
       snapshotCalls: () => snapshotCalls,
       setDefault: (snapshot) => {
         fallback = sequenceObserver([snapshot])
+      },
+      holdRemote: (operation, phase) => {
+        let release: (result: OperationObserverRemoteResult) => void = () => {}
+        const reached = new Promise<void>((resolveReached) => {
+          holds.set(
+            `${operation}:${phase}`,
+            () =>
+              new Promise<OperationObserverRemoteResult>((resolve) => {
+                release = resolve
+                resolveReached()
+              }),
+          )
+        })
+        return { reached, release: (result) => release(result) }
       },
       remoteCalls: () => remoteCalls,
     }
@@ -17244,7 +17275,13 @@ describe('snapshot block record', () => {
             status: 'rejected',
             reasonCode: 'snapshot-blocked',
             blockReason,
+            blockTarget: 'parent-checkout',
           })
+          // The target is named in the rejection only: markers and metadata
+          // carry neither the reason nor the target.
+          expect(JSON.stringify(output.metadata)).not.toContain(
+            'parent-checkout',
+          )
           expect(status(target.adapter).state).not.toBe('unavailable')
           // The parent is not the unit's effective target: no record is set,
           // so status shows no block and a later clean parent read is not
@@ -17316,6 +17353,7 @@ describe('snapshot block record', () => {
             expect(replay.output).toBe(first.output)
             expect(JSON.parse(replay.output)).toMatchObject({
               blockReason: 'command-output-limit',
+              blockTarget: 'parent-checkout',
             })
           } finally {
             target.cleanup()
@@ -18026,6 +18064,69 @@ describe('snapshot block record', () => {
       expect((await statusKeepingBlock(adapter)).seedDeferrals).toBeUndefined()
     })
 
+    test('an older seed whose remote read returns late leaves the deferral a newer seed recorded, and the baseline still binds from a clean before-read', async () => {
+      const checkAvailable = remoteAvailable(D, E, {
+        pullRequest: { identity: D, state: 'open' },
+        checkState: 'pending',
+      })
+      const steered = steeredObserver({
+        'check-readback:before': [checkAvailable],
+        'check-readback:after': [
+          remoteAvailable(D, 'f'.repeat(64), {
+            pullRequest: { identity: D, state: 'open' },
+            checkState: 'success',
+          }),
+        ],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'check-readback',
+      ])
+      const held = steered.holdRemote('check-readback', 'before')
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'older-seed-skill',
+      }
+      const skillArgs = { name: 'ce:work' }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: skillArgs,
+      })
+      const activating = adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: skillArgs },
+        { title: 'Loaded skill', output: 'ok', metadata: {} },
+      )
+      await held.reached
+      // A pristine redeclaration seeds again; its local snapshot hits a limit.
+      steered.queueSnapshot(failing('file-limit'))
+      await redeclare(adapter, 'newer-seed-start')
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toEqual([
+        { operation: 'check-readback', reasonCode: 'snapshot-blocked' },
+      ])
+
+      held.release({ status: 'missing-resource' })
+      await activating
+
+      // The older seed owns nothing any more: the newer deferral survives.
+      const parsed = await statusKeepingBlock(adapter)
+      expect(parsed.seedDeferrals).toEqual([
+        { operation: 'check-readback', reasonCode: 'snapshot-blocked' },
+      ])
+      expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
+      expect(status(adapter).state).not.toBe('unavailable')
+
+      // The cause is fixed: the operation's own clean before-read binds it.
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'gh pr checks 42' },
+        { title: 'checks', output: 'pending', metadata: { exit: 0 } },
+        'bind-check-readback',
+      )
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect((await refreshStatus(adapter)).seedDeferrals).toBeUndefined()
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
     test.each([...FATAL_SEED_REASONS])(
       'a seed snapshot failing with %s still makes the guard unavailable and sets no block',
       async (reasonCode) => {
@@ -18273,6 +18374,125 @@ describe('snapshot block record', () => {
         await refreshing
 
         expect(controls.current()).toEqual({ reasonCode: 'worktree-unstable' })
+      })
+
+      // Observed evidence at distinct revisions, including a satisfied push.
+      async function evidencedPushAdapter(): Promise<{
+        adapter: OpencodeWorkflowGuard
+        steered: SteeredObserver
+        satisfied: readonly ReceiptOperation[]
+        worktree: (tag: string) => OperationObserverSnapshot
+      }> {
+        const steered = steeredObserver(REMOTE)
+        const adapter = createAdapter('observe', false, steered.observer, [
+          'push',
+        ])
+        await activateWorkEpoch(adapter)
+        const worktree = (tag: string) =>
+          operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+        steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+        steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+        await observeOperationTool(
+          adapter,
+          'write',
+          { filePath: 'real.ts', content: 'changed' },
+          BASH_OUTPUT,
+          'obsolete-write',
+        )
+        steered.setDefault(worktree('a1'))
+        await operate(adapter, 'obsolete-verify')
+        await operate(adapter, 'obsolete-push', PUSH)
+        const satisfied = status(adapter).satisfiedOperations
+        expect(satisfied).toEqual(['implementation', 'verification', 'push'])
+        return { adapter, steered, satisfied, worktree }
+      }
+
+      // Holds a status snapshot of a revision no receipt was minted at open,
+      // runs `overtake` while it is in flight, then releases it.
+      async function releaseObsoleteStatusSnapshot(
+        fixture: Awaited<ReturnType<typeof evidencedPushAdapter>>,
+        overtake: () => Promise<void>,
+      ): Promise<{
+        parsed: Record<string, unknown>
+        remoteCallsBefore: number
+      }> {
+        const { adapter, steered, worktree } = fixture
+        const slow = deferredStep(worktree('e9'))
+        const slowObserver = sequenceObserver([slow.step])
+        steered.queueSnapshot(slowObserver)
+        const refreshing = refreshStatus(adapter)
+        for (
+          let tick = 0;
+          tick < 50 && slowObserver.snapshotCalls() < 1;
+          tick++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(slowObserver.snapshotCalls()).toBe(1)
+        await overtake()
+        const remoteCallsBefore = steered.remoteCalls()
+        slow.release()
+        return { parsed: await refreshing, remoteCallsBefore }
+      }
+
+      // Nothing of the obsolete snapshot was applied: the receipts are as
+      // valid as before, no remote was probed, and the skipped probes are
+      // reported so none looks verified.
+      function expectObsoleteSnapshotIgnored(
+        fixture: Awaited<ReturnType<typeof evidencedPushAdapter>>,
+        released: Awaited<ReturnType<typeof releaseObsoleteStatusSnapshot>>,
+      ): void {
+        const { adapter, steered, satisfied } = fixture
+        expect(status(adapter).satisfiedOperations).toEqual(satisfied)
+        expect(steered.remoteCalls()).toBe(released.remoteCallsBefore)
+        expect(released.parsed.unconfirmedReadbacks).toEqual([
+          { probe: 'local', reasonCode: 'command-timeout' },
+          { probe: 'push', reasonCode: 'command-timeout' },
+        ])
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'worktree-unstable',
+        })
+      }
+
+      test('an obsolete status snapshot applies no readback and probes no remote, and is listed as unconfirmed', async () => {
+        const fixture = await evidencedPushAdapter()
+        const { adapter, steered } = fixture
+        adapter.snapshotBlock(SESSION_A).set('file-limit')
+
+        // A newer block overtakes the held snapshot.
+        const released = await releaseObsoleteStatusSnapshot(
+          fixture,
+          async () => {
+            steered.queueSnapshot(failing('worktree-unstable'))
+            await operate(adapter, 'obsolete-later-block')
+            expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+              reasonCode: 'worktree-unstable',
+            })
+          },
+        )
+
+        expectObsoleteSnapshotIgnored(fixture, released)
+      })
+
+      test('a status snapshot taken with no block, overtaken by a block set meanwhile, applies no readback and probes no remote', async () => {
+        const fixture = await evidencedPushAdapter()
+        const { adapter, steered } = fixture
+        expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+
+        // A concurrent hook blocks the unit while the snapshot is in flight.
+        const released = await releaseObsoleteStatusSnapshot(
+          fixture,
+          async () => {
+            steered.queueSnapshot(failing('worktree-unstable'))
+            await operate(adapter, 'unblocked-then-blocked')
+            expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+              reasonCode: 'worktree-unstable',
+            })
+          },
+        )
+
+        expectObsoleteSnapshotIgnored(fixture, released)
       })
 
       test.each([...FATAL_READBACK_REASONS])(
