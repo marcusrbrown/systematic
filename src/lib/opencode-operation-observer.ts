@@ -339,6 +339,8 @@ interface WorktreeReaders {
 interface RootPin {
   readonly targetRoot: string
   readonly gitDir: string
+  /** Where objects and refs live. A linked worktree's `commondir` names it. */
+  readonly commonDir: string
 }
 
 type RootPinCaptureResult =
@@ -350,6 +352,7 @@ type RepositoryAnchorResult =
       status: 'ok'
       toplevel: string
       gitDir: string
+      commonDir: string
       /** Full object id, or `undefined` for an unborn `HEAD`. */
       head: string | undefined
       infoExcludePath: string
@@ -664,9 +667,21 @@ function captureRootPin(
     realPath,
   )
   if (gitDir.status === 'error') return gitDir
+  const commonDir = requiredGitPath(
+    runner,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    targetDirectory,
+    limits,
+    realPath,
+  )
+  if (commonDir.status === 'error') return commonDir
   return {
     status: 'ok',
-    pin: { targetRoot: targetRoot.value, gitDir: gitDir.value },
+    pin: {
+      targetRoot: targetRoot.value,
+      gitDir: gitDir.value,
+      commonDir: commonDir.value,
+    },
   }
 }
 
@@ -907,10 +922,11 @@ function readRevision(
 
 /**
  * One `rev-parse` returns toplevel, absolute git dir, the `info/exclude` path,
- * the in-work-tree answer and the `HEAD` id, in that order. `--verify -q` makes
- * an unborn `HEAD` exit 1 with only the first four lines, so unborn is
- * distinguishable from every other failure. `--git-path` prints a path relative to `cwd` (absolute for a
- * linked worktree), so it is resolved against `cwd`.
+ * the in-work-tree answer, the absolute common dir and the `HEAD` id, in that
+ * order. `--verify -q` makes an unborn `HEAD` exit 1 with only the first five
+ * lines, so unborn is distinguishable from every other failure. `--git-path`
+ * prints a path relative to `cwd` (absolute for a linked worktree), so it is
+ * resolved against `cwd`.
  */
 function readRepositoryAnchor(
   runner: OperationObserverCommandRunner,
@@ -927,6 +943,8 @@ function readRepositoryAnchor(
       '--git-path',
       'info/exclude',
       '--is-inside-work-tree',
+      '--path-format=absolute',
+      '--git-common-dir',
       '--verify',
       '-q',
       'HEAD',
@@ -938,13 +956,21 @@ function readRepositoryAnchor(
   if (result.status === 'error') return result
   const lines = result.output.stdout.split('\n')
   if (lines.at(-1) === '') lines.pop()
-  const unborn = result.exitCode === 1 && lines.length === 4
+  const unborn = result.exitCode === 1 && lines.length === 5
   if (result.exitCode !== 0 && !unborn) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  const [toplevelLine, gitDirLine, excludeLine, insideLine, headLine] = lines
+  const [
+    toplevelLine,
+    gitDirLine,
+    excludeLine,
+    insideLine,
+    commonDirLine,
+    headLine,
+  ] = lines
   const malformed =
-    lines.length !== (unborn ? 4 : 5) ||
+    lines.length !== (unborn ? 5 : 6) ||
+    commonDirLine === undefined ||
     (insideLine !== 'true' && insideLine !== 'false') ||
     toplevelLine === undefined ||
     gitDirLine === undefined ||
@@ -955,13 +981,19 @@ function readRepositoryAnchor(
   if (malformed) return { status: 'error', reasonCode: 'target-unavailable' }
   const toplevel = absoluteCanonicalPath(toplevelLine, realPath)
   const gitDir = absoluteCanonicalPath(gitDirLine, realPath)
-  if (toplevel === undefined || gitDir === undefined) {
+  const commonDir = absoluteCanonicalPath(commonDirLine, realPath)
+  if (
+    toplevel === undefined ||
+    gitDir === undefined ||
+    commonDir === undefined
+  ) {
     return { status: 'error', reasonCode: 'target-unavailable' }
   }
   return {
     status: 'ok',
     toplevel,
     gitDir,
+    commonDir,
     head: headLine?.toLowerCase(),
     infoExcludePath: path.resolve(cwd, excludeLine),
     insideWorkTree: insideLine === 'true',
@@ -996,6 +1028,22 @@ function observed(
   return { status: 'ok', observation: { absolutePath, record, stat } }
 }
 
+/**
+ * Feeds one variable-length field into a digest as `<byte length>:<bytes>`, so
+ * the boundary between two fields is part of what is hashed. Without it, a
+ * file whose content spells out the next record would hash like two files.
+ *
+ * @internal Exported for the framing test only.
+ */
+export function hashField(
+  hash: ReturnType<typeof createHash>,
+  field: string | Uint8Array,
+): void {
+  const bytes = typeof field === 'string' ? Buffer.from(field) : field
+  hash.update(`${bytes.byteLength}:`)
+  hash.update(bytes)
+}
+
 function gitBlobId(content: Uint8Array, format: ObjectFormat): string {
   return createHash(format)
     .update(`blob ${content.byteLength}\0`)
@@ -1007,6 +1055,8 @@ function missingObservation(
   absolutePath: string,
   relativePath: string,
 ): ObservationResult {
+  // A deleted path adds nothing to the digest: the worktree reads the same
+  // whether or not `HEAD` still lists it. The record carries the deletion.
   return observed(
     absolutePath,
     { path: relativePath, kind: 'missing', mode: '', id: undefined },
@@ -1042,28 +1092,6 @@ function sameStat(
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   )
-}
-
-/** Takes a fresh stat and requires it to equal `before`. */
-function confirmStat(
-  readers: WorktreeReaders,
-  absolutePath: string,
-  before: OperationObserverFileStat,
-):
-  | { status: 'ok'; stat: OperationObserverFileStat }
-  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  let after: OperationObserverFileStat
-  try {
-    after = readers.statReader(absolutePath)
-  } catch (error) {
-    return {
-      status: 'error',
-      reasonCode: isEnoent(error) ? 'worktree-unstable' : 'file-read-failed',
-    }
-  }
-  return sameStat(before, after)
-    ? { status: 'ok', stat: after }
-    : { status: 'error', reasonCode: 'worktree-unstable' }
 }
 
 function hasErrorCode(error: unknown, ...codes: readonly string[]): boolean {
@@ -1279,12 +1307,10 @@ function appendSubmoduleFact(
   const inspected = inspectGitlink(readers, absolutePath, limits)
   if (inspected.status === 'error') return inspected
   const id = inspected.status === 'initialized' ? inspected.id : undefined
-  hash.update('gitlink\0')
-  hash.update(relativePath)
-  hash.update('\0')
+  hash.update('gitlink')
+  hashField(hash, relativePath)
   // `uninitialized` is not hex, so it can never collide with a revision.
-  hash.update(id ?? 'uninitialized')
-  hash.update('\0')
+  hashField(hash, id ?? 'uninitialized')
   return observed(
     absolutePath,
     { path: relativePath, kind: 'gitlink', mode: '160000', id },
@@ -1318,13 +1344,9 @@ function appendSymlinkFact(
   ) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
-  const confirmed = confirmStat(readers, absolutePath, stat)
-  if (confirmed.status === 'error') return confirmed
-  hash.update('symlink\0')
-  hash.update(relativePath)
-  hash.update('\0')
-  hash.update(target)
-  hash.update('\0')
+  hash.update('symlink')
+  hashField(hash, relativePath)
+  hashField(hash, target)
   budget.bytes = nextBytes
   return observed(
     absolutePath,
@@ -1334,7 +1356,8 @@ function appendSymlinkFact(
       mode: '120000',
       id: gitBlobId(target, format),
     },
-    confirmed.stat,
+    // The pre-read stat is what the final pass compares against a fresh one.
+    stat,
   )
 }
 
@@ -1364,14 +1387,10 @@ function appendRegularFact(
   if (content.byteLength > remaining) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
-  const confirmed = confirmStat(readers, absolutePath, stat)
-  if (confirmed.status === 'error') return confirmed
-  hash.update('regular\0')
-  hash.update(relativePath)
-  hash.update('\0')
-  hash.update((stat.mode & 0o111) !== 0 ? 'executable\0' : 'non-executable\0')
-  hash.update(content)
-  hash.update('\0')
+  hash.update('regular')
+  hashField(hash, relativePath)
+  hashField(hash, (stat.mode & 0o111) !== 0 ? 'executable' : 'non-executable')
+  hashField(hash, content)
   budget.bytes += content.byteLength
   return observed(
     absolutePath,
@@ -1382,8 +1401,64 @@ function appendRegularFact(
       mode: (stat.mode & 0o100) !== 0 ? '100755' : '100644',
       id: gitBlobId(content, format),
     },
-    confirmed.stat,
+    // The pre-read stat is what the final pass compares against a fresh one.
+    stat,
   )
+}
+
+type AncestorCheck =
+  | { status: 'ok' }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+/**
+ * Requires every directory between the worktree root and `absolutePath` to be
+ * a real directory. A symlinked ancestor would let a tracked path read
+ * content from outside the worktree, hidden behind an ignore rule. Directories
+ * already seen this snapshot are skipped, so each is checked once. A missing
+ * or non-directory ancestor is left for the path's own stat to report.
+ */
+function checkAncestorDirectories(
+  worktreeRoot: string,
+  relativePath: string,
+  verified: Set<string>,
+): AncestorCheck {
+  const parts = relativePath.split('/').slice(0, -1)
+  let current = worktreeRoot
+  for (const part of parts) {
+    current = path.join(current, part)
+    if (verified.has(current)) continue
+    let stat: fs.Stats
+    try {
+      stat = fs.lstatSync(current)
+    } catch (error) {
+      if (hasErrorCode(error, 'ENOENT', 'ENOTDIR')) return { status: 'ok' }
+      return { status: 'error', reasonCode: 'file-read-failed' }
+    }
+    if (stat.isSymbolicLink()) {
+      return { status: 'error', reasonCode: 'file-read-failed' }
+    }
+    if (!stat.isDirectory()) return { status: 'ok' }
+    verified.add(current)
+  }
+  return { status: 'ok' }
+}
+
+/** The directories checked during the snapshot must still be real directories. */
+function verifyAncestorsUnchanged(
+  verified: ReadonlySet<string>,
+): StabilityResult {
+  for (const directory of verified) {
+    try {
+      const stat = fs.lstatSync(directory)
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return UNSTABLE
+    } catch (error) {
+      if (!hasErrorCode(error, 'ENOENT', 'ENOTDIR')) {
+        return { status: 'error', reasonCode: 'file-read-failed' }
+      }
+      return UNSTABLE
+    }
+  }
+  return { status: 'ok' }
 }
 
 /** A path to observe, with its tracked mode when it has one. */
@@ -1404,12 +1479,19 @@ function appendPathFact(
   limits: Limits,
   budget: SnapshotBudget,
   format: ObjectFormat,
+  verifiedDirectories: Set<string>,
 ): ObservationResult {
   const { mode, relativePath } = entry
   const absolutePath = safePath(context.worktreeRoot, relativePath)
   if (!absolutePath || outputBytes(relativePath) > limits.maxPathBytes) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
+  const ancestors = checkAncestorDirectories(
+    context.worktreeRoot,
+    relativePath,
+    verifiedDirectories,
+  )
+  if (ancestors.status === 'error') return ancestors
   const tracked = mode !== ''
   // A gitlink inspects its own directory, so it is dispatched before the stat.
   if (mode === '160000') {
@@ -1512,13 +1594,34 @@ const UNSTABLE: StabilityResult = {
   reasonCode: 'worktree-unstable',
 }
 
+/**
+ * A gitlink is re-inspected rather than re-stat'd: its directory times churn
+ * with submodule activity, but its state and `HEAD` id are what was hashed.
+ */
+function verifyGitlinkUnchanged(
+  readers: WorktreeReaders,
+  limits: Limits,
+  { absolutePath, record }: PathObservation,
+): StabilityResult {
+  const fresh = inspectGitlink(readers, absolutePath, limits)
+  if (fresh.status === 'error') {
+    // The first read of this directory succeeded, so a read failure now means
+    // the directory changed underneath the snapshot.
+    return fresh.reasonCode === 'file-read-failed' ? UNSTABLE : fresh
+  }
+  const id = fresh.status === 'initialized' ? fresh.id : undefined
+  return id === record.id ? { status: 'ok' } : UNSTABLE
+}
+
 function verifyObservationUnchanged(
   readers: WorktreeReaders,
-  { absolutePath, record, stat }: PathObservation,
+  limits: Limits,
+  observation: PathObservation,
 ): StabilityResult {
-  // A gitlink directory's times churn with submodule activity, which this
-  // snapshot does not cover.
-  if (record.kind === 'gitlink') return { status: 'ok' }
+  const { absolutePath, record, stat } = observation
+  if (record.kind === 'gitlink') {
+    return verifyGitlinkUnchanged(readers, limits, observation)
+  }
   let fresh: OperationObserverFileStat
   try {
     fresh = readers.statReader(absolutePath)
@@ -1535,10 +1638,11 @@ function verifyObservationUnchanged(
 
 function verifyObservationsUnchanged(
   readers: WorktreeReaders,
+  limits: Limits,
   observations: readonly PathObservation[],
 ): StabilityResult {
   for (const observation of observations) {
-    const result = verifyObservationUnchanged(readers, observation)
+    const result = verifyObservationUnchanged(readers, limits, observation)
     if (result.status === 'error') return result
   }
   return { status: 'ok' }
@@ -1605,6 +1709,7 @@ function runFinalPass(
   head: string | undefined,
   first: FirstPass,
   observations: readonly PathObservation[],
+  verifiedDirectories: ReadonlySet<string>,
 ): StabilityResult {
   // Ignore sources first: a source swapped for a FIFO or a huge file must be
   // caught by our own bounded read before any git listing reads it.
@@ -1615,7 +1720,9 @@ function runFinalPass(
     first,
   )
   if (sources.status === 'error') return sources
-  const unchanged = verifyObservationsUnchanged(readers, observations)
+  const ancestors = verifyAncestorsUnchanged(verifiedDirectories)
+  if (ancestors.status === 'error') return ancestors
+  const unchanged = verifyObservationsUnchanged(readers, limits, observations)
   if (unchanged.status === 'error') return unchanged
   const listings = verifyListingsUnchanged(
     readers.runner,
@@ -1762,13 +1869,10 @@ function hashIgnoreSource(
   fact: IgnoreSourceFact,
 ): void {
   // No path of any kind enters the identity, only the label and the bytes.
-  hash.update('ignore-source\0')
-  hash.update(fact.label)
-  hash.update('\0')
-  hash.update(fact.content === undefined ? 'absent' : 'present')
-  hash.update('\0')
-  if (fact.content !== undefined) hash.update(fact.content)
-  hash.update('\0')
+  hash.update('ignore-source')
+  hashField(hash, fact.label)
+  hashField(hash, fact.content === undefined ? 'absent' : 'present')
+  hashField(hash, fact.content ?? '')
 }
 
 function sameIgnoreSources(
@@ -1937,6 +2041,7 @@ function readWorktreeSnapshot(
   hash.update(WORKTREE_DIGEST_DOMAIN)
   const budget: SnapshotBudget = { bytes: 0 }
   const observations: PathObservation[] = []
+  const verifiedDirectories = new Set<string>()
   for (const relativePath of paths) {
     const result = appendPathFact(
       hash,
@@ -1946,6 +2051,7 @@ function readWorktreeSnapshot(
       limits,
       budget,
       format,
+      verifiedDirectories,
     )
     if (result.status === 'error') return result
     observations.push(result.observation)
@@ -1958,6 +2064,7 @@ function readWorktreeSnapshot(
     head,
     { ...listings.first, ignoreSources: sources.facts },
     observations,
+    verifiedDirectories,
   )
   if (stable.status === 'error') return stable
   return {
@@ -2481,7 +2588,8 @@ export function createOpencodeOperationObserver(
       // quietly point the observer at different content.
       if (
         anchor.toplevel !== rootPinResult.pin.targetRoot ||
-        anchor.gitDir !== rootPinResult.pin.gitDir
+        anchor.gitDir !== rootPinResult.pin.gitDir ||
+        anchor.commonDir !== rootPinResult.pin.commonDir
       ) {
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }

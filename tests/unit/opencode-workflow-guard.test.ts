@@ -15882,7 +15882,7 @@ describe('OpenCode workflow guard over a real observer', () => {
   })
 
   test.skipIf(process.platform === 'win32')(
-    'rejects completion after a clean-filter-normalized edit follows the evidence',
+    'rejects completion because the worktree digest moved, even when a clean filter makes git call the edit clean',
     async () => {
       const repo = await createRealObserverRepository()
       try {

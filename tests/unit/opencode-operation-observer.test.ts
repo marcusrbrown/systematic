@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -7,6 +7,7 @@ import path from 'node:path'
 
 import {
   createOpencodeOperationObserver,
+  hashField,
   type OpencodeOperationObserver,
   type OperationObserverCommandResult,
   type OperationObserverCommandRunner,
@@ -2283,22 +2284,22 @@ describe('OpenCode operation observer worktree identity characterization', () =>
         fixture.cleanup()
       }
     }
-    // Re-captured for the worktree:v3 domain tag and the ignore-source facts
-    // (the v2 values were captured before the path-record refactor).
+    // Captured with length-framed fields, the ignore-source facts and the
+    // worktree:v3 domain tag.
     expect(digests).toEqual({
       deleted:
-        '5d51050c47613116ab38a47a3689388dedf4dc4c729387ee98bfc8ad8a591bf9',
+        '0baa1ab668ea96046860a2b0b5f44169fec087af6426adc47c7d3399edce5198',
       executable:
-        'e305636e48047fba9c686e2216365169c07208db101816f0227a600f43b0faf6',
+        '35a00917d572e51b6be8d8fa00e1342f82e35f2e8c74a3adec7610d94cd7ae9c',
       gitlink:
-        '845b13594115fc39a434f563a67cf13f4d143a0ec3a484baf70f98c36987e905',
-      mixed: '24c53e4bab1e41c57217903636018c30482d4c46d9a3438f9297dd93d5af6f4b',
+        'b4efd196858ac6382342fdcbadd143bdd4f2bd3340d6c9a6a61c70e0665396bf',
+      mixed: '7d3855c074506dc40ddc6a1c18bfe3c92719627d98e8c91b805a383360b0b87a',
       regular:
-        '0ff80a54dcdc20a86244c87f3bd942d4422f72fbb3054e2878f7e53531d6ebf0',
+        '7c5ca1fe50a40aa3a057bd46c5be0ad9c7d2a1db1e3003577b6ade675cb0c0c3',
       symlink:
-        'deb8d28ad5efe5cf24e05ecc314421ceca3f01dab616cfaf693bb0f91c7021ed',
+        '6a563113eac3c7567d2051744fb976d6d983a80cf719f595272d7cc90e060957',
       untracked:
-        '121aba5f7a13eeff8a437d70ce37e0362d42cbac00caad7df6b1133b13d4f8a4',
+        '41b0c75c82ccdb96a6c1b22b2d1bdfe5e745368de65a141a90ce3631b05915d5',
     })
   }, 30_000)
 
@@ -4039,4 +4040,337 @@ describe('OpenCode operation observer file read caps', () => {
       fixture.cleanup()
     }
   })
+})
+
+/** The bytes a two-file tree would feed an unframed digest, as one file's content. */
+const UNFRAMED_TWO_FILE_CONTENT = Buffer.concat([
+  Buffer.from('A'),
+  Buffer.from('\0regular\0g\0non-executable\0'),
+  Buffer.from('B'),
+])
+
+describe('OpenCode operation observer digest framing', () => {
+  /** The digest of a field sequence, through the production framing helper. */
+  const framedDigest = (fields: readonly string[]): string => {
+    const hash = createHash('sha256')
+    for (const field of fields) hashField(hash, field)
+    return hash.digest('hex')
+  }
+
+  test.each([
+    {
+      name: 'a split moved by one byte',
+      left: ['ab', 'c'],
+      right: ['a', 'bc'],
+    },
+    { name: 'a NUL at the boundary', left: ['a\0', 'b'], right: ['a', '\0b'] },
+    { name: 'a length-like prefix', left: ['1:', 'x'], right: ['1', ':x'] },
+    {
+      name: 'a field merged with its neighbour',
+      left: ['a', 'b'],
+      right: ['ab'],
+    },
+    { name: 'an empty field', left: ['', 'a'], right: ['a', ''] },
+    { name: 'an empty field before another', left: ['a', ''], right: ['a'] },
+  ])(
+    'field sequences with the same concatenation encode differently: $name',
+    ({ left, right }) => {
+      expect(left.join('')).toBe(right.join(''))
+      expect(framedDigest(left)).not.toBe(framedDigest(right))
+    },
+  )
+
+  test('encodes equal field sequences identically, and bytes like their string form', () => {
+    expect(framedDigest(['a', 'b'])).toBe(framedDigest(['a', 'b']))
+    const asBytes = createHash('sha256')
+    hashField(asBytes, Buffer.from('é'))
+    const asString = createHash('sha256')
+    hashField(asString, 'é')
+    expect(asBytes.digest('hex')).toBe(asString.digest('hex'))
+  })
+
+  test('a tracked file cannot imitate a two-file tree with a deleted second file', async () => {
+    const twoFiles = createGitFixture()
+    const oneFile = createGitFixture()
+    try {
+      for (const fixture of [twoFiles, oneFile])
+        setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(twoFiles.root, 'f'), 'A')
+      fs.writeFileSync(path.join(twoFiles.root, 'g'), 'B')
+      addTracked(twoFiles.root, ['f', 'g'], 'two files')
+
+      fs.writeFileSync(path.join(oneFile.root, 'f'), 'A')
+      fs.writeFileSync(path.join(oneFile.root, 'g'), 'B')
+      addTracked(oneFile.root, ['f', 'g'], 'two files')
+      fs.writeFileSync(path.join(oneFile.root, 'f'), UNFRAMED_TWO_FILE_CONTENT)
+      fs.rmSync(path.join(oneFile.root, 'g'))
+
+      const first = await digestOf(
+        createOpencodeOperationObserver({ targetDirectory: twoFiles.root }),
+      )
+      const second = await digestOf(
+        createOpencodeOperationObserver({ targetDirectory: oneFile.root }),
+      )
+      expect(second).not.toBe(first)
+    } finally {
+      twoFiles.cleanup()
+      oneFile.cleanup()
+    }
+  }, 30_000)
+
+  test('an untracked file cannot imitate two untracked files', async () => {
+    const twoFiles = createGitFixture()
+    const oneFile = createGitFixture()
+    try {
+      for (const fixture of [twoFiles, oneFile])
+        setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(twoFiles.root, 'f'), 'A')
+      fs.writeFileSync(path.join(twoFiles.root, 'g'), 'B')
+      fs.writeFileSync(path.join(oneFile.root, 'f'), UNFRAMED_TWO_FILE_CONTENT)
+
+      const first = await digestOf(
+        createOpencodeOperationObserver({ targetDirectory: twoFiles.root }),
+      )
+      const second = await digestOf(
+        createOpencodeOperationObserver({ targetDirectory: oneFile.root }),
+      )
+      expect(second).not.toBe(first)
+    } finally {
+      twoFiles.cleanup()
+      oneFile.cleanup()
+    }
+  }, 30_000)
+
+  test('ignore-source bytes cannot be shifted from one source into the next', async () => {
+    const left = createGitFixture()
+    const right = createGitFixture()
+    try {
+      // The fact that follows `info/exclude` begins with this byte string, so
+      // an unframed digest cannot tell where the first source ends.
+      const boundary = '\0ignore-source\0core-excludes-file\0present\0'
+      fs.writeFileSync(infoExcludePath(left.root), 'a')
+      setExcludesFile(left.root, `b${boundary}c`)
+      fs.writeFileSync(infoExcludePath(right.root), `a${boundary}b`)
+      setExcludesFile(right.root, 'c')
+
+      const first = await digestOf(
+        createOpencodeOperationObserver({ targetDirectory: left.root }),
+      )
+      const second = await digestOf(
+        createOpencodeOperationObserver({ targetDirectory: right.root }),
+      )
+      expect(second).not.toBe(first)
+    } finally {
+      left.cleanup()
+      right.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('OpenCode operation observer common directory pin', () => {
+  test('fails closed when the common directory is redirected after construction', async () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const foreign = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.linkedWorktree,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+
+      const adminDir = gitOutput(fixture.linkedWorktree, [
+        'rev-parse',
+        '--absolute-git-dir',
+      ])
+      fs.writeFileSync(
+        path.join(adminDir, 'commondir'),
+        `${path.join(foreign.root, '.git')}\n`,
+      )
+      expect(
+        gitOutput(fixture.linkedWorktree, [
+          'rev-parse',
+          '--path-format=absolute',
+          '--git-common-dir',
+        ]),
+      ).toBe(fs.realpathSync(path.join(foreign.root, '.git')))
+
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      foreign.cleanup()
+      fixture.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('OpenCode operation observer gitlink final pass', () => {
+  test('fails closed when a submodule commit lands after the gitlink read', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      const submodule = path.join(fixture.root, 'sub')
+      gitOutput(submodule, ['config', 'user.email', 'observer@example.invalid'])
+      gitOutput(submodule, ['config', 'user.name', 'Observer Test'])
+
+      // The first `config` read is the first pass; the second is the first
+      // command of the final pass.
+      let configReads = 0
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args, _result, cwd) => {
+          if (
+            cwd === fs.realpathSync(fixture.root) &&
+            args.includes('config')
+          ) {
+            configReads += 1
+            if (configReads === 2) {
+              gitOutput(submodule, [
+                'commit',
+                '--quiet',
+                '--allow-empty',
+                '-m',
+                'moved',
+              ])
+            }
+          }
+          return undefined
+        }),
+      })
+      configReads = 0
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(configReads).toBe(2)
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('fails closed when a gitlink directory is populated after it was read', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      let configReads = 0
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args, _result, cwd) => {
+          if (
+            cwd === fs.realpathSync(fixture.root) &&
+            args.includes('config')
+          ) {
+            configReads += 1
+            if (configReads === 2) {
+              fs.writeFileSync(path.join(fixture.root, 'sub', 'late.txt'), 'x')
+            }
+          }
+          return undefined
+        }),
+      })
+      configReads = 0
+      const result = await observer.snapshot()
+      expect(result.status).toBe('unavailable')
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('OpenCode operation observer symlinked ancestors', () => {
+  test('a tracked path behind a symlinked directory is not read through it', async () => {
+    const fixture = createGitFixture()
+    const outside = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-outside-'),
+    )
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.mkdirSync(path.join(fixture.root, 'a'))
+      fs.writeFileSync(path.join(fixture.root, 'a', 'b'), 'same bytes\n')
+      addTracked(fixture.root, ['a/b'], 'nested')
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+
+      // The same bytes now live outside the worktree, behind a hidden symlink.
+      fs.writeFileSync(path.join(outside, 'b'), 'same bytes\n')
+      fs.rmSync(path.join(fixture.root, 'a'), { recursive: true })
+      fs.symlinkSync(outside, path.join(fixture.root, 'a'))
+      fs.appendFileSync(infoExcludePath(fixture.root), 'a\n')
+
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('a nested directory chain that is not a symlink still reads normally', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.mkdirSync(path.join(fixture.root, 'a', 'c'), { recursive: true })
+      fs.writeFileSync(path.join(fixture.root, 'a', 'c', 'b'), 'deep\n')
+      fs.writeFileSync(path.join(fixture.root, 'a', 'd'), 'shallow\n')
+      addTracked(fixture.root, ['a'], 'nested')
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+})
+
+describe('OpenCode operation observer no-follow open', () => {
+  test.skipIf(typeof fs.constants.O_NOFOLLOW !== 'number')(
+    'opens every regular file with O_NOFOLLOW',
+    async () => {
+      const fixture = createGitFixture()
+      const opened: Array<{ target: string; flags: unknown }> = []
+      const original = fs.openSync
+      const spy = spyOn(fs, 'openSync').mockImplementation(((
+        ...args: Parameters<typeof fs.openSync>
+      ) => {
+        opened.push({ target: String(args[0]), flags: args[1] })
+        return original(...args)
+      }) as typeof fs.openSync)
+      try {
+        setExcludesFile(fixture.root, null)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        await observer.snapshot()
+        const target = path.join(fs.realpathSync(fixture.root), 'tracked.txt')
+        const flags = opened.filter((entry) => entry.target === target)
+        expect(flags.length).toBeGreaterThan(0)
+        for (const entry of flags) {
+          expect(typeof entry.flags).toBe('number')
+          expect(
+            Number(entry.flags) & (fs.constants.O_NOFOLLOW as number),
+          ).not.toBe(0)
+        }
+      } finally {
+        spy.mockRestore()
+        fixture.cleanup()
+      }
+    },
+  )
 })

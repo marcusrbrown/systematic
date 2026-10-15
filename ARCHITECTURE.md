@@ -301,8 +301,9 @@ refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot ide
 
 - **Paths** — the union of the index, the `HEAD` tree, and untracked files, so a `HEAD` path stays
   observed after `git rm --cached` or an ignore rule.
-- **Contents** — raw bytes read without following symlinks or blocking on special files. Symlink
-  targets compare as bytes, and non-UTF-8 git output fails closed.
+- **Contents** — raw bytes read without following symlinks or blocking on special files. Every
+  directory above a path must be a real directory, not a symlink. Symlink targets compare as bytes,
+  and non-UTF-8 git output fails closed. Each variable-length field is length-prefixed in the digest.
 - **Ignore sources** — the bytes of `info/exclude`, `core.excludesFile` (or its XDG default), and
   every untracked `.gitignore`, including self-ignored ones. An absent source differs from an empty
   one, and a FIFO, device, or file over 1 MiB fails closed. Content that those rules hide is not
@@ -310,20 +311,22 @@ refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot ide
 - **Gitlinks** — an initialized submodule contributes its `HEAD` id. An empty or missing directory
   is recorded as uninitialized, and a non-empty uninitialized one fails closed. More than 32
   gitlinks fail with `file-limit` before any submodule is read.
-- **Root pin** — the repository root and git directory are compared with the values captured when
-  the observer was created. A mismatch fails closed as `target-unavailable`.
+- **Root pin** — the repository root, git directory, and common directory are compared with the
+  values captured when the observer was created. A mismatch fails closed as `target-unavailable`.
 
 `commitClosure` compares the same raw records with `HEAD`'s tree by path, kind, mode, and object
 id. Git's `diff`, clean filters, and the index are not consulted, and an unborn `HEAD` reads not
-closed. A final pass re-stats every path, re-lists the index, untracked files, and discovered
-`.gitignore` files, and re-reads the ignore sources and `HEAD`. Any difference fails the snapshot as
+closed. A final pass re-stats every path and each checked directory, re-inspects every gitlink,
+re-lists the index, untracked files, and discovered `.gitignore` files, and re-reads the ignore
+sources and `HEAD`. Any difference fails the snapshot as
 `worktree-unstable`; this and the limit failures make the guard `unavailable` today (#1124).
 
 A snapshot does not see ignored content, dirty submodule contents, a redirect or ignore rule
 installed before the observer started (#1126), a write that lands after the final pass, or a
 same-second rewrite on a volume with 1-second timestamps. Some trees read not closed by design:
 files git normalizes (CRLF conversion), `core.filemode=false` mounts, and case-only renames on
-case-insensitive volumes.
+case-insensitive volumes. A FIFO or device named `.gitignore` makes git block until the per-command
+timeout, and the snapshot then fails closed (#1124).
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
