@@ -133,6 +133,7 @@ const REASON_CODES = new Set([
   'rejected-operation',
   'resource-mismatch',
   'running-operation',
+  'snapshot-blocked',
   'stale-receipt',
   'transition-finalized',
   'transition-terminal',
@@ -260,6 +261,8 @@ export interface OpencodeWorkflowGuard {
     input: unknown,
     policy?: RuntimeUnitPolicy,
   ): unknown
+  /** @internal Test seam for the snapshot-block helpers. */
+  snapshotBlock(sessionID: unknown): SnapshotBlockControls
 }
 
 function defaultTargetObserver(
@@ -307,6 +310,7 @@ interface SessionRuntime {
   readStatus(): WorkflowStatus
   unavailableCause(): GuardUnavailableCause | undefined
   seedDeferrals(): readonly SeedDeferral[]
+  readonly snapshotBlock: SnapshotBlockControls
   refreshReadback(): Promise<readonly UnconfirmedReadback[]>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
@@ -550,6 +554,62 @@ type GuardUnavailableCauseKind =
 // failing the session. Status-only, enum-only, and bound to the unit that
 // recorded it; never carried in markers, receipts, tool metadata, or digests.
 type SeedDeferralReason = 'command-timeout' | 'missing-resource'
+
+const SNAPSHOT_BLOCKING_REASONS = [
+  'file-limit',
+  'file-output-limit',
+  'command-output-limit',
+  'worktree-unstable',
+] as const satisfies readonly OperationObserverReasonCode[]
+
+// The observer reasons a worktree can cause on purpose: a local snapshot of
+// the unit's effective target that fails with one of them blocks the unit
+// instead of making the guard unavailable.
+export type SnapshotBlockReason = (typeof SNAPSHOT_BLOCKING_REASONS)[number]
+
+/** @internal Exported for tests; production call sites use it unexported. */
+export function isSnapshotBlockingReason(
+  reasonCode: unknown,
+): reasonCode is SnapshotBlockReason {
+  return (
+    typeof reasonCode === 'string' &&
+    (SNAPSHOT_BLOCKING_REASONS as readonly string[]).includes(reasonCode)
+  )
+}
+
+// Per-unit runtime record of a snapshot block. Status-only and enum-only:
+// never carried in markers, receipts, tool metadata, or digests.
+interface SnapshotBlockRecord {
+  readonly unitId: string
+  readonly unitGeneration: number
+  readonly targetIdentity: string
+  readonly reasonCode: SnapshotBlockReason
+}
+
+// Outcome of trying to clear a block with a clean local snapshot. `timeout`
+// leaves the decision to the caller; `fatal` means the guard has already been
+// marked unavailable.
+export type SnapshotBlockClearResult =
+  | { readonly status: 'not-blocked' }
+  | { readonly status: 'cleared' }
+  | {
+      readonly status: 'still-blocked'
+      readonly reasonCode: SnapshotBlockReason
+    }
+  | { readonly status: 'stale' }
+  | { readonly status: 'timeout' }
+  | { readonly status: 'fatal' }
+
+/**
+ * @internal Test seam: drives the snapshot-block helpers of one session
+ * without a hook that sets the block. `set` records a block on the unit's
+ * effective target and returns false when there is no active unit.
+ */
+export interface SnapshotBlockControls {
+  set(reasonCode: SnapshotBlockReason): boolean
+  current(): { readonly reasonCode: SnapshotBlockReason } | undefined
+  clear(): Promise<SnapshotBlockClearResult>
+}
 
 interface SeedDeferral {
   readonly operation: RemoteOperation
@@ -1531,6 +1591,7 @@ function statusForTool(
   unavailableCause?: GuardUnavailableCause,
   seedDeferrals: readonly SeedDeferral[] = [],
   unconfirmedReadbacks: readonly UnconfirmedReadback[] = [],
+  snapshotBlock?: { readonly reasonCode: SnapshotBlockReason },
 ): string {
   return JSON.stringify({
     state: status.state,
@@ -1547,6 +1608,8 @@ function statusForTool(
     // Operations whose activation seeding was deferred for the current unit;
     // shown in any state.
     ...(seedDeferrals.length > 0 ? { seedDeferrals } : {}),
+    // The unit's active snapshot block; shown in any state, never persisted.
+    ...(snapshotBlock ? { snapshotBlock } : {}),
     // Status-refresh probes skipped on a timeout in this call; shown in any
     // state, never persisted.
     ...(unconfirmedReadbacks.length > 0 ? { unconfirmedReadbacks } : {}),
@@ -1846,6 +1909,10 @@ function createSessionRuntime(
   let seedDeferralRecord:
     | { readonly unitId: string; readonly entries: DeferredSeed[] }
     | undefined
+  // The active unit's snapshot block, replaced on every set and deleted on
+  // clear. Runtime-only: never persisted, and never part of the core status,
+  // markers, or receipts.
+  let snapshotBlockRecord: SnapshotBlockRecord | undefined
   // Incremented on every successful unit start or declaration (see
   // `startFreshUnit`); operations capture it to prove they are still current.
   let unitStartGeneration = 0
@@ -1858,11 +1925,17 @@ function createSessionRuntime(
     input: unknown,
     policy?: RuntimeUnitPolicy,
   ): StartUnitResult {
+    const previousUnitId = requireGuard().status().unit?.unitId
     const result = requireGuard().startUnit(input, policy)
     if (result.status === 'started') {
       unitStartGeneration += 1
       firstUnavailableCause = undefined
-      seedDeferralRecord = undefined
+      // A redeclaration of the same unit keeps its runtime records; only a
+      // different unit starts with none.
+      if (result.unit.unitId !== previousUnitId) {
+        seedDeferralRecord = undefined
+        snapshotBlockRecord = undefined
+      }
     }
     return result
   }
@@ -3910,6 +3983,9 @@ function createSessionRuntime(
     for (const operation of operations) {
       const outcome = await seedRemoteScope(reader, operation, local)
       if (outcome.kind === 'fatal') return outcome.cause
+      // A redeclaration of the same unit keeps its deferral record, so each
+      // fresh seed of an operation supersedes what an earlier seed recorded.
+      clearSeedDeferral(operation)
       if (outcome.kind === 'deferred') {
         recordSeedDeferral(operation, outcome.reasonCode)
       }
@@ -4053,6 +4129,148 @@ function createSessionRuntime(
         : {}),
       ...(operation === 'pr-creation' ? { propagate: false } : {}),
     }
+  }
+
+  // The unit's effective target: its pinned worktree, else the parent
+  // checkout. Same rule as `resolveEffectiveObserver`, without the lookup.
+  function currentEffectiveTargetIdentity(): string {
+    return (
+      requireGuard().status().unit?.pinnedOperationTargetIdentity ??
+      options.workspaceIdentity
+    )
+  }
+
+  // A record left by another unit is never returned.
+  function currentSnapshotBlock(): SnapshotBlockRecord | undefined {
+    const unitId = requireGuard().status().unit?.unitId
+    return snapshotBlockRecord && snapshotBlockRecord.unitId === unitId
+      ? snapshotBlockRecord
+      : undefined
+  }
+
+  // With no active unit nothing is recorded: inactive sessions never block.
+  function setSnapshotBlock(
+    reasonCode: SnapshotBlockReason,
+    targetIdentity: string,
+  ): boolean {
+    const unitId = requireGuard().status().unit?.unitId
+    if (!unitId) return false
+    snapshotBlockRecord = {
+      unitId,
+      unitGeneration: unitStartGeneration,
+      targetIdentity,
+      reasonCode,
+    }
+    return true
+  }
+
+  interface SnapshotBlockCapture {
+    readonly record: SnapshotBlockRecord
+    readonly generation: number
+  }
+
+  // A set replaces the record object and a unit start bumps the generation,
+  // so a clear that began before either cannot commit afterwards.
+  function snapshotBlockStillCurrent(capture: SnapshotBlockCapture): boolean {
+    return (
+      snapshotBlockRecord === capture.record &&
+      unitStartGeneration === capture.generation &&
+      currentEffectiveTargetIdentity() === capture.record.targetIdentity
+    )
+  }
+
+  type SnapshotBlockFailureCause = (
+    reasonCode?: GuardUnavailableCause['reasonCode'],
+  ) => GuardUnavailableCause
+
+  // Clears the unit's block with a clean local snapshot of its effective
+  // target. The record and generation are captured in the same synchronous
+  // segment as the `snapshot()` call; the commit runs only if both are
+  // unchanged. `failureCause` builds the cause for every fatal outcome, which
+  // this helper commits itself; `timeout` is left to the caller.
+  async function clearSnapshotBlock(
+    effective: EffectiveOperationObserver,
+    failureCause: SnapshotBlockFailureCause,
+  ): Promise<SnapshotBlockClearResult> {
+    const record = currentSnapshotBlock()
+    if (!record) return { status: 'not-blocked' }
+    const capture = { record, generation: unitStartGeneration }
+    if (record.targetIdentity !== effective.targetIdentity) {
+      return { status: 'stale' }
+    }
+    const read = await readSnapshot(
+      effective.observer,
+      effective.targetIdentity,
+    )
+    if (read.status === 'timeout') return { status: 'timeout' }
+    if (read.status === 'fatal') {
+      return settleFailedBlockSnapshot(read.reasonCode, capture, failureCause)
+    }
+    if (!snapshotBlockStillCurrent(capture)) return { status: 'stale' }
+    return commitSnapshotBlockClear(effective, read.value, failureCause)
+  }
+
+  function settleFailedBlockSnapshot(
+    reasonCode: GuardUnavailableCause['reasonCode'],
+    capture: SnapshotBlockCapture,
+    failureCause: SnapshotBlockFailureCause,
+  ): SnapshotBlockClearResult {
+    if (isSnapshotBlockingReason(reasonCode)) {
+      return snapshotBlockStillCurrent(capture)
+        ? { status: 'still-blocked', reasonCode }
+        : { status: 'stale' }
+    }
+    markUnavailable(failureCause(reasonCode))
+    return { status: 'fatal' }
+  }
+
+  // One synchronous segment: the readback applies to the core locally (no
+  // remote probe) so drift made while blocked marks receipts stale, then the
+  // record is deleted.
+  function commitSnapshotBlockClear(
+    effective: EffectiveOperationObserver,
+    snapshot: OperationObserverSnapshot,
+    failureCause: SnapshotBlockFailureCause,
+  ): SnapshotBlockClearResult {
+    const observed = requireGuard().observeReadback({
+      workspaceIdentity: options.workspaceIdentity,
+      repositoryIdentity: snapshot.repositoryRevisionDigest,
+      worktreeIdentity: snapshot.worktreeRevisionDigest,
+      ...(effective.pinned
+        ? { operationTargetIdentity: effective.targetIdentity }
+        : {}),
+    })
+    if (
+      observed.status === 'rejected' &&
+      observed.reasonCode === 'workspace-mismatch'
+    ) {
+      markUnavailable(failureCause())
+      return { status: 'fatal' }
+    }
+    snapshotBlockRecord = undefined
+    return { status: 'cleared' }
+  }
+
+  const snapshotBlockControls: SnapshotBlockControls = {
+    set: (reasonCode) => {
+      ensureSynchronousRuntime()
+      return setSnapshotBlock(reasonCode, currentEffectiveTargetIdentity())
+    },
+    current: () => {
+      ensureSynchronousRuntime()
+      const record = currentSnapshotBlock()
+      return record ? { reasonCode: record.reasonCode } : undefined
+    },
+    clear: async () => {
+      ensureSynchronousRuntime()
+      const lookup = resolveEffectiveObserver()
+      if (lookup.status === 'timeout') return { status: 'timeout' }
+      if (lookup.status === 'fatal') {
+        markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
+        return { status: 'fatal' }
+      }
+      return clearSnapshotBlock(lookup.value, observerReadbackFailedCause)
+    },
   }
 
   function currentSeedDeferrals(): readonly SeedDeferral[] {
@@ -5206,6 +5424,7 @@ function createSessionRuntime(
     readStatus,
     unavailableCause: () => firstUnavailableCause ?? pendingUnavailableCause,
     seedDeferrals: currentSeedDeferrals,
+    snapshotBlock: snapshotBlockControls,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
@@ -5373,6 +5592,7 @@ export function createOpencodeWorkflowGuard(
                 runtime.unavailableCause(),
                 runtime.seedDeferrals(),
                 unconfirmed,
+                runtime.snapshotBlock.current(),
               )
             : unavailableToolResult(),
         }
@@ -5514,6 +5734,9 @@ export function createOpencodeWorkflowGuard(
         return { status: 'rejected', reasonCode: 'guard-unavailable' }
       }
       return sessionRuntimeFor(sessionID).startUnit(input, policy)
+    },
+    snapshotBlock(sessionID: unknown): SnapshotBlockControls {
+      return sessionRuntimeFor(String(sessionID)).snapshotBlock
     },
   }
 }

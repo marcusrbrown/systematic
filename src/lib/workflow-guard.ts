@@ -71,6 +71,7 @@ export type WorkflowReasonCode =
   | 'rejected-operation'
   | 'resource-mismatch'
   | 'running-operation'
+  | 'snapshot-blocked'
   | 'stale-receipt'
   | 'transition-finalized'
   | 'transition-terminal'

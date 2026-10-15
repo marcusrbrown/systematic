@@ -24,6 +24,7 @@ import {
   createOpencodeWorkflowGuard,
   createWorkflowGuardBlockedError,
   deriveOpencodeOperationTarget,
+  isSnapshotBlockingReason,
   isWorkflowGuardBlockedError,
   type OpencodeWorkflowGuard,
   type OpencodeWorkflowHostReadback,
@@ -16129,5 +16130,441 @@ describe('sequenceObserver fixture', () => {
     deferred.release()
     expect((await pending).status).toBe('available')
     expect(settled).toBe(true)
+  })
+})
+
+describe('snapshot block record', () => {
+  const D = 'd'.repeat(64)
+  const E = 'e'.repeat(64)
+  const BLOCKING_REASONS = [
+    'file-limit',
+    'file-output-limit',
+    'command-output-limit',
+    'worktree-unstable',
+  ] as const
+  const TIMEOUT = {
+    status: 'unavailable' as const,
+    reasonCode: 'command-timeout' as const,
+  }
+  const BASH_OUTPUT = { title: 'bash', output: 'ok', metadata: { exit: 0 } }
+
+  interface SteeredObserver {
+    readonly observer: OpencodeOperationObserver
+    /** The next local `snapshot()` call is answered by `next`. */
+    queueSnapshot(next: OpencodeOperationObserver): void
+    remoteCalls(): number
+  }
+
+  // A clean parent observer whose next local snapshots can be scripted per
+  // call, and whose remote probes are counted.
+  function steeredObserver(
+    remote: Record<string, readonly OperationObserverRemoteResult[]> = {},
+  ): SteeredObserver {
+    const base = sequenceObserver([operationSnapshot()], remote)
+    const queue: OpencodeOperationObserver[] = []
+    let remoteCalls = 0
+    return {
+      observer: {
+        ...base,
+        snapshot: () => (queue.shift() ?? base).snapshot(),
+        async remoteSnapshot(operation, phase) {
+          remoteCalls += 1
+          if (!base.remoteSnapshot) {
+            return { status: 'unavailable', reasonCode: 'remote-missing-field' }
+          }
+          return base.remoteSnapshot(operation, phase)
+        },
+      },
+      queueSnapshot: (next) => {
+        queue.push(next)
+      },
+      remoteCalls: () => remoteCalls,
+    }
+  }
+
+  const DRIFTED = operationSnapshot(OPERATION_SCOPE.repositoryIdentity, E)
+
+  async function statusJson(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<Record<string, unknown>> {
+    const result = await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
+    return JSON.parse(expectToolOutput(result).output)
+  }
+
+  async function markerText(adapter: OpencodeWorkflowGuard): Promise<string> {
+    const transformed = { system: ['base'] }
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      transformed,
+    )
+    return transformed.system.join('\n')
+  }
+
+  async function disableGuard(adapter: OpencodeWorkflowGuard): Promise<void> {
+    const control = getTool(adapter, 'systematic_workflow_control')
+    await control.execute({ mode: 'disabled' }, toolContext())
+    await adapter.hooks['tool.execute.before'](
+      { tool: 'question', sessionID: SESSION_A, callID: 'disable-question' },
+      { args: {} },
+    )
+    await observeQuestionEvent(adapter, 'question.asked', {
+      id: 'disable-request',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: { callID: 'disable-question' },
+    })
+    await observeQuestionEvent(adapter, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'disable-request',
+      answers: [['confirm']],
+    })
+    await control.execute({ mode: 'disabled' }, toolContext())
+  }
+
+  async function activeAdapter(
+    steered = steeredObserver(),
+    mode: 'observe' | 'protected' = 'observe',
+  ): Promise<OpencodeWorkflowGuard> {
+    const adapter = createAdapter(mode, false, steered.observer)
+    await activateWorkEpoch(adapter)
+    return adapter
+  }
+
+  test('status reports no snapshot block, and markers carry nothing, until one is recorded', async () => {
+    const adapter = await activeAdapter()
+    const markersBefore = await markerText(adapter)
+    const before = await statusJson(adapter)
+    expect(before.snapshotBlock).toBeUndefined()
+    expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+
+    expect(adapter.snapshotBlock(SESSION_A).set('file-limit')).toBe(true)
+
+    const after = await statusJson(adapter)
+    expect(after.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
+    // A block is a status-only field: markers and the core status stay as
+    // they were, and no core status or marker names it.
+    expect(await markerText(adapter)).toBe(markersBefore)
+    expect(JSON.stringify([status(adapter), markersBefore])).not.toContain(
+      'snapshot-blocked',
+    )
+    expect(JSON.stringify([status(adapter), markersBefore])).not.toContain(
+      'snapshotBlock',
+    )
+    const { snapshotBlock: _block, ...rest } = after
+    expect(rest).toEqual(before)
+  })
+
+  test.each([
+    ...BLOCKING_REASONS.map((reasonCode) => ({ reasonCode, blocking: true })),
+    ...(
+      [
+        'target-unavailable',
+        'command-failed',
+        'command-timeout',
+        'file-read-failed',
+        'remote-command-failed',
+        'commit-not-closed',
+      ] as const
+    ).map((reasonCode) => ({ reasonCode, blocking: false })),
+  ])(
+    'the blocking-reason predicate answers $blocking for $reasonCode',
+    ({ reasonCode, blocking }) => {
+      expect(isSnapshotBlockingReason(reasonCode)).toBe(blocking)
+    },
+  )
+
+  test('the blocking-reason predicate rejects values that are not observer reasons', () => {
+    expect(isSnapshotBlockingReason(undefined)).toBe(false)
+    expect(isSnapshotBlockingReason(42)).toBe(false)
+    expect(isSnapshotBlockingReason('')).toBe(false)
+  })
+
+  test.each([
+    {
+      label: 'protected',
+      state: 'protected',
+      build: async () => {
+        const adapter = await activeAdapter(steeredObserver(), 'protected')
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+        adapter.snapshotBlock(SESSION_A).set('file-limit')
+        return adapter
+      },
+    },
+    {
+      label: 'waiting',
+      state: 'waiting',
+      build: async () => {
+        const adapter = await activeAdapter()
+        adapter.snapshotBlock(SESSION_A).set('file-limit')
+        return adapter
+      },
+    },
+    {
+      label: 'unavailable',
+      state: 'unavailable',
+      build: async () => {
+        const adapter = await activeAdapter()
+        adapter.snapshotBlock(SESSION_A).set('file-limit')
+        await adapter.hooks['tool.execute.after'](
+          {
+            tool: 'bash',
+            sessionID: SESSION_A,
+            callID: 'never-prepared',
+            args: { command: 'bun test' },
+          },
+          BASH_OUTPUT,
+        )
+        return adapter
+      },
+    },
+    {
+      label: 'disabled',
+      state: 'disabled',
+      build: async () => {
+        const adapter = await activeAdapter()
+        adapter.snapshotBlock(SESSION_A).set('file-limit')
+        await disableGuard(adapter)
+        return adapter
+      },
+    },
+  ])(
+    'status reports the snapshot block while the guard is $label',
+    async ({ state, build }) => {
+      const adapter = await build()
+      expect(status(adapter).state).toBe(state)
+      expect((await statusJson(adapter)).snapshotBlock).toEqual({
+        reasonCode: 'file-limit',
+      })
+    },
+  )
+
+  test('a block with no active unit is not recorded', async () => {
+    const adapter = createAdapter('observe', false, steeredObserver().observer)
+    expect(adapter.snapshotBlock(SESSION_A).set('file-limit')).toBe(false)
+    expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+  })
+
+  test('a later block replaces the reason that status reports', async () => {
+    const adapter = await activeAdapter()
+    const controls = adapter.snapshotBlock(SESSION_A)
+    controls.set('file-limit')
+    controls.set('worktree-unstable')
+    expect((await statusJson(adapter)).snapshotBlock).toEqual({
+      reasonCode: 'worktree-unstable',
+    })
+  })
+
+  test('a redeclaration of the same unit keeps the block and a pending seed deferral', async () => {
+    const steered = steeredObserver({ 'push:before': [TIMEOUT] })
+    const adapter = createAdapter('observe', false, steered.observer, ['push'])
+    await activateWorkEpoch(adapter)
+    const unitId = status(adapter).unit?.unitId
+    adapter.snapshotBlock(SESSION_A).set('file-limit')
+    expect((await statusJson(adapter)).seedDeferrals).toEqual([
+      { operation: 'push', reasonCode: 'command-timeout' },
+    ])
+
+    // The redeclaration adds an operation but declares no resource for push,
+    // so push still has no baseline.
+    expect(
+      adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+    ).toMatchObject({ status: 'started' })
+
+    expect(status(adapter).unit?.unitId).toBe(unitId)
+    const parsed = await statusJson(adapter)
+    expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
+    expect(parsed.seedDeferrals).toEqual([
+      { operation: 'push', reasonCode: 'command-timeout' },
+    ])
+  })
+
+  test('a new unit starts with no block from the previous unit', async () => {
+    const adapter = await activeAdapter()
+    const firstUnitId = status(adapter).unit?.unitId
+    mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+    mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+    adapter.snapshotBlock(SESSION_A).set('file-limit')
+    await completeUnit(adapter, 'block-reset-complete')
+    expect(status(adapter).unit?.status).toBe('completed')
+
+    expect(adapter.startUnit(SESSION_A, {})).toMatchObject({
+      status: 'started',
+    })
+
+    expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
+    expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+    expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+  })
+
+  describe('clearing the block with a local snapshot', () => {
+    test('a clean snapshot clears the block and marks drifted receipts stale', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      expect(status(adapter).satisfiedOperations).toContain('implementation')
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      steered.queueSnapshot(sequenceObserver([DRIFTED]))
+
+      expect(await controls.clear()).toEqual({ status: 'cleared' })
+
+      expect(controls.current()).toBeUndefined()
+      expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+      expect(status(adapter).satisfiedOperations).not.toContain(
+        'implementation',
+      )
+      expect(status(adapter).missingOperations).toContain('implementation')
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('a snapshot that is still blocked keeps the record and names its reason', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      steered.queueSnapshot(
+        sequenceObserver([unavailableStep('worktree-unstable')]),
+      )
+
+      expect(await controls.clear()).toEqual({
+        status: 'still-blocked',
+        reasonCode: 'worktree-unstable',
+      })
+
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('clearing with no block takes no snapshot', async () => {
+      const steered = steeredObserver()
+      const counted = countingObserver(steered.observer)
+      const adapter = createAdapter('observe', false, counted.observer)
+      await activateWorkEpoch(adapter)
+      const baseline = counted.snapshotCount()
+
+      expect(await adapter.snapshotBlock(SESSION_A).clear()).toEqual({
+        status: 'not-blocked',
+      })
+
+      expect(counted.snapshotCount()).toBe(baseline)
+    })
+
+    test('a clear applies no remote probe, though a status refresh does', async () => {
+      const steered = steeredObserver({
+        'push:before': [remoteAvailable(D, E)],
+        'push:after': [remoteAvailable(D, 'f'.repeat(64))],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'git push origin main' },
+        { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+        'blocked-clear-push',
+      )
+      expect(status(adapter).satisfiedOperations).toContain('push')
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      const baseline = steered.remoteCalls()
+
+      expect(await controls.clear()).toEqual({ status: 'cleared' })
+      expect(steered.remoteCalls()).toBe(baseline)
+
+      await statusJson(adapter)
+      expect(steered.remoteCalls()).toBeGreaterThan(baseline)
+    })
+
+    test('a clear whose block was replaced during the snapshot leaves the newer block and the core untouched', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      const slow = deferredStep(DRIFTED)
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+
+      const pending = controls.clear()
+      expect(slowObserver.snapshotCalls()).toBe(1)
+      controls.set('worktree-unstable')
+      slow.release()
+
+      expect(await pending).toEqual({ status: 'stale' })
+      expect(controls.current()).toEqual({ reasonCode: 'worktree-unstable' })
+      // The drifted snapshot was not applied: the receipt is still current.
+      expect(status(adapter).satisfiedOperations).toContain('implementation')
+    })
+
+    test('a clear whose unit was redeclared during the snapshot is stale and keeps the block', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      const slow = deferredStep(operationSnapshot())
+      steered.queueSnapshot(sequenceObserver([slow.step]))
+
+      const pending = controls.clear()
+      expect(
+        adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+      ).toMatchObject({ status: 'started' })
+      slow.release()
+
+      expect(await pending).toEqual({ status: 'stale' })
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+    })
+
+    test('a snapshot of another target makes the guard unavailable and keeps the record', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      const stranger = {
+        ...operationSnapshot(),
+        targetDigest: '9'.repeat(64),
+      }
+      steered.queueSnapshot(sequenceObserver([stranger]))
+
+      expect(await controls.clear()).toEqual({ status: 'fatal' })
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+    })
+
+    test('a snapshot timeout is left to the caller and keeps the record', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      steered.queueSnapshot(
+        sequenceObserver([unavailableStep('command-timeout')]),
+      )
+
+      expect(await controls.clear()).toEqual({ status: 'timeout' })
+
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('a snapshot that fails for a reason other than a blocking one makes the guard unavailable', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      steered.queueSnapshot(
+        sequenceObserver([unavailableStep('target-unavailable')]),
+      )
+
+      expect(await controls.clear()).toEqual({ status: 'fatal' })
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+    })
   })
 })
