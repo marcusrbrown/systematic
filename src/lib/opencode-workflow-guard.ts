@@ -2901,8 +2901,8 @@ function createSessionRuntime(
     await next
   }
 
-  // `halt`: the rollup stops with nothing minted for the child. It is either
-  // a dropped child (a blocking reason: no cause, and the child is not
+  // `halt`: the rollup stops with nothing minted for the child. It is a dropped
+  // child (a blocking reason or a typed timeout: no cause, and the child is not
   // recorded as rolled up) or a fatal failure already committed.
   type ChildSnapshotOutcome =
     | {
@@ -2941,6 +2941,10 @@ function createSessionRuntime(
     // Captured in the same synchronous segment as the snapshot call.
     const capture = captureSnapshotBlock()
     const read = await readSnapshot(observer)
+    // A typed timeout means no verdict on the child's target yet: halt the
+    // pass without a cause, a block or a block clear, and retry on a later
+    // task call.
+    if (read.status === 'timeout') return { kind: 'halt' }
     if (read.status !== 'ok') {
       blockOrFailChildSnapshot(
         probeFailureReason(read),
@@ -3076,9 +3080,12 @@ function createSessionRuntime(
       }
       batchTargetIdentity = targetIdentity
 
-      // A registration timeout is still fatal for the rollup, with the same
-      // cause as any other registration miss.
+      // A registration or validation timeout halts the whole pass: every
+      // receipt of a batch shares one target, and nothing is minted until the
+      // pass has read them all. The child can be rolled up by a later task
+      // call. Every other registration or validation failure is fatal.
       const registered = operationObserverRegistration(targetIdentity)
+      if (registered.status === 'timeout') return
       if (registered.status !== 'ok' || !options.observer) {
         markUnavailable(afterCause('operation-input-invalid'))
         return
@@ -3093,6 +3100,7 @@ function createSessionRuntime(
         markUnavailable(afterCause('operation-input-invalid'))
         return
       }
+      if (isProbeTimeout(validation)) return
       if (
         validation.status === 'error' ||
         validation.targetRoot !== registration.targetRoot ||

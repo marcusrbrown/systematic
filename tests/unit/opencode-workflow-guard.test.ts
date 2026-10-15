@@ -16390,12 +16390,6 @@ describe('snapshot block record', () => {
     'command-output-limit',
     'worktree-unstable',
   ] as const
-  const FATAL_AFTER_REASONS = [
-    'target-unavailable',
-    'command-failed',
-    'command-timeout',
-    'file-read-failed',
-  ] as const
   // The reasons that still make the guard unavailable when the call's own
   // after-snapshot fails with them. A timeout seals the call instead.
   const FATAL_AFTER_SNAPSHOT_REASONS = [
@@ -16426,7 +16420,20 @@ describe('snapshot block record', () => {
       release(result: OperationObserverRemoteResult): void
     }
     remoteCalls(): number
+    /**
+     * Scripts the next registered-worktree validations (of any directory) in
+     * order, then validation is real again. Validation is synchronous, so a
+     * verdict cannot be held open.
+     */
+    scriptValidation(...next: ScriptedValidation[]): void
   }
+
+  type ScriptedValidation =
+    | 'timeout'
+    | 'identity'
+    | 'throws'
+    | 'elsewhere'
+    | 'real'
 
   // A clean parent observer whose next local snapshots can be scripted per
   // call, and whose remote probes are counted.
@@ -16438,12 +16445,32 @@ describe('snapshot block record', () => {
     const queue: OpencodeOperationObserver[] = []
     let snapshotCalls = 0
     let remoteCalls = 0
+    const validations: ScriptedValidation[] = []
     const holds = new Map<
       string,
       () => Promise<OperationObserverRemoteResult>
     >()
     const observer: OpencodeOperationObserver = {
       ...base,
+      validateRegisteredWorktree: (candidate) => {
+        const verdict = validations.shift()
+        if (verdict === 'throws') throw new Error('validation exploded')
+        if (verdict === 'timeout') {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (verdict === 'identity') {
+          return { status: 'error', reasonCode: 'target-unavailable' }
+        }
+        if (verdict === 'elsewhere') {
+          return {
+            status: 'ok',
+            targetRoot: path.join(candidate, 'elsewhere'),
+            gitDir: path.join(candidate, '.git'),
+            commonDir: path.join(candidate, '.git'),
+          }
+        }
+        return base.validateRegisteredWorktree(candidate)
+      },
       snapshot: () => {
         snapshotCalls += 1
         return (queue.shift() ?? fallback).snapshot()
@@ -16487,6 +16514,9 @@ describe('snapshot block record', () => {
         return { reached, release: (result) => release(result) }
       },
       remoteCalls: () => remoteCalls,
+      scriptValidation: (...next) => {
+        validations.push(...next)
+      },
     }
   }
 
@@ -17779,6 +17809,9 @@ describe('snapshot block record', () => {
       workspaceIdentity: string,
       targetIdentity: string,
       after: { repository: string; worktree: string },
+      operations: readonly ('implementation' | 'verification')[] = [
+        'implementation',
+      ],
     ): unknown[] {
       const childLedger = createReceiptLedger({
         capabilityFlags: ['workflow-guard'],
@@ -17803,7 +17836,7 @@ describe('snapshot block record', () => {
         epochId,
         unitId,
         family: 'work',
-        requiredOperations: ['implementation'],
+        requiredOperations: [...operations],
         resourceScopes: [],
         transitionDigest: digestCall('unit-start'),
         timestamp: 11,
@@ -17816,36 +17849,40 @@ describe('snapshot block record', () => {
         repositoryIdentity: CHILD_RECEIPT_REPOSITORY,
         worktreeIdentity: OPERATION_SCOPE.worktreeIdentity,
       }
-      childLedger.prepareObservation({
-        callId: 'child-implementation',
-        operation: 'implementation',
-        context,
-      })
-      const finalized = childLedger.finalizeObservation({
-        callId: 'child-implementation',
-        context,
-        after: {
-          workspaceIdentity,
-          operationTargetIdentity: targetIdentity,
-          repositoryIdentity: after.repository,
-          worktreeIdentity: after.worktree,
-        },
-        classification: {
-          outcome: 'accepted',
-          category: 'implementation',
-          attribution: 'runtime-verified',
-          result: 'success',
-          sideEffect: 'required',
-          reasonCode: 'recognized-command',
-        },
-        terminal: { status: 'success', output: 'non-empty', noOp: false },
-      })
-      if (finalized.status !== 'finalized' || !epochStart || !unitStart) {
+      if (!epochStart || !unitStart) {
         throw new Error('child receipt fixture failed')
       }
-      const mint = projectReceiptMintMarker(finalized.receipt, ROLLUP_SALT)
-      if (!mint) throw new Error('child mint marker failed')
-      return [epochStart, unitStart, mint]
+      const mints = operations.map((operation) => {
+        const callId = `child-${operation}`
+        childLedger.prepareObservation({ callId, operation, context })
+        const finalized = childLedger.finalizeObservation({
+          callId,
+          context,
+          after: {
+            workspaceIdentity,
+            operationTargetIdentity: targetIdentity,
+            repositoryIdentity: after.repository,
+            worktreeIdentity: after.worktree,
+          },
+          classification: {
+            outcome: 'accepted',
+            category: operation,
+            attribution: 'runtime-verified',
+            result: 'success',
+            sideEffect:
+              operation === 'implementation' ? 'required' : 'not-required',
+            reasonCode: 'recognized-command',
+          },
+          terminal: { status: 'success', output: 'non-empty', noOp: false },
+        })
+        if (finalized.status !== 'finalized') {
+          throw new Error('child receipt fixture failed')
+        }
+        const mint = projectReceiptMintMarker(finalized.receipt, ROLLUP_SALT)
+        if (!mint) throw new Error('child mint marker failed')
+        return mint
+      })
+      return [epochStart, unitStart, ...mints]
     }
 
     function partsOf(markers: readonly unknown[]): readonly unknown[] {
@@ -17871,10 +17908,20 @@ describe('snapshot block record', () => {
       { repository: OPERATION_SCOPE.repositoryIdentity, worktree: CHILD_AFTER },
     )
 
+    // Two receipts from one child, on the same target.
+    const TWO_RECEIPT_MARKERS = childMarkers(
+      OPERATION_SCOPE.workspaceIdentity,
+      OPERATION_SCOPE.workspaceIdentity,
+      { repository: OPERATION_SCOPE.repositoryIdentity, worktree: CHILD_AFTER },
+      ['implementation', 'verification'],
+    )
+
     // An adapter whose parent checkout (the effective target) is the child
     // receipt's target.
     async function parentTargetAdapter(
       steered: SteeredObserver,
+      markers: readonly unknown[] = PARENT_CHILD_MARKERS,
+      parentOfChild = SESSION_A,
     ): Promise<OpencodeWorkflowGuard> {
       const adapter = createAdapter(
         'observe',
@@ -17884,10 +17931,10 @@ describe('snapshot block record', () => {
         undefined,
         {
           readSessionParts: async (sessionID) =>
-            sessionID === SESSION_A ? [] : partsOf(PARENT_CHILD_MARKERS),
+            sessionID === SESSION_A ? [] : partsOf(markers),
           listChildren: async (sessionID) =>
             sessionID === SESSION_A
-              ? [{ sessionId: CHILD_SESSION, parentID: SESSION_A }]
+              ? [{ sessionId: CHILD_SESSION, parentID: parentOfChild }]
               : [],
         },
         { registrationIdentity: ROLLUP_REGISTRATION, sessionSalt: ROLLUP_SALT },
@@ -17898,6 +17945,7 @@ describe('snapshot block record', () => {
 
     async function rollup(
       adapter: OpencodeWorkflowGuard,
+      callID = 'task-call',
     ): Promise<Record<string, unknown>> {
       const output: {
         title: string
@@ -17908,7 +17956,7 @@ describe('snapshot block record', () => {
         output: 'done',
         metadata: { sessionId: CHILD_SESSION },
       }
-      const input = { tool: 'task', sessionID: SESSION_A, callID: 'task-call' }
+      const input = { tool: 'task', sessionID: SESSION_A, callID }
       await adapter.hooks['tool.execute.before'](input, { args: {} })
       await adapter.hooks['tool.execute.after']({ ...input, args: {} }, output)
       return output.metadata
@@ -17918,16 +17966,18 @@ describe('snapshot block record', () => {
     // then reads the child's target.
     function queueRollupSnapshots(
       steered: SteeredObserver,
-      child: OperationObserverResult,
+      ...children: OperationObserverResult[]
     ): void {
       steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
-      steered.queueSnapshot(
-        sequenceObserver([
-          child.status === 'available'
-            ? child.snapshot
-            : unavailableStep(child.reasonCode),
-        ]),
-      )
+      for (const child of children) {
+        steered.queueSnapshot(
+          sequenceObserver([
+            child.status === 'available'
+              ? child.snapshot
+              : unavailableStep(child.reasonCode),
+          ]),
+        )
+      }
     }
 
     const CLEAN_CHILD: OperationObserverResult = {
@@ -18000,7 +18050,7 @@ describe('snapshot block record', () => {
       expect(status(adapter).state).not.toBe('unavailable')
     })
 
-    test.each([...FATAL_AFTER_REASONS])(
+    test.each([...FATAL_AFTER_SNAPSHOT_REASONS])(
       'a child snapshot failing with %s still makes the guard unavailable and sets no block',
       async (reasonCode) => {
         const steered = steeredObserver()
@@ -18015,7 +18065,7 @@ describe('snapshot block record', () => {
           site: 'tool-after',
           kind: 'local-snapshot-unavailable',
           reasonCode,
-          timedOut: reasonCode === 'command-timeout',
+          timedOut: false,
         })
         expect(parsed.snapshotBlock).toBeUndefined()
       },
@@ -18060,6 +18110,195 @@ describe('snapshot block record', () => {
       } finally {
         target.cleanup()
       }
+    })
+
+    describe('a timeout while a child is rolled up', () => {
+      const TIMED_OUT_CHILD: OperationObserverResult = {
+        status: 'unavailable',
+        reasonCode: 'command-timeout',
+      }
+
+      // A halted pass leaves no trace: nothing is minted, no marker is
+      // returned, the guard is available, and no cause or block is recorded.
+      // A status read applies a readback of its own, so a test that goes on
+      // to roll the child up again passes `refresh: false`.
+      async function expectHalted(
+        adapter: OpencodeWorkflowGuard,
+        metadata: Record<string, unknown>,
+        refresh = true,
+      ): Promise<void> {
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+        expect(
+          metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ).toBeUndefined()
+        expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+        if (!refresh) return
+        const parsed = await refreshStatus(adapter)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.snapshotBlock).toBeUndefined()
+      }
+
+      test('a validation timeout halts the pass, and the child is not recorded as rolled up', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        // The first validation registers the target; the second is the
+        // rollup's own.
+        steered.scriptValidation('real', 'timeout')
+        // The pass halts before it reads the child's target.
+        queueRollupSnapshots(steered)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata, false)
+        // The same call is not skipped as already rolled up.
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+        const retried = await rollup(adapter)
+        expect(ledger(adapter).listReceipts()).toHaveLength(1)
+        expect(retried[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]).toBeDefined()
+      })
+
+      test('a validation timeout on the second receipt mints nothing for either', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered, TWO_RECEIPT_MARKERS)
+        steered.scriptValidation('real', 'real', 'timeout')
+        queueRollupSnapshots(steered, CLEAN_CHILD, CLEAN_CHILD)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata)
+      })
+
+      test('a snapshot timeout mid-batch mints nothing for any child receipt', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered, TWO_RECEIPT_MARKERS)
+        queueRollupSnapshots(steered, CLEAN_CHILD, TIMED_OUT_CHILD)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata)
+      })
+
+      test('a registration lookup timeout halts the pass', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        steered.scriptValidation('timeout')
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata)
+      })
+
+      test('a halted rollup resumed through a new task call mints every child receipt', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered, TWO_RECEIPT_MARKERS)
+        queueRollupSnapshots(steered, CLEAN_CHILD, TIMED_OUT_CHILD)
+        await expectHalted(adapter, await rollup(adapter), false)
+
+        queueRollupSnapshots(steered, CLEAN_CHILD, CLEAN_CHILD)
+        const resumed = await rollup(adapter, 'task-call-resumed')
+
+        expect(
+          ledger(adapter)
+            .listReceipts()
+            .map((receipt) => receipt.canonical.operation),
+        ).toEqual(['implementation', 'verification'])
+        expect(resumed[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]).toBeDefined()
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test('a timeout while blocked leaves the block untouched, so a status refresh in flight still clears it', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        const controls = adapter.snapshotBlock(SESSION_A)
+        controls.set('file-limit')
+        const slow = deferredStep(DRIFTED)
+        const slowObserver = sequenceObserver([slow.step])
+        steered.queueSnapshot(slowObserver)
+        const refreshing = refreshStatus(adapter)
+        for (
+          let tick = 0;
+          tick < 50 && slowObserver.snapshotCalls() < 1;
+          tick++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(slowObserver.snapshotCalls()).toBe(1)
+        queueRollupSnapshots(steered, TIMED_OUT_CHILD)
+
+        await rollup(adapter)
+
+        expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+        slow.release()
+        const parsed = await refreshing
+
+        // Neither the record nor its version moved, so the refresh was not
+        // overtaken: it cleared the block and applied the drift it saw.
+        expect(parsed.snapshotBlock).toBeUndefined()
+        expect(status(adapter).missingOperations).toContain('implementation')
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test.each([
+        {
+          name: 'a registration validation that fails definitely',
+          verdicts: ['identity'] as ScriptedValidation[],
+          cause: { kind: 'operation-input-invalid' },
+        },
+        {
+          name: 'a validation that fails definitely',
+          verdicts: ['real', 'identity'] as ScriptedValidation[],
+          cause: {
+            kind: 'operation-input-invalid',
+            reasonCode: 'target-unavailable',
+          },
+        },
+        {
+          name: 'a validation that throws',
+          verdicts: ['real', 'throws'] as ScriptedValidation[],
+          cause: { kind: 'operation-input-invalid' },
+        },
+        {
+          name: 'a validation that names another target root',
+          verdicts: ['real', 'elsewhere'] as ScriptedValidation[],
+          cause: { kind: 'operation-input-invalid' },
+        },
+      ])('$name stays fatal', async ({ verdicts, cause }) => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        steered.scriptValidation(...verdicts)
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+
+        await rollup(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect((await refreshStatus(adapter)).firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          ...cause,
+          timedOut: false,
+        })
+      })
+
+      test('a child that is not a child of the calling session stays fatal', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(
+          steered,
+          PARENT_CHILD_MARKERS,
+          'some-other-session',
+        )
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+
+        await rollup(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect((await refreshStatus(adapter)).firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
     })
 
     test('a blocking child result that arrives after the unit was redeclared sets no block', async () => {
