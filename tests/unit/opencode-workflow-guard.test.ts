@@ -11841,7 +11841,7 @@ describe('OpenCode workflow guard adapter', () => {
       )
 
       expect(contentOutput.output).toContain('stale-receipt')
-      expect(status(setup.adapter).state).toBe('unavailable')
+      expect(status(setup.adapter).state).not.toBe('unavailable')
       expect(status(setup.adapter).unit?.status).toBe('active')
       expect(
         ledger(setup.adapter)
@@ -11907,7 +11907,7 @@ describe('OpenCode workflow guard adapter', () => {
       const output = await completeUnit(setup.adapter, 'head-drift-completion')
 
       expect(output.output).toContain('stale-receipt')
-      expect(status(setup.adapter).state).toBe('unavailable')
+      expect(status(setup.adapter).state).not.toBe('unavailable')
       expect(status(setup.adapter).satisfiedOperations).toEqual([
         'implementation',
         'verification',
@@ -15979,6 +15979,7 @@ function expectStaleCompletion(
     target: 'unit',
     reasonCode: 'stale-receipt',
   })
+  expect(status(repo.adapter).state).not.toBe('unavailable')
   expect(status(repo.adapter).unit?.status).toBe('active')
   expect(
     ledger(repo.adapter)
@@ -18324,6 +18325,167 @@ describe('snapshot block record', () => {
           status: 'completed',
         })
         expect(status(adapter).unit?.status).toBe('completed')
+      })
+
+      describe('a stale receipt found at finalize', () => {
+        const WRITE = { filePath: 'real.ts', content: 'changed' }
+        const worktree = (tag: string) =>
+          operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+
+        // Observed evidence, then a completion whose readbacks show a
+        // worktree that no hook saw move.
+        async function driftedAtFinalize(
+          mode: 'observe' | 'protected',
+        ): Promise<{
+          adapter: OpencodeWorkflowGuard
+          steered: SteeredObserver
+          first: CompleteOutput
+        }> {
+          const steered = steeredObserver()
+          const adapter = await activeAdapter(steered, mode)
+          steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+          steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+          await observeOperationTool(
+            adapter,
+            'write',
+            WRITE,
+            BASH_OUTPUT,
+            'stale-write',
+          )
+          steered.setDefault(worktree('a1'))
+          await operate(adapter, 'stale-verify')
+          steered.setDefault(worktree('b2'))
+          await beforeComplete(adapter, 'stale-complete')
+          const first = await afterComplete(adapter, 'stale-complete')
+          return { adapter, steered, first }
+        }
+
+        test.each(['observe', 'protected'] as const)(
+          'is rejected retryably as stale-receipt in %s mode: the guard stays available and nothing is consumed',
+          async (mode) => {
+            const { adapter, first } = await driftedAtFinalize(mode)
+
+            expect(outcomeOf(first)).toEqual({
+              status: 'rejected',
+              reasonCode: 'stale-receipt',
+            })
+            expect(first.metadata.workflowGuard).toMatchObject({
+              status: 'rejected',
+              target: 'unit',
+              reasonCode: 'stale-receipt',
+            })
+            expect(status(adapter).state).not.toBe('unavailable')
+            expect(status(adapter).unit?.status).toBe('active')
+            expect(status(adapter).reasonCode).toBe('stale-receipt')
+            expect(status(adapter).missingOperations).toContain(
+              'implementation',
+            )
+            expect(consumedReceipts(adapter)).toBe(0)
+            expect((await statusJson(adapter)).firstUnavailableCause).toBe(
+              undefined,
+            )
+          },
+        )
+
+        test('replays the same result for a duplicate after-hook', async () => {
+          const { adapter, steered, first } = await driftedAtFinalize('observe')
+          const calls = steered.snapshotCalls()
+
+          const replay = await afterComplete(adapter, 'stale-complete')
+
+          expect(replay.title).toBe(first.title)
+          expect(replay.output).toBe(first.output)
+          expect(steered.snapshotCalls()).toBe(calls)
+          expect(status(adapter).state).not.toBe('unavailable')
+        })
+
+        test('finalizing after the guard became unavailable mid-readback stays fatal and keeps the first cause', async () => {
+          const steered = steeredObserver()
+          const adapter = await activeAdapter(steered)
+          steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+          steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+          await observeOperationTool(
+            adapter,
+            'write',
+            WRITE,
+            BASH_OUTPUT,
+            'fatal-stale-write',
+          )
+          steered.setDefault(worktree('a1'))
+          await operate(adapter, 'fatal-stale-verify')
+          await beforeComplete(adapter, 'fatal-stale-complete')
+          // The completion's readbacks show a moved worktree, but a hook
+          // makes the guard unavailable before they are applied.
+          const slow = deferredStep(worktree('b2'))
+          const slowObserver = sequenceObserver([slow.step])
+          steered.queueSnapshot(slowObserver)
+          const completing = afterComplete(adapter, 'fatal-stale-complete')
+          for (
+            let tick = 0;
+            tick < 50 && slowObserver.snapshotCalls() < 1;
+            tick++
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 0))
+          }
+          expect(slowObserver.snapshotCalls()).toBe(1)
+          steered.queueSnapshot(failing('target-unavailable'))
+          await operate(adapter, 'fatal-stale-make-unavailable')
+          expect(status(adapter).state).toBe('unavailable')
+          steered.setDefault(worktree('b2'))
+
+          slow.release()
+          const output = await completing
+
+          // Core abandoned the prepared transition when the guard went
+          // unavailable, so the finalize is rejected as abandoned rather than
+          // stale; either way it is not the retryable result.
+          expect(output.title).not.toBe('Workflow receipt stale')
+          expect(status(adapter).state).toBe('unavailable')
+          expect(outcomeOf(output)).toEqual({
+            status: 'rejected',
+            reasonCode: 'abandoned-transition',
+          })
+          expect((await statusJson(adapter)).firstUnavailableCause).toEqual({
+            site: 'tool-before',
+            kind: 'local-snapshot-unavailable',
+            reasonCode: 'target-unavailable',
+            timedOut: false,
+          })
+        })
+
+        test('is refused at prepare under protection until the stale operations are rerun, and then completes', async () => {
+          const { adapter, steered } = await driftedAtFinalize('protected')
+
+          let caught: unknown
+          try {
+            await beforeComplete(adapter, 'stale-retry-early')
+          } catch (error) {
+            caught = error
+          }
+          expect(isWorkflowGuardBlockedError(caught)).toBe(true)
+
+          // Rerun the stale operations.
+          steered.queueSnapshot(sequenceObserver([worktree('b2')]))
+          steered.queueSnapshot(sequenceObserver([worktree('c3')]))
+          await observeOperationTool(
+            adapter,
+            'write',
+            WRITE,
+            BASH_OUTPUT,
+            'stale-rerun-write',
+          )
+          steered.setDefault(worktree('c3'))
+          await operate(adapter, 'stale-rerun-verify')
+          expect(status(adapter).state).toBe('protected')
+
+          await beforeComplete(adapter, 'stale-retry')
+          const retry = await afterComplete(adapter, 'stale-retry')
+
+          expect(retry.metadata.workflowGuard).toMatchObject({
+            status: 'completed',
+          })
+          expect(status(adapter).unit?.status).toBe('completed')
+        })
       })
     })
   })

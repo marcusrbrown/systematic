@@ -4928,6 +4928,12 @@ function createSessionRuntime(
     }
     const reasonCode =
       'reasonCode' in result ? result.reasonCode : 'guard-unavailable'
+    // Retryable because core has already marked the receipt stale: a retry is
+    // rejected at prepare until fresh evidence exists, so it cannot loop.
+    if (reasonCode === 'stale-receipt') {
+      finishStaleFinalize(callDigest, pending, output)
+      return
+    }
     markUnavailable(afterCause('transition-finalize-rejected', reasonCode))
     const terminal: TerminalComplete = {
       target: pending.target,
@@ -4937,6 +4943,29 @@ function createSessionRuntime(
     abandonedCompletes.set(callDigest, pending.target)
     terminalCompletes.set(callDigest, terminal)
     writeTerminalCompletionResult(output, terminal, pending.target)
+  }
+
+  // The core transition is already terminal, so there is nothing to abandon:
+  // the terminal entry makes a duplicate after-hook replay this result.
+  // Nothing is consumed, and the guard is not marked unavailable.
+  function finishStaleFinalize(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+  ): void {
+    const terminal: TerminalComplete = {
+      target: pending.target,
+      status: 'rejected',
+      reasonCode: 'stale-receipt',
+      title: 'Workflow receipt stale',
+    }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(
+      output,
+      terminal,
+      pending.target,
+      terminal.title,
+    )
   }
 
   // metadataOnly outcomes (see TerminalComplete) came from a branch where

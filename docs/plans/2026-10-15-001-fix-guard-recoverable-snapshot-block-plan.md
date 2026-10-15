@@ -60,7 +60,7 @@ There is a second path to the same outcome. A finalize-time `stale-receipt` goes
 - R2. While blocked, every operation runs unobserved. The before-hook records the call as skipped, the after-hook stays silent, and no receipt is minted. No operation is refused.
 - R3. While blocked, completion returns a retryable `rejected / snapshot-blocked`. It consumes nothing, replays identically for the same call ID, and never calls `markUnavailable`. Revision drift between the parent, pinned and final completion snapshots sets the block with reason `worktree-unstable` and returns the same result.
 - R4. A clean local snapshot of the effective target clears the block. This applies at the before-hook, after-hook, child rollup, status refresh or completion. The clear applies that readback to the core, local-only and with no remote probes, so drift made while blocked marks receipts stale before completion.
-- R5. A finalize-time `stale-receipt` for a receipt that core has marked stale is turned into a retryable `rejected / stale-receipt` instead of `unavailable`, whatever status core returns with it. If the guard is already `unavailable`, or the receipt is not in core's stale set, the fatal path stays. Every other finalize rejection stays fatal.
+- R5. A finalize-time `stale-receipt` is turned into a retryable `rejected / stale-receipt` instead of `unavailable`, whatever status core returns with it. Every other finalize rejection stays fatal.
 - R6. Status reports the active block as `snapshotBlock: {reasonCode}` in every guard state. It never enters markers or `globalIssue`.
 - R7. These stay fatal:
   - `target-unavailable`, invalid output, unreadable inputs, command failures, and timeouts;
@@ -252,8 +252,7 @@ There is a second path to the same outcome. A finalize-time `stale-receipt` goes
   - A blocked readback or drift abandons with `remember`, writes a `terminalCompletes` entry, and replays by call ID.
   - A target or registration change between completion snapshots stays fatal.
   - **Finalize-time stale receipt:**
-    - The adapter first checks guard state, and an `unavailable` guard takes the fatal path.
-    - Otherwise the adapter keys on the completion's receipt being in core's stale set, whatever status core returns.
+    - The adapter keys on `reasonCode === 'stale-receipt'`, whatever status core returns. No guard-state or stale-set check: an unavailable guard has already abandoned the transition, so finalize returns `abandoned-transition`, and the adapter never enables age-only staleness. Core's own prepare check rejects a retry until fresh evidence exists, so the path cannot loop.
     - The core transition is already terminal, so the adapter deletes `pendingCompletes` and writes the terminal `rejected / stale-receipt` without calling `abandonComplete`.
     - A retry is rejected at prepare until the stale operations are rerun.
   - If the session is already `unavailable`, every path takes the fatal route, as `finishReadbackTimeout` does.
@@ -280,7 +279,7 @@ There is a second path to the same outcome. A finalize-time `stale-receipt` goes
 
 - **Which reasons block:** the four blocking reasons, from local snapshots of the effective target only.
 - **How the agent recovers:** operations run unobserved, and a clean snapshot clears the block.
-- **Finalize-time `stale-receipt`:** retryable when the receipt is in core's stale set.
+- **Finalize-time `stale-receipt`:** retryable.
 - **Completion drift:** revision drift is retryable and sets the block. A target or registration change stays fatal.
 - **Seed-time blocking reasons:** they defer the remote baseline and set the block.
 - **Remote operations while blocked:** not refused. The guidance covers redoing them.
@@ -499,10 +498,7 @@ stateDiagram-v2
 - Modify: `src/lib/opencode-workflow-guard.ts`
 - Test: `tests/unit/opencode-workflow-guard.test.ts`
 
-**Approach:** In `finalizeComplete`:
-- If the guard is `unavailable`, take the fatal path.
-- Otherwise, if the reason is `stale-receipt` and the completion's receipt is in core's stale set, delete `pendingCompletes`, write the terminal `rejected / stale-receipt`, and do not call `abandonComplete`.
-- Every other non-success stays fatal.
+**Approach:** In `finalizeComplete`, a `stale-receipt` reason writes the terminal `rejected / stale-receipt` without calling `abandonComplete`. Every other non-success stays fatal.
 
 **Execution note:** Test-first.
 
@@ -512,7 +508,7 @@ stateDiagram-v2
   - The guard is not `unavailable`, and the receipt is stale in core.
   - A duplicate after-hook replays.
   - A retry with a new call ID is rejected at prepare until verification is rerun, and then succeeds.
-- Edge case: an age-based `stale-receipt` whose receipt is not in the stale set stays fatal.
+- Edge case: finalizing after the guard became unavailable mid-readback stays fatal (`abandoned-transition`) and keeps the first cause.
 - Integration: the existing stale-completion tests over a real observer now also assert that `state` is not `unavailable`.
 - Error path, stays fatal: other finalize rejections, such as a consumed receipt, still make the guard `unavailable`.
 
@@ -550,7 +546,7 @@ stateDiagram-v2
 ## System-Wide Impact
 
 - **Interaction graph:** every local snapshot site in the adapter (before-hook, after-hook, rollup, both seed callers, status refresh, completion readback, finalize). Markers are unchanged.
-- **Error propagation:** blocking reasons, revision drift at completion, and finalize staleness for a stale-set receipt become retryable rejections or skips. Everything else keeps the current `unavailable` path and its first cause.
+- **Error propagation:** blocking reasons, revision drift at completion, and finalize staleness become retryable rejections or skips. Everything else keeps the current `unavailable` path and its first cause.
 - **State lifecycle risks:**
   - Operations that run while blocked leave no receipts, and that includes remote side effects.
   - Every snapshot site re-reads the full tree while blocked. A snapshot timeout there is still fatal (#1084).
