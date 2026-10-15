@@ -553,7 +553,10 @@ type GuardUnavailableCauseKind =
 // A remote operation whose activation seeding was deferred instead of
 // failing the session. Status-only, enum-only, and bound to the unit that
 // recorded it; never carried in markers, receipts, tool metadata, or digests.
-type SeedDeferralReason = 'command-timeout' | 'missing-resource'
+type SeedDeferralReason =
+  | 'command-timeout'
+  | 'missing-resource'
+  | 'snapshot-blocked'
 
 const SNAPSHOT_BLOCKING_REASONS = [
   'file-limit',
@@ -4183,25 +4186,97 @@ function createSessionRuntime(
         timedOut: false,
       }
     }
+    // The local seed snapshot is of the unit's effective target.
+    const lookup = resolveEffectiveObserver()
+    if (lookup.status !== 'ok') return seedLookupCause(lookup)
+    const generation = unitStartGeneration
+    const local = await readSeedSnapshot(lookup.value.observer)
+    if (local.kind === 'fatal') return local.cause
+    if (local.kind === 'blocked') {
+      blockSeededScopes(
+        remoteOperations,
+        local.reasonCode,
+        lookup.value.targetIdentity,
+        generation,
+      )
+      return undefined
+    }
+    return seedEachRemoteScope(remoteOperations, remoteSnapshot, local.snapshot)
+  }
+
+  type SeedLocalRead =
+    | {
+        readonly kind: 'snapshot'
+        readonly snapshot: OperationObserverSnapshot
+      }
+    | { readonly kind: 'blocked'; readonly reasonCode: SnapshotBlockReason }
+    | { readonly kind: 'fatal'; readonly cause: GuardUnavailableCause }
+
+  function seedLookupCause(failure: ProbeFailure): GuardUnavailableCause {
+    const reasonCode =
+      failure.status === 'timeout' ? 'command-timeout' : failure.reasonCode
+    return {
+      site: 'seed-remote-scopes',
+      kind:
+        reasonCode === undefined
+          ? 'local-snapshot-error'
+          : 'local-snapshot-unavailable',
+      ...(reasonCode === undefined ? {} : { reasonCode }),
+      timedOut: reasonCode === 'command-timeout',
+    }
+  }
+
+  // A blocking reason is not fatal: it blocks the unit instead.
+  async function readSeedSnapshot(
+    observer: OpencodeOperationObserver,
+  ): Promise<SeedLocalRead> {
     let local: OperationObserverResult
     try {
-      local = await options.observer.snapshot()
+      local = await observer.snapshot()
     } catch {
       return {
-        site: 'seed-remote-scopes',
-        kind: 'local-snapshot-error',
-        timedOut: false,
+        kind: 'fatal',
+        cause: {
+          site: 'seed-remote-scopes',
+          kind: 'local-snapshot-error',
+          timedOut: false,
+        },
       }
     }
-    if (local.status === 'unavailable') {
-      return {
+    if (local.status === 'available') {
+      return { kind: 'snapshot', snapshot: local.snapshot }
+    }
+    if (isSnapshotBlockingReason(local.reasonCode)) {
+      return { kind: 'blocked', reasonCode: local.reasonCode }
+    }
+    return {
+      kind: 'fatal',
+      cause: {
         site: 'seed-remote-scopes',
         kind: 'local-snapshot-unavailable',
         reasonCode: local.reasonCode,
         timedOut: local.reasonCode === 'command-timeout',
-      }
+      },
     }
-    return seedEachRemoteScope(remoteOperations, remoteSnapshot, local.snapshot)
+  }
+
+  // The seed snapshot hit a blocking reason: no remote baseline can be read,
+  // so every scope without one is deferred, and the unit is blocked. Each
+  // deferred baseline binds later from that operation's own clean before-read.
+  // A seed whose unit was redeclared or replaced while its snapshot was in
+  // flight records nothing; the newer start seeds for itself.
+  function blockSeededScopes(
+    operations: readonly RemoteOperation[],
+    reasonCode: SnapshotBlockReason,
+    targetIdentity: string,
+    generation: number,
+  ): void {
+    if (generation !== unitStartGeneration) return
+    for (const operation of operations) {
+      clearSeedDeferral(operation)
+      recordSeedDeferral(operation, 'snapshot-blocked')
+    }
+    setSnapshotBlock(reasonCode, targetIdentity)
   }
 
   // Continues past deferrals; only a fatal outcome stops seeding.

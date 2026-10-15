@@ -17475,5 +17475,323 @@ describe('snapshot block record', () => {
         target.cleanup()
       }
     })
+
+    test('a blocking child result that arrives after the unit was redeclared sets no block', async () => {
+      const steered = steeredObserver()
+      const adapter = await parentTargetAdapter(steered)
+      const slow = deferredStep(operationSnapshot(), {
+        status: 'unavailable',
+        reasonCode: 'file-limit',
+      })
+      const slowChild = sequenceObserver([slow.step])
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(slowChild)
+      const input = { tool: 'task', sessionID: SESSION_A, callID: 'task-call' }
+      const output = {
+        title: 'task result',
+        output: 'done',
+        metadata: { sessionId: CHILD_SESSION },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: {} })
+      const rolling = adapter.hooks['tool.execute.after'](
+        { ...input, args: {} },
+        output,
+      )
+      for (let tick = 0; tick < 50 && slowChild.snapshotCalls() < 1; tick++) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(slowChild.snapshotCalls()).toBe(1)
+      expect(
+        adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+      ).toMatchObject({ status: 'started' })
+
+      slow.release()
+      await rolling
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    })
+  })
+
+  describe('remote seeding', () => {
+    const PUSH = 'git push origin main'
+    const REMOTE = {
+      'push:before': [remoteAvailable(D, E)],
+      'push:after': [remoteAvailable(D, 'f'.repeat(64))],
+    }
+    const FATAL_SEED_REASONS = [
+      'target-unavailable',
+      'command-failed',
+      'command-timeout',
+      'file-read-failed',
+    ] as const
+
+    function failing(reasonCode: OperationObserverReasonCode) {
+      return sequenceObserver([unavailableStep(reasonCode)])
+    }
+
+    function pushAdapter(
+      remote: Record<string, readonly OperationObserverRemoteResult[]> = REMOTE,
+    ): { steered: SteeredObserver; adapter: OpencodeWorkflowGuard } {
+      const steered = steeredObserver(remote)
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      return { steered, adapter }
+    }
+
+    async function redeclare(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      startArgs: Record<string, unknown> = { expected_operations: ['commit'] },
+    ): Promise<void> {
+      const input = {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID,
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: startArgs })
+      await adapter.hooks['tool.execute.after'](
+        { ...input, args: startArgs },
+        { title: 'x', output: 'y', metadata: {} },
+      )
+    }
+
+    async function pushOperation(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<void> {
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: PUSH },
+        { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+        callID,
+      )
+    }
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    test('a blocking reason at skill activation defers the push baseline and blocks the unit, and the push mints once the cause is fixed', async () => {
+      const { steered, adapter } = pushAdapter()
+      steered.queueSnapshot(failing('file-limit'))
+
+      await activateWorkEpoch(adapter)
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).epoch?.status).toBe('active')
+      expect(steered.remoteCalls()).toBe(0)
+      const parsed = await statusJson(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
+      expect(parsed.seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'snapshot-blocked' },
+      ])
+
+      await pushOperation(adapter, 'push-after-fix')
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect((await statusJson(adapter)).seedDeferrals).toBeUndefined()
+      expect(status(adapter).satisfiedOperations).toContain('push')
+      expect(receiptOperations(adapter)).toContain('push')
+    })
+
+    test('a blocking reason at unit start defers the push baseline and blocks the unit, and the push mints once the cause is fixed', async () => {
+      // Activation defers push on a probe timeout; the start then meets the
+      // blocking reason and replaces that deferral.
+      const { steered, adapter } = pushAdapter({
+        ...REMOTE,
+        'push:before': [TIMEOUT, remoteAvailable(D, E)],
+      })
+      await activateWorkEpoch(adapter)
+      expect((await statusJson(adapter)).seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'command-timeout' },
+      ])
+      const unitId = status(adapter).unit?.unitId
+      steered.queueSnapshot(failing('command-output-limit'))
+
+      await redeclare(adapter, 'blocked-start')
+
+      expect(status(adapter).unit?.unitId).toBe(unitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusJson(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toEqual({
+        reasonCode: 'command-output-limit',
+      })
+      expect(parsed.seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'snapshot-blocked' },
+      ])
+
+      await pushOperation(adapter, 'push-after-fix')
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect(status(adapter).satisfiedOperations).toContain('push')
+      expect(receiptOperations(adapter)).toContain('push')
+    })
+
+    test('while the seed deferral is blocked, a push is skipped and mints no receipt', async () => {
+      const { steered, adapter } = pushAdapter()
+      steered.queueSnapshot(failing('file-limit'))
+      await activateWorkEpoch(adapter)
+      steered.queueSnapshot(failing('file-limit'))
+
+      await pushOperation(adapter, 'push-still-blocked')
+
+      expect(steered.remoteCalls()).toBe(0)
+      expect(receiptOperations(adapter)).not.toContain('push')
+      expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+        reasonCode: 'file-limit',
+      })
+      expect((await statusJson(adapter)).seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'snapshot-blocked' },
+      ])
+    })
+
+    test('a scope whose baseline the unit declares is not deferred when the seed is blocked', async () => {
+      const { steered, adapter } = pushAdapter({
+        ...REMOTE,
+        'push:before': [TIMEOUT],
+      })
+      await activateWorkEpoch(adapter)
+      expect((await statusJson(adapter)).seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'command-timeout' },
+      ])
+      steered.queueSnapshot(failing('file-limit'))
+
+      await redeclare(adapter, 'blocked-start-with-baseline', {
+        resource_scopes: { push: 'remote-resource' },
+      })
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusJson(adapter)
+      expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
+      expect(parsed.seedDeferrals).toBeUndefined()
+    })
+
+    test('a redeclaration of the same unit that is still blocked keeps the deferral and the block', async () => {
+      const { steered, adapter } = pushAdapter()
+      steered.queueSnapshot(failing('file-limit'))
+      await activateWorkEpoch(adapter)
+      const unitId = status(adapter).unit?.unitId
+      steered.queueSnapshot(failing('worktree-unstable'))
+
+      await redeclare(adapter, 'still-blocked-start')
+
+      expect(status(adapter).unit?.unitId).toBe(unitId)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusJson(adapter)
+      expect(parsed.snapshotBlock).toEqual({ reasonCode: 'worktree-unstable' })
+      expect(parsed.seedDeferrals).toEqual([
+        { operation: 'push', reasonCode: 'snapshot-blocked' },
+      ])
+    })
+
+    test('a blocking seed result that arrives after the unit was redeclared records nothing', async () => {
+      const { steered, adapter } = pushAdapter()
+      const slow = deferredStep(operationSnapshot(), {
+        status: 'unavailable',
+        reasonCode: 'file-limit',
+      })
+      const slowSeed = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowSeed)
+      const skillInput = {
+        tool: 'systematic_skill',
+        sessionID: SESSION_A,
+        callID: 'slow-seed-skill',
+      }
+      const skillArgs = { name: 'ce:work' }
+      await adapter.hooks['tool.execute.before'](skillInput, {
+        args: skillArgs,
+      })
+      const activating = adapter.hooks['tool.execute.after'](
+        { ...skillInput, args: skillArgs },
+        { title: 'Loaded skill', output: 'ok', metadata: {} },
+      )
+      for (let tick = 0; tick < 50 && slowSeed.snapshotCalls() < 1; tick++) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(slowSeed.snapshotCalls()).toBe(1)
+      expect(
+        adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+      ).toMatchObject({ status: 'started' })
+
+      slow.release()
+      await activating
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect((await statusJson(adapter)).seedDeferrals).toBeUndefined()
+    })
+
+    test.each([...FATAL_SEED_REASONS])(
+      'a seed snapshot failing with %s still makes the guard unavailable and sets no block',
+      async (reasonCode) => {
+        const { steered, adapter } = pushAdapter()
+        steered.queueSnapshot(failing(reasonCode))
+
+        await activateWorkEpoch(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        const parsed = await statusJson(adapter)
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'seed-remote-scopes',
+          kind: 'local-snapshot-unavailable',
+          reasonCode,
+          timedOut: reasonCode === 'command-timeout',
+        })
+        expect(parsed.snapshotBlock).toBeUndefined()
+        expect(parsed.seedDeferrals).toBeUndefined()
+      },
+    )
+
+    test('a seed snapshot that throws still makes the guard unavailable and sets no block', async () => {
+      const { steered, adapter } = pushAdapter()
+      steered.queueSnapshot({
+        ...sequenceObserver([operationSnapshot()]),
+        snapshot: async () => {
+          throw new Error('seed snapshot exploded')
+        },
+      })
+
+      await activateWorkEpoch(adapter)
+
+      expect(status(adapter).state).toBe('unavailable')
+      const parsed = await statusJson(adapter)
+      expect(parsed.firstUnavailableCause).toMatchObject({
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-error',
+      })
+      expect(parsed.snapshotBlock).toBeUndefined()
+    })
+
+    test('the snapshot-blocked deferral never enters markers or receipts', async () => {
+      const { steered, adapter } = pushAdapter()
+      steered.queueSnapshot(failing('file-limit'))
+      const skillOutput = { title: 'Loaded skill', output: 'ok', metadata: {} }
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'marker-skill',
+        SESSION_A,
+        skillOutput,
+      )
+
+      const everything = JSON.stringify([
+        skillOutput,
+        await markerText(adapter),
+        ledger(adapter).listReceipts(),
+        status(adapter),
+      ])
+      expect((await statusJson(adapter)).seedDeferrals).toBeDefined()
+      expect(everything).not.toContain('snapshot-blocked')
+      expect(everything).not.toContain('seedDeferrals')
+    })
   })
 })
