@@ -603,6 +603,7 @@ function buildPinnedRecoveryMarkers(
   operationTargetIdentity: string,
   repositoryIdentity: string,
   worktreeIdentity: string,
+  includeReceipt = true,
 ): readonly unknown[] {
   const recoveryLedger = createReceiptLedger({
     capabilityFlags: ['workflow-guard'],
@@ -634,6 +635,7 @@ function buildPinnedRecoveryMarkers(
     timestamp: 2,
   })
   if (!epochStart || !unitStart) throw new Error('progression marker failed')
+  if (!includeReceipt) return [epochStart, unitStart]
 
   const context = {
     epochId,
@@ -19175,4 +19177,263 @@ describe('snapshot block record', () => {
       })
     })
   })
+})
+
+describe('parent registration lookups that time out', () => {
+  type RegistrationVerdict = 'timeout' | 'identity' | 'throws'
+
+  // A unit recovered from markers and pinned to the parent observer's own
+  // target, whose registration is not known yet. The Nth upcoming validation
+  // of the parent root follows `verdicts`; later ones succeed.
+  function recoveredParentPinned(
+    verdicts: readonly RegistrationVerdict[],
+    options: { readonly receipt?: boolean } = {},
+  ) {
+    const directory = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-registration-')),
+    )
+    const pinnedIdentity = '9'.repeat(64)
+    const queue = [...verdicts]
+    const base = sequenceObserver([operationSnapshot()], {
+      'push:before': [remoteAvailable('d'.repeat(64), 'e'.repeat(64))],
+    })
+    const observer: OpencodeOperationObserver = {
+      ...base,
+      targetDigest: pinnedIdentity,
+      validateRegisteredWorktree(candidate) {
+        const verdict = candidate === directory ? queue.shift() : undefined
+        if (verdict === 'throws') throw new Error('validation exploded')
+        if (verdict === 'timeout') {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (verdict === 'identity') {
+          return { status: 'error', reasonCode: 'target-unavailable' }
+        }
+        return base.validateRegisteredWorktree(candidate)
+      },
+    }
+    const registrationIdentity = 'registration-timeout-registration'
+    const sessionSalt = new Uint8Array(32).fill(61)
+    const markers = buildPinnedRecoveryMarkers(
+      registrationIdentity,
+      sessionSalt,
+      OPERATION_SCOPE.workspaceIdentity,
+      pinnedIdentity,
+      OPERATION_SCOPE.repositoryIdentity,
+      OPERATION_SCOPE.worktreeIdentity,
+      options.receipt ?? true,
+    )
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'observe', debug: false },
+      ...OPERATION_SCOPE,
+      targetDirectory: directory,
+      sessionLocation: directory,
+      registrationIdentity,
+      sessionSalt,
+      observer,
+      classifier: createReceiptClassifier(),
+      runtimeRequiredOperations: ['push'],
+      hostReadback: {
+        readSessionParts: async (sessionID) =>
+          sessionID === SESSION_A ? wrapReceiptMarkers(markers) : [],
+        listChildren: async () => [],
+      },
+    })
+    return {
+      adapter,
+      cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
+    }
+  }
+
+  async function statusDocument(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<Record<string, unknown>> {
+    const result = await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
+    return JSON.parse(expectToolOutput(result).output)
+  }
+
+  // Loads the recovered unit without looking up any registration.
+  async function loadUnit(adapter: OpencodeWorkflowGuard): Promise<void> {
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      { system: ['base'] },
+    )
+    expect(status(adapter).unit?.status).toBe('active')
+  }
+
+  async function redeclareWithPush(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<void> {
+    const args = { expected_operations: ['push'] }
+    const input = {
+      tool: 'systematic_workflow_start',
+      sessionID: SESSION_A,
+      callID: 'registration-redeclare',
+    }
+    await adapter.hooks['tool.execute.before'](input, { args })
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args },
+      { title: 'x', output: 'y', metadata: {} },
+    )
+  }
+
+  const STAYS_FATAL = [
+    { verdict: 'throws' as const, label: 'a validator that throws' },
+    { verdict: 'identity' as const, label: 'an identity error' },
+  ]
+
+  test('a registration timeout during a status refresh is reported as unconfirmed, and the guard stays available', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'])
+    try {
+      const parsed = await statusDocument(adapter)
+
+      expect(parsed.unconfirmedReadbacks).toEqual([
+        { probe: 'pinned', reasonCode: 'command-timeout' },
+      ])
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a registration timeout during completion is a retryable readback-timeout', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'])
+    try {
+      const output = await completeUnit(
+        adapter,
+        'registration-timeout-complete',
+      )
+
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'readback-timeout',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a registration timeout in the block-clear control returns timeout and keeps the block', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'])
+    try {
+      await loadUnit(adapter)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      expect(controls.set('file-limit')).toBe(true)
+
+      expect(await controls.clear()).toEqual({ status: 'timeout' })
+
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a registration timeout at seed time is fatal and carries a command-timeout cause', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'], {
+      receipt: false,
+    })
+    try {
+      await loadUnit(adapter)
+
+      await redeclareWithPush(adapter)
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect((await statusDocument(adapter)).firstUnavailableCause).toEqual({
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-timeout',
+        timedOut: true,
+      })
+    } finally {
+      cleanup()
+    }
+  })
+
+  test.each(STAYS_FATAL)(
+    '$label during a status refresh stays fatal',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict])
+      try {
+        const parsed = await statusDocument(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toMatchObject({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          timedOut: false,
+        })
+        expect('unconfirmedReadbacks' in parsed).toBe(false)
+      } finally {
+        cleanup()
+      }
+    },
+  )
+
+  test.each(STAYS_FATAL)(
+    '$label during completion stays fatal',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict])
+      try {
+        const output = await completeUnit(
+          adapter,
+          'registration-fatal-complete',
+        )
+
+        expect(JSON.parse(output.output)).toMatchObject({
+          status: 'unavailable',
+        })
+        expect(status(adapter).state).toBe('unavailable')
+      } finally {
+        cleanup()
+      }
+    },
+  )
+
+  test.each(STAYS_FATAL)(
+    '$label in the block-clear control stays fatal',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict])
+      try {
+        await loadUnit(adapter)
+        const controls = adapter.snapshotBlock(SESSION_A)
+        controls.set('file-limit')
+
+        expect(await controls.clear()).toEqual({ status: 'fatal' })
+
+        expect(status(adapter).state).toBe('unavailable')
+      } finally {
+        cleanup()
+      }
+    },
+  )
+
+  test.each(STAYS_FATAL)(
+    '$label at seed time stays fatal without a timeout cause',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict], {
+        receipt: false,
+      })
+      try {
+        await loadUnit(adapter)
+
+        await redeclareWithPush(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect((await statusDocument(adapter)).firstUnavailableCause).toEqual({
+          site: 'seed-remote-scopes',
+          kind: 'local-snapshot-error',
+          timedOut: false,
+        })
+      } finally {
+        cleanup()
+      }
+    },
+  )
 })

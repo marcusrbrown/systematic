@@ -2106,28 +2106,29 @@ function createSessionRuntime(
     operationObservers.set(registration.observer.targetDigest, registration)
   }
 
-  function parentObserverRegistration():
-    | OperationObserverRegistration
-    | undefined {
-    if (!options.observer) return undefined
+  // `timeout` only when the validation itself timed out (no verdict yet); a
+  // throw, an unreadable root, and every non-ok verdict are `fatal`.
+  function parentObserverRegistration(): ProbeRead<OperationObserverRegistration> {
+    if (!options.observer) return { status: 'fatal' }
     const targetRoot = canonicalExistingPath(
       options.targetDirectory ?? process.cwd(),
       fs.realpathSync,
     )
-    if (!targetRoot) return undefined
+    if (!targetRoot) return { status: 'fatal' }
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = options.observer.validateRegisteredWorktree(targetRoot)
     } catch {
-      return undefined
+      return { status: 'fatal' }
     }
+    if (isProbeTimeout(validation)) return { status: 'timeout' }
     const registeredIdentity = registeredWorktreeIdentity(validation)
     if (
       validation.status !== 'ok' ||
       registeredIdentity === undefined ||
       validation.targetRoot !== targetRoot
     ) {
-      return undefined
+      return { status: 'fatal' }
     }
     const registration = {
       targetRoot,
@@ -2135,15 +2136,17 @@ function createSessionRuntime(
       observer: options.observer,
     }
     rememberOperationObserver(registration)
-    return registration
+    return { status: 'ok', value: registration }
   }
 
   function operationObserverRegistration(
     targetIdentity: string,
-  ): OperationObserverRegistration | undefined {
+  ): ProbeRead<OperationObserverRegistration> {
     const existing = operationObservers.get(targetIdentity)
-    if (existing) return existing
-    if (options.observer?.targetDigest !== targetIdentity) return undefined
+    if (existing) return { status: 'ok', value: existing }
+    if (options.observer?.targetDigest !== targetIdentity) {
+      return { status: 'fatal' }
+    }
     return parentObserverRegistration()
   }
 
@@ -2169,10 +2172,10 @@ function createSessionRuntime(
       }
     }
     const registration = operationObserverRegistration(pinnedTargetIdentity)
-    if (!registration) return { status: 'fatal' }
+    if (registration.status !== 'ok') return registration
     return resolvePinnedObserver(
       parentObserver,
-      registration,
+      registration.value,
       pinnedTargetIdentity,
     )
   }
@@ -3065,11 +3068,14 @@ function createSessionRuntime(
       }
       batchTargetIdentity = targetIdentity
 
-      const registration = operationObserverRegistration(targetIdentity)
-      if (!registration || !options.observer) {
+      // A registration timeout is still fatal for the rollup, with the same
+      // cause as any other registration miss.
+      const registered = operationObserverRegistration(targetIdentity)
+      if (registered.status !== 'ok' || !options.observer) {
         markUnavailable(afterCause('operation-input-invalid'))
         return
       }
+      const registration = registered.value
       let validation: RegisteredWorktreeValidationResult
       try {
         validation = options.observer.validateRegisteredWorktree(
