@@ -1507,6 +1507,12 @@ interface PathEntry {
    * is in neither, that is, untracked.
    */
   readonly mode: string
+  /**
+   * A gitlink that only `HEAD` still lists, under which the index or the
+   * listings now hold ordinary files. The submodule was converted, so the
+   * historical path is a deletion and the files are observed on their own.
+   */
+  readonly displacedGitlink?: true
 }
 
 function appendPathFact(
@@ -1531,6 +1537,9 @@ function appendPathFact(
   )
   if (ancestors.status === 'error') return ancestors
   const tracked = mode !== ''
+  if (entry.displacedGitlink) {
+    return missingObservation(absolutePath, relativePath, true)
+  }
   // A gitlink inspects its own directory, so it is dispatched before the stat.
   if (mode === '160000') {
     return appendSubmoduleFact(
@@ -2056,6 +2065,30 @@ function readWorktreeListings(
   return { status: 'ok', first, stageEntries, paths }
 }
 
+/**
+ * Gitlinks that only `HEAD` lists and that now have paths beneath them. A
+ * gitlink in the index is current, so it is never displaced: a populated
+ * directory without `.git` there is still malformed.
+ */
+function findDisplacedGitlinks(
+  paths: readonly string[],
+  indexModes: ReadonlyMap<string, string>,
+  headTree: ReadonlyMap<string, HeadTreeEntry>,
+): ReadonlySet<string> {
+  const headOnly = paths.filter(
+    (entry) => !indexModes.has(entry) && headTree.get(entry)?.mode === '160000',
+  )
+  if (headOnly.length === 0) return new Set()
+  const parents = new Set<string>()
+  for (const entry of paths) {
+    const parts = entry.split('/').slice(0, -1)
+    for (let depth = 1; depth <= parts.length; depth += 1) {
+      parents.add(parts.slice(0, depth).join('/'))
+    }
+  }
+  return new Set(headOnly.filter((entry) => parents.has(entry)))
+}
+
 function readWorktreeSnapshot(
   readers: WorktreeReaders,
   context: RepositoryContext,
@@ -2096,10 +2129,13 @@ function readWorktreeSnapshot(
   const modeOf = (relativePath: string): string =>
     // Index first, then the HEAD tree; empty means not tracked at all.
     modes.get(relativePath) ?? tree.entries.get(relativePath)?.mode ?? ''
-  // Counted from the index and the HEAD tree before any submodule spawn.
+  const displacedGitlinks = findDisplacedGitlinks(paths, modes, tree.entries)
+  // Counted from the index and the HEAD tree before any submodule spawn. A
+  // displaced gitlink is never read, so it does not count.
   if (
-    paths.filter((entry) => modeOf(entry) === '160000').length >
-    limits.maxGitlinks
+    paths.filter(
+      (entry) => modeOf(entry) === '160000' && !displacedGitlinks.has(entry),
+    ).length > limits.maxGitlinks
   ) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
@@ -2113,7 +2149,13 @@ function readWorktreeSnapshot(
       hash,
       readers,
       context,
-      { relativePath, mode: modeOf(relativePath) },
+      {
+        relativePath,
+        mode: modeOf(relativePath),
+        ...(displacedGitlinks.has(relativePath)
+          ? { displacedGitlink: true as const }
+          : {}),
+      },
       limits,
       budget,
       format,

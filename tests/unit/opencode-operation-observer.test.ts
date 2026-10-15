@@ -4699,3 +4699,129 @@ describe('OpenCode operation observer bounded directory emptiness', () => {
     },
   )
 })
+
+describe('OpenCode operation observer submodule converted to ordinary files', () => {
+  test('a staged conversion stays available and keeps its digest across the commit', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      expect(runGit(fixture.root, ['rm', '--quiet', 'sub']).status).toBe(0)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'file.txt'), 'ordinary\n')
+      expect(runGit(fixture.root, ['add', 'sub/file.txt']).status).toBe(0)
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await observer.snapshot()
+      expect(before).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
+      })
+
+      const records = readWorktreeRecords(fixture.root)
+      expect(records.status).toBe('ok')
+      expect(recordFor(records, 'sub')).toEqual({
+        path: 'sub',
+        kind: 'missing',
+        mode: '',
+        id: undefined,
+      })
+      expect(recordFor(records, 'sub/file.txt')).toMatchObject({
+        kind: 'regular',
+      })
+
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'ordinary files'])
+          .status,
+      ).toBe(0)
+      const after = await observer.snapshot()
+      expect(after).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+      if (before.status !== 'available' || after.status !== 'available') return
+      expect(after.snapshot.worktreeRevisionDigest).toBe(
+        before.snapshot.worktreeRevisionDigest,
+      )
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('an untracked replacement under a HEAD-only gitlink is also displaced', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      expect(runGit(fixture.root, ['rm', '--quiet', 'sub']).status).toBe(0)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'file.txt'), 'ordinary\n')
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
+      })
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('a current gitlink with a populated directory and no .git still fails closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'gitlink']).status,
+      ).toBe(0)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'file.txt'), 'smuggled\n')
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('fails closed when an empty gitlink directory is removed before the final pass', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      const root = fs.realpathSync(fixture.root)
+      // The second `config` read is the first command of the final pass.
+      let configReads = 0
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args, _result, cwd) => {
+          if (cwd === root && args.includes('config')) {
+            configReads += 1
+            if (configReads === 2) fs.rmdirSync(path.join(root, 'sub'))
+          }
+          return undefined
+        }),
+      })
+      configReads = 0
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(configReads).toBe(2)
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+})
