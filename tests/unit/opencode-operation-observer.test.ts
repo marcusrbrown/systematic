@@ -14,6 +14,7 @@ import {
   type OperationObserverRemoteResult,
   type RemoteOperation,
   type RemoteReadbackPhase,
+  readWorktreeRecords,
   validateRegisteredWorktree,
 } from '../../src/lib/opencode-operation-observer.js'
 
@@ -2114,6 +2115,219 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
     } finally {
       fs.rmSync(unborn, { recursive: true, force: true })
       born.cleanup()
+    }
+  })
+})
+
+const CHARACTERIZATION_SCENARIOS = [
+  'regular',
+  'executable',
+  'symlink',
+  'gitlink',
+  'deleted',
+  'untracked',
+  'mixed',
+] as const
+type CharacterizationScenario = (typeof CHARACTERIZATION_SCENARIOS)[number]
+
+const DETERMINISTIC_GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_AUTHOR_NAME: 'Observer Test',
+  GIT_AUTHOR_EMAIL: 'observer@example.invalid',
+  GIT_COMMITTER_NAME: 'Observer Test',
+  GIT_COMMITTER_EMAIL: 'observer@example.invalid',
+  GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z',
+  GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z',
+}
+
+/** Creates a bare-bones repo whose commit ids are reproducible. */
+function createDeterministicSubmoduleSource(): string {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-sub-'),
+  )
+  const git = (args: readonly string[]) => {
+    const result = spawnSync('git', [...args], {
+      cwd: root,
+      env: DETERMINISTIC_GIT_ENV,
+      encoding: 'utf8',
+    })
+    if (result.status !== 0) throw new Error(`git setup failed: ${args[0]}`)
+  }
+  git(['init', '--quiet'])
+  fs.writeFileSync(path.join(root, 'sub.txt'), 'submodule\n')
+  git(['add', 'sub.txt'])
+  git(['commit', '--quiet', '-m', 'sub'])
+  return root
+}
+
+function addTracked(root: string, files: readonly string[], message: string) {
+  expect(runGit(root, ['add', ...files]).status).toBe(0)
+  expect(runGit(root, ['commit', '--quiet', '-m', message]).status).toBe(0)
+}
+
+/**
+ * Builds a fixture whose worktree digest depends only on repository content:
+ * relative symlink targets, no absolute paths, and a reproducible submodule
+ * HEAD. A gitlink is staged from a plain clone, so no `.gitmodules` (which
+ * would embed a temp path) is written.
+ */
+function buildCharacterizationFixture(scenario: CharacterizationScenario): {
+  fixture: GitFixture
+  extraCleanup: () => void
+} {
+  const fixture = createGitFixture()
+  const sources: string[] = []
+  const wants = (name: CharacterizationScenario) =>
+    scenario === name || scenario === 'mixed'
+  if (wants('regular')) {
+    fs.writeFileSync(path.join(fixture.root, 'a.txt'), 'alpha\n')
+    addTracked(fixture.root, ['a.txt'], 'regular')
+  }
+  if (wants('executable')) {
+    const script = path.join(fixture.root, 'run.sh')
+    fs.writeFileSync(script, '#!/bin/sh\necho hi\n')
+    fs.chmodSync(script, 0o755)
+    addTracked(fixture.root, ['run.sh'], 'executable')
+  }
+  if (wants('symlink')) {
+    fs.symlinkSync('tracked.txt', path.join(fixture.root, 'link'))
+    addTracked(fixture.root, ['link'], 'symlink')
+  }
+  if (wants('gitlink')) {
+    const source = createDeterministicSubmoduleSource()
+    sources.push(source)
+    const clone = spawnSync(
+      'git',
+      ['clone', '--quiet', source, path.join(fixture.root, 'submodule')],
+      { env: DETERMINISTIC_GIT_ENV, encoding: 'utf8' },
+    )
+    expect(clone.status).toBe(0)
+    addTracked(fixture.root, ['submodule'], 'gitlink')
+  }
+  if (wants('deleted')) {
+    fs.rmSync(path.join(fixture.root, 'tracked.txt'))
+  }
+  if (wants('untracked')) {
+    fs.mkdirSync(path.join(fixture.root, 'dir'))
+    fs.writeFileSync(path.join(fixture.root, 'new.txt'), 'new\n')
+    fs.writeFileSync(path.join(fixture.root, 'dir', 'nested.txt'), 'nested\n')
+  }
+  return {
+    fixture,
+    extraCleanup: () => {
+      for (const source of sources) {
+        fs.rmSync(source, { recursive: true, force: true })
+      }
+    },
+  }
+}
+
+describe('OpenCode operation observer worktree identity characterization', () => {
+  test('keeps the worktree digest value identical for every fact kind', async () => {
+    const digests: Record<string, string> = {}
+    for (const scenario of CHARACTERIZATION_SCENARIOS) {
+      const { fixture, extraCleanup } = buildCharacterizationFixture(scenario)
+      try {
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        digests[scenario] = await digestOf(observer)
+      } finally {
+        extraCleanup()
+        fixture.cleanup()
+      }
+    }
+    // Captured from the implementation before the path-record refactor.
+    expect(digests).toEqual({
+      deleted:
+        '4f8605a93ab2ce9b0a7bf04ab0f9c21c06f774ee97d3c4f73570f1b3d445924b',
+      executable:
+        'a44cc381585b37bf5b1e15053a19c8ece2c9ac4c4077113318b230b4edfd53b7',
+      gitlink:
+        '15f99f9b71763d58d1082a215a90a3fbb0dd88844b996523d41b8c8becf04da9',
+      mixed: '0a53fc712ea00443264643935d2fba0fdce681c50714ae9e219e22251a0e549b',
+      regular:
+        '83a9e1df8c8a295e580917a827585adfc2ecd0b6c8e3be3ebe5edc8d16091342',
+      symlink:
+        '5a9d20e7952a92ecc0832ed88688ad476015d8c423799ac0a58d9adcf566a371',
+      untracked:
+        '274aff7c533f3edac6bbe2afef4b3a4951bc60c83694a856fdba9e98284aa24f',
+    })
+  })
+
+  test('records kind, mode and blob id for every observed path', () => {
+    const { fixture, extraCleanup } = buildCharacterizationFixture('mixed')
+    try {
+      const result = readWorktreeRecords(fixture.root, {
+        commandRunner: (args, cwd) => runGit(cwd, args),
+      })
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      const byPath = new Map(
+        result.records.map((record) => [record.path, record]),
+      )
+
+      // Tracked records must match what git itself stored: mode and id from
+      // the index, and the same ids from the HEAD tree.
+      const staged = runGit(fixture.root, ['ls-files', '--stage', '-z'])
+      const tree = runGit(fixture.root, ['ls-tree', '-r', '-z', 'HEAD'])
+      const treeIds = new Map(
+        tree.stdout
+          .split('\0')
+          .filter(Boolean)
+          .map((entry) => {
+            const [header, entryPath] = entry.split('\t')
+            return [entryPath, header?.split(' ')[2]] as const
+          }),
+      )
+      const expected: Record<string, { kind: string; mode: string }> = {
+        'a.txt': { kind: 'regular', mode: '100644' },
+        'run.sh': { kind: 'regular', mode: '100755' },
+        link: { kind: 'symlink', mode: '120000' },
+        submodule: { kind: 'gitlink', mode: '160000' },
+      }
+      for (const entry of staged.stdout.split('\0').filter(Boolean)) {
+        const [header, entryPath] = entry.split('\t')
+        const [mode, id] = header?.split(' ') ?? []
+        if (entryPath === undefined || entryPath === 'tracked.txt') continue
+        const record = byPath.get(entryPath)
+        expect(record).toMatchObject({
+          ...expected[entryPath],
+          mode,
+          id,
+          path: entryPath,
+        })
+        expect(record?.id).toBe(treeIds.get(entryPath))
+      }
+      expect(Object.keys(expected).sort()).toEqual(
+        [...byPath.values()]
+          .filter((record) => record.id !== undefined && expected[record.path])
+          .map((record) => record.path)
+          .sort(),
+      )
+
+      // A tracked path deleted from the worktree has no content to identify.
+      expect(byPath.get('tracked.txt')).toEqual({
+        path: 'tracked.txt',
+        kind: 'missing',
+        mode: '',
+        id: undefined,
+      })
+      // Untracked files get the id git would give their raw bytes.
+      for (const untracked of ['new.txt', 'dir/nested.txt']) {
+        const hashed = runGit(fixture.root, ['hash-object', untracked])
+        expect(byPath.get(untracked)).toEqual({
+          path: untracked,
+          kind: 'regular',
+          mode: '100644',
+          id: hashed.stdout.trim(),
+        })
+      }
+    } finally {
+      extraCleanup()
+      fixture.cleanup()
     }
   })
 })
