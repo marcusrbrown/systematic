@@ -2019,6 +2019,11 @@ function createSessionRuntime(
   // different unit, and a same-unit redeclaration keeps it. Runtime-only:
   // never persisted, and never part of the core status, markers, or receipts.
   let snapshotBlockRecord: SnapshotBlockRecord | undefined
+  // Monotonic and never reset: bumped on every unit start, and whenever the
+  // snapshot block record is set, cleared, or dropped. A snapshot that began
+  // under another version was overtaken, even if the record looks the same
+  // (set and cleared again) when it returns.
+  let snapshotBlockVersion = 0
   // Incremented on every successful unit start or declaration (see
   // `startFreshUnit`); operations capture it to prove they are still current.
   let unitStartGeneration = 0
@@ -2035,6 +2040,7 @@ function createSessionRuntime(
     const result = requireGuard().startUnit(input, policy)
     if (result.status === 'started') {
       unitStartGeneration += 1
+      snapshotBlockVersion += 1
       firstUnavailableCause = undefined
       // A redeclaration of the same unit keeps its runtime records; only a
       // different unit starts with none.
@@ -3344,6 +3350,7 @@ function createSessionRuntime(
     const effective = lookup.value
     // Captured in the same synchronous segment as the snapshot call.
     const blockCapture = captureSnapshotBlock()
+    const blockVersion = snapshotBlockVersion
     const generation = unitStartGeneration
     const read = await readSnapshot(
       effective.observer,
@@ -3355,7 +3362,12 @@ function createSessionRuntime(
     if (read.status === 'fatal') {
       return blockOrFailRefresh(read.reasonCode, effective, generation)
     }
-    return applyRefreshSnapshot(effective, read.value, blockCapture)
+    return applyRefreshSnapshot(
+      effective,
+      read.value,
+      blockCapture,
+      blockVersion,
+    )
   }
 
   // A blocking reason blocks the unit and skips the remote probes, as a
@@ -3377,15 +3389,19 @@ function createSessionRuntime(
   // A clean snapshot while blocked clears the block through the shared
   // commit, which applies the local readback. The remote probes then run
   // against that snapshot without applying the local readback a second time.
-  // A snapshot the block overtook applies and probes nothing: either its clear
-  // came back stale (the block or unit changed while it was in flight), or no
-  // block was captured at its start and one has been set since. Its probes are
+  // A snapshot the block overtook applies and probes nothing: the block
+  // changed, or a unit started, while it was in flight (`blockVersion`), or its
+  // clear came back stale because the unit's target moved. Its probes are
   // reported as skipped, so none looks verified.
   async function applyRefreshSnapshot(
     effective: EffectiveOperationObserver,
     snapshot: OperationObserverSnapshot,
     blockCapture: SnapshotBlockCapture | undefined,
+    blockVersion: number,
   ): Promise<readonly UnconfirmedReadback[]> {
+    const skipped = (): readonly UnconfirmedReadback[] =>
+      skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
+    if (snapshotBlockVersion !== blockVersion) return skipped()
     const cleared = blockCapture
       ? commitSnapshotBlockClear(
           blockCapture,
@@ -3395,12 +3411,7 @@ function createSessionRuntime(
         )
       : undefined
     if (cleared?.status === 'fatal') return []
-    const overtaken = cleared
-      ? cleared.status === 'stale'
-      : currentSnapshotBlock() !== undefined
-    if (overtaken) {
-      return skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
-    }
+    if (cleared?.status === 'stale') return skipped()
     return applyReadbackAndProbeRemote(
       effective,
       snapshot,
@@ -4558,6 +4569,13 @@ function createSessionRuntime(
     }
   }
 
+  // The only way the record changes after a unit starts: every set, clear, and
+  // drop bumps the version.
+  function writeSnapshotBlock(record: SnapshotBlockRecord | undefined): void {
+    snapshotBlockRecord = record
+    snapshotBlockVersion += 1
+  }
+
   // A record left by another unit is never returned. A record of a target that
   // is no longer the unit's effective target (the unit pinned to a worktree
   // after the block was set) is dropped here, the one place it is noticed:
@@ -4568,7 +4586,7 @@ function createSessionRuntime(
     const status = requireGuard().status()
     if (record.unitId !== status.unit?.unitId) return undefined
     if (record.targetIdentity !== currentEffectiveTargetIdentity()) {
-      snapshotBlockRecord = undefined
+      writeSnapshotBlock(undefined)
       return undefined
     }
     return record
@@ -4607,12 +4625,12 @@ function createSessionRuntime(
     ) {
       return false
     }
-    snapshotBlockRecord = {
+    writeSnapshotBlock({
       unitId,
       unitGeneration: unitStartGeneration,
       targetIdentity,
       reasonCode,
-    }
+    })
     return true
   }
 
@@ -4714,7 +4732,7 @@ function createSessionRuntime(
       markUnavailable(failureCause())
       return { status: 'fatal' }
     }
-    snapshotBlockRecord = undefined
+    writeSnapshotBlock(undefined)
     return { status: 'cleared' }
   }
 

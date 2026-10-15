@@ -18441,6 +18441,9 @@ describe('snapshot block record', () => {
       function expectObsoleteSnapshotIgnored(
         fixture: Awaited<ReturnType<typeof evidencedPushAdapter>>,
         released: Awaited<ReturnType<typeof releaseObsoleteStatusSnapshot>>,
+        finalBlock:
+          | { readonly reasonCode: (typeof BLOCKING_REASONS)[number] }
+          | undefined,
       ): void {
         const { adapter, steered, satisfied } = fixture
         expect(status(adapter).satisfiedOperations).toEqual(satisfied)
@@ -18450,9 +18453,7 @@ describe('snapshot block record', () => {
           { probe: 'push', reasonCode: 'command-timeout' },
         ])
         expect(status(adapter).state).not.toBe('unavailable')
-        expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
-          reasonCode: 'worktree-unstable',
-        })
+        expect(adapter.snapshotBlock(SESSION_A).current()).toEqual(finalBlock)
       }
 
       test('an obsolete status snapshot applies no readback and probes no remote, and is listed as unconfirmed', async () => {
@@ -18472,7 +18473,9 @@ describe('snapshot block record', () => {
           },
         )
 
-        expectObsoleteSnapshotIgnored(fixture, released)
+        expectObsoleteSnapshotIgnored(fixture, released, {
+          reasonCode: 'worktree-unstable',
+        })
       })
 
       test('a status snapshot taken with no block, overtaken by a block set meanwhile, applies no readback and probes no remote', async () => {
@@ -18492,7 +18495,32 @@ describe('snapshot block record', () => {
           },
         )
 
-        expectObsoleteSnapshotIgnored(fixture, released)
+        expectObsoleteSnapshotIgnored(fixture, released, {
+          reasonCode: 'worktree-unstable',
+        })
+      })
+
+      test('a status snapshot taken with no block, then a block set and cleared before it returns, applies no readback and probes no remote', async () => {
+        const fixture = await evidencedPushAdapter()
+        const { adapter, steered } = fixture
+
+        // By the time the held snapshot returns, the unit is unblocked again:
+        // the block that came and went is the only trace.
+        const released = await releaseObsoleteStatusSnapshot(
+          fixture,
+          async () => {
+            steered.queueSnapshot(failing('file-limit'))
+            await operate(adapter, 'set-then-cleared')
+            expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+              reasonCode: 'file-limit',
+            })
+            // A clean read at the receipts' own revision clears the block.
+            expect((await refreshStatus(adapter)).snapshotBlock).toBeUndefined()
+            expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+          },
+        )
+
+        expectObsoleteSnapshotIgnored(fixture, released, undefined)
       })
 
       test.each([...FATAL_READBACK_REASONS])(
