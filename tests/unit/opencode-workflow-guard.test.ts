@@ -369,7 +369,8 @@ function remoteAvailable(
 
 // A status read refreshes the unit's readback, and a clean refresh clears a
 // snapshot block. These maps let a test queue the observer's next local
-// snapshot for the adapter it built, so a status read can keep a block.
+// snapshot for an adapter built by `createAdapter`, so a status read can keep
+// a block.
 interface SnapshotQueue {
   queueSnapshot(next: OpencodeOperationObserver): void
 }
@@ -383,18 +384,23 @@ function createAdapter(
   runtimeRequiredOperations: readonly ReceiptOperation[] = [],
   observations?: ReceiptOperationObservation[],
   hostReadback?: OpencodeWorkflowHostReadback,
-  sharedRecovery = false,
+  sharedRecovery:
+    | boolean
+    | {
+        readonly registrationIdentity: string
+        readonly sessionSalt: Uint8Array
+      } = false,
 ): OpencodeWorkflowGuard {
   const classifier = createReceiptClassifier()
   const adapter = createOpencodeWorkflowGuard({
     config: { mode, debug },
     ...(observer ? OPERATION_SCOPE : SCOPE),
-    ...(sharedRecovery
+    ...(sharedRecovery === true
       ? {
           registrationIdentity: 'adapter-test-registration',
           sessionSalt: new Uint8Array(32).fill(7),
         }
-      : {}),
+      : sharedRecovery || {}),
     ...(observer
       ? {
           observer,
@@ -11841,7 +11847,8 @@ describe('OpenCode workflow guard adapter', () => {
       )
 
       expect(contentOutput.output).toContain('stale-receipt')
-      expect(status(setup.adapter).state).not.toBe('unavailable')
+      expect(status(setup.adapter).state).toBe('rejected')
+      expect(status(setup.adapter).reasonCode).toBe('stale-receipt')
       expect(status(setup.adapter).unit?.status).toBe('active')
       expect(
         ledger(setup.adapter)
@@ -11907,7 +11914,8 @@ describe('OpenCode workflow guard adapter', () => {
       const output = await completeUnit(setup.adapter, 'head-drift-completion')
 
       expect(output.output).toContain('stale-receipt')
-      expect(status(setup.adapter).state).not.toBe('unavailable')
+      expect(status(setup.adapter).state).toBe('rejected')
+      expect(status(setup.adapter).reasonCode).toBe('stale-receipt')
       expect(status(setup.adapter).satisfiedOperations).toEqual([
         'implementation',
         'verification',
@@ -11972,8 +11980,14 @@ describe('OpenCode workflow guard adapter', () => {
 
       const output = await completeUnit(adapter, 'acquisition-drift-completion')
 
-      expect(output.output).toContain('snapshot-blocked')
-      expect(status(adapter).state).not.toBe('unavailable')
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'snapshot-blocked',
+      })
+      expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+        reasonCode: 'worktree-unstable',
+      })
+      expect(status(adapter).state).toBe('protected')
       expect(status(adapter).unit?.status).toBe('active')
       expect(
         ledger(adapter)
@@ -15979,7 +15993,8 @@ function expectStaleCompletion(
     target: 'unit',
     reasonCode: 'stale-receipt',
   })
-  expect(status(repo.adapter).state).not.toBe('unavailable')
+  expect(status(repo.adapter).state).toBe('rejected')
+  expect(status(repo.adapter).reasonCode).toBe('stale-receipt')
   expect(status(repo.adapter).unit?.status).toBe('active')
   expect(
     ledger(repo.adapter)
@@ -16266,13 +16281,19 @@ describe('snapshot block record', () => {
   }
 
   // A status read that leaves an existing block in place: the refresh's own
-  // snapshot is blocked for the same reason.
-  async function statusJson(
+  // snapshot is blocked for the same reason. The adapter must come from
+  // `createAdapter` with a scripted observer, or there is no way to block it.
+  async function statusKeepingBlock(
     adapter: OpencodeWorkflowGuard,
   ): Promise<Record<string, unknown>> {
     const block = adapter.snapshotBlock(SESSION_A).current()
-    const queue = queueByAdapter.get(adapter)
-    if (block && queue) {
+    if (block) {
+      const queue = queueByAdapter.get(adapter)
+      if (!queue) {
+        throw new Error(
+          'statusKeepingBlock needs an adapter with a scripted observer',
+        )
+      }
       queue.queueSnapshot(sequenceObserver([unavailableStep(block.reasonCode)]))
     }
     return refreshStatus(adapter)
@@ -16320,13 +16341,13 @@ describe('snapshot block record', () => {
   test('status reports no snapshot block, and markers carry nothing, until one is recorded', async () => {
     const adapter = await activeAdapter()
     const markersBefore = await markerText(adapter)
-    const before = await statusJson(adapter)
+    const before = await statusKeepingBlock(adapter)
     expect(before.snapshotBlock).toBeUndefined()
     expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
 
     expect(adapter.snapshotBlock(SESSION_A).set('file-limit')).toBe(true)
 
-    const after = await statusJson(adapter)
+    const after = await statusKeepingBlock(adapter)
     expect(after.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
     // A block is a status-only field: markers and the core status stay as
     // they were, and no core status or marker names it.
@@ -16420,7 +16441,7 @@ describe('snapshot block record', () => {
     async ({ state, build }) => {
       const adapter = await build()
       expect(status(adapter).state).toBe(state)
-      expect((await statusJson(adapter)).snapshotBlock).toEqual({
+      expect((await statusKeepingBlock(adapter)).snapshotBlock).toEqual({
         reasonCode: 'file-limit',
       })
     },
@@ -16429,7 +16450,7 @@ describe('snapshot block record', () => {
   test('a block with no active unit is not recorded', async () => {
     const adapter = createAdapter('observe', false, steeredObserver().observer)
     expect(adapter.snapshotBlock(SESSION_A).set('file-limit')).toBe(false)
-    expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+    expect((await statusKeepingBlock(adapter)).snapshotBlock).toBeUndefined()
   })
 
   test('a later block replaces the reason that status reports', async () => {
@@ -16437,7 +16458,7 @@ describe('snapshot block record', () => {
     const controls = adapter.snapshotBlock(SESSION_A)
     controls.set('file-limit')
     controls.set('worktree-unstable')
-    expect((await statusJson(adapter)).snapshotBlock).toEqual({
+    expect((await statusKeepingBlock(adapter)).snapshotBlock).toEqual({
       reasonCode: 'worktree-unstable',
     })
   })
@@ -16448,7 +16469,7 @@ describe('snapshot block record', () => {
     await activateWorkEpoch(adapter)
     const unitId = status(adapter).unit?.unitId
     adapter.snapshotBlock(SESSION_A).set('file-limit')
-    expect((await statusJson(adapter)).seedDeferrals).toEqual([
+    expect((await statusKeepingBlock(adapter)).seedDeferrals).toEqual([
       { operation: 'push', reasonCode: 'command-timeout' },
     ])
 
@@ -16459,7 +16480,7 @@ describe('snapshot block record', () => {
     ).toMatchObject({ status: 'started' })
 
     expect(status(adapter).unit?.unitId).toBe(unitId)
-    const parsed = await statusJson(adapter)
+    const parsed = await statusKeepingBlock(adapter)
     expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
     expect(parsed.seedDeferrals).toEqual([
       { operation: 'push', reasonCode: 'command-timeout' },
@@ -16471,16 +16492,32 @@ describe('snapshot block record', () => {
     const firstUnitId = status(adapter).unit?.unitId
     mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
     mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
-    adapter.snapshotBlock(SESSION_A).set('file-limit')
     await completeUnit(adapter, 'block-reset-complete')
     expect(status(adapter).unit?.status).toBe('completed')
+    // A completion clears any block, so the block is set after it: the old
+    // unit still has an id, and the new unit must not inherit the record.
+    const controls = adapter.snapshotBlock(SESSION_A)
+    expect(controls.set('file-limit')).toBe(true)
+    expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
 
     expect(adapter.startUnit(SESSION_A, {})).toMatchObject({
       status: 'started',
     })
 
     expect(status(adapter).unit?.unitId).not.toBe(firstUnitId)
-    expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+    expect((await statusKeepingBlock(adapter)).snapshotBlock).toBeUndefined()
+    expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+  })
+
+  test('an invalid session ID gets inert controls that record and clear nothing', async () => {
+    const adapter = await activeAdapter()
+
+    for (const invalid of [undefined, 42, '', 'x'.repeat(257)]) {
+      const controls = adapter.snapshotBlock(invalid)
+      expect(controls.set('file-limit')).toBe(false)
+      expect(controls.current()).toBeUndefined()
+      expect(await controls.clear()).toEqual({ status: 'not-blocked' })
+    }
     expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
   })
 
@@ -16497,7 +16534,7 @@ describe('snapshot block record', () => {
       expect(await controls.clear()).toEqual({ status: 'cleared' })
 
       expect(controls.current()).toBeUndefined()
-      expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+      expect((await statusKeepingBlock(adapter)).snapshotBlock).toBeUndefined()
       expect(status(adapter).satisfiedOperations).not.toContain(
         'implementation',
       )
@@ -16561,7 +16598,7 @@ describe('snapshot block record', () => {
       expect(await controls.clear()).toEqual({ status: 'cleared' })
       expect(steered.remoteCalls()).toBe(baseline)
 
-      await statusJson(adapter)
+      await statusKeepingBlock(adapter)
       expect(steered.remoteCalls()).toBeGreaterThan(baseline)
     })
 
@@ -16799,7 +16836,7 @@ describe('snapshot block record', () => {
         expect(status(adapter).epoch?.epochId).toBe(before.epoch?.epochId)
         expect(status(adapter).unit?.unitId).toBe(before.unit?.unitId)
         expect(ledger(adapter).listReceipts()).toHaveLength(0)
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.snapshotBlock).toEqual({ reasonCode })
         expect(parsed.firstUnavailableCause).toBeUndefined()
       },
@@ -16819,7 +16856,7 @@ describe('snapshot block record', () => {
       await operate(adapter, 'clean-after-fix')
 
       expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
-      expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+      expect((await statusKeepingBlock(adapter)).snapshotBlock).toBeUndefined()
       expect(status(adapter).state).not.toBe('unavailable')
       expect(status(adapter).reasonCode).toBe('stale-receipt')
       expect(status(adapter).missingOperations).toContain('implementation')
@@ -16904,7 +16941,7 @@ describe('snapshot block record', () => {
       )
       expect(status(adapter).state).not.toBe('unavailable')
       expect(ledger(adapter).listReceipts()).toHaveLength(0)
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.snapshotBlock).toBeUndefined()
       expect(parsed.firstUnavailableCause).toBeUndefined()
     })
@@ -16947,7 +16984,7 @@ describe('snapshot block record', () => {
       for (const [index, reasonCode] of BLOCKING_REASONS.entries()) {
         steered.queueSnapshot(failing(reasonCode))
         await operate(adapter, `streak-${index}`)
-        expect((await statusJson(adapter)).snapshotBlock).toEqual({
+        expect((await statusKeepingBlock(adapter)).snapshotBlock).toEqual({
           reasonCode,
         })
       }
@@ -16963,7 +17000,7 @@ describe('snapshot block record', () => {
         await operate(adapter, `fatal-${reasonCode}`)
 
         expect(status(adapter).state).toBe('unavailable')
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.firstUnavailableCause).toEqual({
           site: 'tool-before',
           kind: 'local-snapshot-unavailable',
@@ -16987,7 +17024,7 @@ describe('snapshot block record', () => {
       await operate(adapter, 'fatal-throws')
 
       expect(status(adapter).state).toBe('unavailable')
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.firstUnavailableCause).toMatchObject({
         site: 'tool-before',
         kind: 'local-snapshot-error',
@@ -17002,7 +17039,7 @@ describe('snapshot block record', () => {
       await operate(adapter, 'blocked-first')
       steered.queueSnapshot(failing('target-unavailable'))
       await operate(adapter, 'fatal-while-blocked')
-      const first = (await statusJson(adapter)).firstUnavailableCause
+      const first = (await statusKeepingBlock(adapter)).firstUnavailableCause
       expect(first).toEqual({
         site: 'tool-before',
         kind: 'local-snapshot-unavailable',
@@ -17012,7 +17049,9 @@ describe('snapshot block record', () => {
 
       steered.queueSnapshot(failing('command-failed'))
       await operate(adapter, 'fatal-later')
-      expect((await statusJson(adapter)).firstUnavailableCause).toEqual(first)
+      expect((await statusKeepingBlock(adapter)).firstUnavailableCause).toEqual(
+        first,
+      )
     })
 
     describe('across targets', () => {
@@ -17145,7 +17184,7 @@ describe('snapshot block record', () => {
         expect(status(adapter).state).not.toBe('unavailable')
         expect(status(adapter).unit?.unitId).toBe(unitId)
         expect(ledger(adapter).listReceipts()).toHaveLength(0)
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.snapshotBlock).toEqual({ reasonCode })
         expect(parsed.firstUnavailableCause).toBeUndefined()
       },
@@ -17165,7 +17204,7 @@ describe('snapshot block record', () => {
       await finishCall(adapter, 'pending-write', { tool: 'write' }, write)
 
       expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
-      expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+      expect((await statusKeepingBlock(adapter)).snapshotBlock).toBeUndefined()
       expect(
         ledger(adapter)
           .listReceipts()
@@ -17224,7 +17263,7 @@ describe('snapshot block record', () => {
         await finishCall(adapter, `after-fatal-${reasonCode}`)
 
         expect(status(adapter).state).toBe('unavailable')
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.firstUnavailableCause).toEqual({
           site: 'tool-after',
           kind: 'local-snapshot-unavailable',
@@ -17249,7 +17288,9 @@ describe('snapshot block record', () => {
       await finishCall(adapter, 'after-throws')
 
       expect(status(adapter).state).toBe('unavailable')
-      expect((await statusJson(adapter)).firstUnavailableCause).toMatchObject({
+      expect(
+        (await statusKeepingBlock(adapter)).firstUnavailableCause,
+      ).toMatchObject({
         site: 'tool-after',
         kind: 'local-snapshot-error',
       })
@@ -17361,14 +17402,13 @@ describe('snapshot block record', () => {
     async function parentTargetAdapter(
       steered: SteeredObserver,
     ): Promise<OpencodeWorkflowGuard> {
-      const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe', debug: false },
-        ...OPERATION_SCOPE,
-        registrationIdentity: ROLLUP_REGISTRATION,
-        sessionSalt: ROLLUP_SALT,
-        observer: steered.observer,
-        classifier: createReceiptClassifier(),
-        hostReadback: {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        steered.observer,
+        [],
+        undefined,
+        {
           readSessionParts: async (sessionID) =>
             sessionID === SESSION_A ? [] : partsOf(PARENT_CHILD_MARKERS),
           listChildren: async (sessionID) =>
@@ -17376,8 +17416,8 @@ describe('snapshot block record', () => {
               ? [{ sessionId: CHILD_SESSION, parentID: SESSION_A }]
               : [],
         },
-      })
-      queueByAdapter.set(adapter, steered)
+        { registrationIdentity: ROLLUP_REGISTRATION, sessionSalt: ROLLUP_SALT },
+      )
       await activateWorkEpoch(adapter)
       return adapter
     }
@@ -17438,7 +17478,7 @@ describe('snapshot block record', () => {
         expect(
           metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
         ).toBeUndefined()
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.snapshotBlock).toEqual({ reasonCode })
         expect(parsed.firstUnavailableCause).toBeUndefined()
       },
@@ -17496,7 +17536,7 @@ describe('snapshot block record', () => {
         await rollup(adapter)
 
         expect(status(adapter).state).toBe('unavailable')
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.firstUnavailableCause).toEqual({
           site: 'tool-after',
           kind: 'local-snapshot-unavailable',
@@ -17658,7 +17698,7 @@ describe('snapshot block record', () => {
       expect(status(adapter).state).not.toBe('unavailable')
       expect(status(adapter).epoch?.status).toBe('active')
       expect(steered.remoteCalls()).toBe(0)
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.firstUnavailableCause).toBeUndefined()
       expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
       expect(parsed.seedDeferrals).toEqual([
@@ -17668,7 +17708,7 @@ describe('snapshot block record', () => {
       await pushOperation(adapter, 'push-after-fix')
 
       expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
-      expect((await statusJson(adapter)).seedDeferrals).toBeUndefined()
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toBeUndefined()
       expect(status(adapter).satisfiedOperations).toContain('push')
       expect(receiptOperations(adapter)).toContain('push')
     })
@@ -17681,7 +17721,7 @@ describe('snapshot block record', () => {
         'push:before': [TIMEOUT, remoteAvailable(D, E)],
       })
       await activateWorkEpoch(adapter)
-      expect((await statusJson(adapter)).seedDeferrals).toEqual([
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toEqual([
         { operation: 'push', reasonCode: 'command-timeout' },
       ])
       const unitId = status(adapter).unit?.unitId
@@ -17691,7 +17731,7 @@ describe('snapshot block record', () => {
 
       expect(status(adapter).unit?.unitId).toBe(unitId)
       expect(status(adapter).state).not.toBe('unavailable')
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.firstUnavailableCause).toBeUndefined()
       expect(parsed.snapshotBlock).toEqual({
         reasonCode: 'command-output-limit',
@@ -17720,7 +17760,7 @@ describe('snapshot block record', () => {
       expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
         reasonCode: 'file-limit',
       })
-      expect((await statusJson(adapter)).seedDeferrals).toEqual([
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toEqual([
         { operation: 'push', reasonCode: 'snapshot-blocked' },
       ])
     })
@@ -17731,7 +17771,7 @@ describe('snapshot block record', () => {
         'push:before': [TIMEOUT],
       })
       await activateWorkEpoch(adapter)
-      expect((await statusJson(adapter)).seedDeferrals).toEqual([
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toEqual([
         { operation: 'push', reasonCode: 'command-timeout' },
       ])
       steered.queueSnapshot(failing('file-limit'))
@@ -17741,7 +17781,7 @@ describe('snapshot block record', () => {
       })
 
       expect(status(adapter).state).not.toBe('unavailable')
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.snapshotBlock).toEqual({ reasonCode: 'file-limit' })
       expect(parsed.seedDeferrals).toBeUndefined()
     })
@@ -17757,7 +17797,7 @@ describe('snapshot block record', () => {
 
       expect(status(adapter).unit?.unitId).toBe(unitId)
       expect(status(adapter).state).not.toBe('unavailable')
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.snapshotBlock).toEqual({ reasonCode: 'worktree-unstable' })
       expect(parsed.seedDeferrals).toEqual([
         { operation: 'push', reasonCode: 'snapshot-blocked' },
@@ -17798,7 +17838,7 @@ describe('snapshot block record', () => {
 
       expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
       expect(status(adapter).state).not.toBe('unavailable')
-      expect((await statusJson(adapter)).seedDeferrals).toBeUndefined()
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toBeUndefined()
     })
 
     test.each([...FATAL_SEED_REASONS])(
@@ -17810,7 +17850,7 @@ describe('snapshot block record', () => {
         await activateWorkEpoch(adapter)
 
         expect(status(adapter).state).toBe('unavailable')
-        const parsed = await statusJson(adapter)
+        const parsed = await statusKeepingBlock(adapter)
         expect(parsed.firstUnavailableCause).toEqual({
           site: 'seed-remote-scopes',
           kind: 'local-snapshot-unavailable',
@@ -17834,7 +17874,7 @@ describe('snapshot block record', () => {
       await activateWorkEpoch(adapter)
 
       expect(status(adapter).state).toBe('unavailable')
-      const parsed = await statusJson(adapter)
+      const parsed = await statusKeepingBlock(adapter)
       expect(parsed.firstUnavailableCause).toMatchObject({
         site: 'seed-remote-scopes',
         kind: 'local-snapshot-error',
@@ -17861,7 +17901,7 @@ describe('snapshot block record', () => {
         ledger(adapter).listReceipts(),
         status(adapter),
       ])
-      expect((await statusJson(adapter)).seedDeferrals).toBeDefined()
+      expect((await statusKeepingBlock(adapter)).seedDeferrals).toBeDefined()
       expect(everything).not.toContain('snapshot-blocked')
       expect(everything).not.toContain('seedDeferrals')
     })
@@ -18188,7 +18228,7 @@ describe('snapshot block record', () => {
           expect(status(adapter).state).toBe('unavailable')
           expect(outcomeOf(output)).toMatchObject({ status: 'unavailable' })
           expect(
-            (await statusJson(adapter)).firstUnavailableCause,
+            (await statusKeepingBlock(adapter)).firstUnavailableCause,
           ).toMatchObject({
             site: 'complete-readback',
             kind: 'observer-readback-failed',
@@ -18381,9 +18421,9 @@ describe('snapshot block record', () => {
               'implementation',
             )
             expect(consumedReceipts(adapter)).toBe(0)
-            expect((await statusJson(adapter)).firstUnavailableCause).toBe(
-              undefined,
-            )
+            expect(
+              (await statusKeepingBlock(adapter)).firstUnavailableCause,
+            ).toBe(undefined)
           },
         )
 
@@ -18445,7 +18485,9 @@ describe('snapshot block record', () => {
             status: 'rejected',
             reasonCode: 'abandoned-transition',
           })
-          expect((await statusJson(adapter)).firstUnavailableCause).toEqual({
+          expect(
+            (await statusKeepingBlock(adapter)).firstUnavailableCause,
+          ).toEqual({
             site: 'tool-before',
             kind: 'local-snapshot-unavailable',
             reasonCode: 'target-unavailable',

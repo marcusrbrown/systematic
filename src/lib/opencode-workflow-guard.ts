@@ -637,6 +637,20 @@ export interface SnapshotBlockControls {
   clear(): Promise<SnapshotBlockClearResult>
 }
 
+// Builds the cause a failed local snapshot commits when it is fatal. A missing
+// reason code (a throw, or a pure mismatch) is an error; any other reason is
+// the observer being unavailable.
+type SnapshotBlockFailureCause = (
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+) => GuardUnavailableCause
+
+// What an invalid session ID gets from the seam: nothing is ever recorded.
+const INERT_SNAPSHOT_BLOCK: SnapshotBlockControls = {
+  set: () => false,
+  current: () => undefined,
+  clear: async () => ({ status: 'not-blocked' }),
+}
+
 interface SeedDeferral {
   readonly operation: RemoteOperation
   readonly reasonCode: SeedDeferralReason
@@ -735,6 +749,34 @@ function afterCause(
   reasonCode?: GuardUnavailableCause['reasonCode'],
 ): GuardUnavailableCause {
   return hookCause('tool-after', kind, reasonCode)
+}
+
+type GuardCauseBuilder = (
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+) => GuardUnavailableCause
+
+// The one mapping from a failed local snapshot to its cause, for a hook site:
+// pass `beforeCause`, `afterCause`, or `seedCause`.
+function snapshotFailureCause(
+  build: GuardCauseBuilder,
+): SnapshotBlockFailureCause {
+  return (reasonCode) =>
+    reasonCode === undefined
+      ? build('local-snapshot-error')
+      : build('local-snapshot-unavailable', reasonCode)
+}
+
+function seedCause(
+  kind: GuardUnavailableCauseKind,
+  reasonCode?: GuardUnavailableCause['reasonCode'],
+): GuardUnavailableCause {
+  return {
+    site: 'seed-remote-scopes',
+    kind,
+    ...(reasonCode !== undefined ? { reasonCode } : {}),
+    timedOut: reasonCode === 'command-timeout',
+  }
 }
 
 function afterFailure(
@@ -3001,7 +3043,6 @@ function createSessionRuntime(
         rollupGeneration,
       )
       if (targetRead.kind === 'halt') return
-      const targetResult = targetRead
       if (targetRead.blockCapture) {
         blockClear = {
           capture: targetRead.blockCapture,
@@ -3024,11 +3065,11 @@ function createSessionRuntime(
 
       const expectedRepository = childLedger.digestIdentity(
         'repository',
-        targetResult.snapshot.repositoryRevisionDigest,
+        targetRead.snapshot.repositoryRevisionDigest,
       )
       const expectedWorktree = childLedger.digestIdentity(
         'worktree',
-        targetResult.snapshot.worktreeRevisionDigest,
+        targetRead.snapshot.worktreeRevisionDigest,
       )
       if (
         childReceipt.canonical.repositoryDigest !== expectedRepository ||
@@ -3042,7 +3083,7 @@ function createSessionRuntime(
       }
       candidates.push({
         receipt: childReceipt,
-        snapshot: targetResult.snapshot,
+        snapshot: targetRead.snapshot,
         before: recoveredContext?.before,
       })
     }
@@ -3099,12 +3140,9 @@ function createSessionRuntime(
     if (blockClear) {
       commitSnapshotBlockClear(
         blockClear.capture,
-        {
-          targetIdentity: blockClear.targetIdentity,
-          pinned: blockClear.targetIdentity !== options.workspaceIdentity,
-        },
+        readbackTarget(blockClear.targetIdentity),
         blockClear.snapshot,
-        afterSnapshotFailureCause,
+        snapshotFailureCause(afterCause),
       )
     }
   }
@@ -3323,7 +3361,7 @@ function createSessionRuntime(
           blockCapture,
           effective,
           snapshot,
-          refreshFailureCause,
+          observerReadbackFailedCause,
         )
       : undefined
     if (cleared?.status === 'fatal') return []
@@ -3333,9 +3371,6 @@ function createSessionRuntime(
       cleared?.status === 'cleared',
     )
   }
-
-  const refreshFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
-    observerReadbackFailedCause(reasonCode)
 
   async function applyReadbackAndProbeRemote(
     effective: EffectiveOperationObserver,
@@ -3845,11 +3880,6 @@ function createSessionRuntime(
     | { readonly kind: 'skip' }
     | { readonly kind: 'stop' }
 
-  const beforeSnapshotFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
-    reasonCode === undefined
-      ? beforeCause('local-snapshot-error')
-      : beforeCause('local-snapshot-unavailable', reasonCode)
-
   function isEffectiveTarget(observer: OpencodeOperationObserver): boolean {
     return observer.targetDigest === currentEffectiveTargetIdentity()
   }
@@ -3912,12 +3942,9 @@ function createSessionRuntime(
   ): BeforeSnapshotOutcome {
     const cleared = commitSnapshotBlockClear(
       capture,
-      {
-        targetIdentity: observer.targetDigest,
-        pinned: observer.targetDigest !== options.workspaceIdentity,
-      },
+      readbackTarget(observer.targetDigest),
       snapshot,
-      beforeSnapshotFailureCause,
+      snapshotFailureCause(beforeCause),
     )
     if (cleared.status === 'fatal') return { kind: 'stop' }
     return cleared.status === 'cleared'
@@ -3964,7 +3991,7 @@ function createSessionRuntime(
     }
     const result = await clearSnapshotBlock(
       lookup.value,
-      beforeSnapshotFailureCause,
+      snapshotFailureCause(beforeCause),
     )
     return settleOtherTargetClear(
       result,
@@ -4289,17 +4316,9 @@ function createSessionRuntime(
     | { readonly kind: 'fatal'; readonly cause: GuardUnavailableCause }
 
   function seedLookupCause(failure: ProbeFailure): GuardUnavailableCause {
-    const reasonCode =
-      failure.status === 'timeout' ? 'command-timeout' : failure.reasonCode
-    return {
-      site: 'seed-remote-scopes',
-      kind:
-        reasonCode === undefined
-          ? 'local-snapshot-error'
-          : 'local-snapshot-unavailable',
-      ...(reasonCode === undefined ? {} : { reasonCode }),
-      timedOut: reasonCode === 'command-timeout',
-    }
+    return snapshotFailureCause(seedCause)(
+      failure.status === 'timeout' ? 'command-timeout' : failure.reasonCode,
+    )
   }
 
   // A blocking reason is not fatal: it blocks the unit instead.
@@ -4310,14 +4329,7 @@ function createSessionRuntime(
     try {
       local = await observer.snapshot()
     } catch {
-      return {
-        kind: 'fatal',
-        cause: {
-          site: 'seed-remote-scopes',
-          kind: 'local-snapshot-error',
-          timedOut: false,
-        },
-      }
+      return { kind: 'fatal', cause: seedCause('local-snapshot-error') }
     }
     if (local.status === 'available') {
       return { kind: 'snapshot', snapshot: local.snapshot }
@@ -4327,12 +4339,7 @@ function createSessionRuntime(
     }
     return {
       kind: 'fatal',
-      cause: {
-        site: 'seed-remote-scopes',
-        kind: 'local-snapshot-unavailable',
-        reasonCode: local.reasonCode,
-        timedOut: local.reasonCode === 'command-timeout',
-      },
+      cause: snapshotFailureCause(seedCause)(local.reasonCode),
     }
   }
 
@@ -4521,6 +4528,17 @@ function createSessionRuntime(
     )
   }
 
+  // The target of a readback for an identity: pinned unless it is the parent
+  // checkout. The same rule as `resolveEffectiveObserver`.
+  function readbackTarget(
+    targetIdentity: string,
+  ): Pick<EffectiveOperationObserver, 'targetIdentity' | 'pinned'> {
+    return {
+      targetIdentity,
+      pinned: targetIdentity !== options.workspaceIdentity,
+    }
+  }
+
   // A record left by another unit is never returned.
   function currentSnapshotBlock(): SnapshotBlockRecord | undefined {
     const unitId = requireGuard().status().unit?.unitId
@@ -4567,10 +4585,6 @@ function createSessionRuntime(
       currentEffectiveTargetIdentity() === snapshotTargetIdentity
     )
   }
-
-  type SnapshotBlockFailureCause = (
-    reasonCode?: GuardUnavailableCause['reasonCode'],
-  ) => GuardUnavailableCause
 
   // Clears the unit's block with a clean local snapshot of its effective
   // target. The record and generation are captured in the same synchronous
@@ -5523,11 +5537,6 @@ function createSessionRuntime(
     return undefined
   }
 
-  const afterSnapshotFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
-    reasonCode === undefined
-      ? afterCause('local-snapshot-error')
-      : afterCause('local-snapshot-unavailable', reasonCode)
-
   // `blocked`: the after snapshot hit a blocking reason. The call mints
   // nothing, and `settleBlockedAfter` decides whether the unit is blocked.
   async function captureAfterOperation(
@@ -5582,12 +5591,9 @@ function createSessionRuntime(
   ): OperationFailure | undefined {
     const cleared = commitSnapshotBlockClear(
       capture,
-      {
-        targetIdentity: pending.targetIdentity,
-        pinned: pending.targetIdentity !== options.workspaceIdentity,
-      },
+      readbackTarget(pending.targetIdentity),
       snapshot,
-      afterSnapshotFailureCause,
+      snapshotFailureCause(afterCause),
     )
     return cleared.status === 'fatal'
       ? afterFailure('local-snapshot-error')
@@ -6369,7 +6375,9 @@ export function createOpencodeWorkflowGuard(
       return sessionRuntimeFor(sessionID).startUnit(input, policy)
     },
     snapshotBlock(sessionID: unknown): SnapshotBlockControls {
-      return sessionRuntimeFor(String(sessionID)).snapshotBlock
+      return boundedString(sessionID, 256)
+        ? sessionRuntimeFor(sessionID).snapshotBlock
+        : INERT_SNAPSHOT_BLOCK
     },
   }
 }
