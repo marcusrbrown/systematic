@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15721,5 +15722,302 @@ describe('OpenCode workflow guard adapter', () => {
         'commit',
       )
     })
+  })
+})
+
+interface RealObserverRepository {
+  readonly root: string
+  readonly adapter: OpencodeWorkflowGuard
+  readonly observer: OpencodeOperationObserver
+  /**
+   * While on, the guard sees worktree digests in a different value space from
+   * the live ones, as if its receipts were minted by a different observer build.
+   */
+  setLegacyIdentity(on: boolean): void
+  cleanup(): void
+}
+
+function realRepositoryGit(root: string, args: readonly string[]): string {
+  const result = runTargetFixtureGit(root, args)
+  if (result.status !== 0) {
+    throw new Error(`real repository git failed: ${args.join(' ')}`)
+  }
+  return result.stdout.trim()
+}
+
+/**
+ * A disposable repository with `f` committed, watched by a real observer and a
+ * real guard. `core.excludesFile` points at an absent file in the git
+ * directory, so no global ignore of the machine running the tests leaks in.
+ */
+async function createRealObserverRepository(
+  requiredOperations: readonly ReceiptOperation[] = [
+    'implementation',
+    'verification',
+  ],
+): Promise<RealObserverRepository> {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-real-observer-')),
+  )
+  const cleanup = () => fs.rmSync(root, { recursive: true, force: true })
+  try {
+    realRepositoryGit(root, ['init', '--quiet'])
+    realRepositoryGit(root, ['config', 'user.email', 'real@example.invalid'])
+    realRepositoryGit(root, ['config', 'user.name', 'Real Observer'])
+    realRepositoryGit(root, [
+      'config',
+      'core.excludesFile',
+      path.join(root, '.git', 'no-global-excludes'),
+    ])
+    fs.writeFileSync(path.join(root, 'f'), 'base\n')
+    realRepositoryGit(root, ['add', 'f'])
+    realRepositoryGit(root, ['commit', '--quiet', '-m', 'base'])
+
+    const observer = createOpencodeOperationObserver({ targetDirectory: root })
+    const initial = await observer.snapshot()
+    if (initial.status !== 'available') throw new Error('observer unavailable')
+    let legacy = false
+    const guardObserver: OpencodeOperationObserver = {
+      ...observer,
+      snapshot: async () => {
+        const result = await observer.snapshot()
+        if (!legacy || result.status !== 'available') return result
+        return {
+          status: 'available',
+          snapshot: {
+            ...result.snapshot,
+            worktreeRevisionDigest: createHash('sha256')
+              .update(
+                `other-observer:${result.snapshot.worktreeRevisionDigest}`,
+              )
+              .digest('hex'),
+          },
+        }
+      },
+    }
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'observe', debug: false },
+      workspaceIdentity: initial.snapshot.targetDigest,
+      repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+      worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+      targetDirectory: root,
+      sessionLocation: root,
+      observer: guardObserver,
+      classifier: createReceiptClassifier(),
+      runtimeRequiredOperations: requiredOperations,
+    })
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    return {
+      root,
+      adapter,
+      observer,
+      setLegacyIdentity: (on) => {
+        legacy = on
+      },
+      cleanup,
+    }
+  } catch (error) {
+    cleanup()
+    throw error
+  }
+}
+
+/**
+ * Makes git report `f` clean whatever its bytes: the clean filter prints the
+ * committed content. This is the vector that fooled `git diff` based closure.
+ */
+function installNormalizingCleanFilter(root: string): void {
+  fs.writeFileSync(
+    path.join(root, '.git', 'info', 'attributes'),
+    'f filter=fake\n',
+  )
+  realRepositoryGit(root, [
+    'config',
+    'filter.fake.clean',
+    "cat >/dev/null; printf 'base\\n'",
+  ])
+}
+
+async function mintEvidence(repo: RealObserverRepository, label: string) {
+  await observeFreshWrite(
+    repo.adapter,
+    path.join(repo.root, 'impl.txt'),
+    'implementation\n',
+    `${label}-write`,
+  )
+  await observeFreshVerification(repo.adapter, repo.root, `${label}-verify`)
+  expect(ledger(repo.adapter).listReceipts()).toHaveLength(2)
+}
+
+function expectStaleCompletion(
+  repo: RealObserverRepository,
+  output: { output: string; metadata: Record<string, unknown> },
+): void {
+  expect(output.output).toContain('stale-receipt')
+  // Rejected, not fatal: the unit stays active and nothing was consumed.
+  expect(output.metadata.workflowGuard).toMatchObject({
+    status: 'rejected',
+    target: 'unit',
+    reasonCode: 'stale-receipt',
+  })
+  expect(status(repo.adapter).unit?.status).toBe('active')
+  expect(
+    ledger(repo.adapter)
+      .listReceipts()
+      .some((receipt) => receipt.canonical.consumption === 'consumed'),
+  ).toBe(false)
+}
+
+describe('OpenCode workflow guard over a real observer', () => {
+  test('completes when nothing changed after the evidence', async () => {
+    const repo = await createRealObserverRepository()
+    try {
+      await mintEvidence(repo, 'unchanged')
+      const output = await completeUnit(repo.adapter, 'unchanged-complete')
+      expect(output.output).toContain('workflow guard completed unit')
+      expect(status(repo.adapter).unit?.status).toBe('completed')
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'rejects completion because the worktree digest moved, even when a clean filter makes git call the edit clean',
+    async () => {
+      const repo = await createRealObserverRepository()
+      try {
+        await mintEvidence(repo, 'filter')
+        installNormalizingCleanFilter(repo.root)
+        fs.writeFileSync(path.join(repo.root, 'f'), 'edited\n')
+        // Git itself now calls the edited tree clean.
+        expect(
+          runTargetFixtureGit(repo.root, ['diff', '--quiet', 'HEAD']).status,
+        ).toBe(0)
+
+        expectStaleCompletion(
+          repo,
+          await completeUnit(repo.adapter, 'filter-complete'),
+        )
+      } finally {
+        repo.cleanup()
+      }
+    },
+  )
+
+  test('rejects completion after an edit to a path hidden by git rm --cached plus an exclude rule', async () => {
+    const repo = await createRealObserverRepository()
+    try {
+      realRepositoryGit(repo.root, ['rm', '--cached', '--quiet', 'f'])
+      fs.appendFileSync(path.join(repo.root, '.git', 'info', 'exclude'), 'f\n')
+      await mintEvidence(repo, 'hidden')
+      fs.writeFileSync(path.join(repo.root, 'f'), 'edited\n')
+
+      expectStaleCompletion(
+        repo,
+        await completeUnit(repo.adapter, 'hidden-complete'),
+      )
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('rejects completion after an ignore rule that matches nothing is added following the evidence', async () => {
+    const repo = await createRealObserverRepository()
+    try {
+      await mintEvidence(repo, 'rule')
+      fs.appendFileSync(
+        path.join(repo.root, '.git', 'info', 'exclude'),
+        // Matches nothing, so no listed path changes: only the rule text does.
+        'matches-nothing.never\n',
+      )
+
+      expectStaleCompletion(
+        repo,
+        await completeUnit(repo.adapter, 'rule-complete'),
+      )
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('reads a receipt minted under a different worktree digest scheme as stale at completion, never fatal', async () => {
+    const repo = await createRealObserverRepository()
+    try {
+      repo.setLegacyIdentity(true)
+      await mintEvidence(repo, 'other-scheme')
+      repo.setLegacyIdentity(false)
+
+      expectStaleCompletion(
+        repo,
+        await completeUnit(repo.adapter, 'other-scheme-complete'),
+      )
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  describe('commit evidence', () => {
+    async function runCommit(repo: RealObserverRepository): Promise<void> {
+      await mintEvidence(repo, 'commit')
+      const input = {
+        tool: 'bash' as const,
+        sessionID: SESSION_A,
+        callID: 'commit-step',
+        args: { command: 'git commit -m "add impl"', workdir: repo.root },
+      }
+      await repo.adapter.hooks['tool.execute.before'](input, {
+        args: input.args,
+      })
+      realRepositoryGit(repo.root, ['add', 'impl.txt'])
+      realRepositoryGit(repo.root, ['commit', '--quiet', '-m', 'add impl'])
+      await repo.adapter.hooks['tool.execute.after'](input, {
+        title: 'commit complete',
+        output: 'committed',
+        metadata: { exit: 0 },
+      })
+    }
+
+    const commitReceipts = (repo: RealObserverRepository) =>
+      ledger(repo.adapter)
+        .listReceipts()
+        .filter((receipt) => receipt.canonical.operation === 'commit')
+
+    test('a commit that leaves the tree matching HEAD mints a commit receipt', async () => {
+      const repo = await createRealObserverRepository([
+        'implementation',
+        'verification',
+        'commit',
+      ])
+      try {
+        await runCommit(repo)
+        expect(commitReceipts(repo)).toHaveLength(1)
+      } finally {
+        repo.cleanup()
+      }
+    })
+
+    test.skipIf(process.platform === 'win32')(
+      'a commit that leaves a filter-normalized edit uncommitted mints no commit receipt',
+      async () => {
+        const repo = await createRealObserverRepository([
+          'implementation',
+          'verification',
+          'commit',
+        ])
+        try {
+          installNormalizingCleanFilter(repo.root)
+          fs.writeFileSync(path.join(repo.root, 'f'), 'edited\n')
+          await runCommit(repo)
+          // Git reports a clean tree after the commit, yet `f` is not committed.
+          expect(
+            runTargetFixtureGit(repo.root, ['diff', '--quiet', 'HEAD']).status,
+          ).toBe(0)
+          expect(commitReceipts(repo)).toHaveLength(0)
+          expect(status(repo.adapter).missingOperations).toContain('commit')
+        } finally {
+          repo.cleanup()
+        }
+      },
+    )
   })
 })
