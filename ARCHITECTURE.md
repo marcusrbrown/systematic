@@ -244,7 +244,8 @@ other call takes no snapshot and cannot change guard state, and disabled and una
 observe. A skipped call's after-hook is silent even if an epoch activates in between. Local
 snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
 command output; remote readback payloads have their own 4096-item cap. Exceeding a local limit
-fails closed as `file-output-limit`, `file-limit`, or `command-output-limit`. A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
+fails the snapshot as `file-output-limit`, `file-limit`, or `command-output-limit`, which blocks
+the unit rather than making the guard unavailable (see the snapshot block below). A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
 seeding, session initialization, marker recovery, observer readback, a completion readback, or a
 hook or tool wrapper (`tool-before`, `tool-after`, `event`, `transform`, `tool-execute`) flips mode to `unavailable`, the runtime
@@ -278,15 +279,30 @@ status output as an enum-only `unconfirmedReadbacks` list that never appears in 
 or digests. A completion readback timeout rejects that attempt as `readback-timeout` without
 consuming anything or making the guard unavailable; the next completion call prepares fresh and
 surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
-records a `complete-readback` cause. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build
+records a `complete-readback` cause. A local snapshot of the unit's effective target (its pinned
+worktree, else the parent checkout) that fails with `file-limit`, `file-output-limit`,
+`command-output-limit`, or `worktree-unstable` blocks the unit instead of making the guard
+unavailable. The block is a runtime-only record, reported on status output as an enum-only
+`snapshotBlock` in every guard state and never in receipts, markers, or digests; a restart or a new
+unit drops it, and a same-unit redeclaration keeps it. While blocked no call is refused: operations
+run unobserved and leave no receipts, and remote baselines that cannot be seeded are deferred as
+`snapshot-blocked` seed deferrals. Completion is rejected as `snapshot-blocked`, which is retryable
+and consumes nothing; the rejection carries an enum-only `blockReason`, and a parent-checkout block
+on a pinned unit rejects the same way without recording a block, naming `blockTarget:
+parent-checkout` in the rejection so the agent fixes that checkout and retries completion. A later clean snapshot of the effective target clears the block and applies
+the local readback, so anything that moved while blocked marks its receipts stale and those
+operations are rerun. Revision drift between completion snapshots is the same retryable rejection
+(`worktree-unstable`); a target change, an observer or registration change, and every other
+snapshot failure keep the `unavailable` path. A finalize-time `stale-receipt` is also retryable:
+core has already marked the receipt stale, so a retry is rejected at prepare until fresh evidence
+exists. If a block persists, the user-authorized way out is to disable the guard through
+`systematic_workflow_control`, after the user answers its attestation question. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build
 rejects the `inactive` marker state and fails closed until both upgrade; activation covers skill-tool loads only, so reading a skill file directly or running a skill as a slash command does not activate the guard; an older Systematic registration loaded alongside still maps unknown skills to a work epoch, and the merged prompt marker shows the most restrictive state (`waiting`) while it is loaded; a plugin that rewrites `args.name` between the skill call's before-hook and after-hook changes the outcome: an unlisted before-name with an allowlisted after-name activates nothing, while an allowlisted before-name with an unlisted after-name fails closed (`call-lifecycle-mismatch`, guard `unavailable`); if host history loses every
 marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
 from a turn that began before this runtime started fail closed; `missing-resource` cannot
 distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
 defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
-in child rollup still make the guard unavailable (#1084); a worktree that grows past a snapshot
-limit, or changes while a snapshot runs (`worktree-unstable`), makes the guard unavailable for the
-session (#1124); an earlier completion timeout can mask
+in child rollup still make the guard unavailable (#1084); an earlier completion timeout can mask
 later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
 completion throws `abandoned-transition` in protected mode; completion is confirmed independently
 per registration, not atomically across registrations, so when two registrations share one tool
@@ -321,15 +337,15 @@ paths that replaced it are observed on their own. A final pass re-stats every pa
 directory, re-inspects every gitlink, re-lists the index, untracked files, and discovered
 `.gitignore` files, re-reads the ignore sources, and re-runs the repository anchor. A root, git
 directory, or common directory that moved fails as `target-unavailable`, and any other difference
-fails the snapshot as `worktree-unstable`. Both make the guard `unavailable` today (#1124), as do
-the limit failures.
+fails the snapshot as `worktree-unstable`. The first is fatal; the second blocks the unit, as the
+limit failures do.
 
 A snapshot does not see ignored content, dirty submodule contents, a redirect or ignore rule
 installed before the observer started (#1126), a write that lands after the final pass, or a
 same-second rewrite on a volume with 1-second timestamps. Some trees read not closed by design:
 files git normalizes (CRLF conversion), `core.filemode=false` mounts, and case-only renames on
 case-insensitive volumes. A FIFO or device named `.gitignore` makes git block until the per-command
-timeout, and the snapshot then fails closed (#1124).
+timeout, and the snapshot then fails on the timeout path, which is fatal (#1084).
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
