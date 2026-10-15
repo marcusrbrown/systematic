@@ -1,7 +1,7 @@
 ---
 title: "fix: Stop the operation observer from reporting a changed worktree as unchanged"
 type: fix
-status: active
+status: completed
 date: 2026-10-14
 ---
 
@@ -188,7 +188,7 @@ Issue #1095 rejected a design that trusts git's index and clean filters for file
   - Stat values never enter the identity.
   - `worktree-unstable` is added to `OperationObserverReasonCode` only.
 - **Closure is derived from the records.** Every `HEAD` entry must be present with an equal kind, id and mode, and no other path may exist. A gitlink must be initialized with `HEAD` equal to the tree's id. The executable comparison uses git's owner-bit rule, and `core.filemode` is not honored. The index is not required to match `HEAD`. `diff --quiet` and the closure's second untracked listing are removed. An unborn `HEAD` gives `closed=false` and stays available.
-- **Domain tag `worktree:v2` becomes `worktree:v3`.** This changes the value, not the field shape, so no receipt, marker or protocol bump is needed. Old receipts read as a mismatch or stale, never fatal.
+- **Domain tag `worktree:v2` becomes `worktree:v3`.** This changes the value, not the field shape, so no receipt, marker or protocol bump is needed. A receipt minted before the upgrade no longer matches. A status refresh reports it as stale with a fresh-readback repair. A completion against it is rejected as `stale-receipt`, and under the guard's existing completion rule that leaves the session `unavailable`, just as any post-evidence drift does today.
 
 ## Open Questions
 
@@ -232,7 +232,7 @@ Every local git call carries the forced prefix.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Forced prefix and raw-byte output**
+- [x] **Unit 1: Forced prefix and raw-byte output**
 
 **Goal:** Repository config can't hide changes, run commands or redirect `HEAD`'s tree. Non-UTF-8 output fails closed.
 
@@ -259,7 +259,7 @@ Every local git call carries the forced prefix.
 
 **Verification:** Each reproduction is red before the change. The existing observer tests pass.
 
-- [ ] **Unit 2: In-session root and gitDir pin**
+- [x] **Unit 2: In-session root and gitDir pin**
 
 **Goal:** A `core.worktree` or gitfile redirect made after the observer starts fails closed.
 
@@ -280,7 +280,7 @@ Every local git call carries the forced prefix.
 
 **Verification:** Reproductions are red first.
 
-- [ ] **Unit 3: Path records and the shared budget (no behavior change)**
+- [x] **Unit 3: Path records and the shared budget (no behavior change)**
 
 **Goal:** Every observed path yields a record that both the identity and the closure can use, and one budget spans the snapshot.
 
@@ -300,7 +300,7 @@ Every local git call carries the forced prefix.
 
 **Verification:** No existing test changes.
 
-- [ ] **Unit 4: Race-checked reads and the final pass**
+- [x] **Unit 4: Race-checked reads and the final pass**
 
 **Goal:** A file, path set or `HEAD` that changes during the snapshot fails closed.
 
@@ -324,7 +324,7 @@ Every local git call carries the forced prefix.
 
 **Verification:** Race scenarios use the seams, with no sleeps. Measure snapshot time on this repository, warm and cold.
 
-- [ ] **Unit 5: Complete path set, ignore sources and gitlink hardening**
+- [x] **Unit 5: Complete path set, ignore sources and gitlink hardening**
 
 **Goal:** `HEAD` paths are always observed, ignore-rule edits change the identity, and gitlinks are bounded and can't impersonate the parent.
 
@@ -343,7 +343,7 @@ Every local git call carries the forced prefix.
 - Change the domain tag to `worktree:v3`.
 
 **Test scenarios:**
-- Error path: `git rm --cached f`, add `f` to `info/exclude`, then edit `f`. The identity changes at each step.
+- Error path: `git rm --cached f`, add `f` to `info/exclude`, then edit `f`. The exclude rule and the edit each change the identity. `git rm --cached` alone does not, because the index stays out of the identity.
 - Error path: a line added to `.git/info/exclude` changes the identity. So does a new untracked `.gitignore` containing `*`. A later edit to a sibling hidden by that `.gitignore` does not, because that content is now ignored.
 - Error path: `core.excludesFile` pointing at a FIFO or `/dev/zero` fails closed without hanging.
 - Error path: an uninitialized submodule directory no longer hashes the parent's `HEAD`. Writing a file into it gives `file-read-failed`.
@@ -353,7 +353,7 @@ Every local git call carries the forced prefix.
 
 **Verification:** Reproductions are red first. Measure snapshot time.
 
-- [ ] **Unit 6: Commit closure from the observer's records**
+- [x] **Unit 6: Commit closure from the observer's records**
 
 **Goal:** Clean filters, replace refs and git normalization can't make an edited tree read as committed.
 
@@ -380,7 +380,7 @@ Every local git call carries the forced prefix.
 
 **Verification:** No snapshot calls `diff --quiet`. Warm snapshot time on this repository stays within about +60 ms of the 91.8 ms baseline. If it doesn't, consolidate spawns before shipping.
 
-- [ ] **Unit 7: Guard-level proof and documentation**
+- [x] **Unit 7: Guard-level proof and documentation**
 
 **Goal:** Prove through the guard that a false-clean vector no longer lets pre-edit evidence complete a unit, and document the observer's limits.
 
@@ -414,7 +414,7 @@ Every local git call carries the forced prefix.
   - `worktree-unstable`;
   - `file-limit` for gitlinks;
   - `file-read-failed` for invalid output, an invalid ignore source, or an uninitialized non-empty submodule.
-- **State lifecycle risks:** The identity value changes on upgrade, so receipts that exist at upgrade time go stale or mismatch once, never fatal. An ignore-source edit by another process during a completion readback counts as drift within the snapshot.
+- **State lifecycle risks:** The identity value changes on upgrade, so receipts that exist at upgrade time go stale once. A completion attempted against one is rejected and leaves the session `unavailable`, which is the existing rule for any drift between evidence and completion. An ignore-source edit by another process during a completion readback counts as drift within the snapshot.
 - **Unchanged invariants:** Raw-byte identity, stale-versus-fatal semantics, receipt and marker versions, and remote readback.
 
 ## Risks & Dependencies
