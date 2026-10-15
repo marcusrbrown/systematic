@@ -7,6 +7,7 @@ import path from 'node:path'
 
 import {
   createOpencodeOperationObserver,
+  findDisplacedGitlinks,
   hashField,
   type OpencodeOperationObserver,
   type OperationObserverCommandResult,
@@ -4824,4 +4825,75 @@ describe('OpenCode operation observer submodule converted to ordinary files', ()
       fixture.cleanup()
     }
   }, 30_000)
+})
+
+describe('OpenCode operation observer displaced gitlink lookup', () => {
+  const byteOrder = (paths: readonly string[]): string[] =>
+    [...paths].sort((left, right) =>
+      Buffer.from(left).compare(Buffer.from(right)),
+    )
+  const headGitlinks = (...names: string[]) =>
+    new Map(names.map((name) => [name, { mode: '160000', id: 'a'.repeat(40) }]))
+  const displaced = (
+    paths: readonly string[],
+    headOnly: readonly string[],
+    index: readonly string[] = [],
+  ) =>
+    [
+      ...findDisplacedGitlinks(
+        byteOrder(paths),
+        new Map(index.map((name) => [name, '160000'])),
+        headGitlinks(...headOnly),
+      ),
+    ].sort()
+
+  test('finds a HEAD-only gitlink that has a path beneath it', () => {
+    expect(displaced(['sub', 'sub/file.txt', 'z'], ['sub'])).toEqual(['sub'])
+    expect(displaced(['sub', 'sub/a/b/c.txt'], ['sub'])).toEqual(['sub'])
+  })
+
+  test('does not treat a path that only shares a prefix as a descendant', () => {
+    // '-' and '0' sort on either side of '/', so both neighbours are probed.
+    expect(displaced(['sub', 'sub-other/x'], ['sub'])).toEqual([])
+    expect(displaced(['sub', 'sub0/x'], ['sub'])).toEqual([])
+    expect(displaced(['sub', 'subway'], ['sub'])).toEqual([])
+    expect(
+      displaced(['sub', 'sub-other/x', 'sub0/x', 'sub/y'], ['sub']),
+    ).toEqual(['sub'])
+  })
+
+  test('leaves a gitlink with nothing beneath it alone', () => {
+    expect(displaced(['sub'], ['sub'])).toEqual([])
+    expect(displaced(['a', 'sub', 'z/y'], ['sub'])).toEqual([])
+  })
+
+  test('never displaces a gitlink that is in the index', () => {
+    expect(displaced(['sub', 'sub/file.txt'], ['sub'], ['sub'])).toEqual([])
+  })
+
+  test('matches by bytes, including non-ASCII names', () => {
+    expect(displaced(['süb', 'süb/x', 'sub/x'], ['süb'])).toEqual(['süb'])
+    expect(displaced(['süb', 'sub/x'], ['süb'])).toEqual([])
+  })
+
+  test('finds several candidates independently', () => {
+    expect(
+      displaced(['a', 'a/x', 'b', 'c', 'c/y', 'd'], ['a', 'b', 'c', 'd']),
+    ).toEqual(['a', 'c'])
+  })
+
+  test('handles a large synthetic list of very deep paths', () => {
+    const deep = 'x/'.repeat(199)
+    const paths = [
+      'sub',
+      'sub/file.txt',
+      ...Array.from({ length: 2000 }, (_, index) => `d${index}/${deep}f`),
+    ]
+    const started = performance.now()
+    expect(displaced(paths, ['sub'])).toEqual(['sub'])
+    const withoutDescendant = paths.filter((entry) => entry !== 'sub/file.txt')
+    expect(displaced(withoutDescendant, ['sub'])).toEqual([])
+    // Generous: only guards against work that grows with total path depth.
+    expect(performance.now() - started).toBeLessThan(5000)
+  })
 })

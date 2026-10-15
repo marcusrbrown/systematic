@@ -2066,27 +2066,54 @@ function readWorktreeListings(
 }
 
 /**
+ * Whether any path in `sortedPaths` lies beneath `directory`. The list is in
+ * byte order, so every path beneath `directory/` is contiguous and starts at
+ * the first entry that is `>= 'directory/'`. One binary search finds it, and
+ * a prefix check on that entry decides. Nothing is built per path.
+ */
+function hasPathBeneath(
+  sortedPaths: readonly string[],
+  directory: string,
+): boolean {
+  const prefix = `${directory}/`
+  const key = Buffer.from(prefix)
+  let low = 0
+  let high = sortedPaths.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    const candidate = sortedPaths[middle]
+    if (candidate !== undefined && Buffer.from(candidate).compare(key) < 0) {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  return (
+    low < sortedPaths.length && (sortedPaths[low]?.startsWith(prefix) ?? false)
+  )
+}
+
+/**
  * Gitlinks that only `HEAD` lists and that now have paths beneath them. A
  * gitlink in the index is current, so it is never displaced: a populated
  * directory without `.git` there is still malformed.
+ *
+ * `sortedPaths` must be in UTF-8 byte order, as the path set is.
+ *
+ * @internal Exported for tests only.
  */
-function findDisplacedGitlinks(
-  paths: readonly string[],
+export function findDisplacedGitlinks(
+  sortedPaths: readonly string[],
   indexModes: ReadonlyMap<string, string>,
   headTree: ReadonlyMap<string, HeadTreeEntry>,
 ): ReadonlySet<string> {
-  const headOnly = paths.filter(
+  // Usually none, or one: a repository seldom has more than a few submodules.
+  const candidates = sortedPaths.filter(
     (entry) => !indexModes.has(entry) && headTree.get(entry)?.mode === '160000',
   )
-  if (headOnly.length === 0) return new Set()
-  const parents = new Set<string>()
-  for (const entry of paths) {
-    const parts = entry.split('/').slice(0, -1)
-    for (let depth = 1; depth <= parts.length; depth += 1) {
-      parents.add(parts.slice(0, depth).join('/'))
-    }
-  }
-  return new Set(headOnly.filter((entry) => parents.has(entry)))
+  return new Set(
+    candidates.filter((entry) => hasPathBeneath(sortedPaths, entry)),
+  )
 }
 
 function readWorktreeSnapshot(
