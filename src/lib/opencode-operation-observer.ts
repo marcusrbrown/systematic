@@ -23,6 +23,23 @@ const UNTRACKED_FILES_ARGS = [
   ':/',
 ] as const
 
+// Forced on every local git call, before the subcommand, so repository config
+// and refs cannot hide changes (`core.ignorecase`), run commands
+// (`core.fsmonitor`) or redirect `HEAD`'s tree (replace refs).
+const FORCED_GIT_PREFIX = [
+  '--no-replace-objects',
+  '-c',
+  'core.ignorecase=false',
+  '-c',
+  'core.fsmonitor=false',
+] as const
+
+// `ignoreBOM` keeps a leading U+FEFF in a path instead of stripping it.
+const STRICT_UTF8_DECODER = new TextDecoder('utf-8', {
+  fatal: true,
+  ignoreBOM: true,
+})
+
 export type OperationObserverReasonCode =
   | 'target-unavailable'
   | 'command-failed'
@@ -93,6 +110,8 @@ export interface OperationObserverCommandResult {
   readonly stdout: string
   readonly stderr: string
   readonly timedOut?: boolean
+  /** stdout was not valid UTF-8; `stdout` must not be trusted. */
+  readonly invalidOutput?: boolean
 }
 
 export interface OperationObserverRemoteCommandResult {
@@ -168,7 +187,7 @@ export interface OpencodeOperationObserverOptions {
   readonly commandRunner?: OperationObserverCommandRunner
   readonly remoteCommandRunner?: OperationObserverRemoteCommandRunner
   readonly fileReader?: (filePath: string) => Uint8Array
-  readonly symlinkReader?: (filePath: string) => string
+  readonly symlinkReader?: (filePath: string) => Uint8Array
   readonly statReader?: (filePath: string) => OperationObserverFileStat
   readonly realPath?: (filePath: string) => string
   readonly limits?: OperationObserverLimits
@@ -251,6 +270,28 @@ function sanitizedEnvironment(): NodeJS.ProcessEnv {
   return env
 }
 
+/**
+ * The one place local git stdout is decoded. Fails closed: bytes that are not
+ * valid UTF-8 are reported as invalid instead of being replaced with U+FFFD,
+ * which would let distinct paths collide. A genuine U+FFFD in a name is valid
+ * UTF-8 and decodes unchanged.
+ */
+function decodeCommandStdout(raw: unknown): {
+  readonly text: string
+  readonly invalid: boolean
+} {
+  if (typeof raw === 'string') return { text: raw, invalid: false }
+  if (raw instanceof Uint8Array) {
+    try {
+      return { text: STRICT_UTF8_DECODER.decode(raw), invalid: false }
+    } catch {
+      return { text: '', invalid: true }
+    }
+  }
+  // A missing stdout (spawn failure) is empty; any other shape is untrusted.
+  return { text: '', invalid: raw !== null && raw !== undefined }
+}
+
 function defaultCommandRunner(
   args: readonly string[],
   cwd: string,
@@ -261,19 +302,30 @@ function defaultCommandRunner(
     const result = spawnSync('git', [...args], {
       cwd,
       env: sanitizedEnvironment(),
-      encoding: 'utf8',
+      encoding: 'buffer',
       maxBuffer: maxOutputBytes,
       timeout: timeoutMs,
     })
+    const stdout = decodeCommandStdout(result.stdout)
     return {
       status: result.status ?? -1,
-      stdout: typeof result.stdout === 'string' ? result.stdout : '',
-      stderr: typeof result.stderr === 'string' ? result.stderr : '',
+      stdout: stdout.text,
+      stderr: Buffer.isBuffer(result.stderr)
+        ? result.stderr.toString('utf8')
+        : '',
       timedOut: isCommandTimeout(result.error),
+      ...(stdout.invalid ? { invalidOutput: true } : {}),
     }
   } catch {
     return { status: -1, stdout: '', stderr: '' }
   }
+}
+
+function withForcedGitPrefix(
+  runner: OperationObserverCommandRunner,
+): OperationObserverCommandRunner {
+  return (args, cwd, maxOutputBytes, timeoutMs) =>
+    runner([...FORCED_GIT_PREFIX, ...args], cwd, maxOutputBytes, timeoutMs)
 }
 
 function defaultRemoteCommandRunner(
@@ -361,6 +413,21 @@ function safePath(root: string, relativePath: string): string | undefined {
   return absolutePath
 }
 
+function commandResultError(
+  result: OperationObserverCommandResult,
+  limits: Limits,
+): OperationObserverReasonCode | undefined {
+  if (result.timedOut) return 'command-timeout'
+  if (result.invalidOutput) return 'file-read-failed'
+  if (
+    outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
+    outputBytes(result.stderr) > limits.maxCommandOutputBytes
+  ) {
+    return 'command-output-limit'
+  }
+  return undefined
+}
+
 function runCommand(
   runner: OperationObserverCommandRunner,
   args: readonly string[],
@@ -380,15 +447,8 @@ function runCommand(
   } catch {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  if (result.timedOut) {
-    return { status: 'error', reasonCode: 'command-timeout' }
-  }
-  if (
-    outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
-    outputBytes(result.stderr) > limits.maxCommandOutputBytes
-  ) {
-    return { status: 'error', reasonCode: 'command-output-limit' }
-  }
+  const resultError = commandResultError(result, limits)
+  if (resultError) return { status: 'error', reasonCode: resultError }
   if (result.status !== 0) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
@@ -578,7 +638,10 @@ export function validateRegisteredWorktree(
   parentIdentity: RegisteredWorktreeParentIdentity,
   options: RegisteredWorktreeValidationOptions = {},
 ): RegisteredWorktreeValidationResult {
-  const runner = options.commandRunner ?? defaultCommandRunner
+  // A runner passed in (e.g. by the observer) is already wrapped; only the
+  // default is wrapped here, so the prefix is never applied twice.
+  const runner =
+    options.commandRunner ?? withForcedGitPrefix(defaultCommandRunner)
   const limits = mergeLimits(options.limits)
   const realPath = options.realPath ?? fs.realpathSync
   const candidateRoot = canonicalPath(candidateDirectory, realPath)
@@ -673,15 +736,8 @@ function readRevision(
   } catch {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  if (head.timedOut) {
-    return { status: 'error', reasonCode: 'command-timeout' }
-  }
-  if (
-    outputBytes(head.stdout) > limits.maxCommandOutputBytes ||
-    outputBytes(head.stderr) > limits.maxCommandOutputBytes
-  ) {
-    return { status: 'error', reasonCode: 'command-output-limit' }
-  }
+  const headError = commandResultError(head, limits)
+  if (headError) return { status: 'error', reasonCode: headError }
   const headValue = head.status === 0 ? head.stdout.trim() : 'unborn'
   const inside = runCommand(
     runner,
@@ -740,7 +796,7 @@ function appendSubmoduleFact(
 
 function appendSymlinkFact(
   hash: ReturnType<typeof createHash>,
-  symlinkReader: (filePath: string) => string,
+  symlinkReader: (filePath: string) => Uint8Array,
   absolutePath: string,
   relativePath: string,
   limits: Limits,
@@ -748,7 +804,7 @@ function appendSymlinkFact(
 ):
   | { status: 'ok'; totalBytes: number }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  let target: string
+  let target: Uint8Array
   try {
     target = symlinkReader(absolutePath)
   } catch (error) {
@@ -756,10 +812,9 @@ function appendSymlinkFact(
       ? { status: 'ok', totalBytes }
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
-  const targetBytes = Buffer.from(target, 'utf8')
-  const nextTotalBytes = totalBytes + targetBytes.byteLength
+  const nextTotalBytes = totalBytes + target.byteLength
   if (
-    targetBytes.byteLength > limits.maxPathBytes ||
+    target.byteLength > limits.maxPathBytes ||
     nextTotalBytes > limits.maxTotalFileBytes
   ) {
     return { status: 'error', reasonCode: 'file-output-limit' }
@@ -767,7 +822,7 @@ function appendSymlinkFact(
   hash.update('symlink\0')
   hash.update(relativePath)
   hash.update('\0')
-  hash.update(targetBytes)
+  hash.update(target)
   hash.update('\0')
   return { status: 'ok', totalBytes: nextTotalBytes }
 }
@@ -813,7 +868,7 @@ function appendFileFactV2(
   hash: ReturnType<typeof createHash>,
   runner: OperationObserverCommandRunner,
   fileReader: (filePath: string) => Uint8Array,
-  symlinkReader: (filePath: string) => string,
+  symlinkReader: (filePath: string) => Uint8Array,
   statReader: (filePath: string) => OperationObserverFileStat,
   context: RepositoryContext,
   entry: Pick<StageEntry, 'mode' | 'relativePath'>,
@@ -868,7 +923,7 @@ function appendFileFactV2(
 function readWorktreeRevisionV2(
   runner: OperationObserverCommandRunner,
   fileReader: (filePath: string) => Uint8Array,
-  symlinkReader: (filePath: string) => string,
+  symlinkReader: (filePath: string) => Uint8Array,
   statReader: (filePath: string) => OperationObserverFileStat,
   context: RepositoryContext,
   limits: Limits,
@@ -952,15 +1007,8 @@ function readCommitClosure(
   } catch {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  if (diff.timedOut) {
-    return { status: 'error', reasonCode: 'command-timeout' }
-  }
-  if (
-    outputBytes(diff.stdout) > limits.maxCommandOutputBytes ||
-    outputBytes(diff.stderr) > limits.maxCommandOutputBytes
-  ) {
-    return { status: 'error', reasonCode: 'command-output-limit' }
-  }
+  const diffError = commandResultError(diff, limits)
+  if (diffError) return { status: 'error', reasonCode: diffError }
   if (diff.status !== 0 && diff.status !== 1) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
@@ -1322,7 +1370,11 @@ export function createOpencodeOperationObserver(
   } catch {
     targetDirectory = path.resolve(options.targetDirectory)
   }
-  const runner = options.commandRunner ?? defaultCommandRunner
+  // Wrapped exactly once; everything below, including the registered-worktree
+  // validator, receives this runner and must not wrap it again.
+  const runner = withForcedGitPrefix(
+    options.commandRunner ?? defaultCommandRunner,
+  )
   const remoteRunner = options.remoteCommandRunner ?? defaultRemoteCommandRunner
   const realPath = options.realPath ?? fs.realpathSync
   const parentIdentityResult = captureParentIdentity(
@@ -1333,7 +1385,10 @@ export function createOpencodeOperationObserver(
   )
   const targetDigest = digest('target', [targetDirectory])
   const fileReader = options.fileReader ?? fs.readFileSync
-  const symlinkReader = options.symlinkReader ?? fs.readlinkSync
+  const symlinkReader =
+    options.symlinkReader ??
+    ((filePath: string): Uint8Array =>
+      fs.readlinkSync(filePath, { encoding: 'buffer' }))
   const statReader =
     options.statReader ??
     ((filePath: string): OperationObserverFileStat => {

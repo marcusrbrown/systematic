@@ -8,11 +8,13 @@ import {
   createOpencodeOperationObserver,
   type OpencodeOperationObserver,
   type OperationObserverCommandResult,
+  type OperationObserverCommandRunner,
   type OperationObserverLimits,
   type OperationObserverRemoteCommandResult,
   type OperationObserverRemoteResult,
   type RemoteOperation,
   type RemoteReadbackPhase,
+  validateRegisteredWorktree,
 } from '../../src/lib/opencode-operation-observer.js'
 
 /** `remoteSnapshot` is optional on the interface (implementations that never do readbacks may omit it), but every fixture observer here always implements it. */
@@ -1191,7 +1193,8 @@ describe('OpenCode operation observer', () => {
           if (filePath === linkPath) throw new Error('symlink-opened')
           return fs.readFileSync(filePath)
         },
-        symlinkReader: (filePath) => fs.readlinkSync(filePath),
+        symlinkReader: (filePath) =>
+          fs.readlinkSync(filePath, { encoding: 'buffer' }),
       })
       const initial = await observer.snapshot()
       expect(initial.status).toBe('available')
@@ -1548,6 +1551,415 @@ describe('OpenCode operation observer', () => {
         status: 'unavailable',
         reasonCode: 'remote-not-advanced',
       })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+})
+
+const FORCED_GIT_PREFIX = [
+  '--no-replace-objects',
+  '-c',
+  'core.ignorecase=false',
+  '-c',
+  'core.fsmonitor=false',
+] as const
+
+function recordingRunner(calls: string[][]): OperationObserverCommandRunner {
+  return (args, cwd) => {
+    calls.push([...args])
+    return runGit(cwd, args)
+  }
+}
+
+function gitOutput(root: string, args: readonly string[], input?: string) {
+  const result = spawnSync('git', [...args], {
+    cwd: root,
+    encoding: 'utf8',
+    input,
+  })
+  if (result.status !== 0) throw new Error(`git setup failed: ${args[0]}`)
+  return result.stdout.trim()
+}
+
+function isCaseInsensitiveVolume(): boolean {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-case-'),
+  )
+  try {
+    fs.writeFileSync(path.join(dir, 'probe-a'), '')
+    return fs.existsSync(path.join(dir, 'PROBE-A'))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const CASE_INSENSITIVE_VOLUME = isCaseInsensitiveVolume()
+
+/**
+ * Puts a `git` shim first on PATH for the duration of `run`. The shim runs
+ * `shimBody` first (it may `exit`); otherwise it execs the real git. Used to
+ * observe or perturb the observer's DEFAULT runner, which can't be injected.
+ */
+async function withGitShim(
+  shimBody: string,
+  run: (shimDir: string) => Promise<void> | void,
+): Promise<void> {
+  const realGit = Bun.which('git')
+  if (!realGit) throw new Error('git not found')
+  const shimDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-shim-'),
+  )
+  const previousPath = process.env.PATH
+  try {
+    fs.writeFileSync(
+      path.join(shimDir, 'git'),
+      `#!/bin/sh\n${shimBody}\nexec '${realGit}' "$@"\n`,
+      { mode: 0o755 },
+    )
+    process.env.PATH = `${shimDir}${path.delimiter}${previousPath ?? ''}`
+    await run(shimDir)
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    fs.rmSync(shimDir, { recursive: true, force: true })
+  }
+}
+
+async function digestOf(observer: OpencodeOperationObserver): Promise<string> {
+  const result = await observer.snapshot()
+  if (result.status !== 'available') {
+    throw new Error(`snapshot unavailable: ${result.reasonCode}`)
+  }
+  return result.snapshot.worktreeRevisionDigest
+}
+
+describe('OpenCode operation observer forced git prefix and raw output', () => {
+  test('forces the prefix exactly once, before the subcommand, on every local call', async () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const calls: string[][] = []
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.parent.root,
+        commandRunner: recordingRunner(calls),
+        remoteCommandRunner: () => ({ status: 1, stdout: '', stderr: '' }),
+      })
+      expect(
+        observer.validateRegisteredWorktree(fixture.linkedWorktree).status,
+      ).toBe('ok')
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+      await callRemoteSnapshot(observer, 'push', 'before')
+
+      expect(calls.length).toBeGreaterThan(0)
+      for (const call of calls) {
+        expect(call.slice(0, FORCED_GIT_PREFIX.length)).toEqual([
+          ...FORCED_GIT_PREFIX,
+        ])
+        expect(
+          call.filter((arg) => arg === '--no-replace-objects'),
+        ).toHaveLength(1)
+        expect(call.filter((arg) => arg === '-c')).toHaveLength(2)
+        const subcommand = call[FORCED_GIT_PREFIX.length]
+        expect(subcommand).toBeDefined()
+        expect(subcommand?.startsWith('-')).toBe(false)
+      }
+      const subcommands = new Set(calls.map((call) => call[5]))
+      expect(subcommands.has('rev-parse')).toBe(true)
+      expect(subcommands.has('worktree')).toBe(true)
+      expect(subcommands.has('ls-files')).toBe(true)
+      expect(
+        calls.some((call) => call[5] === 'rev-parse' && call[6] === '--verify'),
+      ).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('forces the prefix on the default runner of a standalone validateRegisteredWorktree', async () => {
+    const fixture = createGitFixture()
+    try {
+      const root = fs.realpathSync(fixture.root)
+      const dotGit = fs.realpathSync(path.join(fixture.root, '.git'))
+      const shimLog = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-observer-log-')),
+        'calls.log',
+      )
+      await withGitShim(`echo "$*" >> '${shimLog}'`, () => {
+        expect(
+          validateRegisteredWorktree(fixture.root, {
+            targetRoot: root,
+            gitDir: dotGit,
+            commonDir: dotGit,
+            registeredWorktreeRoots: [root],
+          }),
+        ).toMatchObject({ status: 'ok' })
+      })
+      const lines = fs.readFileSync(shimLog, 'utf8').trim().split('\n')
+      expect(lines.length).toBeGreaterThan(0)
+      for (const line of lines) {
+        expect(line.startsWith(`${FORCED_GIT_PREFIX.join(' ')} `)).toBe(true)
+        expect(line.split('--no-replace-objects')).toHaveLength(2)
+      }
+      fs.rmSync(path.dirname(shimLog), { recursive: true, force: true })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('does not wrap a caller-supplied runner in a standalone validateRegisteredWorktree', () => {
+    const fixture = createGitFixture()
+    const calls: string[][] = []
+    try {
+      const root = fs.realpathSync(fixture.root)
+      const dotGit = fs.realpathSync(path.join(fixture.root, '.git'))
+      expect(
+        validateRegisteredWorktree(
+          fixture.root,
+          {
+            targetRoot: root,
+            gitDir: dotGit,
+            commonDir: dotGit,
+            registeredWorktreeRoots: [root],
+          },
+          { commandRunner: recordingRunner(calls) },
+        ),
+      ).toMatchObject({ status: 'ok' })
+      expect(calls.length).toBeGreaterThan(0)
+      for (const call of calls) {
+        expect(call).not.toContain('--no-replace-objects')
+      }
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('the real default runner observes a new untracked file', async () => {
+    const fixture = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await digestOf(observer)
+      fs.writeFileSync(path.join(fixture.root, 'untracked.txt'), 'new\n')
+      expect(await digestOf(observer)).not.toBe(before)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test.skipIf(CASE_INSENSITIVE_VOLUME)(
+    'core.ignorecase=true cannot hide a case-variant untracked file',
+    async () => {
+      const fixture = createGitFixture()
+      try {
+        expect(
+          runGit(fixture.root, ['config', 'core.ignorecase', 'true']).status,
+        ).toBe(0)
+        fs.writeFileSync(path.join(fixture.root, 'README.md'), 'readme\n')
+        expect(runGit(fixture.root, ['add', 'README.md']).status).toBe(0)
+        expect(
+          runGit(fixture.root, ['commit', '--quiet', '-m', 'readme']).status,
+        ).toBe(0)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        const before = await digestOf(observer)
+        fs.writeFileSync(path.join(fixture.root, 'readme.md'), 'variant\n')
+        expect(await digestOf(observer)).not.toBe(before)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('never runs a core.fsmonitor hook during snapshot()', async () => {
+    const fixture = createGitFixture()
+    const hookDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-hook-'),
+    )
+    const marker = path.join(hookDir, 'ran')
+    const hook = path.join(hookDir, 'hook.sh')
+    try {
+      fs.writeFileSync(hook, `#!/bin/sh\necho ran > '${marker}'\n`, {
+        mode: 0o755,
+      })
+      expect(
+        runGit(fixture.root, ['config', 'core.fsmonitor', hook]).status,
+      ).toBe(0)
+      fs.rmSync(marker, { force: true })
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+      expect(fs.existsSync(marker)).toBe(false)
+    } finally {
+      fs.rmSync(hookDir, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('a replace ref cannot make an edited tree read as closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      const file = path.join(fixture.root, 'f')
+      fs.writeFileSync(file, 'base\n')
+      expect(runGit(fixture.root, ['add', 'f']).status).toBe(0)
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'base']).status,
+      ).toBe(0)
+      fs.writeFileSync(file, 'edited\n')
+
+      const editedBlob = gitOutput(fixture.root, ['hash-object', '-w', 'f'])
+      const trackedBlob = gitOutput(fixture.root, [
+        'rev-parse',
+        'HEAD:tracked.txt',
+      ])
+      const tree = gitOutput(
+        fixture.root,
+        ['mktree'],
+        `100644 blob ${trackedBlob}\ttracked.txt\n100644 blob ${editedBlob}\tf\n`,
+      )
+      const orphan = gitOutput(fixture.root, [
+        'commit-tree',
+        tree,
+        '-m',
+        'orphan',
+      ])
+      gitOutput(fixture.root, ['replace', 'HEAD', orphan])
+      // Self-check the fixture: the replacement makes a plain diff read clean,
+      // and bypassing replacement shows the real edit.
+      expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
+      expect(
+        runGit(fixture.root, [
+          '--no-replace-objects',
+          'diff',
+          '--quiet',
+          'HEAD',
+        ]).status,
+      ).toBe(1)
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const result = await observer.snapshot()
+      expect(result.status).toBe('available')
+      if (result.status !== 'available') return
+      expect(result.snapshot.commitClosure).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('maps a runner result flagged invalidOutput to file-read-failed', async () => {
+    const fixture = createGitFixture()
+    try {
+      const everything = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: () => ({
+          status: 0,
+          stdout: '',
+          stderr: '',
+          invalidOutput: true,
+        }),
+      })
+      await expect(everything.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+
+      const listingOnly = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: (args, cwd) => {
+          const result = runGit(cwd, args)
+          return args.includes('--others')
+            ? { ...result, invalidOutput: true }
+            : result
+        },
+      })
+      await expect(listingOnly.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('the default runner fails closed when git emits non-UTF-8 stdout', async () => {
+    const fixture = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await withGitShim(
+        `for a in "$@"; do if [ "$a" = "--others" ]; then printf 'b\\377\\000'; exit 0; fi; done`,
+        async () => {
+          await expect(observer.snapshot()).resolves.toEqual({
+            status: 'unavailable',
+            reasonCode: 'file-read-failed',
+          })
+        },
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('observes a real file whose name contains U+FFFD', async () => {
+    const fixture = createGitFixture()
+    try {
+      const file = path.join(fixture.root, 'bad\uFFFDname.txt')
+      fs.writeFileSync(file, 'one\n')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await digestOf(observer)
+      fs.writeFileSync(file, 'two\n')
+      expect(await digestOf(observer)).not.toBe(before)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('distinguishes symlinks whose non-UTF-8 targets differ (real symlinks)', async () => {
+    const fixture = createGitFixture()
+    try {
+      const link = path.join(fixture.root, 'link')
+      try {
+        fs.symlinkSync(Buffer.from([0x74, 0xff]), link)
+      } catch {
+        // Volume refuses non-UTF-8 targets (e.g. APFS EILSEQ); the seam test
+        // below covers this case.
+        return
+      }
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const first = await digestOf(observer)
+      fs.unlinkSync(link)
+      fs.symlinkSync(Buffer.from([0x74, 0xfe]), link)
+      expect(await digestOf(observer)).not.toBe(first)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('distinguishes symlinks whose non-UTF-8 targets differ (injected byte seam)', async () => {
+    const fixture = createGitFixture()
+    try {
+      fs.symlinkSync('placeholder', path.join(fixture.root, 'link'))
+      let targetBytes: Uint8Array = Buffer.from([0x74, 0xff])
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        symlinkReader: () => targetBytes,
+      })
+      const first = await digestOf(observer)
+      targetBytes = Buffer.from([0x74, 0xfe])
+      expect(await digestOf(observer)).not.toBe(first)
     } finally {
       fixture.cleanup()
     }
