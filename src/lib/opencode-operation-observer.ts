@@ -8,6 +8,7 @@ const DEFAULT_LIMITS = {
   maxCommandOutputBytes: 8_388_608,
   maxCommandTimeoutMs: 5_000,
   maxFiles: 20_000,
+  maxGitlinks: 32,
   maxRemoteCommandOutputBytes: 1_048_576,
   maxRemoteItems: 4096,
   maxTotalFileBytes: 134_217_728,
@@ -189,6 +190,7 @@ export interface OperationObserverLimits {
   readonly maxCommandOutputBytes?: number
   readonly maxCommandTimeoutMs?: number
   readonly maxFiles?: number
+  readonly maxGitlinks?: number
   readonly maxRemoteCommandOutputBytes?: number
   readonly maxRemoteItems?: number
   readonly maxTotalFileBytes?: number
@@ -236,6 +238,7 @@ interface Limits {
   readonly maxCommandOutputBytes: number
   readonly maxCommandTimeoutMs: number
   readonly maxFiles: number
+  readonly maxGitlinks: number
   readonly maxRemoteCommandOutputBytes: number
   readonly maxRemoteItems: number
   readonly maxTotalFileBytes: number
@@ -311,6 +314,7 @@ interface PathObservation {
 
 interface WorktreeReaders {
   readonly runner: OperationObserverCommandRunner
+  readonly realPath: (filePath: string) => string
   readonly readRegular: RegularContentReader
   readonly symlinkReader: (filePath: string) => Uint8Array
   readonly statReader: (filePath: string) => OperationObserverFileStat
@@ -467,6 +471,7 @@ function mergeLimits(input?: OperationObserverLimits): Limits {
     maxCommandTimeoutMs:
       input?.maxCommandTimeoutMs ?? DEFAULT_LIMITS.maxCommandTimeoutMs,
     maxFiles: input?.maxFiles ?? DEFAULT_LIMITS.maxFiles,
+    maxGitlinks: input?.maxGitlinks ?? DEFAULT_LIMITS.maxGitlinks,
     maxRemoteCommandOutputBytes:
       input?.maxRemoteCommandOutputBytes ??
       DEFAULT_LIMITS.maxRemoteCommandOutputBytes,
@@ -1128,39 +1133,112 @@ function adaptInjectedFileReader(
   }
 }
 
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i
+
+type GitlinkInspection =
+  | { status: 'initialized'; id: string }
+  | { status: 'uninitialized' }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+function directoryIsEmpty(absolutePath: string): boolean | undefined {
+  try {
+    return fs.readdirSync(absolutePath).length === 0
+  } catch (error) {
+    // Gone by now is as good as empty; anything else is unreadable.
+    return isEnoent(error) ? true : undefined
+  }
+}
+
+/**
+ * Reads the submodule's own toplevel and `HEAD` in one call. The toplevel must
+ * be the submodule path itself: a bare or empty `.git` makes git walk up and
+ * answer with the parent, which would otherwise hash the parent's `HEAD`.
+ */
+function readInitializedGitlink(
+  readers: WorktreeReaders,
+  absolutePath: string,
+  limits: Limits,
+): GitlinkInspection {
+  const result = runCommand(
+    readers.runner,
+    ['rev-parse', '--show-toplevel', '--verify', '-q', 'HEAD'],
+    absolutePath,
+    limits,
+  )
+  if (result.status === 'error') return result
+  const lines = result.output.stdout.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  const [toplevel, id] = lines
+  if (
+    lines.length !== 2 ||
+    toplevel === undefined ||
+    id === undefined ||
+    !GIT_OBJECT_ID.test(id) ||
+    !path.isAbsolute(toplevel)
+  ) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  const submodule = canonicalPath(absolutePath, readers.realPath)
+  const reported = canonicalPath(toplevel, readers.realPath)
+  return submodule !== undefined && submodule === reported
+    ? { status: 'initialized', id: id.toLowerCase() }
+    : { status: 'error', reasonCode: 'file-read-failed' }
+}
+
+function inspectGitlink(
+  readers: WorktreeReaders,
+  absolutePath: string,
+  limits: Limits,
+): GitlinkInspection {
+  let directory: OperationObserverFileStat
+  try {
+    directory = readers.statReader(absolutePath)
+  } catch (error) {
+    // A gitlink whose directory was never created is simply not checked out.
+    return isEnoent(error)
+      ? { status: 'uninitialized' }
+      : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  // A symlink or file at a gitlink path would be read through, or is not a
+  // checkout at all.
+  if (!directory.isDirectory) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  try {
+    readers.statReader(path.join(absolutePath, '.git'))
+  } catch (error) {
+    if (!isEnoent(error)) {
+      return { status: 'error', reasonCode: 'file-read-failed' }
+    }
+    // No `.git`: uninitialized only if the directory is empty.
+    return directoryIsEmpty(absolutePath)
+      ? { status: 'uninitialized' }
+      : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  return readInitializedGitlink(readers, absolutePath, limits)
+}
+
 function appendSubmoduleFact(
   hash: ReturnType<typeof createHash>,
-  runner: OperationObserverCommandRunner,
-  submodulePath: string,
+  readers: WorktreeReaders,
+  absolutePath: string,
   relativePath: string,
   limits: Limits,
   budget: SnapshotBudget,
 ): FactResult {
-  const submodule = runCommand(
-    runner,
-    ['rev-parse', '--verify', 'HEAD'],
-    submodulePath,
-    limits,
-  )
-  if (submodule.status === 'error') return submodule
-  const revision = submodule.output.stdout.trim()
-  if (!/^[0-9a-f]{40}$/i.test(revision)) {
-    return { status: 'error', reasonCode: 'file-read-failed' }
-  }
+  const inspected = inspectGitlink(readers, absolutePath, limits)
+  if (inspected.status === 'error') return inspected
+  const id = inspected.status === 'initialized' ? inspected.id : undefined
   hash.update('gitlink\0')
   hash.update(relativePath)
   hash.update('\0')
-  hash.update(revision.toLowerCase())
+  // `uninitialized` is not hex, so it can never collide with a revision.
+  hash.update(id ?? 'uninitialized')
   hash.update('\0')
   budget.gitlinks += 1
   return {
     status: 'ok',
-    record: {
-      path: relativePath,
-      kind: 'gitlink',
-      mode: '160000',
-      id: revision.toLowerCase(),
-    },
+    record: { path: relativePath, kind: 'gitlink', mode: '160000', id },
     stat: undefined,
   }
 }
@@ -1270,6 +1348,17 @@ function appendResolvedFact(
   const { mode, relativePath } = entry
   // An empty mode means the path is not in the index.
   const tracked = mode !== ''
+  // A gitlink inspects its own directory, so it is dispatched before the stat.
+  if (mode === '160000') {
+    return appendSubmoduleFact(
+      hash,
+      readers,
+      absolutePath,
+      relativePath,
+      limits,
+      budget,
+    )
+  }
   let stat: OperationObserverFileStat
   try {
     stat = readers.statReader(absolutePath)
@@ -1277,16 +1366,6 @@ function appendResolvedFact(
     return isEnoent(error)
       ? vanishedPath(tracked, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
-  }
-  if (mode === '160000') {
-    return appendSubmoduleFact(
-      hash,
-      readers.runner,
-      absolutePath,
-      relativePath,
-      limits,
-      budget,
-    )
   }
   return stat.isSymbolicLink
     ? appendSymlinkFact(
@@ -1837,6 +1916,16 @@ function readWorktreeRevisionV2(
   const modes = new Map(
     listings.stageEntries.map((entry) => [entry.relativePath, entry.mode]),
   )
+  const modeOf = (relativePath: string): string =>
+    // Index first, then the HEAD tree; empty means not tracked at all.
+    modes.get(relativePath) ?? tree.entries.get(relativePath)?.mode ?? ''
+  // Counted from the index and the HEAD tree before any submodule spawn.
+  if (
+    paths.filter((entry) => modeOf(entry) === '160000').length >
+    limits.maxGitlinks
+  ) {
+    return { status: 'error', reasonCode: 'file-limit' }
+  }
   const hash = createHash('sha256')
   hash.update(WORKTREE_DIGEST_DOMAIN)
   const budget: SnapshotBudget = { files: 0, bytes: 0, gitlinks: 0 }
@@ -1846,12 +1935,7 @@ function readWorktreeRevisionV2(
       hash,
       readers,
       context,
-      {
-        relativePath,
-        // Index first, then the HEAD tree; empty means not tracked at all.
-        mode:
-          modes.get(relativePath) ?? tree.entries.get(relativePath)?.mode ?? '',
-      },
+      { relativePath, mode: modeOf(relativePath) },
       limits,
       budget,
       format,
@@ -2251,11 +2335,12 @@ function resolveWorktreeReaders(
   runner: OperationObserverCommandRunner,
   options: Pick<
     OpencodeOperationObserverOptions,
-    'fileReader' | 'symlinkReader' | 'statReader'
+    'fileReader' | 'symlinkReader' | 'statReader' | 'realPath'
   >,
 ): WorktreeReaders {
   return {
     runner,
+    realPath: options.realPath ?? fs.realpathSync,
     readRegular: options.fileReader
       ? adaptInjectedFileReader(options.fileReader)
       : readRegularFileHardened,

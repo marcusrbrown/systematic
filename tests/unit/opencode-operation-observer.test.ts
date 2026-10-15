@@ -3181,3 +3181,384 @@ describe('OpenCode operation observer path set and ignore sources', () => {
     }
   })
 })
+
+const FAKE_GITLINK_ID = 'b'.repeat(40)
+
+/** Stages gitlinks (mode 160000) without needing a repository behind them. */
+function stageGitlinks(
+  root: string,
+  names: readonly string[],
+  id = FAKE_GITLINK_ID,
+) {
+  gitOutput(
+    root,
+    ['update-index', '--add', '--index-info'],
+    names.map((name) => `160000 ${id}\t${name}\n`).join(''),
+  )
+}
+
+function recordFor(
+  result: ReturnType<typeof readWorktreeRecords>,
+  name: string,
+) {
+  if (result.status !== 'ok')
+    throw new Error(`records unavailable: ${result.reasonCode}`)
+  return result.records.find((record) => record.path === name)
+}
+
+/** A committed sha1 repository to use as a submodule source. */
+function createSubmoduleSource(extraArgs: readonly string[] = []): string {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-subsrc-'),
+  )
+  const init = runGit(root, ['init', '--quiet', ...extraArgs])
+  if (init.status !== 0) {
+    fs.rmSync(root, { recursive: true, force: true })
+    throw new Error('git setup failed: init')
+  }
+  runGit(root, ['config', 'user.email', 'observer@example.invalid'])
+  runGit(root, ['config', 'user.name', 'Observer Test'])
+  fs.writeFileSync(path.join(root, 'sub.txt'), 'submodule\n')
+  addTracked(root, ['sub.txt'], 'sub')
+  return root
+}
+
+function addSubmodule(parent: string, source: string, name: string) {
+  const added = spawnSync(
+    'git',
+    [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      '--quiet',
+      source,
+      name,
+    ],
+    { cwd: parent, encoding: 'utf8' },
+  )
+  if (added.status !== 0)
+    throw new Error(`submodule add failed: ${added.stderr}`)
+  expect(
+    runGit(parent, ['commit', '--quiet', '-m', 'add submodule']).status,
+  ).toBe(0)
+}
+
+describe('OpenCode operation observer gitlink hardening', () => {
+  test('an uninitialized gitlink directory no longer hashes the parent HEAD', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(recordFor(readWorktreeRecords(fixture.root), 'sub')).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: undefined,
+      })
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await digestOf(observer)
+      // The parent's HEAD moves; an uninitialized gitlink must not follow it.
+      gitOutput(fixture.root, [
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'moved',
+      ])
+      expect(await digestOf(observer)).toBe(before)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a gitlink directory that is missing entirely folds as uninitialized', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      expect(recordFor(readWorktreeRecords(fixture.root), 'sub')).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: undefined,
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a file written into an uninitialized gitlink directory fails closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'smuggled.txt'), 'x\n')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an empty .git directory cannot make a gitlink impersonate the parent', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub', '.git'), { recursive: true })
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a symlink at a gitlink path fails closed instead of reading through it', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.symlinkSync('.', path.join(fixture.root, 'sub'))
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test.each([
+    { count: 33, limits: undefined },
+    { count: 3, limits: { maxGitlinks: 2 } },
+  ])(
+    '$count gitlinks over the limit give file-limit before any submodule spawn',
+    async ({ count, limits }) => {
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        const names = Array.from({ length: count }, (_, index) => `sub${index}`)
+        stageGitlinks(fixture.root, names)
+        for (const name of names) {
+          fs.mkdirSync(path.join(fixture.root, name))
+        }
+        const root = fs.realpathSync(fixture.root)
+        const cwds: string[] = []
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+          ...(limits ? { limits } : {}),
+          commandRunner: (args, cwd) => {
+            cwds.push(cwd)
+            return runGit(cwd, args)
+          },
+        })
+        cwds.length = 0
+        await expect(observer.snapshot()).resolves.toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-limit',
+        })
+        expect(
+          cwds.filter((cwd) => cwd !== root && cwd.startsWith(root)),
+        ).toEqual([])
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('exactly 32 gitlinks are within the default limit', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(
+        fixture.root,
+        Array.from({ length: 32 }, (_, index) => `sub${index}`),
+      )
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a HEAD-only gitlink whose submodule is still checked out fails closed', async () => {
+    // After `git rm --cached`, git lists the checked-out submodule as an
+    // untracked nested repository (`sub/`), which cannot be read as a file.
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'sub']).status,
+      ).toBe(0)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('a gitlink present only in the HEAD tree is still dispatched as a gitlink: uninitialized, not the parent HEAD', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'gitlink']).status,
+      ).toBe(0)
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'sub']).status,
+      ).toBe(0)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      const result = readWorktreeRecords(fixture.root)
+      expect(result.status).toBe('ok')
+      expect(recordFor(result, 'sub')?.id).toBeUndefined()
+      expect(recordFor(result, 'sub')?.kind).toBe('gitlink')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an initialized submodule keeps a stable identity and matches git ids', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      const staged = gitOutput(fixture.root, [
+        'ls-files',
+        '--stage',
+        'sub',
+      ]).split(/\s+/)[1]
+      const inTree = gitOutput(fixture.root, ['ls-tree', 'HEAD', 'sub']).split(
+        /\s+/,
+      )[2]
+      const record = recordFor(readWorktreeRecords(fixture.root), 'sub')
+      expect(record).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: staged,
+      })
+      expect(record?.id).toBe(inTree)
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const first = await observer.snapshot()
+      expect(first.status).toBe('available')
+      await expect(observer.snapshot()).resolves.toEqual(first)
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('detects an initialized submodule in a repository under a symlinked directory', async () => {
+    const source = createSubmoduleSource()
+    const realParent = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-real-'),
+    )
+    const aliasDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-alias-'),
+    )
+    const alias = path.join(aliasDir, 'link-to-repo')
+    try {
+      const repo = path.join(realParent, 'repo')
+      fs.mkdirSync(repo)
+      expect(runGit(repo, ['init', '--quiet']).status).toBe(0)
+      runGit(repo, ['config', 'user.email', 'observer@example.invalid'])
+      runGit(repo, ['config', 'user.name', 'Observer Test'])
+      setExcludesFile(repo, null)
+      fs.writeFileSync(path.join(repo, 'f'), 'f\n')
+      addTracked(repo, ['f'], 'f')
+      addSubmodule(repo, source, 'sub')
+      fs.symlinkSync(repo, alias, 'dir')
+      const expected = gitOutput(path.join(repo, 'sub'), ['rev-parse', 'HEAD'])
+      const records = readWorktreeRecords(alias)
+      expect(recordFor(records, 'sub')?.id).toBe(expected)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: alias,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fs.rmSync(realParent, { recursive: true, force: true })
+      fs.rmSync(aliasDir, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts a 64-hex submodule id in a sha256 repository', () => {
+    const probe = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-sha256-probe-'),
+    )
+    const parentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-sha256-'),
+    )
+    let source: string | undefined
+    try {
+      if (
+        runGit(probe, ['init', '--quiet', '--object-format=sha256']).status !==
+        0
+      ) {
+        return // this git cannot create sha256 repositories
+      }
+      source = createSubmoduleSource(['--object-format=sha256'])
+      expect(
+        runGit(parentDir, ['init', '--quiet', '--object-format=sha256']).status,
+      ).toBe(0)
+      runGit(parentDir, ['config', 'user.email', 'observer@example.invalid'])
+      runGit(parentDir, ['config', 'user.name', 'Observer Test'])
+      setExcludesFile(parentDir, null)
+      fs.writeFileSync(path.join(parentDir, 'f'), 'f\n')
+      addTracked(parentDir, ['f'], 'f')
+      addSubmodule(parentDir, source, 'sub')
+      const staged = gitOutput(parentDir, ['ls-files', '--stage', 'sub']).split(
+        /\s+/,
+      )[1]
+      expect(staged).toHaveLength(64)
+      expect(recordFor(readWorktreeRecords(parentDir), 'sub')).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: staged,
+      })
+    } finally {
+      if (source) fs.rmSync(source, { recursive: true, force: true })
+      fs.rmSync(probe, { recursive: true, force: true })
+      fs.rmSync(parentDir, { recursive: true, force: true })
+    }
+  })
+})
