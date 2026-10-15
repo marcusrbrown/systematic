@@ -1962,40 +1962,51 @@ function readWorktreeRevisionV2(
   }
 }
 
-function readCommitClosure(
-  runner: OperationObserverCommandRunner,
-  context: RepositoryContext,
-  limits: Limits,
-):
-  | { status: 'ok'; closed: boolean }
-  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  let diff: OperationObserverCommandResult
-  try {
-    diff = runner(
-      ['diff', '--quiet', 'HEAD', '--', ':/'],
-      context.commandDirectory,
-      limits.maxCommandOutputBytes,
-      limits.maxCommandTimeoutMs,
-    )
-  } catch {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const diffError = commandResultError(diff, limits)
-  if (diffError) return { status: 'error', reasonCode: diffError }
-  if (diff.status !== 0 && diff.status !== 1) {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const untracked = runCommand(
-    runner,
-    UNTRACKED_FILES_ARGS,
-    context.commandDirectory,
-    limits,
+function recordKindForTreeMode(mode: string): WorktreeRecordKind {
+  if (mode === '120000') return 'symlink'
+  if (mode === '160000') return 'gitlink'
+  return 'regular'
+}
+
+/** One observed path equals its `HEAD` entry in kind, mode and object id. */
+function recordMatchesTreeEntry(
+  record: WorktreeRecord,
+  entry: HeadTreeEntry,
+): boolean {
+  // An uninitialized gitlink and a `missing` path carry no id and never match.
+  return (
+    record.id !== undefined &&
+    record.id === entry.id &&
+    record.mode === entry.mode &&
+    record.kind === recordKindForTreeMode(entry.mode)
   )
-  if (untracked.status === 'error') return untracked
-  return {
-    status: 'ok',
-    closed: diff.status === 0 && untracked.output.stdout.length === 0,
+}
+
+/**
+ * Closed means the observed tree is exactly the `HEAD` tree: every `HEAD`
+ * entry was observed with the same kind, mode and id, and nothing else was
+ * observed. Untracked, intent-to-add and self-ignored files are extra records;
+ * a deleted path is a `missing` record that matches nothing. An unborn `HEAD`
+ * has no tree to equal, so it is never closed. Only the records are compared,
+ * so no git filter, replace ref or normalization can speak for the files, and
+ * the index is not consulted.
+ */
+function deriveCommitClosure(
+  records: readonly WorktreeRecord[],
+  headTree: ReadonlyMap<string, HeadTreeEntry>,
+  head: string | undefined,
+): boolean {
+  if (head === undefined) return false
+  let matched = 0
+  for (const record of records) {
+    const entry = headTree.get(record.path)
+    if (entry === undefined || !recordMatchesTreeEntry(record, entry)) {
+      return false
+    }
+    matched += 1
   }
+  // Records have unique paths, so this means every `HEAD` entry was observed.
+  return matched === headTree.size
 }
 
 function runRemoteCommand(
@@ -2482,15 +2493,17 @@ export function createOpencodeOperationObserver(
         limits,
       )
       if (worktree.status === 'error') return unavailable(worktree)
-      const closure = readCommitClosure(runner, context, limits)
-      if (closure.status === 'error') return unavailable(closure)
       return {
         status: 'available',
         snapshot: {
           targetDigest,
           repositoryRevisionDigest: repository.digest,
           worktreeRevisionDigest: worktree.digest,
-          commitClosure: closure.closed,
+          commitClosure: deriveCommitClosure(
+            worktree.records,
+            worktree.headTree,
+            anchor.head,
+          ),
         },
       }
     },

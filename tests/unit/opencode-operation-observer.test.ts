@@ -2106,8 +2106,7 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
         commandRunner: recordingRunner(calls),
       })
       calls.length = 0
-      // An unborn HEAD is not asserted available here: closure still runs
-      // `diff HEAD`, which a later unit replaces.
+      // An unborn HEAD is available and not closed; only the HEAD reads matter here.
       await observer.snapshot()
       const reads = calls.filter(
         (call) => call.includes('--verify') && call.includes('HEAD'),
@@ -3559,6 +3558,226 @@ describe('OpenCode operation observer gitlink hardening', () => {
       if (source) fs.rmSync(source, { recursive: true, force: true })
       fs.rmSync(probe, { recursive: true, force: true })
       fs.rmSync(parentDir, { recursive: true, force: true })
+    }
+  })
+})
+
+async function closureOf(root: string): Promise<boolean | undefined> {
+  const observer = createOpencodeOperationObserver({ targetDirectory: root })
+  const result = await observer.snapshot()
+  if (result.status !== 'available') {
+    throw new Error(`snapshot unavailable: ${result.reasonCode}`)
+  }
+  return result.snapshot.commitClosure
+}
+
+describe('OpenCode operation observer commit closure from records', () => {
+  test.skipIf(process.platform === 'win32')(
+    'a clean filter that normalizes an edit back to the committed bytes reads not closed',
+    async () => {
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        fs.writeFileSync(path.join(fixture.root, 'f'), 'base\n')
+        addTracked(fixture.root, ['f'], 'f')
+        fs.writeFileSync(
+          path.join(fixture.root, '.git', 'info', 'attributes'),
+          'f filter=fake\n',
+        )
+        expect(
+          runGit(fixture.root, [
+            'config',
+            'filter.fake.clean',
+            "cat >/dev/null; printf 'base\\n'",
+          ]).status,
+        ).toBe(0)
+        fs.writeFileSync(path.join(fixture.root, 'f'), 'edited\n')
+        // The vector: git itself now reports the edited tree as clean.
+        expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
+
+        expect(await closureOf(fixture.root)).toBe(false)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('a staged intent-to-add file reads not closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'new.txt'), 'new\n')
+      expect(runGit(fixture.root, ['add', '-N', 'new.txt']).status).toBe(0)
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an uninitialized gitlink reads not closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'gitlink']).status,
+      ).toBe(0)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a submodule at the committed commit reads closed, and one that moved reads not closed', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      expect(await closureOf(fixture.root)).toBe(true)
+
+      const sub = path.join(fixture.root, 'sub')
+      gitOutput(sub, ['config', 'user.email', 'observer@example.invalid'])
+      gitOutput(sub, ['config', 'user.name', 'Observer Test'])
+      gitOutput(sub, ['commit', '--quiet', '--allow-empty', '-m', 'moved'])
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('a regular file with a symlink target as its content, replacing the symlink, reads not closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const link = path.join(fixture.root, 'link')
+      fs.symlinkSync('tracked.txt', link)
+      addTracked(fixture.root, ['link'], 'link')
+      expect(await closureOf(fixture.root)).toBe(true)
+      fs.rmSync(link)
+      // Same bytes as the symlink target text, so the blob ids are equal.
+      fs.writeFileSync(link, 'tracked.txt')
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'an owner executable-bit change reads not closed, a group-only change still reads closed',
+    async () => {
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        const file = path.join(fixture.root, 'tracked.txt')
+        fs.chmodSync(file, 0o644)
+        expect(await closureOf(fixture.root)).toBe(true)
+
+        fs.chmodSync(file, 0o654)
+        expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
+        expect(await closureOf(fixture.root)).toBe(true)
+
+        fs.chmodSync(file, 0o645)
+        expect(await closureOf(fixture.root)).toBe(true)
+
+        fs.chmodSync(file, 0o744)
+        expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(1)
+        expect(await closureOf(fixture.root)).toBe(false)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('a CRLF worktree file that git reports clean reads not closed (accepted limit)', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      expect(
+        runGit(fixture.root, ['config', 'core.autocrlf', 'true']).status,
+      ).toBe(0)
+      fs.writeFileSync(path.join(fixture.root, 'f'), 'a\r\nb\r\n')
+      addTracked(fixture.root, ['f'], 'f')
+      // Git normalizes the CRLF file to the committed LF blob and calls it clean.
+      expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a deleted tracked file reads not closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.rmSync(path.join(fixture.root, 'tracked.txt'))
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an unborn repository is available and not closed', async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-unborn-'),
+    )
+    try {
+      expect(runGit(root, ['init', '--quiet']).status).toBe(0)
+      setExcludesFile(root, null)
+      expect(await closureOf(root)).toBe(false)
+      fs.writeFileSync(path.join(root, 'f'), 'f\n')
+      expect(await closureOf(root)).toBe(false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a SHA-256 repository reads closed after a commit and open after an edit', async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-sha256-'),
+    )
+    try {
+      if (
+        runGit(root, ['init', '--quiet', '--object-format=sha256']).status !== 0
+      ) {
+        return // this git cannot create sha256 repositories
+      }
+      runGit(root, ['config', 'user.email', 'observer@example.invalid'])
+      runGit(root, ['config', 'user.name', 'Observer Test'])
+      setExcludesFile(root, null)
+      fs.writeFileSync(path.join(root, 'f'), 'base\n')
+      addTracked(root, ['f'], 'f')
+      expect(await closureOf(root)).toBe(true)
+      fs.writeFileSync(path.join(root, 'f'), 'edited\n')
+      expect(await closureOf(root)).toBe(false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('no snapshot spawns diff', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      const calls: string[][] = []
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: recordingRunner(calls),
+      })
+      calls.length = 0
+      await observer.snapshot()
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'edited\n')
+      await observer.snapshot()
+      expect(calls.length).toBeGreaterThan(0)
+      expect(calls.filter((call) => call.includes('diff'))).toEqual([])
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
     }
   })
 })
