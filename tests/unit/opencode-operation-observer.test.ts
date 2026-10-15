@@ -9,6 +9,7 @@ import {
   type OpencodeOperationObserver,
   type OperationObserverCommandResult,
   type OperationObserverCommandRunner,
+  type OperationObserverFileStat,
   type OperationObserverLimits,
   type OperationObserverRemoteCommandResult,
   type OperationObserverRemoteResult,
@@ -2089,12 +2090,16 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
     }
   })
 
-  test('reads HEAD exactly once per snapshot, for born and unborn repositories', async () => {
+  test('reads HEAD once up front and once in the final pass, for born and unborn repositories', async () => {
     const born = createGitFixture()
     const unborn = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-observer-unborn-'),
     )
-    const headReads = async (root: string): Promise<number> => {
+    // The up-front read is the combined anchor call; the final pass re-reads
+    // HEAD with one standalone `rev-parse --verify -q HEAD`.
+    const headReads = async (
+      root: string,
+    ): Promise<{ anchor: number; finalPass: number }> => {
       const calls: string[][] = []
       const observer = createOpencodeOperationObserver({
         targetDirectory: root,
@@ -2104,14 +2109,19 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
       // An unborn HEAD is not asserted available here: closure still runs
       // `diff HEAD`, which a later unit replaces.
       await observer.snapshot()
-      return calls.filter(
+      const reads = calls.filter(
         (call) => call.includes('--verify') && call.includes('HEAD'),
-      ).length
+      )
+      return {
+        anchor: reads.filter((call) => call.includes('--show-toplevel')).length,
+        finalPass: reads.filter((call) => !call.includes('--show-toplevel'))
+          .length,
+      }
     }
     try {
       expect(runGit(unborn, ['init', '--quiet']).status).toBe(0)
-      expect(await headReads(born.root)).toBe(1)
-      expect(await headReads(unborn)).toBe(1)
+      expect(await headReads(born.root)).toEqual({ anchor: 1, finalPass: 1 })
+      expect(await headReads(unborn)).toEqual({ anchor: 1, finalPass: 1 })
     } finally {
       fs.rmSync(unborn, { recursive: true, force: true })
       born.cleanup()
@@ -2327,6 +2337,351 @@ describe('OpenCode operation observer worktree identity characterization', () =>
       }
     } finally {
       extraCleanup()
+      fixture.cleanup()
+    }
+  })
+})
+
+/** lstat with the optional identity fields the race checks compare. */
+function lstatWithIdentity(filePath: string): OperationObserverFileStat {
+  const stat = fs.lstatSync(filePath, { bigint: true })
+  return {
+    isFile: stat.isFile(),
+    isSymbolicLink: stat.isSymbolicLink(),
+    isDirectory: stat.isDirectory(),
+    mode: Number(stat.mode),
+    size: Number(stat.size),
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  }
+}
+
+/** Runs real git, then lets `intercept` observe or rewrite each result. */
+function interceptingRunner(
+  intercept: (
+    args: readonly string[],
+    result: OperationObserverCommandResult,
+    cwd: string,
+  ) => OperationObserverCommandResult | undefined,
+): OperationObserverCommandRunner {
+  return (args, cwd) => {
+    const result = runGit(cwd, args)
+    return intercept(args, result, cwd) ?? result
+  }
+}
+
+const UNSTABLE = {
+  status: 'unavailable',
+  reasonCode: 'worktree-unstable',
+} as const
+
+describe('OpenCode operation observer race-checked reads', () => {
+  test.each(['size', 'mtimeNs'] as const)(
+    'fails closed when the stat seam reports a different %s after the read',
+    async (field) => {
+      const fixture = createGitFixture()
+      try {
+        let calls = 0
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+          statReader: (filePath) => {
+            const stat = lstatWithIdentity(filePath)
+            if (!filePath.endsWith('tracked.txt')) return stat
+            calls += 1
+            if (calls < 2) return stat
+            return field === 'size'
+              ? { ...stat, size: stat.size + 1 }
+              : { ...stat, mtimeNs: BigInt(stat.mtimeNs ?? 0) + 1n }
+          },
+        })
+        await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('fails closed when a recorded path changes between its read and the final pass', async () => {
+    const fixture = createGitFixture()
+    try {
+      let calls = 0
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        statReader: (filePath) => {
+          const stat = lstatWithIdentity(filePath)
+          if (!filePath.endsWith('tracked.txt')) return stat
+          calls += 1
+          // Call 1 is the pre-read stat, call 2 the post-read stat, call 3 the final pass.
+          return calls >= 3
+            ? { ...stat, ctimeNs: BigInt(stat.ctimeNs ?? 0) + 1n }
+            : stat
+        },
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(calls).toBe(3)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when a later read edits an already-read file', async () => {
+    const fixture = createGitFixture()
+    try {
+      const first = path.join(fixture.root, 'a.txt')
+      fs.writeFileSync(first, 'a\n')
+      fs.writeFileSync(path.join(fixture.root, 'z.txt'), 'z\n')
+      addTracked(fixture.root, ['a.txt', 'z.txt'], 'pair')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        fileReader: (filePath) => {
+          if (filePath.endsWith('z.txt')) fs.appendFileSync(first, 'edited\n')
+          return fs.readFileSync(filePath)
+        },
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when a regular file becomes a symlink to identical bytes before it is opened', async () => {
+    const fixture = createGitFixture()
+    try {
+      const target = path.join(fs.realpathSync(fixture.root), 'tracked.txt')
+      let swapped = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        statReader: (filePath) => {
+          const stat = lstatWithIdentity(filePath)
+          if (filePath === target && !swapped) {
+            swapped = true
+            fs.renameSync(target, `${target}.real`)
+            fs.symlinkSync(`${target}.real`, target)
+          }
+          return stat
+        },
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(swapped).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when the untracked re-list returns an extra path', async () => {
+    const fixture = createGitFixture()
+    try {
+      let relists = 0
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args, result) => {
+          if (!args.includes('--others')) return undefined
+          relists += 1
+          return relists === 2
+            ? { ...result, stdout: `${result.stdout}ghost.txt\0` }
+            : undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when the index changes between the listing and the final pass', async () => {
+    const fixture = createGitFixture()
+    try {
+      let relists = 0
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args, result) => {
+          if (!args.includes('--stage')) return undefined
+          relists += 1
+          return relists === 2
+            ? {
+                ...result,
+                stdout: `${result.stdout}100644 ${'0'.repeat(40)} 0\tghost.txt\0`,
+              }
+            : undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when HEAD moves before the final pass', async () => {
+    const fixture = createGitFixture()
+    try {
+      let moved = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args, _result, cwd) => {
+          if (args.includes('--others') && !moved) {
+            moved = true
+            expect(
+              runGit(cwd, ['commit', '--quiet', '--allow-empty', '-m', 'moved'])
+                .status,
+            ).toBe(0)
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(moved).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('never blocks on a FIFO at a listed tracked path and fails closed', async () => {
+    // git never lists a FIFO as untracked, so the reachable case is a tracked
+    // regular file replaced by one.
+    const fixture = createGitFixture()
+    try {
+      const target = path.join(fixture.root, 'tracked.txt')
+      fs.rmSync(target)
+      if (spawnSync('mkfifo', [target]).status !== 0) return // no mkfifo here
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('never blocks when a regular file becomes a FIFO before it is opened', async () => {
+    const fixture = createGitFixture()
+    try {
+      const target = path.join(fs.realpathSync(fixture.root), 'tracked.txt')
+      let swapped = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        statReader: (filePath) => {
+          const stat = lstatWithIdentity(filePath)
+          if (filePath === target && !swapped) {
+            swapped = true
+            fs.rmSync(target)
+            if (spawnSync('mkfifo', [target]).status !== 0)
+              fs.writeFileSync(target, '')
+          }
+          return stat
+        },
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when an untracked path vanishes between the listing and the read', async () => {
+    const fixture = createGitFixture()
+    try {
+      const gone = path.join(fixture.root, 'gone.txt')
+      fs.writeFileSync(gone, 'x\n')
+      let removed = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !removed) {
+            removed = true
+            fs.rmSync(gone)
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when an untracked path vanishes between its stat and its open', async () => {
+    const fixture = createGitFixture()
+    try {
+      const gone = path.join(fs.realpathSync(fixture.root), 'gone.txt')
+      fs.writeFileSync(gone, 'x\n')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        statReader: (filePath) => {
+          const stat = lstatWithIdentity(filePath)
+          if (filePath === gone) fs.rmSync(gone, { force: true })
+          return stat
+        },
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('still reads a deleted tracked file as a deletion', async () => {
+    const fixture = createGitFixture()
+    try {
+      fs.rmSync(path.join(fixture.root, 'tracked.txt'))
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+
+      const revived = fs.realpathSync(fixture.root)
+      fs.writeFileSync(path.join(revived, 'tracked.txt'), 'initial\n')
+      const target = path.join(revived, 'tracked.txt')
+      const records = readWorktreeRecords(fixture.root, {
+        statReader: (filePath) => {
+          const stat = lstatWithIdentity(filePath)
+          if (filePath === target) fs.rmSync(target, { force: true })
+          return stat
+        },
+      })
+      expect(records.status).toBe('ok')
+      if (records.status !== 'ok') return
+      expect(records.records).toEqual([
+        { path: 'tracked.txt', kind: 'missing', mode: '', id: undefined },
+      ])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('two snapshots of an unchanged tree are identical', async () => {
+    const fixture = createGitFixture()
+    try {
+      fs.writeFileSync(path.join(fixture.root, 'untracked.txt'), 'u\n')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const first = await observer.snapshot()
+      const second = await observer.snapshot()
+      expect(first.status).toBe('available')
+      expect(second).toEqual(first)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a ctime-only touch between snapshots does not change the identity', async () => {
+    const fixture = createGitFixture()
+    try {
+      const file = path.join(fixture.root, 'tracked.txt')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await observer.snapshot()
+      fs.chmodSync(file, fs.statSync(file).mode & 0o7777)
+      const after = await observer.snapshot()
+      expect(before.status).toBe('available')
+      expect(after).toEqual(before)
+    } finally {
       fixture.cleanup()
     }
   })

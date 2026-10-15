@@ -55,6 +55,7 @@ export type OperationObserverReasonCode =
   | 'remote-item-limit'
   | 'remote-not-advanced'
   | 'commit-not-closed'
+  | 'worktree-unstable'
 
 export interface RegisteredWorktreeParentIdentity {
   readonly targetRoot: string
@@ -180,6 +181,12 @@ export interface OperationObserverFileStat {
   readonly isDirectory: boolean
   readonly mode: number
   readonly size: number
+  // Optional identity fields. The race checks compare them before and after a
+  // read; a seam that omits them compares equal (`undefined === undefined`).
+  readonly dev?: number | bigint
+  readonly ino?: number | bigint
+  readonly mtimeNs?: number | bigint
+  readonly ctimeNs?: number | bigint
 }
 
 export interface OpencodeOperationObserverOptions {
@@ -256,9 +263,33 @@ interface SnapshotBudget {
   gitlinks: number
 }
 
+type RegularReadOutcome =
+  | { status: 'ok'; content: Uint8Array }
+  | { status: 'missing' }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+/** Reads a regular file under a byte budget. `expected` is the prior lstat. */
+type RegularContentReader = (
+  absolutePath: string,
+  expected: OperationObserverFileStat,
+  maxBytes: number,
+) => RegularReadOutcome
+
+/** What the final pass re-checks for one observed path. */
+interface PathObservation {
+  readonly absolutePath: string
+  readonly record: WorktreeRecord
+  /**
+   * Post-read stat. Compared in the final pass, never hashed. `undefined` for
+   * a gitlink (a directory whose times churn with submodule activity) and for
+   * a `missing` path (which must stay missing).
+   */
+  readonly stat: OperationObserverFileStat | undefined
+}
+
 interface WorktreeReaders {
   readonly runner: OperationObserverCommandRunner
-  readonly fileReader: (filePath: string) => Uint8Array
+  readonly readRegular: RegularContentReader
   readonly symlinkReader: (filePath: string) => Uint8Array
   readonly statReader: (filePath: string) => OperationObserverFileStat
 }
@@ -881,7 +912,15 @@ function isEnoent(error: unknown): boolean {
 }
 
 type FactResult =
-  | { status: 'ok'; record: WorktreeRecord }
+  | {
+      status: 'ok'
+      record: WorktreeRecord
+      stat: OperationObserverFileStat | undefined
+    }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+type ObservationResult =
+  | { status: 'ok'; observation: PathObservation }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
 
 function gitBlobId(content: Uint8Array, format: ObjectFormat): string {
@@ -895,6 +934,162 @@ function missingRecord(relativePath: string): FactResult {
   return {
     status: 'ok',
     record: { path: relativePath, kind: 'missing', mode: '', id: undefined },
+    stat: undefined,
+  }
+}
+
+/**
+ * A listed path that is gone. A tracked path is a deletion. An untracked path
+ * was listed moments ago, so its disappearance is a race.
+ */
+function vanishedPath(tracked: boolean, relativePath: string): FactResult {
+  return tracked
+    ? missingRecord(relativePath)
+    : { status: 'error', reasonCode: 'worktree-unstable' }
+}
+
+function sameStat(
+  left: OperationObserverFileStat,
+  right: OperationObserverFileStat,
+): boolean {
+  return (
+    left.isFile === right.isFile &&
+    left.isSymbolicLink === right.isSymbolicLink &&
+    left.mode === right.mode &&
+    left.size === right.size &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  )
+}
+
+/** Takes a fresh stat and requires it to equal `before`. */
+function confirmStat(
+  readers: WorktreeReaders,
+  absolutePath: string,
+  before: OperationObserverFileStat,
+):
+  | { status: 'ok'; stat: OperationObserverFileStat }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  let after: OperationObserverFileStat
+  try {
+    after = readers.statReader(absolutePath)
+  } catch (error) {
+    return {
+      status: 'error',
+      reasonCode: isEnoent(error) ? 'worktree-unstable' : 'file-read-failed',
+    }
+  }
+  return sameStat(before, after)
+    ? { status: 'ok', stat: after }
+    : { status: 'error', reasonCode: 'worktree-unstable' }
+}
+
+const READ_CHUNK_BYTES = 65_536
+// Reads are synchronous, so one scratch buffer is never shared across calls.
+const READ_SCRATCH = Buffer.allocUnsafe(READ_CHUNK_BYTES)
+
+function hasErrorCode(error: unknown, ...codes: readonly string[]): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    codes.includes(error.code)
+  )
+}
+
+function openWithoutFollowing(
+  absolutePath: string,
+):
+  | { status: 'ok'; fd: number }
+  | { status: 'missing' }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  // O_NONBLOCK keeps a path swapped for a FIFO from blocking the open.
+  // O_NOFOLLOW is undefined on Windows; the lstat comparison covers it there.
+  const flags =
+    fs.constants.O_RDONLY |
+    (fs.constants.O_NOFOLLOW ?? 0) |
+    (fs.constants.O_NONBLOCK ?? 0)
+  try {
+    return { status: 'ok', fd: fs.openSync(absolutePath, flags) }
+  } catch (error) {
+    if (isEnoent(error)) return { status: 'missing' }
+    // The prior lstat said regular, so a symlink here was swapped in.
+    if (hasErrorCode(error, 'ELOOP', 'EMLINK')) {
+      return { status: 'error', reasonCode: 'worktree-unstable' }
+    }
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+}
+
+function readOpenedRegularFile(
+  fd: number,
+  expected: OperationObserverFileStat,
+  maxBytes: number,
+): RegularReadOutcome {
+  const opened = fs.fstatSync(fd, { bigint: true })
+  const identityKnown = expected.dev !== undefined && expected.ino !== undefined
+  if (
+    !opened.isFile() ||
+    (identityKnown &&
+      (opened.dev !== BigInt(expected.dev ?? 0) ||
+        opened.ino !== BigInt(expected.ino ?? 0)))
+  ) {
+    return { status: 'error', reasonCode: 'worktree-unstable' }
+  }
+  // Cap on the bytes actually read, not on what lstat promised.
+  const chunks: Buffer[] = []
+  let total = 0
+  for (;;) {
+    const count = fs.readSync(fd, READ_SCRATCH, 0, READ_CHUNK_BYTES, null)
+    if (count === 0) break
+    total += count
+    if (total > maxBytes) {
+      return { status: 'error', reasonCode: 'file-output-limit' }
+    }
+    chunks.push(Buffer.from(READ_SCRATCH.subarray(0, count)))
+  }
+  return { status: 'ok', content: Buffer.concat(chunks, total) }
+}
+
+/**
+ * The hardened default reader: open without following or blocking, require the
+ * opened inode to be the one already lstat'd, and read to EOF under the budget.
+ */
+function readRegularFileHardened(
+  absolutePath: string,
+  expected: OperationObserverFileStat,
+  maxBytes: number,
+): RegularReadOutcome {
+  const opened = openWithoutFollowing(absolutePath)
+  if (opened.status !== 'ok') return opened
+  try {
+    return readOpenedRegularFile(opened.fd, expected, maxBytes)
+  } catch {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  } finally {
+    try {
+      fs.closeSync(opened.fd)
+    } catch {
+      // The content was already read; a failed close changes nothing.
+    }
+  }
+}
+
+/** Keeps an injected `fileReader` on its existing contract. */
+function adaptInjectedFileReader(
+  fileReader: (filePath: string) => Uint8Array,
+): RegularContentReader {
+  return (absolutePath) => {
+    try {
+      return { status: 'ok', content: fileReader(absolutePath) }
+    } catch (error) {
+      return isEnoent(error)
+        ? { status: 'missing' }
+        : { status: 'error', reasonCode: 'file-read-failed' }
+    }
   }
 }
 
@@ -931,24 +1126,27 @@ function appendSubmoduleFact(
       mode: '160000',
       id: revision.toLowerCase(),
     },
+    stat: undefined,
   }
 }
 
 function appendSymlinkFact(
   hash: ReturnType<typeof createHash>,
-  symlinkReader: (filePath: string) => Uint8Array,
+  readers: WorktreeReaders,
   absolutePath: string,
   relativePath: string,
+  stat: OperationObserverFileStat,
   limits: Limits,
   budget: SnapshotBudget,
   format: ObjectFormat,
+  tracked: boolean,
 ): FactResult {
   let target: Uint8Array
   try {
-    target = symlinkReader(absolutePath)
+    target = readers.symlinkReader(absolutePath)
   } catch (error) {
     return isEnoent(error)
-      ? missingRecord(relativePath)
+      ? vanishedPath(tracked, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
   const nextBytes = budget.bytes + target.byteLength
@@ -958,6 +1156,8 @@ function appendSymlinkFact(
   ) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
+  const confirmed = confirmStat(readers, absolutePath, stat)
+  if (confirmed.status === 'error') return confirmed
   hash.update('symlink\0')
   hash.update(relativePath)
   hash.update('\0')
@@ -972,36 +1172,37 @@ function appendSymlinkFact(
       mode: '120000',
       id: gitBlobId(target, format),
     },
+    stat: confirmed.stat,
   }
 }
 
 function appendRegularFact(
   hash: ReturnType<typeof createHash>,
-  fileReader: (filePath: string) => Uint8Array,
+  readers: WorktreeReaders,
   absolutePath: string,
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
   budget: SnapshotBudget,
   format: ObjectFormat,
+  tracked: boolean,
 ): FactResult {
   if (!stat.isFile || !Number.isSafeInteger(stat.size) || stat.size < 0) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
-  if (budget.bytes + stat.size > limits.maxTotalFileBytes) {
+  const remaining = limits.maxTotalFileBytes - budget.bytes
+  if (stat.size > remaining) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
-  let content: Uint8Array
-  try {
-    content = fileReader(absolutePath)
-  } catch (error) {
-    return isEnoent(error)
-      ? missingRecord(relativePath)
-      : { status: 'error', reasonCode: 'file-read-failed' }
-  }
-  if (budget.bytes + content.byteLength > limits.maxTotalFileBytes) {
+  const read = readers.readRegular(absolutePath, stat, remaining)
+  if (read.status === 'missing') return vanishedPath(tracked, relativePath)
+  if (read.status === 'error') return read
+  const { content } = read
+  if (content.byteLength > remaining) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
+  const confirmed = confirmStat(readers, absolutePath, stat)
+  if (confirmed.status === 'error') return confirmed
   hash.update('regular\0')
   hash.update(relativePath)
   hash.update('\0')
@@ -1018,7 +1219,63 @@ function appendRegularFact(
       mode: (stat.mode & 0o100) !== 0 ? '100755' : '100644',
       id: gitBlobId(content, format),
     },
+    stat: confirmed.stat,
   }
+}
+
+function appendResolvedFact(
+  hash: ReturnType<typeof createHash>,
+  readers: WorktreeReaders,
+  absolutePath: string,
+  entry: Pick<StageEntry, 'mode' | 'relativePath'>,
+  limits: Limits,
+  budget: SnapshotBudget,
+  format: ObjectFormat,
+): FactResult {
+  const { mode, relativePath } = entry
+  // An empty mode means the path is not in the index.
+  const tracked = mode !== ''
+  let stat: OperationObserverFileStat
+  try {
+    stat = readers.statReader(absolutePath)
+  } catch (error) {
+    return isEnoent(error)
+      ? vanishedPath(tracked, relativePath)
+      : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  if (mode === '160000') {
+    return appendSubmoduleFact(
+      hash,
+      readers.runner,
+      absolutePath,
+      relativePath,
+      limits,
+      budget,
+    )
+  }
+  return stat.isSymbolicLink
+    ? appendSymlinkFact(
+        hash,
+        readers,
+        absolutePath,
+        relativePath,
+        stat,
+        limits,
+        budget,
+        format,
+        tracked,
+      )
+    : appendRegularFact(
+        hash,
+        readers,
+        absolutePath,
+        relativePath,
+        stat,
+        limits,
+        budget,
+        format,
+        tracked,
+      )
 }
 
 function appendFileFactV2(
@@ -1029,55 +1286,156 @@ function appendFileFactV2(
   limits: Limits,
   budget: SnapshotBudget,
   format: ObjectFormat,
-): FactResult {
-  const { mode, relativePath } = entry
-  const absolutePath = safePath(context.worktreeRoot, relativePath)
-  if (!absolutePath || outputBytes(relativePath) > limits.maxPathBytes) {
+): ObservationResult {
+  const absolutePath = safePath(context.worktreeRoot, entry.relativePath)
+  if (!absolutePath || outputBytes(entry.relativePath) > limits.maxPathBytes) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
-  let stat: OperationObserverFileStat
-  try {
-    stat = readers.statReader(absolutePath)
-  } catch (error) {
-    return isEnoent(error)
-      ? missingRecord(relativePath)
-      : { status: 'error', reasonCode: 'file-read-failed' }
-  }
-  if (mode === '160000')
-    return appendSubmoduleFact(
-      hash,
-      readers.runner,
-      absolutePath,
-      relativePath,
-      limits,
-      budget,
-    )
-  if (stat.isSymbolicLink) {
-    return appendSymlinkFact(
-      hash,
-      readers.symlinkReader,
-      absolutePath,
-      relativePath,
-      limits,
-      budget,
-      format,
-    )
-  }
-  return appendRegularFact(
+  const fact = appendResolvedFact(
     hash,
-    readers.fileReader,
+    readers,
     absolutePath,
-    relativePath,
-    stat,
+    entry,
     limits,
     budget,
     format,
   )
+  if (fact.status === 'error') return fact
+  return {
+    status: 'ok',
+    observation: { absolutePath, record: fact.record, stat: fact.stat },
+  }
+}
+
+interface FirstListing {
+  readonly staged: string
+  readonly untracked: string
+}
+
+type StabilityResult =
+  | { status: 'ok' }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+const UNSTABLE: StabilityResult = {
+  status: 'error',
+  reasonCode: 'worktree-unstable',
+}
+
+function verifyObservationUnchanged(
+  readers: WorktreeReaders,
+  { absolutePath, record, stat }: PathObservation,
+): StabilityResult {
+  // A gitlink directory's times churn with submodule activity, which this
+  // snapshot does not cover.
+  if (record.kind === 'gitlink') return { status: 'ok' }
+  let fresh: OperationObserverFileStat
+  try {
+    fresh = readers.statReader(absolutePath)
+  } catch (error) {
+    if (!isEnoent(error)) {
+      return { status: 'error', reasonCode: 'file-read-failed' }
+    }
+    // A missing record must stay missing; anything else vanished mid-snapshot.
+    return record.kind === 'missing' ? { status: 'ok' } : UNSTABLE
+  }
+  if (record.kind === 'missing' || stat === undefined) return UNSTABLE
+  return sameStat(stat, fresh) ? { status: 'ok' } : UNSTABLE
+}
+
+function verifyObservationsUnchanged(
+  readers: WorktreeReaders,
+  observations: readonly PathObservation[],
+): StabilityResult {
+  for (const observation of observations) {
+    const result = verifyObservationUnchanged(readers, observation)
+    if (result.status === 'error') return result
+  }
+  return { status: 'ok' }
+}
+
+function verifyListingsUnchanged(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  limits: Limits,
+  first: FirstListing,
+): StabilityResult {
+  const staged = runCommand(
+    runner,
+    ['ls-files', '--stage', '--full-name', '-z', '--', ':/'],
+    context.commandDirectory,
+    limits,
+  )
+  if (staged.status === 'error') return staged
+  const untracked = runCommand(
+    runner,
+    UNTRACKED_FILES_ARGS,
+    context.commandDirectory,
+    limits,
+  )
+  if (untracked.status === 'error') return untracked
+  return staged.output.stdout === first.staged &&
+    untracked.output.stdout === first.untracked
+    ? { status: 'ok' }
+    : UNSTABLE
+}
+
+function verifyHeadUnchanged(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  limits: Limits,
+  head: string | undefined,
+): StabilityResult {
+  let result: OperationObserverCommandResult
+  try {
+    result = runner(
+      ['rev-parse', '--verify', '-q', 'HEAD'],
+      context.commandDirectory,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const resultError = commandResultError(result, limits)
+  if (resultError) return { status: 'error', reasonCode: resultError }
+  // Exit 1 under `-q` is an unborn HEAD.
+  if (result.status !== 0 && result.status !== 1) {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const current = result.status === 0 ? result.stdout.trim() : undefined
+  return current === head ? { status: 'ok' } : UNSTABLE
+}
+
+/**
+ * The final pass. Any difference from what the snapshot saw means the tree
+ * moved underneath it, so the snapshot cannot be trusted.
+ */
+function runFinalPass(
+  readers: WorktreeReaders,
+  context: RepositoryContext,
+  limits: Limits,
+  head: string | undefined,
+  first: FirstListing,
+  observations: readonly PathObservation[],
+): StabilityResult {
+  const unchanged = verifyObservationsUnchanged(readers, observations)
+  if (unchanged.status === 'error') return unchanged
+  const listings = verifyListingsUnchanged(
+    readers.runner,
+    context,
+    limits,
+    first,
+  )
+  if (listings.status === 'error') return listings
+  // Ignore sources (info/exclude, core.excludesFile, untracked .gitignore
+  // files) are re-read here once they join the identity.
+  return verifyHeadUnchanged(readers.runner, context, limits, head)
 }
 
 function readWorktreeRevisionV2(
   readers: WorktreeReaders,
   context: RepositoryContext,
+  head: string | undefined,
   limits: Limits,
   format: ObjectFormat = 'sha1',
 ):
@@ -1125,7 +1483,7 @@ function readWorktreeRevisionV2(
   const hash = createHash('sha256')
   hash.update('systematic:opencode-observer:worktree:v2\0')
   const budget: SnapshotBudget = { files: 0, bytes: 0, gitlinks: 0 }
-  const records: WorktreeRecord[] = []
+  const observations: PathObservation[] = []
   for (const relativePath of paths) {
     const result = appendFileFactV2(
       hash,
@@ -1138,9 +1496,22 @@ function readWorktreeRevisionV2(
     )
     if (result.status === 'error') return result
     budget.files += 1
-    records.push(result.record)
+    observations.push(result.observation)
   }
-  return { status: 'ok', digest: hash.digest('hex'), records }
+  const stable = runFinalPass(
+    readers,
+    context,
+    limits,
+    head,
+    { staged: staged.output.stdout, untracked: untracked.output.stdout },
+    observations,
+  )
+  if (stable.status === 'error') return stable
+  return {
+    status: 'ok',
+    digest: hash.digest('hex'),
+    records: observations.map((observation) => observation.record),
+  }
 }
 
 function readCommitClosure(
@@ -1521,7 +1892,9 @@ function resolveWorktreeReaders(
 ): WorktreeReaders {
   return {
     runner,
-    fileReader: options.fileReader ?? fs.readFileSync,
+    readRegular: options.fileReader
+      ? adaptInjectedFileReader(options.fileReader)
+      : readRegularFileHardened,
     symlinkReader:
       options.symlinkReader ??
       ((filePath: string): Uint8Array =>
@@ -1529,13 +1902,17 @@ function resolveWorktreeReaders(
     statReader:
       options.statReader ??
       ((filePath: string): OperationObserverFileStat => {
-        const stat = fs.lstatSync(filePath)
+        const stat = fs.lstatSync(filePath, { bigint: true })
         return {
           isFile: stat.isFile(),
           isSymbolicLink: stat.isSymbolicLink(),
           isDirectory: stat.isDirectory(),
-          mode: stat.mode,
-          size: stat.size,
+          mode: Number(stat.mode),
+          size: Number(stat.size),
+          dev: stat.dev,
+          ino: stat.ino,
+          mtimeNs: stat.mtimeNs,
+          ctimeNs: stat.ctimeNs,
         }
       }),
   }
@@ -1564,6 +1941,7 @@ export function readWorktreeRecords(
   return readWorktreeRevisionV2(
     resolveWorktreeReaders(runner, options),
     { commandDirectory: targetDirectory, worktreeRoot: anchor.toplevel },
+    anchor.head,
     limits,
   )
 }
@@ -1638,7 +2016,12 @@ export function createOpencodeOperationObserver(
       }
       const repository = readRevision(runner, context, anchor.head, limits)
       if (repository.status === 'error') return unavailable(repository)
-      const worktree = readWorktreeRevisionV2(readers, context, limits)
+      const worktree = readWorktreeRevisionV2(
+        readers,
+        context,
+        anchor.head,
+        limits,
+      )
       if (worktree.status === 'error') return unavailable(worktree)
       const closure = readCommitClosure(runner, context, limits)
       if (closure.status === 'error') return unavailable(closure)
