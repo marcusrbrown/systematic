@@ -2757,6 +2757,72 @@ function createSessionRuntime(
     await next
   }
 
+  // `halt`: the rollup stops with nothing minted for the child. It is either
+  // a dropped child (a blocking reason: no cause, and the child is not
+  // recorded as rolled up) or a fatal failure already committed.
+  type ChildSnapshotOutcome =
+    | {
+        readonly kind: 'snapshot'
+        readonly snapshot: OperationObserverSnapshot
+        readonly blockCapture?: SnapshotBlockCapture
+      }
+    | { readonly kind: 'halt' }
+
+  function settleFailedChildSnapshot(
+    reasonCode: OperationObserverReasonCode,
+    targetIdentity: string,
+    rollupGeneration: number,
+  ): void {
+    if (!isSnapshotBlockingReason(reasonCode)) {
+      markUnavailable(afterCause('local-snapshot-unavailable', reasonCode))
+      return
+    }
+    if (
+      rollupGeneration === unitStartGeneration &&
+      targetIdentity === currentEffectiveTargetIdentity()
+    ) {
+      setSnapshotBlock(reasonCode, targetIdentity)
+    }
+  }
+
+  // One child target's local snapshot. A blocking reason drops the child and
+  // blocks the unit only when the child's target is the effective one. A
+  // clean snapshot hands back the block capture taken with it: the caller
+  // clears the block after minting, because applying the snapshot first would
+  // make the child's own change look like a no-op to the parent.
+  async function readChildSnapshot(
+    observer: OpencodeOperationObserver,
+    targetIdentity: string,
+    rollupGeneration: number,
+  ): Promise<ChildSnapshotOutcome> {
+    // Captured in the same synchronous segment as the snapshot call.
+    const capture = captureSnapshotBlock()
+    let result: OperationObserverResult
+    try {
+      result = await observer.snapshot()
+    } catch {
+      markUnavailable(afterCause('local-snapshot-error'))
+      return { kind: 'halt' }
+    }
+    if (result.status === 'unavailable') {
+      settleFailedChildSnapshot(
+        result.reasonCode,
+        targetIdentity,
+        rollupGeneration,
+      )
+      return { kind: 'halt' }
+    }
+    if (result.snapshot.targetDigest !== targetIdentity) {
+      markUnavailable(afterCause('operation-target-mismatch'))
+      return { kind: 'halt' }
+    }
+    return {
+      kind: 'snapshot',
+      snapshot: result.snapshot,
+      ...(capture ? { blockCapture: capture } : {}),
+    }
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: lineage verification and parent minting must remain atomic
   async function rollupForegroundTask(
     host: HostToolAfter,
@@ -2775,6 +2841,7 @@ function createSessionRuntime(
     // Capture the parent's operation-before identities before reading child
     // history. These are guard-owned digests, not boot-time path values.
     const parentBefore = requireGuard().currentOperationContext()
+    const rollupGeneration = unitStartGeneration
     const children = await options.hostReadback.listChildren(host.sessionID)
     if (
       !children.some(
@@ -2838,6 +2905,13 @@ function createSessionRuntime(
       parentBefore.workspaceIdentity,
     )
     let batchTargetIdentity = currentStatus.unit.pinnedOperationTargetIdentity
+    let blockClear:
+      | {
+          readonly capture: SnapshotBlockCapture
+          readonly targetIdentity: string
+          readonly snapshot: OperationObserverSnapshot
+        }
+      | undefined
     const candidates: Array<{
       readonly receipt: (typeof recovered.receipts)[number]
       readonly snapshot: OperationObserverSnapshot
@@ -2895,22 +2969,19 @@ function createSessionRuntime(
         return
       }
 
-      let targetResult: OperationObserverResult
-      try {
-        targetResult = await registration.observer.snapshot()
-      } catch {
-        markUnavailable(afterCause('local-snapshot-error'))
-        return
-      }
-      if (targetResult.status === 'unavailable') {
-        markUnavailable(
-          afterCause('local-snapshot-unavailable', targetResult.reasonCode),
-        )
-        return
-      }
-      if (targetResult.snapshot.targetDigest !== targetIdentity) {
-        markUnavailable(afterCause('operation-target-mismatch'))
-        return
+      const targetRead = await readChildSnapshot(
+        registration.observer,
+        targetIdentity,
+        rollupGeneration,
+      )
+      if (targetRead.kind === 'halt') return
+      const targetResult = targetRead
+      if (targetRead.blockCapture) {
+        blockClear = {
+          capture: targetRead.blockCapture,
+          targetIdentity,
+          snapshot: targetRead.snapshot,
+        }
       }
 
       const recoveredContext = recoveredOperationContexts.get(
@@ -2999,6 +3070,17 @@ function createSessionRuntime(
       }
     }
     if (minted) rolledUpChildren.add(rollupKey)
+    if (blockClear) {
+      commitSnapshotBlockClear(
+        blockClear.capture,
+        {
+          targetIdentity: blockClear.targetIdentity,
+          pinned: blockClear.targetIdentity !== options.workspaceIdentity,
+        },
+        blockClear.snapshot,
+        afterSnapshotFailureCause,
+      )
+    }
   }
 
   let runtimePolicy = trustedSkillPolicy(
@@ -5130,15 +5212,25 @@ function createSessionRuntime(
     return undefined
   }
 
+  const afterSnapshotFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
+    reasonCode === undefined
+      ? afterCause('local-snapshot-error')
+      : afterCause('local-snapshot-unavailable', reasonCode)
+
+  // `blocked`: the after snapshot hit a blocking reason. The call mints
+  // nothing, and `settleBlockedAfter` decides whether the unit is blocked.
   async function captureAfterOperation(
     pending: PendingOperation,
   ): Promise<
     | { status: 'available'; snapshot: OperationObserverSnapshot }
+    | { status: 'blocked'; reasonCode: SnapshotBlockReason }
     | OperationFailure
   > {
     if (!options.observer) return afterFailure('operation-input-invalid')
     const targetFailure = afterTargetFailure(options.observer, pending)
     if (targetFailure) return targetFailure
+    // Captured in the same synchronous segment as the snapshot call.
+    const blockCapture = captureSnapshotBlock()
     let result: OperationObserverResult
     try {
       result = await pending.observer.snapshot()
@@ -5146,11 +5238,64 @@ function createSessionRuntime(
       return afterFailure('local-snapshot-error')
     }
     if (result.status === 'unavailable') {
-      return afterFailure('local-snapshot-unavailable', result.reasonCode)
+      return isSnapshotBlockingReason(result.reasonCode)
+        ? { status: 'blocked', reasonCode: result.reasonCode }
+        : afterFailure('local-snapshot-unavailable', result.reasonCode)
     }
-    return result.snapshot.targetDigest === pending.targetIdentity
-      ? { status: 'available', snapshot: result.snapshot }
-      : afterFailure('operation-target-mismatch')
+    return settleCleanAfterSnapshot(blockCapture, pending, result.snapshot)
+  }
+
+  function settleCleanAfterSnapshot(
+    blockCapture: SnapshotBlockCapture | undefined,
+    pending: PendingOperation,
+    snapshot: OperationObserverSnapshot,
+  ):
+    | { status: 'available'; snapshot: OperationObserverSnapshot }
+    | OperationFailure {
+    if (snapshot.targetDigest !== pending.targetIdentity) {
+      return afterFailure('operation-target-mismatch')
+    }
+    const failure = blockCapture
+      ? clearBlockAfterOperation(blockCapture, pending, snapshot)
+      : undefined
+    return failure ?? { status: 'available', snapshot }
+  }
+
+  // A clean after snapshot of the effective target clears the block; for any
+  // other target, or a block that has since been replaced, it changes nothing
+  // and the call goes on to mint normally.
+  function clearBlockAfterOperation(
+    capture: SnapshotBlockCapture,
+    pending: PendingOperation,
+    snapshot: OperationObserverSnapshot,
+  ): OperationFailure | undefined {
+    const cleared = commitSnapshotBlockClear(
+      capture,
+      {
+        targetIdentity: pending.targetIdentity,
+        pinned: pending.targetIdentity !== options.workspaceIdentity,
+      },
+      snapshot,
+      afterSnapshotFailureCause,
+    )
+    return cleared.status === 'fatal'
+      ? afterFailure('local-snapshot-error')
+      : undefined
+  }
+
+  // A blocked after snapshot blocks the unit only when it is of the effective
+  // target and the unit is still the one that started the call.
+  function settleBlockedAfter(
+    pending: PendingOperation,
+    reasonCode: SnapshotBlockReason,
+  ): void {
+    if (
+      pending.initiator &&
+      isCurrentInitiator(pending.initiator) &&
+      pending.targetIdentity === currentEffectiveTargetIdentity()
+    ) {
+      setSnapshotBlock(reasonCode, pending.targetIdentity)
+    }
   }
 
   async function captureRemoteAfter(
@@ -5336,6 +5481,11 @@ function createSessionRuntime(
     }
     const capture = await captureAfterOperation(pending)
     if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    if (capture.status === 'blocked') {
+      sealOperation(callDigest, pending, true)
+      settleBlockedAfter(pending, capture.reasonCode)
+      return { status: 'ignored' }
+    }
     if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
       return capture

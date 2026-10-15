@@ -10607,15 +10607,15 @@ describe('OpenCode workflow guard adapter', () => {
       const { observer, arm } = armable({
         snapshot: async () => ({
           status: 'unavailable',
-          reasonCode: 'file-output-limit',
+          reasonCode: 'command-failed',
         }),
       })
       const adapter = await activatedAdapter(observer)
-      await beforeThenAfter(adapter, 'after-file-output-limit', arm)
+      await beforeThenAfter(adapter, 'after-command-failed', arm)
       expect(await causeOf(adapter)).toEqual({
         site: 'tool-after',
         kind: 'local-snapshot-unavailable',
-        reasonCode: 'file-output-limit',
+        reasonCode: 'command-failed',
         timedOut: false,
       })
     })
@@ -16142,6 +16142,12 @@ describe('snapshot block record', () => {
     'command-output-limit',
     'worktree-unstable',
   ] as const
+  const FATAL_AFTER_REASONS = [
+    'target-unavailable',
+    'command-failed',
+    'command-timeout',
+    'file-read-failed',
+  ] as const
   const TIMEOUT = {
     status: 'unavailable' as const,
     reasonCode: 'command-timeout' as const,
@@ -16575,6 +16581,108 @@ describe('snapshot block record', () => {
     })
   })
 
+  const ROLLUP_REGISTRATION = 'snapshot-block-rollup-registration'
+  const ROLLUP_SALT = new Uint8Array(32).fill(21)
+  const CHILD_SESSION = 'snapshot-block-child-session'
+
+  interface TargetAdapter {
+    readonly adapter: OpencodeWorkflowGuard
+    readonly linkedRoot: string
+    readonly workspaceIdentity: string
+    /** The next local snapshots of the parent checkout (the effective target). */
+    queueParent(...next: OperationObserverResult[]): void
+    /** The next local snapshots of the linked worktree. */
+    queueLinked(...next: OperationObserverResult[]): void
+    linkedSnapshots(): number
+    cleanup(): void
+  }
+
+  async function targetAdapter(rollup?: {
+    readonly childParts: () => readonly unknown[]
+  }): Promise<TargetAdapter> {
+    const fixture = createTargetDerivationFixture()
+    const linkedRoot = fs.realpathSync(fixture.linkedRoot)
+    const parent = createOpencodeOperationObserver({
+      targetDirectory: fixture.parentRoot,
+    })
+    const initial = await parent.snapshot()
+    if (initial.status !== 'available') {
+      fixture.cleanup()
+      throw new Error('parent unavailable')
+    }
+    const parentQueue: OperationObserverResult[] = []
+    const linkedQueue: OperationObserverResult[] = []
+    let linkedSnapshots = 0
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'observe', debug: false },
+      workspaceIdentity: initial.snapshot.targetDigest,
+      repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+      worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+      targetDirectory: fixture.parentRoot,
+      sessionLocation: fixture.parentRoot,
+      observer: {
+        ...parent,
+        snapshot: async () => parentQueue.shift() ?? parent.snapshot(),
+      },
+      createTargetObserver: (targetDirectory) => {
+        const real = createOpencodeOperationObserver({ targetDirectory })
+        return {
+          ...real,
+          snapshot: async () => {
+            linkedSnapshots += 1
+            return linkedQueue.shift() ?? real.snapshot()
+          },
+        }
+      },
+      classifier: createReceiptClassifier(),
+      ...(rollup
+        ? {
+            registrationIdentity: ROLLUP_REGISTRATION,
+            sessionSalt: ROLLUP_SALT,
+            hostReadback: {
+              readSessionParts: async (sessionID: string) =>
+                sessionID === SESSION_A ? [] : rollup.childParts(),
+              listChildren: async (sessionID: string) =>
+                sessionID === SESSION_A
+                  ? [{ sessionId: CHILD_SESSION, parentID: SESSION_A }]
+                  : [],
+            },
+          }
+        : {}),
+    })
+    await activateWorkEpoch(adapter)
+    return {
+      adapter,
+      linkedRoot,
+      workspaceIdentity: initial.snapshot.targetDigest,
+      queueParent: (...next) => {
+        parentQueue.push(...next)
+      },
+      queueLinked: (...next) => {
+        linkedQueue.push(...next)
+      },
+      linkedSnapshots: () => linkedSnapshots,
+      cleanup: fixture.cleanup,
+    }
+  }
+
+  const BLOCKED = (reasonCode: OperationObserverReasonCode) =>
+    ({ status: 'unavailable', reasonCode }) as const
+
+  async function operateIn(
+    adapter: OpencodeWorkflowGuard,
+    callID: string,
+    workdir?: string,
+  ): Promise<void> {
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'git status --short', ...(workdir ? { workdir } : {}) },
+      BASH_OUTPUT,
+      callID,
+    )
+  }
+
   describe('the operation before-hook', () => {
     const PUSH = 'git push origin main'
     const PR_CREATE = 'gh pr create --title t --body b'
@@ -16837,86 +16945,6 @@ describe('snapshot block record', () => {
     })
 
     describe('across targets', () => {
-      interface TargetAdapter {
-        readonly adapter: OpencodeWorkflowGuard
-        readonly linkedRoot: string
-        /** The next local snapshots of the parent checkout (the effective target). */
-        queueParent(...next: OperationObserverResult[]): void
-        /** The next local snapshots of the linked worktree. */
-        queueLinked(...next: OperationObserverResult[]): void
-        linkedSnapshots(): number
-        cleanup(): void
-      }
-
-      async function targetAdapter(): Promise<TargetAdapter> {
-        const fixture = createTargetDerivationFixture()
-        const linkedRoot = fs.realpathSync(fixture.linkedRoot)
-        const parent = createOpencodeOperationObserver({
-          targetDirectory: fixture.parentRoot,
-        })
-        const initial = await parent.snapshot()
-        if (initial.status !== 'available') {
-          fixture.cleanup()
-          throw new Error('parent unavailable')
-        }
-        const parentQueue: OperationObserverResult[] = []
-        const linkedQueue: OperationObserverResult[] = []
-        let linkedSnapshots = 0
-        const adapter = createOpencodeWorkflowGuard({
-          config: { mode: 'observe', debug: false },
-          workspaceIdentity: initial.snapshot.targetDigest,
-          repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
-          worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
-          targetDirectory: fixture.parentRoot,
-          sessionLocation: fixture.parentRoot,
-          observer: {
-            ...parent,
-            snapshot: async () => parentQueue.shift() ?? parent.snapshot(),
-          },
-          createTargetObserver: (targetDirectory) => {
-            const real = createOpencodeOperationObserver({ targetDirectory })
-            return {
-              ...real,
-              snapshot: async () => {
-                linkedSnapshots += 1
-                return linkedQueue.shift() ?? real.snapshot()
-              },
-            }
-          },
-          classifier: createReceiptClassifier(),
-        })
-        await activateWorkEpoch(adapter)
-        return {
-          adapter,
-          linkedRoot,
-          queueParent: (...next) => {
-            parentQueue.push(...next)
-          },
-          queueLinked: (...next) => {
-            linkedQueue.push(...next)
-          },
-          linkedSnapshots: () => linkedSnapshots,
-          cleanup: fixture.cleanup,
-        }
-      }
-
-      const BLOCKED = (reasonCode: OperationObserverReasonCode) =>
-        ({ status: 'unavailable', reasonCode }) as const
-
-      async function operateIn(
-        adapter: OpencodeWorkflowGuard,
-        callID: string,
-        workdir?: string,
-      ): Promise<void> {
-        await observeOperationTool(
-          adapter,
-          'bash',
-          { command: 'git status --short', ...(workdir ? { workdir } : {}) },
-          BASH_OUTPUT,
-          callID,
-        )
-      }
-
       test('while the effective target is still blocked, a call to another clean target is skipped and the block stays', async () => {
         const target = await targetAdapter()
         try {
@@ -16999,6 +17027,453 @@ describe('snapshot block record', () => {
           target.cleanup()
         }
       })
+    })
+  })
+
+  describe('the operation after-hook', () => {
+    const args = { command: 'bun test' }
+
+    async function startCall(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      input: { tool: 'bash' | 'write' } = { tool: 'bash' },
+      callArgs: Record<string, unknown> = args,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: input.tool, sessionID: SESSION_A, callID },
+        { args: callArgs },
+      )
+    }
+
+    async function finishCall(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      input: { tool: 'bash' | 'write' } = { tool: 'bash' },
+      callArgs: Record<string, unknown> = args,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](
+        { tool: input.tool, sessionID: SESSION_A, callID, args: callArgs },
+        BASH_OUTPUT,
+      )
+    }
+
+    test.each([...BLOCKING_REASONS])(
+      'an after snapshot failing with %s blocks the unit, mints no receipt, and stays silent on a duplicate after-hook',
+      async (reasonCode) => {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered)
+        const unitId = status(adapter).unit?.unitId
+        await startCall(adapter, `after-${reasonCode}`)
+        steered.queueSnapshot(sequenceObserver([unavailableStep(reasonCode)]))
+
+        await finishCall(adapter, `after-${reasonCode}`)
+        const calls = steered.snapshotCalls()
+        await finishCall(adapter, `after-${reasonCode}`)
+
+        expect(steered.snapshotCalls()).toBe(calls)
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(status(adapter).unit?.unitId).toBe(unitId)
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+        const parsed = await statusJson(adapter)
+        expect(parsed.snapshotBlock).toEqual({ reasonCode })
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      },
+    )
+
+    test('a clean after snapshot while blocked clears the block and still mints the call receipt', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const write = { filePath: 'real.ts', content: 'changed' }
+      await startCall(adapter, 'pending-write', { tool: 'write' }, write)
+      // A concurrent call finds the tree over a limit and blocks the unit.
+      steered.queueSnapshot(sequenceObserver([unavailableStep('file-limit')]))
+      await startCall(adapter, 'concurrent-blocked')
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeDefined()
+      steered.queueSnapshot(sequenceObserver([DRIFTED]))
+
+      await finishCall(adapter, 'pending-write', { tool: 'write' }, write)
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect((await statusJson(adapter)).snapshotBlock).toBeUndefined()
+      expect(
+        ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation),
+      ).toEqual(['implementation'])
+    })
+
+    test('a blocked after snapshot of a target that is not the effective one seals the call and sets no block', async () => {
+      const target = await targetAdapter()
+      try {
+        const linkedArgs = {
+          command: 'git status --short',
+          workdir: target.linkedRoot,
+        }
+        await startCall(
+          target.adapter,
+          'linked-after',
+          { tool: 'bash' },
+          linkedArgs,
+        )
+        target.queueLinked(BLOCKED('file-limit'))
+
+        await finishCall(
+          target.adapter,
+          'linked-after',
+          { tool: 'bash' },
+          linkedArgs,
+        )
+        const calls = target.linkedSnapshots()
+        await finishCall(
+          target.adapter,
+          'linked-after',
+          { tool: 'bash' },
+          linkedArgs,
+        )
+
+        expect(target.linkedSnapshots()).toBe(calls)
+        expect(status(target.adapter).state).not.toBe('unavailable')
+        expect(ledger(target.adapter).listReceipts()).toHaveLength(0)
+        expect(
+          target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test.each([...FATAL_AFTER_REASONS])(
+      'an after snapshot failing with %s still makes the guard unavailable and sets no block',
+      async (reasonCode) => {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered)
+        await startCall(adapter, `after-fatal-${reasonCode}`)
+        steered.queueSnapshot(sequenceObserver([unavailableStep(reasonCode)]))
+
+        await finishCall(adapter, `after-fatal-${reasonCode}`)
+
+        expect(status(adapter).state).toBe('unavailable')
+        const parsed = await statusJson(adapter)
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          kind: 'local-snapshot-unavailable',
+          reasonCode,
+          timedOut: reasonCode === 'command-timeout',
+        })
+        expect(parsed.snapshotBlock).toBeUndefined()
+      },
+    )
+
+    test('an after snapshot that throws still makes the guard unavailable', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      await startCall(adapter, 'after-throws')
+      steered.queueSnapshot({
+        ...sequenceObserver([operationSnapshot()]),
+        snapshot: async () => {
+          throw new Error('after snapshot exploded')
+        },
+      })
+
+      await finishCall(adapter, 'after-throws')
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect((await statusJson(adapter)).firstUnavailableCause).toMatchObject({
+        site: 'tool-after',
+        kind: 'local-snapshot-error',
+      })
+    })
+  })
+
+  describe('the child rollup', () => {
+    const CHILD_RECEIPT_REPOSITORY = OPERATION_SCOPE.repositoryIdentity
+    const CHILD_AFTER = '1'.repeat(64)
+
+    function childMarkers(
+      workspaceIdentity: string,
+      targetIdentity: string,
+      after: { repository: string; worktree: string },
+    ): unknown[] {
+      const childLedger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity: ROLLUP_REGISTRATION,
+        sessionSalt: ROLLUP_SALT,
+      })
+      const epochId = '8'.repeat(32)
+      const unitId = '9'.repeat(32)
+      const digestCall = (tag: string) =>
+        childLedger.digestIdentity('call', tag)
+      const epochStart = projectReceiptProgressionMarker(childLedger, {
+        target: 'epoch',
+        state: 'started',
+        epochId,
+        family: 'work',
+        transitionDigest: digestCall('epoch-start'),
+        timestamp: 10,
+      })
+      const unitStart = projectReceiptProgressionMarker(childLedger, {
+        target: 'unit',
+        state: 'started',
+        epochId,
+        unitId,
+        family: 'work',
+        requiredOperations: ['implementation'],
+        resourceScopes: [],
+        transitionDigest: digestCall('unit-start'),
+        timestamp: 11,
+      })
+      const context = {
+        epochId,
+        unitId,
+        workspaceIdentity,
+        operationTargetIdentity: targetIdentity,
+        repositoryIdentity: CHILD_RECEIPT_REPOSITORY,
+        worktreeIdentity: OPERATION_SCOPE.worktreeIdentity,
+      }
+      childLedger.prepareObservation({
+        callId: 'child-implementation',
+        operation: 'implementation',
+        context,
+      })
+      const finalized = childLedger.finalizeObservation({
+        callId: 'child-implementation',
+        context,
+        after: {
+          workspaceIdentity,
+          operationTargetIdentity: targetIdentity,
+          repositoryIdentity: after.repository,
+          worktreeIdentity: after.worktree,
+        },
+        classification: {
+          outcome: 'accepted',
+          category: 'implementation',
+          attribution: 'runtime-verified',
+          result: 'success',
+          sideEffect: 'required',
+          reasonCode: 'recognized-command',
+        },
+        terminal: { status: 'success', output: 'non-empty', noOp: false },
+      })
+      if (finalized.status !== 'finalized' || !epochStart || !unitStart) {
+        throw new Error('child receipt fixture failed')
+      }
+      const mint = projectReceiptMintMarker(finalized.receipt, ROLLUP_SALT)
+      if (!mint) throw new Error('child mint marker failed')
+      return [epochStart, unitStart, mint]
+    }
+
+    function partsOf(markers: readonly unknown[]): readonly unknown[] {
+      return [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: markers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+    }
+
+    const PARENT_CHILD_MARKERS = childMarkers(
+      OPERATION_SCOPE.workspaceIdentity,
+      OPERATION_SCOPE.workspaceIdentity,
+      { repository: OPERATION_SCOPE.repositoryIdentity, worktree: CHILD_AFTER },
+    )
+
+    // An adapter whose parent checkout (the effective target) is the child
+    // receipt's target.
+    async function parentTargetAdapter(
+      steered: SteeredObserver,
+    ): Promise<OpencodeWorkflowGuard> {
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ROLLUP_REGISTRATION,
+        sessionSalt: ROLLUP_SALT,
+        observer: steered.observer,
+        classifier: createReceiptClassifier(),
+        hostReadback: {
+          readSessionParts: async (sessionID) =>
+            sessionID === SESSION_A ? [] : partsOf(PARENT_CHILD_MARKERS),
+          listChildren: async (sessionID) =>
+            sessionID === SESSION_A
+              ? [{ sessionId: CHILD_SESSION, parentID: SESSION_A }]
+              : [],
+        },
+      })
+      await activateWorkEpoch(adapter)
+      return adapter
+    }
+
+    async function rollup(
+      adapter: OpencodeWorkflowGuard,
+    ): Promise<Record<string, unknown>> {
+      const output: {
+        title: string
+        output: string
+        metadata: Record<string, unknown>
+      } = {
+        title: 'task result',
+        output: 'done',
+        metadata: { sessionId: CHILD_SESSION },
+      }
+      const input = { tool: 'task', sessionID: SESSION_A, callID: 'task-call' }
+      await adapter.hooks['tool.execute.before'](input, { args: {} })
+      await adapter.hooks['tool.execute.after']({ ...input, args: {} }, output)
+      return output.metadata
+    }
+
+    // The rollup first touches the parent observer (its result is ignored),
+    // then reads the child's target.
+    function queueRollupSnapshots(
+      steered: SteeredObserver,
+      child: OperationObserverResult,
+    ): void {
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(
+        sequenceObserver([
+          child.status === 'available'
+            ? child.snapshot
+            : unavailableStep(child.reasonCode),
+        ]),
+      )
+    }
+
+    const CLEAN_CHILD: OperationObserverResult = {
+      status: 'available',
+      snapshot: operationSnapshot(
+        OPERATION_SCOPE.repositoryIdentity,
+        CHILD_AFTER,
+      ),
+    }
+
+    test.each([...BLOCKING_REASONS])(
+      'a child snapshot of the effective target failing with %s blocks the unit and drops the child receipts',
+      async (reasonCode) => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        queueRollupSnapshots(steered, { status: 'unavailable', reasonCode })
+
+        const metadata = await rollup(adapter)
+
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+        expect(
+          metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ).toBeUndefined()
+        const parsed = await statusJson(adapter)
+        expect(parsed.snapshotBlock).toEqual({ reasonCode })
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      },
+    )
+
+    test('a child dropped for a blocking reason is not recorded as rolled up, so a later clean rollup mints it', async () => {
+      const steered = steeredObserver()
+      const adapter = await parentTargetAdapter(steered)
+      queueRollupSnapshots(steered, {
+        status: 'unavailable',
+        reasonCode: 'file-limit',
+      })
+      await rollup(adapter)
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+
+      queueRollupSnapshots(steered, CLEAN_CHILD)
+      const metadata = await rollup(adapter)
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+      expect(metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]).toBeDefined()
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+    })
+
+    test('a clean child snapshot of the effective target clears a block that an operation set', async () => {
+      const steered = steeredObserver()
+      const adapter = await parentTargetAdapter(steered)
+      steered.queueSnapshot(
+        sequenceObserver([unavailableStep('worktree-unstable')]),
+      )
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'blocked-before-rollup',
+      )
+      expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+        reasonCode: 'worktree-unstable',
+      })
+      queueRollupSnapshots(steered, CLEAN_CHILD)
+
+      await rollup(adapter)
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test.each([...FATAL_AFTER_REASONS])(
+      'a child snapshot failing with %s still makes the guard unavailable and sets no block',
+      async (reasonCode) => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        queueRollupSnapshots(steered, { status: 'unavailable', reasonCode })
+
+        await rollup(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        const parsed = await statusJson(adapter)
+        expect(parsed.firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          kind: 'local-snapshot-unavailable',
+          reasonCode,
+          timedOut: reasonCode === 'command-timeout',
+        })
+        expect(parsed.snapshotBlock).toBeUndefined()
+      },
+    )
+
+    test('a blocked child snapshot of a target that is not the effective one drops the receipts and sets no block', async () => {
+      const parts: { current: readonly unknown[] } = { current: [] }
+      const target = await targetAdapter({ childParts: () => parts.current })
+      try {
+        // A before-hook alone registers the linked worktree's observer
+        // without pinning the unit to it.
+        await target.adapter.hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: SESSION_A, callID: 'register-linked' },
+          {
+            args: { command: 'git status --short', workdir: target.linkedRoot },
+          },
+        )
+        expect(status(target.adapter).unit?.pinnedOperationTargetIdentity).toBe(
+          undefined,
+        )
+        const linkedObserver = createOpencodeOperationObserver({
+          targetDirectory: target.linkedRoot,
+        })
+        parts.current = partsOf(
+          childMarkers(target.workspaceIdentity, linkedObserver.targetDigest, {
+            repository: OPERATION_SCOPE.repositoryIdentity,
+            worktree: CHILD_AFTER,
+          }),
+        )
+        target.queueLinked(BLOCKED('file-limit'))
+
+        const metadata = await rollup(target.adapter)
+
+        expect(status(target.adapter).state).not.toBe('unavailable')
+        expect(ledger(target.adapter).listReceipts()).toHaveLength(0)
+        expect(
+          metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ).toBeUndefined()
+        expect(
+          target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+      } finally {
+        target.cleanup()
+      }
     })
   })
 })
