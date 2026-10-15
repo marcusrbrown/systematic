@@ -10308,7 +10308,7 @@ describe('OpenCode workflow guard adapter', () => {
       })
     })
 
-    test('a before snapshot command-timeout records timedOut', async () => {
+    test('a before snapshot command-timeout skips the call without recording a cause', async () => {
       const adapter = createAdapter(
         'observe',
         false,
@@ -10319,12 +10319,9 @@ describe('OpenCode workflow guard adapter', () => {
       )
       await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-timeout')
-      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
-        site: 'tool-before',
-        kind: 'local-snapshot-unavailable',
-        reasonCode: 'command-timeout',
-        timedOut: true,
-      })
+      const parsed = await causeOf(adapter)
+      expect(parsed.state).not.toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toBeUndefined()
     })
 
     test('a before snapshot that throws records local-snapshot-error without a reasonCode', async () => {
@@ -17044,7 +17041,6 @@ describe('snapshot block record', () => {
     const FATAL_REASONS = [
       'target-unavailable',
       'command-failed',
-      'command-timeout',
       'file-read-failed',
     ] as const
 
@@ -17252,7 +17248,7 @@ describe('snapshot block record', () => {
           site: 'tool-before',
           kind: 'local-snapshot-unavailable',
           reasonCode,
-          timedOut: reasonCode === 'command-timeout',
+          timedOut: false,
         })
         expect(parsed.snapshotBlock).toBeUndefined()
       },
@@ -17344,27 +17340,61 @@ describe('snapshot block record', () => {
         }
       })
 
-      test.each([
-        { reasonCode: 'command-timeout' as const },
-        { reasonCode: 'target-unavailable' as const },
-      ])(
-        'while blocked, a snapshot of the effective target failing with $reasonCode is fatal for a call to another target',
-        async ({ reasonCode }) => {
-          const target = await targetAdapter()
-          try {
-            target.queueParent(BLOCKED('file-limit'))
-            await operateIn(target.adapter, 'blocked-parent')
-            target.queueParent(BLOCKED(reasonCode))
+      test('while blocked, a snapshot of the effective target failing with target-unavailable is fatal for a call to another target', async () => {
+        const target = await targetAdapter()
+        try {
+          target.queueParent(BLOCKED('file-limit'))
+          await operateIn(target.adapter, 'blocked-parent')
+          target.queueParent(BLOCKED('target-unavailable'))
 
-            await operateIn(target.adapter, 'linked-fatal', target.linkedRoot)
+          await operateIn(target.adapter, 'linked-fatal', target.linkedRoot)
 
-            expect(status(target.adapter).state).toBe('unavailable')
-            expect(target.linkedSnapshots()).toBe(0)
-          } finally {
-            target.cleanup()
-          }
-        },
-      )
+          expect(status(target.adapter).state).toBe('unavailable')
+          expect(target.linkedSnapshots()).toBe(0)
+        } finally {
+          target.cleanup()
+        }
+      })
+
+      test('while blocked, a timeout on the effective target skips a call to another target and leaves the block as it was', async () => {
+        const target = await targetAdapter()
+        try {
+          target.queueParent(BLOCKED('file-limit'))
+          await operateIn(target.adapter, 'blocked-parent')
+          target.queueParent(BLOCKED('command-timeout'))
+
+          await operateIn(target.adapter, 'linked-timeout', target.linkedRoot)
+
+          // Nothing of the linked call ran: no snapshot, and the after-hook
+          // stayed silent.
+          expect(target.linkedSnapshots()).toBe(0)
+          expect(status(target.adapter).state).not.toBe('unavailable')
+          expect(ledger(target.adapter).listReceipts()).toHaveLength(0)
+          expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+            reasonCode: 'file-limit',
+          })
+
+          // The next clean call is observed normally: it clears the block.
+          await observeOperationTool(
+            target.adapter,
+            'bash',
+            { command: 'bun test', workdir: target.linkedRoot },
+            BASH_OUTPUT,
+            'linked-clean',
+          )
+
+          expect(
+            target.adapter.snapshotBlock(SESSION_A).current(),
+          ).toBeUndefined()
+          expect(
+            ledger(target.adapter)
+              .listReceipts()
+              .map((receipt) => receipt.canonical.operation),
+          ).toContain('verification')
+        } finally {
+          target.cleanup()
+        }
+      })
 
       test('a blocked snapshot of a target that is not the effective one skips the call and sets no block', async () => {
         const target = await targetAdapter()
@@ -19175,6 +19205,171 @@ describe('snapshot block record', () => {
           expect(status(adapter).unit?.status).toBe('completed')
         })
       })
+    })
+  })
+
+  describe('a timeout in the operation before-hook', () => {
+    const TIMED_OUT = sequenceObserver([unavailableStep('command-timeout')])
+
+    async function operate(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      command = 'bun test',
+    ): Promise<void> {
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    test('a local snapshot that times out skips the call, and the next clean call is observed normally', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const calls = steered.snapshotCalls()
+      steered.queueSnapshot(TIMED_OUT)
+
+      await operate(adapter, 'timed-out-snapshot')
+
+      // Only the before-hook's snapshot ran: the after-hook stayed silent.
+      expect(steered.snapshotCalls()).toBe(calls + 1)
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual([])
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+
+      await operate(adapter, 'clean-after-timeout')
+
+      expect(receiptOperations(adapter)).toContain('verification')
+    })
+
+    test('a timeout while blocked leaves the block untouched, so a status refresh in flight still clears it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      const slow = deferredStep(DRIFTED)
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+      const refreshing = refreshStatus(adapter)
+      for (
+        let tick = 0;
+        tick < 50 && slowObserver.snapshotCalls() < 1;
+        tick++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(slowObserver.snapshotCalls()).toBe(1)
+      steered.queueSnapshot(TIMED_OUT)
+
+      await operate(adapter, 'timed-out-while-blocked')
+
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+      slow.release()
+      const parsed = await refreshing
+
+      // Neither the record nor its version moved, so the refresh was not
+      // overtaken: it cleared the block and applied the drift it saw.
+      expect(parsed.snapshotBlock).toBeUndefined()
+      expect(status(adapter).missingOperations).toContain('implementation')
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('a write skipped by a timeout still changes the tree, and completion is rejected as stale-receipt', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered, 'protected')
+      const worktree = (tag: string) =>
+        operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+      const write = { filePath: 'real.ts', content: 'changed' }
+      // Observed evidence: a write and a verification.
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+      steered.setDefault(worktree('a1'))
+      await operate(adapter, 'v1')
+      expect(status(adapter).state).toBe('protected')
+      // The timeout lands on the second write's own before-hook snapshot.
+      steered.queueSnapshot(TIMED_OUT)
+
+      await observeOperationTool(
+        adapter,
+        'write',
+        write,
+        BASH_OUTPUT,
+        'skipped',
+      )
+
+      expect(status(adapter).state).toBe('protected')
+      expect(receiptOperations(adapter)).toEqual([
+        'implementation',
+        'verification',
+      ])
+      // The write the guard never saw moved the tree.
+      steered.setDefault(worktree('b2'))
+      const output = await completeUnit(adapter, 'skipped-write-complete')
+
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'stale-receipt',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
+    test('a later observed write and verification attest the final state after a skipped write', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered, 'protected')
+      const worktree = (tag: string) =>
+        operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+      const write = { filePath: 'real.ts', content: 'changed' }
+      // An observed write and a verification.
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+      steered.setDefault(worktree('a1'))
+      await operate(adapter, 'v1')
+      expect(status(adapter).state).toBe('protected')
+
+      // A second write times out before it is observed, and changes the tree.
+      steered.queueSnapshot(TIMED_OUT)
+      await observeOperationTool(
+        adapter,
+        'write',
+        write,
+        BASH_OUTPUT,
+        'skipped',
+      )
+      steered.setDefault(worktree('b2'))
+      expect(status(adapter).state).not.toBe('unavailable')
+
+      // The next status read applies the drift and marks the evidence stale.
+      await refreshStatus(adapter)
+      expect(status(adapter).missingOperations).toContain('implementation')
+
+      // A later observed write and verification attest the final state.
+      steered.queueSnapshot(sequenceObserver([worktree('b2')]))
+      steered.queueSnapshot(sequenceObserver([worktree('c3')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w2')
+      steered.setDefault(worktree('c3'))
+      await operate(adapter, 'v2')
+      expect(status(adapter).state).toBe('protected')
+
+      const output = await completeUnit(adapter, 'attested-complete')
+
+      expect(output.metadata.workflowGuard).toMatchObject({
+        status: 'completed',
+      })
+      expect(status(adapter).unit?.status).toBe('completed')
     })
   })
 })

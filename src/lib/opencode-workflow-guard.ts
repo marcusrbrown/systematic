@@ -3960,6 +3960,17 @@ function createSessionRuntime(
     return observer.targetDigest === currentEffectiveTargetIdentity()
   }
 
+  // A typed timeout means no verdict yet, so the call runs unobserved: it is
+  // added to `skippedOperations` (its after-hook stays silent) and nothing else
+  // moves. The guard is not marked unavailable, the snapshot block and its
+  // version are neither written nor bumped, and no readback is applied. Drift
+  // the skipped call made is picked up by the next status or completion
+  // readback, which marks older receipts stale.
+  function skipTimedOutCall(callDigest: string): BeforeSnapshotOutcome {
+    skippedOperations.add(callDigest)
+    return { kind: 'skip' }
+  }
+
   // The call's own local snapshot, decided against the unit's snapshot block.
   // Only a snapshot of the effective target sets or clears the block; one of
   // any other target never does. A call whose target is not the effective one
@@ -3968,13 +3979,18 @@ function createSessionRuntime(
   async function takeBeforeSnapshot(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
+    callDigest: string,
   ): Promise<BeforeSnapshotOutcome> {
-    const gated = await clearBlockForOtherTarget(observer, initiator)
+    const gated = await clearBlockForOtherTarget(
+      observer,
+      initiator,
+      callDigest,
+    )
     if (gated) return gated
     // Captured in the same synchronous segment as the snapshot call.
     const capture = captureSnapshotBlock()
     if (capture && !isEffectiveTarget(observer)) return { kind: 'skip' }
-    const read = await readBeforeSnapshot(observer, initiator)
+    const read = await readBeforeSnapshot(observer, initiator, callDigest)
     if (read.kind !== 'snapshot' || !capture) return read
     return clearBlockFromBeforeSnapshot(capture, observer, read.snapshot)
   }
@@ -3982,8 +3998,10 @@ function createSessionRuntime(
   async function readBeforeSnapshot(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
+    callDigest: string,
   ): Promise<BeforeSnapshotOutcome> {
     const read = await readSnapshot(observer)
+    if (read.status === 'timeout') return skipTimedOutCall(callDigest)
     if (read.status !== 'ok') {
       return blockOrFailBeforeSnapshot(
         probeFailureReason(read),
@@ -4043,6 +4061,7 @@ function createSessionRuntime(
   async function clearBlockForOtherTarget(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
+    callDigest: string,
   ): Promise<BeforeSnapshotOutcome | undefined> {
     if (!captureSnapshotBlock() || isEffectiveTarget(observer)) return undefined
     const lookup = resolveEffectiveObserver()
@@ -4056,12 +4075,7 @@ function createSessionRuntime(
       lookup.value,
       snapshotFailureCause(beforeCause),
     )
-    if (result.status === 'timeout') {
-      markUnavailable(
-        beforeCause('local-snapshot-unavailable', 'command-timeout'),
-      )
-      return { kind: 'stop' }
-    }
+    if (result.status === 'timeout') return skipTimedOutCall(callDigest)
     if (result.status === 'fatal') return { kind: 'stop' }
     if (result.status === 'still-blocked') {
       setSnapshotBlock(result.reasonCode, lookup.value.targetIdentity, {
@@ -4159,7 +4173,11 @@ function createSessionRuntime(
           (options.createTargetObserver ?? defaultTargetObserver)(
             target.targetRoot,
           ))
-    const taken = await takeBeforeSnapshot(operationObserver, initiator)
+    const taken = await takeBeforeSnapshot(
+      operationObserver,
+      initiator,
+      callDigest,
+    )
     if (taken.kind === 'skip') {
       skippedOperations.add(callDigest)
       return
