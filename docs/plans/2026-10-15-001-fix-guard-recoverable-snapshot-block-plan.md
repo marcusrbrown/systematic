@@ -1,7 +1,7 @@
 ---
 title: "fix: Block the unit instead of disabling the guard when the worktree breaks a snapshot"
 type: fix
-status: active
+status: completed
 date: 2026-10-15
 ---
 
@@ -308,7 +308,7 @@ stateDiagram-v2
 
 ## Implementation Units
 
-- [ ] **Unit 1a: Step-indexed observer fixture**
+- [x] **Unit 1a: Step-indexed observer fixture**
 
 **Goal:** Fixtures can express blocking reasons and races. No behavior change.
 
@@ -326,7 +326,7 @@ stateDiagram-v2
 
 **Verification:** The guard suites pass with no assertion changes.
 
-- [ ] **Unit 1b: Snapshot-block record, predicate, clear helper and status**
+- [x] **Unit 1b: Snapshot-block record, predicate, clear helper and status**
 
 **Goal:** Add the state, the predicate, the clear helper and the status field. No hook changes.
 
@@ -360,7 +360,7 @@ stateDiagram-v2
 
 **Verification:** The new tests pass and the existing suites are unchanged.
 
-- [ ] **Unit 2a: Before-hook**
+- [x] **Unit 2a: Before-hook**
 
 **Goal:** The before-hook sets, honors and clears the block.
 
@@ -394,7 +394,7 @@ stateDiagram-v2
 
 **Verification:** The before-hook never calls `markUnavailable` for a blocking reason, and the rewritten first-cause tests pass.
 
-- [ ] **Unit 2b: After-hook and child rollup**
+- [x] **Unit 2b: After-hook and child rollup**
 
 **Goal:** After-hooks and rollup set and clear the block instead of making the guard unavailable.
 
@@ -424,7 +424,7 @@ stateDiagram-v2
 
 **Verification:** No after-hook or rollup path calls `markUnavailable` for a blocking reason.
 
-- [ ] **Unit 3a: Seeding**
+- [x] **Unit 3a: Seeding**
 
 **Goal:** A blocking reason at seed time defers remote baselines and sets the block.
 
@@ -454,7 +454,7 @@ stateDiagram-v2
 
 **Verification:** Seeding never calls `markUnavailable` for a blocking reason.
 
-- [ ] **Unit 3b: Status refresh and completion**
+- [x] **Unit 3b: Status refresh and completion**
 
 **Goal:** Status refresh sets and clears the block. Completion is refused, retryably, while blocked and on revision drift.
 
@@ -486,7 +486,7 @@ stateDiagram-v2
 
 **Verification:** Status refresh and completion never call `markUnavailable` for a blocking reason or for revision drift.
 
-- [ ] **Unit 3c: Finalize-time stale receipt**
+- [x] **Unit 3c: Finalize-time stale receipt**
 
 **Goal:** A stale receipt first seen at finalize is retryable.
 
@@ -514,7 +514,7 @@ stateDiagram-v2
 
 **Verification:** The full guard suites pass.
 
-- [ ] **Unit 4: Guidance, bootstrap pin and docs**
+- [x] **Unit 4: Guidance, bootstrap pin and docs**
 
 **Goal:** Agents and readers learn the new state and its way out.
 
