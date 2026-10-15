@@ -70,7 +70,8 @@ const IGNORED_GITIGNORE_ARGS = [
   '--full-name',
   '-z',
   '--',
-  ':(glob)**/.gitignore',
+  // `top` roots the pathspec at the repository, not at the command directory.
+  ':(top,glob)**/.gitignore',
 ] as const
 
 const MAX_IGNORE_SOURCE_BYTES = 1_048_576
@@ -275,6 +276,8 @@ interface RepositoryContext {
   readonly worktreeRoot: string
   /** Absolute path of the repository's `info/exclude`. */
   readonly infoExcludePath: string
+  /** The root, git directory and common directory every read is bound to. */
+  readonly pin: RootPin
 }
 
 /** Git object format; selects the hash used for blob ids. */
@@ -326,6 +329,11 @@ interface PathObservation {
    * a `missing` path (which must stay missing).
    */
   readonly stat: OperationObserverFileStat | undefined
+  /**
+   * A tracked path that is now a real directory. Its record is a deletion, and
+   * the directory is still the stable state the final pass must accept.
+   */
+  readonly displacedByDirectory?: true
 }
 
 interface WorktreeReaders {
@@ -1024,8 +1032,17 @@ function observed(
   absolutePath: string,
   record: WorktreeRecord,
   stat: OperationObserverFileStat | undefined,
+  displacedByDirectory = false,
 ): ObservationResult {
-  return { status: 'ok', observation: { absolutePath, record, stat } }
+  return {
+    status: 'ok',
+    observation: {
+      absolutePath,
+      record,
+      stat,
+      ...(displacedByDirectory ? { displacedByDirectory: true as const } : {}),
+    },
+  }
 }
 
 /**
@@ -1054,6 +1071,7 @@ function gitBlobId(content: Uint8Array, format: ObjectFormat): string {
 function missingObservation(
   absolutePath: string,
   relativePath: string,
+  displacedByDirectory = false,
 ): ObservationResult {
   // A deleted path adds nothing to the digest: the worktree reads the same
   // whether or not `HEAD` still lists it. The record carries the deletion.
@@ -1061,6 +1079,7 @@ function missingObservation(
     absolutePath,
     { path: relativePath, kind: 'missing', mode: '', id: undefined },
     undefined,
+    displacedByDirectory,
   )
 }
 
@@ -1211,16 +1230,31 @@ function adaptInjectedFileReader(
 type GitlinkInspection =
   | { status: 'initialized'; id: string }
   | { status: 'uninitialized' }
+  /** Nothing on disk at the path, as after a submodule is removed. */
+  | { status: 'absent' }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
 
 function directoryEmptiness(
   absolutePath: string,
 ): 'empty' | 'non-empty' | 'unreadable' {
+  let directory: fs.Dir
   try {
-    return fs.readdirSync(absolutePath).length === 0 ? 'empty' : 'non-empty'
+    directory = fs.opendirSync(absolutePath)
   } catch (error) {
     // Gone by now is as good as empty; anything else is unreadable.
-    return isEnoent(error) ? 'empty' : 'unreadable'
+    return hasErrorCode(error, 'ENOENT', 'ENOTDIR') ? 'empty' : 'unreadable'
+  }
+  // One entry decides it, however large the directory is.
+  try {
+    return directory.readSync() === null ? 'empty' : 'non-empty'
+  } catch {
+    return 'unreadable'
+  } finally {
+    try {
+      directory.closeSync()
+    } catch {
+      // The answer is already known; a failed close cannot change it.
+    }
   }
 }
 
@@ -1269,9 +1303,10 @@ function inspectGitlink(
   try {
     directory = readers.statReader(absolutePath)
   } catch (error) {
-    // A gitlink whose directory was never created is simply not checked out.
-    return isEnoent(error)
-      ? { status: 'uninitialized' }
+    // A removed submodule leaves no directory. That is a deletion, unlike an
+    // existing empty directory, which is a checkout that was never populated.
+    return hasErrorCode(error, 'ENOENT', 'ENOTDIR')
+      ? { status: 'absent' }
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
   // A symlink or file at a gitlink path would be read through, or is not a
@@ -1306,6 +1341,9 @@ function appendSubmoduleFact(
 ): ObservationResult {
   const inspected = inspectGitlink(readers, absolutePath, limits)
   if (inspected.status === 'error') return inspected
+  if (inspected.status === 'absent') {
+    return missingObservation(absolutePath, relativePath)
+  }
   const id = inspected.status === 'initialized' ? inspected.id : undefined
   hash.update('gitlink')
   hashField(hash, relativePath)
@@ -1507,9 +1545,17 @@ function appendPathFact(
   try {
     stat = readers.statReader(absolutePath)
   } catch (error) {
-    return isEnoent(error)
+    // ENOTDIR means an ancestor is now a file. For a tracked path that is the
+    // same deletion as ENOENT; the file itself is observed on its own.
+    return hasErrorCode(error, 'ENOENT', 'ENOTDIR')
       ? vanishedPath(tracked, absolutePath, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  // A real directory where a tracked file was: the file is gone, and what
+  // replaced it is observed through its own paths. A symlink is not a
+  // directory here, so a link in the way is still read as a link.
+  if (tracked && stat.isDirectory && !stat.isSymbolicLink) {
+    return missingObservation(absolutePath, relativePath, true)
   }
   return stat.isSymbolicLink
     ? appendSymlinkFact(
@@ -1609,6 +1655,8 @@ function verifyGitlinkUnchanged(
     // the directory changed underneath the snapshot.
     return fresh.reasonCode === 'file-read-failed' ? UNSTABLE : fresh
   }
+  // A gitlink that vanished is not the checkout that was hashed.
+  if (fresh.status === 'absent') return UNSTABLE
   const id = fresh.status === 'initialized' ? fresh.id : undefined
   return id === record.id ? { status: 'ok' } : UNSTABLE
 }
@@ -1626,13 +1674,21 @@ function verifyObservationUnchanged(
   try {
     fresh = readers.statReader(absolutePath)
   } catch (error) {
-    if (!isEnoent(error)) {
+    if (!hasErrorCode(error, 'ENOENT', 'ENOTDIR')) {
       return { status: 'error', reasonCode: 'file-read-failed' }
     }
     // A missing record must stay missing; anything else vanished mid-snapshot.
     return record.kind === 'missing' ? { status: 'ok' } : UNSTABLE
   }
-  if (record.kind === 'missing' || stat === undefined) return UNSTABLE
+  if (record.kind === 'missing') {
+    // A path displaced by a directory is stable while it stays a real directory.
+    const stillDisplaced =
+      observation.displacedByDirectory === true &&
+      fresh.isDirectory &&
+      !fresh.isSymbolicLink
+    return stillDisplaced ? { status: 'ok' } : UNSTABLE
+  }
+  if (stat === undefined) return UNSTABLE
   return sameStat(stat, fresh) ? { status: 'ok' } : UNSTABLE
 }
 
@@ -1676,26 +1732,36 @@ function verifyIgnoreSourcesUnchanged(
     : UNSTABLE
 }
 
-function verifyHeadUnchanged(
-  runner: OperationObserverCommandRunner,
+/**
+ * Re-runs the anchor `rev-parse` and compares all of it with what the snapshot
+ * was bound to. A root, git directory or common directory that moved after the
+ * start redirected the git listings away from the files that were read, which
+ * is the same condition `snapshot()` rejects up front, so it is reported the
+ * same way (`target-unavailable`). A `HEAD` that moved is a transient change
+ * (`worktree-unstable`).
+ */
+function verifyAnchorUnchanged(
+  readers: WorktreeReaders,
   context: RepositoryContext,
   limits: Limits,
   head: string | undefined,
 ): StabilityResult {
-  const result = runCommandAllowingExit(
-    runner,
-    ['rev-parse', '--verify', '-q', 'HEAD'],
+  const anchor = readRepositoryAnchor(
+    readers.runner,
     context.commandDirectory,
     limits,
-    [0, 1],
+    readers.realPath,
   )
-  if (result.status === 'error') return result
-  // Exit 1 under `-q` is an unborn HEAD.
-  const current =
-    result.exitCode === 0
-      ? result.output.stdout.trim().toLowerCase()
-      : undefined
-  return current === head ? { status: 'ok' } : UNSTABLE
+  if (anchor.status === 'error') return anchor
+  const { pin } = context
+  if (
+    anchor.toplevel !== pin.targetRoot ||
+    anchor.gitDir !== pin.gitDir ||
+    anchor.commonDir !== pin.commonDir
+  ) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  return anchor.head === head ? { status: 'ok' } : UNSTABLE
 }
 
 /**
@@ -1731,7 +1797,7 @@ function runFinalPass(
     first,
   )
   if (listings.status === 'error') return listings
-  return verifyHeadUnchanged(readers.runner, context, limits, head)
+  return verifyAnchorUnchanged(readers, context, limits, head)
 }
 
 interface IgnoreSourceFact {
@@ -2522,6 +2588,11 @@ export function readWorktreeRecords(
       commandDirectory: targetDirectory,
       worktreeRoot: anchor.toplevel,
       infoExcludePath: anchor.infoExcludePath,
+      pin: {
+        targetRoot: anchor.toplevel,
+        gitDir: anchor.gitDir,
+        commonDir: anchor.commonDir,
+      },
     },
     anchor.head,
     limits,
@@ -2597,6 +2668,7 @@ export function createOpencodeOperationObserver(
         commandDirectory: targetDirectory,
         worktreeRoot: anchor.toplevel,
         infoExcludePath: anchor.infoExcludePath,
+        pin: rootPinResult.pin,
       }
       const repository = readRevision(
         runner,

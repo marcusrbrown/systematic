@@ -2121,13 +2121,13 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
     }
   })
 
-  test('reads HEAD once up front and once in the final pass, for born and unborn repositories', async () => {
+  test('reads HEAD in the up-front anchor and again in the final-pass anchor, for born and unborn repositories', async () => {
     const born = createGitFixture()
     const unborn = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-observer-unborn-'),
     )
-    // The up-front read is the combined anchor call; the final pass re-reads
-    // HEAD with one standalone `rev-parse --verify -q HEAD`.
+    // The up-front read and the final pass are both the combined anchor call,
+    // which returns HEAD with the root, git directory and common directory.
     const headReads = async (
       root: string,
     ): Promise<{ anchor: number; finalPass: number }> => {
@@ -2150,8 +2150,8 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
     }
     try {
       expect(runGit(unborn, ['init', '--quiet']).status).toBe(0)
-      expect(await headReads(born.root)).toEqual({ anchor: 1, finalPass: 1 })
-      expect(await headReads(unborn)).toEqual({ anchor: 1, finalPass: 1 })
+      expect(await headReads(born.root)).toEqual({ anchor: 2, finalPass: 0 })
+      expect(await headReads(unborn)).toEqual({ anchor: 2, finalPass: 0 })
     } finally {
       fs.rmSync(unborn, { recursive: true, force: true })
       born.cleanup()
@@ -3333,15 +3333,15 @@ describe('OpenCode operation observer gitlink hardening', () => {
     }
   })
 
-  test('a gitlink directory that is missing entirely folds as uninitialized', () => {
+  test('a gitlink directory that is missing entirely is a deletion record', () => {
     const fixture = createGitFixture()
     try {
       setExcludesFile(fixture.root, null)
       stageGitlinks(fixture.root, ['sub'])
       expect(recordFor(readWorktreeRecords(fixture.root), 'sub')).toEqual({
         path: 'sub',
-        kind: 'gitlink',
-        mode: '160000',
+        kind: 'missing',
+        mode: '',
         id: undefined,
       })
     } finally {
@@ -4367,6 +4367,331 @@ describe('OpenCode operation observer no-follow open', () => {
             Number(entry.flags) & (fs.constants.O_NOFOLLOW as number),
           ).not.toBe(0)
         }
+      } finally {
+        spy.mockRestore()
+        fixture.cleanup()
+      }
+    },
+  )
+})
+
+describe('OpenCode operation observer in-flight root redirect', () => {
+  test('rejects a snapshot whose worktree is redirected after the initial anchor', async () => {
+    const fixture = createSeparatedGitFixture()
+    const decoy = path.join(path.dirname(fixture.gitDir), 'decoy')
+    try {
+      // Same index, same HEAD, same listings, but the content on disk differs.
+      fs.cpSync(fixture.worktree, decoy, { recursive: true })
+      fs.writeFileSync(path.join(decoy, 'tracked.txt'), 'dirty decoy\n')
+      let redirected = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.gitDir,
+        commandRunner: interceptingRunner((args, _result, cwd) => {
+          if (!redirected && args.includes('ls-tree')) {
+            redirected = true
+            expect(runGit(cwd, ['config', 'core.worktree', decoy]).status).toBe(
+              0,
+            )
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+      expect(redirected).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('OpenCode operation observer subdirectory ignore discovery', () => {
+  test('observes self-ignored root and sibling .gitignore files from a subdirectory target', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      fs.mkdirSync(path.join(fixture.root, 'sib'))
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'a.txt'), 'a\n')
+      // Each file hides only itself, so neither is in the plain untracked list.
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), '.gitignore\n')
+      fs.writeFileSync(
+        path.join(fixture.root, 'sib', '.gitignore'),
+        '.gitignore\n',
+      )
+      const subdirectory = path.join(fixture.root, 'sub')
+
+      const records = readWorktreeRecords(subdirectory)
+      expect(records.status).toBe('ok')
+      if (records.status !== 'ok') return
+      const paths = records.records.map((record) => record.path)
+      expect(paths).toContain('.gitignore')
+      expect(paths).toContain('sib/.gitignore')
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: subdirectory,
+      })
+      const before = await digestOf(observer)
+      fs.writeFileSync(
+        path.join(fixture.root, '.gitignore'),
+        '.gitignore\n# edit\n',
+      )
+      const afterRoot = await digestOf(observer)
+      expect(afterRoot).not.toBe(before)
+      fs.writeFileSync(
+        path.join(fixture.root, 'sib', '.gitignore'),
+        '.gitignore\n# edit\n',
+      )
+      expect(await digestOf(observer)).not.toBe(afterRoot)
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('OpenCode operation observer displaced file and directory paths', () => {
+  async function expectAvailableNotClosed(root: string): Promise<void> {
+    const observer = createOpencodeOperationObserver({ targetDirectory: root })
+    const first = await observer.snapshot()
+    expect(first).toMatchObject({
+      status: 'available',
+      snapshot: { commitClosure: false },
+    })
+    // The same state must also be stable across a second snapshot.
+    await expect(observer.snapshot()).resolves.toEqual(first)
+  }
+
+  test.each([
+    { name: 'a file becomes a directory (staged)', staged: true },
+    { name: 'a file becomes a directory (unstaged)', staged: false },
+  ])(
+    '$name',
+    async ({ staged }) => {
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        fs.writeFileSync(path.join(fixture.root, 'a'), 'was a file\n')
+        addTracked(fixture.root, ['a'], 'file a')
+        fs.rmSync(path.join(fixture.root, 'a'))
+        fs.mkdirSync(path.join(fixture.root, 'a'))
+        fs.writeFileSync(path.join(fixture.root, 'a', 'b'), 'now a directory\n')
+        if (staged) {
+          expect(
+            runGit(fixture.root, ['rm', '--cached', '--quiet', 'a']).status,
+          ).toBe(0)
+          expect(runGit(fixture.root, ['add', 'a/b']).status).toBe(0)
+        }
+        await expectAvailableNotClosed(fixture.root)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+    30_000,
+  )
+
+  test.each([
+    { name: 'a directory becomes a file (staged)', staged: true },
+    { name: 'a directory becomes a file (unstaged)', staged: false },
+  ])(
+    '$name',
+    async ({ staged }) => {
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        fs.mkdirSync(path.join(fixture.root, 'a'))
+        fs.writeFileSync(path.join(fixture.root, 'a', 'b'), 'was nested\n')
+        addTracked(fixture.root, ['a/b'], 'nested a/b')
+        fs.rmSync(path.join(fixture.root, 'a'), { recursive: true })
+        fs.writeFileSync(path.join(fixture.root, 'a'), 'now a file\n')
+        if (staged) {
+          expect(
+            runGit(fixture.root, ['rm', '--cached', '--quiet', 'a/b']).status,
+          ).toBe(0)
+          expect(runGit(fixture.root, ['add', 'a']).status).toBe(0)
+        }
+        await expectAvailableNotClosed(fixture.root)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+    30_000,
+  )
+
+  test('records a displaced path as a deletion with no id', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'a'), 'was a file\n')
+      addTracked(fixture.root, ['a'], 'file a')
+      fs.rmSync(path.join(fixture.root, 'a'))
+      fs.mkdirSync(path.join(fixture.root, 'a'))
+      fs.writeFileSync(path.join(fixture.root, 'a', 'b'), 'now a directory\n')
+      const result = readWorktreeRecords(fixture.root)
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      expect(result.records.find((record) => record.path === 'a')).toEqual({
+        path: 'a',
+        kind: 'missing',
+        mode: '',
+        id: undefined,
+      })
+      expect(
+        result.records.find((record) => record.path === 'a/b'),
+      ).toMatchObject({ kind: 'regular' })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a symlinked ancestor of a HEAD-only path still fails closed', async () => {
+    const fixture = createGitFixture()
+    const outside = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-outside-'),
+    )
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.mkdirSync(path.join(fixture.root, 'a'))
+      fs.writeFileSync(path.join(fixture.root, 'a', 'b'), 'same\n')
+      addTracked(fixture.root, ['a/b'], 'nested a/b')
+      expect(
+        runGit(fixture.root, ['rm', '-r', '--cached', '--quiet', 'a']).status,
+      ).toBe(0)
+      fs.writeFileSync(path.join(outside, 'b'), 'same\n')
+      fs.rmSync(path.join(fixture.root, 'a'), { recursive: true })
+      fs.symlinkSync(outside, path.join(fixture.root, 'a'))
+      fs.appendFileSync(infoExcludePath(fixture.root), 'a\n')
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('OpenCode operation observer submodule deletion', () => {
+  test('committing a submodule deletion does not change the worktree digest', async () => {
+    const fixture = createGitFixture()
+    const source = createSubmoduleSource()
+    try {
+      setExcludesFile(fixture.root, null)
+      addSubmodule(fixture.root, source, 'sub')
+      expect(runGit(fixture.root, ['rm', '--quiet', 'sub']).status).toBe(0)
+      expect(fs.existsSync(path.join(fixture.root, 'sub'))).toBe(false)
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await observer.snapshot()
+      expect(before).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
+      })
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'remove sub']).status,
+      ).toBe(0)
+      const after = await observer.snapshot()
+      expect(after).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+      if (before.status !== 'available' || after.status !== 'available') return
+      expect(after.snapshot.worktreeRevisionDigest).toBe(
+        before.snapshot.worktreeRevisionDigest,
+      )
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('an absent gitlink is a deletion, an empty directory stays uninitialized', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      expect(
+        runGit(fixture.root, ['commit', '--quiet', '-m', 'gitlink']).status,
+      ).toBe(0)
+      const absent = readWorktreeRecords(fixture.root)
+      expect(absent.status).toBe('ok')
+      expect(recordFor(absent, 'sub')).toEqual({
+        path: 'sub',
+        kind: 'missing',
+        mode: '',
+        id: undefined,
+      })
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(recordFor(readWorktreeRecords(fixture.root), 'sub')).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: undefined,
+      })
+      // A missing HEAD gitlink never reads closed.
+      fs.rmSync(path.join(fixture.root, 'sub'), { recursive: true })
+      expect(
+        await createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+})
+
+describe('OpenCode operation observer bounded directory emptiness', () => {
+  test.each([
+    { name: 'a non-empty directory', files: 200, outcome: 'file-read-failed' },
+    { name: 'an empty directory', files: 0, outcome: 'ok' },
+  ])(
+    'reads at most one entry and closes the handle for $name',
+    ({ files, outcome }) => {
+      const fixture = createGitFixture()
+      const reads: number[] = []
+      const closes: number[] = []
+      const original = fs.opendirSync
+      const spy = spyOn(fs, 'opendirSync').mockImplementation(((
+        ...args: Parameters<typeof fs.opendirSync>
+      ) => {
+        const directory = original(...args)
+        const readSync = directory.readSync.bind(directory)
+        const closeSync = directory.closeSync.bind(directory)
+        directory.readSync = () => {
+          reads.push(1)
+          return readSync()
+        }
+        directory.closeSync = () => {
+          closes.push(1)
+          return closeSync()
+        }
+        return directory
+      }) as typeof fs.opendirSync)
+      try {
+        setExcludesFile(fixture.root, null)
+        stageGitlinks(fixture.root, ['sub'])
+        fs.mkdirSync(path.join(fixture.root, 'sub'))
+        for (let index = 0; index < files; index += 1) {
+          fs.writeFileSync(path.join(fixture.root, 'sub', `f${index}`), 'x')
+        }
+        const result = readWorktreeRecords(fixture.root)
+        expect(result.status === 'ok' ? 'ok' : result.reasonCode).toBe(outcome)
+        expect(closes.length).toBeGreaterThan(0)
+        expect(closes.length).toBe(reads.length > 0 ? closes.length : 0)
+        // Never more than one entry per opened handle.
+        expect(reads.length).toBeLessThanOrEqual(closes.length)
       } finally {
         spy.mockRestore()
         fixture.cleanup()

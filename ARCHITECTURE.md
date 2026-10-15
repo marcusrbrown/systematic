@@ -308,18 +308,21 @@ refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot ide
   every untracked `.gitignore`, including self-ignored ones. An absent source differs from an empty
   one, and a FIFO, device, or file over 1 MiB fails closed. Content that those rules hide is not
   hashed.
-- **Gitlinks** — an initialized submodule contributes its `HEAD` id. An empty or missing directory
-  is recorded as uninitialized, and a non-empty uninitialized one fails closed. More than 32
-  gitlinks fail with `file-limit` before any submodule is read.
+- **Gitlinks** — an initialized submodule contributes its `HEAD` id. An existing empty directory is
+  recorded as uninitialized, a non-empty one without a checkout fails closed, and an absent path is
+  a deletion. More than 32 gitlinks fail with `file-limit` before any submodule is read.
 - **Root pin** — the repository root, git directory, and common directory are compared with the
   values captured when the observer was created. A mismatch fails closed as `target-unavailable`.
 
 `commitClosure` compares the same raw records with `HEAD`'s tree by path, kind, mode, and object
 id. Git's `diff`, clean filters, and the index are not consulted, and an unborn `HEAD` reads not
-closed. A final pass re-stats every path and each checked directory, re-inspects every gitlink,
-re-lists the index, untracked files, and discovered `.gitignore` files, and re-reads the ignore
-sources and `HEAD`. Any difference fails the snapshot as
-`worktree-unstable`; this and the limit failures make the guard `unavailable` today (#1124).
+closed. A tracked path that is now a directory, or whose parent is now a file, is a deletion; the
+paths that replaced it are observed on their own. A final pass re-stats every path and each checked
+directory, re-inspects every gitlink, re-lists the index, untracked files, and discovered
+`.gitignore` files, re-reads the ignore sources, and re-runs the repository anchor. A root, git
+directory, or common directory that moved fails as `target-unavailable`, and any other difference
+fails the snapshot as `worktree-unstable`. Both make the guard `unavailable` today (#1124), as do
+the limit failures.
 
 A snapshot does not see ignored content, dirty submodule contents, a redirect or ignore rule
 installed before the observer started (#1126), a write that lands after the final pass, or a
