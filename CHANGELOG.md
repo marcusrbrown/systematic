@@ -4,6 +4,28 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.22.4](https://github.com/marcusrbrown/systematic/compare/v3.22.3...v3.22.4) (2026-10-15)
+
+### Bug Fixes
+
+* **guard:** stop the operation observer from reading a changed worktree as unchanged ([#1129](https://github.com/marcusrbrown/systematic/issues/1129)) ([5a4ed40](https://github.com/marcusrbrown/systematic/commit/5a4ed40bba271f75a778ca0b0c7dfa9b19ba232a))
+* **security:** patch PostCSS Nano ID denial of service ([#1127](https://github.com/marcusrbrown/systematic/issues/1127)) ([6f23f58](https://github.com/marcusrbrown/systematic/commit/6f23f5820bb5dd95badb7d6a0d90c7fb3c9e8e22))
+
+### Documentation
+
+* **solutions:** record the digest collapse, release gate, brokered push and action pin fixes ([#1122](https://github.com/marcusrbrown/systematic/issues/1122)) ([1709656](https://github.com/marcusrbrown/systematic/commit/1709656d64fbba2a45a0b04d69f3c5f44c1d10dd))
+* **solutions:** record the operation observer false-clean fixes and the review-spiral scope cut ([#1130](https://github.com/marcusrbrown/systematic/issues/1130)) ([f812849](https://github.com/marcusrbrown/systematic/commit/f81284966831da6f20e1fa26fd1123e18a6347e0))
+
+### Tests
+
+* **release:** accept any pinned release App token action ([#1121](https://github.com/marcusrbrown/systematic/issues/1121)) ([cef2d11](https://github.com/marcusrbrown/systematic/commit/cef2d1190741a6560d8d1e9fce1fda7ee3d2628e))
+
+### Miscellaneous Chores
+
+* **deps:** update actions/create-github-app-token action to v3.3.0 ([#1102](https://github.com/marcusrbrown/systematic/issues/1102)) ([30ec28b](https://github.com/marcusrbrown/systematic/commit/30ec28bf1f32b706b057ab16bbb1a5938b000c2d))
+* **deps:** update fro-bot/agent to v0.122.2 ([#1123](https://github.com/marcusrbrown/systematic/issues/1123)) ([12f3f17](https://github.com/marcusrbrown/systematic/commit/12f3f17841f2147677a9fb75734901a3036aa561))
+* **deps:** update github/codeql-action action to v4.39.0 ([#1132](https://github.com/marcusrbrown/systematic/issues/1132)) ([b9f80cf](https://github.com/marcusrbrown/systematic/commit/b9f80cf532d584b35ea5e6bcc1a60e7caa9c8065))
+
 ## [3.22.3](https://github.com/marcusrbrown/systematic/compare/v3.22.2...v3.22.3) (2026-10-14)
 
 ### Bug Fixes
