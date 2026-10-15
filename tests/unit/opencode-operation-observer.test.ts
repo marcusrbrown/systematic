@@ -20,6 +20,38 @@ import {
   validateRegisteredWorktree,
 } from '../../src/lib/opencode-operation-observer.js'
 
+/** Runs `run` in a scratch directory; any failure means the capability is absent. */
+function probeCapability(run: (directory: string) => boolean): boolean {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-probe-'),
+  )
+  try {
+    return run(directory)
+  } catch {
+    return false
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+// Probed once so the runner reports an unsupported platform as skipped.
+const SUPPORTS_SHA256 = probeCapability(
+  (directory) =>
+    spawnSync('git', ['init', '--quiet', '--object-format=sha256'], {
+      cwd: directory,
+    }).status === 0,
+)
+const HAS_MKFIFO = probeCapability(
+  (directory) =>
+    spawnSync('mkfifo', [path.join(directory, 'pipe')]).status === 0,
+)
+const HAS_DEV_ZERO = fs.existsSync('/dev/zero')
+// Some volumes (e.g. APFS) refuse symlink targets that are not valid UTF-8.
+const SUPPORTS_NON_UTF8_SYMLINK = probeCapability((directory) => {
+  fs.symlinkSync(Buffer.from([0x74, 0xff]), path.join(directory, 'link'))
+  return true
+})
+
 /** `remoteSnapshot` is optional on the interface (implementations that never do readbacks may omit it), but every fixture observer here always implements it. */
 function callRemoteSnapshot(
   observer: OpencodeOperationObserver,
@@ -1933,28 +1965,25 @@ describe('OpenCode operation observer forced git prefix and raw output', () => {
     }
   })
 
-  test('distinguishes symlinks whose non-UTF-8 targets differ (real symlinks)', async () => {
-    const fixture = createGitFixture()
-    try {
-      const link = path.join(fixture.root, 'link')
+  test.skipIf(!SUPPORTS_NON_UTF8_SYMLINK)(
+    'distinguishes symlinks whose non-UTF-8 targets differ (real symlinks)',
+    async () => {
+      const fixture = createGitFixture()
       try {
+        const link = path.join(fixture.root, 'link')
         fs.symlinkSync(Buffer.from([0x74, 0xff]), link)
-      } catch {
-        // Volume refuses non-UTF-8 targets (e.g. APFS EILSEQ); the seam test
-        // below covers this case.
-        return
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        const first = await digestOf(observer)
+        fs.unlinkSync(link)
+        fs.symlinkSync(Buffer.from([0x74, 0xfe]), link)
+        expect(await digestOf(observer)).not.toBe(first)
+      } finally {
+        fixture.cleanup()
       }
-      const observer = createOpencodeOperationObserver({
-        targetDirectory: fixture.root,
-      })
-      const first = await digestOf(observer)
-      fs.unlinkSync(link)
-      fs.symlinkSync(Buffer.from([0x74, 0xfe]), link)
-      expect(await digestOf(observer)).not.toBe(first)
-    } finally {
-      fixture.cleanup()
-    }
-  })
+    },
+  )
 
   test('distinguishes symlinks whose non-UTF-8 targets differ (injected byte seam)', async () => {
     const fixture = createGitFixture()
@@ -2389,20 +2418,26 @@ describe('OpenCode operation observer race-checked reads', () => {
     async (field) => {
       const fixture = createGitFixture()
       try {
-        let calls = 0
+        // The change is keyed to a phase, not a call index: it starts once the
+        // file's content has been handed back.
+        let contentRead = false
         const observer = createOpencodeOperationObserver({
           targetDirectory: fixture.root,
+          fileReader: (filePath) => {
+            const content = fs.readFileSync(filePath)
+            if (filePath.endsWith('tracked.txt')) contentRead = true
+            return content
+          },
           statReader: (filePath) => {
             const stat = lstatWithIdentity(filePath)
-            if (!filePath.endsWith('tracked.txt')) return stat
-            calls += 1
-            if (calls < 2) return stat
+            if (!contentRead || !filePath.endsWith('tracked.txt')) return stat
             return field === 'size'
               ? { ...stat, size: stat.size + 1 }
               : { ...stat, mtimeNs: BigInt(stat.mtimeNs ?? 0) + 1n }
           },
         })
         await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+        expect(contentRead).toBe(true)
       } finally {
         fixture.cleanup()
       }
@@ -2412,21 +2447,29 @@ describe('OpenCode operation observer race-checked reads', () => {
   test('fails closed when a recorded path changes between its read and the final pass', async () => {
     const fixture = createGitFixture()
     try {
-      let calls = 0
+      const target = path.join(fixture.root, 'tracked.txt')
+      // The path is touched on disk by the first command that runs after its
+      // content was read and confirmed, so only the final pass can see it.
+      let contentRead = false
+      let touched = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        statReader: (filePath) => {
-          const stat = lstatWithIdentity(filePath)
-          if (!filePath.endsWith('tracked.txt')) return stat
-          calls += 1
-          // Call 1 is the pre-read stat, call 2 the post-read stat, call 3 the final pass.
-          return calls >= 3
-            ? { ...stat, ctimeNs: BigInt(stat.ctimeNs ?? 0) + 1n }
-            : stat
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith('tracked.txt')) contentRead = true
+          return content
         },
+        commandRunner: interceptingRunner(() => {
+          if (contentRead && !touched) {
+            touched = true
+            const later = new Date(Date.now() + 60_000)
+            fs.utimesSync(target, later, later)
+          }
+          return undefined
+        }),
       })
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
-      expect(calls).toBe(3)
+      expect(touched).toBe(true)
     } finally {
       fixture.cleanup()
     }
@@ -2543,49 +2586,54 @@ describe('OpenCode operation observer race-checked reads', () => {
     }
   })
 
-  test('never blocks on a FIFO at a listed tracked path and fails closed', async () => {
-    // git never lists a FIFO as untracked, so the reachable case is a tracked
-    // regular file replaced by one.
-    const fixture = createGitFixture()
-    try {
-      const target = path.join(fixture.root, 'tracked.txt')
-      fs.rmSync(target)
-      if (spawnSync('mkfifo', [target]).status !== 0) return // no mkfifo here
-      const observer = createOpencodeOperationObserver({
-        targetDirectory: fixture.root,
-      })
-      await expect(observer.snapshot()).resolves.toEqual({
-        status: 'unavailable',
-        reasonCode: 'file-read-failed',
-      })
-    } finally {
-      fixture.cleanup()
-    }
-  })
+  test.skipIf(!HAS_MKFIFO)(
+    'never blocks on a FIFO at a listed tracked path and fails closed',
+    async () => {
+      // git never lists a FIFO as untracked, so the reachable case is a tracked
+      // regular file replaced by one.
+      const fixture = createGitFixture()
+      try {
+        const target = path.join(fixture.root, 'tracked.txt')
+        fs.rmSync(target)
+        expect(spawnSync('mkfifo', [target]).status).toBe(0)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        await expect(observer.snapshot()).resolves.toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-read-failed',
+        })
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
 
-  test('never blocks when a regular file becomes a FIFO before it is opened', async () => {
-    const fixture = createGitFixture()
-    try {
-      const target = path.join(fs.realpathSync(fixture.root), 'tracked.txt')
-      let swapped = false
-      const observer = createOpencodeOperationObserver({
-        targetDirectory: fixture.root,
-        statReader: (filePath) => {
-          const stat = lstatWithIdentity(filePath)
-          if (filePath === target && !swapped) {
-            swapped = true
-            fs.rmSync(target)
-            if (spawnSync('mkfifo', [target]).status !== 0)
-              fs.writeFileSync(target, '')
-          }
-          return stat
-        },
-      })
-      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
-    } finally {
-      fixture.cleanup()
-    }
-  })
+  test.skipIf(!HAS_MKFIFO)(
+    'never blocks when a regular file becomes a FIFO before it is opened',
+    async () => {
+      const fixture = createGitFixture()
+      try {
+        const target = path.join(fs.realpathSync(fixture.root), 'tracked.txt')
+        let swapped = false
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+          statReader: (filePath) => {
+            const stat = lstatWithIdentity(filePath)
+            if (filePath === target && !swapped) {
+              swapped = true
+              fs.rmSync(target)
+              expect(spawnSync('mkfifo', [target]).status).toBe(0)
+            }
+            return stat
+          },
+        })
+        await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
 
   test('fails closed when an untracked path vanishes between the listing and the read', async () => {
     const fixture = createGitFixture()
@@ -2866,45 +2914,52 @@ describe('OpenCode operation observer path set and ignore sources', () => {
     }
   })
 
-  test('a core.excludesFile that is a FIFO fails closed without hanging', async () => {
-    const fixture = createGitFixture()
-    try {
-      const fifo = path.join(fixture.root, '.git', 'test-excludes')
-      if (spawnSync('mkfifo', [fifo]).status !== 0) return // no mkfifo here
-      expect(
-        runGit(fixture.root, ['config', 'core.excludesFile', fifo]).status,
-      ).toBe(0)
-      const observer = createOpencodeOperationObserver({
-        targetDirectory: fixture.root,
-      })
-      await expect(observer.snapshot()).resolves.toEqual({
-        status: 'unavailable',
-        reasonCode: 'file-read-failed',
-      })
-    } finally {
-      fixture.cleanup()
-    }
-  }, 10_000)
+  test.skipIf(!HAS_MKFIFO)(
+    'a core.excludesFile that is a FIFO fails closed without hanging',
+    async () => {
+      const fixture = createGitFixture()
+      try {
+        const fifo = path.join(fixture.root, '.git', 'test-excludes')
+        expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+        expect(
+          runGit(fixture.root, ['config', 'core.excludesFile', fifo]).status,
+        ).toBe(0)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        await expect(observer.snapshot()).resolves.toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-read-failed',
+        })
+      } finally {
+        fixture.cleanup()
+      }
+    },
+    10_000,
+  )
 
-  test('a core.excludesFile that is /dev/zero fails closed without hanging', async () => {
-    if (!fs.existsSync('/dev/zero')) return
-    const fixture = createGitFixture()
-    try {
-      expect(
-        runGit(fixture.root, ['config', 'core.excludesFile', '/dev/zero'])
-          .status,
-      ).toBe(0)
-      const observer = createOpencodeOperationObserver({
-        targetDirectory: fixture.root,
-      })
-      await expect(observer.snapshot()).resolves.toEqual({
-        status: 'unavailable',
-        reasonCode: 'file-read-failed',
-      })
-    } finally {
-      fixture.cleanup()
-    }
-  }, 10_000)
+  test.skipIf(!HAS_DEV_ZERO)(
+    'a core.excludesFile that is /dev/zero fails closed without hanging',
+    async () => {
+      const fixture = createGitFixture()
+      try {
+        expect(
+          runGit(fixture.root, ['config', 'core.excludesFile', '/dev/zero'])
+            .status,
+        ).toBe(0)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        await expect(observer.snapshot()).resolves.toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-read-failed',
+        })
+      } finally {
+        fixture.cleanup()
+      }
+    },
+    10_000,
+  )
 
   test('an oversize core.excludesFile fails closed', async () => {
     const fixture = createGitFixture()
@@ -3108,40 +3163,41 @@ describe('OpenCode operation observer path set and ignore sources', () => {
     }
   })
 
-  test('infers a sha256 object format from the HEAD tree ids', () => {
-    const root = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-observer-sha256-'),
-    )
-    try {
-      if (
-        runGit(root, ['init', '--quiet', '--object-format=sha256']).status !== 0
-      ) {
-        return // this git cannot create sha256 repositories
+  test.skipIf(!SUPPORTS_SHA256)(
+    'infers a sha256 object format from the HEAD tree ids',
+    () => {
+      const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-observer-sha256-'),
+      )
+      try {
+        expect(
+          runGit(root, ['init', '--quiet', '--object-format=sha256']).status,
+        ).toBe(0)
+        runGit(root, ['config', 'user.email', 'observer@example.invalid'])
+        runGit(root, ['config', 'user.name', 'Observer Test'])
+        runGit(root, [
+          'config',
+          'core.excludesFile',
+          path.join(root, '.git', 'none'),
+        ])
+        fs.writeFileSync(path.join(root, 'f'), 'base\n')
+        addTracked(root, ['f'], 'f')
+        fs.writeFileSync(path.join(root, 'u'), 'untracked\n')
+        const result = readWorktreeRecords(root)
+        expect(result.status).toBe('ok')
+        if (result.status !== 'ok') return
+        for (const name of ['f', 'u']) {
+          const expected = runGit(root, ['hash-object', name]).stdout.trim()
+          expect(expected).toHaveLength(64)
+          expect(
+            result.records.find((record) => record.path === name)?.id,
+          ).toBe(expected)
+        }
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
       }
-      runGit(root, ['config', 'user.email', 'observer@example.invalid'])
-      runGit(root, ['config', 'user.name', 'Observer Test'])
-      runGit(root, [
-        'config',
-        'core.excludesFile',
-        path.join(root, '.git', 'none'),
-      ])
-      fs.writeFileSync(path.join(root, 'f'), 'base\n')
-      addTracked(root, ['f'], 'f')
-      fs.writeFileSync(path.join(root, 'u'), 'untracked\n')
-      const result = readWorktreeRecords(root)
-      expect(result.status).toBe('ok')
-      if (result.status !== 'ok') return
-      for (const name of ['f', 'u']) {
-        const expected = runGit(root, ['hash-object', name]).stdout.trim()
-        expect(expected).toHaveLength(64)
-        expect(result.records.find((record) => record.path === name)?.id).toBe(
-          expected,
-        )
-      }
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
+    },
+  )
 
   test('two clones of one commit with relative symlinks give the same digest', async () => {
     const source = createGitFixture()
@@ -3520,47 +3576,44 @@ describe('OpenCode operation observer gitlink hardening', () => {
     }
   }, 30_000)
 
-  test('accepts a 64-hex submodule id in a sha256 repository', () => {
-    const probe = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-observer-sha256-probe-'),
-    )
-    const parentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-observer-sha256-'),
-    )
-    let source: string | undefined
-    try {
-      if (
-        runGit(probe, ['init', '--quiet', '--object-format=sha256']).status !==
-        0
-      ) {
-        return // this git cannot create sha256 repositories
+  test.skipIf(!SUPPORTS_SHA256)(
+    'accepts a 64-hex submodule id in a sha256 repository',
+    () => {
+      const parentDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-observer-sha256-'),
+      )
+      let source: string | undefined
+      try {
+        source = createSubmoduleSource(['--object-format=sha256'])
+        expect(
+          runGit(parentDir, ['init', '--quiet', '--object-format=sha256'])
+            .status,
+        ).toBe(0)
+        runGit(parentDir, ['config', 'user.email', 'observer@example.invalid'])
+        runGit(parentDir, ['config', 'user.name', 'Observer Test'])
+        setExcludesFile(parentDir, null)
+        fs.writeFileSync(path.join(parentDir, 'f'), 'f\n')
+        addTracked(parentDir, ['f'], 'f')
+        addSubmodule(parentDir, source, 'sub')
+        const staged = gitOutput(parentDir, [
+          'ls-files',
+          '--stage',
+          'sub',
+        ]).split(/\s+/)[1]
+        expect(staged).toHaveLength(64)
+        expect(recordFor(readWorktreeRecords(parentDir), 'sub')).toEqual({
+          path: 'sub',
+          kind: 'gitlink',
+          mode: '160000',
+          id: staged,
+        })
+      } finally {
+        if (source) fs.rmSync(source, { recursive: true, force: true })
+        fs.rmSync(parentDir, { recursive: true, force: true })
       }
-      source = createSubmoduleSource(['--object-format=sha256'])
-      expect(
-        runGit(parentDir, ['init', '--quiet', '--object-format=sha256']).status,
-      ).toBe(0)
-      runGit(parentDir, ['config', 'user.email', 'observer@example.invalid'])
-      runGit(parentDir, ['config', 'user.name', 'Observer Test'])
-      setExcludesFile(parentDir, null)
-      fs.writeFileSync(path.join(parentDir, 'f'), 'f\n')
-      addTracked(parentDir, ['f'], 'f')
-      addSubmodule(parentDir, source, 'sub')
-      const staged = gitOutput(parentDir, ['ls-files', '--stage', 'sub']).split(
-        /\s+/,
-      )[1]
-      expect(staged).toHaveLength(64)
-      expect(recordFor(readWorktreeRecords(parentDir), 'sub')).toEqual({
-        path: 'sub',
-        kind: 'gitlink',
-        mode: '160000',
-        id: staged,
-      })
-    } finally {
-      if (source) fs.rmSync(source, { recursive: true, force: true })
-      fs.rmSync(probe, { recursive: true, force: true })
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 30_000)
+    },
+    30_000,
+  )
 })
 
 async function closureOf(root: string): Promise<boolean | undefined> {
@@ -3736,28 +3789,29 @@ describe('OpenCode operation observer commit closure from records', () => {
     }
   })
 
-  test('a SHA-256 repository reads closed after a commit and open after an edit', async () => {
-    const root = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-observer-sha256-'),
-    )
-    try {
-      if (
-        runGit(root, ['init', '--quiet', '--object-format=sha256']).status !== 0
-      ) {
-        return // this git cannot create sha256 repositories
+  test.skipIf(!SUPPORTS_SHA256)(
+    'a SHA-256 repository reads closed after a commit and open after an edit',
+    async () => {
+      const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-observer-sha256-'),
+      )
+      try {
+        expect(
+          runGit(root, ['init', '--quiet', '--object-format=sha256']).status,
+        ).toBe(0)
+        runGit(root, ['config', 'user.email', 'observer@example.invalid'])
+        runGit(root, ['config', 'user.name', 'Observer Test'])
+        setExcludesFile(root, null)
+        fs.writeFileSync(path.join(root, 'f'), 'base\n')
+        addTracked(root, ['f'], 'f')
+        expect(await closureOf(root)).toBe(true)
+        fs.writeFileSync(path.join(root, 'f'), 'edited\n')
+        expect(await closureOf(root)).toBe(false)
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
       }
-      runGit(root, ['config', 'user.email', 'observer@example.invalid'])
-      runGit(root, ['config', 'user.name', 'Observer Test'])
-      setExcludesFile(root, null)
-      fs.writeFileSync(path.join(root, 'f'), 'base\n')
-      addTracked(root, ['f'], 'f')
-      expect(await closureOf(root)).toBe(true)
-      fs.writeFileSync(path.join(root, 'f'), 'edited\n')
-      expect(await closureOf(root)).toBe(false)
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
+    },
+  )
 
   test('no snapshot spawns diff', async () => {
     const fixture = createGitFixture()
@@ -3887,4 +3941,102 @@ describe('OpenCode operation observer repository revision digest', () => {
       }
     }
   }, 30_000)
+})
+
+describe('OpenCode operation observer subdirectory targets', () => {
+  test('a self-ignored .gitignore in the target subdirectory is observed under its repository path', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const subdirectory = path.join(fixture.root, 'sub')
+      fs.mkdirSync(subdirectory)
+      fs.writeFileSync(path.join(subdirectory, '.gitignore'), '*\n')
+      const records = readWorktreeRecords(subdirectory)
+      expect(records.status).toBe('ok')
+      if (records.status !== 'ok') return
+      const paths = records.records.map((record) => record.path)
+      expect(paths).toContain('sub/.gitignore')
+      // It must not be mistaken for a root `.gitignore`, which does not exist.
+      expect(paths).not.toContain('.gitignore')
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: subdirectory,
+      })
+      const before = await digestOf(observer)
+      fs.writeFileSync(path.join(subdirectory, '.gitignore'), '**\n')
+      expect(await digestOf(observer)).not.toBe(before)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+})
+
+describe('OpenCode operation observer file read caps', () => {
+  /** The same file, with a size that lstat under-reports consistently. */
+  const underReportedSize = (reported: number) => (filePath: string) => ({
+    ...lstatWithIdentity(filePath),
+    ...(filePath.endsWith('big.txt') ? { size: reported } : {}),
+  })
+
+  test('reads a file that grew past its reported size in full', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const content = 'grown past the reported size\n'.repeat(5000)
+      fs.writeFileSync(path.join(fixture.root, 'big.txt'), content)
+      const result = readWorktreeRecords(fixture.root, {
+        statReader: underReportedSize(3),
+      })
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      const expected = runGit(fixture.root, ['hash-object', 'big.txt'])
+      expect(
+        result.records.find((record) => record.path === 'big.txt')?.id,
+      ).toBe(expected.stdout.trim())
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('caps the bytes actually read, not the reported size', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'big.txt'), 'x'.repeat(10_000))
+      expect(
+        readWorktreeRecords(fixture.root, {
+          statReader: underReportedSize(3),
+          limits: { maxTotalFileBytes: 9_999 },
+        }),
+      ).toEqual({ status: 'error', reasonCode: 'file-output-limit' })
+      expect(
+        readWorktreeRecords(fixture.root, {
+          statReader: underReportedSize(3),
+          limits: { maxTotalFileBytes: 10_008 },
+        }).status,
+      ).toBe('ok')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('reads an empty file and a file exactly at the cap', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'big.txt'), 'y'.repeat(64))
+      fs.writeFileSync(path.join(fixture.root, 'empty.txt'), '')
+      // tracked.txt is 8 bytes; 64 + 8 is exactly the budget.
+      const result = readWorktreeRecords(fixture.root, {
+        limits: { maxTotalFileBytes: 72 },
+      })
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      expect(
+        result.records.find((record) => record.path === 'empty.txt')?.id,
+      ).toBe(runGit(fixture.root, ['hash-object', 'empty.txt']).stdout.trim())
+    } finally {
+      fixture.cleanup()
+    }
+  })
 })

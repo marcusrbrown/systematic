@@ -15,6 +15,19 @@ const DEFAULT_LIMITS = {
   maxPathBytes: 4096,
 } as const
 
+// A full git object id: 40 hex digits (sha1) or 64 (sha256). Ids are lowercased
+// once, where they are parsed, so every comparison is in one case.
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i
+
+const STAGE_LIST_ARGS = [
+  'ls-files',
+  '--stage',
+  '--full-name',
+  '-z',
+  '--',
+  ':/',
+] as const
+
 const UNTRACKED_FILES_ARGS = [
   'ls-files',
   '--others',
@@ -54,6 +67,7 @@ const IGNORED_GITIGNORE_ARGS = [
   '-i',
   '--exclude-standard',
   '--directory',
+  '--full-name',
   '-z',
   '--',
   ':(glob)**/.gitignore',
@@ -250,8 +264,9 @@ interface GitCommandOutput {
 }
 
 interface StageEntry {
-  readonly record: string
   readonly mode: string
+  /** The staged object id, lowercase. */
+  readonly id: string
   readonly relativePath: string
 }
 
@@ -281,11 +296,12 @@ export interface WorktreeRecord {
   readonly id: string | undefined
 }
 
-/** One budget for the whole snapshot. `gitlinks` is counted, not yet enforced. */
+/**
+ * The bytes read so far across the whole snapshot. The file and gitlink counts
+ * are enforced up front against the path set, so only bytes need tracking.
+ */
 interface SnapshotBudget {
-  files: number
   bytes: number
-  gitlinks: number
 }
 
 type RegularReadOutcome =
@@ -337,8 +353,8 @@ type RepositoryAnchorResult =
       /** Full object id, or `undefined` for an unborn `HEAD`. */
       head: string | undefined
       infoExcludePath: string
-      /** `true` or `false`, as `rev-parse --is-inside-work-tree` prints it. */
-      insideWorkTree: string
+      /** What `rev-parse --is-inside-work-tree` answered. */
+      insideWorkTree: boolean
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
 
@@ -503,9 +519,9 @@ function parseStageEntries(
     const header = record.slice(0, separator)
     const relativePath = record.slice(separator + 1)
     if (outputBytes(relativePath) > maxPathBytes) return undefined
-    const [mode] = header.split(' ')
-    if (!mode) return undefined
-    entries.push({ record, mode, relativePath })
+    const [mode, id] = header.split(' ')
+    if (!mode || !id || !GIT_OBJECT_ID.test(id)) return undefined
+    entries.push({ mode, id: id.toLowerCase(), relativePath })
   }
   return entries.sort((left, right) =>
     left.relativePath.localeCompare(right.relativePath),
@@ -541,13 +557,20 @@ function commandResultError(
   return undefined
 }
 
-function runCommand(
+/**
+ * Runs a git command and maps every failure to a reason code. Some commands
+ * use a non-zero exit to answer (`-q` prints nothing and exits 1 for an unborn
+ * `HEAD`, `config --get` exits 1 for an unset key), so the exit codes that
+ * count as success are the caller's choice.
+ */
+function runCommandAllowingExit(
   runner: OperationObserverCommandRunner,
   args: readonly string[],
   cwd: string,
   limits: Limits,
+  acceptedExits: readonly number[],
 ):
-  | { status: 'ok'; output: GitCommandOutput }
+  | { status: 'ok'; output: GitCommandOutput; exitCode: number }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   let result: OperationObserverCommandResult
   try {
@@ -562,10 +585,25 @@ function runCommand(
   }
   const resultError = commandResultError(result, limits)
   if (resultError) return { status: 'error', reasonCode: resultError }
-  if (result.status !== 0) {
+  if (!acceptedExits.includes(result.status)) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  return { status: 'ok', output: { stdout: result.stdout } }
+  return {
+    status: 'ok',
+    output: { stdout: result.stdout },
+    exitCode: result.status,
+  }
+}
+
+function runCommand(
+  runner: OperationObserverCommandRunner,
+  args: readonly string[],
+  cwd: string,
+  limits: Limits,
+):
+  | { status: 'ok'; output: GitCommandOutput }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  return runCommandAllowingExit(runner, args, cwd, limits, [0])
 }
 
 function canonicalPath(
@@ -840,7 +878,7 @@ function readRevision(
   runner: OperationObserverCommandRunner,
   context: RepositoryContext,
   head: string | undefined,
-  insideWorkTree: string,
+  insideWorkTree: boolean,
   limits: Limits,
 ):
   | { status: 'ok'; digest: string }
@@ -861,7 +899,8 @@ function readRevision(
     digest: digest('repository-revision', [
       head ?? 'unborn',
       branchValue,
-      insideWorkTree,
+      // The digest has always carried the answer as git prints it.
+      String(insideWorkTree),
     ]),
   }
 }
@@ -879,36 +918,31 @@ function readRepositoryAnchor(
   limits: Limits,
   realPath: (filePath: string) => string,
 ): RepositoryAnchorResult {
-  let result: OperationObserverCommandResult
-  try {
-    result = runner(
-      [
-        'rev-parse',
-        '--show-toplevel',
-        '--absolute-git-dir',
-        '--git-path',
-        'info/exclude',
-        '--is-inside-work-tree',
-        '--verify',
-        '-q',
-        'HEAD',
-      ],
-      cwd,
-      limits.maxCommandOutputBytes,
-      limits.maxCommandTimeoutMs,
-    )
-  } catch {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const resultError = commandResultError(result, limits)
-  if (resultError) return { status: 'error', reasonCode: resultError }
-  const lines = result.stdout.split('\n')
+  const result = runCommandAllowingExit(
+    runner,
+    [
+      'rev-parse',
+      '--show-toplevel',
+      '--absolute-git-dir',
+      '--git-path',
+      'info/exclude',
+      '--is-inside-work-tree',
+      '--verify',
+      '-q',
+      'HEAD',
+    ],
+    cwd,
+    limits,
+    [0, 1],
+  )
+  if (result.status === 'error') return result
+  const lines = result.output.stdout.split('\n')
   if (lines.at(-1) === '') lines.pop()
-  const unborn = result.status === 1 && lines.length === 4
-  if (result.status !== 0 && !unborn) {
+  const unborn = result.exitCode === 1 && lines.length === 4
+  if (result.exitCode !== 0 && !unborn) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  const [toplevelLine, gitDirLine, excludeLine, insideLine, head] = lines
+  const [toplevelLine, gitDirLine, excludeLine, insideLine, headLine] = lines
   const malformed =
     lines.length !== (unborn ? 4 : 5) ||
     (insideLine !== 'true' && insideLine !== 'false') ||
@@ -917,7 +951,7 @@ function readRepositoryAnchor(
     excludeLine === undefined ||
     excludeLine.length === 0 ||
     outputBytes(toplevelLine) > limits.maxPathBytes ||
-    (head !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head))
+    (headLine !== undefined && !GIT_OBJECT_ID.test(headLine))
   if (malformed) return { status: 'error', reasonCode: 'target-unavailable' }
   const toplevel = absoluteCanonicalPath(toplevelLine, realPath)
   const gitDir = absoluteCanonicalPath(gitDirLine, realPath)
@@ -928,9 +962,9 @@ function readRepositoryAnchor(
     status: 'ok',
     toplevel,
     gitDir,
-    head,
+    head: headLine?.toLowerCase(),
     infoExcludePath: path.resolve(cwd, excludeLine),
-    insideWorkTree: insideLine,
+    insideWorkTree: insideLine === 'true',
   }
 }
 
@@ -950,17 +984,17 @@ function isEnoent(error: unknown): boolean {
   )
 }
 
-type FactResult =
-  | {
-      status: 'ok'
-      record: WorktreeRecord
-      stat: OperationObserverFileStat | undefined
-    }
-  | { status: 'error'; reasonCode: OperationObserverReasonCode }
-
 type ObservationResult =
   | { status: 'ok'; observation: PathObservation }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+function observed(
+  absolutePath: string,
+  record: WorktreeRecord,
+  stat: OperationObserverFileStat | undefined,
+): ObservationResult {
+  return { status: 'ok', observation: { absolutePath, record, stat } }
+}
 
 function gitBlobId(content: Uint8Array, format: ObjectFormat): string {
   return createHash(format)
@@ -969,21 +1003,28 @@ function gitBlobId(content: Uint8Array, format: ObjectFormat): string {
     .digest('hex')
 }
 
-function missingRecord(relativePath: string): FactResult {
-  return {
-    status: 'ok',
-    record: { path: relativePath, kind: 'missing', mode: '', id: undefined },
-    stat: undefined,
-  }
+function missingObservation(
+  absolutePath: string,
+  relativePath: string,
+): ObservationResult {
+  return observed(
+    absolutePath,
+    { path: relativePath, kind: 'missing', mode: '', id: undefined },
+    undefined,
+  )
 }
 
 /**
  * A listed path that is gone. A tracked path is a deletion. An untracked path
  * was listed moments ago, so its disappearance is a race.
  */
-function vanishedPath(tracked: boolean, relativePath: string): FactResult {
+function vanishedPath(
+  tracked: boolean,
+  absolutePath: string,
+  relativePath: string,
+): ObservationResult {
   return tracked
-    ? missingRecord(relativePath)
+    ? missingObservation(absolutePath, relativePath)
     : { status: 'error', reasonCode: 'worktree-unstable' }
 }
 
@@ -1024,10 +1065,6 @@ function confirmStat(
     ? { status: 'ok', stat: after }
     : { status: 'error', reasonCode: 'worktree-unstable' }
 }
-
-const READ_CHUNK_BYTES = 65_536
-// Reads are synchronous, so one scratch buffer is never shared across calls.
-const READ_SCRATCH = Buffer.allocUnsafe(READ_CHUNK_BYTES)
 
 function hasErrorCode(error: unknown, ...codes: readonly string[]): boolean {
   return (
@@ -1078,19 +1115,30 @@ function readOpenedRegularFile(
   ) {
     return { status: 'error', reasonCode: 'worktree-unstable' }
   }
-  // Cap on the bytes actually read, not on what lstat promised.
-  const chunks: Buffer[] = []
+  // One buffer sized from lstat plus a byte, so a file that stays its size
+  // reaches EOF without a second allocation. A file that grew is enlarged,
+  // never beyond one byte past the cap. The cap applies to the bytes actually
+  // read, not to what lstat promised.
+  let buffer = Buffer.allocUnsafe(
+    Math.min(Math.max(expected.size, 0), maxBytes) + 1,
+  )
   let total = 0
   for (;;) {
-    const count = fs.readSync(fd, READ_SCRATCH, 0, READ_CHUNK_BYTES, null)
+    if (total === buffer.length) {
+      const grown = Buffer.allocUnsafe(
+        Math.min(buffer.length * 2, maxBytes + 1),
+      )
+      buffer.copy(grown, 0, 0, total)
+      buffer = grown
+    }
+    const count = fs.readSync(fd, buffer, total, buffer.length - total, null)
     if (count === 0) break
     total += count
     if (total > maxBytes) {
       return { status: 'error', reasonCode: 'file-output-limit' }
     }
-    chunks.push(Buffer.from(READ_SCRATCH.subarray(0, count)))
   }
-  return { status: 'ok', content: Buffer.concat(chunks, total) }
+  return { status: 'ok', content: buffer.subarray(0, total) }
 }
 
 /**
@@ -1132,19 +1180,19 @@ function adaptInjectedFileReader(
   }
 }
 
-const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i
-
 type GitlinkInspection =
   | { status: 'initialized'; id: string }
   | { status: 'uninitialized' }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
 
-function directoryIsEmpty(absolutePath: string): boolean | undefined {
+function directoryEmptiness(
+  absolutePath: string,
+): 'empty' | 'non-empty' | 'unreadable' {
   try {
-    return fs.readdirSync(absolutePath).length === 0
+    return fs.readdirSync(absolutePath).length === 0 ? 'empty' : 'non-empty'
   } catch (error) {
     // Gone by now is as good as empty; anything else is unreadable.
-    return isEnoent(error) ? true : undefined
+    return isEnoent(error) ? 'empty' : 'unreadable'
   }
 }
 
@@ -1210,9 +1258,13 @@ function inspectGitlink(
       return { status: 'error', reasonCode: 'file-read-failed' }
     }
     // No `.git`: uninitialized only if the directory is empty.
-    return directoryIsEmpty(absolutePath)
-      ? { status: 'uninitialized' }
-      : { status: 'error', reasonCode: 'file-read-failed' }
+    switch (directoryEmptiness(absolutePath)) {
+      case 'empty':
+        return { status: 'uninitialized' }
+      case 'non-empty':
+      case 'unreadable':
+        return { status: 'error', reasonCode: 'file-read-failed' }
+    }
   }
   return readInitializedGitlink(readers, absolutePath, limits)
 }
@@ -1223,8 +1275,7 @@ function appendSubmoduleFact(
   absolutePath: string,
   relativePath: string,
   limits: Limits,
-  budget: SnapshotBudget,
-): FactResult {
+): ObservationResult {
   const inspected = inspectGitlink(readers, absolutePath, limits)
   if (inspected.status === 'error') return inspected
   const id = inspected.status === 'initialized' ? inspected.id : undefined
@@ -1234,12 +1285,11 @@ function appendSubmoduleFact(
   // `uninitialized` is not hex, so it can never collide with a revision.
   hash.update(id ?? 'uninitialized')
   hash.update('\0')
-  budget.gitlinks += 1
-  return {
-    status: 'ok',
-    record: { path: relativePath, kind: 'gitlink', mode: '160000', id },
-    stat: undefined,
-  }
+  return observed(
+    absolutePath,
+    { path: relativePath, kind: 'gitlink', mode: '160000', id },
+    undefined,
+  )
 }
 
 function appendSymlinkFact(
@@ -1252,13 +1302,13 @@ function appendSymlinkFact(
   budget: SnapshotBudget,
   format: ObjectFormat,
   tracked: boolean,
-): FactResult {
+): ObservationResult {
   let target: Uint8Array
   try {
     target = readers.symlinkReader(absolutePath)
   } catch (error) {
     return isEnoent(error)
-      ? vanishedPath(tracked, relativePath)
+      ? vanishedPath(tracked, absolutePath, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
   const nextBytes = budget.bytes + target.byteLength
@@ -1276,16 +1326,16 @@ function appendSymlinkFact(
   hash.update(target)
   hash.update('\0')
   budget.bytes = nextBytes
-  return {
-    status: 'ok',
-    record: {
+  return observed(
+    absolutePath,
+    {
       path: relativePath,
       kind: 'symlink',
       mode: '120000',
       id: gitBlobId(target, format),
     },
-    stat: confirmed.stat,
-  }
+    confirmed.stat,
+  )
 }
 
 function appendRegularFact(
@@ -1298,7 +1348,7 @@ function appendRegularFact(
   budget: SnapshotBudget,
   format: ObjectFormat,
   tracked: boolean,
-): FactResult {
+): ObservationResult {
   if (!stat.isFile || !Number.isSafeInteger(stat.size) || stat.size < 0) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
@@ -1307,7 +1357,8 @@ function appendRegularFact(
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
   const read = readers.readRegular(absolutePath, stat, remaining)
-  if (read.status === 'missing') return vanishedPath(tracked, relativePath)
+  if (read.status === 'missing')
+    return vanishedPath(tracked, absolutePath, relativePath)
   if (read.status === 'error') return read
   const { content } = read
   if (content.byteLength > remaining) {
@@ -1322,30 +1373,43 @@ function appendRegularFact(
   hash.update(content)
   hash.update('\0')
   budget.bytes += content.byteLength
-  return {
-    status: 'ok',
-    record: {
+  return observed(
+    absolutePath,
+    {
       path: relativePath,
       kind: 'regular',
       // Git's rule: only the owner execute bit matters.
       mode: (stat.mode & 0o100) !== 0 ? '100755' : '100644',
       id: gitBlobId(content, format),
     },
-    stat: confirmed.stat,
-  }
+    confirmed.stat,
+  )
 }
 
-function appendResolvedFact(
+/** A path to observe, with its tracked mode when it has one. */
+interface PathEntry {
+  readonly relativePath: string
+  /**
+   * The mode from the index, else from the `HEAD` tree. Empty means the path
+   * is in neither, that is, untracked.
+   */
+  readonly mode: string
+}
+
+function appendPathFact(
   hash: ReturnType<typeof createHash>,
   readers: WorktreeReaders,
-  absolutePath: string,
-  entry: Pick<StageEntry, 'mode' | 'relativePath'>,
+  context: RepositoryContext,
+  entry: PathEntry,
   limits: Limits,
   budget: SnapshotBudget,
   format: ObjectFormat,
-): FactResult {
+): ObservationResult {
   const { mode, relativePath } = entry
-  // An empty mode means the path is not in the index.
+  const absolutePath = safePath(context.worktreeRoot, relativePath)
+  if (!absolutePath || outputBytes(relativePath) > limits.maxPathBytes) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
   const tracked = mode !== ''
   // A gitlink inspects its own directory, so it is dispatched before the stat.
   if (mode === '160000') {
@@ -1355,7 +1419,6 @@ function appendResolvedFact(
       absolutePath,
       relativePath,
       limits,
-      budget,
     )
   }
   let stat: OperationObserverFileStat
@@ -1363,7 +1426,7 @@ function appendResolvedFact(
     stat = readers.statReader(absolutePath)
   } catch (error) {
     return isEnoent(error)
-      ? vanishedPath(tracked, relativePath)
+      ? vanishedPath(tracked, absolutePath, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
   return stat.isSymbolicLink
@@ -1391,41 +1454,53 @@ function appendResolvedFact(
       )
 }
 
-function appendFileFactV2(
-  hash: ReturnType<typeof createHash>,
-  readers: WorktreeReaders,
-  context: RepositoryContext,
-  entry: Pick<StageEntry, 'mode' | 'relativePath'>,
-  limits: Limits,
-  budget: SnapshotBudget,
-  format: ObjectFormat,
-): ObservationResult {
-  const absolutePath = safePath(context.worktreeRoot, entry.relativePath)
-  if (!absolutePath || outputBytes(entry.relativePath) > limits.maxPathBytes) {
-    return { status: 'error', reasonCode: 'file-read-failed' }
-  }
-  const fact = appendResolvedFact(
-    hash,
-    readers,
-    absolutePath,
-    entry,
-    limits,
-    budget,
-    format,
-  )
-  if (fact.status === 'error') return fact
-  return {
-    status: 'ok',
-    observation: { absolutePath, record: fact.record, stat: fact.stat },
-  }
-}
-
-/** Everything the final pass compares against, taken during the first pass. */
-interface FirstPass {
+/** The three listings that decide the path set, as git printed them. */
+interface RawListings {
   readonly staged: string
   readonly untracked: string
   readonly ignoredGitignores: string
+}
+
+/** Everything the final pass compares against, taken during the first pass. */
+interface FirstPass extends RawListings {
   readonly ignoreSources: readonly IgnoreSourceFact[]
+}
+
+/** Lists the index, the untracked files and the self-ignored `.gitignore` files. */
+function listWorktreePaths(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  limits: Limits,
+):
+  | ({ status: 'ok' } & RawListings)
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const staged = runCommand(
+    runner,
+    STAGE_LIST_ARGS,
+    context.commandDirectory,
+    limits,
+  )
+  if (staged.status === 'error') return staged
+  const untracked = runCommand(
+    runner,
+    UNTRACKED_FILES_ARGS,
+    context.commandDirectory,
+    limits,
+  )
+  if (untracked.status === 'error') return untracked
+  const ignoredGitignores = runCommand(
+    runner,
+    IGNORED_GITIGNORE_ARGS,
+    context.commandDirectory,
+    limits,
+  )
+  if (ignoredGitignores.status === 'error') return ignoredGitignores
+  return {
+    status: 'ok',
+    staged: staged.output.stdout,
+    untracked: untracked.output.stdout,
+    ignoredGitignores: ignoredGitignores.output.stdout,
+  }
 }
 
 type StabilityResult =
@@ -1475,30 +1550,11 @@ function verifyListingsUnchanged(
   limits: Limits,
   first: FirstPass,
 ): StabilityResult {
-  const staged = runCommand(
-    runner,
-    ['ls-files', '--stage', '--full-name', '-z', '--', ':/'],
-    context.commandDirectory,
-    limits,
-  )
-  if (staged.status === 'error') return staged
-  const untracked = runCommand(
-    runner,
-    UNTRACKED_FILES_ARGS,
-    context.commandDirectory,
-    limits,
-  )
-  if (untracked.status === 'error') return untracked
-  const ignoredGitignores = runCommand(
-    runner,
-    IGNORED_GITIGNORE_ARGS,
-    context.commandDirectory,
-    limits,
-  )
-  if (ignoredGitignores.status === 'error') return ignoredGitignores
-  return staged.output.stdout === first.staged &&
-    untracked.output.stdout === first.untracked &&
-    ignoredGitignores.output.stdout === first.ignoredGitignores
+  const fresh = listWorktreePaths(runner, context, limits)
+  if (fresh.status === 'error') return fresh
+  return fresh.staged === first.staged &&
+    fresh.untracked === first.untracked &&
+    fresh.ignoredGitignores === first.ignoredGitignores
     ? { status: 'ok' }
     : UNSTABLE
 }
@@ -1522,24 +1578,19 @@ function verifyHeadUnchanged(
   limits: Limits,
   head: string | undefined,
 ): StabilityResult {
-  let result: OperationObserverCommandResult
-  try {
-    result = runner(
-      ['rev-parse', '--verify', '-q', 'HEAD'],
-      context.commandDirectory,
-      limits.maxCommandOutputBytes,
-      limits.maxCommandTimeoutMs,
-    )
-  } catch {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const resultError = commandResultError(result, limits)
-  if (resultError) return { status: 'error', reasonCode: resultError }
+  const result = runCommandAllowingExit(
+    runner,
+    ['rev-parse', '--verify', '-q', 'HEAD'],
+    context.commandDirectory,
+    limits,
+    [0, 1],
+  )
+  if (result.status === 'error') return result
   // Exit 1 under `-q` is an unborn HEAD.
-  if (result.status !== 0 && result.status !== 1) {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const current = result.status === 0 ? result.stdout.trim() : undefined
+  const current =
+    result.exitCode === 0
+      ? result.output.stdout.trim().toLowerCase()
+      : undefined
   return current === head ? { status: 'ok' } : UNSTABLE
 }
 
@@ -1658,27 +1709,19 @@ function resolveExcludesFilePath(
 ):
   | { status: 'ok'; filePath: string | undefined }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  let result: OperationObserverCommandResult
-  try {
-    result = runner(
-      ['config', '--type=path', '--get', 'core.excludesFile'],
-      context.commandDirectory,
-      limits.maxCommandOutputBytes,
-      limits.maxCommandTimeoutMs,
-    )
-  } catch {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const resultError = commandResultError(result, limits)
-  if (resultError) return { status: 'error', reasonCode: resultError }
+  const result = runCommandAllowingExit(
+    runner,
+    ['config', '--type=path', '--get', 'core.excludesFile'],
+    context.commandDirectory,
+    limits,
+    [0, 1],
+  )
+  if (result.status === 'error') return result
   // Exit 1 means the key is unset.
-  if (result.status === 1) {
+  if (result.exitCode === 1) {
     return { status: 'ok', filePath: defaultExcludesFilePath() }
   }
-  if (result.status !== 0) {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const configured = result.stdout.replace(/\n$/, '')
+  const configured = result.output.stdout.replace(/\n$/, '')
   return {
     status: 'ok',
     filePath:
@@ -1783,12 +1826,12 @@ function readHeadTree(
       !mode ||
       !id ||
       !/^[0-7]{6}$/.test(mode) ||
-      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id) ||
+      !GIT_OBJECT_ID.test(id) ||
       outputBytes(entryPath) > limits.maxPathBytes
     ) {
       return { status: 'error', reasonCode: 'file-read-failed' }
     }
-    entries.set(entryPath, { mode, id })
+    entries.set(entryPath, { mode, id: id.toLowerCase() })
   }
   return {
     status: 'ok',
@@ -1806,7 +1849,7 @@ function inferObjectFormat(ids: readonly string[]): ObjectFormat | undefined {
 }
 
 interface WorktreeListings {
-  readonly first: Omit<FirstPass, 'ignoreSources'>
+  readonly first: RawListings
   readonly stageEntries: readonly StageEntry[]
   readonly paths: readonly string[]
 }
@@ -1820,60 +1863,30 @@ function readWorktreeListings(
 ):
   | ({ status: 'ok' } & WorktreeListings)
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const staged = runCommand(
-    runner,
-    ['ls-files', '--stage', '--full-name', '-z', '--', ':/'],
-    context.commandDirectory,
-    limits,
-  )
-  if (staged.status === 'error') return staged
-  const untracked = runCommand(
-    runner,
-    UNTRACKED_FILES_ARGS,
-    context.commandDirectory,
-    limits,
-  )
-  if (untracked.status === 'error') return untracked
-  const ignoredGitignores = runCommand(
-    runner,
-    IGNORED_GITIGNORE_ARGS,
-    context.commandDirectory,
-    limits,
-  )
-  if (ignoredGitignores.status === 'error') return ignoredGitignores
-  const stageEntries = parseStageEntries(
-    staged.output.stdout,
-    limits.maxPathBytes,
-  )
+  const first = listWorktreePaths(runner, context, limits)
+  if (first.status === 'error') return first
+  const stageEntries = parseStageEntries(first.staged, limits.maxPathBytes)
   if (!stageEntries) return { status: 'error', reasonCode: 'file-read-failed' }
   // A trailing slash marks a wholly ignored directory, whose contents are
   // ignored and so stay out of the identity.
-  const selfIgnored = splitRecords(ignoredGitignores.output.stdout).filter(
+  const selfIgnored = splitRecords(first.ignoredGitignores).filter(
     (entry) => !entry.endsWith('/'),
   )
-  const paths = [
-    ...new Set([
-      // The index paths come from the stage listing, which lists the same
-      // paths as the plain one.
-      ...stageEntries.map((entry) => entry.relativePath),
-      ...headTree.keys(),
-      ...splitRecords(untracked.output.stdout),
-      ...selfIgnored,
-    ]),
-  ].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)))
-  return {
-    status: 'ok',
-    first: {
-      staged: staged.output.stdout,
-      untracked: untracked.output.stdout,
-      ignoredGitignores: ignoredGitignores.output.stdout,
-    },
-    stageEntries,
-    paths,
-  }
+  const unique = new Set([
+    ...stageEntries.map((entry) => entry.relativePath),
+    ...headTree.keys(),
+    ...splitRecords(first.untracked),
+    ...selfIgnored,
+  ])
+  // Sort by raw UTF-8 bytes. The keys are built once, not on every comparison.
+  const paths = [...unique]
+    .map((entry) => ({ entry, key: Buffer.from(entry) }))
+    .sort((left, right) => left.key.compare(right.key))
+    .map(({ entry }) => entry)
+  return { status: 'ok', first, stageEntries, paths }
 }
 
-function readWorktreeRevisionV2(
+function readWorktreeSnapshot(
   readers: WorktreeReaders,
   context: RepositoryContext,
   head: string | undefined,
@@ -1898,7 +1911,7 @@ function readWorktreeRevisionV2(
   if (listings.status === 'error') return listings
   const format = inferObjectFormat([
     ...tree.ids,
-    ...listings.stageEntries.map((entry) => entry.record.split(' ')[1] ?? ''),
+    ...listings.stageEntries.map((entry) => entry.id),
   ])
   if (format === undefined) {
     return { status: 'error', reasonCode: 'file-read-failed' }
@@ -1922,10 +1935,10 @@ function readWorktreeRevisionV2(
   }
   const hash = createHash('sha256')
   hash.update(WORKTREE_DIGEST_DOMAIN)
-  const budget: SnapshotBudget = { files: 0, bytes: 0, gitlinks: 0 }
+  const budget: SnapshotBudget = { bytes: 0 }
   const observations: PathObservation[] = []
   for (const relativePath of paths) {
-    const result = appendFileFactV2(
+    const result = appendPathFact(
       hash,
       readers,
       context,
@@ -1935,7 +1948,6 @@ function readWorktreeRevisionV2(
       format,
     )
     if (result.status === 'error') return result
-    budget.files += 1
     observations.push(result.observation)
   }
   for (const fact of sources.facts) hashIgnoreSource(hash, fact)
@@ -2397,7 +2409,7 @@ export function readWorktreeRecords(
   )
   const anchor = readRepositoryAnchor(runner, targetDirectory, limits, realPath)
   if (anchor.status === 'error') return anchor
-  return readWorktreeRevisionV2(
+  return readWorktreeSnapshot(
     resolveWorktreeReaders(runner, options),
     {
       commandDirectory: targetDirectory,
@@ -2486,7 +2498,7 @@ export function createOpencodeOperationObserver(
         limits,
       )
       if (repository.status === 'error') return unavailable(repository)
-      const worktree = readWorktreeRevisionV2(
+      const worktree = readWorktreeSnapshot(
         readers,
         context,
         anchor.head,
