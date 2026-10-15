@@ -4598,6 +4598,7 @@ describe('OpenCode workflow guard adapter', () => {
             expect(JSON.parse(second.output)).toEqual({
               status: 'rejected',
               reasonCode: 'snapshot-blocked',
+              blockReason: 'worktree-unstable',
             })
             expect(status(fx.adapter).state).not.toBe('unavailable')
             expect(consumedReceipts(fx.adapter)).toBe(0)
@@ -11983,6 +11984,7 @@ describe('OpenCode workflow guard adapter', () => {
       expect(JSON.parse(output.output)).toEqual({
         status: 'rejected',
         reasonCode: 'snapshot-blocked',
+        blockReason: 'worktree-unstable',
       })
       expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
         reasonCode: 'worktree-unstable',
@@ -16699,8 +16701,10 @@ describe('snapshot block record', () => {
     readonly workspaceIdentity: string
     /** The next local snapshots of the parent checkout (the effective target). */
     queueParent(...next: OperationObserverResult[]): void
-    /** The next local snapshots of the linked worktree. */
-    queueLinked(...next: OperationObserverResult[]): void
+    /** The next local snapshots of the linked worktree (a promise holds one open). */
+    queueLinked(
+      ...next: (OperationObserverResult | Promise<OperationObserverResult>)[]
+    ): void
     linkedSnapshots(): number
     cleanup(): void
   }
@@ -16719,7 +16723,10 @@ describe('snapshot block record', () => {
       throw new Error('parent unavailable')
     }
     const parentQueue: OperationObserverResult[] = []
-    const linkedQueue: OperationObserverResult[] = []
+    const linkedQueue: (
+      | OperationObserverResult
+      | Promise<OperationObserverResult>
+    )[] = []
     let linkedSnapshots = 0
     const adapter = createOpencodeWorkflowGuard({
       config: { mode: 'observe', debug: false },
@@ -17136,6 +17143,184 @@ describe('snapshot block record', () => {
         } finally {
           target.cleanup()
         }
+      })
+
+      test('a block set on the parent while a call to another worktree is in flight does not outlive the unit pinning to that worktree', async () => {
+        const target = await targetAdapter()
+        try {
+          let release: (result: OperationObserverResult) => void = () => {}
+          const held = new Promise<OperationObserverResult>((resolve) => {
+            release = resolve
+          })
+          target.queueLinked(held)
+          const linkedArgs = {
+            command: 'git status --short',
+            workdir: target.linkedRoot,
+          }
+          const linkedInput = {
+            tool: 'bash' as const,
+            sessionID: SESSION_A,
+            callID: 'linked-in-flight',
+          }
+          const linkedBefore = target.adapter.hooks['tool.execute.before'](
+            linkedInput,
+            { args: linkedArgs },
+          )
+          for (
+            let tick = 0;
+            tick < 50 && target.linkedSnapshots() < 1;
+            tick++
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 0))
+          }
+          expect(target.linkedSnapshots()).toBe(1)
+          target.queueParent(BLOCKED('file-limit'))
+          await operateIn(target.adapter, 'parent-blocks-meanwhile')
+          expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+            reasonCode: 'file-limit',
+          })
+          const parentIdentity = status(target.adapter).unit
+            ?.pinnedOperationTargetIdentity
+          expect(parentIdentity).toBeUndefined()
+
+          const linkedObserver = createOpencodeOperationObserver({
+            targetDirectory: target.linkedRoot,
+          })
+          release(await linkedObserver.snapshot())
+          await linkedBefore
+          await target.adapter.hooks['tool.execute.after'](
+            { ...linkedInput, args: linkedArgs },
+            BASH_OUTPUT,
+          )
+
+          // The call was accepted and the unit pinned to the linked worktree.
+          expect(
+            status(target.adapter).unit?.pinnedOperationTargetIdentity,
+          ).toBe(linkedObserver.targetDigest)
+          // The block was of the parent, which is no longer the effective
+          // target: it is gone, and it does not strand the unit.
+          expect(
+            target.adapter.snapshotBlock(SESSION_A).current(),
+          ).toBeUndefined()
+          const parsed = await statusKeepingBlock(target.adapter)
+          expect(parsed.snapshotBlock).toBeUndefined()
+          expect(status(target.adapter).state).not.toBe('unavailable')
+          const output = await completeUnit(target.adapter, 'pinned-complete')
+          expect(output.output).not.toContain('snapshot-blocked')
+        } finally {
+          target.cleanup()
+        }
+      })
+
+      describe('a completion whose parent checkout read is the one that blocks', () => {
+        async function pinnedTargetAdapter(): Promise<TargetAdapter> {
+          const target = await targetAdapter()
+          // Evidence observed in the linked worktree pins the unit to it.
+          await observeFreshWrite(
+            target.adapter,
+            path.join(target.linkedRoot, 'pinned-evidence.txt'),
+            'evidence',
+            'pin-write',
+          )
+          await observeFreshVerification(
+            target.adapter,
+            target.linkedRoot,
+            'pin-verify',
+          )
+          expect(
+            status(target.adapter).unit?.pinnedOperationTargetIdentity,
+          ).toBeDefined()
+          return target
+        }
+
+        async function expectBlockedWithReason(
+          target: TargetAdapter,
+          callID: string,
+          blockReason: string,
+        ): Promise<void> {
+          const output = await completeUnit(target.adapter, callID)
+
+          expect(JSON.parse(output.output)).toEqual({
+            status: 'rejected',
+            reasonCode: 'snapshot-blocked',
+            blockReason,
+          })
+          expect(status(target.adapter).state).not.toBe('unavailable')
+          // The parent is not the unit's effective target: no record is set,
+          // so status shows no block and a later clean parent read is not
+          // mistaken for a fix.
+          expect(
+            target.adapter.snapshotBlock(SESSION_A).current(),
+          ).toBeUndefined()
+          expect(
+            (await statusKeepingBlock(target.adapter)).snapshotBlock,
+          ).toBeUndefined()
+        }
+
+        test('is a retryable snapshot-blocked that names the reason but records no block on a pinned unit', async () => {
+          const target = await pinnedTargetAdapter()
+          try {
+            target.queueParent(BLOCKED('file-limit'))
+
+            await expectBlockedWithReason(
+              target,
+              'pinned-parent-limit',
+              'file-limit',
+            )
+          } finally {
+            target.cleanup()
+          }
+        })
+
+        test('treats parent revision drift on a pinned unit the same way, with worktree-unstable', async () => {
+          const target = await pinnedTargetAdapter()
+          try {
+            const parentSnapshot = (worktree: string) =>
+              ({
+                status: 'available',
+                snapshot: {
+                  targetDigest: target.workspaceIdentity,
+                  repositoryRevisionDigest: 'b'.repeat(64),
+                  worktreeRevisionDigest: worktree.repeat(64),
+                },
+              }) as const
+            target.queueParent(parentSnapshot('1'), parentSnapshot('2'))
+
+            await expectBlockedWithReason(
+              target,
+              'pinned-parent-drift',
+              'worktree-unstable',
+            )
+          } finally {
+            target.cleanup()
+          }
+        })
+
+        test('replays the same reason for a duplicate after-hook', async () => {
+          const target = await pinnedTargetAdapter()
+          try {
+            target.queueParent(BLOCKED('command-output-limit'))
+            const first = await completeUnit(target.adapter, 'pinned-replay')
+            const replay = { title: 'complete', output: 'done', metadata: {} }
+
+            await target.adapter.hooks['tool.execute.after'](
+              {
+                tool: 'systematic_workflow_complete',
+                sessionID: SESSION_A,
+                callID: 'pinned-replay',
+                args: { target: 'unit' },
+              },
+              replay,
+            )
+
+            expect(replay.output).toBe(first.output)
+            expect(JSON.parse(replay.output)).toMatchObject({
+              blockReason: 'command-output-limit',
+            })
+          } finally {
+            target.cleanup()
+          }
+        })
       })
     })
   })
@@ -18125,6 +18310,7 @@ describe('snapshot block record', () => {
           expect(outcomeOf(first)).toEqual({
             status: 'rejected',
             reasonCode: 'snapshot-blocked',
+            blockReason: 'file-limit',
           })
           expect(first.title).toBe('Workflow snapshot blocked')
           expect(status(adapter).unit?.status).toBe('active')
@@ -18152,6 +18338,7 @@ describe('snapshot block record', () => {
         expect(outcomeOf(output)).toEqual({
           status: 'rejected',
           reasonCode: 'snapshot-blocked',
+          blockReason: 'command-output-limit',
         })
         expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
           reasonCode: 'command-output-limit',
@@ -18186,6 +18373,7 @@ describe('snapshot block record', () => {
         expect(outcomeOf(output)).toEqual({
           status: 'rejected',
           reasonCode: 'snapshot-blocked',
+          blockReason: 'worktree-unstable',
         })
         expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
           reasonCode: 'worktree-unstable',
@@ -18262,6 +18450,7 @@ describe('snapshot block record', () => {
         expect(outcomeOf(output)).toEqual({
           status: 'rejected',
           reasonCode: 'snapshot-blocked',
+          blockReason: 'worktree-unstable',
         })
         expect(status(adapter).unit?.status).toBe('active')
         expect(consumedReceipts(adapter)).toBe(0)
