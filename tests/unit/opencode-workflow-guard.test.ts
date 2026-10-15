@@ -15,6 +15,7 @@ import type {
   OpencodeOperationObserver,
   OperationObserverReasonCode,
   OperationObserverRemoteResult,
+  OperationObserverResult,
   OperationObserverSnapshot,
   RemoteOperation,
 } from '../../src/lib/opencode-operation-observer.js'
@@ -212,16 +213,78 @@ function deriveWithFixture(
   })
 }
 
+/**
+ * A step that carries an explicit observer result and, optionally, a gate the
+ * `snapshot()` call waits on after consuming the step.
+ */
+interface SequenceStepSpec {
+  readonly result: OperationObserverResult
+  readonly gate?: Promise<unknown>
+}
+
+/** A bare snapshot is an `available` step that resolves immediately. */
+type SequenceStep = OperationObserverSnapshot | SequenceStepSpec
+
+interface SequenceObserver extends OpencodeOperationObserver {
+  /** Number of `snapshot()` calls made so far, whichever caller made them. */
+  snapshotCalls(): number
+  /** Step index consumed by each `snapshot()` call, in call order. */
+  consumedSteps(): readonly number[]
+}
+
+/** A step whose `snapshot()` result is `unavailable` with `reasonCode`. */
+function unavailableStep(
+  reasonCode: OperationObserverReasonCode,
+): SequenceStepSpec {
+  return { result: { status: 'unavailable', reasonCode } }
+}
+
+/**
+ * A step that is consumed when `snapshot()` is called but does not resolve
+ * until `release()` runs, so tests can drive races between callers.
+ */
+function deferredStep(
+  snapshot: OperationObserverSnapshot,
+  outcome: OperationObserverResult = { status: 'available', snapshot },
+): { readonly step: SequenceStepSpec; release(): void } {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { step: { result: outcome, gate }, release: () => release() }
+}
+
+function isSequenceStepSpec(step: SequenceStep): step is SequenceStepSpec {
+  return 'result' in step
+}
+
+/**
+ * Step N of `steps` is the result of the Nth `snapshot()` call, whichever
+ * caller makes it (seed, before-hook, after-hook, completion). The last step
+ * repeats once the list is exhausted.
+ */
 function sequenceObserver(
-  snapshots: readonly OperationObserverSnapshot[],
+  steps: readonly SequenceStep[],
   remoteResults: Readonly<
     Record<string, readonly OperationObserverRemoteResult[]>
   > = {},
-): OpencodeOperationObserver {
+): SequenceObserver {
   let index = 0
+  const consumed: number[] = []
   const remoteIndexes = new Map<string, number>()
+  const firstStep = steps[0]
+  const firstSnapshot =
+    firstStep === undefined
+      ? undefined
+      : isSequenceStepSpec(firstStep)
+        ? firstStep.result.status === 'available'
+          ? firstStep.result.snapshot
+          : undefined
+        : firstStep
   return {
-    targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
+    targetDigest: firstSnapshot?.targetDigest ?? 'a'.repeat(64),
+    snapshotCalls: () => consumed.length,
+    consumedSteps: () => [...consumed],
     validateRegisteredWorktree(candidateDirectory) {
       return {
         status: 'ok',
@@ -231,11 +294,19 @@ function sequenceObserver(
       }
     },
     async snapshot() {
-      const snapshot = snapshots[Math.min(index++, snapshots.length - 1)]
-      if (!snapshot) {
+      const stepIndex = Math.min(index++, steps.length - 1)
+      const step = steps[stepIndex]
+      if (!step) {
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
-      return { status: 'available', snapshot }
+      consumed.push(stepIndex)
+      if (!isSequenceStepSpec(step)) {
+        return { status: 'available', snapshot: step }
+      }
+      if (step.gate) {
+        await step.gate
+      }
+      return step.result
     },
     async remoteSnapshot(operation, phase) {
       const key = `${operation}:${phase}`
@@ -16019,5 +16090,44 @@ describe('OpenCode workflow guard over a real observer', () => {
         }
       },
     )
+  })
+})
+
+describe('sequenceObserver fixture', () => {
+  test('an unavailable step returns its reason, and each call consumes its own step', async () => {
+    const observer = sequenceObserver([
+      operationSnapshot(),
+      unavailableStep('file-limit'),
+      operationSnapshot(),
+    ])
+
+    expect((await observer.snapshot()).status).toBe('available')
+    expect(await observer.snapshot()).toEqual({
+      status: 'unavailable',
+      reasonCode: 'file-limit',
+    })
+    expect((await observer.snapshot()).status).toBe('available')
+    expect(observer.consumedSteps()).toEqual([0, 1, 2])
+    expect(observer.snapshotCalls()).toBe(3)
+  })
+
+  test('a deferred step is consumed at call time but does not resolve until released', async () => {
+    const deferred = deferredStep(operationSnapshot())
+    const observer = sequenceObserver([deferred.step])
+
+    let settled = false
+    const pending = observer.snapshot().then((result) => {
+      settled = true
+      return result
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(observer.snapshotCalls()).toBe(1)
+    expect(settled).toBe(false)
+
+    deferred.release()
+    expect((await pending).status).toBe('available')
+    expect(settled).toBe(true)
   })
 })
