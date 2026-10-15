@@ -130,10 +130,10 @@ export function hashField(
 
 - **The prefix comes before the subcommand.** After the subcommand, `-c` means `--cached` for `ls-files`. Placed before it, the overrides win over repository-local, `config.worktree` and `include.path` values.
 - **Closure is a comparison, not a question to git.** The index and the listings only decide which paths are observed. Whether a path matches is decided by the bytes the observer read (kind, mode and blob id) against `HEAD`'s tree. Every record must match an entry, and the count must equal the tree size, so the two sets are equal. The forced prefix neutralizes replace refs. Clean filters and index stat data play no part.
-- **The final pass re-checks everything the snapshot relied on.** If a redirect moved the pin, the snapshot returns `target-unavailable`. Any other change returns `worktree-unstable`. Stat values are compared but never hashed, so touching a file without changing it leaves identity alone.
+- **The final pass re-checks everything the snapshot relied on.** If a redirect moved the pin, the snapshot returns `target-unavailable`. Any other change returns `worktree-unstable`, which blocks the unit recoverably. Stat values are compared but never hashed, so touching a file without changing it leaves identity alone.
 - **Length framing puts field boundaries into the hash**, so no field's content can imitate another field.
 
-**Upgrade effect.** The digest domain changed to `worktree:v3`. A unit that was in progress across the upgrade completes as `stale-receipt`, and under the guard's existing rule for drift between evidence and completion, that session's guard stays unavailable until a fresh session starts.
+**Upgrade effect.** The digest domain changed to `worktree:v3`. A unit that was in progress across the upgrade has its completion rejected as `stale-receipt`. That rejection is retryable: the guard stays available, and the stale operations are rerun before completing again.
 
 **Cost.** A snapshot spawns 12 git processes instead of 9.
 
@@ -149,7 +149,7 @@ export function hashField(
 The limits are listed in ARCHITECTURE.md under "Local observer snapshot":
 
 - #1126: ignore rules that hide uncommitted work from closure, redirects made before the observer starts or across a restart, and dirty submodule contents.
-- #1124: `worktree-unstable` and limit failures leave the guard unavailable for the session.
+- #1124: `worktree-unstable` and limit failures now block the unit recoverably instead of leaving the guard unavailable. A snapshot timeout, including a FIFO or device named `.gitignore`, still makes the guard unavailable (#1084).
 - #1125: restored receipts are not rechecked at restore time.
 - Residuals:
   - a write after the final pass;
@@ -158,7 +158,7 @@ The limits are listed in ARCHITECTURE.md under "Local observer snapshot":
 
 ## Related Issues
 
-- #1099 and #1129 (this fix); #1095 (rejected git-backed identity); #1124, #1125 and #1126 (deferred).
+- #1099 and #1129 (this fix); #1095 (rejected git-backed identity); #1125 and #1126 (deferred); #1124 (limit failures and `worktree-unstable` now block recoverably; snapshot timeouts stay fatal, #1084).
 - [Worktree-targeted receipt observation](../integration-issues/worktree-targeted-receipt-observation-2026-08-02.md): structural worktree identity, with evidence and readbacks in one revision domain.
 - [Delegated receipt rollup and live-state recovery](../integration-issues/delegated-receipt-rollup-live-state-recovery-2026-07-31.md): stable workspace identity versus mutable revision identity.
 - [Workflow guard digest collapse](workflow-guard-digest-collapse-long-identities-2026-10-14.md): a comparison path must never map distinct values to one digest.
