@@ -1670,7 +1670,12 @@ describe('OpenCode operation observer forced git prefix and raw output', () => {
       expect(subcommands.has('worktree')).toBe(true)
       expect(subcommands.has('ls-files')).toBe(true)
       expect(
-        calls.some((call) => call[5] === 'rev-parse' && call[6] === '--verify'),
+        calls.some(
+          (call) =>
+            call[5] === 'rev-parse' &&
+            call.includes('--verify') &&
+            call.includes('HEAD'),
+        ),
       ).toBe(true)
     } finally {
       fixture.cleanup()
@@ -1962,6 +1967,153 @@ describe('OpenCode operation observer forced git prefix and raw output', () => {
       expect(await digestOf(observer)).not.toBe(first)
     } finally {
       fixture.cleanup()
+    }
+  })
+})
+
+describe('OpenCode operation observer in-session root and gitDir pin', () => {
+  test('fails closed when core.worktree is redirected to a decoy after construction', async () => {
+    const fixture = createSeparatedGitFixture()
+    const decoy = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-decoy-'),
+    )
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.gitDir,
+      })
+      fs.writeFileSync(path.join(fixture.worktree, 'tracked.txt'), 'edited\n')
+      // The decoy holds exactly the committed content, so a read of it looks clean.
+      fs.writeFileSync(path.join(decoy, 'tracked.txt'), 'initial\n')
+      expect(
+        runGit(fixture.gitDir, ['config', 'core.worktree', decoy]).status,
+      ).toBe(0)
+
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fs.rmSync(decoy, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when a linked worktree is redirected to another admin directory', async () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const second = `${fixture.linkedWorktree}-second`
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.linkedWorktree,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+
+      expect(
+        runGit(fixture.parent.root, [
+          'worktree',
+          'add',
+          '--quiet',
+          '-b',
+          'second',
+          second,
+        ]).status,
+      ).toBe(0)
+      const secondAdmin = gitOutput(second, ['rev-parse', '--absolute-git-dir'])
+      const linkedDotGit = path.join(fixture.linkedWorktree, '.git')
+      // Redirect the gitfile and rewrite the backlink so git sees a consistent pair.
+      fs.writeFileSync(linkedDotGit, `gitdir: ${secondAdmin}\n`)
+      fs.writeFileSync(path.join(secondAdmin, 'gitdir'), `${linkedDotGit}\n`)
+      expect(
+        gitOutput(fixture.linkedWorktree, ['rev-parse', '--absolute-git-dir']),
+      ).toBe(secondAdmin)
+
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fs.rmSync(second, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('still snapshots a separated git directory', async () => {
+    const fixture = createSeparatedGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.gitDir,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('passes the canonical comparison through a symlinked directory', async () => {
+    const fixture = createGitFixture()
+    const aliasDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-alias-'),
+    )
+    const alias = path.join(aliasDir, 'repo-alias')
+    try {
+      fs.symlinkSync(fixture.root, alias, 'dir')
+      const viaAlias = createOpencodeOperationObserver({
+        targetDirectory: alias,
+      })
+      await expect(viaAlias.snapshot()).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+
+      // Force the observer to keep the unresolved alias as its command
+      // directory, so git's resolved toplevel must be compared canonically.
+      const unresolved = createOpencodeOperationObserver({
+        targetDirectory: alias,
+        realPath: (filePath) => {
+          if (filePath === alias) throw new Error('keep alias unresolved')
+          return fs.realpathSync(filePath)
+        },
+      })
+      await expect(unresolved.snapshot()).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: true },
+      })
+    } finally {
+      fs.rmSync(aliasDir, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('reads HEAD exactly once per snapshot, for born and unborn repositories', async () => {
+    const born = createGitFixture()
+    const unborn = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-unborn-'),
+    )
+    const headReads = async (root: string): Promise<number> => {
+      const calls: string[][] = []
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: root,
+        commandRunner: recordingRunner(calls),
+      })
+      calls.length = 0
+      // An unborn HEAD is not asserted available here: closure still runs
+      // `diff HEAD`, which a later unit replaces.
+      await observer.snapshot()
+      return calls.filter(
+        (call) => call.includes('--verify') && call.includes('HEAD'),
+      ).length
+    }
+    try {
+      expect(runGit(unborn, ['init', '--quiet']).status).toBe(0)
+      expect(await headReads(born.root)).toBe(1)
+      expect(await headReads(unborn)).toBe(1)
+    } finally {
+      fs.rmSync(unborn, { recursive: true, force: true })
+      born.cleanup()
     }
   })
 })

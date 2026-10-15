@@ -230,6 +230,25 @@ interface RepositoryContext {
   readonly worktreeRoot: string
 }
 
+interface RootPin {
+  readonly targetRoot: string
+  readonly gitDir: string
+}
+
+type RootPinCaptureResult =
+  | { status: 'ok'; pin: RootPin }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+type RepositoryAnchorResult =
+  | {
+      status: 'ok'
+      toplevel: string
+      gitDir: string
+      /** Full object id, or `undefined` for an unborn `HEAD`. */
+      head: string | undefined
+    }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
 type ParentIdentityCaptureResult =
   | { status: 'ok'; identity: RegisteredWorktreeParentIdentity }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
@@ -487,12 +506,16 @@ function requiredGitPath(
     : { status: 'ok', value }
 }
 
-function captureParentIdentity(
+/**
+ * Reads and canonicalizes the toplevel and git directory once, at
+ * construction. `snapshot()` pins every later read against these values.
+ */
+function captureRootPin(
   targetDirectory: string,
   runner: OperationObserverCommandRunner,
   limits: Limits,
-  realPath: (filePath: string) => string = fs.realpathSync,
-): ParentIdentityCaptureResult {
+  realPath: (filePath: string) => string,
+): RootPinCaptureResult {
   const targetRoot = requiredGitPath(
     runner,
     ['rev-parse', '--show-toplevel'],
@@ -509,6 +532,19 @@ function captureParentIdentity(
     realPath,
   )
   if (gitDir.status === 'error') return gitDir
+  return {
+    status: 'ok',
+    pin: { targetRoot: targetRoot.value, gitDir: gitDir.value },
+  }
+}
+
+function captureParentIdentity(
+  targetDirectory: string,
+  pin: RootPin,
+  runner: OperationObserverCommandRunner,
+  limits: Limits,
+  realPath: (filePath: string) => string = fs.realpathSync,
+): ParentIdentityCaptureResult {
   const commonDir = requiredGitPath(
     runner,
     ['rev-parse', '--path-format=absolute', '--git-common-dir'],
@@ -538,8 +574,8 @@ function captureParentIdentity(
     ? {
         status: 'ok',
         identity: {
-          targetRoot: targetRoot.value,
-          gitDir: gitDir.value,
+          targetRoot: pin.targetRoot,
+          gitDir: pin.gitDir,
           commonDir: commonDir.value,
           registeredWorktreeRoots: roots,
         },
@@ -709,6 +745,7 @@ export function validateRegisteredWorktree(
 function readRevision(
   runner: OperationObserverCommandRunner,
   context: RepositoryContext,
+  head: string | undefined,
   limits: Limits,
 ):
   | { status: 'ok'; digest: string }
@@ -724,21 +761,6 @@ function readRevision(
   }
   const branchValue =
     branch.status === 'ok' ? branch.output.stdout.trim() : 'detached'
-
-  let head: OperationObserverCommandResult
-  try {
-    head = runner(
-      ['rev-parse', '--verify', 'HEAD'],
-      context.commandDirectory,
-      limits.maxCommandOutputBytes,
-      limits.maxCommandTimeoutMs,
-    )
-  } catch {
-    return { status: 'error', reasonCode: 'command-failed' }
-  }
-  const headError = commandResultError(head, limits)
-  if (headError) return { status: 'error', reasonCode: headError }
-  const headValue = head.status === 0 ? head.stdout.trim() : 'unborn'
   const inside = runCommand(
     runner,
     ['rev-parse', '--is-inside-work-tree'],
@@ -749,11 +771,71 @@ function readRevision(
   return {
     status: 'ok',
     digest: digest('repository-revision', [
-      headValue,
+      head ?? 'unborn',
       branchValue,
       inside.output.stdout.trim(),
     ]),
   }
+}
+
+/**
+ * One `rev-parse` returns toplevel, absolute git dir and the `HEAD` id, in
+ * that order. `--verify -q` makes an unborn `HEAD` exit 1 with only the first
+ * two lines, so unborn is distinguishable from every other failure.
+ */
+function readRepositoryAnchor(
+  runner: OperationObserverCommandRunner,
+  cwd: string,
+  limits: Limits,
+  realPath: (filePath: string) => string,
+): RepositoryAnchorResult {
+  let result: OperationObserverCommandResult
+  try {
+    result = runner(
+      [
+        'rev-parse',
+        '--show-toplevel',
+        '--absolute-git-dir',
+        '--verify',
+        '-q',
+        'HEAD',
+      ],
+      cwd,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const resultError = commandResultError(result, limits)
+  if (resultError) return { status: 'error', reasonCode: resultError }
+  const lines = result.stdout.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  const unborn = result.status === 1 && lines.length === 2
+  if (result.status !== 0 && !unborn) {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const [toplevelLine, gitDirLine, head] = lines
+  const malformed =
+    lines.length !== (unborn ? 2 : 3) ||
+    toplevelLine === undefined ||
+    gitDirLine === undefined ||
+    outputBytes(toplevelLine) > limits.maxPathBytes ||
+    (head !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head))
+  if (malformed) return { status: 'error', reasonCode: 'target-unavailable' }
+  const toplevel = absoluteCanonicalPath(toplevelLine, realPath)
+  const gitDir = absoluteCanonicalPath(gitDirLine, realPath)
+  if (toplevel === undefined || gitDir === undefined) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  return { status: 'ok', toplevel, gitDir, head }
+}
+
+function absoluteCanonicalPath(
+  value: string,
+  realPath: (filePath: string) => string,
+): string | undefined {
+  return path.isAbsolute(value) ? canonicalPath(value, realPath) : undefined
 }
 
 function isEnoent(error: unknown): boolean {
@@ -1377,12 +1459,22 @@ export function createOpencodeOperationObserver(
   )
   const remoteRunner = options.remoteCommandRunner ?? defaultRemoteCommandRunner
   const realPath = options.realPath ?? fs.realpathSync
-  const parentIdentityResult = captureParentIdentity(
+  const rootPinResult = captureRootPin(
     targetDirectory,
     runner,
     limits,
     realPath,
   )
+  const parentIdentityResult: ParentIdentityCaptureResult =
+    rootPinResult.status === 'error'
+      ? rootPinResult
+      : captureParentIdentity(
+          targetDirectory,
+          rootPinResult.pin,
+          runner,
+          limits,
+          realPath,
+        )
   const targetDigest = digest('target', [targetDirectory])
   const fileReader = options.fileReader ?? fs.readFileSync
   const symlinkReader =
@@ -1413,22 +1505,27 @@ export function createOpencodeOperationObserver(
       )
     },
     async snapshot(): Promise<OperationObserverResult> {
-      const rootResult = runCommand(
+      const anchor = readRepositoryAnchor(
         runner,
-        ['rev-parse', '--show-toplevel'],
         targetDirectory,
         limits,
+        realPath,
       )
-      if (rootResult.status === 'error') return unavailable(rootResult)
-      const root = rootResult.output.stdout.trim()
-      if (root.length === 0 || outputBytes(root) > limits.maxPathBytes) {
+      if (anchor.status === 'error') return unavailable(anchor)
+      if (rootPinResult.status === 'error') return unavailable(rootPinResult)
+      // A `core.worktree` or gitfile redirect after construction must not
+      // quietly point the observer at different content.
+      if (
+        anchor.toplevel !== rootPinResult.pin.targetRoot ||
+        anchor.gitDir !== rootPinResult.pin.gitDir
+      ) {
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
       const context: RepositoryContext = {
         commandDirectory: targetDirectory,
-        worktreeRoot: root,
+        worktreeRoot: anchor.toplevel,
       }
-      const repository = readRevision(runner, context, limits)
+      const repository = readRevision(runner, context, anchor.head, limits)
       if (repository.status === 'error') return unavailable(repository)
       const worktree = readWorktreeRevisionV2(
         runner,
