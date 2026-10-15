@@ -1112,47 +1112,6 @@ describe('OpenCode workflow guard adapter', () => {
       expect(withWorkdir(TIMED_OUT)).toEqual(TARGET_TIMEOUT)
       expect(withWorkdir(IDENTITY_FAILURE)).toEqual(TARGET_UNAVAILABLE)
     })
-
-    test('a derivation timeout still marks the guard unavailable, with the cause it always had', async () => {
-      const directory = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-timeout-'),
-      )
-      try {
-        const base = sequenceObserver([operationSnapshot()])
-        const adapter = createAdapter('observe', false, {
-          ...base,
-          validateRegisteredWorktree: () => ({
-            status: 'error',
-            reasonCode: 'command-timeout',
-          }),
-        })
-        await activateWorkEpoch(adapter)
-
-        await observeOperationTool(
-          adapter,
-          'bash',
-          { command: 'git status --short', workdir: directory },
-          { title: 'bash', output: 'ok', metadata: { exit: 0 } },
-          'derivation-timeout',
-        )
-
-        expect(status(adapter).state).toBe('unavailable')
-        const result = await getTool(
-          adapter,
-          'systematic_workflow_status',
-        ).execute({}, toolContext())
-        expect(
-          JSON.parse(expectToolOutput(result).output).firstUnavailableCause,
-        ).toEqual({
-          site: 'tool-before',
-          kind: 'operation-input-invalid',
-          reasonCode: 'target-unavailable',
-          timedOut: false,
-        })
-      } finally {
-        fs.rmSync(directory, { recursive: true, force: true })
-      }
-    })
   })
 
   test('target derivation: registered worktree from bash workdir', () => {
@@ -10377,11 +10336,6 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-failed',
         },
         {
-          name: 'validation timeout',
-          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
-          reasonCode: 'command-timeout',
-        },
-        {
           name: 'ok validation for a different target root',
           validate: (candidateDirectory) => ({
             status: 'ok',
@@ -10414,10 +10368,25 @@ describe('OpenCode workflow guard adapter', () => {
             ...(validationCase.reasonCode === undefined
               ? {}
               : { reasonCode: validationCase.reasonCode }),
-            timedOut: validationCase.reasonCode === 'command-timeout',
+            timedOut: false,
           })
         })
       }
+
+      test('validation timeout skips the call without recording a cause', async () => {
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          validateRegisteredWorktree: () => ({
+            status: 'error',
+            reasonCode: 'command-timeout',
+          }),
+        })
+        await activateWorkEpoch(adapter)
+        await beforeOperation(adapter, 'before-validation-timeout')
+        const parsed = await causeOf(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      })
     })
 
     test('arguments that cannot be fingerprinted record operation-input-invalid', async () => {
@@ -16943,8 +16912,16 @@ describe('snapshot block record', () => {
       ...next: (OperationObserverResult | Promise<OperationObserverResult>)[]
     ): void
     linkedSnapshots(): number
+    /**
+     * Scripts the registered-worktree validation of the linked worktree (and
+     * anything inside it): the next calls take these verdicts in order, then
+     * validation is real again.
+     */
+    scriptLinkedValidation(...next: LinkedValidation[]): void
     cleanup(): void
   }
+
+  type LinkedValidation = 'timeout' | 'identity' | 'throws' | 'real'
 
   async function targetAdapter(rollup?: {
     readonly childParts: () => readonly unknown[]
@@ -16965,6 +16942,10 @@ describe('snapshot block record', () => {
       | Promise<OperationObserverResult>
     )[] = []
     let linkedSnapshots = 0
+    const validationScript: LinkedValidation[] = []
+    const insideLinked = (candidate: string) =>
+      candidate === linkedRoot ||
+      candidate.startsWith(`${linkedRoot}${path.sep}`)
     const adapter = createOpencodeWorkflowGuard({
       config: { mode: 'observe', debug: false },
       workspaceIdentity: initial.snapshot.targetDigest,
@@ -16975,6 +16956,19 @@ describe('snapshot block record', () => {
       observer: {
         ...parent,
         snapshot: async () => parentQueue.shift() ?? parent.snapshot(),
+        validateRegisteredWorktree: (candidate) => {
+          const verdict = insideLinked(candidate)
+            ? validationScript.shift()
+            : undefined
+          if (verdict === 'throws') throw new Error('validation exploded')
+          if (verdict === 'timeout') {
+            return { status: 'error', reasonCode: 'command-timeout' }
+          }
+          if (verdict === 'identity') {
+            return { status: 'error', reasonCode: 'target-unavailable' }
+          }
+          return parent.validateRegisteredWorktree(candidate)
+        },
       },
       createTargetObserver: (targetDirectory) => {
         const real = createOpencodeOperationObserver({ targetDirectory })
@@ -17014,6 +17008,9 @@ describe('snapshot block record', () => {
         linkedQueue.push(...next)
       },
       linkedSnapshots: () => linkedSnapshots,
+      scriptLinkedValidation: (...next) => {
+        validationScript.push(...next)
+      },
       cleanup: fixture.cleanup,
     }
   }
@@ -19205,6 +19202,177 @@ describe('snapshot block record', () => {
           expect(status(adapter).unit?.status).toBe('completed')
         })
       })
+    })
+  })
+
+  describe('a timeout while a call is targeted and validated', () => {
+    const LINKED_CALL = (target: TargetAdapter) => ({
+      command: 'bun test',
+      workdir: target.linkedRoot,
+    })
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    async function callLinked(
+      target: TargetAdapter,
+      callID: string,
+    ): Promise<void> {
+      await observeOperationTool(
+        target.adapter,
+        'bash',
+        LINKED_CALL(target),
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    // A call is skipped when it leaves no trace: the guard stays available,
+    // nothing is minted, the call took no snapshot (so its after-hook stayed
+    // silent), no cause was recorded and no block was set.
+    async function expectSkippedCall(target: TargetAdapter): Promise<void> {
+      expect(status(target.adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(target.adapter)).toEqual([])
+      expect(target.linkedSnapshots()).toBe(0)
+      const parsed = await refreshStatus(target.adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+    }
+
+    test('a timeout while the call target is derived skips the call, and the next clean call is observed normally', async () => {
+      const target = await targetAdapter()
+      try {
+        // The first validation of the linked worktree is the derivation's.
+        target.scriptLinkedValidation('timeout')
+
+        await callLinked(target, 'timed-out-derivation')
+
+        await expectSkippedCall(target)
+        await callLinked(target, 'clean-after-derivation-timeout')
+        expect(receiptOperations(target.adapter)).toContain('verification')
+        expect(target.linkedSnapshots()).toBeGreaterThan(0)
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('a timeout while the derived target is validated skips the call, and the next clean call is observed normally', async () => {
+      const target = await targetAdapter()
+      try {
+        // Derivation passes; the validation that follows it times out.
+        target.scriptLinkedValidation('real', 'timeout')
+
+        await callLinked(target, 'timed-out-validation')
+
+        await expectSkippedCall(target)
+        await callLinked(target, 'clean-after-validation-timeout')
+        expect(receiptOperations(target.adapter)).toContain('verification')
+        expect(target.linkedSnapshots()).toBeGreaterThan(0)
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('while blocked on a pinned worktree, a timeout looking up that worktree skips a call to another target and leaves the block as it was', async () => {
+      const target = await targetAdapter()
+      try {
+        // An accepted call to the linked worktree pins the unit to it.
+        await callLinked(target, 'pin-to-linked')
+        expect(
+          status(target.adapter).unit?.pinnedOperationTargetIdentity,
+        ).toBeDefined()
+        target.queueLinked(BLOCKED('file-limit'))
+        await callLinked(target, 'block-linked')
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'file-limit',
+        })
+        const receipts = receiptOperations(target.adapter)
+        // The lookup of the pinned worktree is the next linked validation.
+        target.scriptLinkedValidation('timeout')
+
+        await operateIn(target.adapter, 'parent-while-blocked')
+
+        expect(status(target.adapter).state).not.toBe('unavailable')
+        expect(receiptOperations(target.adapter)).toEqual(receipts)
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'file-limit',
+        })
+        expect(
+          (await refreshStatus(target.adapter)).firstUnavailableCause,
+        ).toBeUndefined()
+
+        // Once the lookup works, the next clean call clears the block.
+        await callLinked(target, 'clean-after-lookup-timeout')
+        expect(
+          target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test.each([
+      {
+        verdicts: ['throws'] as LinkedValidation[],
+        at: 'derivation',
+      },
+      {
+        verdicts: ['identity'] as LinkedValidation[],
+        at: 'derivation',
+      },
+      {
+        verdicts: ['real', 'throws'] as LinkedValidation[],
+        at: 'validation',
+      },
+      {
+        verdicts: ['real', 'identity'] as LinkedValidation[],
+        at: 'validation',
+      },
+    ])(
+      'a validation that fails definitely at $at ($verdicts) still makes the guard unavailable',
+      async ({ verdicts }) => {
+        const target = await targetAdapter()
+        try {
+          target.scriptLinkedValidation(...verdicts)
+
+          await callLinked(target, 'definite-failure')
+
+          expect(status(target.adapter).state).toBe('unavailable')
+          expect(
+            (await refreshStatus(target.adapter)).firstUnavailableCause,
+          ).toMatchObject({
+            site: 'tool-before',
+            kind: 'operation-input-invalid',
+            timedOut: false,
+          })
+        } finally {
+          target.cleanup()
+        }
+      },
+    )
+
+    test('a parent target directory that cannot be resolved still makes the guard unavailable', async () => {
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        targetDirectory: path.join(os.tmpdir(), 'systematic-no-such-directory'),
+        observer: sequenceObserver([operationSnapshot()]),
+        classifier: createReceiptClassifier(),
+      })
+      await activateWorkEpoch(adapter)
+
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'unresolvable-parent',
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
     })
   })
 

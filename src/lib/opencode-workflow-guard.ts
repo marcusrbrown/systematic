@@ -4065,6 +4065,7 @@ function createSessionRuntime(
   ): Promise<BeforeSnapshotOutcome | undefined> {
     if (!captureSnapshotBlock() || isEffectiveTarget(observer)) return undefined
     const lookup = resolveEffectiveObserver()
+    if (lookup.status === 'timeout') return skipTimedOutCall(callDigest)
     if (lookup.status !== 'ok') {
       markUnavailable(
         beforeCause('operation-input-invalid', probeFailureReason(lookup)),
@@ -4124,11 +4125,11 @@ function createSessionRuntime(
       validateRegisteredWorktree: options.observer.validateRegisteredWorktree,
     })
     if (target.status === 'unavailable') {
-      // A derivation timeout is still fatal here, with the cause it has always
-      // had: the reason code stays `target-unavailable`.
-      markUnavailable(
-        beforeCause('operation-input-invalid', 'target-unavailable'),
-      )
+      if (target.reasonCode === 'command-timeout') {
+        skipTimedOutCall(callDigest)
+        return
+      }
+      markUnavailable(beforeCause('operation-input-invalid', target.reasonCode))
       return
     }
     let registeredTarget: RegisteredWorktreeValidationResult
@@ -4138,6 +4139,10 @@ function createSessionRuntime(
       )
     } catch {
       markUnavailable(beforeCause('operation-input-invalid'))
+      return
+    }
+    if (isProbeTimeout(registeredTarget)) {
+      skipTimedOutCall(callDigest)
       return
     }
     const registeredIdentity = registeredWorktreeIdentity(registeredTarget)
