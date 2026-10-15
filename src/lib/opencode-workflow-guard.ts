@@ -6001,23 +6001,14 @@ function createSessionRuntime(
     return { status: 'ignored' }
   }
 
-  // A typed timeout in the after-hook means no verdict on this one call: it
-  // is sealed as abandoned, so nothing is minted and a duplicate after-hook is
-  // silent. The guard is not marked unavailable and the block is untouched.
-  // Whatever the call changed is picked up by the next readback. The caller
-  // has already checked that the call's unit still owns it.
-  function sealTimedOutOperation(
-    callDigest: string,
-    pending: PendingOperation,
-  ): OperationCompletionResult {
-    sealOperation(callDigest, pending, true)
-    return { status: 'ignored' }
-  }
-
-  // Seals a push whose upstream did not move. Like a timed-out call it mints
-  // nothing, leaves the guard available, and its duplicate after-hook is
-  // silent.
-  function sealUnadvancedPush(
+  // Seals one call that has no evidence to give: a typed timeout in the
+  // after-hook (no verdict on the call), or a push whose upstream did not
+  // advance. The call is sealed as abandoned, so nothing is minted and a
+  // duplicate after-hook is silent. The guard is not marked unavailable and
+  // the block is untouched. Whatever the call changed is picked up by the next
+  // readback. The caller has already checked that the call's unit still owns
+  // it.
+  function sealWithoutEvidence(
     callDigest: string,
     pending: PendingOperation,
   ): OperationCompletionResult {
@@ -6070,7 +6061,7 @@ function createSessionRuntime(
       return { status: 'ignored' }
     }
     if (capture.status === 'timeout') {
-      return sealTimedOutOperation(callDigest, pending)
+      return sealWithoutEvidence(callDigest, pending)
     }
     if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
@@ -6104,7 +6095,7 @@ function createSessionRuntime(
         return sealLostOperation(callDigest, pending)
       }
       if (remoteCapture.status === 'timeout') {
-        return sealTimedOutOperation(callDigest, pending)
+        return sealWithoutEvidence(callDigest, pending)
       }
       if (
         remoteCapture.status === 'not-advanced' ||
@@ -6117,7 +6108,7 @@ function createSessionRuntime(
             finalObservation.operation,
           )
         ) {
-          return sealUnadvancedPush(callDigest, pending)
+          return sealWithoutEvidence(callDigest, pending)
         }
         sealOperation(callDigest, pending, true)
         return afterFailure(
