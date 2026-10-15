@@ -5818,11 +5818,17 @@ function createSessionRuntime(
     })
   }
 
+  // `not-advanced` and `missing`: the typed remote results a push can end
+  // with when nothing it did reached the remote. `completeOperationObservation`
+  // decides whether they seal the call or stay fatal, because that depends on
+  // the call's classification, which this read does not know.
   async function captureRemoteAfter(
     operation: RemoteOperation,
     observer: OpencodeOperationObserver,
   ): Promise<
     | { status: 'available'; snapshot: OperationObserverRemoteSnapshot }
+    | { status: 'not-advanced' }
+    | { status: 'missing' }
     | TimedOutRead
     | OperationFailure
   > {
@@ -5835,6 +5841,13 @@ function createSessionRuntime(
       return afterFailure('operation-observation-rejected')
     }
     if (isProbeTimeout(result)) return TIMED_OUT_READ
+    if (result.status === 'missing-resource') return { status: 'missing' }
+    if (
+      result.status === 'unavailable' &&
+      result.reasonCode === 'remote-not-advanced'
+    ) {
+      return { status: 'not-advanced' }
+    }
     return result.status === 'available'
       ? { status: 'available', snapshot: result.snapshot }
       : afterFailure(
@@ -6001,6 +6014,41 @@ function createSessionRuntime(
     return { status: 'ignored' }
   }
 
+  // Seals a push whose upstream did not move. Like a timed-out call it mints
+  // nothing, leaves the guard available, and its duplicate after-hook is
+  // silent.
+  function sealUnadvancedPush(
+    callDigest: string,
+    pending: PendingOperation,
+  ): OperationCompletionResult {
+    sealOperation(callDigest, pending, true)
+    return { status: 'ignored' }
+  }
+
+  // A push whose upstream did not move is sealed like a push that was never
+  // observed: nothing is minted and the guard stays available. The classifier
+  // runs in both hooks, so the rule needs the call to be a push in both: the
+  // before-hook's intent (`pending.remoteOperation`) and the finished call's
+  // classification (`finalOperation`).
+  //
+  // `remote-not-advanced` seals whatever the before-read was (a push rejected
+  // on a tracked branch is common). `missing-resource` cannot tell an absent
+  // upstream from other git failures, so it seals only when the before-read
+  // was missing as well. Every other after-read failure stays fatal.
+  function sealsUnadvancedPush(
+    remoteCapture: { status: 'not-advanced' } | { status: 'missing' },
+    pending: PendingOperation,
+    finalOperation: ReceiptOperation,
+  ): boolean {
+    if (pending.remoteOperation !== 'push' || finalOperation !== 'push') {
+      return false
+    }
+    return (
+      remoteCapture.status === 'not-advanced' ||
+      pending.remoteBefore?.status === 'missing-resource'
+    )
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
   async function completeOperationObservation(
     callDigest: string,
@@ -6057,6 +6105,27 @@ function createSessionRuntime(
       }
       if (remoteCapture.status === 'timeout') {
         return sealTimedOutOperation(callDigest, pending)
+      }
+      if (
+        remoteCapture.status === 'not-advanced' ||
+        remoteCapture.status === 'missing'
+      ) {
+        if (
+          sealsUnadvancedPush(
+            remoteCapture,
+            pending,
+            finalObservation.operation,
+          )
+        ) {
+          return sealUnadvancedPush(callDigest, pending)
+        }
+        sealOperation(callDigest, pending, true)
+        return afterFailure(
+          'operation-observation-rejected',
+          remoteCapture.status === 'missing'
+            ? 'missing-resource'
+            : 'remote-not-advanced',
+        )
       }
       if (remoteCapture.status === 'unavailable') {
         sealOperation(callDigest, pending, true)

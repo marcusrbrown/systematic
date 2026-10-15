@@ -19388,6 +19388,289 @@ describe('snapshot block record', () => {
     })
   })
 
+  describe('a push whose after-read shows the upstream did not advance', () => {
+    const PUSH = 'git push origin main'
+    const PR_CREATE = 'gh pr create --title t --body b'
+    const MISSING = { status: 'missing-resource' } as const
+    const NOT_ADVANCED = {
+      status: 'unavailable',
+      reasonCode: 'remote-not-advanced',
+    } as const
+    const AVAILABLE = remoteAvailable(D, E)
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    // Every push:before value is scripted: the first is the activation seed,
+    // the second the call's own before-read, the third the retry of a
+    // timed-out before-read. The last value repeats.
+    function adapterFor(
+      operation: 'push' | 'pr-creation',
+      before: OperationObserverRemoteResult,
+      after: OperationObserverRemoteResult | 'throws',
+    ): { adapter: OpencodeWorkflowGuard; steered: SteeredObserver } {
+      const steered = steeredObserver({
+        [`${operation}:before`]: [before],
+        [`${operation}:after`]: after === 'throws' ? [AVAILABLE] : [after],
+      })
+      const observer =
+        after === 'throws'
+          ? {
+              ...steered.observer,
+              remoteSnapshot: async (
+                remoteOperation: RemoteOperation,
+                phase: 'before' | 'after',
+              ) => {
+                if (remoteOperation === operation && phase === 'after') {
+                  throw new Error('probe failed')
+                }
+                return (
+                  steered.observer.remoteSnapshot?.(remoteOperation, phase) ?? {
+                    status: 'unavailable' as const,
+                    reasonCode: 'remote-missing-field' as const,
+                  }
+                )
+              },
+            }
+          : steered.observer
+      const adapter = createAdapter('observe', false, observer, [operation])
+      return { adapter, steered }
+    }
+
+    async function runCall(
+      adapter: OpencodeWorkflowGuard,
+      command: string,
+      callID: string,
+    ): Promise<void> {
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    async function sealedScenario(
+      operation: 'push' | 'pr-creation',
+      before: OperationObserverRemoteResult,
+      after: OperationObserverRemoteResult,
+    ): Promise<void> {
+      const { adapter, steered } = adapterFor(operation, before, after)
+      await activateWorkEpoch(adapter)
+      await runCall(adapter, 'bun test', 'earlier-verification')
+      const receipts = receiptOperations(adapter)
+      const command = operation === 'push' ? PUSH : PR_CREATE
+
+      await runCall(adapter, command, 'sealed-call')
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual(receipts)
+      // A duplicate after-hook is silent: it reads nothing further.
+      const reads = steered.remoteCalls()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'bash',
+          sessionID: SESSION_A,
+          callID: 'sealed-call',
+          args: { command },
+        },
+        BASH_OUTPUT,
+      )
+      expect(steered.remoteCalls()).toBe(reads)
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+    }
+
+    test.each([
+      { name: 'available', before: AVAILABLE, after: NOT_ADVANCED },
+      { name: 'missing-resource', before: MISSING, after: NOT_ADVANCED },
+      {
+        name: 'timed out, and so is its retry',
+        before: TIMEOUT,
+        after: NOT_ADVANCED,
+      },
+    ])(
+      'a push whose before-read was $name and whose after-read is remote-not-advanced is sealed',
+      async ({ before, after }) => {
+        await sealedScenario('push', before, after)
+      },
+    )
+
+    test('a push whose before-read and after-read are both missing-resource is sealed', async () => {
+      await sealedScenario('push', MISSING, MISSING)
+    })
+
+    test('a push whose before-read was missing-resource and whose after-read times out is sealed', async () => {
+      await sealedScenario('push', MISSING, TIMEOUT)
+    })
+
+    async function fatalScenario(
+      operation: 'push' | 'pr-creation',
+      before: OperationObserverRemoteResult,
+      after: OperationObserverRemoteResult | 'throws',
+      reasonCode: string | undefined,
+    ): Promise<void> {
+      const { adapter } = adapterFor(operation, before, after)
+      await activateWorkEpoch(adapter)
+
+      await runCall(adapter, operation === 'push' ? PUSH : PR_CREATE, 'fatal')
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect((await refreshStatus(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-after',
+        kind: 'operation-observation-rejected',
+        ...(reasonCode === undefined ? {} : { reasonCode }),
+        timedOut: false,
+      })
+    }
+
+    test('a push whose before-read was available and whose after-read is missing-resource stays fatal', async () => {
+      await fatalScenario('push', AVAILABLE, MISSING, 'missing-resource')
+    })
+
+    test.each([
+      'remote-command-output-limit',
+      'remote-missing-field',
+      'remote-invalid-json',
+      'remote-command-failed',
+    ] as const)(
+      'a push whose after-read fails with %s stays fatal',
+      async (reasonCode) => {
+        await fatalScenario(
+          'push',
+          AVAILABLE,
+          { status: 'unavailable', reasonCode },
+          reasonCode,
+        )
+      },
+    )
+
+    test('a push whose after-read throws stays fatal', async () => {
+      await fatalScenario('push', AVAILABLE, 'throws', undefined)
+    })
+
+    test('a pull request creation whose after-read is remote-not-advanced stays fatal', async () => {
+      await fatalScenario(
+        'pr-creation',
+        MISSING,
+        NOT_ADVANCED,
+        'remote-not-advanced',
+      )
+    })
+
+    test('a pull request creation whose before-read and after-read are both missing-resource stays fatal', async () => {
+      await fatalScenario('pr-creation', MISSING, MISSING, 'missing-resource')
+    })
+
+    // The before-hook reads the command's intent with `classify`; the
+    // after-hook classifies the finished call with `classifyOperation`. A
+    // classifier that disagrees between the two makes the push rule not apply.
+    function skewedAdapter(
+      intent: ReceiptOperation,
+      observed: ReceiptOperation,
+    ): OpencodeWorkflowGuard {
+      const real = createReceiptClassifier()
+      const steered = steeredObserver({
+        'push:before': [AVAILABLE],
+        'push:after': [NOT_ADVANCED],
+        'pr-creation:before': [MISSING],
+        'pr-creation:after': [NOT_ADVANCED],
+      })
+      return createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        observer: steered.observer,
+        classifier: {
+          ...real,
+          classify: async (input) => ({
+            ...(await real.classify(input)),
+            category: intent,
+          }),
+          classifyOperation: async (input) => ({
+            ...(await (real.classifyOperation?.(input) ??
+              real.classify(input))),
+            category: observed,
+          }),
+        },
+        runtimeRequiredOperations: ['push', 'pr-creation'],
+      })
+    }
+
+    test.each([
+      { intent: 'push', observed: 'pr-creation' },
+      { intent: 'pr-creation', observed: 'push' },
+    ] as const)(
+      'a call read as $intent before and $observed after is not sealed as an unadvanced push',
+      async ({ intent, observed }) => {
+        const adapter = skewedAdapter(intent, observed)
+        await activateWorkEpoch(adapter)
+
+        await runCall(adapter, PUSH, 'skewed')
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await refreshStatus(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-after',
+          kind: 'operation-observation-rejected',
+          reasonCode: 'remote-not-advanced',
+        })
+      },
+    )
+
+    test('after a push was sealed with the upstream unchanged, a second push that advances it is minted', async () => {
+      const steered = steeredObserver({
+        'push:before': [AVAILABLE],
+        'push:after': [NOT_ADVANCED, remoteAvailable(D, 'a'.repeat(64))],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await runCall(adapter, PUSH, 'sealed-push')
+      expect(receiptOperations(adapter)).toEqual([])
+
+      await runCall(adapter, PUSH, 'advancing-push')
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual(['push'])
+      expect(status(adapter).satisfiedOperations).toEqual(['push'])
+    })
+
+    // An upstream that moved since activation is not this unit's baseline any
+    // more, so the existing resource-revision rule rejects the next push that
+    // reads it. Sealing the earlier push did not cause that, and does not
+    // change it: the guard stays available, nothing is minted, and a status
+    // refresh or a later push does not re-baseline it.
+    test('after a push was sealed, a second push that reads an upstream that moved since activation is rejected by the revision rule, and the guard stays available', async () => {
+      const moved = remoteAvailable(D, 'f'.repeat(64))
+      const steered = steeredObserver({
+        'push:before': [AVAILABLE, AVAILABLE, moved],
+        'push:after': [NOT_ADVANCED, remoteAvailable(D, 'a'.repeat(64))],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await runCall(adapter, PUSH, 'sealed-push')
+
+      await runCall(adapter, PUSH, 'push-after-the-upstream-moved')
+
+      expect(status(adapter).state).toBe('rejected')
+      expect(status(adapter).reasonCode).toBe('resource-mismatch')
+      expect(receiptOperations(adapter)).toEqual([])
+      expect(status(adapter).missingOperations).toContain('push')
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(status(adapter).state).toBe('rejected')
+    })
+  })
+
   describe('a timeout while a call is targeted and validated', () => {
     const LINKED_CALL = (target: TargetAdapter) => ({
       command: 'bun test',
