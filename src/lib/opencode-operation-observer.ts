@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 const DEFAULT_LIMITS = {
@@ -39,6 +40,25 @@ const STRICT_UTF8_DECODER = new TextDecoder('utf-8', {
   fatal: true,
   ignoreBOM: true,
 })
+
+// The domain tag versions the worktree identity. v3 adds the ignore sources and
+// the HEAD-tree path set.
+const WORKTREE_DIGEST_DOMAIN = 'systematic:opencode-observer:worktree:v3\0'
+
+// Self-ignored untracked `.gitignore` files never appear in the plain untracked
+// listing, yet they change what is hidden, so they are discovered separately.
+const IGNORED_GITIGNORE_ARGS = [
+  'ls-files',
+  '-o',
+  '-i',
+  '--exclude-standard',
+  '--directory',
+  '-z',
+  '--',
+  ':(glob)**/.gitignore',
+] as const
+
+const MAX_IGNORE_SOURCE_BYTES = 1_048_576
 
 export type OperationObserverReasonCode =
   | 'target-unavailable'
@@ -235,6 +255,8 @@ interface StageEntry {
 interface RepositoryContext {
   readonly commandDirectory: string
   readonly worktreeRoot: string
+  /** Absolute path of the repository's `info/exclude`. */
+  readonly infoExcludePath: string
 }
 
 /** Git object format; selects the hash used for blob ids. */
@@ -310,6 +332,7 @@ type RepositoryAnchorResult =
       gitDir: string
       /** Full object id, or `undefined` for an unborn `HEAD`. */
       head: string | undefined
+      infoExcludePath: string
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
 
@@ -843,9 +866,11 @@ function readRevision(
 }
 
 /**
- * One `rev-parse` returns toplevel, absolute git dir and the `HEAD` id, in
- * that order. `--verify -q` makes an unborn `HEAD` exit 1 with only the first
- * two lines, so unborn is distinguishable from every other failure.
+ * One `rev-parse` returns toplevel, absolute git dir, the `info/exclude` path
+ * and the `HEAD` id, in that order. `--verify -q` makes an unborn `HEAD` exit 1
+ * with only the first three lines, so unborn is distinguishable from every
+ * other failure. `--git-path` prints a path relative to `cwd` (absolute for a
+ * linked worktree), so it is resolved against `cwd`.
  */
 function readRepositoryAnchor(
   runner: OperationObserverCommandRunner,
@@ -860,6 +885,8 @@ function readRepositoryAnchor(
         'rev-parse',
         '--show-toplevel',
         '--absolute-git-dir',
+        '--git-path',
+        'info/exclude',
         '--verify',
         '-q',
         'HEAD',
@@ -875,15 +902,17 @@ function readRepositoryAnchor(
   if (resultError) return { status: 'error', reasonCode: resultError }
   const lines = result.stdout.split('\n')
   if (lines.at(-1) === '') lines.pop()
-  const unborn = result.status === 1 && lines.length === 2
+  const unborn = result.status === 1 && lines.length === 3
   if (result.status !== 0 && !unborn) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  const [toplevelLine, gitDirLine, head] = lines
+  const [toplevelLine, gitDirLine, excludeLine, head] = lines
   const malformed =
-    lines.length !== (unborn ? 2 : 3) ||
+    lines.length !== (unborn ? 3 : 4) ||
     toplevelLine === undefined ||
     gitDirLine === undefined ||
+    excludeLine === undefined ||
+    excludeLine.length === 0 ||
     outputBytes(toplevelLine) > limits.maxPathBytes ||
     (head !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head))
   if (malformed) return { status: 'error', reasonCode: 'target-unavailable' }
@@ -892,7 +921,13 @@ function readRepositoryAnchor(
   if (toplevel === undefined || gitDir === undefined) {
     return { status: 'error', reasonCode: 'target-unavailable' }
   }
-  return { status: 'ok', toplevel, gitDir, head }
+  return {
+    status: 'ok',
+    toplevel,
+    gitDir,
+    head,
+    infoExcludePath: path.resolve(cwd, excludeLine),
+  }
 }
 
 function absoluteCanonicalPath(
@@ -1307,9 +1342,12 @@ function appendFileFactV2(
   }
 }
 
-interface FirstListing {
+/** Everything the final pass compares against, taken during the first pass. */
+interface FirstPass {
   readonly staged: string
   readonly untracked: string
+  readonly ignoredGitignores: string
+  readonly ignoreSources: readonly IgnoreSourceFact[]
 }
 
 type StabilityResult =
@@ -1357,7 +1395,7 @@ function verifyListingsUnchanged(
   runner: OperationObserverCommandRunner,
   context: RepositoryContext,
   limits: Limits,
-  first: FirstListing,
+  first: FirstPass,
 ): StabilityResult {
   const staged = runCommand(
     runner,
@@ -1373,8 +1411,29 @@ function verifyListingsUnchanged(
     limits,
   )
   if (untracked.status === 'error') return untracked
+  const ignoredGitignores = runCommand(
+    runner,
+    IGNORED_GITIGNORE_ARGS,
+    context.commandDirectory,
+    limits,
+  )
+  if (ignoredGitignores.status === 'error') return ignoredGitignores
   return staged.output.stdout === first.staged &&
-    untracked.output.stdout === first.untracked
+    untracked.output.stdout === first.untracked &&
+    ignoredGitignores.output.stdout === first.ignoredGitignores
+    ? { status: 'ok' }
+    : UNSTABLE
+}
+
+function verifyIgnoreSourcesUnchanged(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  limits: Limits,
+  first: FirstPass,
+): StabilityResult {
+  const fresh = readIgnoreSources(runner, context, limits)
+  if (fresh.status === 'error') return fresh
+  return sameIgnoreSources(first.ignoreSources, fresh.facts)
     ? { status: 'ok' }
     : UNSTABLE
 }
@@ -1415,9 +1474,18 @@ function runFinalPass(
   context: RepositoryContext,
   limits: Limits,
   head: string | undefined,
-  first: FirstListing,
+  first: FirstPass,
   observations: readonly PathObservation[],
 ): StabilityResult {
+  // Ignore sources first: a source swapped for a FIFO or a huge file must be
+  // caught by our own bounded read before any git listing reads it.
+  const sources = verifyIgnoreSourcesUnchanged(
+    readers.runner,
+    context,
+    limits,
+    first,
+  )
+  if (sources.status === 'error') return sources
   const unchanged = verifyObservationsUnchanged(readers, observations)
   if (unchanged.status === 'error') return unchanged
   const listings = verifyListingsUnchanged(
@@ -1427,21 +1495,253 @@ function runFinalPass(
     first,
   )
   if (listings.status === 'error') return listings
-  // Ignore sources (info/exclude, core.excludesFile, untracked .gitignore
-  // files) are re-read here once they join the identity.
   return verifyHeadUnchanged(readers.runner, context, limits, head)
 }
 
-function readWorktreeRevisionV2(
-  readers: WorktreeReaders,
+interface IgnoreSourceFact {
+  readonly label: 'info-exclude' | 'core-excludes-file'
+  /** `undefined` means the file is absent, which differs from an empty file. */
+  readonly content: Uint8Array | undefined
+}
+
+type IgnoreSourceFileResult =
+  | { status: 'ok'; fact: IgnoreSourceFact }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+/**
+ * Reads one ignore-source file. Symlinks are resolved, and only a regular file
+ * of at most 1 MiB is read. The stat comes before the open, and the open is
+ * non-blocking, so a FIFO or a device can never hang or flood the read.
+ */
+function readIgnoreSourceFile(
+  label: IgnoreSourceFact['label'],
+  filePath: string,
+): IgnoreSourceFileResult {
+  const absent: IgnoreSourceFileResult = {
+    status: 'ok',
+    fact: { label, content: undefined },
+  }
+  let resolved: string
+  let stat: fs.BigIntStats
+  try {
+    resolved = fs.realpathSync(filePath)
+    stat = fs.statSync(resolved, { bigint: true })
+  } catch (error) {
+    return hasErrorCode(error, 'ENOENT', 'ENOTDIR')
+      ? absent
+      : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  if (!stat.isFile() || stat.size > BigInt(MAX_IGNORE_SOURCE_BYTES)) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  const read = readRegularFileHardened(
+    resolved,
+    {
+      isFile: true,
+      isSymbolicLink: false,
+      isDirectory: false,
+      mode: Number(stat.mode),
+      size: Number(stat.size),
+      dev: stat.dev,
+      ino: stat.ino,
+    },
+    MAX_IGNORE_SOURCE_BYTES,
+  )
+  if (read.status === 'missing') {
+    return { status: 'error', reasonCode: 'worktree-unstable' }
+  }
+  if (read.status === 'error') {
+    return {
+      status: 'error',
+      reasonCode:
+        read.reasonCode === 'file-output-limit'
+          ? 'file-read-failed'
+          : read.reasonCode,
+    }
+  }
+  return { status: 'ok', fact: { label, content: read.content } }
+}
+
+function defaultExcludesFilePath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME
+  if (xdg) return path.join(xdg, 'git', 'ignore')
+  return path.join(process.env.HOME || os.homedir(), '.config', 'git', 'ignore')
+}
+
+/**
+ * `core.excludesFile` as git resolves it: the configured path, or the XDG
+ * default when unset. `undefined` means a configured-empty value, which names
+ * no file.
+ */
+function resolveExcludesFilePath(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  limits: Limits,
+):
+  | { status: 'ok'; filePath: string | undefined }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  let result: OperationObserverCommandResult
+  try {
+    result = runner(
+      ['config', '--type=path', '--get', 'core.excludesFile'],
+      context.commandDirectory,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const resultError = commandResultError(result, limits)
+  if (resultError) return { status: 'error', reasonCode: resultError }
+  // Exit 1 means the key is unset.
+  if (result.status === 1) {
+    return { status: 'ok', filePath: defaultExcludesFilePath() }
+  }
+  if (result.status !== 0) {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const configured = result.stdout.replace(/\n$/, '')
+  return {
+    status: 'ok',
+    filePath:
+      configured.length === 0
+        ? undefined
+        : path.resolve(context.worktreeRoot, configured),
+  }
+}
+
+/** `info/exclude` and `core.excludesFile`, in that fixed order. */
+function readIgnoreSources(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  limits: Limits,
+):
+  | { status: 'ok'; facts: readonly IgnoreSourceFact[] }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const infoExclude = readIgnoreSourceFile(
+    'info-exclude',
+    context.infoExcludePath,
+  )
+  if (infoExclude.status === 'error') return infoExclude
+  const configured = resolveExcludesFilePath(runner, context, limits)
+  if (configured.status === 'error') return configured
+  const global =
+    configured.filePath === undefined
+      ? ({
+          status: 'ok',
+          fact: { label: 'core-excludes-file', content: undefined },
+        } as const)
+      : readIgnoreSourceFile('core-excludes-file', configured.filePath)
+  if (global.status === 'error') return global
+  return { status: 'ok', facts: [infoExclude.fact, global.fact] }
+}
+
+function hashIgnoreSource(
+  hash: ReturnType<typeof createHash>,
+  fact: IgnoreSourceFact,
+): void {
+  // No path of any kind enters the identity, only the label and the bytes.
+  hash.update('ignore-source\0')
+  hash.update(fact.label)
+  hash.update('\0')
+  hash.update(fact.content === undefined ? 'absent' : 'present')
+  hash.update('\0')
+  if (fact.content !== undefined) hash.update(fact.content)
+  hash.update('\0')
+}
+
+function sameIgnoreSources(
+  left: readonly IgnoreSourceFact[],
+  right: readonly IgnoreSourceFact[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((fact, index) => {
+      const other = right[index]
+      if (other === undefined || fact.label !== other.label) return false
+      if (fact.content === undefined || other.content === undefined) {
+        return fact.content === other.content
+      }
+      return Buffer.compare(fact.content, other.content) === 0
+    })
+  )
+}
+
+export interface HeadTreeEntry {
+  readonly mode: string
+  readonly id: string
+}
+
+type HeadTreeResult =
+  | {
+      status: 'ok'
+      entries: ReadonlyMap<string, HeadTreeEntry>
+      ids: readonly string[]
+    }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+/** `ls-tree -r -z --full-tree <sha>`, read once per snapshot. */
+function readHeadTree(
+  runner: OperationObserverCommandRunner,
   context: RepositoryContext,
   head: string | undefined,
   limits: Limits,
-  format: ObjectFormat = 'sha1',
+): HeadTreeResult {
+  const entries = new Map<string, HeadTreeEntry>()
+  if (head === undefined) return { status: 'ok', entries, ids: [] }
+  const listing = runCommand(
+    runner,
+    ['ls-tree', '-r', '-z', '--full-tree', head],
+    context.commandDirectory,
+    limits,
+  )
+  if (listing.status === 'error') return listing
+  for (const record of splitRecords(listing.output.stdout)) {
+    const separator = record.indexOf('\t')
+    const [mode, , id] = record.slice(0, separator).split(' ')
+    const entryPath = record.slice(separator + 1)
+    if (
+      separator <= 0 ||
+      !mode ||
+      !id ||
+      !/^[0-7]{6}$/.test(mode) ||
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id) ||
+      outputBytes(entryPath) > limits.maxPathBytes
+    ) {
+      return { status: 'error', reasonCode: 'file-read-failed' }
+    }
+    entries.set(entryPath, { mode, id })
+  }
+  return {
+    status: 'ok',
+    entries,
+    ids: [...entries.values()].map((entry) => entry.id),
+  }
+}
+
+/** 40 hex digits is sha1, 64 is sha256. Mixed lengths cannot happen in one repo. */
+function inferObjectFormat(ids: readonly string[]): ObjectFormat | undefined {
+  const lengths = new Set(ids.map((id) => id.length))
+  if (lengths.size === 0) return 'sha1'
+  if (lengths.size > 1) return undefined
+  return lengths.has(64) ? 'sha256' : 'sha1'
+}
+
+interface WorktreeListings {
+  readonly first: Omit<FirstPass, 'ignoreSources'>
+  readonly stageEntries: readonly StageEntry[]
+  readonly paths: readonly string[]
+}
+
+/** The first listing, and the sorted union of every path to observe. */
+function readWorktreeListings(
+  runner: OperationObserverCommandRunner,
+  context: RepositoryContext,
+  headTree: ReadonlyMap<string, HeadTreeEntry>,
+  limits: Limits,
 ):
-  | { status: 'ok'; digest: string; records: readonly WorktreeRecord[] }
+  | ({ status: 'ok' } & WorktreeListings)
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const { runner } = readers
   const tracked = runCommand(
     runner,
     ['ls-files', '--full-name', '-z', '--', ':/'],
@@ -1463,25 +1763,82 @@ function readWorktreeRevisionV2(
     limits,
   )
   if (untracked.status === 'error') return untracked
+  const ignoredGitignores = runCommand(
+    runner,
+    IGNORED_GITIGNORE_ARGS,
+    context.commandDirectory,
+    limits,
+  )
+  if (ignoredGitignores.status === 'error') return ignoredGitignores
   const stageEntries = parseStageEntries(
     staged.output.stdout,
     limits.maxPathBytes,
   )
   if (!stageEntries) return { status: 'error', reasonCode: 'file-read-failed' }
-  const modes = new Map(
-    stageEntries.map((entry) => [entry.relativePath, entry.mode]),
+  // A trailing slash marks a wholly ignored directory, whose contents are
+  // ignored and so stay out of the identity.
+  const selfIgnored = splitRecords(ignoredGitignores.output.stdout).filter(
+    (entry) => !entry.endsWith('/'),
   )
   const paths = [
     ...new Set([
       ...splitRecords(tracked.output.stdout),
+      ...headTree.keys(),
       ...splitRecords(untracked.output.stdout),
+      ...selfIgnored,
     ]),
   ].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)))
+  return {
+    status: 'ok',
+    first: {
+      staged: staged.output.stdout,
+      untracked: untracked.output.stdout,
+      ignoredGitignores: ignoredGitignores.output.stdout,
+    },
+    stageEntries,
+    paths,
+  }
+}
+
+function readWorktreeRevisionV2(
+  readers: WorktreeReaders,
+  context: RepositoryContext,
+  head: string | undefined,
+  limits: Limits,
+):
+  | {
+      status: 'ok'
+      digest: string
+      records: readonly WorktreeRecord[]
+      /** The `HEAD` tree by path, for the commit closure. Empty when unborn. */
+      headTree: ReadonlyMap<string, HeadTreeEntry>
+    }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const { runner } = readers
+  // Ignore sources are read before any listing: git itself reads them while
+  // listing, so a FIFO or a device must be rejected before that happens.
+  const sources = readIgnoreSources(runner, context, limits)
+  if (sources.status === 'error') return sources
+  const tree = readHeadTree(runner, context, head, limits)
+  if (tree.status === 'error') return tree
+  const listings = readWorktreeListings(runner, context, tree.entries, limits)
+  if (listings.status === 'error') return listings
+  const format = inferObjectFormat([
+    ...tree.ids,
+    ...listings.stageEntries.map((entry) => entry.record.split(' ')[1] ?? ''),
+  ])
+  if (format === undefined) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  const { paths } = listings
   if (paths.length > limits.maxFiles) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
+  const modes = new Map(
+    listings.stageEntries.map((entry) => [entry.relativePath, entry.mode]),
+  )
   const hash = createHash('sha256')
-  hash.update('systematic:opencode-observer:worktree:v2\0')
+  hash.update(WORKTREE_DIGEST_DOMAIN)
   const budget: SnapshotBudget = { files: 0, bytes: 0, gitlinks: 0 }
   const observations: PathObservation[] = []
   for (const relativePath of paths) {
@@ -1489,7 +1846,12 @@ function readWorktreeRevisionV2(
       hash,
       readers,
       context,
-      { relativePath, mode: modes.get(relativePath) ?? '' },
+      {
+        relativePath,
+        // Index first, then the HEAD tree; empty means not tracked at all.
+        mode:
+          modes.get(relativePath) ?? tree.entries.get(relativePath)?.mode ?? '',
+      },
       limits,
       budget,
       format,
@@ -1498,12 +1860,13 @@ function readWorktreeRevisionV2(
     budget.files += 1
     observations.push(result.observation)
   }
+  for (const fact of sources.facts) hashIgnoreSource(hash, fact)
   const stable = runFinalPass(
     readers,
     context,
     limits,
     head,
-    { staged: staged.output.stdout, untracked: untracked.output.stdout },
+    { ...listings.first, ignoreSources: sources.facts },
     observations,
   )
   if (stable.status === 'error') return stable
@@ -1511,6 +1874,7 @@ function readWorktreeRevisionV2(
     status: 'ok',
     digest: hash.digest('hex'),
     records: observations.map((observation) => observation.record),
+    headTree: tree.entries,
   }
 }
 
@@ -1929,7 +2293,12 @@ export function readWorktreeRecords(
     'targetDirectory' | 'remoteCommandRunner'
   > = {},
 ):
-  | { status: 'ok'; digest: string; records: readonly WorktreeRecord[] }
+  | {
+      status: 'ok'
+      digest: string
+      records: readonly WorktreeRecord[]
+      headTree: ReadonlyMap<string, HeadTreeEntry>
+    }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const limits = mergeLimits(options.limits)
   const realPath = options.realPath ?? fs.realpathSync
@@ -1940,7 +2309,11 @@ export function readWorktreeRecords(
   if (anchor.status === 'error') return anchor
   return readWorktreeRevisionV2(
     resolveWorktreeReaders(runner, options),
-    { commandDirectory: targetDirectory, worktreeRoot: anchor.toplevel },
+    {
+      commandDirectory: targetDirectory,
+      worktreeRoot: anchor.toplevel,
+      infoExcludePath: anchor.infoExcludePath,
+    },
     anchor.head,
     limits,
   )
@@ -2013,6 +2386,7 @@ export function createOpencodeOperationObserver(
       const context: RepositoryContext = {
         commandDirectory: targetDirectory,
         worktreeRoot: anchor.toplevel,
+        infoExcludePath: anchor.infoExcludePath,
       }
       const repository = readRevision(runner, context, anchor.head, limits)
       if (repository.status === 'error') return unavailable(repository)

@@ -2188,6 +2188,11 @@ function buildCharacterizationFixture(scenario: CharacterizationScenario): {
   extraCleanup: () => void
 } {
   const fixture = createGitFixture()
+  // The ignore sources are part of the identity, so pin them: a fixed
+  // info/exclude (git's template varies) and an absent global ignore file in
+  // place of whatever the machine running the tests has configured.
+  fs.writeFileSync(infoExcludePath(fixture.root), '# characterization\n')
+  setExcludesFile(fixture.root, null)
   const sources: string[] = []
   const wants = (name: CharacterizationScenario) =>
     scenario === name || scenario === 'mixed'
@@ -2249,23 +2254,24 @@ describe('OpenCode operation observer worktree identity characterization', () =>
         fixture.cleanup()
       }
     }
-    // Captured from the implementation before the path-record refactor.
+    // Re-captured for the worktree:v3 domain tag and the ignore-source facts
+    // (the v2 values were captured before the path-record refactor).
     expect(digests).toEqual({
       deleted:
-        '4f8605a93ab2ce9b0a7bf04ab0f9c21c06f774ee97d3c4f73570f1b3d445924b',
+        '5d51050c47613116ab38a47a3689388dedf4dc4c729387ee98bfc8ad8a591bf9',
       executable:
-        'a44cc381585b37bf5b1e15053a19c8ece2c9ac4c4077113318b230b4edfd53b7',
+        'e305636e48047fba9c686e2216365169c07208db101816f0227a600f43b0faf6',
       gitlink:
-        '15f99f9b71763d58d1082a215a90a3fbb0dd88844b996523d41b8c8becf04da9',
-      mixed: '0a53fc712ea00443264643935d2fba0fdce681c50714ae9e219e22251a0e549b',
+        '845b13594115fc39a434f563a67cf13f4d143a0ec3a484baf70f98c36987e905',
+      mixed: '24c53e4bab1e41c57217903636018c30482d4c46d9a3438f9297dd93d5af6f4b',
       regular:
-        '83a9e1df8c8a295e580917a827585adfc2ecd0b6c8e3be3ebe5edc8d16091342',
+        '0ff80a54dcdc20a86244c87f3bd942d4422f72fbb3054e2878f7e53531d6ebf0',
       symlink:
-        '5a9d20e7952a92ecc0832ed88688ad476015d8c423799ac0a58d9adcf566a371',
+        'deb8d28ad5efe5cf24e05ecc314421ceca3f01dab616cfaf693bb0f91c7021ed',
       untracked:
-        '274aff7c533f3edac6bbe2afef4b3a4951bc60c83694a856fdba9e98284aa24f',
+        '121aba5f7a13eeff8a437d70ce37e0362d42cbac00caad7df6b1133b13d4f8a4',
     })
-  })
+  }, 30_000)
 
   test('records kind, mode and blob id for every observed path', () => {
     const { fixture, extraCleanup } = buildCharacterizationFixture('mixed')
@@ -2683,6 +2689,495 @@ describe('OpenCode operation observer race-checked reads', () => {
       expect(after).toEqual(before)
     } finally {
       fixture.cleanup()
+    }
+  })
+})
+
+/**
+ * Points `core.excludesFile` at a file inside the fixture's git dir, so the
+ * global ignore of whoever runs the tests never reaches an assertion. A `null`
+ * content leaves the file absent.
+ */
+function setExcludesFile(root: string, content: string | null): string {
+  const excludesPath = path.join(root, '.git', 'test-excludes')
+  if (content === null) fs.rmSync(excludesPath, { force: true })
+  else fs.writeFileSync(excludesPath, content)
+  expect(
+    runGit(root, ['config', 'core.excludesFile', excludesPath]).status,
+  ).toBe(0)
+  return excludesPath
+}
+
+function infoExcludePath(root: string): string {
+  return path.join(root, '.git', 'info', 'exclude')
+}
+
+/** Runs git with the user's and the system's config switched off. */
+const configIsolatedRunner: OperationObserverCommandRunner = (args, cwd) => {
+  const result = spawnSync('git', [...args], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    },
+  })
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  }
+}
+
+describe('OpenCode operation observer path set and ignore sources', () => {
+  test('observes a file after git rm --cached plus an exclude rule', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const file = path.join(fixture.root, 'f')
+      fs.writeFileSync(file, 'base\n')
+      addTracked(fixture.root, ['f'], 'f')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const tracked = await digestOf(observer)
+
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'f']).status,
+      ).toBe(0)
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+
+      fs.appendFileSync(infoExcludePath(fixture.root), 'f\n')
+      const excluded = await digestOf(observer)
+      expect(excluded).not.toBe(tracked)
+
+      fs.writeFileSync(file, 'edited\n')
+      expect(await digestOf(observer)).not.toBe(excluded)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a line added to info/exclude changes the identity', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await digestOf(observer)
+      fs.appendFileSync(
+        infoExcludePath(fixture.root),
+        'nothing-matches.never\n',
+      )
+      expect(await digestOf(observer)).not.toBe(before)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a new untracked .gitignore changes the identity, even one that ignores itself', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await digestOf(observer)
+      // Matches nothing, so no listed path changes: only the file itself can.
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), '*.never\n')
+      const added = await digestOf(observer)
+      expect(added).not.toBe(before)
+
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), '*\n')
+      const hidingEverything = await digestOf(observer)
+      expect(hidingEverything).not.toBe(added)
+      // `*` and `**` both ignore every path; only the file's bytes differ.
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), '**\n')
+      expect(await digestOf(observer)).not.toBe(hidingEverything)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an edit to a sibling hidden by an untracked .gitignore does not change the identity', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const sibling = path.join(fixture.root, 'hidden.txt')
+      fs.writeFileSync(sibling, 'one\n')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const visible = await digestOf(observer)
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), '*\n')
+      const hidden = await digestOf(observer)
+      expect(hidden).not.toBe(visible)
+      fs.writeFileSync(sibling, 'two\n')
+      expect(await digestOf(observer)).toBe(hidden)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an edit to an already-ignored file does not change the identity', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), 'node_modules/\n')
+      addTracked(fixture.root, ['.gitignore'], 'ignore')
+      fs.mkdirSync(path.join(fixture.root, 'node_modules'))
+      const ignored = path.join(fixture.root, 'node_modules', 'x')
+      fs.writeFileSync(ignored, 'one\n')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const before = await digestOf(observer)
+      fs.writeFileSync(ignored, 'two\n')
+      expect(await digestOf(observer)).toBe(before)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('lists a self-ignored .gitignore as an ordinary record', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      // The root file hides nothing, so it is an ordinary untracked path; the
+      // nested one ignores itself and only the discovery can find it.
+      fs.writeFileSync(path.join(fixture.root, '.gitignore'), '*.never\n')
+      fs.writeFileSync(path.join(fixture.root, 'sub', '.gitignore'), '*\n')
+      // A wholly ignored directory is listed with a trailing slash and dropped.
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'x'), 'x\n')
+      const result = readWorktreeRecords(fixture.root)
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      const paths = result.records.map((record) => record.path)
+      expect(paths).toContain('.gitignore')
+      expect(paths).toContain('sub/.gitignore')
+      expect(paths).not.toContain('sub/')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a core.excludesFile that is a FIFO fails closed without hanging', async () => {
+    const fixture = createGitFixture()
+    try {
+      const fifo = path.join(fixture.root, '.git', 'test-excludes')
+      if (spawnSync('mkfifo', [fifo]).status !== 0) return // no mkfifo here
+      expect(
+        runGit(fixture.root, ['config', 'core.excludesFile', fifo]).status,
+      ).toBe(0)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  }, 10_000)
+
+  test('a core.excludesFile that is /dev/zero fails closed without hanging', async () => {
+    if (!fs.existsSync('/dev/zero')) return
+    const fixture = createGitFixture()
+    try {
+      expect(
+        runGit(fixture.root, ['config', 'core.excludesFile', '/dev/zero'])
+          .status,
+      ).toBe(0)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  }, 10_000)
+
+  test('an oversize core.excludesFile fails closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, 'x'.repeat(1_048_577))
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      await expect(observer.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a missing and an empty core.excludesFile give different identities, and neither fails', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const missing = await digestOf(observer)
+      setExcludesFile(fixture.root, '')
+      const empty = await digestOf(observer)
+      expect(empty).not.toBe(missing)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('falls back to the XDG and then the HOME default when core.excludesFile is unset', async () => {
+    const fixture = createGitFixture()
+    const home = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-home-'),
+    )
+    const previous = {
+      HOME: process.env.HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    }
+    const restore = (key: 'HOME' | 'XDG_CONFIG_HOME') => {
+      const value = previous[key]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    try {
+      const xdg = path.join(home, 'xdg')
+      fs.mkdirSync(path.join(xdg, 'git'), { recursive: true })
+      fs.mkdirSync(path.join(home, '.config', 'git'), { recursive: true })
+      process.env.HOME = home
+      process.env.XDG_CONFIG_HOME = xdg
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: configIsolatedRunner,
+      })
+      const absent = await digestOf(observer)
+      fs.writeFileSync(path.join(xdg, 'git', 'ignore'), 'one\n')
+      const withXdg = await digestOf(observer)
+      expect(withXdg).not.toBe(absent)
+      fs.writeFileSync(path.join(xdg, 'git', 'ignore'), 'two\n')
+      expect(await digestOf(observer)).not.toBe(withXdg)
+
+      delete process.env.XDG_CONFIG_HOME
+      const homeAbsent = await digestOf(observer)
+      fs.writeFileSync(path.join(home, '.config', 'git', 'ignore'), 'home\n')
+      expect(await digestOf(observer)).not.toBe(homeAbsent)
+    } finally {
+      restore('HOME')
+      restore('XDG_CONFIG_HOME')
+      fs.rmSync(home, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when info/exclude changes after it was read and before the final pass', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      let edited = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        // Ignore sources are read before any listing, so the first untracked
+        // listing is already after the first read.
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !edited) {
+            edited = true
+            fs.appendFileSync(infoExcludePath(fixture.root), 'changed.never\n')
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(edited).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when core.excludesFile changes after it was read and before the final pass', async () => {
+    const fixture = createGitFixture()
+    try {
+      const excludes = setExcludesFile(fixture.root, 'one\n')
+      let edited = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !edited) {
+            edited = true
+            fs.writeFileSync(excludes, 'two\n')
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when a self-ignored .gitignore appears after the first discovery', async () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      let created = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          // The discovery is the only `ls-files -o -i` call.
+          if (args.includes('-i') && args.includes('-o') && !created) {
+            created = true
+            fs.writeFileSync(path.join(fixture.root, '.gitignore'), '*\n')
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(created).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('includes a HEAD-only path that is missing on disk as a deletion', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'f'), 'base\n')
+      addTracked(fixture.root, ['f'], 'f')
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'f']).status,
+      ).toBe(0)
+      fs.rmSync(path.join(fixture.root, 'f'))
+      const result = readWorktreeRecords(fixture.root)
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      expect(result.records.find((record) => record.path === 'f')).toEqual({
+        path: 'f',
+        kind: 'missing',
+        mode: '',
+        id: undefined,
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('reads a HEAD-only path that still exists on disk, and exposes the HEAD tree', () => {
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'f'), 'base\n')
+      addTracked(fixture.root, ['f'], 'f')
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'f']).status,
+      ).toBe(0)
+      fs.appendFileSync(infoExcludePath(fixture.root), 'f\n')
+      fs.writeFileSync(path.join(fixture.root, 'f'), 'edited\n')
+      const result = readWorktreeRecords(fixture.root)
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      const edited = runGit(fixture.root, ['hash-object', 'f']).stdout.trim()
+      expect(
+        result.records.find((record) => record.path === 'f'),
+      ).toMatchObject({
+        kind: 'regular',
+        id: edited,
+      })
+      const committed = runGit(fixture.root, [
+        'rev-parse',
+        'HEAD:f',
+      ]).stdout.trim()
+      expect(result.headTree.get('f')).toEqual({
+        mode: '100644',
+        id: committed,
+      })
+      expect(result.headTree.get('tracked.txt')?.mode).toBe('100644')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('infers a sha256 object format from the HEAD tree ids', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-sha256-'),
+    )
+    try {
+      if (
+        runGit(root, ['init', '--quiet', '--object-format=sha256']).status !== 0
+      ) {
+        return // this git cannot create sha256 repositories
+      }
+      runGit(root, ['config', 'user.email', 'observer@example.invalid'])
+      runGit(root, ['config', 'user.name', 'Observer Test'])
+      runGit(root, [
+        'config',
+        'core.excludesFile',
+        path.join(root, '.git', 'none'),
+      ])
+      fs.writeFileSync(path.join(root, 'f'), 'base\n')
+      addTracked(root, ['f'], 'f')
+      fs.writeFileSync(path.join(root, 'u'), 'untracked\n')
+      const result = readWorktreeRecords(root)
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') return
+      for (const name of ['f', 'u']) {
+        const expected = runGit(root, ['hash-object', name]).stdout.trim()
+        expect(expected).toHaveLength(64)
+        expect(result.records.find((record) => record.path === name)?.id).toBe(
+          expected,
+        )
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('two clones of one commit with relative symlinks give the same digest', async () => {
+    const source = createGitFixture()
+    const parent = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-clones-'),
+    )
+    try {
+      fs.symlinkSync('tracked.txt', path.join(source.root, 'link'))
+      fs.writeFileSync(path.join(source.root, '.gitignore'), 'node_modules/\n')
+      addTracked(source.root, ['link', '.gitignore'], 'link')
+      const digests: string[] = []
+      for (const name of ['a', 'b']) {
+        const clone = path.join(parent, name, 'checkout')
+        fs.mkdirSync(path.dirname(clone))
+        const cloned = spawnSync('git', [
+          'clone',
+          '--quiet',
+          source.root,
+          clone,
+        ])
+        expect(cloned.status).toBe(0)
+        // Same ignore sources in both: explicit info/exclude, and an absent
+        // global file at a different absolute path in each clone.
+        fs.writeFileSync(infoExcludePath(clone), '# shared\n')
+        setExcludesFile(clone, null)
+        fs.mkdirSync(path.join(clone, 'node_modules'))
+        fs.writeFileSync(path.join(clone, 'node_modules', 'x'), name)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: clone,
+        })
+        digests.push(await digestOf(observer))
+      }
+      expect(digests[0]).toBe(digests[1])
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true })
+      source.cleanup()
     }
   })
 })
