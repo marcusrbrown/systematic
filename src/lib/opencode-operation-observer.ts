@@ -337,6 +337,8 @@ type RepositoryAnchorResult =
       /** Full object id, or `undefined` for an unborn `HEAD`. */
       head: string | undefined
       infoExcludePath: string
+      /** `true` or `false`, as `rev-parse --is-inside-work-tree` prints it. */
+      insideWorkTree: string
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
 
@@ -838,6 +840,7 @@ function readRevision(
   runner: OperationObserverCommandRunner,
   context: RepositoryContext,
   head: string | undefined,
+  insideWorkTree: string,
   limits: Limits,
 ):
   | { status: 'ok'; digest: string }
@@ -853,28 +856,21 @@ function readRevision(
   }
   const branchValue =
     branch.status === 'ok' ? branch.output.stdout.trim() : 'detached'
-  const inside = runCommand(
-    runner,
-    ['rev-parse', '--is-inside-work-tree'],
-    context.commandDirectory,
-    limits,
-  )
-  if (inside.status === 'error') return inside
   return {
     status: 'ok',
     digest: digest('repository-revision', [
       head ?? 'unborn',
       branchValue,
-      inside.output.stdout.trim(),
+      insideWorkTree,
     ]),
   }
 }
 
 /**
- * One `rev-parse` returns toplevel, absolute git dir, the `info/exclude` path
- * and the `HEAD` id, in that order. `--verify -q` makes an unborn `HEAD` exit 1
- * with only the first three lines, so unborn is distinguishable from every
- * other failure. `--git-path` prints a path relative to `cwd` (absolute for a
+ * One `rev-parse` returns toplevel, absolute git dir, the `info/exclude` path,
+ * the in-work-tree answer and the `HEAD` id, in that order. `--verify -q` makes
+ * an unborn `HEAD` exit 1 with only the first four lines, so unborn is
+ * distinguishable from every other failure. `--git-path` prints a path relative to `cwd` (absolute for a
  * linked worktree), so it is resolved against `cwd`.
  */
 function readRepositoryAnchor(
@@ -892,6 +888,7 @@ function readRepositoryAnchor(
         '--absolute-git-dir',
         '--git-path',
         'info/exclude',
+        '--is-inside-work-tree',
         '--verify',
         '-q',
         'HEAD',
@@ -907,13 +904,14 @@ function readRepositoryAnchor(
   if (resultError) return { status: 'error', reasonCode: resultError }
   const lines = result.stdout.split('\n')
   if (lines.at(-1) === '') lines.pop()
-  const unborn = result.status === 1 && lines.length === 3
+  const unborn = result.status === 1 && lines.length === 4
   if (result.status !== 0 && !unborn) {
     return { status: 'error', reasonCode: 'command-failed' }
   }
-  const [toplevelLine, gitDirLine, excludeLine, head] = lines
+  const [toplevelLine, gitDirLine, excludeLine, insideLine, head] = lines
   const malformed =
-    lines.length !== (unborn ? 3 : 4) ||
+    lines.length !== (unborn ? 4 : 5) ||
+    (insideLine !== 'true' && insideLine !== 'false') ||
     toplevelLine === undefined ||
     gitDirLine === undefined ||
     excludeLine === undefined ||
@@ -932,6 +930,7 @@ function readRepositoryAnchor(
     gitDir,
     head,
     infoExcludePath: path.resolve(cwd, excludeLine),
+    insideWorkTree: insideLine,
   }
 }
 
@@ -1821,13 +1820,6 @@ function readWorktreeListings(
 ):
   | ({ status: 'ok' } & WorktreeListings)
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const tracked = runCommand(
-    runner,
-    ['ls-files', '--full-name', '-z', '--', ':/'],
-    context.commandDirectory,
-    limits,
-  )
-  if (tracked.status === 'error') return tracked
   const staged = runCommand(
     runner,
     ['ls-files', '--stage', '--full-name', '-z', '--', ':/'],
@@ -1861,7 +1853,9 @@ function readWorktreeListings(
   )
   const paths = [
     ...new Set([
-      ...splitRecords(tracked.output.stdout),
+      // The index paths come from the stage listing, which lists the same
+      // paths as the plain one.
+      ...stageEntries.map((entry) => entry.relativePath),
       ...headTree.keys(),
       ...splitRecords(untracked.output.stdout),
       ...selfIgnored,
@@ -2484,7 +2478,13 @@ export function createOpencodeOperationObserver(
         worktreeRoot: anchor.toplevel,
         infoExcludePath: anchor.infoExcludePath,
       }
-      const repository = readRevision(runner, context, anchor.head, limits)
+      const repository = readRevision(
+        runner,
+        context,
+        anchor.head,
+        anchor.insideWorkTree,
+        limits,
+      )
       if (repository.status === 'error') return unavailable(repository)
       const worktree = readWorktreeRevisionV2(
         readers,

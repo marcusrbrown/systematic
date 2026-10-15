@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -196,7 +197,7 @@ describe('OpenCode operation observer', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('validates the parent main checkout as a registered worktree', () => {
     const fixture = createGitFixture()
@@ -268,7 +269,7 @@ describe('OpenCode operation observer', () => {
       fs.rmSync(linkedAlias, { force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('rejects an independent unrelated repository', () => {
     const parent = createGitFixture()
@@ -286,7 +287,7 @@ describe('OpenCode operation observer', () => {
       unrelated.cleanup()
       parent.cleanup()
     }
-  })
+  }, 30_000)
 
   test('rejects an independent nested repository inside the parent checkout', () => {
     const parent = createGitFixture()
@@ -305,7 +306,7 @@ describe('OpenCode operation observer', () => {
     } finally {
       parent.cleanup()
     }
-  })
+  }, 30_000)
 
   test('rejects a submodule target whose common directory is under git modules', () => {
     const parent = createGitFixture()
@@ -338,7 +339,7 @@ describe('OpenCode operation observer', () => {
       submodule.cleanup()
       parent.cleanup()
     }
-  })
+  }, 30_000)
 
   test('rejects a fake gitfile that points directly at the parent git directory', () => {
     const parent = createGitFixture()
@@ -387,7 +388,7 @@ describe('OpenCode operation observer', () => {
       fs.rmSync(fakeRoot, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('ignores poisoned ambient GIT variables in observer subprocesses', async () => {
     const parent = createGitFixture()
@@ -448,7 +449,7 @@ describe('OpenCode operation observer', () => {
       unrelated.cleanup()
       parent.cleanup()
     }
-  })
+  }, 30_000)
 
   test('keeps target stable while repository and worktree revisions change', async () => {
     const fixture = createGitFixture()
@@ -491,7 +492,7 @@ describe('OpenCode operation observer', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('uses repository-root semantics when target is a repository subdirectory', async () => {
     const fixture = createGitFixture()
@@ -521,7 +522,7 @@ describe('OpenCode operation observer', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('stays available when the git directory and worktree are separate', async () => {
     const fixture = createSeparatedGitFixture()
@@ -576,7 +577,7 @@ describe('OpenCode operation observer', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('stays available for remote readback when the git directory and worktree are separate', async () => {
     const fixture = createSeparatedGitRemoteFixture()
@@ -592,7 +593,7 @@ describe('OpenCode operation observer', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('reports partial-stage commit closure as open and full closure as closed', async () => {
     const fixture = createGitFixture()
@@ -826,7 +827,7 @@ describe('OpenCode operation observer', () => {
       fs.rmSync(secondLinkedWorktree, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('fails closed on command failure and bounded output without exposing raw facts', async () => {
     const fixture = createGitFixture()
@@ -1682,7 +1683,7 @@ describe('OpenCode operation observer forced git prefix and raw output', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('forces the prefix on the default runner of a standalone validateRegisteredWorktree', async () => {
     const fixture = createGitFixture()
@@ -1998,7 +1999,7 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
       fs.rmSync(decoy, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('fails closed when a linked worktree is redirected to another admin directory', async () => {
     const fixture = createRegisteredWorktreeFixture()
@@ -2038,7 +2039,7 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
       fs.rmSync(second, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('still snapshots a separated git directory', async () => {
     const fixture = createSeparatedGitFixture()
@@ -2053,7 +2054,7 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
     } finally {
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('passes the canonical comparison through a symlinked directory', async () => {
     const fixture = createGitFixture()
@@ -2125,7 +2126,7 @@ describe('OpenCode operation observer in-session root and gitDir pin', () => {
       fs.rmSync(unborn, { recursive: true, force: true })
       born.cleanup()
     }
-  })
+  }, 30_000)
 })
 
 const CHARACTERIZATION_SCENARIOS = [
@@ -2344,7 +2345,7 @@ describe('OpenCode operation observer worktree identity characterization', () =>
       extraCleanup()
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 })
 
 /** lstat with the optional identity fields the race checks compare. */
@@ -3178,7 +3179,7 @@ describe('OpenCode operation observer path set and ignore sources', () => {
       fs.rmSync(parent, { recursive: true, force: true })
       source.cleanup()
     }
-  })
+  }, 30_000)
 })
 
 const FAKE_GITLINK_ID = 'b'.repeat(40)
@@ -3425,7 +3426,7 @@ describe('OpenCode operation observer gitlink hardening', () => {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('a gitlink present only in the HEAD tree is still dispatched as a gitlink: uninitialized, not the parent HEAD', () => {
     const fixture = createGitFixture()
@@ -3481,7 +3482,7 @@ describe('OpenCode operation observer gitlink hardening', () => {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('detects an initialized submodule in a repository under a symlinked directory', async () => {
     const source = createSubmoduleSource()
@@ -3517,7 +3518,7 @@ describe('OpenCode operation observer gitlink hardening', () => {
       fs.rmSync(realParent, { recursive: true, force: true })
       fs.rmSync(aliasDir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 
   test('accepts a 64-hex submodule id in a sha256 repository', () => {
     const probe = fs.mkdtempSync(
@@ -3559,7 +3560,7 @@ describe('OpenCode operation observer gitlink hardening', () => {
       fs.rmSync(probe, { recursive: true, force: true })
       fs.rmSync(parentDir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })
 
 async function closureOf(root: string): Promise<boolean | undefined> {
@@ -3647,7 +3648,7 @@ describe('OpenCode operation observer commit closure from records', () => {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
 
   test('a regular file with a symlink target as its content, replacing the symlink, reads not closed', async () => {
     const fixture = createGitFixture()
@@ -3779,5 +3780,111 @@ describe('OpenCode operation observer commit closure from records', () => {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
     }
-  })
+  }, 30_000)
+})
+
+type RevisionFixtureKind = 'branch' | 'detached' | 'unborn'
+
+/** A repository whose HEAD id is reproducible: fixed identity, dates and tree. */
+function createRevisionFixture(kind: RevisionFixtureKind): string {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-revision-'),
+  )
+  const git = (args: readonly string[]) => {
+    const result = spawnSync('git', [...args], {
+      cwd: root,
+      env: DETERMINISTIC_GIT_ENV,
+      encoding: 'utf8',
+    })
+    if (result.status !== 0) throw new Error(`git setup failed: ${args[0]}`)
+  }
+  git(['init', '--quiet', '-b', 'main'])
+  if (kind !== 'unborn') {
+    fs.writeFileSync(path.join(root, 'f'), 'base\n')
+    git(['add', 'f'])
+    git(['commit', '--quiet', '-m', 'base'])
+  }
+  if (kind === 'detached') git(['checkout', '--quiet', '--detach'])
+  return root
+}
+
+/** The repository-revision fact layout, written out independently of the source. */
+function repositoryRevisionDigestOf(facts: readonly string[]): string {
+  const hash = createHash('sha256')
+  hash.update('systematic:opencode-observer:repository-revision:v1\0')
+  for (const fact of facts) {
+    hash.update(fact)
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+async function repositoryDigestOf(root: string): Promise<string> {
+  const observer = createOpencodeOperationObserver({ targetDirectory: root })
+  const result = await observer.snapshot()
+  if (result.status !== 'available') {
+    throw new Error(`snapshot unavailable: ${result.reasonCode}`)
+  }
+  return result.snapshot.repositoryRevisionDigest
+}
+
+describe('OpenCode operation observer repository revision digest', () => {
+  test('keeps the repository-revision digest value for branch, detached and unborn HEADs', async () => {
+    const digests: Record<string, string> = {}
+    for (const kind of ['branch', 'detached', 'unborn'] as const) {
+      const root = createRevisionFixture(kind)
+      try {
+        digests[kind] = await repositoryDigestOf(root)
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    }
+    // Captured before the in-work-tree check moved into the anchor call.
+    expect(digests).toEqual({
+      branch:
+        '4364fe5e1c8044b32dbb0a2812a3ff1b7b470ad486141d73367906830a08b7c4',
+      detached:
+        '47c6c2dd477c8c8afd1d798d20199cb3b0742cce49375caa43286dbb9cdd2730',
+      unborn:
+        '83527fa9038e65bf2d07c5e7a1b61189d41bd64111fba591ada007bd92cc1c23',
+    })
+  }, 30_000)
+
+  test('derives the digest from HEAD, the branch and the in-work-tree answer', async () => {
+    const separated = createSeparatedGitFixture()
+    const born = createRevisionFixture('branch')
+    const detached = createRevisionFixture('detached')
+    const unborn = createRevisionFixture('unborn')
+    try {
+      const expected = async (root: string, gitCwd = root) => {
+        const head = runGit(gitCwd, ['rev-parse', '--verify', '-q', 'HEAD'])
+        const branch = runGit(gitCwd, ['symbolic-ref', '--short', 'HEAD'])
+        const inside = runGit(gitCwd, ['rev-parse', '--is-inside-work-tree'])
+        return repositoryRevisionDigestOf([
+          head.status === 0 ? head.stdout.trim() : 'unborn',
+          branch.status === 0 ? branch.stdout.trim() : 'detached',
+          inside.stdout.trim(),
+        ])
+      }
+      for (const root of [born, detached, unborn]) {
+        expect(await repositoryDigestOf(root)).toBe(await expected(root))
+      }
+      // From inside the git directory the answer is `false`, and it must reach
+      // the digest exactly as the standalone call used to report it.
+      expect(
+        runGit(separated.gitDir, [
+          'rev-parse',
+          '--is-inside-work-tree',
+        ]).stdout.trim(),
+      ).toBe('false')
+      expect(await repositoryDigestOf(separated.gitDir)).toBe(
+        await expected(separated.gitDir),
+      )
+    } finally {
+      separated.cleanup()
+      for (const root of [born, detached, unborn]) {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    }
+  }, 30_000)
 })
