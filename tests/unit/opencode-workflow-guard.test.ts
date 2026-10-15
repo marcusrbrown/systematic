@@ -946,6 +946,213 @@ async function completeUnit(
 }
 
 describe('OpenCode workflow guard adapter', () => {
+  describe('target derivation under validation timeouts', () => {
+    const REGISTERED = (targetRoot: string) =>
+      ({
+        status: 'ok',
+        targetRoot,
+        gitDir: '/parent/.git/worktrees/linked',
+        commonDir: '/parent/.git',
+      }) as const
+    const TIMED_OUT = {
+      status: 'error',
+      reasonCode: 'command-timeout',
+    } as const
+    const IDENTITY_FAILURE = {
+      status: 'error',
+      reasonCode: 'target-unavailable',
+    } as const
+    const TARGET_TIMEOUT = {
+      status: 'unavailable',
+      reasonCode: 'command-timeout',
+    } as const
+    const TARGET_UNAVAILABLE = {
+      status: 'unavailable',
+      reasonCode: 'target-unavailable',
+    } as const
+
+    type Verdict =
+      | ReturnType<typeof REGISTERED>
+      | typeof TIMED_OUT
+      | typeof IDENTITY_FAILURE
+      | 'throws'
+
+    // Derives the target of a `write` naming one file per directory, where
+    // `verdicts` says what validating each directory returns.
+    function deriveFiles(verdicts: Readonly<Record<string, Verdict>>) {
+      const directories = Object.keys(verdicts)
+      const args =
+        directories.length === 1
+          ? { path: `${directories[0]}/file.ts` }
+          : {
+              filePath: `${directories[0]}/file.ts`,
+              path: `${directories[1]}/file.ts`,
+            }
+      return deriveWith('write', args, verdicts)
+    }
+
+    function derivePatch(verdicts: Readonly<Record<string, Verdict>>) {
+      const patchText = [
+        '*** Begin Patch',
+        ...Object.keys(verdicts).flatMap((directory) => [
+          `*** Add File: ${directory}/file.ts`,
+          '+content',
+        ]),
+        '*** End Patch',
+      ].join('\n')
+      return deriveWith('apply_patch', { patchText }, verdicts)
+    }
+
+    function deriveWith(
+      tool: 'write' | 'apply_patch',
+      args: Record<string, unknown>,
+      verdicts: Readonly<Record<string, Verdict>>,
+    ) {
+      return deriveOpencodeOperationTarget(tool, args, {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) => {
+          const verdict = verdicts[candidate]
+          if (verdict === 'throws') throw new Error('validation exploded')
+          return verdict ?? IDENTITY_FAILURE
+        },
+      })
+    }
+
+    test('one candidate whose validation times out is a timeout', () => {
+      expect(deriveFiles({ '/linked-a': TIMED_OUT })).toEqual(TARGET_TIMEOUT)
+    })
+
+    test('every candidate timing out is a timeout, however many there are', () => {
+      expect(
+        derivePatch({
+          '/linked-a': TIMED_OUT,
+          '/linked-b': TIMED_OUT,
+          '/linked-c': TIMED_OUT,
+        }),
+      ).toEqual(TARGET_TIMEOUT)
+    })
+
+    test.each([
+      {
+        order: 'before',
+        verdicts: { '/linked-a': TIMED_OUT, '/linked-b': IDENTITY_FAILURE },
+      },
+      {
+        order: 'after',
+        verdicts: { '/linked-b': IDENTITY_FAILURE, '/linked-a': TIMED_OUT },
+      },
+    ])(
+      'a definite failure beats a timeout that comes $order it',
+      ({ verdicts }) => {
+        expect(deriveFiles(verdicts)).toEqual(TARGET_UNAVAILABLE)
+        expect(derivePatch(verdicts)).toEqual(TARGET_UNAVAILABLE)
+      },
+    )
+
+    test.each([
+      {
+        order: 'before',
+        verdicts: {
+          '/linked-a': TIMED_OUT,
+          '/linked-b': REGISTERED('/linked-b'),
+        },
+      },
+      {
+        order: 'after',
+        verdicts: {
+          '/linked-b': REGISTERED('/linked-b'),
+          '/linked-a': TIMED_OUT,
+        },
+      },
+    ])(
+      'a timeout beside a clean candidate that comes $order it is a timeout',
+      ({ verdicts }) => {
+        expect(deriveFiles(verdicts)).toEqual(TARGET_TIMEOUT)
+        expect(derivePatch(verdicts)).toEqual(TARGET_TIMEOUT)
+      },
+    )
+
+    test('a root the candidates span beats a timeout', () => {
+      expect(
+        derivePatch({
+          '/linked-a': REGISTERED('/linked-a'),
+          '/linked-b': REGISTERED('/linked-b'),
+          '/linked-c': TIMED_OUT,
+        }),
+      ).toEqual(TARGET_UNAVAILABLE)
+    })
+
+    test('a validation that throws is target-unavailable, even beside a timeout', () => {
+      expect(deriveFiles({ '/linked-a': 'throws' })).toEqual(TARGET_UNAVAILABLE)
+      expect(
+        deriveFiles({ '/linked-a': TIMED_OUT, '/linked-b': 'throws' }),
+      ).toEqual(TARGET_UNAVAILABLE)
+    })
+
+    test('a patch workdir whose validation times out is a timeout, and an identity failure stays one', () => {
+      const patchText = [
+        '*** Begin Patch',
+        '*** Add File: file.ts',
+        '+content',
+        '*** End Patch',
+      ].join('\n')
+      const withWorkdir = (verdict: Verdict) =>
+        deriveWith(
+          'apply_patch',
+          { workdir: '/linked-a', patchText },
+          {
+            '/linked-a': verdict,
+          },
+        )
+
+      expect(withWorkdir(TIMED_OUT)).toEqual(TARGET_TIMEOUT)
+      expect(withWorkdir(IDENTITY_FAILURE)).toEqual(TARGET_UNAVAILABLE)
+    })
+
+    test('a derivation timeout still marks the guard unavailable, with the cause it always had', async () => {
+      const directory = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-timeout-'),
+      )
+      try {
+        const base = sequenceObserver([operationSnapshot()])
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          validateRegisteredWorktree: () => ({
+            status: 'error',
+            reasonCode: 'command-timeout',
+          }),
+        })
+        await activateWorkEpoch(adapter)
+
+        await observeOperationTool(
+          adapter,
+          'bash',
+          { command: 'git status --short', workdir: directory },
+          { title: 'bash', output: 'ok', metadata: { exit: 0 } },
+          'derivation-timeout',
+        )
+
+        expect(status(adapter).state).toBe('unavailable')
+        const result = await getTool(
+          adapter,
+          'systematic_workflow_status',
+        ).execute({}, toolContext())
+        expect(
+          JSON.parse(expectToolOutput(result).output).firstUnavailableCause,
+        ).toEqual({
+          site: 'tool-before',
+          kind: 'operation-input-invalid',
+          reasonCode: 'target-unavailable',
+          timedOut: false,
+        })
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true })
+      }
+    })
+  })
+
   test('target derivation: registered worktree from bash workdir', () => {
     const result = deriveOpencodeOperationTarget(
       'bash',

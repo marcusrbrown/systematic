@@ -1049,15 +1049,28 @@ export interface OpencodeOperationTargetDerivationOptions {
   readonly realPath?: (filePath: string) => string
 }
 
+// `command-timeout`: a candidate's registered-worktree validation timed out and
+// nothing else was wrong, so no verdict exists yet. Every other failure
+// (including a throw from validation) is `target-unavailable`, and a definite
+// failure always wins over a timeout.
 export type OpencodeOperationTargetDerivationResult =
   | { readonly status: 'available'; readonly targetRoot: string }
   | {
       readonly status: 'unavailable'
-      readonly reasonCode: 'target-unavailable'
+      readonly reasonCode: 'target-unavailable' | 'command-timeout'
     }
 
-function unavailableOperationTarget(): OpencodeOperationTargetDerivationResult {
+type UnavailableOperationTarget = Extract<
+  OpencodeOperationTargetDerivationResult,
+  { readonly status: 'unavailable' }
+>
+
+function unavailableOperationTarget(): UnavailableOperationTarget {
   return { status: 'unavailable', reasonCode: 'target-unavailable' }
+}
+
+function timedOutOperationTarget(): UnavailableOperationTarget {
+  return { status: 'unavailable', reasonCode: 'command-timeout' }
 }
 
 function canonicalExistingPath(
@@ -1120,7 +1133,11 @@ function targetResultFromValidation(
   candidatePath: string,
   validation: RegisteredWorktreeValidationResult,
 ): OpencodeOperationTargetDerivationResult {
-  if (validation.status === 'error') return unavailableOperationTarget()
+  if (validation.status === 'error') {
+    return isProbeTimeout(validation)
+      ? timedOutOperationTarget()
+      : unavailableOperationTarget()
+  }
   if (!pathWithinOrEqual(validation.targetRoot, candidatePath)) {
     return unavailableOperationTarget()
   }
@@ -1184,19 +1201,29 @@ interface DerivedDirectoryTarget {
   readonly resolvedPath: string
 }
 
+// The one target every candidate agrees on. Every candidate is scanned, so a
+// timeout cannot hide a definite failure behind it: a definite failure, or
+// roots that span, win over a timeout. A timeout is the result only when every
+// candidate timed out, or when timeouts sit among candidates that agree.
 function sharedTargetRoot(
   targets: readonly OpencodeOperationTargetDerivationResult[],
   extraRoots: readonly string[] = [],
-): string | undefined {
+): OpencodeOperationTargetDerivationResult {
   const roots = [...extraRoots]
+  let definiteFailure = false
+  let timedOut = false
   for (const target of targets) {
-    if (target.status === 'unavailable') return undefined
-    roots.push(target.targetRoot)
+    if (target.status === 'available') roots.push(target.targetRoot)
+    else if (target.reasonCode === 'command-timeout') timedOut = true
+    else definiteFailure = true
   }
   const targetRoot = roots[0]
-  return targetRoot && roots.every((root) => root === targetRoot)
-    ? targetRoot
-    : undefined
+  const spans = targetRoot !== undefined && roots.some((r) => r !== targetRoot)
+  if (definiteFailure || spans) return unavailableOperationTarget()
+  if (timedOut) return timedOutOperationTarget()
+  return targetRoot
+    ? { status: 'available', targetRoot }
+    : unavailableOperationTarget()
 }
 
 function deriveDirectoryTarget(
@@ -1207,17 +1234,17 @@ function deriveDirectoryTarget(
   realPath: (filePath: string) => string,
 ):
   | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
-  | { readonly status: 'unavailable' } {
+  | UnavailableOperationTarget {
   const resolvedPath = canonicalExistingPath(
     path.resolve(baseDirectory, rawPath),
     realPath,
   )
-  if (!resolvedPath) return { status: 'unavailable' }
+  if (!resolvedPath) return unavailableOperationTarget()
   const parentResult = path.isAbsolute(rawPath)
     ? undefined
     : trustedParentTarget(parentTargetRoot, resolvedPath)
   if (parentResult?.status === 'unavailable') {
-    return { status: 'unavailable' }
+    return unavailableOperationTarget()
   }
   if (parentResult) {
     return {
@@ -1231,7 +1258,7 @@ function deriveDirectoryTarget(
         status: 'available',
         target: { targetRoot: validated.targetRoot, resolvedPath },
       }
-    : { status: 'unavailable' }
+    : validated
 }
 
 const PATCH_FILE_PREFIXES = [
@@ -1313,10 +1340,7 @@ function deriveFileOperationTarget(
       realPath,
     ),
   )
-  const targetRoot = sharedTargetRoot(targets)
-  return targetRoot
-    ? { status: 'available', targetRoot }
-    : unavailableOperationTarget()
+  return sharedTargetRoot(targets)
 }
 
 function deriveApplyPatchTarget(
@@ -1350,7 +1374,7 @@ function deriveApplyPatchTarget(
           options,
           realPath,
         )
-  if (workdir.status === 'unavailable') return unavailableOperationTarget()
+  if (workdir.status === 'unavailable') return workdir
   const targets = patchPaths.map((rawPath) =>
     deriveFileTarget(
       rawPath,
@@ -1368,13 +1392,10 @@ function deriveApplyPatchTarget(
   // still contributes the workdir root, preserving the spanning guard and the
   // parent fallback for fileless patches.
   const seedWorkdirRoot = args.workdir !== undefined || targets.length === 0
-  const targetRoot = sharedTargetRoot(
+  return sharedTargetRoot(
     targets,
     seedWorkdirRoot ? [workdir.target.targetRoot] : [],
   )
-  return targetRoot
-    ? { status: 'available', targetRoot }
-    : unavailableOperationTarget()
 }
 
 function deriveBashTarget(
@@ -4083,7 +4104,11 @@ function createSessionRuntime(
       validateRegisteredWorktree: options.observer.validateRegisteredWorktree,
     })
     if (target.status === 'unavailable') {
-      markUnavailable(beforeCause('operation-input-invalid', target.reasonCode))
+      // A derivation timeout is still fatal here, with the cause it has always
+      // had: the reason code stays `target-unavailable`.
+      markUnavailable(
+        beforeCause('operation-input-invalid', 'target-unavailable'),
+      )
       return
     }
     let registeredTarget: RegisteredWorktreeValidationResult
