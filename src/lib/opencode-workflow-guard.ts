@@ -297,10 +297,27 @@ type CompletionRemoteOutcome =
 
 // `none`: no observer. `timeout`: a probe timed out, so the attempt is
 // retryable. `fatal`: any other readback failure.
+//
+// `blocked`: a completion snapshot hit a blocking reason, or the revision
+// moved between completion snapshots. The attempt is rejected retryably and
+// the unit is blocked. `ready` carries the block capture taken before the
+// first snapshot when the unit was blocked then, with the snapshot that may
+// clear it.
 type CompletionReadbackOutcome =
   | { readonly status: 'none' }
-  | { readonly status: 'ready'; readonly readbacks: readonly unknown[] }
+  | {
+      readonly status: 'ready'
+      readonly readbacks: readonly unknown[]
+      readonly blockClear?: CompletionBlockClear
+    }
+  | { readonly status: 'blocked'; readonly reasonCode: SnapshotBlockReason }
   | ProbeFailure
+
+interface CompletionBlockClear {
+  readonly capture: SnapshotBlockCapture
+  readonly target: Pick<EffectiveOperationObserver, 'targetIdentity' | 'pinned'>
+  readonly snapshot: OperationObserverSnapshot
+}
 
 interface SessionRuntime {
   readonly ledger?: ReceiptLedger
@@ -587,6 +604,12 @@ interface SnapshotBlockRecord {
   readonly unitGeneration: number
   readonly targetIdentity: string
   readonly reasonCode: SnapshotBlockReason
+}
+
+// The record and unit generation as they were when a snapshot call began.
+interface SnapshotBlockCapture {
+  readonly record: SnapshotBlockRecord
+  readonly generation: number
 }
 
 // Outcome of trying to clear a block with a clean local snapshot. `timeout`
@@ -3250,6 +3273,9 @@ function createSessionRuntime(
       return []
     }
     const effective = lookup.value
+    // Captured in the same synchronous segment as the snapshot call.
+    const blockCapture = captureSnapshotBlock()
+    const generation = unitStartGeneration
     const read = await readSnapshot(
       effective.observer,
       effective.targetIdentity,
@@ -3258,26 +3284,76 @@ function createSessionRuntime(
       return skippedWithRemoteTail(effective.pinned ? 'pinned' : 'local')
     }
     if (read.status === 'fatal') {
-      markUnavailable(observerReadbackFailedCause(read.reasonCode))
+      return settleFailedRefresh(read.reasonCode, effective, generation)
+    }
+    return applyRefreshSnapshot(effective, read.value, blockCapture)
+  }
+
+  // A blocking reason blocks the unit and skips the remote probes, as a
+  // timeout does: the local state was not read, so nothing remote can be
+  // confirmed against it. Every other failure is fatal.
+  function settleFailedRefresh(
+    reasonCode: GuardUnavailableCause['reasonCode'],
+    effective: EffectiveOperationObserver,
+    generation: number,
+  ): readonly UnconfirmedReadback[] {
+    if (!isSnapshotBlockingReason(reasonCode)) {
+      markUnavailable(observerReadbackFailedCause(reasonCode))
       return []
     }
-    return applyReadbackAndProbeRemote(effective, read.value)
+    if (
+      generation === unitStartGeneration &&
+      effective.targetIdentity === currentEffectiveTargetIdentity()
+    ) {
+      setSnapshotBlock(reasonCode, effective.targetIdentity)
+    }
+    return []
   }
+
+  // A clean snapshot while blocked clears the block through the shared
+  // commit, which applies the local readback. The remote probes then run
+  // against that snapshot without applying the local readback a second time.
+  async function applyRefreshSnapshot(
+    effective: EffectiveOperationObserver,
+    snapshot: OperationObserverSnapshot,
+    blockCapture: SnapshotBlockCapture | undefined,
+  ): Promise<readonly UnconfirmedReadback[]> {
+    const cleared = blockCapture
+      ? commitSnapshotBlockClear(
+          blockCapture,
+          effective,
+          snapshot,
+          refreshFailureCause,
+        )
+      : undefined
+    if (cleared?.status === 'fatal') return []
+    return applyReadbackAndProbeRemote(
+      effective,
+      snapshot,
+      cleared?.status === 'cleared',
+    )
+  }
+
+  const refreshFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
+    observerReadbackFailedCause(reasonCode)
 
   async function applyReadbackAndProbeRemote(
     effective: EffectiveOperationObserver,
     snapshot: OperationObserverSnapshot,
+    localApplied = false,
   ): Promise<readonly UnconfirmedReadback[]> {
-    const observed = requireGuard().observeReadback({
-      workspaceIdentity: options.workspaceIdentity,
-      repositoryIdentity: snapshot.repositoryRevisionDigest,
-      worktreeIdentity: snapshot.worktreeRevisionDigest,
-      ...(effective.pinned
-        ? { operationTargetIdentity: effective.targetIdentity }
-        : {}),
-    })
+    const observed = localApplied
+      ? undefined
+      : requireGuard().observeReadback({
+          workspaceIdentity: options.workspaceIdentity,
+          repositoryIdentity: snapshot.repositoryRevisionDigest,
+          worktreeIdentity: snapshot.worktreeRevisionDigest,
+          ...(effective.pinned
+            ? { operationTargetIdentity: effective.targetIdentity }
+            : {}),
+        })
     if (
-      observed.status === 'rejected' &&
+      observed?.status === 'rejected' &&
       observed.reasonCode === 'workspace-mismatch'
     ) {
       markUnavailable(observerReadbackFailedCause())
@@ -4469,11 +4545,6 @@ function createSessionRuntime(
     return true
   }
 
-  interface SnapshotBlockCapture {
-    readonly record: SnapshotBlockRecord
-    readonly generation: number
-  }
-
   // Taken in the same synchronous segment as the `snapshot()` call whose
   // result may clear the block.
   function captureSnapshotBlock(): SnapshotBlockCapture | undefined {
@@ -4942,16 +5013,33 @@ function createSessionRuntime(
     if (remember) abandonedCompletes.set(callDigest, pending.target)
   }
 
+  // A blocking reason from a completion snapshot is a block, not a failure.
+  function blockedOrFailure(
+    failure: ProbeFailure,
+  ):
+    | ProbeFailure
+    | { readonly status: 'blocked'; reasonCode: SnapshotBlockReason } {
+    return failure.status === 'fatal' &&
+      isSnapshotBlockingReason(failure.reasonCode)
+      ? { status: 'blocked', reasonCode: failure.reasonCode }
+      : failure
+  }
+
   // The first stage that is not ok ends the attempt. A `command-timeout` at
-  // any stage is `timeout` (retryable); throws, `undefined`, target mismatch,
-  // revision drift, an invalid pinned lookup, and every other reason are
+  // any stage is `timeout` (retryable). A blocking reason, or revision drift
+  // between the parent snapshots or the pinned revalidation, is `blocked`
+  // (retryable). Throws, `undefined`, a target mismatch, an observer or
+  // registration change, an invalid pinned lookup, and every other reason are
   // `fatal`.
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fail-closed effective-observer selection and readback bundle construction must remain a single ordered pipeline
   async function completionReadbacks(): Promise<CompletionReadbackOutcome> {
     const observer = options.observer
     if (!observer) return { status: 'none' }
+    // Taken before the first snapshot call, so a block set or replaced during
+    // any of the awaits below keeps a later clean snapshot from clearing it.
+    const blockCapture = captureSnapshotBlock()
     const parent = await readSnapshot(observer, options.workspaceIdentity)
-    if (parent.status !== 'ok') return parent
+    if (parent.status !== 'ok') return blockedOrFailure(parent)
     const lookup = resolveEffectiveObserver()
     if (lookup.status !== 'ok') return lookup
     const effective = lookup.value
@@ -4961,15 +5049,17 @@ function createSessionRuntime(
         effective.observer,
         effective.targetIdentity,
       )
-      if (pinned.status !== 'ok') return pinned
+      if (pinned.status !== 'ok') return blockedOrFailure(pinned)
       initialEffective = pinned.value
     }
     const remote = await completionRemoteReadbacks(effective.observer)
     if (remote.status !== 'ready') return remote
     const finalParent = await readSnapshot(observer)
-    if (finalParent.status !== 'ok') return finalParent
-    if (completionParentDrifted(parent.value, finalParent.value)) {
-      return { status: 'fatal' }
+    if (finalParent.status !== 'ok') return blockedOrFailure(finalParent)
+    const drift = completionParentDrift(parent.value, finalParent.value)
+    if (drift === 'target') return { status: 'fatal' }
+    if (drift === 'revision') {
+      return { status: 'blocked', reasonCode: 'worktree-unstable' }
     }
     const final = effective.pinned
       ? await revalidatePinnedCompletion(effective, initialEffective)
@@ -4993,22 +5083,35 @@ function createSessionRuntime(
           ),
         ),
       ],
+      ...(blockCapture
+        ? {
+            blockClear: {
+              capture: blockCapture,
+              target: final.effective,
+              snapshot: final.snapshot,
+            },
+          }
+        : {}),
     }
   }
 
-  function completionParentDrifted(
+  // A change of target identity is fatal; a moved repository or worktree
+  // revision is drift.
+  function completionParentDrift(
     initial: OperationObserverSnapshot,
     final: OperationObserverSnapshot,
-  ): boolean {
-    return (
-      final.targetDigest !== initial.targetDigest ||
-      final.repositoryRevisionDigest !== initial.repositoryRevisionDigest ||
+  ): 'none' | 'revision' | 'target' {
+    if (final.targetDigest !== initial.targetDigest) return 'target'
+    return final.repositoryRevisionDigest !==
+      initial.repositoryRevisionDigest ||
       final.worktreeRevisionDigest !== initial.worktreeRevisionDigest
-    )
+      ? 'revision'
+      : 'none'
   }
 
   // Second lookup and snapshot of the pinned target. The observer, target, and
-  // revision digests must be exactly what the first pass saw.
+  // registration must be exactly what the first pass saw (otherwise fatal);
+  // moved revision digests are drift (a block).
   async function revalidatePinnedCompletion(
     effective: EffectiveOperationObserver,
     initial: OperationObserverSnapshot,
@@ -5018,6 +5121,7 @@ function createSessionRuntime(
         readonly effective: EffectiveOperationObserver
         readonly snapshot: OperationObserverSnapshot
       }
+    | { readonly status: 'blocked'; readonly reasonCode: SnapshotBlockReason }
     | ProbeFailure
   > {
     const lookup = resolveEffectiveObserver()
@@ -5034,13 +5138,13 @@ function createSessionRuntime(
       revalidated.observer,
       revalidated.targetIdentity,
     )
-    if (pinned.status !== 'ok') return pinned
+    if (pinned.status !== 'ok') return blockedOrFailure(pinned)
     if (
       pinned.value.repositoryRevisionDigest !==
         initial.repositoryRevisionDigest ||
       pinned.value.worktreeRevisionDigest !== initial.worktreeRevisionDigest
     ) {
-      return { status: 'fatal' }
+      return { status: 'blocked', reasonCode: 'worktree-unstable' }
     }
     return {
       status: 'ready',
@@ -5170,6 +5274,61 @@ function createSessionRuntime(
     )
   }
 
+  // A completion that cannot proceed because the worktree blocks its
+  // snapshots: reject this attempt as retryable. Nothing is consumed and the
+  // session is NOT marked unavailable. The terminal entry makes a duplicate
+  // after-hook replay exactly what is written here. A session that is
+  // already unavailable is not retryable and takes the fatal path.
+  function finishBlockedComplete(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+    reasonCode: SnapshotBlockReason,
+  ): void {
+    if (requireGuard().status().state === 'unavailable') {
+      finishUnavailableReadback(callDigest, pending, output, reasonCode)
+      return
+    }
+    abandonComplete(callDigest, pending, true)
+    const terminal: TerminalComplete = {
+      target: pending.target,
+      status: 'rejected',
+      reasonCode: 'snapshot-blocked',
+      title: 'Workflow snapshot blocked',
+    }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(
+      output,
+      terminal,
+      pending.target,
+      terminal.title,
+    )
+  }
+
+  // One synchronous segment, ending in the caller's finalize: a clean
+  // completion snapshot clears a block that was there when the readbacks
+  // began, and a block that is there now (set by a concurrent hook, or one
+  // the clear could not remove) rejects the completion. The finalize that
+  // follows applies the same readbacks again, which changes nothing.
+  function completionBlock(
+    readbacks: CompletionReadbackOutcome,
+  ): SnapshotBlockReason | 'fatal' | undefined {
+    if (readbacks.status === 'ready' && readbacks.blockClear) {
+      const { capture, target, snapshot } = readbacks.blockClear
+      const cleared = commitSnapshotBlockClear(
+        capture,
+        target,
+        snapshot,
+        completionFailureCause,
+      )
+      if (cleared.status === 'fatal') return 'fatal'
+    }
+    return currentSnapshotBlock()?.reasonCode
+  }
+
+  const completionFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
+    observerReadbackFailedCause(reasonCode, 'complete-readback')
+
   async function finishComplete(
     host: HostToolAfter,
     output: unknown,
@@ -5186,7 +5345,46 @@ function createSessionRuntime(
       finishUnreplayableComplete(finalTarget, output)
       return
     }
+    const generation = unitStartGeneration
     const readbacks = await completionReadbacks()
+    settleCompletionReadbacks(
+      callDigest,
+      pending,
+      output,
+      readbacks,
+      generation,
+    )
+  }
+
+  // The unit is blocked on its effective target unless it was replaced during
+  // the readbacks or the session is already unavailable (no retry is offered
+  // then, so there is nothing for a block to describe).
+  function blockForCompletion(
+    reasonCode: SnapshotBlockReason,
+    generation: number,
+  ): void {
+    if (
+      generation === unitStartGeneration &&
+      requireGuard().status().state !== 'unavailable'
+    ) {
+      setSnapshotBlock(reasonCode, currentEffectiveTargetIdentity())
+    }
+  }
+
+  // Synchronous from the first check to finalizeComplete: nothing may change
+  // the block between the re-check and the finalize.
+  function settleCompletionReadbacks(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+    readbacks: CompletionReadbackOutcome,
+    generation: number,
+  ): void {
+    if (readbacks.status === 'blocked') {
+      blockForCompletion(readbacks.reasonCode, generation)
+      finishBlockedComplete(callDigest, pending, output, readbacks.reasonCode)
+      return
+    }
     if (readbacks.status === 'fatal') {
       finishUnavailableReadback(
         callDigest,
@@ -5198,6 +5396,15 @@ function createSessionRuntime(
     }
     if (readbacks.status === 'timeout') {
       finishReadbackTimeout(callDigest, pending, output)
+      return
+    }
+    const block = completionBlock(readbacks)
+    if (block === 'fatal') {
+      finishUnavailableReadback(callDigest, pending, output)
+      return
+    }
+    if (block) {
+      finishBlockedComplete(callDigest, pending, output, block)
       return
     }
     finalizeComplete(

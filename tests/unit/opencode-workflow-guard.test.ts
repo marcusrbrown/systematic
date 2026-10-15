@@ -367,6 +367,15 @@ function remoteAvailable(
   }
 }
 
+// A status read refreshes the unit's readback, and a clean refresh clears a
+// snapshot block. These maps let a test queue the observer's next local
+// snapshot for the adapter it built, so a status read can keep a block.
+interface SnapshotQueue {
+  queueSnapshot(next: OpencodeOperationObserver): void
+}
+const queueByObserver = new WeakMap<OpencodeOperationObserver, SnapshotQueue>()
+const queueByAdapter = new WeakMap<object, SnapshotQueue>()
+
 function createAdapter(
   mode: 'observe' | 'protected' | 'disabled' = 'protected',
   debug = false,
@@ -377,7 +386,7 @@ function createAdapter(
   sharedRecovery = false,
 ): OpencodeWorkflowGuard {
   const classifier = createReceiptClassifier()
-  return createOpencodeWorkflowGuard({
+  const adapter = createOpencodeWorkflowGuard({
     config: { mode, debug },
     ...(observer ? OPERATION_SCOPE : SCOPE),
     ...(sharedRecovery
@@ -409,6 +418,9 @@ function createAdapter(
         }
       : {}),
   })
+  const queue = observer ? queueByObserver.get(observer) : undefined
+  if (queue) queueByAdapter.set(adapter, queue)
+  return adapter
 }
 
 function operationSnapshot(
@@ -3306,6 +3318,8 @@ describe('OpenCode workflow guard adapter', () => {
         timeoutLocalSnapshotOnCall(n: number): void
         // The Nth upcoming local snapshot call reports a drifted revision.
         driftLocalSnapshotOnCall(n: number): void
+        // The Nth upcoming local snapshot call reports a different target.
+        retargetLocalSnapshotOnCall(n: number): void
         // Every upcoming local snapshot fails without a timeout.
         failLocalSnapshot(how: LocalFailure | undefined): void
         // The next remote 'after' read of `operation` is held until released.
@@ -3380,6 +3394,7 @@ describe('OpenCode workflow guard adapter', () => {
         let snapshotCalls = 0
         let timeoutOnCall: number | undefined
         let driftOnCall: number | undefined
+        let retargetOnCall: number | undefined
         let localFailure: LocalFailure | undefined
         let remoteCalls = 0
         const overrides = new Map<
@@ -3390,17 +3405,24 @@ describe('OpenCode workflow guard adapter', () => {
           RemoteOperation,
           () => Promise<OperationObserverRemoteResult>
         >()
+        const forcedSnapshotFor = (
+          call: number,
+        ): OperationObserverSnapshot | undefined => {
+          if (call === retargetOnCall) {
+            return { ...operationSnapshot(), targetDigest: '9'.repeat(64) }
+          }
+          return call === driftOnCall
+            ? operationSnapshot('e'.repeat(64), 'd'.repeat(64))
+            : undefined
+        }
         const forcedSnapshot = (
           call: number,
         ):
           | Awaited<ReturnType<OpencodeOperationObserver['snapshot']>>
           | undefined => {
           if (localTimeout || call === timeoutOnCall) return TIMEOUT
-          if (call !== driftOnCall) return undefined
-          return {
-            status: 'available',
-            snapshot: operationSnapshot('e'.repeat(64), 'd'.repeat(64)),
-          }
+          const forced = forcedSnapshotFor(call)
+          return forced ? { status: 'available', snapshot: forced } : undefined
         }
         const observer: OpencodeOperationObserver = {
           ...base,
@@ -3453,6 +3475,9 @@ describe('OpenCode workflow guard adapter', () => {
           },
           driftLocalSnapshotOnCall(n) {
             driftOnCall = snapshotCalls + n
+          },
+          retargetLocalSnapshotOnCall(n) {
+            retargetOnCall = snapshotCalls + n
           },
           failLocalSnapshot(how) {
             localFailure = how
@@ -4533,7 +4558,7 @@ describe('OpenCode workflow guard adapter', () => {
             })
           })
 
-          test('4: a new call ID whose readbacks show drift after a timeout takes the fatal path, and the timed-out attempt applied nothing', async () => {
+          test('4: a new call ID whose readbacks show a changed target after a timeout takes the fatal path, and the timed-out attempt applied nothing', async () => {
             const fx = await skipFixture('observe')
             const receiptsBefore = JSON.stringify(
               ledger(fx.adapter).listReceipts(),
@@ -4547,10 +4572,28 @@ describe('OpenCode workflow guard adapter', () => {
             expect(JSON.stringify(status(fx.adapter))).toBe(statusBefore)
 
             fx.failRemote('push', undefined)
-            fx.driftLocalSnapshotOnCall(2)
+            fx.retargetLocalSnapshotOnCall(2)
             const second = await complete(fx.adapter, 'drift-complete')
             expectFatal(second)
             expect(status(fx.adapter).state).toBe('unavailable')
+            expect(consumedReceipts(fx.adapter)).toBe(0)
+          })
+
+          test('4: a new call ID whose readbacks show revision drift after a timeout is a retryable block, and nothing is consumed', async () => {
+            const fx = await skipFixture('observe')
+            fx.failRemote('push', TIMEOUT)
+            expectRetryable(await complete(fx.adapter, 'timeout-complete'))
+
+            fx.failRemote('push', undefined)
+            fx.driftLocalSnapshotOnCall(2)
+            const second = await complete(fx.adapter, 'drift-complete')
+
+            expect(second.title).toBe('Workflow snapshot blocked')
+            expect(JSON.parse(second.output)).toEqual({
+              status: 'rejected',
+              reasonCode: 'snapshot-blocked',
+            })
+            expect(status(fx.adapter).state).not.toBe('unavailable')
             expect(consumedReceipts(fx.adapter)).toBe(0)
           })
 
@@ -11665,7 +11708,7 @@ describe('OpenCode workflow guard adapter', () => {
     ).toBe(false)
   })
 
-  test('an interleaved-digest completion readback writes an unavailable terminal result instead of stale ready metadata', async () => {
+  test('a completion readback whose final snapshot is of another target writes an unavailable terminal result instead of stale ready metadata', async () => {
     const adapter = createAdapter(
       'observe',
       false,
@@ -11675,7 +11718,10 @@ describe('OpenCode workflow guard adapter', () => {
         operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
         operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
         operationSnapshot('b'.repeat(64), 'f'.repeat(64)),
-        operationSnapshot('b'.repeat(64), 'g'.repeat(64)),
+        {
+          ...operationSnapshot('b'.repeat(64), 'g'.repeat(64)),
+          targetDigest: '9'.repeat(64),
+        },
       ]),
     )
     await observeSkill(adapter, 'systematic_skill', 'ce:work')
@@ -11877,7 +11923,7 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
-  test('fails closed when the pinned target changes during completion acquisition', async () => {
+  test('rejects completion as a retryable block when the pinned worktree changes during completion acquisition', async () => {
     const fixture = createTargetDerivationFixture()
     try {
       const realParentObserver = createOpencodeOperationObserver({
@@ -11924,10 +11970,11 @@ describe('OpenCode workflow guard adapter', () => {
       parentSnapshots = 0
       mutateDuringCompletion = true
 
-      await completeUnit(adapter, 'acquisition-drift-completion')
+      const output = await completeUnit(adapter, 'acquisition-drift-completion')
 
-      expect(status(adapter).state).toBe('unavailable')
-      expect(status(adapter).reasonCode).toBe('guard-unavailable')
+      expect(output.output).toContain('snapshot-blocked')
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
       expect(
         ledger(adapter)
           .listReceipts()
@@ -16160,6 +16207,8 @@ describe('snapshot block record', () => {
     queueSnapshot(next: OpencodeOperationObserver): void
     /** Local `snapshot()` calls from every caller, scripted or not. */
     snapshotCalls(): number
+    /** From now on an unscripted `snapshot()` returns this one. */
+    setDefault(snapshot: OperationObserverSnapshot): void
     remoteCalls(): number
   }
 
@@ -16169,35 +16218,43 @@ describe('snapshot block record', () => {
     remote: Record<string, readonly OperationObserverRemoteResult[]> = {},
   ): SteeredObserver {
     const base = sequenceObserver([operationSnapshot()], remote)
+    let fallback: OpencodeOperationObserver = base
     const queue: OpencodeOperationObserver[] = []
     let snapshotCalls = 0
     let remoteCalls = 0
+    const observer: OpencodeOperationObserver = {
+      ...base,
+      snapshot: () => {
+        snapshotCalls += 1
+        return (queue.shift() ?? fallback).snapshot()
+      },
+      async remoteSnapshot(operation, phase) {
+        remoteCalls += 1
+        if (!base.remoteSnapshot) {
+          return { status: 'unavailable', reasonCode: 'remote-missing-field' }
+        }
+        return base.remoteSnapshot(operation, phase)
+      },
+    }
+    const queueSnapshot = (next: OpencodeOperationObserver): void => {
+      queue.push(next)
+    }
+    queueByObserver.set(observer, { queueSnapshot })
     return {
-      observer: {
-        ...base,
-        snapshot: () => {
-          snapshotCalls += 1
-          return (queue.shift() ?? base).snapshot()
-        },
-        async remoteSnapshot(operation, phase) {
-          remoteCalls += 1
-          if (!base.remoteSnapshot) {
-            return { status: 'unavailable', reasonCode: 'remote-missing-field' }
-          }
-          return base.remoteSnapshot(operation, phase)
-        },
-      },
-      queueSnapshot: (next) => {
-        queue.push(next)
-      },
+      observer,
+      queueSnapshot,
       snapshotCalls: () => snapshotCalls,
+      setDefault: (snapshot) => {
+        fallback = sequenceObserver([snapshot])
+      },
       remoteCalls: () => remoteCalls,
     }
   }
 
   const DRIFTED = operationSnapshot(OPERATION_SCOPE.repositoryIdentity, E)
 
-  async function statusJson(
+  // A status read refreshes the readback, and a clean refresh clears a block.
+  async function refreshStatus(
     adapter: OpencodeWorkflowGuard,
   ): Promise<Record<string, unknown>> {
     const result = await getTool(adapter, 'systematic_workflow_status').execute(
@@ -16205,6 +16262,19 @@ describe('snapshot block record', () => {
       toolContext(),
     )
     return JSON.parse(expectToolOutput(result).output)
+  }
+
+  // A status read that leaves an existing block in place: the refresh's own
+  // snapshot is blocked for the same reason.
+  async function statusJson(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<Record<string, unknown>> {
+    const block = adapter.snapshotBlock(SESSION_A).current()
+    const queue = queueByAdapter.get(adapter)
+    if (block && queue) {
+      queue.queueSnapshot(sequenceObserver([unavailableStep(block.reasonCode)]))
+    }
+    return refreshStatus(adapter)
   }
 
   async function markerText(adapter: OpencodeWorkflowGuard): Promise<string> {
@@ -17306,6 +17376,7 @@ describe('snapshot block record', () => {
               : [],
         },
       })
+      queueByAdapter.set(adapter, steered)
       await activateWorkEpoch(adapter)
       return adapter
     }
@@ -17792,6 +17863,468 @@ describe('snapshot block record', () => {
       expect((await statusJson(adapter)).seedDeferrals).toBeDefined()
       expect(everything).not.toContain('snapshot-blocked')
       expect(everything).not.toContain('seedDeferrals')
+    })
+  })
+
+  describe('status refresh and completion', () => {
+    const PUSH = 'git push origin main'
+    const REMOTE = {
+      'push:before': [remoteAvailable(D, E)],
+      'push:after': [remoteAvailable(D, 'f'.repeat(64))],
+    }
+    const FATAL_READBACK_REASONS = [
+      'target-unavailable',
+      'command-failed',
+      'file-read-failed',
+    ] as const
+    const COMPLETE_ARGS = { target: 'unit' }
+
+    function failing(reasonCode: OperationObserverReasonCode) {
+      return sequenceObserver([unavailableStep(reasonCode)])
+    }
+
+    async function operate(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      command = 'bun test',
+    ): Promise<void> {
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    async function beforeComplete(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'systematic_workflow_complete', sessionID: SESSION_A, callID },
+        { args: COMPLETE_ARGS },
+      )
+    }
+
+    interface CompleteOutput {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }
+
+    async function afterComplete(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<CompleteOutput> {
+      const output: CompleteOutput = {
+        title: 'complete',
+        output: 'done',
+        metadata: {},
+      }
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: SESSION_A,
+          callID,
+          args: COMPLETE_ARGS,
+        },
+        output,
+      )
+      return output
+    }
+
+    function outcomeOf(output: CompleteOutput): unknown {
+      return JSON.parse(output.output)
+    }
+
+    // An active unit with both required receipts, ready to complete.
+    async function readyAdapter(
+      steered = steeredObserver(),
+      mode: 'observe' | 'protected' = 'observe',
+    ): Promise<OpencodeWorkflowGuard> {
+      const adapter = await activeAdapter(steered, mode)
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      mintReceipt(adapter, 'verification', SESSION_A, OPERATION_SCOPE)
+      return adapter
+    }
+
+    function consumedReceipts(adapter: OpencodeWorkflowGuard): number {
+      return ledger(adapter)
+        .listReceipts()
+        .filter((receipt) => receipt.canonical.consumption !== 'available')
+        .length
+    }
+
+    async function blockWithOperation(
+      adapter: OpencodeWorkflowGuard,
+      steered: SteeredObserver,
+      reasonCode: (typeof BLOCKING_REASONS)[number] = 'file-limit',
+    ): Promise<void> {
+      steered.queueSnapshot(failing(reasonCode))
+      await operate(adapter, `block-${reasonCode}`)
+      expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({ reasonCode })
+    }
+
+    describe('status refresh', () => {
+      test.each([...BLOCKING_REASONS])(
+        'a status refresh whose snapshot fails with %s reports the block without making the guard unavailable',
+        async (reasonCode) => {
+          const steered = steeredObserver()
+          const adapter = await activeAdapter(steered)
+          steered.queueSnapshot(failing(reasonCode))
+
+          const parsed = await refreshStatus(adapter)
+
+          expect(parsed.snapshotBlock).toEqual({ reasonCode })
+          expect(parsed.firstUnavailableCause).toBeUndefined()
+          expect(status(adapter).state).not.toBe('unavailable')
+        },
+      )
+
+      test('a blocked status refresh runs no remote probe, and the clearing refresh runs them once', async () => {
+        const steered = steeredObserver(REMOTE)
+        const adapter = createAdapter('observe', false, steered.observer, [
+          'push',
+        ])
+        await activateWorkEpoch(adapter)
+        await operate(adapter, 'status-push', PUSH)
+        expect(status(adapter).satisfiedOperations).toContain('push')
+        const beforePlain = steered.remoteCalls()
+        await refreshStatus(adapter)
+        const plainProbes = steered.remoteCalls() - beforePlain
+        expect(plainProbes).toBeGreaterThan(0)
+
+        steered.queueSnapshot(failing('file-limit'))
+        const beforeBlocked = steered.remoteCalls()
+        expect((await refreshStatus(adapter)).snapshotBlock).toEqual({
+          reasonCode: 'file-limit',
+        })
+        expect(steered.remoteCalls()).toBe(beforeBlocked)
+
+        const beforeClear = steered.remoteCalls()
+        expect((await refreshStatus(adapter)).snapshotBlock).toBeUndefined()
+        expect(steered.remoteCalls() - beforeClear).toBe(plainProbes)
+      })
+
+      test('the next clean status refresh clears the block and marks drifted receipts stale', async () => {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered)
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        steered.queueSnapshot(failing('file-limit'))
+        expect((await refreshStatus(adapter)).snapshotBlock).toBeDefined()
+        steered.queueSnapshot(sequenceObserver([DRIFTED]))
+
+        const parsed = await refreshStatus(adapter)
+
+        expect(parsed.snapshotBlock).toBeUndefined()
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(status(adapter).missingOperations).toContain('implementation')
+      })
+
+      test('a slow clean status snapshot that finishes after a later block leaves the block in place', async () => {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered)
+        const controls = adapter.snapshotBlock(SESSION_A)
+        controls.set('file-limit')
+        const slow = deferredStep(operationSnapshot())
+        const slowObserver = sequenceObserver([slow.step])
+        steered.queueSnapshot(slowObserver)
+        const refreshing = refreshStatus(adapter)
+        for (
+          let tick = 0;
+          tick < 50 && slowObserver.snapshotCalls() < 1;
+          tick++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(slowObserver.snapshotCalls()).toBe(1)
+        steered.queueSnapshot(failing('worktree-unstable'))
+        await operate(adapter, 'later-block')
+        expect(controls.current()).toEqual({ reasonCode: 'worktree-unstable' })
+
+        slow.release()
+        await refreshing
+
+        expect(controls.current()).toEqual({ reasonCode: 'worktree-unstable' })
+      })
+
+      test.each([...FATAL_READBACK_REASONS])(
+        'a status refresh failing with %s still makes the guard unavailable and sets no block',
+        async (reasonCode) => {
+          const steered = steeredObserver()
+          const adapter = await activeAdapter(steered)
+          steered.queueSnapshot(failing(reasonCode))
+
+          const parsed = await refreshStatus(adapter)
+
+          expect(status(adapter).state).toBe('unavailable')
+          expect(parsed.firstUnavailableCause).toMatchObject({
+            site: 'refresh-readback',
+            kind: 'observer-readback-failed',
+            reasonCode,
+          })
+          expect(parsed.snapshotBlock).toBeUndefined()
+        },
+      )
+    })
+
+    describe('completion', () => {
+      test.each(['protected', 'observe'] as const)(
+        'while blocked, completion is rejected as snapshot-blocked in %s mode, consumes nothing, and replays identically',
+        async (mode) => {
+          const steered = steeredObserver()
+          const adapter = await readyAdapter(steered, mode)
+          await blockWithOperation(adapter, steered)
+          await beforeComplete(adapter, 'blocked-complete')
+          steered.queueSnapshot(failing('file-limit'))
+
+          const first = await afterComplete(adapter, 'blocked-complete')
+
+          expect(outcomeOf(first)).toEqual({
+            status: 'rejected',
+            reasonCode: 'snapshot-blocked',
+          })
+          expect(first.title).toBe('Workflow snapshot blocked')
+          expect(status(adapter).unit?.status).toBe('active')
+          expect(status(adapter).state).not.toBe('unavailable')
+          expect(consumedReceipts(adapter)).toBe(0)
+          expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+            reasonCode: 'file-limit',
+          })
+          const calls = steered.snapshotCalls()
+          const replay = await afterComplete(adapter, 'blocked-complete')
+          expect(replay.title).toBe(first.title)
+          expect(replay.output).toBe(first.output)
+          expect(steered.snapshotCalls()).toBe(calls)
+        },
+      )
+
+      test('a blocking reason on a completion snapshot rejects an unblocked unit and sets the block', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await beforeComplete(adapter, 'fresh-block-complete')
+        steered.queueSnapshot(failing('command-output-limit'))
+
+        const output = await afterComplete(adapter, 'fresh-block-complete')
+
+        expect(outcomeOf(output)).toEqual({
+          status: 'rejected',
+          reasonCode: 'snapshot-blocked',
+        })
+        expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'command-output-limit',
+        })
+        expect(status(adapter).unit?.status).toBe('active')
+      })
+
+      test('a clean completion snapshot while blocked clears the block and completes', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await blockWithOperation(adapter, steered)
+        await beforeComplete(adapter, 'clear-and-complete')
+
+        const output = await afterComplete(adapter, 'clear-and-complete')
+
+        expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+        expect(status(adapter).unit?.status).toBe('completed')
+        expect(output.metadata.workflowGuard).toMatchObject({
+          status: 'completed',
+        })
+      })
+
+      test('revision drift between the parent and final completion snapshots is a retryable block', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await beforeComplete(adapter, 'drift-complete')
+        steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+        steered.queueSnapshot(sequenceObserver([DRIFTED]))
+
+        const output = await afterComplete(adapter, 'drift-complete')
+
+        expect(outcomeOf(output)).toEqual({
+          status: 'rejected',
+          reasonCode: 'snapshot-blocked',
+        })
+        expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'worktree-unstable',
+        })
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(status(adapter).unit?.status).toBe('active')
+        expect(consumedReceipts(adapter)).toBe(0)
+      })
+
+      test('a target change between completion snapshots is still fatal', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await beforeComplete(adapter, 'target-change-complete')
+        steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+        steered.queueSnapshot(
+          sequenceObserver([
+            { ...operationSnapshot(), targetDigest: '9'.repeat(64) },
+          ]),
+        )
+
+        await afterComplete(adapter, 'target-change-complete')
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      })
+
+      test.each([...FATAL_READBACK_REASONS])(
+        'a completion snapshot failing with %s still makes the guard unavailable and sets no block',
+        async (reasonCode) => {
+          const steered = steeredObserver()
+          const adapter = await readyAdapter(steered)
+          await beforeComplete(adapter, `fatal-complete-${reasonCode}`)
+          steered.queueSnapshot(failing(reasonCode))
+
+          const output = await afterComplete(
+            adapter,
+            `fatal-complete-${reasonCode}`,
+          )
+
+          expect(status(adapter).state).toBe('unavailable')
+          expect(outcomeOf(output)).toMatchObject({ status: 'unavailable' })
+          expect(
+            (await statusJson(adapter)).firstUnavailableCause,
+          ).toMatchObject({
+            site: 'complete-readback',
+            kind: 'observer-readback-failed',
+            reasonCode,
+          })
+          expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+        },
+      )
+
+      test('a block set by a concurrent hook during the completion readback rejects the completion without finalizing', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await beforeComplete(adapter, 'concurrent-complete')
+        const slow = deferredStep(operationSnapshot())
+        const slowObserver = sequenceObserver([slow.step])
+        steered.queueSnapshot(slowObserver)
+        const completing = afterComplete(adapter, 'concurrent-complete')
+        for (
+          let tick = 0;
+          tick < 50 && slowObserver.snapshotCalls() < 1;
+          tick++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(slowObserver.snapshotCalls()).toBe(1)
+        await blockWithOperation(adapter, steered, 'worktree-unstable')
+
+        slow.release()
+        const output = await completing
+
+        expect(outcomeOf(output)).toEqual({
+          status: 'rejected',
+          reasonCode: 'snapshot-blocked',
+        })
+        expect(status(adapter).unit?.status).toBe('active')
+        expect(consumedReceipts(adapter)).toBe(0)
+        expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'worktree-unstable',
+        })
+      })
+
+      test('a session that became unavailable during the readback takes the fatal path for a blocked completion', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await beforeComplete(adapter, 'unavailable-complete')
+        const slow = deferredStep(operationSnapshot(), {
+          status: 'unavailable',
+          reasonCode: 'file-limit',
+        })
+        const slowObserver = sequenceObserver([slow.step])
+        steered.queueSnapshot(slowObserver)
+        const completing = afterComplete(adapter, 'unavailable-complete')
+        for (
+          let tick = 0;
+          tick < 50 && slowObserver.snapshotCalls() < 1;
+          tick++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        steered.queueSnapshot(failing('target-unavailable'))
+        await operate(adapter, 'make-unavailable')
+        expect(status(adapter).state).toBe('unavailable')
+
+        slow.release()
+        const output = await completing
+
+        expect(outcomeOf(output)).toEqual({
+          status: 'unavailable',
+          reasonCode: 'finalization-failed',
+        })
+        expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      })
+
+      test('the block reason never enters markers or receipt metadata', async () => {
+        const steered = steeredObserver()
+        const adapter = await readyAdapter(steered)
+        await beforeComplete(adapter, 'marker-complete')
+        steered.queueSnapshot(failing('file-limit'))
+
+        const output = await afterComplete(adapter, 'marker-complete')
+
+        expect(
+          output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ).toBeUndefined()
+        expect(await markerText(adapter)).not.toContain('snapshot-blocked')
+        expect(JSON.stringify(ledger(adapter).listReceipts())).not.toContain(
+          'snapshot-blocked',
+        )
+      })
+
+      test('end to end: block, an unobserved shrink, a clearing status, rerun operations, then complete', async () => {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered, 'protected')
+        const worktreeA = operationSnapshot(
+          OPERATION_SCOPE.repositoryIdentity,
+          'a1'.repeat(32),
+        )
+        const worktreeB = operationSnapshot(
+          OPERATION_SCOPE.repositoryIdentity,
+          'b2'.repeat(32),
+        )
+        const worktreeC = operationSnapshot(
+          OPERATION_SCOPE.repositoryIdentity,
+          'c3'.repeat(32),
+        )
+        const write = { filePath: 'real.ts', content: 'changed' }
+        // Observed implementation and verification.
+        steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+        steered.queueSnapshot(sequenceObserver([worktreeA]))
+        await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+        steered.setDefault(worktreeA)
+        await operate(adapter, 'v1')
+        expect(status(adapter).state).toBe('protected')
+
+        await blockWithOperation(adapter, steered)
+        // The offending file is removed without an observed operation.
+        steered.setDefault(worktreeB)
+        const refreshed = await refreshStatus(adapter)
+        expect(refreshed.snapshotBlock).toBeUndefined()
+        expect(status(adapter).missingOperations).toContain('implementation')
+
+        // Rerun the stale operations.
+        steered.queueSnapshot(sequenceObserver([worktreeB]))
+        steered.queueSnapshot(sequenceObserver([worktreeC]))
+        await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w2')
+        steered.setDefault(worktreeC)
+        await operate(adapter, 'v2')
+        expect(status(adapter).state).toBe('protected')
+
+        await beforeComplete(adapter, 'end-to-end-complete')
+        const output = await afterComplete(adapter, 'end-to-end-complete')
+
+        expect(output.metadata.workflowGuard).toMatchObject({
+          status: 'completed',
+        })
+        expect(status(adapter).unit?.status).toBe('completed')
+      })
     })
   })
 })
