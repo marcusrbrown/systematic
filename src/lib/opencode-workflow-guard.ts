@@ -285,6 +285,12 @@ type ProbeFailure =
 
 type ProbeRead<T> = { readonly status: 'ok'; readonly value: T } | ProbeFailure
 
+// A read that timed out: no verdict yet. Only a typed timeout (never a cause)
+// produces one, and every timeout return uses this one value.
+type TimedOutRead = Extract<ProbeFailure, { readonly status: 'timeout' }>
+
+const TIMED_OUT_READ: TimedOutRead = { status: 'timeout' }
+
 type CompletionRemoteOutcome =
   | {
       readonly status: 'ready'
@@ -523,14 +529,6 @@ interface OperationFailure {
   status: 'unavailable'
   cause: GuardUnavailableCause
 }
-
-// A read that timed out: no verdict yet. Only a typed timeout (never a cause)
-// produces one.
-interface TimedOutRead {
-  status: 'timeout'
-}
-
-const TIMED_OUT_READ: TimedOutRead = { status: 'timeout' }
 
 interface MarkerSource {
   source: string
@@ -845,7 +843,7 @@ async function readSnapshot(
   } catch {
     return { status: 'fatal' }
   }
-  if (isProbeTimeout(result)) return { status: 'timeout' }
+  if (isProbeTimeout(result)) return TIMED_OUT_READ
   if (result.status === 'unavailable') {
     return { status: 'fatal', reasonCode: result.reasonCode }
   }
@@ -2129,7 +2127,7 @@ function createSessionRuntime(
     } catch {
       return { status: 'fatal' }
     }
-    if (isProbeTimeout(validation)) return { status: 'timeout' }
+    if (isProbeTimeout(validation)) return TIMED_OUT_READ
     const registeredIdentity = registeredWorktreeIdentity(validation)
     if (
       validation.status !== 'ok' ||
@@ -2201,7 +2199,7 @@ function createSessionRuntime(
     } catch {
       return { status: 'fatal' }
     }
-    if (isProbeTimeout(validation)) return { status: 'timeout' }
+    if (isProbeTimeout(validation)) return TIMED_OUT_READ
     if (validation.status !== 'ok') {
       return { status: 'fatal', reasonCode: validation.reasonCode }
     }
@@ -3080,11 +3078,11 @@ function createSessionRuntime(
       }
       batchTargetIdentity = targetIdentity
 
-      // A registration or validation timeout halts the whole pass: every
-      // receipt of a batch shares one target, and nothing is minted until the
-      // pass has read them all. The child can be rolled up by a later task
-      // call. Every other registration or validation failure is fatal.
+      // A registration, validation or snapshot timeout halts the whole pass:
+      // every receipt of a batch shares one target, and nothing is minted
+      // until the pass has read them all. Every other failure is fatal.
       const registered = operationObserverRegistration(targetIdentity)
+      // Halts the pass; a later task call can roll the child up.
       if (registered.status === 'timeout') return
       if (registered.status !== 'ok' || !options.observer) {
         markUnavailable(afterCause('operation-input-invalid'))
@@ -3100,6 +3098,7 @@ function createSessionRuntime(
         markUnavailable(afterCause('operation-input-invalid'))
         return
       }
+      // Halts the pass; a later task call can roll the child up.
       if (isProbeTimeout(validation)) return
       if (
         validation.status === 'error' ||
@@ -3976,17 +3975,6 @@ function createSessionRuntime(
     return observer.targetDigest === currentEffectiveTargetIdentity()
   }
 
-  // A typed timeout means no verdict yet, so the call runs unobserved: it is
-  // added to `skippedOperations` (its after-hook stays silent) and nothing else
-  // moves. The guard is not marked unavailable, the snapshot block and its
-  // version are neither written nor bumped, and no readback is applied. Drift
-  // the skipped call made is picked up by the next status or completion
-  // readback, which marks older receipts stale.
-  function skipTimedOutCall(callDigest: string): BeforeSnapshotOutcome {
-    skippedOperations.add(callDigest)
-    return { kind: 'skip' }
-  }
-
   // The call's own local snapshot, decided against the unit's snapshot block.
   // Only a snapshot of the effective target sets or clears the block; one of
   // any other target never does. A call whose target is not the effective one
@@ -3995,18 +3983,13 @@ function createSessionRuntime(
   async function takeBeforeSnapshot(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
-    callDigest: string,
   ): Promise<BeforeSnapshotOutcome> {
-    const gated = await clearBlockForOtherTarget(
-      observer,
-      initiator,
-      callDigest,
-    )
+    const gated = await clearBlockForOtherTarget(observer, initiator)
     if (gated) return gated
     // Captured in the same synchronous segment as the snapshot call.
     const capture = captureSnapshotBlock()
     if (capture && !isEffectiveTarget(observer)) return { kind: 'skip' }
-    const read = await readBeforeSnapshot(observer, initiator, callDigest)
+    const read = await readBeforeSnapshot(observer, initiator)
     if (read.kind !== 'snapshot' || !capture) return read
     return clearBlockFromBeforeSnapshot(capture, observer, read.snapshot)
   }
@@ -4014,10 +3997,15 @@ function createSessionRuntime(
   async function readBeforeSnapshot(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
-    callDigest: string,
   ): Promise<BeforeSnapshotOutcome> {
     const read = await readSnapshot(observer)
-    if (read.status === 'timeout') return skipTimedOutCall(callDigest)
+    // A typed timeout means no verdict yet, so the call runs unobserved.
+    // `prepareOperation` records the skip, and nothing else moves: the guard
+    // is not marked unavailable, the snapshot block and its version are
+    // neither written nor bumped, and no readback is applied. Drift the
+    // skipped call made is picked up by the next status or completion
+    // readback, which marks older receipts stale.
+    if (read.status === 'timeout') return { kind: 'skip' }
     if (read.status !== 'ok') {
       return blockOrFailBeforeSnapshot(
         probeFailureReason(read),
@@ -4077,11 +4065,10 @@ function createSessionRuntime(
   async function clearBlockForOtherTarget(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
-    callDigest: string,
   ): Promise<BeforeSnapshotOutcome | undefined> {
     if (!captureSnapshotBlock() || isEffectiveTarget(observer)) return undefined
     const lookup = resolveEffectiveObserver()
-    if (lookup.status === 'timeout') return skipTimedOutCall(callDigest)
+    if (lookup.status === 'timeout') return { kind: 'skip' }
     if (lookup.status !== 'ok') {
       markUnavailable(
         beforeCause('operation-input-invalid', probeFailureReason(lookup)),
@@ -4092,7 +4079,7 @@ function createSessionRuntime(
       lookup.value,
       snapshotFailureCause(beforeCause),
     )
-    if (result.status === 'timeout') return skipTimedOutCall(callDigest)
+    if (result.status === 'timeout') return { kind: 'skip' }
     if (result.status === 'fatal') return { kind: 'stop' }
     if (result.status === 'still-blocked') {
       setSnapshotBlock(result.reasonCode, lookup.value.targetIdentity, {
@@ -4142,7 +4129,8 @@ function createSessionRuntime(
     })
     if (target.status === 'unavailable') {
       if (target.reasonCode === 'command-timeout') {
-        skipTimedOutCall(callDigest)
+        // Same skip as a timed-out before-snapshot: run the call unobserved.
+        skippedOperations.add(callDigest)
         return
       }
       markUnavailable(beforeCause('operation-input-invalid', target.reasonCode))
@@ -4158,7 +4146,7 @@ function createSessionRuntime(
       return
     }
     if (isProbeTimeout(registeredTarget)) {
-      skipTimedOutCall(callDigest)
+      skippedOperations.add(callDigest)
       return
     }
     const registeredIdentity = registeredWorktreeIdentity(registeredTarget)
@@ -4194,11 +4182,7 @@ function createSessionRuntime(
           (options.createTargetObserver ?? defaultTargetObserver)(
             target.targetRoot,
           ))
-    const taken = await takeBeforeSnapshot(
-      operationObserver,
-      initiator,
-      callDigest,
-    )
+    const taken = await takeBeforeSnapshot(operationObserver, initiator)
     if (taken.kind === 'skip') {
       skippedOperations.add(callDigest)
       return
@@ -4742,7 +4726,7 @@ function createSessionRuntime(
       effective.observer,
       effective.targetIdentity,
     )
-    if (read.status === 'timeout') return { status: 'timeout' }
+    if (read.status === 'timeout') return TIMED_OUT_READ
     if (read.status === 'fatal') {
       return settleFailedBlockSnapshot(
         read.reasonCode,
@@ -4821,7 +4805,7 @@ function createSessionRuntime(
     clear: async () => {
       ensureSynchronousRuntime()
       const lookup = resolveEffectiveObserver()
-      if (lookup.status === 'timeout') return { status: 'timeout' }
+      if (lookup.status === 'timeout') return TIMED_OUT_READ
       if (lookup.status === 'fatal') {
         markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
         return { status: 'fatal' }
@@ -5388,7 +5372,7 @@ function createSessionRuntime(
     }> = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
-      if (isProbeTimeout(result)) return { status: 'timeout' }
+      if (isProbeTimeout(result)) return TIMED_OUT_READ
       if (result?.status !== 'available') {
         return { status: 'fatal', reasonCode: remoteFailureReason(result) }
       }
@@ -5997,26 +5981,15 @@ function createSessionRuntime(
     return !pending.initiator || isCurrentInitiator(pending.initiator)
   }
 
-  // Ownership is revalidated after every await in the pipeline below and
-  // before any self-seed or admission: the unit can complete and a successor
-  // (or a redeclaration) can start while an after-read is in flight. A lost
-  // operation mints nothing, seeds nothing, and propagates nothing.
-  function sealLostOperation(
-    callDigest: string,
-    pending: PendingOperation,
-  ): OperationCompletionResult {
-    sealOperation(callDigest, pending, true)
-    return { status: 'ignored' }
-  }
-
-  // Seals one call that has no evidence to give: a typed timeout in the
-  // after-hook (no verdict on the call), or a push whose upstream did not
-  // advance. The call is sealed as abandoned, so nothing is minted and a
-  // duplicate after-hook is silent. The guard is not marked unavailable and
+  // Seals one call as abandoned and reports it as ignored: nothing is minted,
+  // a duplicate after-hook is silent, the guard is not marked unavailable and
   // the block is untouched. Whatever the call changed is picked up by the next
-  // readback. The caller has already checked that the call's unit still owns
-  // it.
-  function sealWithoutEvidence(
+  // readback. The call sites say why: the call's unit no longer owns it
+  // (ownership is revalidated after every await in the pipeline below and
+  // before any self-seed or admission, because the unit can complete and a
+  // successor or redeclaration can start while an after-read is in flight), a
+  // typed timeout in the after-hook, or a push whose upstream did not advance.
+  function sealAndIgnore(
     callDigest: string,
     pending: PendingOperation,
   ): OperationCompletionResult {
@@ -6055,22 +6028,25 @@ function createSessionRuntime(
     pending: PendingOperation,
     output: unknown,
   ): Promise<OperationCompletionResult> {
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)
       return afterFailure('operation-input-invalid')
     }
     const capture = await captureAfterOperation(pending)
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     if (capture.status === 'blocked') {
+      // Sealed before the block is set, so the order stays fixed here and the
+      // shared helper is not used.
       sealOperation(callDigest, pending, true)
       setBlockFromAfterSnapshot(pending, capture.reasonCode)
       return { status: 'ignored' }
     }
-    if (capture.status === 'timeout') {
-      return sealWithoutEvidence(callDigest, pending)
-    }
+    // A typed timeout in the after-snapshot: no verdict on this call.
+    if (capture.status === 'timeout') return sealAndIgnore(callDigest, pending)
     if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
       return capture
@@ -6083,12 +6059,11 @@ function createSessionRuntime(
       requireGuard().status(),
       parsedOutput,
     )
-    if (!observation) {
-      sealOperation(callDigest, pending, true)
-      return { status: 'ignored' }
-    }
+    // No active epoch or unit to observe the call under.
+    if (!observation) return sealAndIgnore(callDigest, pending)
     const classification = await classifyLocalObservation(observation)
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     if (classification.status !== 'ready') {
       sealOperation(callDigest, pending, true)
       return classification
@@ -6100,10 +6075,11 @@ function createSessionRuntime(
         pending.observer,
       )
       if (!ownsOperation(pending)) {
-        return sealLostOperation(callDigest, pending)
+        return sealAndIgnore(callDigest, pending)
       }
+      // A typed timeout in the remote after-read: no verdict on this call.
       if (remoteCapture.status === 'timeout') {
-        return sealWithoutEvidence(callDigest, pending)
+        return sealAndIgnore(callDigest, pending)
       }
       if (
         remoteCapture.status === 'not-advanced' ||
@@ -6116,7 +6092,8 @@ function createSessionRuntime(
             finalObservation.operation,
           )
         ) {
-          return sealWithoutEvidence(callDigest, pending)
+          // A push whose upstream did not advance.
+          return sealAndIgnore(callDigest, pending)
         }
         sealOperation(callDigest, pending, true)
         return afterFailure(
@@ -6170,7 +6147,8 @@ function createSessionRuntime(
     }
     // No await separates the last ownership check from the admission call
     // below, whose synchronous prefix reads the guard state.
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)

@@ -19643,16 +19643,20 @@ describe('snapshot block record', () => {
         .map((receipt) => receipt.canonical.operation)
     }
 
-    // Every push:before value is scripted: the first is the activation seed,
-    // the second the call's own before-read, the third the retry of a
-    // timed-out before-read. The last value repeats.
+    // A single `before` value repeats for every before-read: the activation
+    // seed, the call's own before-read and its retry. A list is read in order,
+    // and its last value repeats. The retry runs only when the activation seed
+    // was deferred by a timeout, so a list needs a third value only for a
+    // timed-out seed.
     function adapterFor(
       operation: 'push' | 'pr-creation',
-      before: OperationObserverRemoteResult,
+      before:
+        | OperationObserverRemoteResult
+        | readonly OperationObserverRemoteResult[],
       after: OperationObserverRemoteResult | 'throws',
     ): { adapter: OpencodeWorkflowGuard; steered: SteeredObserver } {
       const steered = steeredObserver({
-        [`${operation}:before`]: [before],
+        [`${operation}:before`]: 'status' in before ? [before] : before,
         [`${operation}:after`]: after === 'throws' ? [AVAILABLE] : [after],
       })
       const observer =
@@ -19693,18 +19697,24 @@ describe('snapshot block record', () => {
       )
     }
 
+    // Runs a sealed call and returns how many remote reads that call made
+    // (its before-read, any retry, and its after-read).
     async function sealedScenario(
       operation: 'push' | 'pr-creation',
-      before: OperationObserverRemoteResult,
+      before:
+        | OperationObserverRemoteResult
+        | readonly OperationObserverRemoteResult[],
       after: OperationObserverRemoteResult,
-    ): Promise<void> {
+    ): Promise<number> {
       const { adapter, steered } = adapterFor(operation, before, after)
       await activateWorkEpoch(adapter)
       await runCall(adapter, 'bun test', 'earlier-verification')
       const receipts = receiptOperations(adapter)
       const command = operation === 'push' ? PUSH : PR_CREATE
+      const readsBeforeCall = steered.remoteCalls()
 
       await runCall(adapter, command, 'sealed-call')
+      const callReads = steered.remoteCalls() - readsBeforeCall
 
       expect(status(adapter).state).not.toBe('unavailable')
       expect(receiptOperations(adapter)).toEqual(receipts)
@@ -19723,22 +19733,44 @@ describe('snapshot block record', () => {
       const parsed = await refreshStatus(adapter)
       expect(parsed.firstUnavailableCause).toBeUndefined()
       expect(parsed.snapshotBlock).toBeUndefined()
+      return callReads
     }
 
     test.each([
       { name: 'available', before: AVAILABLE, after: NOT_ADVANCED },
       { name: 'missing-resource', before: MISSING, after: NOT_ADVANCED },
-      {
-        name: 'timed out, and so is its retry',
-        before: TIMEOUT,
-        after: NOT_ADVANCED,
-      },
     ])(
       'a push whose before-read was $name and whose after-read is remote-not-advanced is sealed',
       async ({ before, after }) => {
         await sealedScenario('push', before, after)
       },
     )
+
+    // The seed is available, so nothing is deferred and a timed-out
+    // before-read is not retried: the call reads its before-state once and its
+    // after-state once.
+    test('a push whose before-read timed out once, with an available seed, and whose after-read is remote-not-advanced is sealed without a retry', async () => {
+      const reads = await sealedScenario(
+        'push',
+        [AVAILABLE, TIMEOUT],
+        NOT_ADVANCED,
+      )
+
+      expect(reads).toBe(2)
+    })
+
+    // The seed timed out, so the push is deferred and its before-read is
+    // retried once: the call reads its before-state twice and its after-state
+    // once.
+    test('a push whose seed, before-read and retry all timed out, and whose after-read is remote-not-advanced is sealed', async () => {
+      const reads = await sealedScenario(
+        'push',
+        [TIMEOUT, TIMEOUT, TIMEOUT],
+        NOT_ADVANCED,
+      )
+
+      expect(reads).toBe(3)
+    })
 
     test('a push whose before-read and after-read are both missing-resource is sealed', async () => {
       await sealedScenario('push', MISSING, MISSING)
