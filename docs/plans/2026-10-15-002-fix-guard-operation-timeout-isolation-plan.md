@@ -1,7 +1,7 @@
 ---
 title: "fix: Isolate operation timeouts and rejected pushes to the one call instead of disabling the guard"
 type: fix
-status: active
+status: completed
 date: 2026-10-15
 ---
 
@@ -216,7 +216,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Type timeouts in target derivation**
+- [x] **Unit 1: Type timeouts in target derivation**
 
 **Goal:** Derivation results carry a typed timeout with failure-first precedence. Behaviour does not change: callers still treat the timeout as fatal until Unit 3.
 
@@ -244,7 +244,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 **Verification:** The guard suites pass unchanged.
 
-- [ ] **Unit 2: Type timeouts in registration lookups**
+- [x] **Unit 2: Type timeouts in registration lookups**
 
 **Goal:** `parentObserverRegistration` and `operationObserverRegistration` return ok, timeout or fatal. Their consumers apply R6.
 
@@ -273,7 +273,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 **Verification:** The new tests pass. Existing tests change only where R6 requires it.
 
-- [ ] **Unit 3: Skip the call on a before-hook timeout**
+- [x] **Unit 3: Skip the call on a before-hook timeout**
 
 **Goal:** Every before-hook timeout site skips the call.
 
@@ -308,7 +308,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 **Verification:** No before-hook path calls `markUnavailable` for a typed timeout. Mutation proof: removing the skip at a site fails that site's test.
 
-- [ ] **Unit 4: Seal the call on an after-hook timeout**
+- [x] **Unit 4: Seal the call on an after-hook timeout**
 
 **Goal:** After-hook timeouts seal the one call.
 
@@ -333,7 +333,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 **Verification:** No after-hook path calls `markUnavailable` for a typed timeout.
 
-- [ ] **Unit 5: Seal a push that did not advance**
+- [x] **Unit 5: Seal a push that did not advance**
 
 **Goal:** The R3 push rule.
 
@@ -364,7 +364,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 **Verification:** Mutation proof: removing the rule fails the tracked-branch rejection test.
 
-- [ ] **Unit 6: Halt the rollup pass on a child timeout**
+- [x] **Unit 6: Halt the rollup pass on a child timeout**
 
 **Goal:** A child-rollup timeout halts without minting, and the child can be retried.
 
@@ -392,7 +392,7 @@ All in `tests/unit/opencode-workflow-guard.test.ts`.
 
 **Verification:** No rollup path calls `markUnavailable` for a typed timeout.
 
-- [ ] **Unit 7: Docs, guidance and bootstrap pin**
+- [x] **Unit 7: Docs, guidance and bootstrap pin**
 
 **Goal:** Readers and agents learn the new behaviour and the attestation model.
 
