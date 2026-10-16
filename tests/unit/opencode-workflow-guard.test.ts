@@ -19772,6 +19772,25 @@ describe('snapshot block record', () => {
       expect(reads).toBe(3)
     })
 
+    // A missing-resource after-read cannot tell an absent upstream from other
+    // git failures, so it seals only when the before-read gave no better
+    // answer: it was missing too, or it timed out.
+    test('a push whose before-read timed out once, with an available seed, and whose after-read is missing-resource is sealed without a retry', async () => {
+      const reads = await sealedScenario('push', [AVAILABLE, TIMEOUT], MISSING)
+
+      expect(reads).toBe(2)
+    })
+
+    test('a push whose seed, before-read and retry all timed out, and whose after-read is missing-resource is sealed', async () => {
+      const reads = await sealedScenario(
+        'push',
+        [TIMEOUT, TIMEOUT, TIMEOUT],
+        MISSING,
+      )
+
+      expect(reads).toBe(3)
+    })
+
     test('a push whose before-read and after-read are both missing-resource is sealed', async () => {
       await sealedScenario('push', MISSING, MISSING)
     })
