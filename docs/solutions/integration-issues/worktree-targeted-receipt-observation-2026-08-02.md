@@ -135,9 +135,10 @@ Because the completion readback is anchored to the same target that minted the
 evidence, there is no cross-root false delta. Because the target identity is
 authenticated (integrity-covered) and validated as a registered worktree, a
 confused or malicious child cannot launder work from an unrelated repo/worktree
-into the parent unit. Every path where a target cannot be validated or observed
-fails closed to `unavailable` — nothing completes a unit on evidence that did not
-happen.
+into the parent unit. A target whose identity or registration cannot be
+established still fails closed to `unavailable`. A typed validation or snapshot
+timeout does not: it skips or seals the one call (or halts the one rollup pass)
+and admits nothing. Nothing completes a unit on evidence that did not happen.
 
 ## Prevention
 

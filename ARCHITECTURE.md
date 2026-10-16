@@ -306,7 +306,7 @@ rollup (registration, validation, snapshot) the pass halts before it mints anyth
 cause, and the child can be rolled up by a later task call. None of these writes, clears or bumps
 the snapshot block, and every other failure keeps the `unavailable` path. A push is also sealed
 when its after-read is `remote-not-advanced`, whatever the before-read was (a push rejected on a
-tracked branch), or `missing-resource` when the before-read was also `missing-resource`. Both the
+tracked branch), or `missing-resource` when the before-read was also `missing-resource` or timed out. Both the
 before-hook intent and the finished classification must be a push; output-limit, malformed and
 pull-request-creation failures stay fatal. A parent-registration timeout is retryable in status
 refresh (reported as unconfirmed), completion (`readback-timeout`) and the block clear; seeding
