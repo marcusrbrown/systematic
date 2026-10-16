@@ -105,7 +105,7 @@ markUnavailable(afterCause('transition-finalize-rejected', reasonCode))
   - unreadable inputs
   - a failure that is not a typed timeout: a throw, a target-digest mismatch, malformed output, and a classifier or parser failure
   - pinned-lookup failures
-  - remote-probe failures
+  - remote-probe failures other than a typed timeout, which seals the one call, and a push whose upstream did not advance, which is sealed (see ARCHITECTURE.md)
   - a change of target identity or registration between completion snapshots
 - **Guidance.** The guidance in `skills/using-systematic/SKILL.md` gives the recovery order: read `blockReason` or `snapshotBlock.reasonCode`, fix the cause, call status, rerun stale or missing operations, then complete. It also says:
   - Check remote state before redoing a push or PR.

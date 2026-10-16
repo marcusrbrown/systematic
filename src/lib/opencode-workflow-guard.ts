@@ -1239,15 +1239,21 @@ function sharedTargetRoot(
     : unavailableOperationTarget()
 }
 
+// A directory's resolved path is derived apart from its validation. `timeout`
+// still carries the path, so a caller can derive more targets against it while
+// the directory's own validation is pending.
+type DirectoryTargetDerivation =
+  | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
+  | { readonly status: 'timeout'; readonly resolvedPath: string }
+  | UnavailableOperationTarget
+
 function deriveDirectoryTarget(
   rawPath: string,
   baseDirectory: string,
   parentTargetRoot: string,
   options: OpencodeOperationTargetDerivationOptions,
   realPath: (filePath: string) => string,
-):
-  | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
-  | UnavailableOperationTarget {
+): DirectoryTargetDerivation {
   const resolvedPath = canonicalExistingPath(
     path.resolve(baseDirectory, rawPath),
     realPath,
@@ -1266,11 +1272,14 @@ function deriveDirectoryTarget(
     }
   }
   const validated = validationForCandidate(resolvedPath, options)
-  return validated.status === 'available'
-    ? {
-        status: 'available',
-        target: { targetRoot: validated.targetRoot, resolvedPath },
-      }
+  if (validated.status === 'available') {
+    return {
+      status: 'available',
+      target: { targetRoot: validated.targetRoot, resolvedPath },
+    }
+  }
+  return validated.reasonCode === 'command-timeout'
+    ? { status: 'timeout', resolvedPath }
     : validated
 }
 
@@ -1387,17 +1396,27 @@ function deriveApplyPatchTarget(
           options,
           realPath,
         )
+  // A definite workdir failure (an unresolvable path, a git admin directory)
+  // ends the derivation. A workdir whose validation timed out still has its
+  // path, so every file target is derived against it and a definite failure
+  // among them wins over the timeout.
   if (workdir.status === 'unavailable') return workdir
-  const targets = patchPaths.map((rawPath) =>
-    deriveFileTarget(
-      rawPath,
-      workdir.target.resolvedPath,
-      parentTargetRoot,
-      options,
-      realPath,
-      args.workdir === undefined,
-    ),
+  const resolvedWorkdir =
+    workdir.status === 'available'
+      ? workdir.target.resolvedPath
+      : workdir.resolvedPath
+  const targets: OpencodeOperationTargetDerivationResult[] = patchPaths.map(
+    (rawPath) =>
+      deriveFileTarget(
+        rawPath,
+        resolvedWorkdir,
+        parentTargetRoot,
+        options,
+        realPath,
+        args.workdir === undefined,
+      ),
   )
+  if (workdir.status === 'timeout') targets.push(timedOutOperationTarget())
   // When workdir is absent and the patch names files, those targets alone
   // determine the shared root (consistent with deriveFileOperationTarget).
   // Seeding the parent root here would reject absolute paths into a registered
@@ -1407,7 +1426,9 @@ function deriveApplyPatchTarget(
   const seedWorkdirRoot = args.workdir !== undefined || targets.length === 0
   return sharedTargetRoot(
     targets,
-    seedWorkdirRoot ? [workdir.target.targetRoot] : [],
+    seedWorkdirRoot && workdir.status === 'available'
+      ? [workdir.target.targetRoot]
+      : [],
   )
 }
 
@@ -4007,11 +4028,13 @@ function createSessionRuntime(
   ): Promise<BeforeSnapshotOutcome> {
     const read = await readSnapshot(observer)
     // A typed timeout means no verdict yet, so the call runs unobserved.
-    // `prepareOperation` records the skip, and nothing else moves: the guard
-    // is not marked unavailable, the snapshot block and its version are
-    // neither written nor bumped, and no readback is applied. Drift the
-    // skipped call made is picked up by the next status or completion
-    // readback, which marks older receipts stale.
+    // `prepareOperation` records the skip. The timeout itself marks nothing
+    // unavailable, never writes, clears or bumps the snapshot block, and
+    // applies no readback. A clean snapshot of the effective target taken
+    // earlier in the same call (a call to another target while blocked) may
+    // already have cleared the block and applied its readback, and that clear
+    // stays committed. Drift the skipped call made is picked up by the next
+    // status or completion readback, which marks older receipts stale.
     if (read.status === 'timeout') return { kind: 'skip' }
     if (read.status !== 'ok') {
       return blockOrFailBeforeSnapshot(
@@ -4068,7 +4091,9 @@ function createSessionRuntime(
   // snapshot (no block, the call is for the effective target, or the block was
   // just cleared). `skip`: the block remains, or changed while the snapshot was
   // in flight (a block set or replaced during the await, or a new unit): the
-  // call is skipped rather than observed against a state it did not see.
+  // call is skipped rather than observed against a state it did not see. A
+  // clear that was committed stays committed even if the call's own snapshot
+  // then times out and the call is skipped.
   async function clearBlockForOtherTarget(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
@@ -5986,8 +6011,8 @@ function createSessionRuntime(
 
   // Seals one call as abandoned and reports it as ignored: nothing is minted,
   // a duplicate after-hook is silent, the guard is not marked unavailable and
-  // the block is untouched. Whatever the call changed is picked up by the next
-  // readback. The call sites say why: the call's unit no longer owns it
+  // the seal itself never writes, clears or bumps the block. Whatever the call
+  // changed is picked up by the next readback. The call sites say why: the call's unit no longer owns it
   // (ownership is revalidated after every await in the pipeline below and
   // before any self-seed or admission, because the unit can complete and a
   // successor or redeclaration can start while an after-read is in flight), a

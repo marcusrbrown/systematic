@@ -303,8 +303,10 @@ validation, and the lookup and clear snapshot used for a call to another target 
 call is skipped and runs unobserved. In the after-hook (target validation, the local snapshot, and
 the remote read) the call is sealed: nothing is minted and a duplicate after-hook is silent. In child
 rollup (registration, validation, snapshot) the pass halts before it mints anything, records no
-cause, and the child can be rolled up by a later task call. None of these writes, clears or bumps
-the snapshot block, and every other failure keeps the `unavailable` path. A push is also sealed
+cause, and the child can be rolled up by a later task call. A timeout itself never writes, clears
+or bumps the snapshot block, though a clean snapshot of the effective target taken earlier in the
+same call (a call to another target while blocked) may already have cleared it, and that clear
+stays committed. Every other failure keeps the `unavailable` path. A push is also sealed
 when its after-read is `remote-not-advanced`, whatever the before-read was (a push rejected on a
 tracked branch), or `missing-resource` when the before-read was also `missing-resource` or timed out. Both the
 before-hook intent and the finished classification must be a push; output-limit, malformed and

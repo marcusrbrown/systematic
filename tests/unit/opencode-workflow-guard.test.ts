@@ -1112,6 +1112,83 @@ describe('OpenCode workflow guard adapter', () => {
       expect(withWorkdir(TIMED_OUT)).toEqual(TARGET_TIMEOUT)
       expect(withWorkdir(IDENTITY_FAILURE)).toEqual(TARGET_UNAVAILABLE)
     })
+
+    // The workdir's path is resolved apart from its validation, so a patch's
+    // file targets are still derived when the workdir's validation timed out
+    // and can still fail definitely.
+    describe('a patch workdir whose validation times out', () => {
+      const patchFor = (...files: string[]) =>
+        [
+          '*** Begin Patch',
+          ...files.flatMap((file) => [`*** Add File: ${file}`, '+content']),
+          '*** End Patch',
+        ].join('\n')
+
+      const withTimedOutWorkdir = (
+        files: readonly string[],
+        verdicts: Readonly<Record<string, Verdict>> = {},
+      ) =>
+        deriveWith(
+          'apply_patch',
+          { workdir: '/linked-a', patchText: patchFor(...files) },
+          { '/linked-a': TIMED_OUT, ...verdicts },
+        )
+
+      test('and an absolute .git/config target is target-unavailable', () => {
+        expect(withTimedOutWorkdir(['/parent/.git/config'])).toEqual(
+          TARGET_UNAVAILABLE,
+        )
+      })
+
+      test('and file targets that validate in the same worktree are a timeout', () => {
+        expect(
+          withTimedOutWorkdir(['/linked-a/src/file.ts'], {
+            '/linked-a/src': REGISTERED('/linked-a'),
+          }),
+        ).toEqual(TARGET_TIMEOUT)
+      })
+
+      test('and a file target that also times out is a timeout', () => {
+        expect(
+          withTimedOutWorkdir(['/linked-a/src/file.ts'], {
+            '/linked-a/src': TIMED_OUT,
+          }),
+        ).toEqual(TARGET_TIMEOUT)
+      })
+
+      // The workdir's root is unknown while its validation is pending, so a
+      // file target in another worktree cannot be told apart from one in the
+      // workdir's own: only a definite failure takes precedence.
+      test('and a file target that validates in another worktree is still a timeout', () => {
+        expect(
+          withTimedOutWorkdir(['/linked-b/src/file.ts'], {
+            '/linked-b/src': REGISTERED('/linked-b'),
+          }),
+        ).toEqual(TARGET_TIMEOUT)
+      })
+
+      test('and a patch with no file targets is a timeout', () => {
+        expect(withTimedOutWorkdir([])).toEqual(TARGET_TIMEOUT)
+      })
+
+      test('and a workdir path that cannot be resolved stays target-unavailable', () => {
+        const result = deriveOpencodeOperationTarget(
+          'apply_patch',
+          { workdir: '/missing', patchText: patchFor('/missing/file.ts') },
+          {
+            parentTargetRoot: '/parent',
+            sessionLocation: '/parent',
+            realPath: (value) => {
+              if (value.startsWith('/missing')) throw new Error('no such path')
+              return value
+            },
+            validateRegisteredWorktree: () => TIMED_OUT,
+          },
+        )
+
+        expect(result).toEqual(TARGET_UNAVAILABLE)
+      })
+    })
   })
 
   test('target derivation: registered worktree from bash workdir', () => {
@@ -19592,6 +19669,63 @@ describe('snapshot block record', () => {
       }
     })
 
+    test('a mutating call sealed by an after-snapshot timeout leaves the tree changed, and completion is rejected as stale-receipt', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered, 'protected')
+      const worktree = (tag: string) =>
+        operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+      const write = { filePath: 'real.ts', content: 'changed' }
+      // An observed write mints implementation, then a verification follows.
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+      steered.setDefault(worktree('a1'))
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'v1',
+      )
+      const receipts = receiptOperations(adapter)
+      expect(receipts).toEqual(['implementation', 'verification'])
+      expect(status(adapter).state).toBe('protected')
+
+      // A second write begins cleanly, but its after-snapshot times out: the
+      // call is sealed while the tree it changed is never observed.
+      const sealed = { tool: 'write', sessionID: SESSION_A, callID: 'sealed' }
+      await adapter.hooks['tool.execute.before'](sealed, { args: write })
+      steered.queueSnapshot(TIMED_OUT)
+      await adapter.hooks['tool.execute.after'](
+        { ...sealed, args: write },
+        BASH_OUTPUT,
+      )
+      expect(receiptOperations(adapter)).toEqual(receipts)
+      expect(status(adapter).state).not.toBe('unavailable')
+
+      steered.setDefault(worktree('b2'))
+      const output = await completeUnit(adapter, 'sealed-write-complete')
+
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'stale-receipt',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+
+      // A duplicate after-hook for the sealed call is silent: it takes no
+      // snapshot, mints nothing, and restores no evidence.
+      const calls = steered.snapshotCalls()
+      await adapter.hooks['tool.execute.after'](
+        { ...sealed, args: write },
+        BASH_OUTPUT,
+      )
+      expect(steered.snapshotCalls()).toBe(calls)
+      expect(receiptOperations(adapter)).toEqual(receipts)
+      expect(status(adapter).missingOperations).toContain('implementation')
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
     test('a call whose unit was redeclared during a timing-out after-read is handled as a lost call', async () => {
       const steered = steeredObserver()
       const adapter = await activeAdapter(steered)
@@ -20064,6 +20198,68 @@ describe('snapshot block record', () => {
         await callLinked(target, 'clean-after-lookup-timeout')
         expect(
           target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    // The clean snapshot of the effective target that clears the block is taken
+    // before the call's own snapshot. When that one then times out, the call is
+    // skipped, but the clear it already committed stays: the timeout itself
+    // writes, clears and bumps nothing.
+    test("a clean snapshot of the effective target clears the block, and a timeout of the call's own snapshot then skips the call but keeps the clear", async () => {
+      const target = await targetAdapter()
+      try {
+        await callLinked(target, 'pin-to-linked')
+        expect(
+          status(target.adapter).unit?.pinnedOperationTargetIdentity,
+        ).toBeDefined()
+        expect(receiptOperations(target.adapter)).toEqual(['verification'])
+        target.queueLinked(BLOCKED('file-limit'))
+        await callLinked(target, 'block-linked')
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'file-limit',
+        })
+        // The linked worktree moved while the unit was blocked.
+        const linked = await createOpencodeOperationObserver({
+          targetDirectory: target.linkedRoot,
+        }).snapshot()
+        if (linked.status !== 'available') throw new Error('linked unavailable')
+        target.queueLinked({
+          status: 'available',
+          snapshot: {
+            ...linked.snapshot,
+            worktreeRevisionDigest: 'f'.repeat(64),
+          },
+        })
+        target.queueParent(BLOCKED('command-timeout'))
+        const receipts = receiptOperations(target.adapter)
+
+        await operateIn(target.adapter, 'parent-call')
+
+        // The clear stayed committed: the block is gone and the readback it
+        // applied marked the earlier verification stale.
+        expect(
+          target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+        expect(status(target.adapter).missingOperations).toContain(
+          'verification',
+        )
+        // The call itself minted nothing, and its after-hook stayed silent.
+        expect(receiptOperations(target.adapter)).toEqual(receipts)
+        expect(status(target.adapter).state).not.toBe('unavailable')
+        const snapshots = target.linkedSnapshots()
+        await observeOperationTool(
+          target.adapter,
+          'bash',
+          { command: 'git status --short' },
+          BASH_OUTPUT,
+          'parent-call',
+        )
+        expect(target.linkedSnapshots()).toBe(snapshots)
+        expect(
+          (await refreshStatus(target.adapter)).firstUnavailableCause,
         ).toBeUndefined()
       } finally {
         target.cleanup()
