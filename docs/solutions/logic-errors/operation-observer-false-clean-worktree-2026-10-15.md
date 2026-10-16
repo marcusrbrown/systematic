@@ -149,16 +149,16 @@ export function hashField(
 The limits are listed in ARCHITECTURE.md under "Local observer snapshot":
 
 - #1126: ignore rules that hide uncommitted work from closure, redirects made before the observer starts or across a restart, and dirty submodule contents.
-- #1124: `worktree-unstable` and limit failures now block the unit recoverably instead of leaving the guard unavailable. A snapshot timeout, including a FIFO or device named `.gitignore`, still makes the guard unavailable (#1084).
+- #1124: `worktree-unstable` and limit failures now block the unit recoverably instead of leaving the guard unavailable. A snapshot timeout, including one caused by a FIFO or device named `.gitignore`, no longer makes the guard unavailable: it skips, seals or halts the one call, is reported as unconfirmed on status, or rejects completion as `readback-timeout` (#1084).
 - #1125: restored receipts are not rechecked at restore time.
 - Residuals:
   - a write after the final pass;
   - a same-size rewrite within the filesystem's timestamp granularity;
-  - a FIFO named `.gitignore`, which makes git block until the per-command timeout before the snapshot fails closed.
+  - a FIFO named `.gitignore`, which makes git block until the per-command timeout, so the snapshot times out.
 
 ## Related Issues
 
-- #1099 and #1129 (this fix); #1095 (rejected git-backed identity); #1125 and #1126 (deferred); #1124 (limit failures and `worktree-unstable` now block recoverably; snapshot timeouts stay fatal, #1084).
+- #1099 and #1129 (this fix); #1095 (rejected git-backed identity); #1125 and #1126 (deferred); #1124 (limit failures and `worktree-unstable` now block recoverably; snapshot timeouts no longer disable the guard, #1084).
 - [Worktree-targeted receipt observation](../integration-issues/worktree-targeted-receipt-observation-2026-08-02.md): structural worktree identity, with evidence and readbacks in one revision domain.
 - [Delegated receipt rollup and live-state recovery](../integration-issues/delegated-receipt-rollup-live-state-recovery-2026-07-31.md): stable workspace identity versus mutable revision identity.
 - [Workflow guard digest collapse](workflow-guard-digest-collapse-long-identities-2026-10-14.md): a comparison path must never map distinct values to one digest.

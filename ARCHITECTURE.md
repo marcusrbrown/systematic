@@ -296,13 +296,36 @@ operations are rerun. Revision drift between completion snapshots is the same re
 snapshot failure keep the `unavailable` path. A finalize-time `stale-receipt` is also retryable:
 core has already marked the receipt stale, so a retry is rejected at prepare until fresh evidence
 exists. If a block persists, the user-authorized way out is to disable the guard through
-`systematic_workflow_control`, after the user answers its attestation question. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build
+`systematic_workflow_control`, after the user answers its attestation question. A typed
+`command-timeout` from an observer or a worktree-registration check never makes the guard
+unavailable; it isolates the one call. In the before-hook (the local snapshot, target derivation and
+validation, and the lookup and clear snapshot used for a call to another target while blocked) the
+call is skipped and runs unobserved. In the after-hook (target validation, the local snapshot, and
+the remote read) the call is sealed: nothing is minted and a duplicate after-hook is silent. In child
+rollup (registration, validation, snapshot) the pass halts before it mints anything, records no
+cause, and the child can be rolled up by a later task call. A timeout itself never writes, clears
+or bumps the snapshot block, though a clean snapshot of the effective target taken earlier in the
+same call (a call to another target while blocked) may already have cleared it, and that clear
+stays committed. Every other failure keeps the `unavailable` path. A push is also sealed
+when its after-read is `remote-not-advanced`, whatever the before-read was (a push rejected on a
+tracked branch), or `missing-resource` when the before-read was also `missing-resource` or timed out. Both the
+before-hook intent and the finished classification must be a push; output-limit, malformed and
+pull-request-creation failures stay fatal. A parent-registration timeout is retryable in status
+refresh (reported as unconfirmed), completion (`readback-timeout`) and the block clear; seeding
+stays fatal but carries a typed `command-timeout` cause. Receipts bind to a worktree and
+repository revision, so the guard attests the final state, not that every write was observed. That
+was already true of calls skipped while blocked, calls in inactive sessions, tools the classifier
+does not recognize, and destructive pushes, which are never observed. A skipped or sealed call fits
+the same model: the next readback marks older receipts stale, and later observed work attests the
+final state. Residuals: `missingOperations` reports a lost call only when its operation has no
+receipt at all; a push that landed but whose after-read timed out stays unreceipted, and later
+pushes in that unit are rejected as `resource-mismatch` until the unit is redeclared; and evidence
+a halted child rollup did not mint shows up only when the operation has no other receipt. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build
 rejects the `inactive` marker state and fails closed until both upgrade; activation covers skill-tool loads only, so reading a skill file directly or running a skill as a slash command does not activate the guard; an older Systematic registration loaded alongside still maps unknown skills to a work epoch, and the merged prompt marker shows the most restrictive state (`waiting`) while it is loaded; a plugin that rewrites `args.name` between the skill call's before-hook and after-hook changes the outcome: an unlisted before-name with an allowlisted after-name activates nothing, while an allowlisted before-name with an unlisted after-name fails closed (`call-lifecycle-mismatch`, guard `unavailable`); if host history loses every
 marker, a previously activated session cannot be told apart from a fresh one; in-flight guard calls
 from a turn that began before this runtime started fail closed; `missing-resource` cannot
 distinguish absence from some `gh` or `git` failures, and a first push to a branch with no upstream
-defers but cannot mint a receipt (#1081); timeouts in an operation's before-hook or after-hook and
-in child rollup still make the guard unavailable (#1084); an earlier completion timeout can mask
+defers but cannot mint a receipt (#1081); an earlier completion timeout can mask
 later drift until the next attempt; replaying a before-hook with the same call ID after a timed-out
 completion throws `abandoned-transition` in protected mode; completion is confirmed independently
 per registration, not atomically across registrations, so when two registrations share one tool
@@ -345,7 +368,9 @@ installed before the observer started (#1126), a write that lands after the fina
 same-second rewrite on a volume with 1-second timestamps. Some trees read not closed by design:
 files git normalizes (CRLF conversion), `core.filemode=false` mounts, and case-only renames on
 case-insensitive volumes. A FIFO or device named `.gitignore` makes git block until the per-command
-timeout, and the snapshot then fails on the timeout path, which is fatal (#1084).
+timeout, and the snapshot then times out. That timeout skips, seals or halts the one call, is
+reported as unconfirmed on status, or rejects completion as `readback-timeout`; it never makes the
+guard unavailable.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

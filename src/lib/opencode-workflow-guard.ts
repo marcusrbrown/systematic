@@ -285,6 +285,19 @@ type ProbeFailure =
 
 type ProbeRead<T> = { readonly status: 'ok'; readonly value: T } | ProbeFailure
 
+// A read that timed out: no verdict yet. Only a typed timeout (never a cause)
+// produces one, and every timeout return uses this one value.
+type TimedOutRead = Extract<ProbeFailure, { readonly status: 'timeout' }>
+
+const TIMED_OUT_READ: TimedOutRead = { status: 'timeout' }
+
+// A remote after-read showing the upstream did not move, with the reason that
+// would make it fatal if the call is not sealed.
+interface UnadvancedRemote {
+  readonly status: 'unadvanced'
+  readonly reasonCode: 'missing-resource' | 'remote-not-advanced'
+}
+
 type CompletionRemoteOutcome =
   | {
       readonly status: 'ready'
@@ -837,7 +850,7 @@ async function readSnapshot(
   } catch {
     return { status: 'fatal' }
   }
-  if (isProbeTimeout(result)) return { status: 'timeout' }
+  if (isProbeTimeout(result)) return TIMED_OUT_READ
   if (result.status === 'unavailable') {
     return { status: 'fatal', reasonCode: result.reasonCode }
   }
@@ -1049,15 +1062,28 @@ export interface OpencodeOperationTargetDerivationOptions {
   readonly realPath?: (filePath: string) => string
 }
 
+// `command-timeout`: a candidate's registered-worktree validation timed out and
+// nothing else was wrong, so no verdict exists yet. Every other failure
+// (including a throw from validation) is `target-unavailable`, and a definite
+// failure always wins over a timeout.
 export type OpencodeOperationTargetDerivationResult =
   | { readonly status: 'available'; readonly targetRoot: string }
   | {
       readonly status: 'unavailable'
-      readonly reasonCode: 'target-unavailable'
+      readonly reasonCode: 'target-unavailable' | 'command-timeout'
     }
 
-function unavailableOperationTarget(): OpencodeOperationTargetDerivationResult {
+type UnavailableOperationTarget = Extract<
+  OpencodeOperationTargetDerivationResult,
+  { readonly status: 'unavailable' }
+>
+
+function unavailableOperationTarget(): UnavailableOperationTarget {
   return { status: 'unavailable', reasonCode: 'target-unavailable' }
+}
+
+function timedOutOperationTarget(): UnavailableOperationTarget {
+  return { status: 'unavailable', reasonCode: 'command-timeout' }
 }
 
 function canonicalExistingPath(
@@ -1120,7 +1146,11 @@ function targetResultFromValidation(
   candidatePath: string,
   validation: RegisteredWorktreeValidationResult,
 ): OpencodeOperationTargetDerivationResult {
-  if (validation.status === 'error') return unavailableOperationTarget()
+  if (validation.status === 'error') {
+    return isProbeTimeout(validation)
+      ? timedOutOperationTarget()
+      : unavailableOperationTarget()
+  }
   if (!pathWithinOrEqual(validation.targetRoot, candidatePath)) {
     return unavailableOperationTarget()
   }
@@ -1184,20 +1214,38 @@ interface DerivedDirectoryTarget {
   readonly resolvedPath: string
 }
 
+// The one target every candidate agrees on. Every candidate is scanned, so a
+// timeout cannot hide a definite failure behind it: a definite failure, or
+// roots that span, win over a timeout. A timeout is the result only when every
+// candidate timed out, or when timeouts sit among candidates that agree.
 function sharedTargetRoot(
   targets: readonly OpencodeOperationTargetDerivationResult[],
   extraRoots: readonly string[] = [],
-): string | undefined {
+): OpencodeOperationTargetDerivationResult {
   const roots = [...extraRoots]
+  let definiteFailure = false
+  let timedOut = false
   for (const target of targets) {
-    if (target.status === 'unavailable') return undefined
-    roots.push(target.targetRoot)
+    if (target.status === 'available') roots.push(target.targetRoot)
+    else if (target.reasonCode === 'command-timeout') timedOut = true
+    else definiteFailure = true
   }
   const targetRoot = roots[0]
-  return targetRoot && roots.every((root) => root === targetRoot)
-    ? targetRoot
-    : undefined
+  const spans = targetRoot !== undefined && roots.some((r) => r !== targetRoot)
+  if (definiteFailure || spans) return unavailableOperationTarget()
+  if (timedOut) return timedOutOperationTarget()
+  return targetRoot
+    ? { status: 'available', targetRoot }
+    : unavailableOperationTarget()
 }
+
+// A directory's resolved path is derived apart from its validation. `timeout`
+// still carries the path, so a caller can derive more targets against it while
+// the directory's own validation is pending.
+type DirectoryTargetDerivation =
+  | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
+  | { readonly status: 'timeout'; readonly resolvedPath: string }
+  | UnavailableOperationTarget
 
 function deriveDirectoryTarget(
   rawPath: string,
@@ -1205,19 +1253,17 @@ function deriveDirectoryTarget(
   parentTargetRoot: string,
   options: OpencodeOperationTargetDerivationOptions,
   realPath: (filePath: string) => string,
-):
-  | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
-  | { readonly status: 'unavailable' } {
+): DirectoryTargetDerivation {
   const resolvedPath = canonicalExistingPath(
     path.resolve(baseDirectory, rawPath),
     realPath,
   )
-  if (!resolvedPath) return { status: 'unavailable' }
+  if (!resolvedPath) return unavailableOperationTarget()
   const parentResult = path.isAbsolute(rawPath)
     ? undefined
     : trustedParentTarget(parentTargetRoot, resolvedPath)
   if (parentResult?.status === 'unavailable') {
-    return { status: 'unavailable' }
+    return unavailableOperationTarget()
   }
   if (parentResult) {
     return {
@@ -1226,12 +1272,15 @@ function deriveDirectoryTarget(
     }
   }
   const validated = validationForCandidate(resolvedPath, options)
-  return validated.status === 'available'
-    ? {
-        status: 'available',
-        target: { targetRoot: validated.targetRoot, resolvedPath },
-      }
-    : { status: 'unavailable' }
+  if (validated.status === 'available') {
+    return {
+      status: 'available',
+      target: { targetRoot: validated.targetRoot, resolvedPath },
+    }
+  }
+  return validated.reasonCode === 'command-timeout'
+    ? { status: 'timeout', resolvedPath }
+    : validated
 }
 
 const PATCH_FILE_PREFIXES = [
@@ -1313,10 +1362,7 @@ function deriveFileOperationTarget(
       realPath,
     ),
   )
-  const targetRoot = sharedTargetRoot(targets)
-  return targetRoot
-    ? { status: 'available', targetRoot }
-    : unavailableOperationTarget()
+  return sharedTargetRoot(targets)
 }
 
 function deriveApplyPatchTarget(
@@ -1350,17 +1396,27 @@ function deriveApplyPatchTarget(
           options,
           realPath,
         )
-  if (workdir.status === 'unavailable') return unavailableOperationTarget()
-  const targets = patchPaths.map((rawPath) =>
-    deriveFileTarget(
-      rawPath,
-      workdir.target.resolvedPath,
-      parentTargetRoot,
-      options,
-      realPath,
-      args.workdir === undefined,
-    ),
+  // A definite workdir failure (an unresolvable path, a git admin directory)
+  // ends the derivation. A workdir whose validation timed out still has its
+  // path, so every file target is derived against it and a definite failure
+  // among them wins over the timeout.
+  if (workdir.status === 'unavailable') return workdir
+  const resolvedWorkdir =
+    workdir.status === 'available'
+      ? workdir.target.resolvedPath
+      : workdir.resolvedPath
+  const targets: OpencodeOperationTargetDerivationResult[] = patchPaths.map(
+    (rawPath) =>
+      deriveFileTarget(
+        rawPath,
+        resolvedWorkdir,
+        parentTargetRoot,
+        options,
+        realPath,
+        args.workdir === undefined,
+      ),
   )
+  if (workdir.status === 'timeout') targets.push(timedOutOperationTarget())
   // When workdir is absent and the patch names files, those targets alone
   // determine the shared root (consistent with deriveFileOperationTarget).
   // Seeding the parent root here would reject absolute paths into a registered
@@ -1368,13 +1424,12 @@ function deriveApplyPatchTarget(
   // still contributes the workdir root, preserving the spanning guard and the
   // parent fallback for fileless patches.
   const seedWorkdirRoot = args.workdir !== undefined || targets.length === 0
-  const targetRoot = sharedTargetRoot(
+  return sharedTargetRoot(
     targets,
-    seedWorkdirRoot ? [workdir.target.targetRoot] : [],
+    seedWorkdirRoot && workdir.status === 'available'
+      ? [workdir.target.targetRoot]
+      : [],
   )
-  return targetRoot
-    ? { status: 'available', targetRoot }
-    : unavailableOperationTarget()
 }
 
 function deriveBashTarget(
@@ -2085,28 +2140,29 @@ function createSessionRuntime(
     operationObservers.set(registration.observer.targetDigest, registration)
   }
 
-  function parentObserverRegistration():
-    | OperationObserverRegistration
-    | undefined {
-    if (!options.observer) return undefined
+  // `timeout` only when the validation itself timed out (no verdict yet); a
+  // throw, an unreadable root, and every non-ok verdict are `fatal`.
+  function parentObserverRegistration(): ProbeRead<OperationObserverRegistration> {
+    if (!options.observer) return { status: 'fatal' }
     const targetRoot = canonicalExistingPath(
       options.targetDirectory ?? process.cwd(),
       fs.realpathSync,
     )
-    if (!targetRoot) return undefined
+    if (!targetRoot) return { status: 'fatal' }
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = options.observer.validateRegisteredWorktree(targetRoot)
     } catch {
-      return undefined
+      return { status: 'fatal' }
     }
+    if (isProbeTimeout(validation)) return TIMED_OUT_READ
     const registeredIdentity = registeredWorktreeIdentity(validation)
     if (
       validation.status !== 'ok' ||
       registeredIdentity === undefined ||
       validation.targetRoot !== targetRoot
     ) {
-      return undefined
+      return { status: 'fatal' }
     }
     const registration = {
       targetRoot,
@@ -2114,15 +2170,17 @@ function createSessionRuntime(
       observer: options.observer,
     }
     rememberOperationObserver(registration)
-    return registration
+    return { status: 'ok', value: registration }
   }
 
   function operationObserverRegistration(
     targetIdentity: string,
-  ): OperationObserverRegistration | undefined {
+  ): ProbeRead<OperationObserverRegistration> {
     const existing = operationObservers.get(targetIdentity)
-    if (existing) return existing
-    if (options.observer?.targetDigest !== targetIdentity) return undefined
+    if (existing) return { status: 'ok', value: existing }
+    if (options.observer?.targetDigest !== targetIdentity) {
+      return { status: 'fatal' }
+    }
     return parentObserverRegistration()
   }
 
@@ -2148,10 +2206,10 @@ function createSessionRuntime(
       }
     }
     const registration = operationObserverRegistration(pinnedTargetIdentity)
-    if (!registration) return { status: 'fatal' }
+    if (registration.status !== 'ok') return registration
     return resolvePinnedObserver(
       parentObserver,
-      registration,
+      registration.value,
       pinnedTargetIdentity,
     )
   }
@@ -2169,7 +2227,7 @@ function createSessionRuntime(
     } catch {
       return { status: 'fatal' }
     }
-    if (isProbeTimeout(validation)) return { status: 'timeout' }
+    if (isProbeTimeout(validation)) return TIMED_OUT_READ
     if (validation.status !== 'ok') {
       return { status: 'fatal', reasonCode: validation.reasonCode }
     }
@@ -2869,8 +2927,8 @@ function createSessionRuntime(
     await next
   }
 
-  // `halt`: the rollup stops with nothing minted for the child. It is either
-  // a dropped child (a blocking reason: no cause, and the child is not
+  // `halt`: the rollup stops with nothing minted for the child. It is a dropped
+  // child (a blocking reason or a typed timeout: no cause, and the child is not
   // recorded as rolled up) or a fatal failure already committed.
   type ChildSnapshotOutcome =
     | {
@@ -2909,6 +2967,10 @@ function createSessionRuntime(
     // Captured in the same synchronous segment as the snapshot call.
     const capture = captureSnapshotBlock()
     const read = await readSnapshot(observer)
+    // A typed timeout means no verdict on the child's target yet: halt the
+    // pass without a cause, a block or a block clear, and retry on a later
+    // task call.
+    if (read.status === 'timeout') return { kind: 'halt' }
     if (read.status !== 'ok') {
       blockOrFailChildSnapshot(
         probeFailureReason(read),
@@ -3044,11 +3106,17 @@ function createSessionRuntime(
       }
       batchTargetIdentity = targetIdentity
 
-      const registration = operationObserverRegistration(targetIdentity)
-      if (!registration || !options.observer) {
+      // A registration, validation or snapshot timeout halts the whole pass:
+      // every receipt of a batch shares one target, and nothing is minted
+      // until the pass has read them all. Every other failure is fatal.
+      const registered = operationObserverRegistration(targetIdentity)
+      // Halts the pass; a later task call can roll the child up.
+      if (registered.status === 'timeout') return
+      if (registered.status !== 'ok' || !options.observer) {
         markUnavailable(afterCause('operation-input-invalid'))
         return
       }
+      const registration = registered.value
       let validation: RegisteredWorktreeValidationResult
       try {
         validation = options.observer.validateRegisteredWorktree(
@@ -3058,6 +3126,8 @@ function createSessionRuntime(
         markUnavailable(afterCause('operation-input-invalid'))
         return
       }
+      // Halts the pass; a later task call can roll the child up.
+      if (isProbeTimeout(validation)) return
       if (
         validation.status === 'error' ||
         validation.targetRoot !== registration.targetRoot ||
@@ -3957,6 +4027,15 @@ function createSessionRuntime(
     initiator: OperationInitiator | undefined,
   ): Promise<BeforeSnapshotOutcome> {
     const read = await readSnapshot(observer)
+    // A typed timeout means no verdict yet, so the call runs unobserved.
+    // `prepareOperation` records the skip. The timeout itself marks nothing
+    // unavailable, never writes, clears or bumps the snapshot block, and
+    // applies no readback. A clean snapshot of the effective target taken
+    // earlier in the same call (a call to another target while blocked) may
+    // already have cleared the block and applied its readback, and that clear
+    // stays committed. Drift the skipped call made is picked up by the next
+    // status or completion readback, which marks older receipts stale.
+    if (read.status === 'timeout') return { kind: 'skip' }
     if (read.status !== 'ok') {
       return blockOrFailBeforeSnapshot(
         probeFailureReason(read),
@@ -4012,13 +4091,16 @@ function createSessionRuntime(
   // snapshot (no block, the call is for the effective target, or the block was
   // just cleared). `skip`: the block remains, or changed while the snapshot was
   // in flight (a block set or replaced during the await, or a new unit): the
-  // call is skipped rather than observed against a state it did not see.
+  // call is skipped rather than observed against a state it did not see. A
+  // clear that was committed stays committed even if the call's own snapshot
+  // then times out and the call is skipped.
   async function clearBlockForOtherTarget(
     observer: OpencodeOperationObserver,
     initiator: OperationInitiator | undefined,
   ): Promise<BeforeSnapshotOutcome | undefined> {
     if (!captureSnapshotBlock() || isEffectiveTarget(observer)) return undefined
     const lookup = resolveEffectiveObserver()
+    if (lookup.status === 'timeout') return { kind: 'skip' }
     if (lookup.status !== 'ok') {
       markUnavailable(
         beforeCause('operation-input-invalid', probeFailureReason(lookup)),
@@ -4029,12 +4111,7 @@ function createSessionRuntime(
       lookup.value,
       snapshotFailureCause(beforeCause),
     )
-    if (result.status === 'timeout') {
-      markUnavailable(
-        beforeCause('local-snapshot-unavailable', 'command-timeout'),
-      )
-      return { kind: 'stop' }
-    }
+    if (result.status === 'timeout') return { kind: 'skip' }
     if (result.status === 'fatal') return { kind: 'stop' }
     if (result.status === 'still-blocked') {
       setSnapshotBlock(result.reasonCode, lookup.value.targetIdentity, {
@@ -4083,6 +4160,11 @@ function createSessionRuntime(
       validateRegisteredWorktree: options.observer.validateRegisteredWorktree,
     })
     if (target.status === 'unavailable') {
+      if (target.reasonCode === 'command-timeout') {
+        // Same skip as a timed-out before-snapshot: run the call unobserved.
+        skippedOperations.add(callDigest)
+        return
+      }
       markUnavailable(beforeCause('operation-input-invalid', target.reasonCode))
       return
     }
@@ -4093,6 +4175,10 @@ function createSessionRuntime(
       )
     } catch {
       markUnavailable(beforeCause('operation-input-invalid'))
+      return
+    }
+    if (isProbeTimeout(registeredTarget)) {
+      skippedOperations.add(callDigest)
       return
     }
     const registeredIdentity = registeredWorktreeIdentity(registeredTarget)
@@ -4672,7 +4758,7 @@ function createSessionRuntime(
       effective.observer,
       effective.targetIdentity,
     )
-    if (read.status === 'timeout') return { status: 'timeout' }
+    if (read.status === 'timeout') return TIMED_OUT_READ
     if (read.status === 'fatal') {
       return settleFailedBlockSnapshot(
         read.reasonCode,
@@ -4751,7 +4837,7 @@ function createSessionRuntime(
     clear: async () => {
       ensureSynchronousRuntime()
       const lookup = resolveEffectiveObserver()
-      if (lookup.status === 'timeout') return { status: 'timeout' }
+      if (lookup.status === 'timeout') return TIMED_OUT_READ
       if (lookup.status === 'fatal') {
         markUnavailable(observerReadbackFailedCause(lookup.reasonCode))
         return { status: 'fatal' }
@@ -5318,7 +5404,7 @@ function createSessionRuntime(
     }> = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
-      if (isProbeTimeout(result)) return { status: 'timeout' }
+      if (isProbeTimeout(result)) return TIMED_OUT_READ
       if (result?.status !== 'available') {
         return { status: 'fatal', reasonCode: remoteFailureReason(result) }
       }
@@ -5653,17 +5739,19 @@ function createSessionRuntime(
   }
 
   // Re-validates the registered worktree the operation began under. Returns
-  // the typed failure when it no longer matches.
+  // the typed failure when it no longer matches, or `timeout` when the
+  // validation itself timed out (no verdict yet).
   function afterTargetFailure(
     observer: OpencodeOperationObserver,
     pending: PendingOperation,
-  ): OperationFailure | undefined {
+  ): OperationFailure | TimedOutRead | undefined {
     let validation: RegisteredWorktreeValidationResult
     try {
       validation = observer.validateRegisteredWorktree(pending.targetRoot)
     } catch {
       return afterFailure('operation-input-invalid')
     }
+    if (isProbeTimeout(validation)) return TIMED_OUT_READ
     if (
       validation.status === 'error' ||
       validation.targetRoot !== pending.targetRoot ||
@@ -5680,11 +5768,13 @@ function createSessionRuntime(
 
   // `blocked`: the after snapshot hit a blocking reason. The call mints
   // nothing, and `setBlockFromAfterSnapshot` decides whether the unit is blocked.
+  // `timeout`: a typed timeout, so the call is sealed and mints nothing.
   async function captureAfterOperation(
     pending: PendingOperation,
   ): Promise<
     | { status: 'available'; snapshot: OperationObserverSnapshot }
     | { status: 'blocked'; reasonCode: SnapshotBlockReason }
+    | TimedOutRead
     | OperationFailure
   > {
     if (!options.observer) return afterFailure('operation-input-invalid')
@@ -5696,6 +5786,7 @@ function createSessionRuntime(
     if (read.status === 'ok') {
       return settleCleanAfterSnapshot(blockCapture, pending, read.value)
     }
+    if (read.status === 'timeout') return TIMED_OUT_READ
     const reasonCode = probeFailureReason(read)
     if (isSnapshotBlockingReason(reasonCode)) {
       return { status: 'blocked', reasonCode }
@@ -5751,11 +5842,17 @@ function createSessionRuntime(
     })
   }
 
+  // `unadvanced`: the typed remote results a push can end with when nothing
+  // it did reached the remote. `settleUnadvancedRemote` decides whether they
+  // seal the call or stay fatal, because that depends on the call's
+  // classification, which this read does not know.
   async function captureRemoteAfter(
     operation: RemoteOperation,
     observer: OpencodeOperationObserver,
   ): Promise<
     | { status: 'available'; snapshot: OperationObserverRemoteSnapshot }
+    | UnadvancedRemote
+    | TimedOutRead
     | OperationFailure
   > {
     const remoteSnapshot = observer.remoteSnapshot
@@ -5766,12 +5863,17 @@ function createSessionRuntime(
     } catch {
       return afterFailure('operation-observation-rejected')
     }
+    if (isProbeTimeout(result)) return TIMED_OUT_READ
+    const reasonCode = remoteFailureReason(result)
+    if (
+      reasonCode === 'missing-resource' ||
+      reasonCode === 'remote-not-advanced'
+    ) {
+      return { status: 'unadvanced', reasonCode }
+    }
     return result.status === 'available'
       ? { status: 'available', snapshot: result.snapshot }
-      : afterFailure(
-          'operation-observation-rejected',
-          remoteFailureReason(result),
-        )
+      : afterFailure('operation-observation-rejected', reasonCode)
   }
 
   async function readRemoteScope(
@@ -5907,16 +6009,54 @@ function createSessionRuntime(
     return !pending.initiator || isCurrentInitiator(pending.initiator)
   }
 
-  // Ownership is revalidated after every await in the pipeline below and
-  // before any self-seed or admission: the unit can complete and a successor
-  // (or a redeclaration) can start while an after-read is in flight. A lost
-  // operation mints nothing, seeds nothing, and propagates nothing.
-  function sealLostOperation(
+  // Seals one call as abandoned and reports it as ignored: nothing is minted,
+  // a duplicate after-hook is silent, the guard is not marked unavailable and
+  // the seal itself never writes, clears or bumps the block. Whatever the call
+  // changed is picked up by the next readback. The call sites say why: the call's unit no longer owns it
+  // (ownership is revalidated after every await in the pipeline below and
+  // before any self-seed or admission, because the unit can complete and a
+  // successor or redeclaration can start while an after-read is in flight), a
+  // typed timeout in the after-hook, or a push whose upstream did not advance.
+  function sealAndIgnore(
     callDigest: string,
     pending: PendingOperation,
   ): OperationCompletionResult {
     sealOperation(callDigest, pending, true)
     return { status: 'ignored' }
+  }
+
+  // Settles a remote after-read that shows the upstream did not move.
+  //
+  // A push is sealed like a push that was never observed: nothing is minted
+  // and the guard stays available. The classifier runs in both hooks, so the
+  // rule needs the call to be a push in both: the before-hook's intent
+  // (`pending.remoteOperation`) and the finished call's classification
+  // (`finalOperation`).
+  //
+  // `remote-not-advanced` seals whatever the before-read was (a push rejected
+  // on a tracked branch is common). `missing-resource` cannot tell an absent
+  // upstream from other git failures, so it seals only when the before-read
+  // gave no better answer: it was missing as well, or it timed out.
+  //
+  // Everything else is fatal: the call is sealed and the guard is marked
+  // unavailable with the after-read's reason.
+  function settleUnadvancedRemote(
+    callDigest: string,
+    pending: PendingOperation,
+    finalOperation: ReceiptOperation,
+    unadvanced: UnadvancedRemote,
+  ): OperationCompletionResult {
+    const bothPush =
+      pending.remoteOperation === 'push' && finalOperation === 'push'
+    const before = pending.remoteBefore
+    const sealed =
+      bothPush &&
+      (unadvanced.reasonCode === 'remote-not-advanced' ||
+        before?.status === 'missing-resource' ||
+        isProbeTimeout(before))
+    if (sealed) return sealAndIgnore(callDigest, pending)
+    sealOperation(callDigest, pending, true)
+    return afterFailure('operation-observation-rejected', unadvanced.reasonCode)
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
@@ -5926,19 +6066,25 @@ function createSessionRuntime(
     pending: PendingOperation,
     output: unknown,
   ): Promise<OperationCompletionResult> {
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     const parsedOutput = parseHostOutput(output)
     if (!parsedOutput) {
       sealOperation(callDigest, pending, true)
       return afterFailure('operation-input-invalid')
     }
     const capture = await captureAfterOperation(pending)
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     if (capture.status === 'blocked') {
+      // Sealed before the block is set, so the order stays fixed here and the
+      // shared helper is not used.
       sealOperation(callDigest, pending, true)
       setBlockFromAfterSnapshot(pending, capture.reasonCode)
       return { status: 'ignored' }
     }
+    // A typed timeout in the after-snapshot: no verdict on this call.
+    if (capture.status === 'timeout') return sealAndIgnore(callDigest, pending)
     if (capture.status === 'unavailable') {
       sealOperation(callDigest, pending, true)
       return capture
@@ -5951,12 +6097,11 @@ function createSessionRuntime(
       requireGuard().status(),
       parsedOutput,
     )
-    if (!observation) {
-      sealOperation(callDigest, pending, true)
-      return { status: 'ignored' }
-    }
+    // No active epoch or unit to observe the call under.
+    if (!observation) return sealAndIgnore(callDigest, pending)
     const classification = await classifyLocalObservation(observation)
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     if (classification.status !== 'ready') {
       sealOperation(callDigest, pending, true)
       return classification
@@ -5968,7 +6113,19 @@ function createSessionRuntime(
         pending.observer,
       )
       if (!ownsOperation(pending)) {
-        return sealLostOperation(callDigest, pending)
+        return sealAndIgnore(callDigest, pending)
+      }
+      // A typed timeout in the remote after-read: no verdict on this call.
+      if (remoteCapture.status === 'timeout') {
+        return sealAndIgnore(callDigest, pending)
+      }
+      if (remoteCapture.status === 'unadvanced') {
+        return settleUnadvancedRemote(
+          callDigest,
+          pending,
+          finalObservation.operation,
+          remoteCapture,
+        )
       }
       if (remoteCapture.status === 'unavailable') {
         sealOperation(callDigest, pending, true)
@@ -6014,7 +6171,8 @@ function createSessionRuntime(
     }
     // No await separates the last ownership check from the admission call
     // below, whose synchronous prefix reads the guard state.
-    if (!ownsOperation(pending)) return sealLostOperation(callDigest, pending)
+    // Lost ownership: the unit that began this call is gone.
+    if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)

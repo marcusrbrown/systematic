@@ -603,6 +603,7 @@ function buildPinnedRecoveryMarkers(
   operationTargetIdentity: string,
   repositoryIdentity: string,
   worktreeIdentity: string,
+  includeReceipt = true,
 ): readonly unknown[] {
   const recoveryLedger = createReceiptLedger({
     capabilityFlags: ['workflow-guard'],
@@ -634,6 +635,7 @@ function buildPinnedRecoveryMarkers(
     timestamp: 2,
   })
   if (!epochStart || !unitStart) throw new Error('progression marker failed')
+  if (!includeReceipt) return [epochStart, unitStart]
 
   const context = {
     epochId,
@@ -946,6 +948,249 @@ async function completeUnit(
 }
 
 describe('OpenCode workflow guard adapter', () => {
+  describe('target derivation under validation timeouts', () => {
+    const REGISTERED = (targetRoot: string) =>
+      ({
+        status: 'ok',
+        targetRoot,
+        gitDir: '/parent/.git/worktrees/linked',
+        commonDir: '/parent/.git',
+      }) as const
+    const TIMED_OUT = {
+      status: 'error',
+      reasonCode: 'command-timeout',
+    } as const
+    const IDENTITY_FAILURE = {
+      status: 'error',
+      reasonCode: 'target-unavailable',
+    } as const
+    const TARGET_TIMEOUT = {
+      status: 'unavailable',
+      reasonCode: 'command-timeout',
+    } as const
+    const TARGET_UNAVAILABLE = {
+      status: 'unavailable',
+      reasonCode: 'target-unavailable',
+    } as const
+
+    type Verdict =
+      | ReturnType<typeof REGISTERED>
+      | typeof TIMED_OUT
+      | typeof IDENTITY_FAILURE
+      | 'throws'
+
+    // Derives the target of a `write` naming one file per directory, where
+    // `verdicts` says what validating each directory returns.
+    function deriveFiles(verdicts: Readonly<Record<string, Verdict>>) {
+      const directories = Object.keys(verdicts)
+      const args =
+        directories.length === 1
+          ? { path: `${directories[0]}/file.ts` }
+          : {
+              filePath: `${directories[0]}/file.ts`,
+              path: `${directories[1]}/file.ts`,
+            }
+      return deriveWith('write', args, verdicts)
+    }
+
+    function derivePatch(verdicts: Readonly<Record<string, Verdict>>) {
+      const patchText = [
+        '*** Begin Patch',
+        ...Object.keys(verdicts).flatMap((directory) => [
+          `*** Add File: ${directory}/file.ts`,
+          '+content',
+        ]),
+        '*** End Patch',
+      ].join('\n')
+      return deriveWith('apply_patch', { patchText }, verdicts)
+    }
+
+    function deriveWith(
+      tool: 'write' | 'apply_patch',
+      args: Record<string, unknown>,
+      verdicts: Readonly<Record<string, Verdict>>,
+    ) {
+      return deriveOpencodeOperationTarget(tool, args, {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) => {
+          const verdict = verdicts[candidate]
+          if (verdict === 'throws') throw new Error('validation exploded')
+          return verdict ?? IDENTITY_FAILURE
+        },
+      })
+    }
+
+    test('one candidate whose validation times out is a timeout', () => {
+      expect(deriveFiles({ '/linked-a': TIMED_OUT })).toEqual(TARGET_TIMEOUT)
+    })
+
+    test('every candidate timing out is a timeout, however many there are', () => {
+      expect(
+        derivePatch({
+          '/linked-a': TIMED_OUT,
+          '/linked-b': TIMED_OUT,
+          '/linked-c': TIMED_OUT,
+        }),
+      ).toEqual(TARGET_TIMEOUT)
+    })
+
+    test.each([
+      {
+        order: 'before',
+        verdicts: { '/linked-a': TIMED_OUT, '/linked-b': IDENTITY_FAILURE },
+      },
+      {
+        order: 'after',
+        verdicts: { '/linked-b': IDENTITY_FAILURE, '/linked-a': TIMED_OUT },
+      },
+    ])(
+      'a definite failure beats a timeout that comes $order it',
+      ({ verdicts }) => {
+        expect(deriveFiles(verdicts)).toEqual(TARGET_UNAVAILABLE)
+        expect(derivePatch(verdicts)).toEqual(TARGET_UNAVAILABLE)
+      },
+    )
+
+    test.each([
+      {
+        order: 'before',
+        verdicts: {
+          '/linked-a': TIMED_OUT,
+          '/linked-b': REGISTERED('/linked-b'),
+        },
+      },
+      {
+        order: 'after',
+        verdicts: {
+          '/linked-b': REGISTERED('/linked-b'),
+          '/linked-a': TIMED_OUT,
+        },
+      },
+    ])(
+      'a timeout beside a clean candidate that comes $order it is a timeout',
+      ({ verdicts }) => {
+        expect(deriveFiles(verdicts)).toEqual(TARGET_TIMEOUT)
+        expect(derivePatch(verdicts)).toEqual(TARGET_TIMEOUT)
+      },
+    )
+
+    test('a root the candidates span beats a timeout', () => {
+      expect(
+        derivePatch({
+          '/linked-a': REGISTERED('/linked-a'),
+          '/linked-b': REGISTERED('/linked-b'),
+          '/linked-c': TIMED_OUT,
+        }),
+      ).toEqual(TARGET_UNAVAILABLE)
+    })
+
+    test('a validation that throws is target-unavailable, even beside a timeout', () => {
+      expect(deriveFiles({ '/linked-a': 'throws' })).toEqual(TARGET_UNAVAILABLE)
+      expect(
+        deriveFiles({ '/linked-a': TIMED_OUT, '/linked-b': 'throws' }),
+      ).toEqual(TARGET_UNAVAILABLE)
+    })
+
+    test('a patch workdir whose validation times out is a timeout, and an identity failure stays one', () => {
+      const patchText = [
+        '*** Begin Patch',
+        '*** Add File: file.ts',
+        '+content',
+        '*** End Patch',
+      ].join('\n')
+      const withWorkdir = (verdict: Verdict) =>
+        deriveWith(
+          'apply_patch',
+          { workdir: '/linked-a', patchText },
+          {
+            '/linked-a': verdict,
+          },
+        )
+
+      expect(withWorkdir(TIMED_OUT)).toEqual(TARGET_TIMEOUT)
+      expect(withWorkdir(IDENTITY_FAILURE)).toEqual(TARGET_UNAVAILABLE)
+    })
+
+    // The workdir's path is resolved apart from its validation, so a patch's
+    // file targets are still derived when the workdir's validation timed out
+    // and can still fail definitely.
+    describe('a patch workdir whose validation times out', () => {
+      const patchFor = (...files: string[]) =>
+        [
+          '*** Begin Patch',
+          ...files.flatMap((file) => [`*** Add File: ${file}`, '+content']),
+          '*** End Patch',
+        ].join('\n')
+
+      const withTimedOutWorkdir = (
+        files: readonly string[],
+        verdicts: Readonly<Record<string, Verdict>> = {},
+      ) =>
+        deriveWith(
+          'apply_patch',
+          { workdir: '/linked-a', patchText: patchFor(...files) },
+          { '/linked-a': TIMED_OUT, ...verdicts },
+        )
+
+      test('and an absolute .git/config target is target-unavailable', () => {
+        expect(withTimedOutWorkdir(['/parent/.git/config'])).toEqual(
+          TARGET_UNAVAILABLE,
+        )
+      })
+
+      test('and file targets that validate in the same worktree are a timeout', () => {
+        expect(
+          withTimedOutWorkdir(['/linked-a/src/file.ts'], {
+            '/linked-a/src': REGISTERED('/linked-a'),
+          }),
+        ).toEqual(TARGET_TIMEOUT)
+      })
+
+      test('and a file target that also times out is a timeout', () => {
+        expect(
+          withTimedOutWorkdir(['/linked-a/src/file.ts'], {
+            '/linked-a/src': TIMED_OUT,
+          }),
+        ).toEqual(TARGET_TIMEOUT)
+      })
+
+      // The workdir's root is unknown while its validation is pending, so a
+      // file target in another worktree cannot be told apart from one in the
+      // workdir's own: only a definite failure takes precedence.
+      test('and a file target that validates in another worktree is still a timeout', () => {
+        expect(
+          withTimedOutWorkdir(['/linked-b/src/file.ts'], {
+            '/linked-b/src': REGISTERED('/linked-b'),
+          }),
+        ).toEqual(TARGET_TIMEOUT)
+      })
+
+      test('and a patch with no file targets is a timeout', () => {
+        expect(withTimedOutWorkdir([])).toEqual(TARGET_TIMEOUT)
+      })
+
+      test('and a workdir path that cannot be resolved stays target-unavailable', () => {
+        const result = deriveOpencodeOperationTarget(
+          'apply_patch',
+          { workdir: '/missing', patchText: patchFor('/missing/file.ts') },
+          {
+            parentTargetRoot: '/parent',
+            sessionLocation: '/parent',
+            realPath: (value) => {
+              if (value.startsWith('/missing')) throw new Error('no such path')
+              return value
+            },
+            validateRegisteredWorktree: () => TIMED_OUT,
+          },
+        )
+
+        expect(result).toEqual(TARGET_UNAVAILABLE)
+      })
+    })
+  })
+
   test('target derivation: registered worktree from bash workdir', () => {
     const result = deriveOpencodeOperationTarget(
       'bash',
@@ -10099,7 +10344,7 @@ describe('OpenCode workflow guard adapter', () => {
       })
     })
 
-    test('a before snapshot command-timeout records timedOut', async () => {
+    test('a before snapshot command-timeout skips the call without recording a cause', async () => {
       const adapter = createAdapter(
         'observe',
         false,
@@ -10110,12 +10355,9 @@ describe('OpenCode workflow guard adapter', () => {
       )
       await activateWorkEpoch(adapter)
       await beforeOperation(adapter, 'before-timeout')
-      expect((await causeOf(adapter)).firstUnavailableCause).toEqual({
-        site: 'tool-before',
-        kind: 'local-snapshot-unavailable',
-        reasonCode: 'command-timeout',
-        timedOut: true,
-      })
+      const parsed = await causeOf(adapter)
+      expect(parsed.state).not.toBe('unavailable')
+      expect(parsed.firstUnavailableCause).toBeUndefined()
     })
 
     test('a before snapshot that throws records local-snapshot-error without a reasonCode', async () => {
@@ -10171,11 +10413,6 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-failed',
         },
         {
-          name: 'validation timeout',
-          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
-          reasonCode: 'command-timeout',
-        },
-        {
           name: 'ok validation for a different target root',
           validate: (candidateDirectory) => ({
             status: 'ok',
@@ -10208,10 +10445,25 @@ describe('OpenCode workflow guard adapter', () => {
             ...(validationCase.reasonCode === undefined
               ? {}
               : { reasonCode: validationCase.reasonCode }),
-            timedOut: validationCase.reasonCode === 'command-timeout',
+            timedOut: false,
           })
         })
       }
+
+      test('validation timeout skips the call without recording a cause', async () => {
+        const adapter = createAdapter('observe', false, {
+          ...base,
+          validateRegisteredWorktree: () => ({
+            status: 'error',
+            reasonCode: 'command-timeout',
+          }),
+        })
+        await activateWorkEpoch(adapter)
+        await beforeOperation(adapter, 'before-validation-timeout')
+        const parsed = await causeOf(adapter)
+        expect(parsed.state).not.toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+      })
     })
 
     test('arguments that cannot be fingerprinted record operation-input-invalid', async () => {
@@ -10606,11 +10858,6 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'command-failed',
         },
         {
-          name: 'a timeout',
-          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
-          reasonCode: 'command-timeout',
-        },
-        {
           name: 'a different target root',
           validate: (candidateDirectory) => ({
             status: 'ok',
@@ -10643,14 +10890,19 @@ describe('OpenCode workflow guard adapter', () => {
           const adapter = await activatedAdapter(observer)
           await beforeThenAfter(adapter, 'after-validation', arm)
           expect(await causeOf(adapter)).toEqual(
-            afterCause(
-              'operation-input-invalid',
-              validationCase.reasonCode,
-              validationCase.reasonCode === 'command-timeout',
-            ),
+            afterCause('operation-input-invalid', validationCase.reasonCode),
           )
         })
       }
+
+      test('a timeout seals the call without recording a cause', async () => {
+        const { observer, arm } = armable({
+          validate: () => ({ status: 'error', reasonCode: 'command-timeout' }),
+        })
+        const adapter = await activatedAdapter(observer)
+        await beforeThenAfter(adapter, 'after-validation-timeout', arm)
+        expect(await causeOf(adapter)).toBe('not-unavailable')
+      })
     })
 
     test('an after snapshot that is unavailable records its observer reasonCode', async () => {
@@ -10670,7 +10922,7 @@ describe('OpenCode workflow guard adapter', () => {
       })
     })
 
-    test('an after snapshot command-timeout records timedOut', async () => {
+    test('an after snapshot command-timeout seals the call without recording a cause', async () => {
       const { observer, arm } = armable({
         snapshot: async () => ({
           status: 'unavailable',
@@ -10679,9 +10931,7 @@ describe('OpenCode workflow guard adapter', () => {
       })
       const adapter = await activatedAdapter(observer)
       await beforeThenAfter(adapter, 'after-timeout', arm)
-      expect(await causeOf(adapter)).toEqual(
-        afterCause('local-snapshot-unavailable', 'command-timeout', true),
-      )
+      expect(await causeOf(adapter)).toBe('not-unavailable')
     })
 
     test('an after snapshot that throws records local-snapshot-error', async () => {
@@ -10789,11 +11039,6 @@ describe('OpenCode workflow guard adapter', () => {
           reasonCode: 'remote-missing-field',
         },
         {
-          name: 'a remote after-read that times out',
-          after: { status: 'unavailable', reasonCode: 'command-timeout' },
-          reasonCode: 'command-timeout',
-        },
-        {
           name: 'a remote after-read with a missing resource',
           after: { status: 'missing-resource' },
           reasonCode: 'missing-resource',
@@ -10824,14 +11069,29 @@ describe('OpenCode workflow guard adapter', () => {
           const adapter = await activatedAdapter(observer, ['push'])
           await pushAfter(adapter, 'after-remote')
           expect(await causeOf(adapter)).toEqual(
-            afterCause(
-              'operation-observation-rejected',
-              pushCase.reasonCode,
-              pushCase.reasonCode === 'command-timeout',
-            ),
+            afterCause('operation-observation-rejected', pushCase.reasonCode),
           )
         })
       }
+
+      test('a remote after-read that times out seals the call without recording a cause', async () => {
+        const base = sequenceObserver([operationSnapshot()], {
+          'push:before': [remoteAvailable(D, E), remoteAvailable(D, E)],
+        })
+        const observer: OpencodeOperationObserver = {
+          ...base,
+          remoteSnapshot: async (operation, phase) =>
+            operation === 'push' && phase === 'after'
+              ? { status: 'unavailable', reasonCode: 'command-timeout' }
+              : (base.remoteSnapshot?.(operation, phase) ?? {
+                  status: 'unavailable',
+                  reasonCode: 'remote-missing-field',
+                }),
+        }
+        const adapter = await activatedAdapter(observer, ['push'])
+        await pushAfter(adapter, 'after-remote-timeout')
+        expect(await causeOf(adapter)).toBe('not-unavailable')
+      })
 
       test('a pr-creation self-seed readback the guard rejects records operation-observation-rejected with the guard reason', async () => {
         const MISSING = { status: 'missing-resource' as const }
@@ -16207,10 +16467,11 @@ describe('snapshot block record', () => {
     'command-output-limit',
     'worktree-unstable',
   ] as const
-  const FATAL_AFTER_REASONS = [
+  // The reasons that still make the guard unavailable when the call's own
+  // after-snapshot fails with them. A timeout seals the call instead.
+  const FATAL_AFTER_SNAPSHOT_REASONS = [
     'target-unavailable',
     'command-failed',
-    'command-timeout',
     'file-read-failed',
   ] as const
   const TIMEOUT = {
@@ -16236,7 +16497,20 @@ describe('snapshot block record', () => {
       release(result: OperationObserverRemoteResult): void
     }
     remoteCalls(): number
+    /**
+     * Scripts the next registered-worktree validations (of any directory) in
+     * order, then validation is real again. Validation is synchronous, so a
+     * verdict cannot be held open.
+     */
+    scriptValidation(...next: ScriptedValidation[]): void
   }
+
+  type ScriptedValidation =
+    | 'timeout'
+    | 'identity'
+    | 'throws'
+    | 'elsewhere'
+    | 'real'
 
   // A clean parent observer whose next local snapshots can be scripted per
   // call, and whose remote probes are counted.
@@ -16248,12 +16522,32 @@ describe('snapshot block record', () => {
     const queue: OpencodeOperationObserver[] = []
     let snapshotCalls = 0
     let remoteCalls = 0
+    const validations: ScriptedValidation[] = []
     const holds = new Map<
       string,
       () => Promise<OperationObserverRemoteResult>
     >()
     const observer: OpencodeOperationObserver = {
       ...base,
+      validateRegisteredWorktree: (candidate) => {
+        const verdict = validations.shift()
+        if (verdict === 'throws') throw new Error('validation exploded')
+        if (verdict === 'timeout') {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (verdict === 'identity') {
+          return { status: 'error', reasonCode: 'target-unavailable' }
+        }
+        if (verdict === 'elsewhere') {
+          return {
+            status: 'ok',
+            targetRoot: path.join(candidate, 'elsewhere'),
+            gitDir: path.join(candidate, '.git'),
+            commonDir: path.join(candidate, '.git'),
+          }
+        }
+        return base.validateRegisteredWorktree(candidate)
+      },
       snapshot: () => {
         snapshotCalls += 1
         return (queue.shift() ?? fallback).snapshot()
@@ -16297,6 +16591,9 @@ describe('snapshot block record', () => {
         return { reached, release: (result) => release(result) }
       },
       remoteCalls: () => remoteCalls,
+      scriptValidation: (...next) => {
+        validations.push(...next)
+      },
     }
   }
 
@@ -16737,8 +17034,16 @@ describe('snapshot block record', () => {
       ...next: (OperationObserverResult | Promise<OperationObserverResult>)[]
     ): void
     linkedSnapshots(): number
+    /**
+     * Scripts the registered-worktree validation of the linked worktree (and
+     * anything inside it): the next calls take these verdicts in order, then
+     * validation is real again.
+     */
+    scriptLinkedValidation(...next: LinkedValidation[]): void
     cleanup(): void
   }
+
+  type LinkedValidation = 'timeout' | 'identity' | 'throws' | 'real'
 
   async function targetAdapter(rollup?: {
     readonly childParts: () => readonly unknown[]
@@ -16759,6 +17064,10 @@ describe('snapshot block record', () => {
       | Promise<OperationObserverResult>
     )[] = []
     let linkedSnapshots = 0
+    const validationScript: LinkedValidation[] = []
+    const insideLinked = (candidate: string) =>
+      candidate === linkedRoot ||
+      candidate.startsWith(`${linkedRoot}${path.sep}`)
     const adapter = createOpencodeWorkflowGuard({
       config: { mode: 'observe', debug: false },
       workspaceIdentity: initial.snapshot.targetDigest,
@@ -16769,6 +17078,19 @@ describe('snapshot block record', () => {
       observer: {
         ...parent,
         snapshot: async () => parentQueue.shift() ?? parent.snapshot(),
+        validateRegisteredWorktree: (candidate) => {
+          const verdict = insideLinked(candidate)
+            ? validationScript.shift()
+            : undefined
+          if (verdict === 'throws') throw new Error('validation exploded')
+          if (verdict === 'timeout') {
+            return { status: 'error', reasonCode: 'command-timeout' }
+          }
+          if (verdict === 'identity') {
+            return { status: 'error', reasonCode: 'target-unavailable' }
+          }
+          return parent.validateRegisteredWorktree(candidate)
+        },
       },
       createTargetObserver: (targetDirectory) => {
         const real = createOpencodeOperationObserver({ targetDirectory })
@@ -16808,6 +17130,9 @@ describe('snapshot block record', () => {
         linkedQueue.push(...next)
       },
       linkedSnapshots: () => linkedSnapshots,
+      scriptLinkedValidation: (...next) => {
+        validationScript.push(...next)
+      },
       cleanup: fixture.cleanup,
     }
   }
@@ -16835,7 +17160,6 @@ describe('snapshot block record', () => {
     const FATAL_REASONS = [
       'target-unavailable',
       'command-failed',
-      'command-timeout',
       'file-read-failed',
     ] as const
 
@@ -17043,7 +17367,7 @@ describe('snapshot block record', () => {
           site: 'tool-before',
           kind: 'local-snapshot-unavailable',
           reasonCode,
-          timedOut: reasonCode === 'command-timeout',
+          timedOut: false,
         })
         expect(parsed.snapshotBlock).toBeUndefined()
       },
@@ -17135,27 +17459,61 @@ describe('snapshot block record', () => {
         }
       })
 
-      test.each([
-        { reasonCode: 'command-timeout' as const },
-        { reasonCode: 'target-unavailable' as const },
-      ])(
-        'while blocked, a snapshot of the effective target failing with $reasonCode is fatal for a call to another target',
-        async ({ reasonCode }) => {
-          const target = await targetAdapter()
-          try {
-            target.queueParent(BLOCKED('file-limit'))
-            await operateIn(target.adapter, 'blocked-parent')
-            target.queueParent(BLOCKED(reasonCode))
+      test('while blocked, a snapshot of the effective target failing with target-unavailable is fatal for a call to another target', async () => {
+        const target = await targetAdapter()
+        try {
+          target.queueParent(BLOCKED('file-limit'))
+          await operateIn(target.adapter, 'blocked-parent')
+          target.queueParent(BLOCKED('target-unavailable'))
 
-            await operateIn(target.adapter, 'linked-fatal', target.linkedRoot)
+          await operateIn(target.adapter, 'linked-fatal', target.linkedRoot)
 
-            expect(status(target.adapter).state).toBe('unavailable')
-            expect(target.linkedSnapshots()).toBe(0)
-          } finally {
-            target.cleanup()
-          }
-        },
-      )
+          expect(status(target.adapter).state).toBe('unavailable')
+          expect(target.linkedSnapshots()).toBe(0)
+        } finally {
+          target.cleanup()
+        }
+      })
+
+      test('while blocked, a timeout on the effective target skips a call to another target and leaves the block as it was', async () => {
+        const target = await targetAdapter()
+        try {
+          target.queueParent(BLOCKED('file-limit'))
+          await operateIn(target.adapter, 'blocked-parent')
+          target.queueParent(BLOCKED('command-timeout'))
+
+          await operateIn(target.adapter, 'linked-timeout', target.linkedRoot)
+
+          // Nothing of the linked call ran: no snapshot, and the after-hook
+          // stayed silent.
+          expect(target.linkedSnapshots()).toBe(0)
+          expect(status(target.adapter).state).not.toBe('unavailable')
+          expect(ledger(target.adapter).listReceipts()).toHaveLength(0)
+          expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+            reasonCode: 'file-limit',
+          })
+
+          // The next clean call is observed normally: it clears the block.
+          await observeOperationTool(
+            target.adapter,
+            'bash',
+            { command: 'bun test', workdir: target.linkedRoot },
+            BASH_OUTPUT,
+            'linked-clean',
+          )
+
+          expect(
+            target.adapter.snapshotBlock(SESSION_A).current(),
+          ).toBeUndefined()
+          expect(
+            ledger(target.adapter)
+              .listReceipts()
+              .map((receipt) => receipt.canonical.operation),
+          ).toContain('verification')
+        } finally {
+          target.cleanup()
+        }
+      })
 
       test('a blocked snapshot of a target that is not the effective one skips the call and sets no block', async () => {
         const target = await targetAdapter()
@@ -17475,7 +17833,7 @@ describe('snapshot block record', () => {
       }
     })
 
-    test.each([...FATAL_AFTER_REASONS])(
+    test.each([...FATAL_AFTER_SNAPSHOT_REASONS])(
       'an after snapshot failing with %s still makes the guard unavailable and sets no block',
       async (reasonCode) => {
         const steered = steeredObserver()
@@ -17491,7 +17849,7 @@ describe('snapshot block record', () => {
           site: 'tool-after',
           kind: 'local-snapshot-unavailable',
           reasonCode,
-          timedOut: reasonCode === 'command-timeout',
+          timedOut: false,
         })
         expect(parsed.snapshotBlock).toBeUndefined()
       },
@@ -17528,6 +17886,9 @@ describe('snapshot block record', () => {
       workspaceIdentity: string,
       targetIdentity: string,
       after: { repository: string; worktree: string },
+      operations: readonly ('implementation' | 'verification')[] = [
+        'implementation',
+      ],
     ): unknown[] {
       const childLedger = createReceiptLedger({
         capabilityFlags: ['workflow-guard'],
@@ -17552,7 +17913,7 @@ describe('snapshot block record', () => {
         epochId,
         unitId,
         family: 'work',
-        requiredOperations: ['implementation'],
+        requiredOperations: [...operations],
         resourceScopes: [],
         transitionDigest: digestCall('unit-start'),
         timestamp: 11,
@@ -17565,36 +17926,40 @@ describe('snapshot block record', () => {
         repositoryIdentity: CHILD_RECEIPT_REPOSITORY,
         worktreeIdentity: OPERATION_SCOPE.worktreeIdentity,
       }
-      childLedger.prepareObservation({
-        callId: 'child-implementation',
-        operation: 'implementation',
-        context,
-      })
-      const finalized = childLedger.finalizeObservation({
-        callId: 'child-implementation',
-        context,
-        after: {
-          workspaceIdentity,
-          operationTargetIdentity: targetIdentity,
-          repositoryIdentity: after.repository,
-          worktreeIdentity: after.worktree,
-        },
-        classification: {
-          outcome: 'accepted',
-          category: 'implementation',
-          attribution: 'runtime-verified',
-          result: 'success',
-          sideEffect: 'required',
-          reasonCode: 'recognized-command',
-        },
-        terminal: { status: 'success', output: 'non-empty', noOp: false },
-      })
-      if (finalized.status !== 'finalized' || !epochStart || !unitStart) {
+      if (!epochStart || !unitStart) {
         throw new Error('child receipt fixture failed')
       }
-      const mint = projectReceiptMintMarker(finalized.receipt, ROLLUP_SALT)
-      if (!mint) throw new Error('child mint marker failed')
-      return [epochStart, unitStart, mint]
+      const mints = operations.map((operation) => {
+        const callId = `child-${operation}`
+        childLedger.prepareObservation({ callId, operation, context })
+        const finalized = childLedger.finalizeObservation({
+          callId,
+          context,
+          after: {
+            workspaceIdentity,
+            operationTargetIdentity: targetIdentity,
+            repositoryIdentity: after.repository,
+            worktreeIdentity: after.worktree,
+          },
+          classification: {
+            outcome: 'accepted',
+            category: operation,
+            attribution: 'runtime-verified',
+            result: 'success',
+            sideEffect:
+              operation === 'implementation' ? 'required' : 'not-required',
+            reasonCode: 'recognized-command',
+          },
+          terminal: { status: 'success', output: 'non-empty', noOp: false },
+        })
+        if (finalized.status !== 'finalized') {
+          throw new Error('child receipt fixture failed')
+        }
+        const mint = projectReceiptMintMarker(finalized.receipt, ROLLUP_SALT)
+        if (!mint) throw new Error('child mint marker failed')
+        return mint
+      })
+      return [epochStart, unitStart, ...mints]
     }
 
     function partsOf(markers: readonly unknown[]): readonly unknown[] {
@@ -17620,10 +17985,20 @@ describe('snapshot block record', () => {
       { repository: OPERATION_SCOPE.repositoryIdentity, worktree: CHILD_AFTER },
     )
 
+    // Two receipts from one child, on the same target.
+    const TWO_RECEIPT_MARKERS = childMarkers(
+      OPERATION_SCOPE.workspaceIdentity,
+      OPERATION_SCOPE.workspaceIdentity,
+      { repository: OPERATION_SCOPE.repositoryIdentity, worktree: CHILD_AFTER },
+      ['implementation', 'verification'],
+    )
+
     // An adapter whose parent checkout (the effective target) is the child
     // receipt's target.
     async function parentTargetAdapter(
       steered: SteeredObserver,
+      markers: readonly unknown[] = PARENT_CHILD_MARKERS,
+      parentOfChild = SESSION_A,
     ): Promise<OpencodeWorkflowGuard> {
       const adapter = createAdapter(
         'observe',
@@ -17633,10 +18008,10 @@ describe('snapshot block record', () => {
         undefined,
         {
           readSessionParts: async (sessionID) =>
-            sessionID === SESSION_A ? [] : partsOf(PARENT_CHILD_MARKERS),
+            sessionID === SESSION_A ? [] : partsOf(markers),
           listChildren: async (sessionID) =>
             sessionID === SESSION_A
-              ? [{ sessionId: CHILD_SESSION, parentID: SESSION_A }]
+              ? [{ sessionId: CHILD_SESSION, parentID: parentOfChild }]
               : [],
         },
         { registrationIdentity: ROLLUP_REGISTRATION, sessionSalt: ROLLUP_SALT },
@@ -17647,6 +18022,7 @@ describe('snapshot block record', () => {
 
     async function rollup(
       adapter: OpencodeWorkflowGuard,
+      callID = 'task-call',
     ): Promise<Record<string, unknown>> {
       const output: {
         title: string
@@ -17657,7 +18033,7 @@ describe('snapshot block record', () => {
         output: 'done',
         metadata: { sessionId: CHILD_SESSION },
       }
-      const input = { tool: 'task', sessionID: SESSION_A, callID: 'task-call' }
+      const input = { tool: 'task', sessionID: SESSION_A, callID }
       await adapter.hooks['tool.execute.before'](input, { args: {} })
       await adapter.hooks['tool.execute.after']({ ...input, args: {} }, output)
       return output.metadata
@@ -17667,16 +18043,18 @@ describe('snapshot block record', () => {
     // then reads the child's target.
     function queueRollupSnapshots(
       steered: SteeredObserver,
-      child: OperationObserverResult,
+      ...children: OperationObserverResult[]
     ): void {
       steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
-      steered.queueSnapshot(
-        sequenceObserver([
-          child.status === 'available'
-            ? child.snapshot
-            : unavailableStep(child.reasonCode),
-        ]),
-      )
+      for (const child of children) {
+        steered.queueSnapshot(
+          sequenceObserver([
+            child.status === 'available'
+              ? child.snapshot
+              : unavailableStep(child.reasonCode),
+          ]),
+        )
+      }
     }
 
     const CLEAN_CHILD: OperationObserverResult = {
@@ -17749,7 +18127,7 @@ describe('snapshot block record', () => {
       expect(status(adapter).state).not.toBe('unavailable')
     })
 
-    test.each([...FATAL_AFTER_REASONS])(
+    test.each([...FATAL_AFTER_SNAPSHOT_REASONS])(
       'a child snapshot failing with %s still makes the guard unavailable and sets no block',
       async (reasonCode) => {
         const steered = steeredObserver()
@@ -17764,7 +18142,7 @@ describe('snapshot block record', () => {
           site: 'tool-after',
           kind: 'local-snapshot-unavailable',
           reasonCode,
-          timedOut: reasonCode === 'command-timeout',
+          timedOut: false,
         })
         expect(parsed.snapshotBlock).toBeUndefined()
       },
@@ -17809,6 +18187,195 @@ describe('snapshot block record', () => {
       } finally {
         target.cleanup()
       }
+    })
+
+    describe('a timeout while a child is rolled up', () => {
+      const TIMED_OUT_CHILD: OperationObserverResult = {
+        status: 'unavailable',
+        reasonCode: 'command-timeout',
+      }
+
+      // A halted pass leaves no trace: nothing is minted, no marker is
+      // returned, the guard is available, and no cause or block is recorded.
+      // A status read applies a readback of its own, so a test that goes on
+      // to roll the child up again passes `refresh: false`.
+      async function expectHalted(
+        adapter: OpencodeWorkflowGuard,
+        metadata: Record<string, unknown>,
+        refresh = true,
+      ): Promise<void> {
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(ledger(adapter).listReceipts()).toHaveLength(0)
+        expect(
+          metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ).toBeUndefined()
+        expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+        if (!refresh) return
+        const parsed = await refreshStatus(adapter)
+        expect(parsed.firstUnavailableCause).toBeUndefined()
+        expect(parsed.snapshotBlock).toBeUndefined()
+      }
+
+      test('a validation timeout halts the pass, and the child is not recorded as rolled up', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        // The first validation registers the target; the second is the
+        // rollup's own.
+        steered.scriptValidation('real', 'timeout')
+        // The pass halts before it reads the child's target.
+        queueRollupSnapshots(steered)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata, false)
+        // The same call is not skipped as already rolled up.
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+        const retried = await rollup(adapter)
+        expect(ledger(adapter).listReceipts()).toHaveLength(1)
+        expect(retried[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]).toBeDefined()
+      })
+
+      test('a validation timeout on the second receipt mints nothing for either', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered, TWO_RECEIPT_MARKERS)
+        steered.scriptValidation('real', 'real', 'timeout')
+        queueRollupSnapshots(steered, CLEAN_CHILD, CLEAN_CHILD)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata)
+      })
+
+      test('a snapshot timeout mid-batch mints nothing for any child receipt', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered, TWO_RECEIPT_MARKERS)
+        queueRollupSnapshots(steered, CLEAN_CHILD, TIMED_OUT_CHILD)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata)
+      })
+
+      test('a registration lookup timeout halts the pass', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        steered.scriptValidation('timeout')
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+
+        const metadata = await rollup(adapter)
+
+        await expectHalted(adapter, metadata)
+      })
+
+      test('a halted rollup resumed through a new task call mints every child receipt', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered, TWO_RECEIPT_MARKERS)
+        queueRollupSnapshots(steered, CLEAN_CHILD, TIMED_OUT_CHILD)
+        await expectHalted(adapter, await rollup(adapter), false)
+
+        queueRollupSnapshots(steered, CLEAN_CHILD, CLEAN_CHILD)
+        const resumed = await rollup(adapter, 'task-call-resumed')
+
+        expect(
+          ledger(adapter)
+            .listReceipts()
+            .map((receipt) => receipt.canonical.operation),
+        ).toEqual(['implementation', 'verification'])
+        expect(resumed[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]).toBeDefined()
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test('a timeout while blocked leaves the block untouched, so a status refresh in flight still clears it', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+        const controls = adapter.snapshotBlock(SESSION_A)
+        controls.set('file-limit')
+        const slow = deferredStep(DRIFTED)
+        const slowObserver = sequenceObserver([slow.step])
+        steered.queueSnapshot(slowObserver)
+        const refreshing = refreshStatus(adapter)
+        for (
+          let tick = 0;
+          tick < 50 && slowObserver.snapshotCalls() < 1;
+          tick++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(slowObserver.snapshotCalls()).toBe(1)
+        queueRollupSnapshots(steered, TIMED_OUT_CHILD)
+
+        await rollup(adapter)
+
+        expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+        slow.release()
+        const parsed = await refreshing
+
+        // Neither the record nor its version moved, so the refresh was not
+        // overtaken: it cleared the block and applied the drift it saw.
+        expect(parsed.snapshotBlock).toBeUndefined()
+        expect(status(adapter).missingOperations).toContain('implementation')
+        expect(status(adapter).state).not.toBe('unavailable')
+      })
+
+      test.each([
+        {
+          name: 'a registration validation that fails definitely',
+          verdicts: ['identity'] as ScriptedValidation[],
+          cause: { kind: 'operation-input-invalid' },
+        },
+        {
+          name: 'a validation that fails definitely',
+          verdicts: ['real', 'identity'] as ScriptedValidation[],
+          cause: {
+            kind: 'operation-input-invalid',
+            reasonCode: 'target-unavailable',
+          },
+        },
+        {
+          name: 'a validation that throws',
+          verdicts: ['real', 'throws'] as ScriptedValidation[],
+          cause: { kind: 'operation-input-invalid' },
+        },
+        {
+          name: 'a validation that names another target root',
+          verdicts: ['real', 'elsewhere'] as ScriptedValidation[],
+          cause: { kind: 'operation-input-invalid' },
+        },
+      ])('$name stays fatal', async ({ verdicts, cause }) => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(steered)
+        steered.scriptValidation(...verdicts)
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+
+        await rollup(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect((await refreshStatus(adapter)).firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          ...cause,
+          timedOut: false,
+        })
+      })
+
+      test('a child that is not a child of the calling session stays fatal', async () => {
+        const steered = steeredObserver()
+        const adapter = await parentTargetAdapter(
+          steered,
+          PARENT_CHILD_MARKERS,
+          'some-other-session',
+        )
+        queueRollupSnapshots(steered, CLEAN_CHILD)
+
+        await rollup(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect((await refreshStatus(adapter)).firstUnavailableCause).toEqual({
+          site: 'tool-after',
+          kind: 'call-lifecycle-mismatch',
+          timedOut: false,
+        })
+      })
     })
 
     test('a blocking child result that arrives after the unit was redeclared sets no block', async () => {
@@ -18968,4 +19535,1220 @@ describe('snapshot block record', () => {
       })
     })
   })
+
+  describe('a timeout in the operation after-hook', () => {
+    const PUSH = 'git push origin main'
+    const TIMED_OUT = sequenceObserver([unavailableStep('command-timeout')])
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    interface Call {
+      readonly tool: 'bash'
+      readonly sessionID: string
+      readonly callID: string
+      readonly args: Record<string, unknown>
+    }
+
+    function call(callID: string, args: Record<string, unknown>): Call {
+      return { tool: 'bash', sessionID: SESSION_A, callID, args }
+    }
+
+    async function begin(
+      adapter: OpencodeWorkflowGuard,
+      input: Call,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+    }
+
+    async function end(
+      adapter: OpencodeWorkflowGuard,
+      input: Call,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](input, BASH_OUTPUT)
+    }
+
+    // A sealed call mints nothing, leaves the earlier receipts as they were,
+    // records no cause and no block, and its duplicate after-hook is silent.
+    async function expectSealed(
+      adapter: OpencodeWorkflowGuard,
+      input: Call,
+      receiptsBefore: string[],
+      work: () => number,
+    ): Promise<void> {
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual(receiptsBefore)
+      const workDone = work()
+      await end(adapter, input)
+      expect(work()).toBe(workDone)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+      expect(receiptOperations(adapter)).toEqual(receiptsBefore)
+    }
+
+    test('a local after-snapshot that times out seals the call and leaves earlier receipts alone', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'earlier-verification',
+      )
+      const receipts = receiptOperations(adapter)
+      expect(receipts).toContain('verification')
+      const input = call('timed-out-after-snapshot', { command: 'bun test' })
+      await begin(adapter, input)
+      steered.queueSnapshot(TIMED_OUT)
+
+      await end(adapter, input)
+
+      await expectSealed(adapter, input, receipts, steered.snapshotCalls)
+    })
+
+    test('a remote after-read that times out seals the push and leaves earlier receipts alone', async () => {
+      const steered = steeredObserver({
+        'push:before': [remoteAvailable(D, E)],
+        'push:after': [TIMEOUT],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'earlier-verification',
+      )
+      const receipts = receiptOperations(adapter)
+      const input = call('timed-out-remote-after', { command: PUSH })
+      await begin(adapter, input)
+      const remoteReads = steered.remoteCalls()
+
+      await end(adapter, input)
+
+      expect(steered.remoteCalls()).toBeGreaterThan(remoteReads)
+      await expectSealed(adapter, input, receipts, steered.remoteCalls)
+      expect(receiptOperations(adapter)).not.toContain('push')
+    })
+
+    test('a registered-worktree validation that times out in the after-hook seals the call and leaves earlier receipts alone', async () => {
+      const target = await targetAdapter()
+      try {
+        await observeOperationTool(
+          target.adapter,
+          'bash',
+          { command: 'bun test', workdir: target.linkedRoot },
+          BASH_OUTPUT,
+          'earlier-verification',
+        )
+        const receipts = receiptOperations(target.adapter)
+        expect(receipts).toContain('verification')
+        const input = call('timed-out-after-validation', {
+          command: 'bun test',
+          workdir: target.linkedRoot,
+        })
+        await begin(target.adapter, input)
+        target.scriptLinkedValidation('timeout')
+
+        await end(target.adapter, input)
+
+        await expectSealed(target.adapter, input, receipts, () =>
+          target.linkedSnapshots(),
+        )
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('a mutating call sealed by an after-snapshot timeout leaves the tree changed, and completion is rejected as stale-receipt', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered, 'protected')
+      const worktree = (tag: string) =>
+        operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+      const write = { filePath: 'real.ts', content: 'changed' }
+      // An observed write mints implementation, then a verification follows.
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+      steered.setDefault(worktree('a1'))
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'v1',
+      )
+      const receipts = receiptOperations(adapter)
+      expect(receipts).toEqual(['implementation', 'verification'])
+      expect(status(adapter).state).toBe('protected')
+
+      // A second write begins cleanly, but its after-snapshot times out: the
+      // call is sealed while the tree it changed is never observed.
+      const sealed = { tool: 'write', sessionID: SESSION_A, callID: 'sealed' }
+      await adapter.hooks['tool.execute.before'](sealed, { args: write })
+      steered.queueSnapshot(TIMED_OUT)
+      await adapter.hooks['tool.execute.after'](
+        { ...sealed, args: write },
+        BASH_OUTPUT,
+      )
+      expect(receiptOperations(adapter)).toEqual(receipts)
+      expect(status(adapter).state).not.toBe('unavailable')
+
+      steered.setDefault(worktree('b2'))
+      const output = await completeUnit(adapter, 'sealed-write-complete')
+
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'stale-receipt',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+
+      // A duplicate after-hook for the sealed call is silent: it takes no
+      // snapshot, mints nothing, and restores no evidence.
+      const calls = steered.snapshotCalls()
+      await adapter.hooks['tool.execute.after'](
+        { ...sealed, args: write },
+        BASH_OUTPUT,
+      )
+      expect(steered.snapshotCalls()).toBe(calls)
+      expect(receiptOperations(adapter)).toEqual(receipts)
+      expect(status(adapter).missingOperations).toContain('implementation')
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
+    test('a call whose unit was redeclared during a timing-out after-read is handled as a lost call', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const input = call('lost-then-timeout', { command: 'bun test' })
+      await begin(adapter, input)
+      const slow = deferredStep(operationSnapshot(), {
+        status: 'unavailable',
+        reasonCode: 'command-timeout',
+      })
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+      const finishing = end(adapter, input)
+      for (
+        let tick = 0;
+        tick < 50 && slowObserver.snapshotCalls() < 1;
+        tick++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(slowObserver.snapshotCalls()).toBe(1)
+      expect(
+        adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+      ).toMatchObject({ status: 'started' })
+
+      slow.release()
+      await finishing
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual([])
+      expect(
+        (await refreshStatus(adapter)).firstUnavailableCause,
+      ).toBeUndefined()
+    })
+  })
+
+  describe('a push whose after-read shows the upstream did not advance', () => {
+    const PUSH = 'git push origin main'
+    const PR_CREATE = 'gh pr create --title t --body b'
+    const MISSING = { status: 'missing-resource' } as const
+    const NOT_ADVANCED = {
+      status: 'unavailable',
+      reasonCode: 'remote-not-advanced',
+    } as const
+    const AVAILABLE = remoteAvailable(D, E)
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    // A single `before` value repeats for every before-read: the activation
+    // seed, the call's own before-read and its retry. A list is read in order,
+    // and its last value repeats. The retry runs only when the activation seed
+    // was deferred by a timeout, so a list needs a third value only for a
+    // timed-out seed.
+    function adapterFor(
+      operation: 'push' | 'pr-creation',
+      before:
+        | OperationObserverRemoteResult
+        | readonly OperationObserverRemoteResult[],
+      after: OperationObserverRemoteResult | 'throws',
+    ): { adapter: OpencodeWorkflowGuard; steered: SteeredObserver } {
+      const steered = steeredObserver({
+        [`${operation}:before`]: 'status' in before ? [before] : before,
+        [`${operation}:after`]: after === 'throws' ? [AVAILABLE] : [after],
+      })
+      const observer =
+        after === 'throws'
+          ? {
+              ...steered.observer,
+              remoteSnapshot: async (
+                remoteOperation: RemoteOperation,
+                phase: 'before' | 'after',
+              ) => {
+                if (remoteOperation === operation && phase === 'after') {
+                  throw new Error('probe failed')
+                }
+                return (
+                  steered.observer.remoteSnapshot?.(remoteOperation, phase) ?? {
+                    status: 'unavailable' as const,
+                    reasonCode: 'remote-missing-field' as const,
+                  }
+                )
+              },
+            }
+          : steered.observer
+      const adapter = createAdapter('observe', false, observer, [operation])
+      return { adapter, steered }
+    }
+
+    async function runCall(
+      adapter: OpencodeWorkflowGuard,
+      command: string,
+      callID: string,
+    ): Promise<void> {
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    // Runs a sealed call and returns how many remote reads that call made
+    // (its before-read, any retry, and its after-read).
+    async function sealedScenario(
+      operation: 'push' | 'pr-creation',
+      before:
+        | OperationObserverRemoteResult
+        | readonly OperationObserverRemoteResult[],
+      after: OperationObserverRemoteResult,
+    ): Promise<number> {
+      const { adapter, steered } = adapterFor(operation, before, after)
+      await activateWorkEpoch(adapter)
+      await runCall(adapter, 'bun test', 'earlier-verification')
+      const receipts = receiptOperations(adapter)
+      const command = operation === 'push' ? PUSH : PR_CREATE
+      const readsBeforeCall = steered.remoteCalls()
+
+      await runCall(adapter, command, 'sealed-call')
+      const callReads = steered.remoteCalls() - readsBeforeCall
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual(receipts)
+      // A duplicate after-hook is silent: it reads nothing further.
+      const reads = steered.remoteCalls()
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'bash',
+          sessionID: SESSION_A,
+          callID: 'sealed-call',
+          args: { command },
+        },
+        BASH_OUTPUT,
+      )
+      expect(steered.remoteCalls()).toBe(reads)
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+      return callReads
+    }
+
+    test.each([
+      { name: 'available', before: AVAILABLE, after: NOT_ADVANCED },
+      { name: 'missing-resource', before: MISSING, after: NOT_ADVANCED },
+    ])(
+      'a push whose before-read was $name and whose after-read is remote-not-advanced is sealed',
+      async ({ before, after }) => {
+        await sealedScenario('push', before, after)
+      },
+    )
+
+    // The seed is available, so nothing is deferred and a timed-out
+    // before-read is not retried: the call reads its before-state once and its
+    // after-state once.
+    test('a push whose before-read timed out once, with an available seed, and whose after-read is remote-not-advanced is sealed without a retry', async () => {
+      const reads = await sealedScenario(
+        'push',
+        [AVAILABLE, TIMEOUT],
+        NOT_ADVANCED,
+      )
+
+      expect(reads).toBe(2)
+    })
+
+    // The seed timed out, so the push is deferred and its before-read is
+    // retried once: the call reads its before-state twice and its after-state
+    // once.
+    test('a push whose seed, before-read and retry all timed out, and whose after-read is remote-not-advanced is sealed', async () => {
+      const reads = await sealedScenario(
+        'push',
+        [TIMEOUT, TIMEOUT, TIMEOUT],
+        NOT_ADVANCED,
+      )
+
+      expect(reads).toBe(3)
+    })
+
+    // A missing-resource after-read cannot tell an absent upstream from other
+    // git failures, so it seals only when the before-read gave no better
+    // answer: it was missing too, or it timed out.
+    test('a push whose before-read timed out once, with an available seed, and whose after-read is missing-resource is sealed without a retry', async () => {
+      const reads = await sealedScenario('push', [AVAILABLE, TIMEOUT], MISSING)
+
+      expect(reads).toBe(2)
+    })
+
+    test('a push whose seed, before-read and retry all timed out, and whose after-read is missing-resource is sealed', async () => {
+      const reads = await sealedScenario(
+        'push',
+        [TIMEOUT, TIMEOUT, TIMEOUT],
+        MISSING,
+      )
+
+      expect(reads).toBe(3)
+    })
+
+    test('a push whose before-read and after-read are both missing-resource is sealed', async () => {
+      await sealedScenario('push', MISSING, MISSING)
+    })
+
+    test('a push whose before-read was missing-resource and whose after-read times out is sealed', async () => {
+      await sealedScenario('push', MISSING, TIMEOUT)
+    })
+
+    async function fatalScenario(
+      operation: 'push' | 'pr-creation',
+      before: OperationObserverRemoteResult,
+      after: OperationObserverRemoteResult | 'throws',
+      reasonCode: string | undefined,
+    ): Promise<void> {
+      const { adapter } = adapterFor(operation, before, after)
+      await activateWorkEpoch(adapter)
+
+      await runCall(adapter, operation === 'push' ? PUSH : PR_CREATE, 'fatal')
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect((await refreshStatus(adapter)).firstUnavailableCause).toEqual({
+        site: 'tool-after',
+        kind: 'operation-observation-rejected',
+        ...(reasonCode === undefined ? {} : { reasonCode }),
+        timedOut: false,
+      })
+    }
+
+    test('a push whose before-read was available and whose after-read is missing-resource stays fatal', async () => {
+      await fatalScenario('push', AVAILABLE, MISSING, 'missing-resource')
+    })
+
+    test.each([
+      'remote-command-output-limit',
+      'remote-missing-field',
+      'remote-invalid-json',
+      'remote-command-failed',
+    ] as const)(
+      'a push whose after-read fails with %s stays fatal',
+      async (reasonCode) => {
+        await fatalScenario(
+          'push',
+          AVAILABLE,
+          { status: 'unavailable', reasonCode },
+          reasonCode,
+        )
+      },
+    )
+
+    test('a push whose after-read throws stays fatal', async () => {
+      await fatalScenario('push', AVAILABLE, 'throws', undefined)
+    })
+
+    test('a pull request creation whose after-read is remote-not-advanced stays fatal', async () => {
+      await fatalScenario(
+        'pr-creation',
+        MISSING,
+        NOT_ADVANCED,
+        'remote-not-advanced',
+      )
+    })
+
+    test('a pull request creation whose before-read and after-read are both missing-resource stays fatal', async () => {
+      await fatalScenario('pr-creation', MISSING, MISSING, 'missing-resource')
+    })
+
+    // The before-hook reads the command's intent with `classify`; the
+    // after-hook classifies the finished call with `classifyOperation`. A
+    // classifier that disagrees between the two makes the push rule not apply.
+    function skewedAdapter(
+      intent: ReceiptOperation,
+      observed: ReceiptOperation,
+    ): OpencodeWorkflowGuard {
+      const real = createReceiptClassifier()
+      const steered = steeredObserver({
+        'push:before': [AVAILABLE],
+        'push:after': [NOT_ADVANCED],
+        'pr-creation:before': [MISSING],
+        'pr-creation:after': [NOT_ADVANCED],
+      })
+      return createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        observer: steered.observer,
+        classifier: {
+          ...real,
+          classify: async (input) => ({
+            ...(await real.classify(input)),
+            category: intent,
+          }),
+          classifyOperation: async (input) => ({
+            ...(await (real.classifyOperation?.(input) ??
+              real.classify(input))),
+            category: observed,
+          }),
+        },
+        runtimeRequiredOperations: ['push', 'pr-creation'],
+      })
+    }
+
+    test.each([
+      { intent: 'push', observed: 'pr-creation' },
+      { intent: 'pr-creation', observed: 'push' },
+    ] as const)(
+      'a call read as $intent before and $observed after is not sealed as an unadvanced push',
+      async ({ intent, observed }) => {
+        const adapter = skewedAdapter(intent, observed)
+        await activateWorkEpoch(adapter)
+
+        await runCall(adapter, PUSH, 'skewed')
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect(
+          (await refreshStatus(adapter)).firstUnavailableCause,
+        ).toMatchObject({
+          site: 'tool-after',
+          kind: 'operation-observation-rejected',
+          reasonCode: 'remote-not-advanced',
+        })
+      },
+    )
+
+    test('after a push was sealed with the upstream unchanged, a second push that advances it is minted', async () => {
+      const steered = steeredObserver({
+        'push:before': [AVAILABLE],
+        'push:after': [NOT_ADVANCED, remoteAvailable(D, 'a'.repeat(64))],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await runCall(adapter, PUSH, 'sealed-push')
+      expect(receiptOperations(adapter)).toEqual([])
+
+      await runCall(adapter, PUSH, 'advancing-push')
+
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual(['push'])
+      expect(status(adapter).satisfiedOperations).toEqual(['push'])
+    })
+
+    // An upstream that moved since activation is not this unit's baseline any
+    // more, so the existing resource-revision rule rejects the next push that
+    // reads it. Sealing the earlier push did not cause that, and does not
+    // change it: the guard stays available, nothing is minted, and a status
+    // refresh or a later push does not re-baseline it.
+    test('after a push was sealed, a second push that reads an upstream that moved since activation is rejected by the revision rule, and the guard stays available', async () => {
+      const moved = remoteAvailable(D, 'f'.repeat(64))
+      const steered = steeredObserver({
+        'push:before': [AVAILABLE, AVAILABLE, moved],
+        'push:after': [NOT_ADVANCED, remoteAvailable(D, 'a'.repeat(64))],
+      })
+      const adapter = createAdapter('observe', false, steered.observer, [
+        'push',
+      ])
+      await activateWorkEpoch(adapter)
+      await runCall(adapter, PUSH, 'sealed-push')
+
+      await runCall(adapter, PUSH, 'push-after-the-upstream-moved')
+
+      expect(status(adapter).state).toBe('rejected')
+      expect(status(adapter).reasonCode).toBe('resource-mismatch')
+      expect(receiptOperations(adapter)).toEqual([])
+      expect(status(adapter).missingOperations).toContain('push')
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(status(adapter).state).toBe('rejected')
+    })
+  })
+
+  describe('a timeout while a call is targeted and validated', () => {
+    const LINKED_CALL = (target: TargetAdapter) => ({
+      command: 'bun test',
+      workdir: target.linkedRoot,
+    })
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    async function callLinked(
+      target: TargetAdapter,
+      callID: string,
+    ): Promise<void> {
+      await observeOperationTool(
+        target.adapter,
+        'bash',
+        LINKED_CALL(target),
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    // A call is skipped when it leaves no trace: the guard stays available,
+    // nothing is minted, the call took no snapshot (so its after-hook stayed
+    // silent), no cause was recorded and no block was set.
+    async function expectSkippedCall(target: TargetAdapter): Promise<void> {
+      expect(status(target.adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(target.adapter)).toEqual([])
+      expect(target.linkedSnapshots()).toBe(0)
+      const parsed = await refreshStatus(target.adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+    }
+
+    test('a timeout while the call target is derived skips the call, and the next clean call is observed normally', async () => {
+      const target = await targetAdapter()
+      try {
+        // The first validation of the linked worktree is the derivation's.
+        target.scriptLinkedValidation('timeout')
+
+        await callLinked(target, 'timed-out-derivation')
+
+        await expectSkippedCall(target)
+        await callLinked(target, 'clean-after-derivation-timeout')
+        expect(receiptOperations(target.adapter)).toContain('verification')
+        expect(target.linkedSnapshots()).toBeGreaterThan(0)
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('a timeout while the derived target is validated skips the call, and the next clean call is observed normally', async () => {
+      const target = await targetAdapter()
+      try {
+        // Derivation passes; the validation that follows it times out.
+        target.scriptLinkedValidation('real', 'timeout')
+
+        await callLinked(target, 'timed-out-validation')
+
+        await expectSkippedCall(target)
+        await callLinked(target, 'clean-after-validation-timeout')
+        expect(receiptOperations(target.adapter)).toContain('verification')
+        expect(target.linkedSnapshots()).toBeGreaterThan(0)
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('while blocked on a pinned worktree, a timeout looking up that worktree skips a call to another target and leaves the block as it was', async () => {
+      const target = await targetAdapter()
+      try {
+        // An accepted call to the linked worktree pins the unit to it.
+        await callLinked(target, 'pin-to-linked')
+        expect(
+          status(target.adapter).unit?.pinnedOperationTargetIdentity,
+        ).toBeDefined()
+        target.queueLinked(BLOCKED('file-limit'))
+        await callLinked(target, 'block-linked')
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'file-limit',
+        })
+        const receipts = receiptOperations(target.adapter)
+        // The lookup of the pinned worktree is the next linked validation.
+        target.scriptLinkedValidation('timeout')
+
+        await operateIn(target.adapter, 'parent-while-blocked')
+
+        expect(status(target.adapter).state).not.toBe('unavailable')
+        expect(receiptOperations(target.adapter)).toEqual(receipts)
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'file-limit',
+        })
+        expect(
+          (await refreshStatus(target.adapter)).firstUnavailableCause,
+        ).toBeUndefined()
+
+        // Once the lookup works, the next clean call clears the block.
+        await callLinked(target, 'clean-after-lookup-timeout')
+        expect(
+          target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    // The clean snapshot of the effective target that clears the block is taken
+    // before the call's own snapshot. When that one then times out, the call is
+    // skipped, but the clear it already committed stays: the timeout itself
+    // writes, clears and bumps nothing.
+    test("a clean snapshot of the effective target clears the block, and a timeout of the call's own snapshot then skips the call but keeps the clear", async () => {
+      const target = await targetAdapter()
+      try {
+        await callLinked(target, 'pin-to-linked')
+        expect(
+          status(target.adapter).unit?.pinnedOperationTargetIdentity,
+        ).toBeDefined()
+        expect(receiptOperations(target.adapter)).toEqual(['verification'])
+        target.queueLinked(BLOCKED('file-limit'))
+        await callLinked(target, 'block-linked')
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toEqual({
+          reasonCode: 'file-limit',
+        })
+        // The linked worktree moved while the unit was blocked.
+        const linked = await createOpencodeOperationObserver({
+          targetDirectory: target.linkedRoot,
+        }).snapshot()
+        if (linked.status !== 'available') throw new Error('linked unavailable')
+        target.queueLinked({
+          status: 'available',
+          snapshot: {
+            ...linked.snapshot,
+            worktreeRevisionDigest: 'f'.repeat(64),
+          },
+        })
+        target.queueParent(BLOCKED('command-timeout'))
+        const receipts = receiptOperations(target.adapter)
+
+        await operateIn(target.adapter, 'parent-call')
+
+        // The clear stayed committed: the block is gone and the readback it
+        // applied marked the earlier verification stale.
+        expect(
+          target.adapter.snapshotBlock(SESSION_A).current(),
+        ).toBeUndefined()
+        expect(status(target.adapter).missingOperations).toContain(
+          'verification',
+        )
+        // The call itself minted nothing, and its after-hook stayed silent.
+        expect(receiptOperations(target.adapter)).toEqual(receipts)
+        expect(status(target.adapter).state).not.toBe('unavailable')
+        const snapshots = target.linkedSnapshots()
+        await observeOperationTool(
+          target.adapter,
+          'bash',
+          { command: 'git status --short' },
+          BASH_OUTPUT,
+          'parent-call',
+        )
+        expect(target.linkedSnapshots()).toBe(snapshots)
+        expect(
+          (await refreshStatus(target.adapter)).firstUnavailableCause,
+        ).toBeUndefined()
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test.each([
+      {
+        verdicts: ['throws'] as LinkedValidation[],
+        at: 'derivation',
+      },
+      {
+        verdicts: ['identity'] as LinkedValidation[],
+        at: 'derivation',
+      },
+      {
+        verdicts: ['real', 'throws'] as LinkedValidation[],
+        at: 'validation',
+      },
+      {
+        verdicts: ['real', 'identity'] as LinkedValidation[],
+        at: 'validation',
+      },
+    ])(
+      'a validation that fails definitely at $at ($verdicts) still makes the guard unavailable',
+      async ({ verdicts }) => {
+        const target = await targetAdapter()
+        try {
+          target.scriptLinkedValidation(...verdicts)
+
+          await callLinked(target, 'definite-failure')
+
+          expect(status(target.adapter).state).toBe('unavailable')
+          expect(
+            (await refreshStatus(target.adapter)).firstUnavailableCause,
+          ).toMatchObject({
+            site: 'tool-before',
+            kind: 'operation-input-invalid',
+            timedOut: false,
+          })
+        } finally {
+          target.cleanup()
+        }
+      },
+    )
+
+    test('a parent target directory that cannot be resolved still makes the guard unavailable', async () => {
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        targetDirectory: path.join(os.tmpdir(), 'systematic-no-such-directory'),
+        observer: sequenceObserver([operationSnapshot()]),
+        classifier: createReceiptClassifier(),
+      })
+      await activateWorkEpoch(adapter)
+
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command: 'bun test' },
+        BASH_OUTPUT,
+        'unresolvable-parent',
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
+    })
+  })
+
+  describe('a timeout in the operation before-hook', () => {
+    const TIMED_OUT = sequenceObserver([unavailableStep('command-timeout')])
+
+    async function operate(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+      command = 'bun test',
+    ): Promise<void> {
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        BASH_OUTPUT,
+        callID,
+      )
+    }
+
+    function receiptOperations(adapter: OpencodeWorkflowGuard): string[] {
+      return ledger(adapter)
+        .listReceipts()
+        .map((receipt) => receipt.canonical.operation)
+    }
+
+    test('a local snapshot that times out skips the call, and the next clean call is observed normally', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const calls = steered.snapshotCalls()
+      steered.queueSnapshot(TIMED_OUT)
+
+      await operate(adapter, 'timed-out-snapshot')
+
+      // Only the before-hook's snapshot ran: the after-hook stayed silent.
+      expect(steered.snapshotCalls()).toBe(calls + 1)
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(receiptOperations(adapter)).toEqual([])
+      const parsed = await refreshStatus(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.snapshotBlock).toBeUndefined()
+
+      await operate(adapter, 'clean-after-timeout')
+
+      expect(receiptOperations(adapter)).toContain('verification')
+    })
+
+    test('a timeout while blocked leaves the block untouched, so a status refresh in flight still clears it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      mintReceipt(adapter, 'implementation', SESSION_A, OPERATION_SCOPE)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      controls.set('file-limit')
+      const slow = deferredStep(DRIFTED)
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+      const refreshing = refreshStatus(adapter)
+      for (
+        let tick = 0;
+        tick < 50 && slowObserver.snapshotCalls() < 1;
+        tick++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(slowObserver.snapshotCalls()).toBe(1)
+      steered.queueSnapshot(TIMED_OUT)
+
+      await operate(adapter, 'timed-out-while-blocked')
+
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+      slow.release()
+      const parsed = await refreshing
+
+      // Neither the record nor its version moved, so the refresh was not
+      // overtaken: it cleared the block and applied the drift it saw.
+      expect(parsed.snapshotBlock).toBeUndefined()
+      expect(status(adapter).missingOperations).toContain('implementation')
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('a write skipped by a timeout still changes the tree, and completion is rejected as stale-receipt', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered, 'protected')
+      const worktree = (tag: string) =>
+        operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+      const write = { filePath: 'real.ts', content: 'changed' }
+      // Observed evidence: a write and a verification.
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+      steered.setDefault(worktree('a1'))
+      await operate(adapter, 'v1')
+      expect(status(adapter).state).toBe('protected')
+      // The timeout lands on the second write's own before-hook snapshot.
+      steered.queueSnapshot(TIMED_OUT)
+
+      await observeOperationTool(
+        adapter,
+        'write',
+        write,
+        BASH_OUTPUT,
+        'skipped',
+      )
+
+      expect(status(adapter).state).toBe('protected')
+      expect(receiptOperations(adapter)).toEqual([
+        'implementation',
+        'verification',
+      ])
+      // The write the guard never saw moved the tree.
+      steered.setDefault(worktree('b2'))
+      const output = await completeUnit(adapter, 'skipped-write-complete')
+
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'stale-receipt',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+    })
+
+    test('a later observed write and verification attest the final state after a skipped write', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered, 'protected')
+      const worktree = (tag: string) =>
+        operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+      const write = { filePath: 'real.ts', content: 'changed' }
+      // An observed write and a verification.
+      steered.queueSnapshot(sequenceObserver([operationSnapshot()]))
+      steered.queueSnapshot(sequenceObserver([worktree('a1')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w1')
+      steered.setDefault(worktree('a1'))
+      await operate(adapter, 'v1')
+      expect(status(adapter).state).toBe('protected')
+
+      // A second write times out before it is observed, and changes the tree.
+      steered.queueSnapshot(TIMED_OUT)
+      await observeOperationTool(
+        adapter,
+        'write',
+        write,
+        BASH_OUTPUT,
+        'skipped',
+      )
+      steered.setDefault(worktree('b2'))
+      expect(status(adapter).state).not.toBe('unavailable')
+
+      // The next status read applies the drift and marks the evidence stale.
+      await refreshStatus(adapter)
+      expect(status(adapter).missingOperations).toContain('implementation')
+
+      // A later observed write and verification attest the final state.
+      steered.queueSnapshot(sequenceObserver([worktree('b2')]))
+      steered.queueSnapshot(sequenceObserver([worktree('c3')]))
+      await observeOperationTool(adapter, 'write', write, BASH_OUTPUT, 'w2')
+      steered.setDefault(worktree('c3'))
+      await operate(adapter, 'v2')
+      expect(status(adapter).state).toBe('protected')
+
+      const output = await completeUnit(adapter, 'attested-complete')
+
+      expect(output.metadata.workflowGuard).toMatchObject({
+        status: 'completed',
+      })
+      expect(status(adapter).unit?.status).toBe('completed')
+    })
+  })
+})
+
+describe('parent registration lookups that time out', () => {
+  type RegistrationVerdict = 'timeout' | 'identity' | 'throws'
+
+  // A unit recovered from markers and pinned to the parent observer's own
+  // target, whose registration is not known yet. The Nth upcoming validation
+  // of the parent root follows `verdicts`; later ones succeed.
+  function recoveredParentPinned(
+    verdicts: readonly RegistrationVerdict[],
+    options: { readonly receipt?: boolean } = {},
+  ) {
+    const directory = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-registration-')),
+    )
+    const pinnedIdentity = '9'.repeat(64)
+    const queue = [...verdicts]
+    const base = sequenceObserver([operationSnapshot()], {
+      'push:before': [remoteAvailable('d'.repeat(64), 'e'.repeat(64))],
+    })
+    const observer: OpencodeOperationObserver = {
+      ...base,
+      targetDigest: pinnedIdentity,
+      validateRegisteredWorktree(candidate) {
+        const verdict = candidate === directory ? queue.shift() : undefined
+        if (verdict === 'throws') throw new Error('validation exploded')
+        if (verdict === 'timeout') {
+          return { status: 'error', reasonCode: 'command-timeout' }
+        }
+        if (verdict === 'identity') {
+          return { status: 'error', reasonCode: 'target-unavailable' }
+        }
+        return base.validateRegisteredWorktree(candidate)
+      },
+    }
+    const registrationIdentity = 'registration-timeout-registration'
+    const sessionSalt = new Uint8Array(32).fill(61)
+    const markers = buildPinnedRecoveryMarkers(
+      registrationIdentity,
+      sessionSalt,
+      OPERATION_SCOPE.workspaceIdentity,
+      pinnedIdentity,
+      OPERATION_SCOPE.repositoryIdentity,
+      OPERATION_SCOPE.worktreeIdentity,
+      options.receipt ?? true,
+    )
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'observe', debug: false },
+      ...OPERATION_SCOPE,
+      targetDirectory: directory,
+      sessionLocation: directory,
+      registrationIdentity,
+      sessionSalt,
+      observer,
+      classifier: createReceiptClassifier(),
+      runtimeRequiredOperations: ['push'],
+      hostReadback: {
+        readSessionParts: async (sessionID) =>
+          sessionID === SESSION_A ? wrapReceiptMarkers(markers) : [],
+        listChildren: async () => [],
+      },
+    })
+    return {
+      adapter,
+      cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
+    }
+  }
+
+  async function statusDocument(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<Record<string, unknown>> {
+    const result = await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
+    return JSON.parse(expectToolOutput(result).output)
+  }
+
+  // Loads the recovered unit without looking up any registration.
+  async function loadUnit(adapter: OpencodeWorkflowGuard): Promise<void> {
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      { system: ['base'] },
+    )
+    expect(status(adapter).unit?.status).toBe('active')
+  }
+
+  async function redeclareWithPush(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<void> {
+    const args = { expected_operations: ['push'] }
+    const input = {
+      tool: 'systematic_workflow_start',
+      sessionID: SESSION_A,
+      callID: 'registration-redeclare',
+    }
+    await adapter.hooks['tool.execute.before'](input, { args })
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args },
+      { title: 'x', output: 'y', metadata: {} },
+    )
+  }
+
+  const STAYS_FATAL = [
+    { verdict: 'throws' as const, label: 'a validator that throws' },
+    { verdict: 'identity' as const, label: 'an identity error' },
+  ]
+
+  test('a registration timeout during a status refresh is reported as unconfirmed, and the guard stays available', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'])
+    try {
+      const parsed = await statusDocument(adapter)
+
+      expect(parsed.unconfirmedReadbacks).toEqual([
+        { probe: 'pinned', reasonCode: 'command-timeout' },
+      ])
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a registration timeout during completion is a retryable readback-timeout', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'])
+    try {
+      const output = await completeUnit(
+        adapter,
+        'registration-timeout-complete',
+      )
+
+      expect(JSON.parse(output.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'readback-timeout',
+      })
+      expect(status(adapter).state).not.toBe('unavailable')
+      expect(status(adapter).unit?.status).toBe('active')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a registration timeout in the block-clear control returns timeout and keeps the block', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'])
+    try {
+      await loadUnit(adapter)
+      const controls = adapter.snapshotBlock(SESSION_A)
+      expect(controls.set('file-limit')).toBe(true)
+
+      expect(await controls.clear()).toEqual({ status: 'timeout' })
+
+      expect(controls.current()).toEqual({ reasonCode: 'file-limit' })
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a registration timeout at seed time is fatal and carries a command-timeout cause', async () => {
+    const { adapter, cleanup } = recoveredParentPinned(['timeout'], {
+      receipt: false,
+    })
+    try {
+      await loadUnit(adapter)
+
+      await redeclareWithPush(adapter)
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect((await statusDocument(adapter)).firstUnavailableCause).toEqual({
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: 'command-timeout',
+        timedOut: true,
+      })
+    } finally {
+      cleanup()
+    }
+  })
+
+  test.each(STAYS_FATAL)(
+    '$label during a status refresh stays fatal',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict])
+      try {
+        const parsed = await statusDocument(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect(parsed.firstUnavailableCause).toMatchObject({
+          site: 'refresh-readback',
+          kind: 'observer-readback-failed',
+          timedOut: false,
+        })
+        expect('unconfirmedReadbacks' in parsed).toBe(false)
+      } finally {
+        cleanup()
+      }
+    },
+  )
+
+  test.each(STAYS_FATAL)(
+    '$label during completion stays fatal',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict])
+      try {
+        const output = await completeUnit(
+          adapter,
+          'registration-fatal-complete',
+        )
+
+        expect(JSON.parse(output.output)).toMatchObject({
+          status: 'unavailable',
+        })
+        expect(status(adapter).state).toBe('unavailable')
+      } finally {
+        cleanup()
+      }
+    },
+  )
+
+  test.each(STAYS_FATAL)(
+    '$label in the block-clear control stays fatal',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict])
+      try {
+        await loadUnit(adapter)
+        const controls = adapter.snapshotBlock(SESSION_A)
+        controls.set('file-limit')
+
+        expect(await controls.clear()).toEqual({ status: 'fatal' })
+
+        expect(status(adapter).state).toBe('unavailable')
+      } finally {
+        cleanup()
+      }
+    },
+  )
+
+  test.each(STAYS_FATAL)(
+    '$label at seed time stays fatal without a timeout cause',
+    async ({ verdict }) => {
+      const { adapter, cleanup } = recoveredParentPinned([verdict], {
+        receipt: false,
+      })
+      try {
+        await loadUnit(adapter)
+
+        await redeclareWithPush(adapter)
+
+        expect(status(adapter).state).toBe('unavailable')
+        expect((await statusDocument(adapter)).firstUnavailableCause).toEqual({
+          site: 'seed-remote-scopes',
+          kind: 'local-snapshot-error',
+          timedOut: false,
+        })
+      } finally {
+        cleanup()
+      }
+    },
+  )
 })

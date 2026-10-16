@@ -103,9 +103,9 @@ markUnavailable(afterCause('transition-finalize-rejected', reasonCode))
   - `target-unavailable`
   - command failures
   - unreadable inputs
-  - a snapshot timeout inside an operation hook (open bug #1084); a status refresh instead reports a timed-out probe as unconfirmed, and completion rejects it as the retryable `readback-timeout`
+  - a failure that is not a typed timeout: a throw, a target-digest mismatch, malformed output, and a classifier or parser failure
   - pinned-lookup failures
-  - remote-probe failures
+  - remote-probe failures other than a typed timeout, which seals the one call, and a push whose upstream did not advance, which is sealed (see ARCHITECTURE.md)
   - a change of target identity or registration between completion snapshots
 - **Guidance.** The guidance in `skills/using-systematic/SKILL.md` gives the recovery order: read `blockReason` or `snapshotBlock.reasonCode`, fix the cause, call status, rerun stale or missing operations, then complete. It also says:
   - Check remote state before redoing a push or PR.
@@ -126,7 +126,8 @@ Recording only the effective target keeps the block and its clear in the same pl
 - Remote side effects made while blocked (a push, a PR) leave no receipt and no status trace. The guidance tells the agent to check remote state before redoing them.
 - A blocked snapshot of a target that is not the effective target skips the call without recording a block, so status does not show it.
 - Block-and-fix cycles have no attempt cap. Completion rejections are retryable and consume nothing, and the one-fix escalation is the agent's judgment. Disabling the guard still needs the user's answer to an attestation question.
-- Open: #1084 (hook-time snapshot timeouts are fatal) and #1126 (ignore rules and other agent-written state can hide work from the snapshot).
+- A snapshot timeout no longer makes the guard unavailable. A before-hook timeout skips the call, an after-hook timeout seals it, a child-rollup timeout halts the pass, a status refresh reports the probe as unconfirmed, and completion rejects it as the retryable `readback-timeout`. The attestation model, the unreceipted-push residual and the rollup residual are in ARCHITECTURE.md (#1084).
+- Open: #1126 (ignore rules and other agent-written state can hide work from the snapshot).
 
 ## Prevention
 
@@ -145,7 +146,7 @@ Recording only the effective target keeps the block and its clear in the same pl
 
 ## Related Issues
 
-- #1124, #1134. #1084 (snapshot timeouts stay fatal), #1131 (verification receipts that overlap a reverted parallel write), #1126 (open: anchor observer roots and ignore rules so agent-written state cannot hide work).
+- #1124, #1134. #1084 (snapshot timeouts skip, seal or halt the one call instead of making the guard unavailable), #1131 (verification receipts that overlap a reverted parallel write), #1126 (open: anchor observer roots and ignore rules so agent-written state cannot hide work).
 - [The operation observer reported a changed worktree as unchanged or committed](./operation-observer-false-clean-worktree-2026-10-15.md): the snapshot reasons this fix classifies.
 - [Workflow guard digests collapsed long values, and large operation arguments disabled the guard](./workflow-guard-digest-collapse-long-identities-2026-10-14.md): a separate oversized-input path that stays `operation-input-invalid`.
 - [Receipt guard missed worktree-targeted child operations](../integration-issues/worktree-targeted-receipt-observation-2026-08-02.md): the effective-target and pinned-worktree rules.
