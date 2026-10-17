@@ -1,7 +1,7 @@
 ---
 title: "fix: Fence core operation observations against redeclaration and keep seed timeouts visible"
 type: fix
-status: active
+status: completed
 date: 2026-10-17
 ---
 
@@ -164,13 +164,15 @@ On the seed side, `recordSeedDeferral` returns early whenever the core holds any
 - Both parts ship in one PR, which closes #1083 (confirmed).
 - The bind rule, the new reason code and the mode fence are as above (confirmed).
 
-### Deferred to Implementation
+### Resolved During Implementation
 
-- Exact names for the classifier outcome variants.
+- Classifier outcome variants are `classified`, `stale` and `unclassified`.
+- `declaration-superseded` is added to the reason-code union only. The stale path records no issue, so `issueKind` and `repairFor` / `eligibleRepairKinds` never see it, and their defaults would already give the right answer.
+- A snapshot-blocked seed for an undeclared operation over a propagated baseline cannot happen through the hooks: a blocked seed stops before any remote seed, and a propagated baseline makes the unit reject a later redeclaration. A control test pins that rejection instead.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Fence core observations with a declaration generation**
+- [x] **Unit 1: Fence core observations with a declaration generation**
 
 **Goal:** an observation finalizes only if its unit's declaration, its unit's completion state and the guard mode are unchanged since it started.
 
@@ -213,7 +215,7 @@ On the seed side, `recordSeedDeferral` returns early whenever the core holds any
 - Each of these mutations fails at least one discriminating scenario: removing the post-await compare, removing the in-catch compare, removing the `startActiveUnit` bump, removing the completion bump, removing the `setMode` bump, and moving the `setMode` bump before its early return.
 - `bun run typecheck:all` passes.
 
-- [ ] **Unit 2: Keep seed timeouts visible when a baseline was propagated**
+- [x] **Unit 2: Keep seed timeouts visible when a baseline was propagated**
 
 **Goal:** a seed timeout for an operation without a declared resource scope is recorded and retried after pull-request propagation. Binding does not hide it on a read that did not answer for the operation.
 
@@ -251,7 +253,7 @@ On the seed side, `recordSeedDeferral` returns early whenever the core holds any
 - The flipped test passes. Every listed control stays green.
 - Each of these mutations fails at least one discriminating scenario: restoring the any-baseline early return, making the bind-time clear unconditional, dropping `sameSeedObserver` from the clear, and making the retry ignore the deferral record.
 
-- [ ] **Unit 3: Docs**
+- [x] **Unit 3: Docs**
 
 **Goal:** the docs describe the core fence and the seed rule as they now behave.
 

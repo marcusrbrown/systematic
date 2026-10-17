@@ -268,8 +268,13 @@ in-flight guard call in the current, unfinished assistant turn do not count as u
 history; any other markerless guard history fails closed. At activation, a remote probe timeout, or
 a push `missing-resource`, defers that one operation instead of making the guard unavailable;
 deferrals are listed on status output as an enum-only `seedDeferrals` list and never appear in
-receipts, markers, or digests. A deferred operation is admitted only after its own before-read is
-available (retried once on a timeout) from the same observer and target as the seed, and PR creation
+receipts, markers, or digests. A deferral is skipped only for an operation with a declared resource
+scope; a baseline propagated from PR creation to check or review readback does not hide a timeout.
+A deferred operation is admitted only after its own before-read is
+available (retried once on a timeout) from the same observer and target as the seed. Where a
+baseline is already present, the deferral clears only on that operation's own `available`
+before-read from the seed's observer and target, so a timeout, a missing resource, or another
+observer's read leaves it in place. PR creation
 seeds its baseline from the after-read only when its before-read reported `missing-resource`. After
 an operation is satisfied, a probe timeout during a status refresh skips that probe instead of
 making the guard unavailable: a remote timeout skips only that operation and the rest still run, a
@@ -279,7 +284,11 @@ status output as an enum-only `unconfirmedReadbacks` list that never appears in 
 or digests. A completion readback timeout rejects that attempt as `readback-timeout` without
 consuming anything or making the guard unavailable; the next completion call prepares fresh and
 surfaces any real blocking reason. A fatal completion readback replays `finalization-failed` and
-records a `complete-readback` cause. A local snapshot of the unit's effective target (its pinned
+records a `complete-readback` cause. An operation's core observation is superseded when what it was admitted
+against changes while the core awaits the classifier: a changed redeclaration, the unit's
+completion, or a mode change. It mints nothing, records no issue, and returns
+`declaration-superseded`; the adapter seals that result and ignores it, and the agent reruns the
+operation. A local snapshot of the unit's effective target (its pinned
 worktree, else the parent checkout) that fails with `file-limit`, `file-output-limit`,
 `command-output-limit`, or `worktree-unstable` blocks the unit instead of making the guard
 unavailable. The block is a runtime-only record, reported on status output as an enum-only
@@ -342,7 +351,15 @@ ID seen more than once (held even after its executions return), and the entry an
 before-hook leaves, which over-seal verifications in the same request until the next request
 boundary; and an unparseable before-hook
 whose tool name cannot be read, which cannot be told apart from a non-local call and is not
-counted. Other residuals: `missingOperations` reports a lost call only when its operation has no
+counted. Other residuals: a superseded observation leaves the call terminal, so a later changed
+redeclaration of that unit is rejected as `unit-active`, as after an accepted or rejected
+observation; sibling calls that move resource identities or write unit evidence during the
+classifier await are not fenced; a seed read after a changed redeclaration can replace a propagated
+identity; where a baseline is present the deferral's clear leaves the operation's revision baseline
+unset, so its first before-revision is unchecked; an `available` before-read for a different pull
+request clears the deferral and admission then rejects the call as `resource-mismatch`; a deferral
+recorded before the operation was declared stays until the operation's own `available` read or the
+end of the unit; `missingOperations` reports a lost call only when its operation has no
 receipt at all; a push that landed but whose after-read timed out stays unreceipted, and later
 pushes in that unit are rejected as `resource-mismatch` until the unit is redeclared; and evidence
 a halted child rollup did not mint shows up only when the operation has no other receipt. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build
