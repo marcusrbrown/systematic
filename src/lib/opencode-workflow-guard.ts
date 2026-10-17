@@ -348,6 +348,8 @@ interface SessionRuntime {
   unavailableCause(): GuardUnavailableCause | undefined
   seedDeferrals(): readonly SeedDeferral[]
   readonly snapshotBlock: SnapshotBlockControls
+  /** Counts a local call whose before-hook input could not be parsed. */
+  noteUnparsedLocalCall(): void
   refreshReadback(): Promise<readonly UnconfirmedReadback[]>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
@@ -404,6 +406,21 @@ interface PendingOperation {
   initiator?: OperationInitiator
   remoteOperation?: RemoteOperation
   remoteBefore?: OperationObserverRemoteResult
+  /** The session's local-call facts when this call's before-hook began. */
+  localCall: LocalCallStart
+}
+
+/**
+ * What a local call's before-hook saw of the session's other local calls, read
+ * in the same synchronous step as the call's own increment of the session's
+ * local-call sequence. `sequenceAtStart` includes that increment, and
+ * `otherInFlightAtStart` is whether any other call (by call key) was in flight.
+ */
+type LocalCallState = 'running' | 'returned' | 'ambiguous'
+
+interface LocalCallStart {
+  readonly sequenceAtStart: number
+  readonly otherInFlightAtStart: boolean
 }
 
 /**
@@ -2050,6 +2067,21 @@ function createSessionRuntime(
   // state has become in between. Entries outlive their first after-hook so a
   // duplicate stays silent, and move to `abandonedOperations` at the transform.
   const skippedOperations = new Set<string>()
+  // Local calls (write, edit, apply_patch, bash) are counted whether or not
+  // the guard observes them, because an unobserved call still changes the
+  // tree. The sequence moves on every local before-hook, a duplicate call ID
+  // included (a duplicate is a second execution), and is never reset. The
+  // map records, per call key seen in this request, whether it is still
+  // running: a key begun once is `running` until its after-hook runs, then
+  // `returned`. A key begun more than once is `ambiguous` and stays in
+  // flight: no execution identity tells a replayed after-hook from the second
+  // execution's own, so no after-hook may release it. An unparsed local
+  // before-hook has no after-hook that could match it and is held as
+  // `ambiguous` under a synthetic key. The map is cleared at the request
+  // boundary, because the host has no cleanup hook for a call that was
+  // denied, interrupted or threw. Runtime-only.
+  let localCallSequence = 0
+  const inFlightLocalCalls = new Map<string, LocalCallState>()
   const abandonedOperations = new Map<
     string,
     SealedOperation | SkippedOperation
@@ -3324,6 +3356,10 @@ function createSessionRuntime(
       abandonedOperations.set(callDigest, { skipped: true })
     }
     skippedOperations.clear()
+    // The request boundary: a call whose after-hook never ran (denied,
+    // interrupted, threw) must not seal later verifications. The sequence is
+    // never reset.
+    inFlightLocalCalls.clear()
   }
 
   // A status read must not touch sibling calls' pending work: pending
@@ -4122,12 +4158,64 @@ function createSessionRuntime(
     return result.status === 'stale' ? { kind: 'skip' } : undefined
   }
 
+  // The first statement of a local before-hook. Increments the sequence, and in
+  // the same synchronous step reads the facts the call's verification gate
+  // needs, then marks this call in flight. A call key seen before in this
+  // request is a second execution and becomes `ambiguous`. `otherInFlight
+  // AtStart` asks only about keys other than this call's own.
+  function beginLocalCall(callDigest: string): LocalCallStart {
+    localCallSequence += 1
+    const start: LocalCallStart = {
+      sequenceAtStart: localCallSequence,
+      otherInFlightAtStart: [...inFlightLocalCalls].some(
+        ([key, state]) => key !== callDigest && state !== 'returned',
+      ),
+    }
+    inFlightLocalCalls.set(
+      callDigest,
+      inFlightLocalCalls.has(callDigest) ? 'ambiguous' : 'running',
+    )
+    return start
+  }
+
+  // An after-hook ran for this call key. Only a key begun exactly once is
+  // released; a replay of that after-hook, or an after-hook for a key that is
+  // unknown or ambiguous, changes nothing.
+  function endLocalCall(callDigest: string): void {
+    if (inFlightLocalCalls.get(callDigest) === 'running') {
+      inFlightLocalCalls.set(callDigest, 'returned')
+    }
+  }
+
+  // A local before-hook whose input could not be parsed. Its call key is
+  // unknown, so no after-hook can match it: it is held in flight under a
+  // synthetic key (the sequence is unique, and a call digest never contains a
+  // colon) until the request boundary clears it.
+  function beginUnparsedLocalCall(): void {
+    localCallSequence += 1
+    inFlightLocalCalls.set(`unparsed:${localCallSequence}`, 'ambiguous')
+  }
+
+  // Whether another local call ran during this call's window: one was in
+  // flight when it began, or a local before-hook has run since. Read with no
+  // await between this check and admission.
+  function overlappedAnotherLocalCall(pending: PendingOperation): boolean {
+    return (
+      pending.localCall.otherInFlightAtStart ||
+      localCallSequence !== pending.localCall.sequenceAtStart
+    )
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: target derivation, registered-worktree validation, and observer registration must stay atomic on the before hook
   async function prepareOperation(
     host: HostToolBefore,
     args: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
+    // Counted before the observation gate and before any await: a call that
+    // runs unobserved still changes the tree, and a call that starts during
+    // an await below must be counted by a verification already in flight.
+    const localCall = beginLocalCall(digestCall(ledger, host.callID))
     // Decided before any argument work: fingerprinting can fail on large
     // arguments, and a skipped call must not depend on it.
     if (!operationObservationApplies()) {
@@ -4243,6 +4331,7 @@ function createSessionRuntime(
       registeredWorktreeIdentity: registeredIdentity,
       observer: operationObserver,
       before: taken.snapshot,
+      localCall,
       ...(initiator ? { initiator } : {}),
       ...(remote
         ? { remoteOperation: remote.operation, remoteBefore: remote.before }
@@ -6173,6 +6262,16 @@ function createSessionRuntime(
     // below, whose synchronous prefix reads the guard state.
     // Lost ownership: the unit that began this call is gone.
     if (!ownsOperation(pending)) return sealAndIgnore(callDigest, pending)
+    // A verification that overlapped another local call says nothing about a
+    // stable tree: part of the run may have read a tree another call changed,
+    // even one it changed back. Nothing is minted, the guard stays available,
+    // and the agent reruns the verification alone.
+    if (
+      finalObservation.operation === 'verification' &&
+      overlappedAnotherLocalCall(pending)
+    ) {
+      return sealAndIgnore(callDigest, pending)
+    }
     const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)
@@ -6254,6 +6353,9 @@ function createSessionRuntime(
   ): Promise<void> {
     if (!options.observer || !isLocalOperationAfter(host)) return
     const callDigest = digestCall(ledger, host.callID)
+    // The tool has returned: this execution is no longer in flight, whatever
+    // happens to its record below.
+    endLocalCall(callDigest)
     const pending = takeOperationToFinish(callDigest, host)
     if (!pending) return
     const result = await completeOperationObservation(
@@ -6358,6 +6460,7 @@ function createSessionRuntime(
     unavailableCause: () => firstUnavailableCause ?? pendingUnavailableCause,
     seedDeferrals: currentSeedDeferrals,
     snapshotBlock: snapshotBlockControls,
+    noteUnparsedLocalCall: beginUnparsedLocalCall,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
@@ -6563,9 +6666,30 @@ export function createOpencodeWorkflowGuard(
     ),
   }
 
+  // A before-hook whose input cannot be parsed still lets its tool run. When
+  // the session and a local tool can be read from it, the call is counted as a
+  // local call and held in flight until the request boundary, so it seals a
+  // verification that begins while it runs as well as one it overlaps. If the
+  // tool name itself cannot be read there is no telling whether the call is
+  // local, and it is not counted.
+  function countUnparsedLocalCall(input: unknown): void {
+    if (
+      !isRecord(input) ||
+      !boundedString(input.sessionID, 256) ||
+      !boundedString(input.tool, 128) ||
+      !isLocalOperationTool(input.tool)
+    ) {
+      return
+    }
+    sessionRuntimeFor(input.sessionID).noteUnparsedLocalCall()
+  }
+
   async function before(input: unknown, output: unknown): Promise<void> {
     const host = parseHostBefore(input)
-    if (!host) return
+    if (!host) {
+      countUnparsedLocalCall(input)
+      return
+    }
     // The runtime hook already converts every non-blocked exception into a
     // `hook-threw` cause; a blocked error propagates to the host unchanged.
     await sessionRuntimeFor(host.sessionID).hooks['tool.execute.before'](

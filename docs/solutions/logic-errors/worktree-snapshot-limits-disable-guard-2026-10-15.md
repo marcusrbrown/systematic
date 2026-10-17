@@ -146,7 +146,7 @@ Recording only the effective target keeps the block and its clear in the same pl
 
 ## Related Issues
 
-- #1124, #1134. #1084 (snapshot timeouts skip, seal or halt the one call instead of making the guard unavailable), #1131 (verification receipts that overlap a reverted parallel write), #1126 (open: anchor observer roots and ignore rules so agent-written state cannot hide work).
+- #1124, #1134. #1084 (snapshot timeouts skip, seal or halt the one call instead of making the guard unavailable), #1126 (open: anchor observer roots and ignore rules so agent-written state cannot hide work).
 - [The operation observer reported a changed worktree as unchanged or committed](./operation-observer-false-clean-worktree-2026-10-15.md): the snapshot reasons this fix classifies.
 - [Workflow guard digests collapsed long values, and large operation arguments disabled the guard](./workflow-guard-digest-collapse-long-identities-2026-10-14.md): a separate oversized-input path that stays `operation-input-invalid`.
 - [Receipt guard missed worktree-targeted child operations](../integration-issues/worktree-targeted-receipt-observation-2026-08-02.md): the effective-target and pinned-worktree rules.
