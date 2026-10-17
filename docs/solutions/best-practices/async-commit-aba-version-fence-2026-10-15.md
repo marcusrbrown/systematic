@@ -126,4 +126,5 @@ Test outline. These are the deferred-step tests in `tests/unit/opencode-workflow
 - [Worktree snapshot limits turned workflow guard enforcement off for the session](../logic-errors/worktree-snapshot-limits-disable-guard-2026-10-15.md): the snapshot block this fence protects.
 - [The operation observer reported a changed worktree as unchanged or committed](../logic-errors/operation-observer-false-clean-worktree-2026-10-15.md): the same "change during the read" concern inside one snapshot, solved there with a final re-check pass.
 - [A mutation that fails nothing needs a decision](./a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md).
+- [A verification that overlapped another local call could still mint a receipt](../logic-errors/verification-overlap-mints-receipt-2026-10-17.md): the same capture-before-await rule, applied to verification receipts, which describe a whole run.
 - #1083 (an open classifier race on same-ID redeclaration, which needs the same kind of ownership fencing).
