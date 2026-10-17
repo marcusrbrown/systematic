@@ -20447,6 +20447,25 @@ describe('snapshot block record', () => {
       await expectSealed(adapter, steered, verification)
     })
 
+    test('a call ID reused after it returned stays in flight, so a replayed after-hook cannot hide the reuse', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'reused-id', WRITE)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+      // The same call ID begins again after the first execution returned.
+      await begin(adapter, writer)
+      // The same after-hook input again: a replay of the first execution's,
+      // or the second execution's own. Nothing tells them apart.
+      await end(adapter, writer)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
     test('a call ID seen twice stays in flight after its after-hooks, and the next request boundary releases it', async () => {
       const steered = steeredObserver()
       const adapter = await activeAdapter(steered)
