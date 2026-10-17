@@ -95,7 +95,7 @@ These stay fatal: an `available` before-read followed by a `missing-resource` af
 
 ## Why This Works
 
-Receipts are bound to a worktree and repository revision, so the guard attests the final state of what the observer digests, not every write. Ignored content is outside that digest (#1126). That was already true for calls skipped while blocked, inactive sessions, tools the classifier does not recognise, and destructive pushes, which are never observed. A skipped or sealed call fits the same model. The next readback marks older receipts stale, and later observed work outside an overlap attests the final state. A verification that overlapped another local call in the same session is the exception: it is sealed and minted nothing, so it must be rerun alone.
+Receipts are bound to a worktree and repository revision, so the guard attests the final state of what the observer digests, not every write. Ignored content is outside that digest (#1126). That was already true for calls skipped while blocked, inactive sessions, tools the classifier does not recognise, and destructive pushes, which are never observed. A skipped or sealed call fits the same model. The next readback marks older receipts stale, and later observed work attests the final state. The exception is a verification that overlapped another local call: it is sealed, so it must be rerun alone (see [the verification-overlap doc](./verification-overlap-mints-receipt-2026-10-17.md)).
 
 Two tests in `tests/unit/opencode-workflow-guard.test.ts` pin this. In one, a later observed write and its verification attest the final state after a skipped write, and completion succeeds. In the other, a skipped write followed by completion is rejected as `stale-receipt`. Fully attesting every write would need a new mechanism, an unattested-digest marker, and that is out of scope.
 
@@ -104,7 +104,7 @@ Residuals, documented in `ARCHITECTURE.md`:
 - A push that landed but whose after-read timed out has no receipt. Later pushes in that unit are rejected as `resource-mismatch` until the unit is redeclared.
 - The evidence a halted child rollup did not mint shows up only when the operation has no other receipt.
 - A snapshot that always times out keeps completion in a retryable `readback-timeout`. The way out is to fix the tree or have the user disable the guard.
-- A skipped call is silent: no status field or counter records it. Only a later stale receipt or missing operation shows it.
+- A skipped call is silent: no status field or counter records that it was skipped. Only a later stale receipt or missing operation shows it. It still counts toward the local call sequence, so it can seal an overlapping verification.
 - The guard cannot tell an induced timeout from a transient one, so any call whose probe times out runs unobserved. Final-state attestation is what still holds.
 
 ## Prevention
@@ -125,3 +125,4 @@ Residuals, documented in `ARCHITECTURE.md`:
 - [An async read that commits on return must detect any change made while it waited](../best-practices/async-commit-aba-version-fence-2026-10-15.md): the timeout paths keep its ownership and version checks.
 - [A mutation that fails nothing needs a decision](../best-practices/a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md)
 - [Receipt guard missed worktree-targeted child operations](../integration-issues/worktree-targeted-receipt-observation-2026-08-02.md): identity and registration failures still fail closed.
+- [A verification that overlapped another local call could still mint a receipt](./verification-overlap-mints-receipt-2026-10-17.md): the overlap exception to final-state attestation.
