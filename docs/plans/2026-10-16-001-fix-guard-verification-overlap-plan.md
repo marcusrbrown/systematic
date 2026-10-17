@@ -9,7 +9,7 @@ date: 2026-10-16
 
 ## Overview
 
-A verification receipt says a verification command ran against a stable tree. Today the guard mints one whenever the verification call's own after-hook succeeds. It never checks whether another local operation in the same session ran while the call was in flight. With parallel tool calls this allows a misleading receipt, a case Fro Bot reproduced at the adapter boundary (#1131):
+A verification receipt says a verification command ran against a stable tree. Today the guard mints one whenever the verification call's own after-hook succeeds. It never checks whether another local call in the same session ran while that call was in flight, so parallel tool calls can produce a misleading receipt (#1131, reproduced by Fro Bot at the adapter boundary):
 
 1. A `bun test` starts at worktree digest D0.
 2. A parallel write changes the tree to D1.
@@ -18,50 +18,65 @@ A verification receipt says a verification command ran against a stable tree. To
 
 Part of the test run read D1.
 
-This plan tracks local operations per session. A verification that overlapped any other local call is sealed: nothing is minted, the guard stays available, and the agent reruns verification alone.
+This plan tracks local calls per session and seals a verification that overlapped any of them. Nothing is minted, the guard stays available, and the agent reruns verification alone.
 
 **Terms.**
 
-- *Local call*: a `write`, `edit`, `apply_patch` or `bash` call, as defined by `isLocalOperationTool`.
-- *Overlap*: another local call was in flight when the verification's before-hook began, or another local call's before-hook began while the verification was in flight. Calls that were skipped, blocked, timed out, or made in an inactive session all count, because they still run.
+- *Local call*: a `write`, `edit`, `apply_patch` or `bash` call, as `isLocalOperationTool` defines it.
+- *Call key*: `digestCall(ledger, host.callID)`. It is derived from the call ID only, never from arguments.
+- *Overlap window* of a verification V: from the first statement of V's `prepareOperation` to V's admission check.
+- *Overlap*: either another local call was in flight when V's window opened, or another local before-hook ran during V's window. Calls that run unobserved still count. That covers calls skipped by the observation gate, by a block on the effective target, or by a timeout.
 - *Seal*: the existing `sealAndIgnore`. The call is sealed as abandoned, nothing is minted, and a duplicate after-hook stays silent.
 
 ## Problem Frame
 
-Verification admission runs in `completeOperationObservation` in `src/lib/opencode-workflow-guard.ts`. It goes through `receipt-classifier.ts` `validateVerification`, which checks workspace identity only, and then into core `observeOperation`. None of these know about other calls in the session.
+Verification admission runs in `completeOperationObservation` in `src/lib/opencode-workflow-guard.ts`. It passes through `receipt-classifier.ts` `validateVerification`, which checks only workspace identity, and then into core `observeOperation`. None of these know about other calls in the session. Endpoint digests can't solve this either: a write that is later reverted leaves the before and after digests equal. Verification receipts do not check digest stability, so this overlap check is the only same-session guard on them.
 
-Endpoint digests can't solve this either: a write that is reverted produces identical before and after digests. The existing serial test that mints verification across differing digests stays valid.
+Host behaviour (OpenCode v1.19.0, `anomalyco/opencode` 733b2c62) that the design relies on or works around:
+
+- The host awaits `tool.execute.before` before the tool runs (`packages/opencode/src/session/tools.ts`).
+- `tool.execute.after` runs only when the tool succeeds. A tool that throws, is denied, or is interrupted never reaches it, and the host has no cleanup hook.
+- The next request, and its system transform, can start while a tool from the previous step is still running. Cleanup waits 250 ms, then marks the tool interrupted, and whether the tool actually stops depends on the tool.
+- Call IDs come from the model. The host neither generates them nor rejects duplicates.
 
 ## Requirements Trace
 
-- R1. Each session runtime keeps a monotonic local-call sequence and a map of in-flight local calls keyed by call digest. The first statement of `prepareOperation` for a local tool, before the observation gate, adds the call and increments the sequence. This happens only when the digest is new, so a duplicate before-hook neither double-counts nor seals itself. In the same synchronous step, the call captures `sequenceAtStart` (read after its own increment) and whether any other call was in flight.
+- R1. Each session runtime keeps a monotonic local-call sequence and a map of in-flight local calls keyed by call key.
+  - Every local `prepareOperation` begins, before the observation gate, by incrementing the sequence. Duplicates of the same call key increment it too.
+  - When the call key is not already in the map, the call adds itself and, in the same synchronous step, captures `sequenceAtStart` (read after its own increment) and whether any other call was in flight.
+  - A before-hook whose host input can't be parsed increments the sequence when its session can be identified.
 - R2. The in-flight entry is removed:
-  - in `after()` right after the host input is parsed, before any await;
-  - in the `before()` catch for a local tool;
-  - by `abandonPending`, which clears the map.
-  The sequence is never reset.
-- R3. In `completeOperationObservation`, beside the final ownership check, after classification and the last await and before admission, the call is sealed with `sealAndIgnore` if both of these hold:
-  - the final operation is `verification`;
-  - another call was in flight at start, or the sequence has moved since `sequenceAtStart`.
-  The guard is not marked unavailable, and no block is written by the gate.
-- R4. Non-verification operations are unaffected, as is every existing path: #1105 skips, #1124 block skips and clears, #1084 timeout skips and seals, push sealing, rollup, completion and status readbacks.
+  - at the top of `finishOperation`, after `recoverFromHost` and using the same call key;
+  - in the runtime `before()` catch, before either rethrow, when a local tool is rejected.
+
+  `abandonPending` clears the map at the request boundary. The sequence is never reset.
+- R3. In `completeOperationObservation`, after the final ownership check and before `observeClassifiedOperation`, with no await between them: if the final operation is `verification` and either another call was in flight at the start of V's window or the sequence has moved since `sequenceAtStart`, the call is sealed with `sealAndIgnore`. The guard is not marked unavailable, and the gate writes no block.
+- R4. Everything else is unchanged:
+  - non-verification operations;
+  - the observation-gate skips, block skips and clears, timeout skips and seals, and push sealing;
+  - rollup, and the completion and status readbacks.
 - R5. A verification run alone afterwards mints normally.
 - R6. Docs and guidance:
-  - ARCHITECTURE.md;
-  - the using-systematic guard sentence, plus its bootstrap pin;
-  - the transient-timeout and snapshot-limits solution docs.
-  They state the rule, that over-sealing is strict, and the residuals. Guidance tells the agent that a verification which overlapped another local call is not receipted, and to rerun it alone.
+  - ARCHITECTURE.md and the using-systematic guard sentence, plus its bootstrap pin, state the rule, its strictness and the residuals.
+  - The guidance says: "a verification that overlapped another local call is not receipted; rerun it alone, in a later request if a call in this one failed or is still running."
+  - The transient-timeout solution doc qualifies its attestation line.
+  - The snapshot-limits doc drops #1131 from its open list.
 
 ## Scope Boundaries
 
 - Only verification is gated. Commit and implementation receipts are unchanged. Commit carries no verification evidence: classification is single-valued, and `validateCommit` checks closure.
-- The rule is strict. Every overlapping local call counts, including read-only bash and other verifications, so `bun test` running beside `rg` or `git status` is sealed. This fails closed, and the cost is a rerun.
-- No new status field. A required verification that was sealed shows up in `missingOperations`.
+- The rule is strict. Every overlapping local call counts, read-only bash and other verifications included. So `bun test` running next to `rg` or `git status` is sealed. This fails closed, and the cost is a rerun.
+- Duplicate call keys seal every verification in flight, including a duplicated verification. A duplicate means a second execution.
+- An overlapped verification still runs its after-hook up to the gate, so a clean after-snapshot can still clear an existing block. That is the existing ordering.
+- There is no new status field. A sealed verification that is still required shows up in `missingOperations`.
 - **Residuals, documented only:**
-  - writers outside the session, other sessions, and child `task` sessions writing the parent tree (rollup mints a child's verification without an overlap check);
-  - tools that are not tracked as local operations (MCP tools, formatters);
+  - writers outside the session, and other sessions;
+  - child `task` sessions writing the parent tree, since rollup mints a child's verification with no overlap check;
+  - tools not tracked as local calls (MCP tools, `multiedit`, formatters);
+  - detached background processes started by a local call that has finished;
+  - a tool that ignores abort and keeps running into the next request, because the boundary clears its entry;
   - cross-target over-sealing, where a write in one worktree seals a verification in another;
-  - an entry left in flight by a tool whose after-hook never fires (denied or errored), which can over-seal a parallel verification until the next request boundary.
+  - an entry left by a tool that threw, was denied or was interrupted, or by a late duplicate before-hook. These over-seal verifications in the same request until the next request boundary.
 
 ## Context & Research
 
@@ -70,23 +85,21 @@ Endpoint digests can't solve this either: a write that is reverted produces iden
 All in `src/lib/opencode-workflow-guard.ts`:
 
 - `createSessionRuntime` owns `pendingOperations`, `skippedOperations` and `abandonedOperations`. The new state lives here too.
-- `prepareOperation`:
-  - The local-tool check comes first, then the #1105 gate `operationObservationApplies`, `currentInitiator`, `argsFingerprint`, `bindCall`, target derivation, `takeBeforeSnapshot` and `remoteIntentForOperation`.
-  - `pendingOperations.set` happens only after those awaits, so the overlap capture must happen before them.
-- `before()` and its catch; `after()` → `parseHostAfter` → `recoverFromHost` → `finishOperation` → `takeOperationToFinish` → `takePendingOperation` → `completeOperationObservation`.
-- `completeOperationObservation`: this function contains the ownership checks, `captureAfterOperation`, `classifyLocalObservation`, the remote capture, the final `ownsOperation`, and `observeClassifiedOperation`. `sealAndIgnore` is the seal primitive.
-- `abandonPending` runs at the system transform (the request boundary).
-- `PendingOperation` gets the captured overlap facts.
+- Runtime `before()` calls `recoverFromHost` and then `prepareHostCall` → `prepareOperation`, so the ledger is ready when `prepareOperation` starts.
+  - In `prepareOperation`, the local-tool check comes first. Then: the observation gate (`operationObservationApplies`), `currentInitiator`, `argsFingerprint`, `bindCall` (whose `'duplicate'` result returns early), target derivation, `takeBeforeSnapshot`, `remoteIntentForOperation`, and finally `pendingOperations.set`.
+  - The runtime `before()` catch rethrows in two places.
+- `after()` → `parseHostAfter` → `recoverFromHost` → `finishOperation` → `takeOperationToFinish` → `takePendingOperation` → `completeOperationObservation`.
+  - `completeOperationObservation` holds the ownership checks, `captureAfterOperation` with the block settle, `classifyLocalObservation`, the remote capture, the final `ownsOperation`, and `observeClassifiedOperation`.
+  - The `after()` catch marks the guard unavailable (`hook-threw`).
+- `sealAndIgnore` is the seal primitive. `abandonPending` runs at the request boundary (the system transform).
 
 ### Institutional Learnings
 
-- `docs/solutions/best-practices/async-commit-aba-version-fence-2026-10-15.md`: capture in the same synchronous step as the work starting, use a monotonic counter, and stop the whole commit on change.
-- `docs/solutions/logic-errors/transient-timeout-disables-workflow-guard-2026-10-15.md`: skipped calls still run and must be counted. Its attestation lines hold only outside the overlap window.
-- `docs/solutions/logic-errors/worktree-snapshot-limits-disable-guard-2026-10-15.md`: keep this separate from the block.
-- `docs/solutions/best-practices/a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md`: both the sequence check and the in-flight check need a test that fails when they are removed.
-- `docs/solutions/integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md`:
-  - correlate calls by `sessionID` + `callID`, never by arguments;
-  - the after-hook runs only when the tool returned.
+- `docs/solutions/best-practices/async-commit-aba-version-fence-2026-10-15.md`: capture in the same synchronous step that starts the work, keep the counter monotonic, and stop the whole commit when it moves.
+- `docs/solutions/logic-errors/transient-timeout-disables-workflow-guard-2026-10-15.md`: a skipped call still runs and must be counted.
+- `docs/solutions/logic-errors/worktree-snapshot-limits-disable-guard-2026-10-15.md`: keep this check separate from the block.
+- `docs/solutions/best-practices/a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md`: every check needs a test that fails when the check is removed. A check that no test can reach is either dropped or kept with a stated reason.
+- `docs/solutions/integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md`: correlate calls by `callID`, never by their arguments.
 
 ## Prior-Art Survey
 
@@ -114,35 +127,41 @@ All in `src/lib/opencode-workflow-guard.ts`:
 
 ## Key Technical Decisions
 
-- **Capture at the very top of `prepareOperation`.** The pending record is written after the before-hook's awaits. A writer that starts and finishes during those awaits would be missed if the capture happened there. Before-hooks run their synchronous prefix in order, so a writer's tool cannot run until its own before-hook has counted it.
-- **The sequence and the in-flight map are both needed.** The map catches a writer that was already pending when the verification began. The sequence catches one that began, and maybe finished and was reverted, during the verification. Neither one alone covers both.
-- **Gate at admission, not earlier.** Only the after-hook knows a call is a verification, and only after classification. The gate sits after the last await so that no writer can slip in between the check and the mint.
-- **Strict.** Exempting read-only commands would mean trusting command kinds the classifier doesn't model. Exempting verification-intent calls would help little, because plain `rg`, `cat` and `git diff` still count.
-- **Remove an entry early on the after-hook path.** A throw after parsing must not leave the entry behind. An entry left by a tool whose after-hook never runs is cleared at the request boundary.
-- **No plan labels in code.** Requirement IDs, unit numbers and issue numbers never appear in code identifiers or test names.
+- **Capture at the very top of `prepareOperation`.** The pending record is written only after the before-hook's awaits, so a writer that starts and finishes during those awaits would be missed if the capture happened there. The host awaits each before-hook before running its tool. That means a writer's tool cannot run until its own before-hook has incremented the sequence.
+- **Both a sequence and an in-flight map are needed.** The map catches a writer that was already running when V's window opened. The sequence catches one that began during V's window, including one that finished and was reverted. Neither check alone covers both cases.
+- **Every before-hook increments the sequence; only the map add is deduplicated.** A duplicate call key from the model is a second execution, so it must seal a verification that is in flight. Deduplicating the map keeps one entry for each key, so a removal clears it.
+- **Remove the entry at the top of `finishOperation`.** At that point the tool has already returned, and the ledger is ready after `recoverFromHost`. A call whose after-hook never runs is cleared at the request boundary, because the host offers no cleanup hook.
+- **Clear at the boundary, never keep entries forever.** Keeping entries would let one denied write seal every later verification in the session. Clearing costs coverage of a tool that ignores abort, which is a documented residual.
+- **Gate after the final ownership check.** Only the after-hook knows a call is a verification, and only after classification. A lost call is still handled as lost first. No await sits between the gate and admission.
+- **Strict.** Exempting commands that look read-only would mean trusting kinds the classifier does not model.
+- **No plan labels in code.** Requirement IDs, unit numbers and issue numbers never appear in identifiers or test names.
 
 ## Open Questions
 
 ### Resolved During Planning
 
-- Gate verification only: yes.
-- Strict or refined: strict.
+- What gets gated: verification only.
+- Strict or refined rule: strict.
 - New status field: no.
-- Child tasks and rollup: documented as a residual. No follow-up issue.
+- Child tasks and rollup: documented residual, with no follow-up issue.
 - Commit path: unaffected.
+- Boundary clearing: kept.
+- Duplicates: they count.
 
 ### Deferred to Implementation
 
-- Whether the overlap facts live on `PendingOperation` or in a side map keyed by digest. Skipped calls never mint, so they need the counter and map entry but not the captured facts.
-- Exact helper names, as long as Biome complexity stays at 15 or below.
+- Where the captured start facts live: on `PendingOperation`, or in a side map keyed by call key. A skipped call never mints, so it needs only the counter and the map entry.
+- Exact helper names. Keep Biome complexity at 15 or below.
+- How to identify the session for an unparseable before-hook. If the session can't be identified, that input is a residual.
+- Whether a local before-hook can be rejected by a throw without marking the guard unavailable. If no such path exists, drop the catch removal under the mutation-decision rule.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Local-call sequence and in-flight tracking**
+- [ ] **Unit 1: Track local calls and seal an overlapped verification**
 
-**Goal:** Count every local call and track which ones are in flight. No behaviour changes yet.
+**Goal:** A verification that overlapped another local call mints nothing.
 
-**Requirements:** R1, R2
+**Requirements:** R1, R2, R3, R4, R5
 
 **Dependencies:** None
 
@@ -152,105 +171,92 @@ All in `src/lib/opencode-workflow-guard.ts`:
 
 **Approach:**
 - Add the sequence and the map to `createSessionRuntime`.
-- At the top of `prepareOperation` for a local tool, compute the call digest. If it is new, add it, increment, and capture the start facts. Carry those facts through to the pending record.
-- Remove the entry in `after()` right after parsing, and in the `before()` catch for local tools.
-- `abandonPending` clears the map but never resets the sequence.
-- Expose nothing new on the public interface. Tests observe the effect through Unit 2.
+- At the top of `prepareOperation` for a local tool, compute the call key and increment the sequence. If the key is new, add it and capture the start facts.
+- Carry the start facts to the pending record.
+- Increment the sequence for an unparseable before-hook.
+- Remove the entry at the top of `finishOperation` and in the runtime `before()` catch.
+- In `abandonPending`, clear the map but never reset the sequence.
+- Gate as R3 describes.
+- Rewrite "a block set on the parent while a call to another worktree is in flight…" so its linked call is a non-verification call that still pins the unit, keeping the test's intent. Use a `write` with `filePath` under `target.linkedRoot`, driven with raw hooks as the test already does. If a write does not pin the unit, use a non-verification bash command that does.
 
-**Execution note:** Test-first, through Unit 2's behaviour. This unit and Unit 2 may land as one commit if splitting them makes the RED tests impossible to write.
-
-**Test scenarios:**
-- Edge case: a duplicate before-hook for the same call increments nothing, and its verification still mints when run alone.
-- Edge case: a call skipped by the observation gate (inactive session) still counts. A verification overlapping it in an active session is sealed.
-
-**Verification:** The guard suites pass unchanged.
-
-- [ ] **Unit 2: Seal an overlapped verification**
-
-**Goal:** A verification that overlapped another local call mints nothing.
-
-**Requirements:** R3, R4, R5
-
-**Dependencies:** Unit 1
-
-**Files:**
-- Modify: `src/lib/opencode-workflow-guard.ts`
-- Test: `tests/unit/opencode-workflow-guard.test.ts`
-
-**Approach:**
-- Beside the final `ownsOperation` check in `completeOperationObservation`, check the condition in R3 when `finalObservation.operation` is `verification`.
-- If it holds, call `sealAndIgnore`.
-- The earlier after-hook steps (snapshot, block settle) run unchanged.
-
-**Execution note:** Test-first. Rewrite the test "a block set on the parent while a call to another worktree is in flight…" so its linked call is a non-verification write that pins the worktree. That keeps the test's original intent, and the new overlap tests cover sealing.
+**Execution note:** Test-first. The overlap scenarios need raw interleaved hooks, `sequenceObserver` and `deferredStep`. `observeOperationTool` runs hooks one after another and cannot create overlap. A block-skipped call needs the linked-target fixture (`targetAdapter`).
 
 **Test scenarios:**
-- Happy path, sealed (nothing minted, guard not `unavailable`, duplicate after-hook silent):
-  - write B starts before verification A and is still in flight at A's start;
-  - write B starts and finishes during A, with the tree restored before A's after-hook (the issue's reproduction);
-  - a bash writer during A;
-  - a skipped writer during A, either blocked or timed out;
-  - two parallel verifications, both sealed.
-- Happy path, still mints:
+- Sealed: nothing minted, the guard is not `unavailable`, and a duplicate after-hook stays silent.
+  - A local call is in flight when V's window opens.
+  - A local call's before-hook runs after V's `prepareOperation` begins but before V's pending record is written. Hold V's before-snapshot with a deferred step.
+  - A local call starts and finishes during V's window, and the tree is restored before V's after-hook. This is the reported reproduction.
+  - A bash call overlaps V.
+  - A call skipped by a timeout during V's window.
+  - A call skipped by a block on the effective target during V's window.
+  - Two parallel verifications: both are sealed.
+  - Two before-hooks with the same call key: both verifications are sealed.
+  - An unparseable before-hook during V's window.
+- Mints:
   - a lone verification;
-  - a sealed verification followed by a lone rerun;
-  - a writer that finished before A started.
-- Edge case: a non-verification call overlapped by a writer still mints its own receipt, for example implementation.
-- Edge case: a sealed verification's clean after-snapshot still clears a #1124 block.
-- Edge case: an after-hook that throws after parsing leaves no in-flight entry, so a later lone verification mints.
-- Edge case: a transform mid-call clears the map. A verification that starts after the boundary is not sealed by the earlier call.
-- Integration:
-  - Overlap does not leave earlier receipts invalid when the tree is restored and the restore was never observed.
-  - When the writer's after-hook observed D1, the earlier verification is stale and needs a rerun.
+  - a sealed verification followed by a lone rerun in a later request;
+  - a local call that finished before V's window opened.
+- Edge case: a non-verification call overlapped by another local call still mints its own receipt.
+- Edge case: a sealed verification's clean after-snapshot still clears an existing block.
+- Edge case: a call denied or interrupted in one request, whose after-hook never runs, seals a verification later in that request. A verification in the next request mints, because the boundary cleared the entry.
+- Edge case: if a local before-hook can be rejected by a throw without making the guard unavailable, a later lone verification in the same request mints.
+- Integration: a sealed required verification appears in `missingOperations`.
+- Integration: restore cases.
+  - If the overlapping call's after-hook observed D1, the earlier verification receipt is stale and needs a rerun.
+  - If no change was observed, the sealed verification mints nothing and earlier receipts are unchanged.
 - Mutation:
-  - removing the sequence comparison fails the during-A tests;
-  - removing the in-flight check fails the started-before-A test;
-  - incrementing on a duplicate before-hook fails the duplicate test.
+  - Removing the sequence comparison fails the during-window tests.
+  - Removing the in-flight-at-start check fails the in-flight test.
+  - Incrementing only for new call keys fails the duplicate-key test.
 
-**Verification:** The whole guard test file and `tests/integration` pass, and the mutation proofs fail the named tests.
+**Verification:** The whole guard test file passes, `tests/integration` passes, and each mutation fails the tests named above.
 
-- [ ] **Unit 3: Docs, guidance and bootstrap pin**
+- [ ] **Unit 2: Docs, guidance and bootstrap pin**
 
 **Goal:** Readers and agents learn the rule and its residuals.
 
 **Requirements:** R6
 
-**Dependencies:** Unit 2
+**Dependencies:** Unit 1
 
 **Files:**
 - Modify: `ARCHITECTURE.md`, `skills/using-systematic/SKILL.md`, `tests/unit/bootstrap.test.ts`, `tests/unit/__snapshots__/bootstrap.test.ts.snap`, `docs/solutions/logic-errors/transient-timeout-disables-workflow-guard-2026-10-15.md`, `docs/solutions/logic-errors/worktree-snapshot-limits-disable-guard-2026-10-15.md`
 
 **Approach:**
-- ARCHITECTURE.md: in the attestation and parallel-call paragraphs, add the overlap rule, strictness, and the residuals listed in Scope Boundaries.
-- SKILL.md: add one clause: "a verification that overlapped another local call is not receipted; rerun it alone." Regenerate the bootstrap pin.
-- Transient-timeout doc: qualify the "later observed write plus verification attests the final state" line so it applies only outside the overlap window.
-- Snapshot-limits doc: drop #1131 from its open list.
+- ARCHITECTURE.md: in the attestation and parallel-call paragraphs, add the overlap rule, its strictness, the fact that verification receipts do not check digest stability, and the residuals listed in Scope Boundaries.
+- SKILL.md: add the R6 clause and regenerate the bootstrap pin.
+- Transient-timeout doc: limit the "later observed write plus verification attests the final state" line to work outside the overlap window.
+- Snapshot-limits doc: remove #1131 from its open list.
 
 **Test scenarios:**
-- Happy path: the bootstrap byte pin and snapshot pass.
+- Happy path: the bootstrap byte pin and the snapshot pass.
 
-**Verification:** markdownlint, content-integrity and bootstrap tests pass.
+**Verification:** markdownlint, content-integrity and the bootstrap tests pass.
 
 ## System-Wide Impact
 
-- **Interaction graph:** the `before()`/`after()` hooks for local tools, `prepareOperation`, `completeOperationObservation` and `abandonPending`. Rollup, status and completion are unchanged.
-- **Error propagation:** a sealed verification is not a failure. The guard state, causes and markers are unchanged.
-- **State lifecycle risks:**
-  - An entry left in flight by a tool whose after-hook never fires can over-seal until the request boundary.
-  - The sequence is runtime state, so a restart drops it. That is harmless, because pending calls do not survive a restart either.
-- **Unchanged invariants:** receipt and marker protocol versions, revision binding and staleness, every existing skip, seal and block path, and non-verification receipts.
+- **Interaction graph:** the `before()` and `after()` hooks for local tools, `prepareOperation`, `finishOperation`, `completeOperationObservation` and `abandonPending`. Rollup, status and completion are unchanged.
+- **Error propagation:** sealing a verification is not a failure. Guard state, causes and markers are unchanged.
+- **State lifecycle risks:** a leftover entry can over-seal until the next request boundary. The sequence is runtime state and is lost on restart. That is harmless, because pending calls do not survive a restart either.
+- **Unchanged invariants:**
+  - receipt and marker protocol versions;
+  - revision binding and staleness;
+  - every existing skip, seal and block path;
+  - non-verification receipts.
 
 ## Risks & Dependencies
 
 | Risk | Mitigation |
 |------|------------|
-| A writer during the before-hook's awaits is missed | Capture at the top of `prepareOperation` (Unit 1), with a during-A test (Unit 2) |
-| Duplicate before-hook seals itself | Increment only on a new digest, with a test and mutation (Unit 2) |
-| Over-sealing slows agents | Strict by design; guidance says rerun alone (Unit 3) |
-| Leaked entry over-seals | Early removal in `after()` and in the `before()` catch, plus boundary clear, with a throw test (Unit 2) |
-| Child tasks write during a parent verification | Documented residual (Unit 3) |
+| A writer during the before-hook's awaits is missed | Capture at the top of `prepareOperation`; the deferred before-snapshot test (Unit 1) |
+| Duplicate call keys mint twice | Every before-hook increments the sequence; the duplicate-key test (Unit 1) |
+| Over-sealing slows agents | Strict by design; guidance says to rerun alone or in a later request (Unit 2) |
+| A leftover entry over-seals | Early removal and the boundary clear; the denied-call test (Unit 1) |
+| A tool outlives its request | Documented residual (Unit 2) |
+| Child tasks write during a parent verification | Documented residual (Unit 2) |
 
 ## Sources & References
 
-- Issue #1131 (with Fro Bot triage). Related: #1084, #1124, #1105.
+- Issue #1131, with Fro Bot's triage. Related: #1084, #1124, #1105.
 - Related code: `src/lib/opencode-workflow-guard.ts`, `src/lib/receipt-classifier.ts`, `src/lib/workflow-guard.ts`.
+- Host source: `anomalyco/opencode` v1.19.0, `packages/opencode/src/session/tools.ts`, `processor.ts`, `llm/request.ts`.
