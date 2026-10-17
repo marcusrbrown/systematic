@@ -17541,13 +17541,31 @@ describe('snapshot block record', () => {
           const held = new Promise<OperationObserverResult>((resolve) => {
             release = resolve
           })
+          const linkedObserver = createOpencodeOperationObserver({
+            targetDirectory: target.linkedRoot,
+          })
+          const linkedBeforeSnapshot = await linkedObserver.snapshot()
+          if (linkedBeforeSnapshot.status !== 'available') {
+            throw new Error('linked worktree unavailable')
+          }
           target.queueLinked(held)
+          // The write changes the linked worktree, so its after-hook reads a
+          // different revision and the call is observed and pins the unit.
+          target.queueLinked({
+            status: 'available',
+            snapshot: {
+              ...linkedBeforeSnapshot.snapshot,
+              worktreeRevisionDigest: 'f'.repeat(64),
+            },
+          })
+          // A write is not a verification, so overlapping the parent's call
+          // does not stop it from being observed and pinning the unit.
           const linkedArgs = {
-            command: 'git status --short',
-            workdir: target.linkedRoot,
+            filePath: path.join(target.linkedRoot, 'real.ts'),
+            content: 'changed',
           }
           const linkedInput = {
-            tool: 'bash' as const,
+            tool: 'write' as const,
             sessionID: SESSION_A,
             callID: 'linked-in-flight',
           }
@@ -17572,10 +17590,7 @@ describe('snapshot block record', () => {
             ?.pinnedOperationTargetIdentity
           expect(parentIdentity).toBeUndefined()
 
-          const linkedObserver = createOpencodeOperationObserver({
-            targetDirectory: target.linkedRoot,
-          })
-          release(await linkedObserver.snapshot())
+          release(linkedBeforeSnapshot)
           await linkedBefore
           await target.adapter.hooks['tool.execute.after'](
             { ...linkedInput, args: linkedArgs },
@@ -20092,6 +20107,401 @@ describe('snapshot block record', () => {
       const parsed = await refreshStatus(adapter)
       expect(parsed.firstUnavailableCause).toBeUndefined()
       expect(status(adapter).state).toBe('rejected')
+    })
+  })
+
+  describe('a verification that overlaps another local call', () => {
+    const VERIFY = { command: 'bun test' }
+    const WRITE = { filePath: 'real.ts', content: 'changed' }
+    const SEARCH = { command: 'rg needle' }
+    const TIMED_OUT = sequenceObserver([unavailableStep('command-timeout')])
+    const worktree = (tag: string) =>
+      operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
+
+    interface RawCall {
+      readonly tool: 'bash' | 'write'
+      readonly sessionID: string
+      readonly callID: string
+      readonly args: Record<string, unknown>
+    }
+
+    function rawCall(
+      tool: 'bash' | 'write',
+      callID: string,
+      args: Record<string, unknown>,
+    ): RawCall {
+      return { tool, sessionID: SESSION_A, callID, args }
+    }
+
+    // The two hooks run separately, so calls can interleave the way parallel
+    // tool calls do: a call's before-hook runs to completion before its tool
+    // runs, and its after-hook runs when the tool returns.
+    async function begin(
+      adapter: OpencodeWorkflowGuard,
+      call: RawCall,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.before'](call, { args: call.args })
+    }
+
+    async function end(
+      adapter: OpencodeWorkflowGuard,
+      call: RawCall,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](call, BASH_OUTPUT)
+    }
+
+    function verificationReceipts(adapter: OpencodeWorkflowGuard): number {
+      return ledger(adapter)
+        .listReceipts()
+        .filter((receipt) => receipt.canonical.operation === 'verification')
+        .length
+    }
+
+    async function untilCalled(
+      observer: ReturnType<typeof sequenceObserver>,
+    ): Promise<void> {
+      for (let tick = 0; tick < 50 && observer.snapshotCalls() < 1; tick++) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(observer.snapshotCalls()).toBe(1)
+    }
+
+    // A sealed verification mints nothing beyond the `minted` receipts that
+    // already existed, leaves the guard available, and its duplicate
+    // after-hook is silent.
+    async function expectSealed(
+      adapter: OpencodeWorkflowGuard,
+      steered: SteeredObserver,
+      verification: RawCall,
+      minted = 0,
+    ): Promise<void> {
+      expect(verificationReceipts(adapter)).toBe(minted)
+      expect(status(adapter).state).not.toBe('unavailable')
+      const snapshots = steered.snapshotCalls()
+      await end(adapter, verification)
+      expect(steered.snapshotCalls()).toBe(snapshots)
+      expect(verificationReceipts(adapter)).toBe(minted)
+      expect(status(adapter).state).not.toBe('unavailable')
+    }
+
+    async function lone(
+      adapter: OpencodeWorkflowGuard,
+      callID: string,
+    ): Promise<void> {
+      const call = rawCall('bash', callID, VERIFY)
+      await begin(adapter, call)
+      await end(adapter, call)
+    }
+
+    test('a lone verification mints', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+
+      await lone(adapter, 'lone')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+      expect(status(adapter).satisfiedOperations).toContain('verification')
+    })
+
+    test('a local call that finished before the verification began does not seal it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'earlier-writer', WRITE)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+
+      await lone(adapter, 'after-writer')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+    })
+
+    test('a local call in flight when the verification began seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'in-flight-writer', WRITE)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, writer)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+      expect(status(adapter).missingOperations).toContain('verification')
+      await end(adapter, writer)
+    })
+
+    test('a local call that begins while the verification is held in its before-hook seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const slow = deferredStep(operationSnapshot())
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      const beginning = begin(adapter, verification)
+      await untilCalled(slowObserver)
+      // The writer's whole call runs inside the verification's before-hook.
+      const writer = rawCall('write', 'quick-writer', WRITE)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+      slow.release()
+      await beginning
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a write that starts and finishes during the verification and is reverted before it ends still seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      const writer = rawCall('write', 'reverted-writer', WRITE)
+      await begin(adapter, writer)
+      steered.setDefault(worktree('d1'))
+      await end(adapter, writer)
+      // The tree is restored before the verification's after-hook reads it.
+      steered.setDefault(operationSnapshot())
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+      expect(status(adapter).missingOperations).toContain('verification')
+    })
+
+    test('a bash call that overlaps the verification seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      const search = rawCall('bash', 'searcher', SEARCH)
+      await begin(adapter, search)
+      await end(adapter, search)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a call skipped by a timeout during the verification seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      steered.queueSnapshot(TIMED_OUT)
+      const timedOut = rawCall('write', 'timed-out-writer', WRITE)
+      await begin(adapter, timedOut)
+      await end(adapter, timedOut)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a call skipped by a block on the effective target during the verification seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      steered.queueSnapshot(sequenceObserver([unavailableStep('file-limit')]))
+      const blocked = rawCall('write', 'blocked-writer', WRITE)
+      await begin(adapter, blocked)
+      await end(adapter, blocked)
+      expect(adapter.snapshotBlock(SESSION_A).current()).toEqual({
+        reasonCode: 'file-limit',
+      })
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a call to another worktree skipped while the effective target is blocked seals a verification', async () => {
+      const target = await targetAdapter()
+      try {
+        const verification = rawCall('bash', 'sealed', VERIFY)
+        await begin(target.adapter, verification)
+        target.queueParent(BLOCKED('file-limit'))
+        await operateIn(target.adapter, 'parent-blocks')
+        target.queueParent(BLOCKED('worktree-unstable'))
+        await operateIn(target.adapter, 'linked-skipped', target.linkedRoot)
+        expect(target.adapter.snapshotBlock(SESSION_A).current()).toBeDefined()
+
+        await end(target.adapter, verification)
+
+        expect(verificationReceipts(target.adapter)).toBe(0)
+        expect(status(target.adapter).state).not.toBe('unavailable')
+      } finally {
+        target.cleanup()
+      }
+    })
+
+    test('two parallel verifications are both sealed', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const first = rawCall('bash', 'first', VERIFY)
+      const second = rawCall('bash', 'second', {
+        command: 'bun test tests/unit',
+      })
+      await begin(adapter, first)
+      await begin(adapter, second)
+
+      await end(adapter, first)
+      await end(adapter, second)
+
+      expect(verificationReceipts(adapter)).toBe(0)
+      await expectSealed(adapter, steered, first)
+      await expectSealed(adapter, steered, second)
+    })
+
+    test('two before-hooks with the same call ID seal the verification', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'duplicated', VERIFY)
+      await begin(adapter, verification)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a before-hook whose input cannot be parsed during the verification seals it', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      // The call ID is too long to parse, but the session and tool are known.
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'bash',
+          sessionID: SESSION_A,
+          callID: 'c'.repeat(257),
+        },
+        { args: SEARCH },
+      )
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a non-verification call overlapped by another local call still mints its receipt', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'overlapped-writer', WRITE)
+      await begin(adapter, writer)
+      const search = rawCall('bash', 'searcher', SEARCH)
+      await begin(adapter, search)
+      // A receipt needs the tree to change between the write's hooks.
+      steered.setDefault(worktree('d1'))
+
+      await end(adapter, writer)
+      await end(adapter, search)
+
+      expect(
+        ledger(adapter)
+          .listReceipts()
+          .map((receipt) => receipt.canonical.operation),
+      ).toContain('implementation')
+    })
+
+    test('a sealed verification followed by a lone rerun in a later request mints', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'in-flight-writer', WRITE)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, writer)
+      await begin(adapter, verification)
+      await end(adapter, verification)
+      await end(adapter, writer)
+      expect(verificationReceipts(adapter)).toBe(0)
+
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+      await lone(adapter, 'rerun')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+      expect(status(adapter).satisfiedOperations).toContain('verification')
+    })
+
+    test('a call whose after-hook never runs seals a verification in its request, and the next request mints', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      // A denied or interrupted call: its before-hook ran, its after-hook never will.
+      await begin(adapter, rawCall('write', 'denied-writer', WRITE))
+      await lone(adapter, 'same-request')
+      expect(verificationReceipts(adapter)).toBe(0)
+
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+      await lone(adapter, 'next-request')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+    })
+
+    test('a sealed verification whose after-snapshot is clean still clears an existing block', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      await begin(adapter, rawCall('bash', 'searcher', SEARCH))
+      adapter.snapshotBlock(SESSION_A).set('file-limit')
+
+      await end(adapter, verification)
+
+      expect(adapter.snapshotBlock(SESSION_A).current()).toBeUndefined()
+      expect(verificationReceipts(adapter)).toBe(0)
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    describe('with an earlier verification receipt', () => {
+      async function withEarlierVerification(): Promise<{
+        steered: SteeredObserver
+        adapter: OpencodeWorkflowGuard
+      }> {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered)
+        await lone(adapter, 'earlier')
+        expect(verificationReceipts(adapter)).toBe(1)
+        expect(status(adapter).satisfiedOperations).toContain('verification')
+        return { steered, adapter }
+      }
+
+      test('an overlapping call that observed the tree move leaves the earlier receipt stale and mints nothing new', async () => {
+        const { steered, adapter } = await withEarlierVerification()
+        const verification = rawCall('bash', 'sealed', VERIFY)
+        await begin(adapter, verification)
+        const writer = rawCall('write', 'moving-writer', WRITE)
+        await begin(adapter, writer)
+        steered.setDefault(worktree('d1'))
+        await end(adapter, writer)
+        steered.setDefault(operationSnapshot())
+
+        await end(adapter, verification)
+
+        expect(verificationReceipts(adapter)).toBe(1)
+        expect(status(adapter).missingOperations).toContain('verification')
+      })
+
+      test('an overlapping call that observed no change leaves the earlier receipts as they were', async () => {
+        const { steered, adapter } = await withEarlierVerification()
+        const verification = rawCall('bash', 'sealed', VERIFY)
+        await begin(adapter, verification)
+        const search = rawCall('bash', 'searcher', SEARCH)
+        await begin(adapter, search)
+        await end(adapter, search)
+
+        await end(adapter, verification)
+
+        expect(verificationReceipts(adapter)).toBe(1)
+        expect(status(adapter).satisfiedOperations).toContain('verification')
+        await expectSealed(adapter, steered, verification, 1)
+      })
     })
   })
 
