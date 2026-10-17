@@ -20405,6 +20405,77 @@ describe('snapshot block record', () => {
       await expectSealed(adapter, steered, verification)
     })
 
+    // Two executions that share a call ID are two calls: each is in flight
+    // until its own after-hook runs.
+    test('a verification that begins while the second of two calls sharing a call ID is still pending is sealed', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'shared-id', WRITE)
+      await begin(adapter, writer)
+      await begin(adapter, writer)
+      // The first execution returns; the second is still running.
+      await end(adapter, writer)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+      // The second execution returns after the verification ended: its
+      // after-hook is a replay and stays silent.
+      await end(adapter, writer)
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('once every execution sharing a call ID has returned, a later lone verification mints', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'shared-id', WRITE)
+      await begin(adapter, writer)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+      await end(adapter, writer)
+
+      await lone(adapter, 'after-both-returned')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    // The call ID is too long to parse, so no after-hook can ever match this
+    // call: only the request boundary can drop it.
+    test('a verification that begins while an unparsed local call may still be running is sealed', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'write', sessionID: SESSION_A, callID: 'c'.repeat(257) },
+        { args: WRITE },
+      )
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('after the request boundary, a lone verification mints despite an earlier unparsed local call', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      await adapter.hooks['tool.execute.before'](
+        { tool: 'write', sessionID: SESSION_A, callID: 'c'.repeat(257) },
+        { args: WRITE },
+      )
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+
+      await lone(adapter, 'next-request')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+    })
+
     test.each([
       { name: 'a tool that is not local', input: { tool: 'read' } },
       { name: 'a tool name that is not a string', input: { tool: 42 } },

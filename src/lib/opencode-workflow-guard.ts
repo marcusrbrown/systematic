@@ -2069,11 +2069,15 @@ function createSessionRuntime(
   // the guard observes them, because an unobserved call still changes the
   // tree. The sequence moves on every local before-hook, a duplicate call ID
   // included (a duplicate is a second execution), and is never reset. The
-  // map holds the calls whose after-hook has not run yet, keyed by call key;
-  // it is cleared at the request boundary, because the host has no cleanup
-  // hook for a call that was denied, interrupted or threw. Runtime-only.
+  // map counts, per call key, the executions whose after-hook has not run
+  // yet: every before-hook adds one and every after-hook removes one, and a
+  // key leaves the map when its count reaches zero. An unparsed local
+  // before-hook has no after-hook that could match it, so it is held under a
+  // synthetic key. The map is cleared at the request boundary, because the
+  // host has no cleanup hook for a call that was denied, interrupted or
+  // threw. Runtime-only.
   let localCallSequence = 0
-  const inFlightLocalCalls = new Map<string, LocalCallStart>()
+  const inFlightLocalCalls = new Map<string, number>()
   const abandonedOperations = new Map<
     string,
     SealedOperation | SkippedOperation
@@ -4152,8 +4156,9 @@ function createSessionRuntime(
 
   // The first statement of a local before-hook. Increments the sequence, and in
   // the same synchronous step reads the facts the call's verification gate
-  // needs. Only a call key that is not already in flight is added, so a
-  // duplicate keeps one entry that one removal clears.
+  // needs, then counts this execution as in flight. A duplicate call key is a
+  // second execution, so it adds a second count to the same key; `otherIn
+  // FlightAtStart` asks only about keys other than this call's own.
   function beginLocalCall(callDigest: string): LocalCallStart {
     localCallSequence += 1
     const start: LocalCallStart = {
@@ -4162,10 +4167,28 @@ function createSessionRuntime(
         (key) => key !== callDigest,
       ),
     }
-    if (!inFlightLocalCalls.has(callDigest)) {
-      inFlightLocalCalls.set(callDigest, start)
-    }
+    inFlightLocalCalls.set(
+      callDigest,
+      (inFlightLocalCalls.get(callDigest) ?? 0) + 1,
+    )
     return start
+  }
+
+  // One execution of this call key has returned. The key leaves the map when
+  // its last execution has.
+  function endLocalCall(callDigest: string): void {
+    const remaining = (inFlightLocalCalls.get(callDigest) ?? 0) - 1
+    if (remaining > 0) inFlightLocalCalls.set(callDigest, remaining)
+    else inFlightLocalCalls.delete(callDigest)
+  }
+
+  // A local before-hook whose input could not be parsed. Its call key is
+  // unknown, so no after-hook can match it: it is held in flight under a
+  // synthetic key (the sequence is unique, and a call digest never contains a
+  // colon) until the request boundary clears it.
+  function beginUnparsedLocalCall(): void {
+    localCallSequence += 1
+    inFlightLocalCalls.set(`unparsed:${localCallSequence}`, 1)
   }
 
   // Whether another local call ran during this call's window: one was in
@@ -6325,9 +6348,9 @@ function createSessionRuntime(
   ): Promise<void> {
     if (!options.observer || !isLocalOperationAfter(host)) return
     const callDigest = digestCall(ledger, host.callID)
-    // The tool has returned: it is no longer in flight, whatever happens to
-    // its record below.
-    inFlightLocalCalls.delete(callDigest)
+    // The tool has returned: this execution is no longer in flight, whatever
+    // happens to its record below.
+    endLocalCall(callDigest)
     const pending = takeOperationToFinish(callDigest, host)
     if (!pending) return
     const result = await completeOperationObservation(
@@ -6432,9 +6455,7 @@ function createSessionRuntime(
     unavailableCause: () => firstUnavailableCause ?? pendingUnavailableCause,
     seedDeferrals: currentSeedDeferrals,
     snapshotBlock: snapshotBlockControls,
-    noteUnparsedLocalCall: () => {
-      localCallSequence += 1
-    },
+    noteUnparsedLocalCall: beginUnparsedLocalCall,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
@@ -6642,9 +6663,10 @@ export function createOpencodeWorkflowGuard(
 
   // A before-hook whose input cannot be parsed still lets its tool run. When
   // the session and a local tool can be read from it, the call is counted as a
-  // local call so it seals a verification it overlaps. If the tool name itself
-  // cannot be read there is no telling whether the call is local, and it is not
-  // counted.
+  // local call and held in flight until the request boundary, so it seals a
+  // verification that begins while it runs as well as one it overlaps. If the
+  // tool name itself cannot be read there is no telling whether the call is
+  // local, and it is not counted.
   function countUnparsedLocalCall(input: unknown): void {
     if (
       !isRecord(input) ||
