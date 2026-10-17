@@ -416,6 +416,8 @@ interface PendingOperation {
  * local-call sequence. `sequenceAtStart` includes that increment, and
  * `otherInFlightAtStart` is whether any other call (by call key) was in flight.
  */
+type LocalCallState = 'running' | 'returned' | 'ambiguous'
+
 interface LocalCallStart {
   readonly sequenceAtStart: number
   readonly otherInFlightAtStart: boolean
@@ -2069,15 +2071,17 @@ function createSessionRuntime(
   // the guard observes them, because an unobserved call still changes the
   // tree. The sequence moves on every local before-hook, a duplicate call ID
   // included (a duplicate is a second execution), and is never reset. The
-  // map counts, per call key, the executions whose after-hook has not run
-  // yet: every before-hook adds one and every after-hook removes one, and a
-  // key leaves the map when its count reaches zero. An unparsed local
-  // before-hook has no after-hook that could match it, so it is held under a
-  // synthetic key. The map is cleared at the request boundary, because the
-  // host has no cleanup hook for a call that was denied, interrupted or
-  // threw. Runtime-only.
+  // map records, per call key seen in this request, whether it is still
+  // running: a key begun once is `running` until its after-hook runs, then
+  // `returned`. A key begun more than once is `ambiguous` and stays in
+  // flight: no execution identity tells a replayed after-hook from the second
+  // execution's own, so no after-hook may release it. An unparsed local
+  // before-hook has no after-hook that could match it and is held as
+  // `ambiguous` under a synthetic key. The map is cleared at the request
+  // boundary, because the host has no cleanup hook for a call that was
+  // denied, interrupted or threw. Runtime-only.
   let localCallSequence = 0
-  const inFlightLocalCalls = new Map<string, number>()
+  const inFlightLocalCalls = new Map<string, LocalCallState>()
   const abandonedOperations = new Map<
     string,
     SealedOperation | SkippedOperation
@@ -4156,30 +4160,31 @@ function createSessionRuntime(
 
   // The first statement of a local before-hook. Increments the sequence, and in
   // the same synchronous step reads the facts the call's verification gate
-  // needs, then counts this execution as in flight. A duplicate call key is a
-  // second execution, so it adds a second count to the same key; `otherIn
-  // FlightAtStart` asks only about keys other than this call's own.
+  // needs, then marks this call in flight. A call key seen before in this
+  // request is a second execution and becomes `ambiguous`. `otherInFlight
+  // AtStart` asks only about keys other than this call's own.
   function beginLocalCall(callDigest: string): LocalCallStart {
     localCallSequence += 1
     const start: LocalCallStart = {
       sequenceAtStart: localCallSequence,
-      otherInFlightAtStart: [...inFlightLocalCalls.keys()].some(
-        (key) => key !== callDigest,
+      otherInFlightAtStart: [...inFlightLocalCalls].some(
+        ([key, state]) => key !== callDigest && state !== 'returned',
       ),
     }
     inFlightLocalCalls.set(
       callDigest,
-      (inFlightLocalCalls.get(callDigest) ?? 0) + 1,
+      inFlightLocalCalls.has(callDigest) ? 'ambiguous' : 'running',
     )
     return start
   }
 
-  // One execution of this call key has returned. The key leaves the map when
-  // its last execution has.
+  // An after-hook ran for this call key. Only a key begun exactly once is
+  // released; a replay of that after-hook, or an after-hook for a key that is
+  // unknown or ambiguous, changes nothing.
   function endLocalCall(callDigest: string): void {
-    const remaining = (inFlightLocalCalls.get(callDigest) ?? 0) - 1
-    if (remaining > 0) inFlightLocalCalls.set(callDigest, remaining)
-    else inFlightLocalCalls.delete(callDigest)
+    if (inFlightLocalCalls.get(callDigest) === 'running') {
+      inFlightLocalCalls.set(callDigest, 'returned')
+    }
   }
 
   // A local before-hook whose input could not be parsed. Its call key is
@@ -4188,7 +4193,7 @@ function createSessionRuntime(
   // colon) until the request boundary clears it.
   function beginUnparsedLocalCall(): void {
     localCallSequence += 1
-    inFlightLocalCalls.set(`unparsed:${localCallSequence}`, 1)
+    inFlightLocalCalls.set(`unparsed:${localCallSequence}`, 'ambiguous')
   }
 
   // Whether another local call ran during this call's window: one was in

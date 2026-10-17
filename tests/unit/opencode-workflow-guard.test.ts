@@ -20427,7 +20427,27 @@ describe('snapshot block record', () => {
       expect(status(adapter).state).not.toBe('unavailable')
     })
 
-    test('once every execution sharing a call ID has returned, a later lone verification mints', async () => {
+    // There is no execution identity to tell a replayed after-hook from the
+    // second execution's own, so a call ID seen twice is held until the
+    // request boundary rather than counted down.
+    test("a replay of the first execution's after-hook does not hide the second execution that is still running", async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'shared-id', WRITE)
+      await begin(adapter, writer)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+      // The same after-hook input again: a replay, or the second execution.
+      await end(adapter, writer)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a call ID seen twice stays in flight after its after-hooks, and the next request boundary releases it', async () => {
       const steered = steeredObserver()
       const adapter = await activeAdapter(steered)
       const writer = rawCall('write', 'shared-id', WRITE)
@@ -20435,9 +20455,74 @@ describe('snapshot block record', () => {
       await begin(adapter, writer)
       await end(adapter, writer)
       await end(adapter, writer)
+      // Still the same request: the entry is held, so a verification is sealed.
+      await lone(adapter, 'same-request')
+      expect(verificationReceipts(adapter)).toBe(0)
 
-      await lone(adapter, 'after-both-returned')
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        { system: ['base'] },
+      )
+      await lone(adapter, 'next-request')
 
+      expect(verificationReceipts(adapter)).toBe(1)
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test('a call ID seen once leaves on its after-hook, and a replay of that after-hook hides nothing', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const writer = rawCall('write', 'single-id', WRITE)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+      await end(adapter, writer)
+
+      await lone(adapter, 'after-single')
+
+      expect(verificationReceipts(adapter)).toBe(1)
+      expect(status(adapter).state).not.toBe('unavailable')
+    })
+
+    test("a replay of a finished call's after-hook does not release another call that is running", async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const finished = rawCall('write', 'finished-id', WRITE)
+      await begin(adapter, finished)
+      await end(adapter, finished)
+      const running = rawCall('write', 'running-id', WRITE)
+      await begin(adapter, running)
+      await end(adapter, finished)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+
+      await end(adapter, verification)
+
+      await expectSealed(adapter, steered, verification)
+    })
+
+    test('a verification whose after-snapshot is held while another local call starts and finishes is sealed, and a lone retry mints', async () => {
+      const steered = steeredObserver()
+      const adapter = await activeAdapter(steered)
+      const verification = rawCall('bash', 'sealed', VERIFY)
+      await begin(adapter, verification)
+      // The next snapshot is the verification's own after-snapshot: hold it.
+      const slow = deferredStep(operationSnapshot())
+      const slowObserver = sequenceObserver([slow.step])
+      steered.queueSnapshot(slowObserver)
+      const ending = end(adapter, verification)
+      await untilCalled(slowObserver)
+      // Another local call runs to completion while the verification waits.
+      const writer = rawCall('write', 'during-after-snapshot', WRITE)
+      await begin(adapter, writer)
+      await end(adapter, writer)
+
+      // The snapshot comes back unchanged, but the window was not alone.
+      slow.release()
+      await ending
+
+      await expectSealed(adapter, steered, verification)
+
+      await lone(adapter, 'retry')
       expect(verificationReceipts(adapter)).toBe(1)
       expect(status(adapter).state).not.toBe('unavailable')
     })

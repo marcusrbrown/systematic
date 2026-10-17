@@ -323,11 +323,12 @@ verification on its own. It overlapped if another local call (`write`, `edit`, `
 `bash`) was in flight when its before-hook began, or another local before-hook ran before it was
 admitted. Every local before-hook counts: calls that run unobserved (skipped by the observation
 gate, a snapshot block or a timeout), duplicate call IDs, and before-hooks whose input names a
-local tool but cannot be parsed. Each execution is counted: two calls that share a call ID are two
-executions, and the call stays in flight until both after-hooks have run. A call leaves the
-in-flight set on its after-hook, and the set is also cleared at each request boundary, because a
-call that throws, is denied or is interrupted never reaches its after-hook. An unparsed local
-before-hook can never be matched by an after-hook, so it stays in flight until that boundary. The rule is strict: read-only bash and other verifications count
+local tool but cannot be parsed. A call ID seen once leaves the in-flight set on its after-hook. A
+call ID seen more than once (a duplicate is a second execution, and nothing tells a replayed
+after-hook from the second execution's own) stays in flight until the request boundary. The set is
+cleared at each request boundary, because a call that throws, is denied or is interrupted never
+reaches its after-hook. An unparsed local before-hook can never be matched by an after-hook, so it
+also stays in flight until that boundary. The rule is strict: read-only bash and other verifications count
 too, so a test run beside `rg` or `git status` is sealed and rerun. Verification receipts do not
 check digest stability, and a write that is later reverted leaves equal digests, so this rule is
 the only same-session guard on them; commit and implementation receipts are unchanged. Residuals
@@ -336,9 +337,10 @@ writing the parent tree, since rollup mints a child's verification without an ov
 that are not tracked as local calls (MCP tools, `multiedit`, formatters); detached processes left
 by a finished call; any local call still running when the request boundary arrives, because the
 boundary drops its entry (a tool that ignores abort is the usual case); cross-target over-sealing, where a write in one worktree seals a
-verification in another; entries left by a call that threw, was denied or was interrupted, or by a
-late duplicate before-hook, and the entry an unparsed local before-hook leaves, which over-seal
-verifications in the same request until the next request boundary; and an unparseable before-hook
+verification in another; entries left by a call that threw, was denied or was interrupted, a call
+ID seen more than once (held even after its executions return), and the entry an unparsed local
+before-hook leaves, which over-seal verifications in the same request until the next request
+boundary; and an unparseable before-hook
 whose tool name cannot be read, which cannot be told apart from a non-local call and is not
 counted. Other residuals: `missingOperations` reports a lost call only when its operation has no
 receipt at all; a push that landed but whose after-read timed out stays unreceipted, and later
