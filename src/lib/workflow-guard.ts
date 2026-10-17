@@ -45,6 +45,7 @@ export type WorkflowReasonCode =
   | 'call-context-conflict'
   | 'cancelled-operation'
   | 'consumed-receipt'
+  | 'declaration-superseded'
   | 'disabled'
   | 'epoch-completed'
   | 'epoch-mismatch'
@@ -1283,6 +1284,12 @@ export function createWorkflowGuard(
   const runtimeRequired = normalizeOperations(options.runtimeRequiredOperations)
   const runtimeScopes = normalizeResourceScopes(options.runtimeResourceScopes)
   let mode = options.mode ?? 'protected'
+  // Counts the changes that decide what an in-flight operation observation was
+  // admitted against: a changed declaration of the active unit, the unit's
+  // completion, and a mode change. An observation captures it before it awaits
+  // the classifier and finalizes only if it is unchanged. Monotonic and never
+  // reset; runtime-only.
+  let declarationGeneration = 0
   let epoch: EpochState | undefined
   let globalIssue: Issue | undefined
   const transitionsByCall = new Map<string, PreparedTransition>()
@@ -2354,6 +2361,7 @@ export function createWorkflowGuard(
       }
     }
     epoch.unit.status = 'completed'
+    declarationGeneration += 1
     return {
       status: 'completed',
       target: lifecycle.target,
@@ -2654,6 +2662,13 @@ export function createWorkflowGuard(
     if (!declarationChanged(unit, requiredOperations, resourceScopes)) {
       return { status: 'rejected', reasonCode: 'unit-active' }
     }
+    // A changed redeclaration mutates the active unit in place, under any
+    // observation that is awaiting its classifier. No other replacement can
+    // happen during that await: a new unit needs a non-active unit, which
+    // means the completion below already bumped; epoch completion needs a
+    // completed unit; activate needs a completed or absent epoch; restore
+    // needs no epoch.
+    declarationGeneration += 1
     unit.requiredOperations = requiredOperations
     unit.declaredResourceOperations = Object.freeze([...resourceScopes.keys()])
     unit.resourceScopes = resourceScopes
@@ -2780,6 +2795,7 @@ export function createWorkflowGuard(
     unit: UnitState,
     trustedClassification?: ReceiptClassification,
   ): Promise<EvidenceObservationResult> {
+    const generation = declarationGeneration
     if (!unit.requiredOperations.includes(parsed.operation)) {
       markTerminalOperation(parsed, input)
       return { status: 'rejected', reasonCode: 'operation-not-required' }
@@ -2800,12 +2816,41 @@ export function createWorkflowGuard(
         ? { status: 'rejected', reasonCode: 'call-context-conflict' }
         : { status: 'rejected', reasonCode: 'rejected-operation' }
     }
-    const classification =
-      trustedClassification ??
-      (await classifyPreparedOperation(parsed, input, unit))
-    return classification
-      ? finalizeOperation(parsed, input, unit, classification)
-      : { status: 'rejected', reasonCode: 'guard-unavailable' }
+    const outcome: ClassificationOutcome = trustedClassification
+      ? { kind: 'classified', classification: trustedClassification }
+      : await classifyPreparedOperation(parsed, input, unit, generation)
+    return settleClassifiedOperation(parsed, input, unit, generation, outcome)
+  }
+
+  // Runs after the only await and before anything is written. If the
+  // declaration, the unit's completion state or the mode changed while the
+  // classifier ran, the observation was admitted against something that no
+  // longer holds and is superseded.
+  function settleClassifiedOperation(
+    parsed: ParsedOperationObservation,
+    input: unknown,
+    unit: UnitState,
+    generation: number,
+    outcome: ClassificationOutcome,
+  ): EvidenceObservationResult {
+    if (outcome.kind === 'unclassified') {
+      return { status: 'rejected', reasonCode: 'guard-unavailable' }
+    }
+    if (outcome.kind === 'stale' || generation !== declarationGeneration) {
+      return supersedeOperation(parsed, input)
+    }
+    return finalizeOperation(parsed, input, unit, outcome.classification)
+  }
+
+  // The observation outlived its declaration. It mints nothing and records no
+  // issue; the call is terminal, so the adapter seals it and the agent reruns.
+  function supersedeOperation(
+    parsed: ParsedOperationObservation,
+    input: unknown,
+  ): EvidenceObservationResult {
+    abandonPreparedOperation(parsed)
+    markTerminalOperation(parsed, input)
+    return { status: 'rejected', reasonCode: 'declaration-superseded' }
   }
 
   function rejectParsedOperation(
@@ -2818,25 +2863,42 @@ export function createWorkflowGuard(
     return recordUnitEvidenceIssue(unit, parsed.operation, reasonCode)
   }
 
+  // `stale`: the classifier threw after the declaration generation moved, so
+  // nothing may be written for the unit's current declaration. The caller
+  // supersedes the observation. `unclassified` keeps today's meaning: the
+  // classifier is missing or failed, and the issue is already recorded.
+  type ClassificationOutcome =
+    | {
+        readonly kind: 'classified'
+        readonly classification: ReceiptClassification
+      }
+    | { readonly kind: 'stale' }
+    | { readonly kind: 'unclassified' }
+
   async function classifyPreparedOperation(
     parsed: ParsedOperationObservation,
     input: unknown,
     unit: UnitState,
-  ): Promise<ReceiptClassification | undefined> {
+    generation: number,
+  ): Promise<ClassificationOutcome> {
     const classifyOperation = options.classifier?.classifyOperation
     if (!classifyOperation) {
       abandonPreparedOperation(parsed)
       markTerminalOperation(parsed, input)
       recordUnitEvidenceIssue(unit, parsed.operation, 'guard-unavailable')
-      return undefined
+      return { kind: 'unclassified' }
     }
     try {
-      return await classifyOperation(input)
+      const classification = await classifyOperation(input)
+      return classification
+        ? { kind: 'classified', classification }
+        : { kind: 'unclassified' }
     } catch {
+      if (generation !== declarationGeneration) return { kind: 'stale' }
       abandonPreparedOperation(parsed)
       markTerminalOperation(parsed, input)
       recordUnitEvidenceIssue(unit, parsed.operation, 'guard-unavailable')
-      return undefined
+      return { kind: 'unclassified' }
     }
   }
 
@@ -3692,6 +3754,7 @@ export function createWorkflowGuard(
       if (!parsed) return { status: 'rejected', reasonCode: 'invalid-control' }
       if (parsed.mode === mode) return { status: 'unchanged', mode }
       mode = parsed.mode
+      declarationGeneration += 1
       for (const lifecycle of transitionsByCall.values()) {
         if (lifecycle.state === 'prepared') lifecycle.state = 'abandoned'
       }

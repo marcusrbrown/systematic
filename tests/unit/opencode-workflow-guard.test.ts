@@ -21379,3 +21379,101 @@ describe('parent registration lookups that time out', () => {
     },
   )
 })
+
+describe('a declaration change while the core classifies an operation', () => {
+  const COMMAND = { command: 'bun test tests/unit/example.test.ts' }
+  const PASSED = { title: 'tests', output: '1 pass', metadata: { exit: 0 } }
+
+  // The adapter and the core share one classifier and each classifies the
+  // call once, the adapter first. This one holds the second classification
+  // (the core's) until `release()`.
+  function holdSecondClassification(): {
+    readonly classifier: ReturnType<typeof createReceiptClassifier>
+    calls(): number
+    release(): void
+  } {
+    const real = createReceiptClassifier()
+    let calls = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return {
+      classifier: {
+        ...real,
+        classifyOperation: async (input: unknown) => {
+          calls += 1
+          if (calls === 2) await gate
+          const classify = real.classifyOperation
+          if (!classify) {
+            throw new Error(
+              'expected classifier to implement classifyOperation',
+            )
+          }
+          return classify(input)
+        },
+      },
+      calls: () => calls,
+      release: () => release(),
+    }
+  }
+
+  test('a changed redeclaration through the adapter leaves the call ignored, with no receipt and no cause', async () => {
+    const hold = holdSecondClassification()
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'observe', debug: false },
+      ...OPERATION_SCOPE,
+      observer: sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+      classifier: hold.classifier,
+      runtimeRequiredOperations: [],
+    })
+    await activateWorkEpoch(adapter)
+    const input = { tool: 'bash', sessionID: SESSION_A, callID: 'held-core' }
+    await adapter.hooks['tool.execute.before'](input, { args: COMMAND })
+    const output = { ...PASSED, metadata: { ...PASSED.metadata } }
+    const finishing = adapter.hooks['tool.execute.after'](
+      { ...input, args: COMMAND },
+      output,
+    )
+    // The adapter has classified and passed its ownership check; the core's
+    // classification is now held, out of the adapter's sight.
+    for (let tick = 0; tick < 50 && hold.calls() < 2; tick++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect(hold.calls()).toBe(2)
+
+    expect(
+      adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+    ).toMatchObject({ status: 'started' })
+    hold.release()
+    await finishing
+
+    expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    expect(
+      (output.metadata as Record<string, unknown>)[
+        SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY
+      ],
+    ).toBeUndefined()
+    const document = JSON.parse(
+      expectToolOutput(
+        await getTool(adapter, 'systematic_workflow_status').execute(
+          {},
+          toolContext(),
+        ),
+      ).output,
+    )
+    expect(document.state).not.toBe('unavailable')
+    expect(document.firstUnavailableCause).toBeUndefined()
+    // The call is sealed: a duplicate after-hook is silent.
+    const calls = hold.calls()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: COMMAND },
+      { ...PASSED, metadata: { ...PASSED.metadata } },
+    )
+    expect(hold.calls()).toBe(calls)
+    expect(status(adapter).state).not.toBe('unavailable')
+  })
+})

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
   createReceiptClassifier,
@@ -2169,5 +2169,311 @@ describe('receipt operation adapters', () => {
         .every((receipt) => receipt.canonical.consumption === 'available'),
     ).toBe(true)
     await classifier.close()
+  })
+})
+
+describe('operation observations that outlive their declaration', () => {
+  const HELD_CALL = 'held-call'
+
+  interface GatedClassifier {
+    readonly classifier: OperationClassifier & { close(): Promise<void> }
+    /** How many times the held call's classification has begun. */
+    heldStarts(): number
+    /** Lets the held call's classification go on. */
+    release(): void
+  }
+
+  const gates: GatedClassifier[] = []
+
+  afterEach(async () => {
+    await Promise.all(gates.splice(0).map((gate) => gate.classifier.close()))
+  })
+
+  function callIdOf(input: unknown): unknown {
+    return typeof input === 'object' && input !== null && 'callId' in input
+      ? input.callId
+      : undefined
+  }
+
+  /**
+   * Holds the classification of one call open until `release()`, then
+   * classifies it for real or throws. Every other call is classified at once.
+   */
+  function gatedClassifier(
+    afterRelease: 'classify' | 'throw' = 'classify',
+  ): GatedClassifier {
+    const real = createReceiptClassifier()
+    const classifyReal = requireClassifyOperation(real)
+    let heldStarts = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const gated: GatedClassifier = {
+      classifier: {
+        classifyOperation: async (input) => {
+          if (callIdOf(input) !== HELD_CALL) return classifyReal(input)
+          heldStarts += 1
+          await gate
+          if (afterRelease === 'throw') {
+            throw new Error('classifier failed while the call was held')
+          }
+          return classifyReal(input)
+        },
+        close: () => real.close(),
+      },
+      heldStarts: () => heldStarts,
+      release: () => release(),
+    }
+    gates.push(gated)
+    return gated
+  }
+
+  function implementationInput(callId: string): OperationInput {
+    return operationInput('implementation', { callId })
+  }
+
+  function verificationInput(callId: string): OperationInput {
+    return operationInput('verification', {
+      callId,
+      context: {
+        ...operationInput('verification').context,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
+      after: {
+        ...operationInput('verification').after,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
+    })
+  }
+
+  /**
+   * Starts observing the held call. Its classification has begun by the time
+   * this returns, so whatever the test does next happens during the await.
+   */
+  function holdImplementation(
+    guard: WorkflowGuard,
+    gate: GatedClassifier,
+  ): Promise<EvidenceObservationResult> {
+    const held = guard.observeOperation(
+      bindOperation(guard, implementationInput(HELD_CALL)),
+    )
+    expect(gate.heldStarts()).toBe(1)
+    return held
+  }
+
+  const CHANGED_DECLARATION = { expectedOperations: ['commit' as const] }
+
+  function receiptCount(scenario: {
+    ledger: ReturnType<typeof createReceiptLedger>
+  }): number {
+    return scenario.ledger.listReceipts().length
+  }
+
+  test('a changed redeclaration during the classifier await supersedes the observation', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    expect(scenario.guard.startUnit(CHANGED_DECLARATION)).toMatchObject({
+      status: 'started',
+    })
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'declaration-superseded',
+    })
+    expect(receiptCount(scenario)).toBe(0)
+    expect(scenario.guard.status().satisfiedOperations).not.toContain(
+      'implementation',
+    )
+    expect(scenario.guard.status().state).not.toBe('unavailable')
+  })
+
+  test('a unit completed during the classifier await supersedes the observation', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const { guard } = scenario
+    for (const input of [
+      implementationInput('call-implementation'),
+      verificationInput('call-verification'),
+    ]) {
+      expect(
+        await guard.observeOperation(bindOperation(guard, input)),
+      ).toMatchObject({ status: 'accepted' })
+    }
+    const held = guard.observeOperation(
+      bindOperation(guard, {
+        ...verificationInput(HELD_CALL),
+      }),
+    )
+    expect(gate.heldStarts()).toBe(1)
+
+    const prepared = guard.prepareTransition({
+      callId: 'complete-during-await',
+      target: 'unit',
+    })
+    expect(prepared).toMatchObject({ status: 'allowed' })
+    if (prepared.status !== 'allowed') {
+      throw new Error('transition did not prepare')
+    }
+    expect(
+      guard.finalizeTransition({
+        callId: 'complete-during-await',
+        transitionId: prepared.transitionId,
+        readbacks: [
+          {
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_CURRENT,
+            worktreeIdentity: WORKTREE_AFTER,
+            operationTargetIdentity: OPERATION_TARGET_IDENTITY,
+          },
+        ],
+      }),
+    ).toMatchObject({ status: 'completed' })
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'declaration-superseded',
+    })
+    expect(receiptCount(scenario)).toBe(2)
+    expect(guard.status().unit?.status).toBe('completed')
+  })
+
+  test('a mode change during the classifier await supersedes the observation', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    expect(scenario.guard.setMode({ mode: 'disabled' })).toEqual({
+      status: 'changed',
+      mode: 'disabled',
+    })
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'declaration-superseded',
+    })
+    expect(receiptCount(scenario)).toBe(0)
+    expect(scenario.guard.status().state).toBe('disabled')
+    expect(scenario.guard.setMode({ mode: 'disabled' })).toEqual({
+      status: 'unchanged',
+      mode: 'disabled',
+    })
+  })
+
+  test('a classifier that throws after a changed redeclaration records no issue on the new declaration', async () => {
+    const gate = gatedClassifier('throw')
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    expect(scenario.guard.startUnit(CHANGED_DECLARATION)).toMatchObject({
+      status: 'started',
+    })
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'declaration-superseded',
+    })
+    const status = scenario.guard.status()
+    expect(status.state).not.toBe('unavailable')
+    expect(status.reasonCode).not.toBe('guard-unavailable')
+    expect(receiptCount(scenario)).toBe(0)
+  })
+
+  test('a mode change to the mode already set during the classifier await leaves the observation accepted', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    expect(scenario.guard.setMode({ mode: 'protected' })).toEqual({
+      status: 'unchanged',
+      mode: 'protected',
+    })
+    gate.release()
+
+    await expect(held).resolves.toMatchObject({ status: 'accepted' })
+    expect(receiptCount(scenario)).toBe(1)
+  })
+
+  test('control: an observation with no declaration change during the await is accepted and mints', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'accepted',
+      operation: 'implementation',
+    })
+    expect(receiptCount(scenario)).toBe(1)
+    expect(scenario.guard.status().satisfiedOperations).toContain(
+      'implementation',
+    )
+  })
+
+  test('control: an identical redeclaration during the await returns unit-active and the observation is accepted', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    expect(scenario.guard.startUnit({ expectedOperations: [] })).toEqual({
+      status: 'rejected',
+      reasonCode: 'unit-active',
+    })
+    gate.release()
+
+    await expect(held).resolves.toMatchObject({ status: 'accepted' })
+    expect(receiptCount(scenario)).toBe(1)
+  })
+
+  test('control: replaying the call after a superseded result returns rejected-operation', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+    scenario.guard.startUnit(CHANGED_DECLARATION)
+    gate.release()
+    await held
+
+    await expect(
+      scenario.guard.observeOperation(
+        bindOperation(scenario.guard, implementationInput(HELD_CALL)),
+      ),
+    ).resolves.toEqual({ status: 'rejected', reasonCode: 'rejected-operation' })
+  })
+
+  test('control: after a superseded seal, a changed redeclaration returns unit-active as it does after an accepted observation', async () => {
+    const gate = gatedClassifier()
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+    scenario.guard.startUnit(CHANGED_DECLARATION)
+    gate.release()
+    await held
+
+    expect(
+      scenario.guard.startUnit({ expectedOperations: ['commit', 'push'] }),
+    ).toEqual({ status: 'rejected', reasonCode: 'unit-active' })
+  })
+
+  test('control: a classifier that throws with no declaration change still reports guard-unavailable', async () => {
+    const gate = gatedClassifier('throw')
+    const scenario = createScenario(gate.classifier)
+    const held = holdImplementation(scenario.guard, gate)
+
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'guard-unavailable',
+    })
+    expect(scenario.guard.status().state).toBe('unavailable')
+    expect(receiptCount(scenario)).toBe(0)
   })
 })
