@@ -126,7 +126,7 @@ Recording only the effective target keeps the block and its clear in the same pl
 - Remote side effects made while blocked (a push, a PR) leave no receipt and no status trace. The guidance tells the agent to check remote state before redoing them.
 - A blocked snapshot of a target that is not the effective target skips the call without recording a block, so status does not show it.
 - Block-and-fix cycles have no attempt cap. Completion rejections are retryable and consume nothing, and the one-fix escalation is the agent's judgment. Disabling the guard still needs the user's answer to an attestation question.
-- A snapshot timeout no longer makes the guard unavailable. A before-hook timeout skips the call, an after-hook timeout seals it, a child-rollup timeout halts the pass, a status refresh reports the probe as unconfirmed, and completion rejects it as the retryable `readback-timeout`. The attestation model, the unreceipted-push residual and the rollup residual are in ARCHITECTURE.md (#1084).
+- A snapshot timeout no longer makes the guard unavailable. A before-hook timeout skips the call, an after-hook timeout seals it, a child-rollup timeout halts the pass, a status refresh reports the probe as unconfirmed, and completion rejects it as the retryable `readback-timeout`. The attestation model, the unreceipted-push residual and the rollup residual are in ARCHITECTURE.md and [the transient-timeout doc](./transient-timeout-disables-workflow-guard-2026-10-15.md) (#1084).
 - Open: #1126 (ignore rules and other agent-written state can hide work from the snapshot).
 
 ## Prevention

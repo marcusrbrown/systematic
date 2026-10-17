@@ -311,8 +311,8 @@ when its after-read is `remote-not-advanced`, whatever the before-read was (a pu
 tracked branch), or `missing-resource` when the before-read was also `missing-resource` or timed out. Both the
 before-hook intent and the finished classification must be a push; output-limit, malformed and
 pull-request-creation failures stay fatal. A parent-registration timeout is retryable in status
-refresh (reported as unconfirmed), completion (`readback-timeout`) and the block clear; seeding
-stays fatal but carries a typed `command-timeout` cause. Receipts bind to a worktree and
+refresh (reported as unconfirmed), completion (`readback-timeout`) and the block clear; at seed
+time it stays fatal but carries a typed `command-timeout` cause. Receipts bind to a worktree and
 repository revision, so the guard attests the final state, not that every write was observed. That
 was already true of calls skipped while blocked, calls in inactive sessions, tools the classifier
 does not recognize, and destructive pushes, which are never observed. A skipped or sealed call fits
