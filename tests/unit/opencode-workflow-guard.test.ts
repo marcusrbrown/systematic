@@ -20114,7 +20114,6 @@ describe('snapshot block record', () => {
     const VERIFY = { command: 'bun test' }
     const WRITE = { filePath: 'real.ts', content: 'changed' }
     const SEARCH = { command: 'rg needle' }
-    const TIMED_OUT = sequenceObserver([unavailableStep('command-timeout')])
     const worktree = (tag: string) =>
       operationSnapshot(OPERATION_SCOPE.repositoryIdentity, tag.repeat(32))
 
@@ -20288,14 +20287,34 @@ describe('snapshot block record', () => {
       const adapter = await activeAdapter(steered)
       const verification = rawCall('bash', 'sealed', VERIFY)
       await begin(adapter, verification)
-      steered.queueSnapshot(TIMED_OUT)
+      const timedOutObserver = sequenceObserver([
+        unavailableStep('command-timeout'),
+      ])
+      steered.queueSnapshot(timedOutObserver)
       const timedOut = rawCall('write', 'timed-out-writer', WRITE)
+      const snapshotsBefore = steered.snapshotCalls()
       await begin(adapter, timedOut)
+
+      // The before-hook took exactly one snapshot, the one that timed out,
+      // and the call was skipped. The tree then changes, so a call that was
+      // observed anyway would mint a receipt.
+      expect(timedOutObserver.snapshotCalls()).toBe(1)
+      expect(steered.snapshotCalls()).toBe(snapshotsBefore + 1)
+      steered.setDefault(worktree('d1'))
       await end(adapter, timedOut)
+
+      // The skipped call's after-hook is silent: it took no snapshot, minted
+      // nothing, and recorded no cause.
+      expect(steered.snapshotCalls()).toBe(snapshotsBefore + 1)
+      expect(ledger(adapter).listReceipts()).toEqual([])
+      steered.setDefault(operationSnapshot())
 
       await end(adapter, verification)
 
       await expectSealed(adapter, steered, verification)
+      expect(
+        (await refreshStatus(adapter)).firstUnavailableCause,
+      ).toBeUndefined()
     })
 
     test('a call skipped by a block on the effective target during the verification seals it', async () => {
@@ -20385,6 +20404,29 @@ describe('snapshot block record', () => {
 
       await expectSealed(adapter, steered, verification)
     })
+
+    test.each([
+      { name: 'a tool that is not local', input: { tool: 'read' } },
+      { name: 'a tool name that is not a string', input: { tool: 42 } },
+    ])(
+      'a before-hook whose input cannot be parsed, naming $name, does not seal the verification',
+      async ({ input }) => {
+        const steered = steeredObserver()
+        const adapter = await activeAdapter(steered)
+        const verification = rawCall('bash', 'unsealed', VERIFY)
+        await begin(adapter, verification)
+        await adapter.hooks['tool.execute.before'](
+          { ...input, sessionID: SESSION_A, callID: 'c'.repeat(257) },
+          { args: SEARCH },
+        )
+
+        await end(adapter, verification)
+
+        expect(verificationReceipts(adapter)).toBe(1)
+        expect(status(adapter).state).not.toBe('unavailable')
+        expect(status(adapter).satisfiedOperations).toContain('verification')
+      },
+    )
 
     test('a non-verification call overlapped by another local call still mints its receipt', async () => {
       const steered = steeredObserver()
