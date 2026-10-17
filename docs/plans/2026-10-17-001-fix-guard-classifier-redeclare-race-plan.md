@@ -9,49 +9,62 @@ date: 2026-10-17
 
 ## Overview
 
-Two gaps in workflow-guard operation admission (#1083), both reproduced by Fro Bot's triage.
+This plan fixes two gaps in workflow-guard operation admission (#1083). Fro Bot's triage reproduced both.
 
-1. The core guard awaits the classifier inside `observeOperation` and then finalizes against the unit object it captured on entry. A same-ID redeclaration during that await mutates the unit in place, so the observation finalizes against a declaration it was never checked against. Fro Bot minted a verification receipt under a declaration that had changed to `[push]`.
-2. When a pull-request-creation seed has already propagated the check and review baselines, a later check or review seed timeout records no deferral. Status does not explain the missing operation, and the before-read loses its one retry.
+1. The core guard awaits the classifier inside `observeOperation`, then finalizes against the unit object it captured on entry. A same-ID redeclaration during that await mutates the unit in place. The observation then finalizes against a declaration it was never checked against. Fro Bot got a verification receipt minted under a declaration that had changed to `[push]`.
+2. A pull-request-creation seed can propagate resource baselines to check and review. If it has, a later check or review seed timeout records no deferral. Status gives no reason the operation is missing, and its before-read loses its one retry.
+
+## Terms
+
+- **Changed redeclaration:** a start of the active unit for which `startActiveUnit` does not return `unit-active`. An identical redeclaration returns `unit-active` and changes nothing.
+- **Stale observation:** one whose captured generation no longer matches the core's generation after the classifier await. `declaration-superseded` is the reason code it returns.
+- **Resource baseline:** the expected resource identity for an operation. It comes from the unit's declared resource scope, from earlier evidence, or from pull-request propagation. `currentResourceIdentities` names only the core field that holds the non-declared ones.
+- **Declared resource scope:** an operation listed in the status unit's `requiredResourceOperations`. This includes scopes supplied by the runtime policy, and `pr-creation` when it is declared.
 
 ## Problem Frame
 
-The adapter (`src/lib/opencode-workflow-guard.ts`) already fences its own awaits with `unitStartGeneration` and seals a lost operation with `sealAndIgnore`. The core (`src/lib/workflow-guard.ts`) has no equivalent, and the classifier await in `processOperation` is the one window the adapter cannot see. Unit completion during that await is likewise invisible to the adapter, because completion changes none of the adapter's initiator fields.
+The adapter (`src/lib/opencode-workflow-guard.ts`) fences its own awaits with `unitStartGeneration`. It seals a lost operation with `sealAndIgnore`, and it checks ownership synchronously before calling the core. The core (`src/lib/workflow-guard.ts`) has no equivalent. Its classifier await in `processOperation` is the one window the adapter cannot see. Unit completion and mode changes during that await are also invisible to the adapter, because neither changes the adapter's initiator fields.
 
-On the seed side, `recordSeedDeferral` returns early whenever the core holds any baseline for the operation. A propagated pull-request baseline is not the operation's own evidence, but it suppresses the deferral record, and the one-time before-read retry is keyed on that record. `bindDeferredBaseline` also clears a deferral unconditionally whenever a baseline exists, which hides a timeout recorded before propagation.
+On the seed side, `recordSeedDeferral` returns early whenever the core holds any resource baseline for the operation. A propagated baseline is not the operation's own evidence, yet it suppresses the deferral record. The one-time before-read retry is keyed on that record. `bindDeferredBaseline` also clears a deferral whenever a baseline exists, so a timeout recorded before propagation is hidden too.
 
 ## Requirements Trace
 
-- R1. An observation whose unit declaration changed, whose unit completed, or whose guard mode changed while the classifier was awaited mints nothing, records no issue or cause, and leaves the guard available. The adapter seals it and ignores the call.
+- R1. A stale observation (changed redeclaration, unit completion or mode change during the classifier await) mints nothing and records no issue or cause. It returns `rejected` / `declaration-superseded` and is terminal for its call. The stale result does not itself make the guard unavailable. The adapter seals it as abandoned and ignores the call.
 - R2. The classifier-throw path applies the same fence before it writes anything.
-- R3. An unchanged redeclaration (same IDs, same declaration) does not disturb an in-flight observation.
-- R4. A seed timeout for an operation the unit did not declare is recorded even when a baseline was propagated from another operation, and the one-time before-read retry applies to it.
-- R5. With a propagated baseline present, a deferral clears only when the operation's own before-read is `available`. Admission still rejects mismatched evidence, and propagated baselines are never overwritten.
-- R6. Every new check fails a named test when removed.
+- R3. An identical redeclaration does not disturb an in-flight observation.
+- R4. A seed timeout for an operation without a declared resource scope is recorded even when a baseline was propagated from another operation. The one-time before-read retry applies to it.
+- R5. When a baseline is present, a deferral clears only on the operation's own `available` before-read from the same observer and target as the seed. Binding never overwrites a propagated baseline. Admission still compares resource identity.
+- R6. Removing any new check fails a named test.
 
 ## Scope Boundaries
 
-- Remote-evidence redesign (#1081), cross-registration coordination (#1090), restart-proof anchors (#1126) and receipt hardening (#740) are out of scope.
-- Resource identities moved by sibling readbacks during the classifier await are not fenced. That is pre-existing and stays a residual.
-- Operations the unit declared keep today's behaviour: a declared baseline still exempts them from deferral.
+- Out of scope: remote-evidence redesign (#1081), cross-registration coordination (#1090), restart-proof anchors (#1126) and receipt hardening (#740).
+- Operations with a declared resource scope keep today's behaviour. A seed timeout for one still records no deferral and gets no retry. Propagation never writes a declared operation, so the declared-and-propagated case cannot occur.
+- Residuals. These are not fenced and are documented in Unit 3:
+  - Sibling calls that move resource identities or write unit evidence during the classifier await (pre-existing).
+  - A seed read after a changed redeclaration can replace a propagated identity (pre-existing; the seed path calls `observeReadback`).
+  - On the bind-clear branch, the operation's revision baseline stays unset, so its first before-revision is unchecked (pre-existing).
+  - An `available` before-read for a different pull request clears the deferral. Admission then rejects that call as `resource-mismatch`. The timeout record is gone, and an accepted receipt later clears the issue.
+  - A deferral recorded before the operation was declared stays until the operation's own `available` read or the end of the unit.
+  - A stale seal marks the call terminal, so later changed redeclarations of that unit return `unit-active`. Accepted and rejected observations already do the same.
 
 ## Context & Research
 
 ### Relevant Code and Patterns
 
-- Core path: `observeOperation` → `processOperation` → `classifyPreparedOperation` (the only await) → `finalizeOperation`. A rejection that mints nothing already exists as `abandonPreparedOperation` + `markTerminalOperation` on the classifier-throw path.
-- Redeclaration: `startActiveUnit` mutates `requiredOperations`, `declaredResourceOperations`, `resourceScopes` and `currentResourceIdentities` in place. An identical redeclaration returns `unit-active` before any mutation.
-- Completion: the unit branch of `finalizePrepared`. Mode: `setMode`, reached from the adapter's `markUnavailable`.
-- Adapter result mapping in `completeOperationObservation`: any non-accepted, non-`unavailable` result seals the call as abandoned and returns `ignored`.
-- Seed: `recordSeedDeferral`, `bindDeferredBaseline`, `deferredSeedFor`, the one-time retry in the before-read, and `propagatePullRequestScope` in the core. The status `unit.requiredResourceOperations` lists declared resource operations, including runtime scopes and a declared `pr-creation`.
-- Pattern: a monotonic, never-reset version captured before an await and compared after it, as in `snapshotBlockVersion` and `unitStartGeneration`.
+- Core path: `observeOperation` → `processOperation` → `classifyPreparedOperation` (the only await) → `finalizeOperation`. The classifier-throw handling already abandons the prepared observation and marks the call terminal before it records a unit issue.
+- Changed redeclaration: `startActiveUnit` mutates `requiredOperations`, `declaredResourceOperations`, `resourceScopes` and `currentResourceIdentities` in place. Declarations only grow.
+- Completion is the unit branch of `finalizePrepared`. Mode changes go through `setMode`, which the adapter reaches from `markUnavailable` via `recordUnavailable`. A same-mode call returns early.
+- The adapter checks `ownsOperation` synchronously before `observeClassifiedOperation`. Its result mapping seals any result that is neither accepted nor `unavailable` as abandoned, and returns `ignored`.
+- Seed: `recordSeedDeferral`, `bindDeferredBaseline` with its initiator gate and `sameSeedObserver` check, `deferredSeedFor`, the one-time retry in the before-read, and `propagatePullRequestScope` in the core. `startFreshUnit` runs before the seeds, so the status unit is current at record time.
+- Pattern: a monotonic, never-reset version, captured before an await and compared after it, as in `snapshotBlockVersion` and `unitStartGeneration`.
 
 ### Institutional Learnings
 
-- `docs/solutions/best-practices/async-commit-aba-version-fence-2026-10-15.md`: capture the fence synchronously before the await, and reject a stale result before any side effect. This doc lists #1083 as open.
+- `docs/solutions/best-practices/async-commit-aba-version-fence-2026-10-15.md`: capture synchronously before the await, and reject a stale result before any side effect. It still lists #1083 as open.
 - `docs/solutions/logic-errors/verification-overlap-mints-receipt-2026-10-17.md` and `docs/solutions/logic-errors/transient-timeout-disables-workflow-guard-2026-10-15.md`: a lost or stale operation is sealed and ignored, with no cause and no `unavailable`.
-- `docs/solutions/workflow-issues/stop-patching-after-second-review-round-2026-10-15.md`: the seed fix stays deferral bookkeeping. Binding comes only from the operation's own before-read, and there are no compare-only readbacks.
-- `docs/solutions/best-practices/a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md`: a check that no test can reach is removed or justified, never kept silently.
+- `docs/solutions/workflow-issues/stop-patching-after-second-review-round-2026-10-15.md`: the seed fix stays deferral bookkeeping. Binding comes only from the operation's own before-read, with no compare-only readbacks.
+- `docs/solutions/best-practices/a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md`: a check no test can reach is removed or justified.
 
 ## Prior-Art Survey
 
@@ -126,32 +139,40 @@ On the seed side, `recordSeedDeferral` returns early whenever the core holds any
 
 ## Key Technical Decisions
 
-- **A core declaration generation, not a refusal to redeclare.** Refusing a redeclaration while an observation is in flight would need in-flight tracking and a new start result the agent sees. The generation is captured and compared, as the version-fence doc prescribes.
-- **Bump only where it is reachable.** Bump on a changed declaration in `startActiveUnit`, on unit completion in `finalizePrepared`, and on a mode change in `setMode`. Unit replacement, epoch completion, activation and recovery cannot happen while an observation is in flight: replacement and epoch completion require a completed unit, and activation and recovery require no live epoch. Bumps there would be mutants no test can kill.
-- **Capture in `processOperation`.** It is shared by `observeOperation` and the trusted recovery path. The trusted path has no await, so it can never be stale.
-- **The throw path checks inside the classifier's catch.** The catch records a unit issue before it returns, so a recheck after the await is too late. `classifyPreparedOperation` receives the captured generation and reports a stale result distinctly.
-- **Stale result: `rejected` with a new `declaration-superseded` code.** The core abandons the observation and marks the call terminal, and writes nothing else. `unit-mismatch` would also work functionally, but its existing producer records an issue, and a same-ID redeclaration is not a unit mismatch. The new code is added to the core's reason-code union only. The adapter needs no change, because it seals any non-accepted result and returns `ignored`.
-- **Seed gate exempts declared operations only.** `recordSeedDeferral` skips an operation only when the unit declared its resource scope (`requiredResourceOperations`). A propagated baseline no longer suppresses the record, and the retry follows the record without further change.
-- **Bind with a baseline present clears on the operation's own `available` before-read.** Admission then rejects a mismatched resource as `resource-mismatch`, as it does today. The deferral stays on timeout, unavailable or missing reads. No new core accessor, and `observeReadback` is never called on this path, so a propagated baseline is never overwritten.
+- **Use a core declaration generation instead of refusing to redeclare.** Refusing would need in-flight tracking and a new start result that the agent sees. The generation is captured and compared, as the version-fence doc prescribes.
+- **Bump only where it can happen.** The generation bumps on a changed redeclaration in `startActiveUnit`, on unit completion in `finalizePrepared`, and in `setMode` after the mode actually changes (never on a same-mode call). No other replacement can happen while an observation is in flight:
+  - Unit replacement needs a non-active unit, and an in-flight observation needs an active one, so completion has already bumped.
+  - Epoch completion requires a completed unit.
+  - `activate` requires a completed or absent epoch.
+  - `restore` requires no epoch.
+  A comment at the `startActiveUnit` bump states this.
+- **Capture in `processOperation`.** Both `observeOperation` and the trusted recovery path go through it. The trusted path skips the classifier and has no await, so it cannot go stale.
+- **Signal staleness with a discriminated classifier outcome.** `classifyPreparedOperation` receives the captured generation and returns one of three outcomes: classified, stale or unclassified. Its catch checks the generation before any write. An unclassified outcome keeps today's `guard-unavailable` mapping. `processOperation` also compares after the await, before `finalizeOperation`. The no-classifier branch writes synchronously before the call yields, so its writes cannot land after a redeclaration.
+- **A stale result is `rejected` with a new `declaration-superseded` code.** The core abandons the observation, marks the call terminal, and writes nothing else. `unit-mismatch` would also work functionally, but its existing producer records an issue, and a same-ID redeclaration is not a unit mismatch. Consumers of the core reason-code union to update:
+  - the union itself in `src/lib/workflow-guard.ts`;
+  - `issueKind`;
+  - `repairFor` / `eligibleRepairKinds`.
+  The last two are non-exhaustive, so typecheck will not flag them. The adapter's `REASON_CODES` does not need it, because it gates only `isWorkflowGuardBlockedError`, which this path never throws. No schema, docs list or marker carries the union.
+- **The seed gate exempts declared resource scopes only.** `recordSeedDeferral` skips an operation only when it has a declared resource scope. A propagated baseline no longer suppresses the record, and the retry follows the record with no further change.
+- **When a baseline is present, binding clears on the operation's own `available` before-read from the seed's observer and target.** In every other case the deferral stays. No new core accessor is needed, and `observeReadback` is never called on this branch. Clearing on a match only was considered: it needs a new core accessor, and it leaves a stale timeout in status for the rest of the unit. Its benefit is diagnostic, because admission gates the evidence either way.
 
 ## Open Questions
 
 ### Resolved During Planning
 
-- Stale observation outcome: sealed and ignored, guard available (confirmed).
-- One PR for both parts, closing #1083 (confirmed).
-- Bind rule, reason code and mode fence: as above (confirmed).
+- Stale observation outcome: it is sealed and ignored, with no cause (confirmed).
+- Both parts ship in one PR, which closes #1083 (confirmed).
+- The bind rule, the new reason code and the mode fence are as above (confirmed).
 
 ### Deferred to Implementation
 
-- The exact shape of the stale signal from `classifyPreparedOperation`. It must stay distinguishable from "no classification", which still returns `guard-unavailable`.
-- Whether the reason-code union feeds a schema, a status renderer or a docs list that also needs the new code. The implementer checks every consumer.
+- Exact names for the classifier outcome variants.
 
 ## Implementation Units
 
 - [ ] **Unit 1: Fence core observations with a declaration generation**
 
-**Goal:** An observation finalizes only against the declaration, unit state and mode it started with.
+**Goal:** an observation finalizes only if its unit's declaration, its unit's completion state and the guard mode are unchanged since it started.
 
 **Requirements:** R1, R2, R3, R6
 
@@ -160,107 +181,118 @@ On the seed side, `recordSeedDeferral` returns early whenever the core holds any
 **Files:**
 - Modify: `src/lib/workflow-guard.ts`
 - Test: `tests/unit/receipt-operations.test.ts`
-- Test: `tests/unit/workflow-guard.test.ts` (only if the unit-completion helper lives there)
+- Test: `tests/unit/opencode-workflow-guard.test.ts` (one adapter integration scenario)
 
 **Approach:**
-- Add a monotonic, never-reset generation to the guard closure. Bump it on a changed declaration in `startActiveUnit`, unit completion in `finalizePrepared`, and a mode change in `setMode`. Each bump site gets a one-line comment. Note in one place why the other replacement sites cannot occur while an observation is in flight.
-- Capture the generation at the top of `processOperation`. Compare it after the classifier await, before `finalizeOperation`, and inside the classifier catch before any write.
-- On stale: abandon the prepared observation, mark the call terminal, and return `rejected` / `declaration-superseded`. Record no issue, no global issue and no cause.
-- Add `declaration-superseded` to the core reason-code union and to any consumer the implementer finds.
+- Add a monotonic generation to the guard closure that is never reset. Bump it at the three sites above.
+- Capture it at the top of `processOperation`. Compare it inside the classifier catch before any write, and again after the await before `finalizeOperation`.
+- When stale: abandon the prepared observation, mark the call terminal, and return `rejected` / `declaration-superseded`. Record nothing else.
+- Add the reason code to the consumers listed in Key Technical Decisions.
 
-**Execution note:** Implement test-first. Add the gated-classifier race test and confirm it is RED on the current core before changing the source.
+**Execution note:** implement test-first. Each discriminating scenario below must fail on the current core before the source changes.
 
 **Patterns to follow:**
 - `snapshotBlockVersion` and `unitStartGeneration` in `src/lib/opencode-workflow-guard.ts`.
-- The existing classifier-throw handling in `classifyPreparedOperation` for abandon and terminal marking.
+- The existing abandon-and-terminal handling in `classifyPreparedOperation`.
+- Core scenarios use `createScenario` with a gated wrapper over `createReceiptClassifier`. Completion during the await needs `implementation` minted, verification context and after-readbacks that include the worktree revision, and coherent final readbacks. Follow the existing completion scenarios in this file.
 
 **Test scenarios:**
-- Happy path: a gated classifier; redeclare the active unit with the same IDs and a changed declaration while it is suspended; release. The result is `rejected` / `declaration-superseded`, no receipt is minted, `satisfiedOperations` lacks the operation, and the guard is not `unavailable`.
-- Happy path: a gated classifier with no redeclaration. The result is accepted and a receipt is minted (control).
-- Edge case: an identical redeclaration (same IDs, same declaration) during the await returns `unit-active`, and the observation is still accepted.
-- Edge case: the unit completes during the await. The observation mints nothing.
-- Edge case: the guard mode changes during the await. The observation mints nothing.
-- Error path: the classifier throws after a redeclaration. No unit issue or `guard-unavailable` is recorded on the new declaration, and the guard is not `unavailable`.
-- Edge case: replaying the same call after a stale result returns the terminal `rejected-operation`, and nothing is minted.
-- Edge case: after a stale seal, a later redeclaration returns `unit-active`, the same as after an accepted observation.
-- Integration: through the adapter, a core `declaration-superseded` result is sealed as abandoned and the call is `ignored`, with no cause recorded.
+- Happy path (discriminating): suspend a gated classifier, make a changed redeclaration with the same IDs, then release. The result is `rejected` / `declaration-superseded`, the receipt count is unchanged, `satisfiedOperations` lacks the operation, and the guard is not `unavailable`. Today this is accepted and mints.
+- Edge case (discriminating): the unit completes during the await, so the observation mints nothing. Today it is accepted.
+- Edge case (discriminating): `setMode` changes the mode during the await, so the observation mints nothing. Assert the receipt count and the result, and that the mode is the one the test set. Today it is accepted and mints.
+- Error path (discriminating): the classifier throws after a changed redeclaration. No unit issue or `guard-unavailable` is recorded on the new declaration, and the result is `declaration-superseded`. Today the new declaration records `guard-unavailable`.
+- Edge case (discriminating): a same-mode `setMode` during the await leaves the observation accepted. A bump placed before the early return fails this.
+- Control: a gated classifier with no redeclaration is accepted and mints.
+- Control: an identical redeclaration during the await returns `unit-active`, and the observation is accepted.
+- Control: replaying the same call after a stale result returns the terminal `rejected-operation`.
+- Control: after a stale seal, a changed redeclaration returns `unit-active`, the same as after an accepted observation.
+- Integration: a call-counting gate on the classifier the adapter and core share holds the core's second classification. A changed redeclaration through the adapter during that hold leaves the call `ignored`, with no receipt and no cause.
 
 **Verification:**
-- The race test fails on the current core and passes after the change.
-- Mutations each fail at least one named test: removing the post-await comparison; removing the in-catch comparison; removing each of the three bumps.
+- Each discriminating scenario fails before the change and passes after it.
+- Each of these mutations fails at least one discriminating scenario: removing the post-await compare, removing the in-catch compare, removing the `startActiveUnit` bump, removing the completion bump, removing the `setMode` bump, and moving the `setMode` bump before its early return.
+- `bun run typecheck:all` passes.
 
 - [ ] **Unit 2: Keep seed timeouts visible when a baseline was propagated**
 
-**Goal:** A seed timeout for an undeclared operation is recorded and retried even after pull-request propagation, and binding never hides it on a read that did not confirm the operation.
+**Goal:** a seed timeout for an operation without a declared resource scope is recorded and retried after pull-request propagation. Binding does not hide it on a read that did not answer for the operation.
 
 **Requirements:** R4, R5, R6
 
-**Dependencies:** None (independent of Unit 1)
+**Dependencies:** none. It is independent of Unit 1.
 
 **Files:**
 - Modify: `src/lib/opencode-workflow-guard.ts`
 - Test: `tests/unit/opencode-workflow-guard.test.ts`
 
 **Approach:**
-- In `recordSeedDeferral`, replace the any-baseline early return with an exemption for operations the unit declared, read from the status unit's `requiredResourceOperations`.
-- In `bindDeferredBaseline`, when the core already holds a baseline, clear the deferral only when the operation's own before-read is `available`. Keep it on any other read. Do not call `observeReadback` on this branch.
+- In `recordSeedDeferral`, replace the any-baseline early return with an exemption for declared resource scopes, read from the status unit.
+- In `bindDeferredBaseline`'s baseline-present branch, clear the deferral only when the operation's own before-read is `available` and `sameSeedObserver` holds. Otherwise keep it. Never call `observeReadback` on this branch.
 - Leave the retry, the initiator gate, propagation and admission unchanged.
 
-**Execution note:** Implement test-first. Flip test g's expectation first and confirm it is RED.
+**Execution note:** implement test-first, and flip the existing pull-request-then-check test before changing the source.
 
 **Patterns to follow:**
-- The existing deferral tests built on `deferralAdapter`, `sequenceObserver` and `statusParsed`.
+- The existing deferral tests that use `deferralAdapter`, `sequenceObserver` and `statusParsed`.
 
 **Test scenarios:**
-- Happy path: seed pull-request creation as available, then time out the check-readback seed. Status lists `{ operation: 'check-readback', reasonCode: 'command-timeout' }`. This flips the existing test g.
-- Happy path: the same for review-readback.
-- Edge case, reversed order: the check seed times out first, then the pull-request seed propagates. The deferral is still listed, a timed-out check before-read keeps it, and an `available` before-read for the same pull request clears it and is admitted.
-- Error path: with the deferral and a propagated baseline present, an `available` before-read for a different pull request clears the deferral and admission rejects it as `resource-mismatch`. The propagated baseline is unchanged.
-- Edge case: a timed-out before-read with a deferral over a propagated baseline is retried exactly once.
-- Edge case: an operation the unit declared still records no deferral on a seed timeout (tests h and the snapshot-blocked declared-scope test stay green).
+- Happy path (flip): change 'g: a check timeout after pr-creation seeded records no check deferral' so that status lists `{ operation: 'check-readback', reasonCode: 'command-timeout' }`. Rename it to describe the new behaviour.
+- Happy path: the same case for review-readback.
+- Edge case (discriminating, reversed order): the check seed times out first, then the pull-request seed propagates. The deferral is listed, and a timed-out check before-read keeps it. Then an `available` before-read for the same pull request clears it and is admitted. Today the timed-out read clears it. This is the scenario that fails when the bind-time clear is made unconditional.
+- Edge case (discriminating): a deferral sits over a propagated baseline and its before-read comes from a different observer or target. The deferral stays.
+- Edge case (discriminating): a timed-out before-read with a deferral over a propagated baseline is retried exactly once.
+- Edge case (discriminating, negative): a timed-out before-read with no deferral gets exactly one read. Use a declared operation, or an undeclared one before propagation. This fails an always-retry mutation.
+- Residual pin: with a deferral and a propagated baseline present, an `available` before-read for a different pull request clears the deferral. Admission rejects it as `resource-mismatch`, and the propagated baseline is unchanged.
+- Control: 'a different PR cannot overwrite the propagated baseline or mint evidence' and 'the same PR is still admitted and the obsolete deferral is cleared' stay green for check and review.
+- Control: 'h: a timeout for an operation whose resource the unit declared…' and 'a scope whose baseline the unit declares is not deferred when the seed is blocked' stay green.
 - Edge case: a snapshot-blocked seed for an undeclared operation with a propagated baseline records a `snapshot-blocked` deferral.
 
 **Verification:**
-- Test g flips and passes. The existing different-pull-request and same-pull-request tests stay green.
-- Mutations each fail at least one named test: restoring the any-baseline early return; making the bind-time clear unconditional; dropping the retry's dependence on the deferral record.
+- The flipped test passes. Every listed control stays green.
+- Each of these mutations fails at least one discriminating scenario: restoring the any-baseline early return, making the bind-time clear unconditional, dropping `sameSeedObserver` from the clear, and making the retry ignore the deferral record.
 
 - [ ] **Unit 3: Docs**
 
-**Goal:** Docs describe the core fence and the seed rule as they now behave.
+**Goal:** the docs describe the core fence and the seed rule as they now behave.
 
 **Requirements:** R1, R4, R5
 
 **Dependencies:** Units 1 and 2
 
 **Files:**
-- Modify: `ARCHITECTURE.md` (guard section: one sentence on the core fence; the seeding paragraph for propagated baselines)
-- Modify: `docs/solutions/best-practices/async-commit-aba-version-fence-2026-10-15.md` (mark #1083 resolved, and add the core as an example)
-- Modify: `docs/plans/2026-10-11-002-fix-remote-seeding-deferral-plan.md` (one superseded note where it records the baseline exemption)
+- Modify: `ARCHITECTURE.md`, in the guard section. Add one sentence on the core fence and its stale result. Update the seeding paragraph for propagated baselines, and list the residuals from Scope Boundaries.
+- Modify: `docs/solutions/best-practices/async-commit-aba-version-fence-2026-10-15.md`. Mark #1083 resolved and add the core as an example.
+- Modify: `docs/plans/2026-10-11-002-fix-remote-seeding-deferral-plan.md`. Add one superseded note where it records the baseline exemption.
 
 **Approach:**
-- State current behaviour plainly. Add no change-history narration.
-- Name the residuals: resource identities moved by sibling readbacks during the await, and a stale seal leaving the unit non-pristine.
+- State current behaviour plainly, with no change-history narration.
 
-**Test expectation:** none (documentation only).
+**Test expectation:** none, because this unit is documentation only.
 
 **Verification:**
 - markdownlint and `bun scripts/content-integrity.ts` are clean.
 
 ## System-Wide Impact
 
-- **Interaction graph:** the core fence affects every observation through `processOperation`. The adapter's mapping already seals any non-accepted result. The trusted recovery path has no await and is unaffected.
+- **Interaction graph:** the core fence affects every observation that goes through `processOperation`. The adapter's mapping already seals any non-accepted result. The trusted recovery path has no await.
 - **Error propagation:** a stale observation is a silent seal. It never reaches `markUnavailable`, and the core never throws on it.
 - **State lifecycle risks:** a stale call is terminal in the ledger. A replay gets `rejected-operation`, and a rerun has a new call ID.
-- **Unchanged invariants:** admission's resource comparison, pull-request propagation, the one-time retry bound, the declared-scope exemption, and the adapter's own ownership checks.
+- **Unchanged invariants:** these all stay as they are:
+  - admission's resource comparison;
+  - pull-request propagation;
+  - the one-time retry bound;
+  - the declared-scope exemption;
+  - the adapter's own ownership checks.
 
 ## Risks & Dependencies
 
 | Risk | Mitigation |
 |------|------------|
-| A missed bump site leaves a window | The flow analysis traced every unit and epoch replacement. The unreachable ones are documented, and the reachable ones are mutation-checked. |
-| A redeclaration during a long verification now costs a rerun | Accepted. A changed declaration means the evidence was checked against a different declaration. |
-| The new reason code reaches a consumer with an exhaustive switch | The implementer checks every consumer of the union, and typecheck catches exhaustiveness. |
-| Clearing on any `available` read lets a mismatched read hide the earlier timeout | Admission still rejects the mismatch, and status shows `resource-mismatch` for that call. |
+| A missed bump site leaves a window open | The reachable sites are mutation-checked. The comment at the `startActiveUnit` bump states the chain that makes the others unreachable: replacement needs a non-active unit, epoch completion needs a completed unit, activation needs a completed or absent epoch, and restore needs no epoch. |
+| A changed redeclaration during a long verification now costs a rerun | Accepted. Declarations only grow, so a unit can bump only a finite number of times. |
+| A stale seal leaves the unit non-pristine | This is the same class as accepted and rejected observations today. It is documented as a residual. |
+| The new reason code is missing from a non-exhaustive consumer | Unit 1 names every consumer, and the discriminating tests assert the code. |
+| Clearing on a mismatched `available` read hides the earlier timeout | Admission still rejects the mismatch, and the residual is pinned by a test and documented. |
 
 ## Sources & References
 
