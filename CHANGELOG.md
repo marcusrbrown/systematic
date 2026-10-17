@@ -4,6 +4,26 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.22.5](https://github.com/marcusrbrown/systematic/compare/v3.22.4...v3.22.5) (2026-10-17)
+
+### Bug Fixes
+
+* **guard:** block the unit instead of disabling the guard when the worktree breaks a snapshot ([#1134](https://github.com/marcusrbrown/systematic/issues/1134)) ([e1ef220](https://github.com/marcusrbrown/systematic/commit/e1ef22055ffb811a80a69e03f2cf361dccd3e7dd))
+* **guard:** do not receipt a verification that overlapped another local call ([#1142](https://github.com/marcusrbrown/systematic/issues/1142)) ([5cad8aa](https://github.com/marcusrbrown/systematic/commit/5cad8aa588b5727d99c555fdf56c73843a1cf95d))
+* **guard:** isolate operation timeouts and rejected pushes to the one call instead of disabling the guard ([#1138](https://github.com/marcusrbrown/systematic/issues/1138)) ([6983602](https://github.com/marcusrbrown/systematic/commit/69836021c1d85ceba02672f35ee9af9f80cd03cf))
+* **security:** patch transitive YAML denial of service ([#1137](https://github.com/marcusrbrown/systematic/issues/1137)) ([4fa8c8c](https://github.com/marcusrbrown/systematic/commit/4fa8c8c6cc64b4a2f5766b8fbdfc6346a9e9edef))
+* **security:** preserve release client's undici connection checks ([#1139](https://github.com/marcusrbrown/systematic/issues/1139)) ([ef0decf](https://github.com/marcusrbrown/systematic/commit/ef0decf2359a53593a5110b346d33e512f57870e))
+
+### Documentation
+
+* **solutions:** record how transient operation timeouts and rejected pushes stay confined to one call ([#1140](https://github.com/marcusrbrown/systematic/issues/1140)) ([e97c59f](https://github.com/marcusrbrown/systematic/commit/e97c59f7b682eb1a448c98f2bb5a23f145da5864))
+* **solutions:** record the recoverable snapshot block, the async-commit version fence, and unprovable defensive checks ([#1136](https://github.com/marcusrbrown/systematic/issues/1136)) ([b5eea14](https://github.com/marcusrbrown/systematic/commit/b5eea14b01475ee06679c8334f49e0e32f9e95f6))
+* **solutions:** record why a verification that overlapped another local call is sealed ([#1143](https://github.com/marcusrbrown/systematic/issues/1143)) ([b6e45c5](https://github.com/marcusrbrown/systematic/commit/b6e45c5b4669067adb3aa814e2ac3f50ba800c52))
+
+### Miscellaneous Chores
+
+* **dev:** update dependency typebox to v1.3.37 ([#1133](https://github.com/marcusrbrown/systematic/issues/1133)) ([56cddff](https://github.com/marcusrbrown/systematic/commit/56cddff54eb87b9ccfba4da526f67eca3cac016f))
+
 ## [3.22.4](https://github.com/marcusrbrown/systematic/compare/v3.22.3...v3.22.4) (2026-10-15)
 
 ### Bug Fixes
