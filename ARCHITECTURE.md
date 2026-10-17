@@ -316,8 +316,28 @@ time it stays fatal but carries a typed `command-timeout` cause. Receipts bind t
 repository revision, so the guard attests the final state, not that every write was observed. That
 was already true of calls skipped while blocked, calls in inactive sessions, tools the classifier
 does not recognize, and destructive pushes, which are never observed. A skipped or sealed call fits
-the same model: the next readback marks older receipts stale, and later observed work attests the
-final state. Residuals: `missingOperations` reports a lost call only when its operation has no
+the same model: the next readback marks older receipts stale, and later observed work outside an
+overlap attests the final state. A verification that overlapped another local call in the same
+session is sealed: nothing is minted, the guard stays available, and the agent reruns the
+verification on its own. It overlapped if another local call (`write`, `edit`, `apply_patch` or
+`bash`) was in flight when its before-hook began, or another local before-hook ran before it was
+admitted. Every local before-hook counts: calls that run unobserved (skipped by the observation
+gate, a snapshot block or a timeout), duplicate call IDs, and before-hooks whose input names a
+local tool but cannot be parsed. A call leaves the in-flight set on its after-hook, and the set is
+also cleared at each request boundary, because a call that throws, is denied or is interrupted
+never reaches its after-hook. The rule is strict: read-only bash and other verifications count
+too, so a test run beside `rg` or `git status` is sealed and rerun. Verification receipts do not
+check digest stability, and a write that is later reverted leaves equal digests, so this rule is
+the only same-session guard on them; commit and implementation receipts are unchanged. Residuals
+of the overlap rule: writers outside the session and other sessions; child `task` sessions
+writing the parent tree, since rollup mints a child's verification without an overlap check; tools
+that are not tracked as local calls (MCP tools, `multiedit`, formatters); detached processes left
+by a finished call; a tool that ignores abort and keeps running into the next request, because
+the boundary clears its entry; cross-target over-sealing, where a write in one worktree seals a
+verification in another; entries left by a call that threw, was denied or was interrupted, or by a
+late duplicate before-hook, which over-seal verifications in the same request until the next
+request boundary; and an unparseable before-hook whose tool name cannot be read, which cannot be
+told apart from a non-local call. Other residuals: `missingOperations` reports a lost call only when its operation has no
 receipt at all; a push that landed but whose after-read timed out stays unreceipted, and later
 pushes in that unit are rejected as `resource-mismatch` until the unit is redeclared; and evidence
 a halted child rollup did not mint shows up only when the operation has no other receipt. With parallel tool calls, a command whose before-hook runs before an allowlisted skill's before-hook is not observed and does not count toward the unit that skill activates, so the unit reports missing evidence and the command is rerun, while a command whose before-hook runs after the skill's is observed and counts toward that unit. Known limits: a dual registration running an older build

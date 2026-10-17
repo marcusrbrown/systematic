@@ -95,7 +95,7 @@ These stay fatal: an `available` before-read followed by a `missing-resource` af
 
 ## Why This Works
 
-Receipts are bound to a worktree and repository revision, so the guard attests the final state of what the observer digests, not every write. Ignored content is outside that digest (#1126). That was already true for calls skipped while blocked, inactive sessions, tools the classifier does not recognise, and destructive pushes, which are never observed. A skipped or sealed call fits the same model. The next readback marks older receipts stale, and later observed work attests the final state.
+Receipts are bound to a worktree and repository revision, so the guard attests the final state of what the observer digests, not every write. Ignored content is outside that digest (#1126). That was already true for calls skipped while blocked, inactive sessions, tools the classifier does not recognise, and destructive pushes, which are never observed. A skipped or sealed call fits the same model. The next readback marks older receipts stale, and later observed work outside an overlap attests the final state. A verification that overlapped another local call in the same session is the exception: it is sealed and minted nothing, so it must be rerun alone.
 
 Two tests in `tests/unit/opencode-workflow-guard.test.ts` pin this. In one, a later observed write and its verification attest the final state after a skipped write, and completion succeeds. In the other, a skipped write followed by completion is rejected as `stale-receipt`. Fully attesting every write would need a new mechanism, an unattested-digest marker, and that is out of scope.
 
