@@ -1,7 +1,7 @@
 ---
 title: "fix: Do not receipt a verification that overlapped another local call"
 type: fix
-status: active
+status: completed
 date: 2026-10-16
 ---
 
@@ -157,7 +157,7 @@ All in `src/lib/opencode-workflow-guard.ts`:
 
 ## Implementation Units
 
-- [ ] **Unit 1: Track local calls and seal an overlapped verification**
+- [x] **Unit 1: Track local calls and seal an overlapped verification**
 
 **Goal:** A verification that overlapped another local call mints nothing.
 
@@ -211,7 +211,7 @@ All in `src/lib/opencode-workflow-guard.ts`:
 
 **Verification:** The whole guard test file passes, `tests/integration` passes, and each mutation fails the tests named above.
 
-- [ ] **Unit 2: Docs, guidance and bootstrap pin**
+- [x] **Unit 2: Docs, guidance and bootstrap pin**
 
 **Goal:** Readers and agents learn the rule and its residuals.
 
