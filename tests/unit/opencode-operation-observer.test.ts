@@ -2250,7 +2250,7 @@ function buildCharacterizationFixture(scenario: CharacterizationScenario): {
       { env: DETERMINISTIC_GIT_ENV, encoding: 'utf8' },
     )
     expect(clone.status).toBe(0)
-    pinSubmoduleIgnoreSources(path.join(fixture.root, 'submodule'))
+    pinCheckoutIgnoreSources(path.join(fixture.root, 'submodule'))
     addTracked(fixture.root, ['submodule'], 'gitlink')
   }
   if (wants('deleted')) {
@@ -2764,11 +2764,11 @@ function infoExcludePath(root: string): string {
 }
 
 /**
- * Pins a submodule's own ignore sources, which its digest includes: a fixed
+ * Pins a checkout's own ignore sources, which its digest includes: a fixed
  * `info/exclude` (git's template varies) and an absent global ignore file in
  * place of whatever the machine running the tests has configured.
  */
-function pinSubmoduleIgnoreSources(directory: string): void {
+function pinCheckoutIgnoreSources(directory: string): void {
   const gitDir = fs.realpathSync(
     gitOutput(directory, ['rev-parse', '--absolute-git-dir']),
   )
@@ -3483,9 +3483,10 @@ describe('OpenCode operation observer gitlink hardening', () => {
     }
   })
 
-  test('a HEAD-only gitlink whose submodule is still checked out fails closed', async () => {
+  test('a HEAD-only gitlink whose submodule is still checked out is walked as an untracked nested repository and reads not closed', async () => {
     // After `git rm --cached`, git lists the checked-out submodule as an
-    // untracked nested repository (`sub/`), which cannot be read as a file.
+    // untracked nested repository (`sub/`), and the gitlink that only HEAD
+    // records is displaced by it.
     const fixture = createGitFixture()
     const source = createSubmoduleSource()
     try {
@@ -3497,10 +3498,16 @@ describe('OpenCode operation observer gitlink hardening', () => {
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
       })
-      await expect(observer.snapshot()).resolves.toEqual({
-        status: 'unavailable',
-        reasonCode: 'file-read-failed',
+      const before = await observer.snapshot()
+      expect(before).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
       })
+      // What the nested walk reads is the digest: an edit inside it shows.
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'sub.txt'), 'edited\n')
+      const after = await observer.snapshot()
+      expect(after.status).toBe('available')
+      expect(after).not.toEqual(before)
     } finally {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
@@ -4743,6 +4750,384 @@ describe('OpenCode operation observer submodule contents', () => {
       bare.cleanup()
     }
   }, 30_000)
+
+  describe('untracked nested repositories', () => {
+    /**
+     * An untracked repository at `name` under `root`. Its files are committed
+     * unless `commit` is false, and its ignore sources are pinned.
+     */
+    function addNestedRepository(
+      root: string,
+      name: string,
+      options: { files?: Record<string, string>; commit?: boolean } = {},
+    ): string {
+      const { files = { 'inner.txt': 'inner\n' }, commit = true } = options
+      const directory = path.join(root, name)
+      fs.mkdirSync(directory, { recursive: true })
+      expect(runGit(directory, ['init', '--quiet']).status).toBe(0)
+      pinCheckoutIgnoreSources(directory)
+      for (const [file, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(directory, file), content)
+      }
+      if (commit) {
+        expect(runGit(directory, ['add', ...Object.keys(files)]).status).toBe(0)
+        expect(
+          runGit(directory, [
+            ...SUBMODULE_COMMIT_IDENTITY,
+            'commit',
+            '--quiet',
+            '-m',
+            'nested',
+          ]).status,
+        ).toBe(0)
+      }
+      return directory
+    }
+
+    function commitEmptyInside(directory: string): void {
+      expect(
+        runGit(directory, [
+          ...SUBMODULE_COMMIT_IDENTITY,
+          'commit',
+          '--quiet',
+          '--allow-empty',
+          '-m',
+          'moved',
+        ]).status,
+      ).toBe(0)
+    }
+
+    function withParent<T>(run: (root: string) => Promise<T>): Promise<T> {
+      const fixture = createGitFixture()
+      setExcludesFile(fixture.root, null)
+      return run(fixture.root).finally(fixture.cleanup)
+    }
+
+    test(
+      'an untracked nested repository is available, never closed, and an edit inside it changes the digest',
+      () =>
+        withParent(async (root) => {
+          const baseline = await stateOf(root)
+          // Control: the parent is closed until the nested repository exists.
+          expect(baseline.closed).toBe(true)
+          const nested = addNestedRepository(root, 'inner-repo')
+          const clean = await stateOf(root)
+          expect(clean.digest).not.toBe(baseline.digest)
+          // Clean or dirty, a nested repository is never part of HEAD.
+          expect(clean.closed).toBe(false)
+
+          const file = path.join(nested, 'inner.txt')
+          const original = fs.readFileSync(file)
+          fs.writeFileSync(file, EDITED)
+          const dirty = await stateOf(root)
+          expect(dirty.digest).not.toBe(clean.digest)
+          expect(dirty.closed).toBe(false)
+
+          fs.writeFileSync(file, original)
+          expect(await stateOf(root)).toEqual(clean)
+
+          fs.writeFileSync(path.join(nested, 'untracked.txt'), 'new\n')
+          expect((await stateOf(root)).digest).not.toBe(clean.digest)
+
+          // Control: without the nested repository the parent is closed again.
+          fs.rmSync(nested, { recursive: true, force: true })
+          expect(await stateOf(root)).toEqual(baseline)
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository is recorded as a gitlink-shaped record at its slash-terminated path',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          expect(recordFor(readWorktreeRecords(root), 'inner-repo/')).toEqual({
+            path: 'inner-repo/',
+            kind: 'gitlink',
+            mode: '160000',
+            id: gitOutput(nested, ['rev-parse', 'HEAD']),
+          })
+        }),
+      30_000,
+    )
+
+    test(
+      'an unborn nested repository is available and not closed',
+      () =>
+        withParent(async (root) => {
+          const baseline = await stateOf(root)
+          const nested = addNestedRepository(root, 'inner-repo', {
+            files: {},
+            commit: false,
+          })
+          const unborn = await stateOf(root)
+          expect(unborn.digest).not.toBe(baseline.digest)
+          expect(unborn.closed).toBe(false)
+          expect(
+            recordFor(readWorktreeRecords(root), 'inner-repo/')?.id,
+          ).toBeUndefined()
+
+          // Its first commit is a new state.
+          fs.writeFileSync(path.join(nested, 'inner.txt'), 'inner\n')
+          expect(runGit(nested, ['add', 'inner.txt']).status).toBe(0)
+          commitEmptyInside(nested)
+          expect((await stateOf(root)).digest).not.toBe(unborn.digest)
+        }),
+      30_000,
+    )
+
+    test(
+      'moving a nested repository to another path changes the digest though its contents are identical',
+      () =>
+        withParent(async (root) => {
+          const first = path.join(root, 'a')
+          const second = path.join(root, 'b')
+          addNestedRepository(root, 'a')
+          const before = await stateOf(root)
+          fs.renameSync(first, second)
+          const moved = await stateOf(root)
+          expect(moved.digest).not.toBe(before.digest)
+          expect(moved.closed).toBe(false)
+          // Control: moving it back is the same state again.
+          fs.renameSync(second, first)
+          expect(await stateOf(root)).toEqual(before)
+        }),
+      30_000,
+    )
+
+    test(
+      'a commit inside a nested repository changes the digest though no file changed',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          const before = await stateOf(root)
+          commitEmptyInside(nested)
+          expect((await stateOf(root)).digest).not.toBe(before.digest)
+        }),
+      30_000,
+    )
+
+    test('a nested repository inside a submodule is walked the same way', async () => {
+      const parent = createSubmoduleParent()
+      try {
+        const sub = path.join(parent.root, 'sub')
+        const clean = await stateOf(parent.root)
+        expect(clean.closed).toBe(true)
+        const nested = addNestedRepository(sub, 'scratch-repo')
+        const withNested = await stateOf(parent.root)
+        expect(withNested.digest).not.toBe(clean.digest)
+        expect(withNested.closed).toBe(false)
+
+        fs.writeFileSync(path.join(nested, 'inner.txt'), EDITED)
+        const dirty = await stateOf(parent.root)
+        expect(dirty.digest).not.toBe(withNested.digest)
+        expect(dirty.closed).toBe(false)
+
+        // Control: removing it closes the submodule, and so the parent, again.
+        fs.rmSync(nested, { recursive: true, force: true })
+        expect(await stateOf(parent.root)).toEqual(clean)
+      } finally {
+        parent.cleanup()
+      }
+    }, 30_000)
+
+    test(
+      'a nested repository inside a nested repository is walked at every depth',
+      () =>
+        withParent(async (root) => {
+          const outer = addNestedRepository(root, 'outer-repo')
+          const innermost = addNestedRepository(outer, 'deeper-repo')
+          const clean = await stateOf(root)
+          expect(clean.closed).toBe(false)
+          fs.writeFileSync(path.join(innermost, 'inner.txt'), EDITED)
+          expect((await stateOf(root)).digest).not.toBe(clean.digest)
+        }),
+      60_000,
+    )
+
+    test('nested repositories and submodules draw on one gitlink budget, counted before any of them is read', async () => {
+      const parent = createSubmoduleParent()
+      try {
+        addNestedRepository(parent.root, 'inner-repo')
+        const root = fs.realpathSync(parent.root)
+        const snapshotWith = (maxGitlinks: number) => {
+          const cwds: string[] = []
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: parent.root,
+            limits: { maxGitlinks },
+            commandRunner: (args, cwd) => {
+              cwds.push(cwd)
+              return runGit(cwd, args)
+            },
+          })
+          cwds.length = 0
+          return observer.snapshot().then((result) => ({ result, cwds }))
+        }
+        // One submodule and one nested repository: two in all.
+        expect((await snapshotWith(2)).result).toMatchObject({
+          status: 'available',
+        })
+        const over = await snapshotWith(1)
+        expect(over.result).toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-limit',
+        })
+        expect(
+          over.cwds.filter((cwd) => cwd !== root && cwd.startsWith(root)),
+        ).toEqual([])
+      } finally {
+        parent.cleanup()
+      }
+    }, 30_000)
+
+    test(
+      'the files of a nested repository count toward the shared file limit',
+      () =>
+        withParent(async (root) => {
+          addNestedRepository(root, 'inner-repo', {
+            files: { 'a.txt': 'a\n', 'b.txt': 'b\n' },
+          })
+          const limitFor = (maxFiles: number) =>
+            createOpencodeOperationObserver({
+              targetDirectory: root,
+              limits: { maxFiles },
+            }).snapshot()
+          // tracked.txt and `inner-repo/` in the parent, a.txt and b.txt inside.
+          await expect(limitFor(4)).resolves.toMatchObject({
+            status: 'available',
+          })
+          await expect(limitFor(3)).resolves.toEqual({
+            status: 'unavailable',
+            reasonCode: 'file-limit',
+          })
+        }),
+      30_000,
+    )
+
+    test(
+      'an ignored nested repository stays outside the digest',
+      () =>
+        withParent(async (root) => {
+          // Control: ignored content is not observed.
+          fs.appendFileSync(infoExcludePath(root), 'hidden-repo/\n')
+          const baseline = await stateOf(root)
+          const nested = addNestedRepository(root, 'hidden-repo')
+          expect(await stateOf(root)).toEqual(baseline)
+          fs.writeFileSync(path.join(nested, 'inner.txt'), EDITED)
+          expect(await stateOf(root)).toEqual(baseline)
+        }),
+      30_000,
+    )
+
+    test(
+      'untracked files in a plain directory are read as before',
+      () =>
+        withParent(async (root) => {
+          // Control: a directory without a repository lists its files, not itself.
+          const baseline = await stateOf(root)
+          fs.mkdirSync(path.join(root, 'plain'))
+          const file = path.join(root, 'plain', 'note.txt')
+          fs.writeFileSync(file, 'one\n')
+          const first = await stateOf(root)
+          expect(first.digest).not.toBe(baseline.digest)
+          expect(first.closed).toBe(false)
+          fs.writeFileSync(file, 'two\n')
+          expect((await stateOf(root)).digest).not.toBe(first.digest)
+          expect(
+            recordFor(readWorktreeRecords(root), 'plain/note.txt')?.kind,
+          ).toBe('regular')
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository that vanishes between the first pass and the final pass is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          let contentRead = false
+          let removed = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            fileReader: (filePath) => {
+              const content = fs.readFileSync(filePath)
+              if (filePath.endsWith(path.join('inner-repo', 'inner.txt'))) {
+                contentRead = true
+              }
+              return content
+            },
+            commandRunner: interceptingRunner(() => {
+              if (contentRead && !removed) {
+                removed = true
+                fs.rmSync(nested, { recursive: true, force: true })
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(removed).toBe(true)
+        }),
+      30_000,
+    )
+
+    test(
+      'the HEAD of a nested repository moving between the first pass and the final pass is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          let contentRead = false
+          let moved = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            fileReader: (filePath) => {
+              const content = fs.readFileSync(filePath)
+              if (filePath.endsWith(path.join('inner-repo', 'inner.txt'))) {
+                contentRead = true
+              }
+              return content
+            },
+            commandRunner: interceptingRunner(() => {
+              if (contentRead && !moved) {
+                moved = true
+                commitEmptyInside(nested)
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(moved).toBe(true)
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository that appears between the first pass and the final pass is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          // Control: the changed untracked listing already gave this result.
+          let contentRead = false
+          let appeared = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            fileReader: (filePath) => {
+              const content = fs.readFileSync(filePath)
+              if (filePath.endsWith('tracked.txt')) contentRead = true
+              return content
+            },
+            commandRunner: interceptingRunner(() => {
+              if (contentRead && !appeared) {
+                appeared = true
+                addNestedRepository(root, 'inner-repo')
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(appeared).toBe(true)
+        }),
+      30_000,
+    )
+  })
 })
 
 type RevisionFixtureKind = 'branch' | 'detached' | 'unborn'

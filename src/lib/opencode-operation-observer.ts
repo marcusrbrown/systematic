@@ -1375,13 +1375,7 @@ function appendSubmoduleFact(
   const walked =
     inspected.status === 'uninitialized'
       ? undefined
-      : readRepositorySnapshot(
-          readers,
-          contextForCheckout(absolutePath, inspected.anchor),
-          inspected.anchor.head,
-          limits,
-          walk,
-        )
+      : walkCheckout(readers, absolutePath, inspected, limits, walk)
   if (walked?.status === 'error') return walked
   const id = inspected.status === 'initialized' ? inspected.id : undefined
   hash.update('gitlink')
@@ -1396,6 +1390,70 @@ function appendSubmoduleFact(
     false,
     inspected.status,
     walked,
+  )
+}
+
+/**
+ * An untracked nested repository, which git lists as `name/`. It is read like
+ * a checked-out submodule and folded in at its own sorted position under its
+ * own label. It has no entry in `HEAD`, so its record never matches one: a
+ * nested repository, clean or dirty, keeps the repository from being closed.
+ */
+function appendNestedRepositoryFact(
+  hash: ReturnType<typeof createHash>,
+  readers: WorktreeReaders,
+  absolutePath: string,
+  relativePath: string,
+  limits: Limits,
+  walk: WalkState,
+): ObservationResult {
+  const inspected = inspectGitlink(readers, absolutePath, limits)
+  if (inspected.status === 'error') return inspected
+  // It was listed as a repository a moment ago, so one that is gone, or that
+  // no longer holds a checkout, changed underneath the snapshot.
+  if (inspected.status === 'absent' || inspected.status === 'uninitialized') {
+    return { status: 'error', reasonCode: 'worktree-unstable' }
+  }
+  const walked = walkCheckout(readers, absolutePath, inspected, limits, walk)
+  if (walked.status === 'error') return walked
+  hash.update('nested')
+  hashField(hash, relativePath)
+  hashField(hash, gitlinkIdentity(inspected))
+  hashField(hash, walked.digest)
+  return observed(
+    absolutePath,
+    {
+      path: relativePath,
+      kind: 'gitlink',
+      mode: '160000',
+      id: inspected.status === 'initialized' ? inspected.id : undefined,
+    },
+    undefined,
+    false,
+    undefined,
+    walked,
+  )
+}
+
+/** Git lists an untracked nested repository with a trailing slash, and nothing else. */
+function isNestedRepositoryEntry(relativePath: string): boolean {
+  return relativePath.endsWith('/')
+}
+
+/** Reads a checkout the way the parent is read, from the anchor already taken. */
+function walkCheckout(
+  readers: WorktreeReaders,
+  absolutePath: string,
+  checkout: Extract<GitlinkInspection, { status: 'initialized' | 'unborn' }>,
+  limits: Limits,
+  walk: WalkState,
+): RepositorySnapshotResult {
+  return readRepositorySnapshot(
+    readers,
+    contextForCheckout(absolutePath, checkout.anchor),
+    checkout.anchor.head,
+    limits,
+    walk,
   )
 }
 
@@ -1614,7 +1672,18 @@ function appendPathFact(
   if (entry.displacedGitlink) {
     return missingObservation(absolutePath, relativePath, true)
   }
-  // A gitlink inspects its own directory, so it is dispatched before the stat.
+  // A nested repository and a gitlink inspect their own directory, so they are
+  // dispatched before the stat.
+  if (isNestedRepositoryEntry(relativePath)) {
+    return appendNestedRepositoryFact(
+      hash,
+      readers,
+      absolutePath,
+      relativePath,
+      limits,
+      budget,
+    )
+  }
   if (mode === '160000') {
     return appendSubmoduleFact(
       hash,
@@ -2294,10 +2363,13 @@ function readRepositorySnapshot(
     // Index first, then the HEAD tree; empty means not tracked at all.
     modes.get(relativePath) ?? tree.entries.get(relativePath)?.mode ?? ''
   const displacedGitlinks = findDisplacedGitlinks(paths, modes, tree.entries)
-  // Counted from the index and the HEAD tree before any submodule spawn. A
-  // displaced gitlink is never read, so it does not count.
+  // Counted from the index, the HEAD tree and the untracked listing before any
+  // checkout is read. A displaced gitlink is never read, so it does not count;
+  // a nested repository is read like a gitlink, so it does.
   const gitlinkCount = paths.filter(
-    (entry) => modeOf(entry) === '160000' && !displacedGitlinks.has(entry),
+    (entry) =>
+      isNestedRepositoryEntry(entry) ||
+      (modeOf(entry) === '160000' && !displacedGitlinks.has(entry)),
   ).length
   if (walk.gitlinks + gitlinkCount > limits.maxGitlinks) {
     return { status: 'error', reasonCode: 'file-limit' }
@@ -2426,6 +2498,9 @@ function recordMatchesTreeEntry(
  * has no tree to equal, so it is never closed. Only the records are compared,
  * so no git filter, replace ref or normalization can speak for the files, and
  * the index is not consulted.
+ *
+ * An untracked nested repository is an extra record: its path ends in a slash,
+ * which no `HEAD` entry does, so it is never closed, clean or dirty.
  *
  * Two gitlink states have no commit to compare. An uninitialized submodule is
  * a clone that did not fetch it, so it matches the gitlink `HEAD` records. An
