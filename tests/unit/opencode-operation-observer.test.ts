@@ -3670,7 +3670,7 @@ describe('OpenCode operation observer commit closure from records', () => {
     }
   })
 
-  test('an uninitialized gitlink reads not closed', async () => {
+  test('an uninitialized gitlink reads closed when it is the only difference from HEAD', async () => {
     const fixture = createGitFixture()
     try {
       setExcludesFile(fixture.root, null)
@@ -3680,7 +3680,7 @@ describe('OpenCode operation observer commit closure from records', () => {
       ).toBe(0)
       fs.mkdirSync(path.join(fixture.root, 'sub'))
       expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
-      expect(await closureOf(fixture.root)).toBe(false)
+      expect(await closureOf(fixture.root)).toBe(true)
     } finally {
       fixture.cleanup()
     }
@@ -3837,6 +3837,204 @@ describe('OpenCode operation observer commit closure from records', () => {
       fixture.cleanup()
     }
   }, 30_000)
+})
+
+type SubmoduleState = 'uninitialized' | 'unborn' | 'initialized'
+
+const SUBMODULE_COMMIT_IDENTITY = [
+  '-c',
+  'user.email=observer@example.invalid',
+  '-c',
+  'user.name=Observer Test',
+] as const
+
+/**
+ * Puts the directory at `name` into one of the three submodule states. The
+ * parent index must already hold a gitlink for it.
+ */
+function setSubmoduleState(
+  root: string,
+  name: string,
+  state: SubmoduleState,
+): void {
+  const directory = path.join(root, name)
+  fs.rmSync(directory, { recursive: true, force: true })
+  fs.mkdirSync(directory)
+  if (state === 'uninitialized') return
+  expect(runGit(directory, ['init', '--quiet']).status).toBe(0)
+  if (state === 'unborn') return
+  expect(
+    runGit(directory, [
+      ...SUBMODULE_COMMIT_IDENTITY,
+      'commit',
+      '--quiet',
+      '--allow-empty',
+      '-m',
+      'sub',
+    ]).status,
+  ).toBe(0)
+}
+
+/** A parent whose HEAD records a gitlink at `sub`; the directory is not made. */
+function createGitlinkFixture(): GitFixture {
+  const fixture = createGitFixture()
+  setExcludesFile(fixture.root, null)
+  stageGitlinks(fixture.root, ['sub'])
+  expect(
+    runGit(fixture.root, ['commit', '--quiet', '-m', 'gitlink']).status,
+  ).toBe(0)
+  return fixture
+}
+
+describe('OpenCode operation observer submodule state', () => {
+  test('an unborn submodule is available and its record carries no id', async () => {
+    const fixture = createGitlinkFixture()
+    try {
+      setSubmoduleState(fixture.root, 'sub', 'unborn')
+      expect(recordFor(readWorktreeRecords(fixture.root), 'sub')).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: undefined,
+      })
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const first = await observer.snapshot()
+      expect(first.status).toBe('available')
+      await expect(observer.snapshot()).resolves.toEqual(first)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an unborn submodule reads not closed even when it is the only difference from HEAD', async () => {
+    const fixture = createGitlinkFixture()
+    try {
+      setSubmoduleState(fixture.root, 'sub', 'uninitialized')
+      // Control: the same parent with the checkout absent is closed.
+      expect(await closureOf(fixture.root)).toBe(true)
+      setSubmoduleState(fixture.root, 'sub', 'unborn')
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('uninitialized, unborn and initialized submodules each digest differently', async () => {
+    const fixture = createGitlinkFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const digests: Record<SubmoduleState, string> = {
+        uninitialized: '',
+        unborn: '',
+        initialized: '',
+      }
+      for (const state of ['uninitialized', 'unborn', 'initialized'] as const) {
+        setSubmoduleState(fixture.root, 'sub', state)
+        digests[state] = await digestOf(observer)
+      }
+      expect(new Set(Object.values(digests)).size).toBe(3)
+      // Control: the same state digests the same on a second snapshot.
+      setSubmoduleState(fixture.root, 'sub', 'unborn')
+      expect(await digestOf(observer)).toBe(digests.unborn)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an uninitialized gitlink that HEAD does not record reads not closed', async () => {
+    // Control: the closing rule matches an uninitialized submodule to its HEAD
+    // gitlink, so one that HEAD does not hold has nothing to match.
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an uninitialized gitlink does not close a repository with an edited tracked file', async () => {
+    // Control: the rule closes only the gitlink; every other record still has
+    // to equal HEAD.
+    const fixture = createGitlinkFixture()
+    try {
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(await closureOf(fixture.root)).toBe(true)
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'edited\n')
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test.each([
+    { from: 'uninitialized', to: 'unborn' },
+    { from: 'unborn', to: 'initialized' },
+    { from: 'unborn', to: 'uninitialized' },
+  ] as const)(
+    'a gitlink that goes from $from to $to between the first pass and the final pass is worktree-unstable',
+    async ({ from, to }) => {
+      const fixture = createGitlinkFixture()
+      try {
+        setSubmoduleState(fixture.root, 'sub', from)
+        const root = fs.realpathSync(fixture.root)
+        const submodule = path.join(root, 'sub')
+        // The change is keyed to a phase: it happens on the first command run
+        // outside the submodule after its state was read, which is the final
+        // pass's first command.
+        let stateRead = false
+        let changed = false
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+          statReader: (filePath) => {
+            if (filePath === path.join(submodule, '.git')) stateRead = true
+            return lstatWithIdentity(filePath)
+          },
+          commandRunner: interceptingRunner((_args, _result, cwd) => {
+            if (stateRead && !changed && !cwd.startsWith(submodule)) {
+              changed = true
+              setSubmoduleState(fixture.root, 'sub', to)
+            }
+            return undefined
+          }),
+        })
+        await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+        expect(changed).toBe(true)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('a populated directory without a checkout and an empty .git directory stay file-read-failed', async () => {
+    // Control: reading the anchor after the existing checks must not let
+    // either of these resolve to the parent.
+    const populated = createGitlinkFixture()
+    const emptyGit = createGitlinkFixture()
+    try {
+      fs.mkdirSync(path.join(populated.root, 'sub'))
+      fs.writeFileSync(path.join(populated.root, 'sub', 'smuggled.txt'), 'x\n')
+      fs.mkdirSync(path.join(emptyGit.root, 'sub', '.git'), { recursive: true })
+      for (const fixture of [populated, emptyGit]) {
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        await expect(observer.snapshot()).resolves.toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-read-failed',
+        })
+      }
+    } finally {
+      populated.cleanup()
+      emptyGit.cleanup()
+    }
+  })
 })
 
 type RevisionFixtureKind = 'branch' | 'detached' | 'unborn'

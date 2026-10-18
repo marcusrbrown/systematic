@@ -300,11 +300,18 @@ export interface WorktreeRecord {
 }
 
 /**
- * The bytes read so far across the whole snapshot. The file and gitlink counts
- * are enforced up front against the path set, so only bytes need tracking.
+ * What one `snapshot()` has spent so far, shared by reference by everything
+ * that reads for it. The file and gitlink counts are enforced up front against
+ * a repository's path set; the bytes are spent as the files are read.
  */
-interface SnapshotBudget {
+interface WalkState {
   bytes: number
+  files: number
+  gitlinks: number
+}
+
+function createWalkState(): WalkState {
+  return { bytes: 0, files: 0, gitlinks: 0 }
 }
 
 type RegularReadOutcome =
@@ -334,6 +341,11 @@ interface PathObservation {
    * the directory is still the stable state the final pass must accept.
    */
   readonly displacedByDirectory?: true
+  /**
+   * What a gitlink held when it was hashed. The record carries only the
+   * commit, which an uninitialized and an unborn checkout both lack.
+   */
+  readonly gitlinkState?: GitlinkState
 }
 
 interface WorktreeReaders {
@@ -1033,6 +1045,7 @@ function observed(
   record: WorktreeRecord,
   stat: OperationObserverFileStat | undefined,
   displacedByDirectory = false,
+  gitlinkState?: GitlinkState,
 ): ObservationResult {
   return {
     status: 'ok',
@@ -1041,6 +1054,7 @@ function observed(
       record,
       stat,
       ...(displacedByDirectory ? { displacedByDirectory: true as const } : {}),
+      ...(gitlinkState ? { gitlinkState } : {}),
     },
   }
 }
@@ -1227,8 +1241,15 @@ function adaptInjectedFileReader(
   }
 }
 
+/**
+ * What a gitlink path holds on disk: nothing checked out (`uninitialized`), a
+ * checkout with no commit yet (`unborn`), or a checkout at a commit.
+ */
+type GitlinkState = 'uninitialized' | 'unborn' | 'initialized'
+
 type GitlinkInspection =
   | { status: 'initialized'; id: string }
+  | { status: 'unborn' }
   | { status: 'uninitialized' }
   /** Nothing on disk at the path, as after a submodule is removed. */
   | { status: 'absent' }
@@ -1259,39 +1280,35 @@ function directoryEmptiness(
 }
 
 /**
- * Reads the submodule's own toplevel and `HEAD` in one call. The toplevel must
- * be the submodule path itself: a bare or empty `.git` makes git walk up and
- * answer with the parent, which would otherwise hash the parent's `HEAD`.
+ * Reads the submodule's anchor in one call. The toplevel must be the submodule
+ * path itself: a bare or empty `.git` makes git walk up and answer with the
+ * parent, which would otherwise hash the parent's `HEAD`. A checkout with no
+ * commit is `unborn`, not a failure.
  */
-function readInitializedGitlink(
+function readCheckedOutGitlink(
   readers: WorktreeReaders,
   absolutePath: string,
   limits: Limits,
 ): GitlinkInspection {
-  const result = runCommand(
+  const anchor = readRepositoryAnchor(
     readers.runner,
-    ['rev-parse', '--show-toplevel', '--verify', '-q', 'HEAD'],
     absolutePath,
     limits,
+    readers.realPath,
   )
-  if (result.status === 'error') return result
-  const lines = result.output.stdout.split('\n')
-  if (lines.at(-1) === '') lines.pop()
-  const [toplevel, id] = lines
-  if (
-    lines.length !== 2 ||
-    toplevel === undefined ||
-    id === undefined ||
-    !GIT_OBJECT_ID.test(id) ||
-    !path.isAbsolute(toplevel)
-  ) {
-    return { status: 'error', reasonCode: 'file-read-failed' }
+  if (anchor.status === 'error') {
+    // Output that does not parse is a malformed checkout here, as it always was.
+    return anchor.reasonCode === 'target-unavailable'
+      ? { status: 'error', reasonCode: 'file-read-failed' }
+      : anchor
   }
   const submodule = canonicalPath(absolutePath, readers.realPath)
-  const reported = canonicalPath(toplevel, readers.realPath)
-  return submodule !== undefined && submodule === reported
-    ? { status: 'initialized', id: id.toLowerCase() }
-    : { status: 'error', reasonCode: 'file-read-failed' }
+  if (submodule === undefined || submodule !== anchor.toplevel) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  return anchor.head === undefined
+    ? { status: 'unborn' }
+    : { status: 'initialized', id: anchor.head }
 }
 
 function inspectGitlink(
@@ -1329,7 +1346,7 @@ function inspectGitlink(
         return { status: 'error', reasonCode: 'file-read-failed' }
     }
   }
-  return readInitializedGitlink(readers, absolutePath, limits)
+  return readCheckedOutGitlink(readers, absolutePath, limits)
 }
 
 function appendSubmoduleFact(
@@ -1347,13 +1364,28 @@ function appendSubmoduleFact(
   const id = inspected.status === 'initialized' ? inspected.id : undefined
   hash.update('gitlink')
   hashField(hash, relativePath)
-  // `uninitialized` is not hex, so it can never collide with a revision.
-  hashField(hash, id ?? 'uninitialized')
+  hashField(hash, gitlinkIdentity(inspected))
   return observed(
     absolutePath,
     { path: relativePath, kind: 'gitlink', mode: '160000', id },
     undefined,
+    false,
+    inspected.status,
   )
+}
+
+/**
+ * What a gitlink contributes to the digest: its commit when it has one, else
+ * its state. Neither state name is hex, so none can collide with a revision,
+ * and an unborn checkout digests differently from an absent one.
+ */
+function gitlinkIdentity(
+  inspected: Extract<
+    GitlinkInspection,
+    { status: 'initialized' | 'unborn' | 'uninitialized' }
+  >,
+): string {
+  return inspected.status === 'initialized' ? inspected.id : inspected.status
 }
 
 function appendSymlinkFact(
@@ -1363,7 +1395,7 @@ function appendSymlinkFact(
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
-  budget: SnapshotBudget,
+  budget: WalkState,
   format: ObjectFormat,
   tracked: boolean,
 ): ObservationResult {
@@ -1406,7 +1438,7 @@ function appendRegularFact(
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
-  budget: SnapshotBudget,
+  budget: WalkState,
   format: ObjectFormat,
   tracked: boolean,
 ): ObservationResult {
@@ -1521,7 +1553,7 @@ function appendPathFact(
   context: RepositoryContext,
   entry: PathEntry,
   limits: Limits,
-  budget: SnapshotBudget,
+  budget: WalkState,
   format: ObjectFormat,
   verifiedDirectories: Set<string>,
 ): ObservationResult {
@@ -1656,7 +1688,7 @@ const UNSTABLE: StabilityResult = {
 function verifyGitlinkUnchanged(
   readers: WorktreeReaders,
   limits: Limits,
-  { absolutePath, record }: PathObservation,
+  { absolutePath, record, gitlinkState }: PathObservation,
 ): StabilityResult {
   const fresh = inspectGitlink(readers, absolutePath, limits)
   if (fresh.status === 'error') {
@@ -1664,8 +1696,12 @@ function verifyGitlinkUnchanged(
     // the directory changed underneath the snapshot.
     return fresh.reasonCode === 'file-read-failed' ? UNSTABLE : fresh
   }
-  // A gitlink that vanished is not the checkout that was hashed.
-  if (fresh.status === 'absent') return UNSTABLE
+  // A gitlink that vanished is not the checkout that was hashed, and neither
+  // is one that changed state: a checkout appearing or going away, or a first
+  // commit landing, moved underneath the snapshot.
+  if (fresh.status === 'absent' || fresh.status !== gitlinkState) {
+    return UNSTABLE
+  }
   const id = fresh.status === 'initialized' ? fresh.id : undefined
   return id === record.id ? { status: 'ok' } : UNSTABLE
 }
@@ -2121,6 +2157,7 @@ function readWorktreeSnapshot(
   context: RepositoryContext,
   head: string | undefined,
   limits: Limits,
+  walk: WalkState,
 ):
   | {
       status: 'ok'
@@ -2128,6 +2165,8 @@ function readWorktreeSnapshot(
       records: readonly WorktreeRecord[]
       /** The `HEAD` tree by path, for the commit closure. Empty when unborn. */
       headTree: ReadonlyMap<string, HeadTreeEntry>
+      /** What each observed gitlink held, for the commit closure. */
+      gitlinkStates: ReadonlyMap<string, GitlinkState>
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const { runner } = readers
@@ -2147,9 +2186,11 @@ function readWorktreeSnapshot(
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
   const { paths } = listings
-  if (paths.length > limits.maxFiles) {
+  // Counted against everything this snapshot has read so far.
+  if (walk.files + paths.length > limits.maxFiles) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
+  walk.files += paths.length
   const modes = new Map(
     listings.stageEntries.map((entry) => [entry.relativePath, entry.mode]),
   )
@@ -2159,16 +2200,15 @@ function readWorktreeSnapshot(
   const displacedGitlinks = findDisplacedGitlinks(paths, modes, tree.entries)
   // Counted from the index and the HEAD tree before any submodule spawn. A
   // displaced gitlink is never read, so it does not count.
-  if (
-    paths.filter(
-      (entry) => modeOf(entry) === '160000' && !displacedGitlinks.has(entry),
-    ).length > limits.maxGitlinks
-  ) {
+  const gitlinkCount = paths.filter(
+    (entry) => modeOf(entry) === '160000' && !displacedGitlinks.has(entry),
+  ).length
+  if (walk.gitlinks + gitlinkCount > limits.maxGitlinks) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
+  walk.gitlinks += gitlinkCount
   const hash = createHash('sha256')
   hash.update(WORKTREE_DIGEST_DOMAIN)
-  const budget: SnapshotBudget = { bytes: 0 }
   const observations: PathObservation[] = []
   const verifiedDirectories = new Set<string>()
   for (const relativePath of paths) {
@@ -2184,7 +2224,7 @@ function readWorktreeSnapshot(
           : {}),
       },
       limits,
-      budget,
+      walk,
       format,
       verifiedDirectories,
     )
@@ -2207,6 +2247,11 @@ function readWorktreeSnapshot(
     digest: hash.digest('hex'),
     records: observations.map((observation) => observation.record),
     headTree: tree.entries,
+    gitlinkStates: new Map(
+      observations.flatMap(({ record, gitlinkState }) =>
+        gitlinkState ? [[record.path, gitlinkState] as const] : [],
+      ),
+    ),
   }
 }
 
@@ -2221,7 +2266,8 @@ function recordMatchesTreeEntry(
   record: WorktreeRecord,
   entry: HeadTreeEntry,
 ): boolean {
-  // An uninitialized gitlink and a `missing` path carry no id and never match.
+  // A `missing` path carries no id and never matches. An uninitialized gitlink
+  // has none either; `deriveCommitClosure` decides that case.
   return (
     record.id !== undefined &&
     record.id === entry.id &&
@@ -2238,19 +2284,29 @@ function recordMatchesTreeEntry(
  * has no tree to equal, so it is never closed. Only the records are compared,
  * so no git filter, replace ref or normalization can speak for the files, and
  * the index is not consulted.
+ *
+ * Two gitlink states have no commit to compare. An uninitialized submodule is
+ * a clone that did not fetch it, so it matches the gitlink `HEAD` records. An
+ * unborn one holds a checkout with no commit, which `HEAD` cannot have
+ * recorded: its record has no id, so it matches nothing and is never closed.
  */
 function deriveCommitClosure(
   records: readonly WorktreeRecord[],
   headTree: ReadonlyMap<string, HeadTreeEntry>,
   head: string | undefined,
+  gitlinkStates: ReadonlyMap<string, GitlinkState>,
 ): boolean {
   if (head === undefined) return false
   let matched = 0
   for (const record of records) {
     const entry = headTree.get(record.path)
-    if (entry === undefined || !recordMatchesTreeEntry(record, entry)) {
-      return false
-    }
+    if (entry === undefined) return false
+    const state = gitlinkStates.get(record.path)
+    const matches =
+      state === 'uninitialized'
+        ? entry.mode === '160000'
+        : recordMatchesTreeEntry(record, entry)
+    if (!matches) return false
     matched += 1
   }
   // Records have unique paths, so this means every `HEAD` entry was observed.
@@ -2642,6 +2698,7 @@ export function readWorktreeRecords(
       digest: string
       records: readonly WorktreeRecord[]
       headTree: ReadonlyMap<string, HeadTreeEntry>
+      gitlinkStates: ReadonlyMap<string, GitlinkState>
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const limits = mergeLimits(options.limits)
@@ -2665,6 +2722,7 @@ export function readWorktreeRecords(
     },
     anchor.head,
     limits,
+    createWalkState(),
   )
 }
 
@@ -2752,6 +2810,7 @@ export function createOpencodeOperationObserver(
         context,
         anchor.head,
         limits,
+        createWalkState(),
       )
       if (worktree.status === 'error') return unavailable(worktree)
       return {
@@ -2764,6 +2823,7 @@ export function createOpencodeOperationObserver(
             worktree.records,
             worktree.headTree,
             anchor.head,
+            worktree.gitlinkStates,
           ),
         },
       }
