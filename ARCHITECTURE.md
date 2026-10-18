@@ -28,10 +28,15 @@ these hooks:
   unless the user set `tool_output` limits. Fail-closed; never blocks the host.
 - **`event`** — workflow-guard observation of host events. Fail-closed; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
-  suppresses title generation for internal agents.
+  suppresses title generation for internal agents. When the guard is enabled, the bootstrap also
+  carries the guard guidance.
 
 The last four are the receipt-backed workflow guard (see Cross-Cutting Concerns). The registered set
 is authoritative in `src/index.ts`; do not restate a count here.
+
+The guard is off by default (`workflow_guard.mode` is `disabled`). A disabled plugin still registers
+every hook and the four workflow tools, but it builds no operation observer, takes no initial
+snapshot, reads no session history, and builds no receipt classifier, so none of them does guard work.
 
 The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `capabilities`,
 `validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, and `pi-subagents`
@@ -232,6 +237,21 @@ schema file at runtime, so changing a vocabulary there takes effect without edit
 required-field list is hardcoded in the gate, and schema constraints such as array maximums and
 optional-field patterns are not enforced — changing either still requires a matching validator
 change. Must pass before any release.
+
+**Workflow guard default and disabled mode.** The guard is opt-in. `workflow_guard.mode` resolves to
+`disabled` unless user config or `$OPENCODE_CONFIG_DIR` config sets `observe` or `protected`; project
+config cannot set it, and a block that sets only `debug` leaves the mode `disabled`. When the mode is
+`disabled`, `src/index.ts` builds the guard without an observer, an initial snapshot, a host reader
+or a classifier, and passes a placeholder identity instead of a repository digest, so the plugin
+makes no git call and no session read on behalf of the guard. The workflow tools stay registered and
+answer `disabled`: `status` reports it, `start` is rejected as `disabled`, `control` answers
+`disabled` to a request to disable, and `complete` returns a terminal `rejected`/`disabled` result
+that a duplicate after-hook replays. The guard guidance is a constant owned by
+`src/lib/opencode-workflow-guard.ts`; `src/index.ts` adds it to the OpenCode bootstrap's profile block
+only when the configured mode is `observe` or `protected`. It is never part of the `using-systematic`
+skill, so Pi and Claude Code do not carry it, and a custom `bootstrap.file` or `bootstrap.enabled:
+false` leaves it out. A runtime disable through `systematic_workflow_control` does not change the
+configured mode, so the guidance stays in place for that session.
 
 **Receipt-backed workflow guard** (`src/lib/workflow-guard.ts` plus the OpenCode adapter in
 `src/lib/opencode-workflow-guard.ts`, `opencode-operation-observer.ts`, and `receipt-classifier.ts`

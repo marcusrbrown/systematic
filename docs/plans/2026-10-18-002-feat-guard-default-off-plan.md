@@ -1,7 +1,7 @@
 ---
 title: "feat: Turn the workflow guard off by default"
 type: feat
-status: active
+status: completed
 date: 2026-10-18
 ---
 
@@ -138,7 +138,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 ## Implementation Units
 
-- [ ] **Unit 1: Integration tests opt into the guard explicitly**
+- [x] **Unit 1: Integration tests opt into the guard explicitly**
 
 **Goal:** Every test that asserts guard behaviour sets its mode, so flipping the default cannot silently change what it tests.
 
@@ -163,7 +163,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Verification:** The opted-in integration suites pass at the current default, and no assertion changes.
 
-- [ ] **Unit 2: Flip the default and make default tests hermetic**
+- [x] **Unit 2: Flip the default and make default tests hermetic**
 
 **Goal:** `disabled` becomes the resolved default in the schema and at runtime.
 
@@ -192,7 +192,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Verification:** Config suites pass. `schema:drift` is clean after regeneration.
 
-- [ ] **Unit 3: Disabled means off in the plugin**
+- [x] **Unit 3: Disabled means off in the plugin**
 
 **Goal:** A disabled plugin builds no observer, takes no snapshot, makes no guard host reads, and returns terminal tool results.
 
@@ -225,7 +225,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Verification:** The zero-I/O test passes and its positive control fails without the shim. The guard suites pass unchanged in explicit modes.
 
-- [ ] **Unit 4: Guidance only where the guard runs**
+- [x] **Unit 4: Guidance only where the guard runs**
 
 **Goal:** Move the guard clause out of the shared bootstrap and into enabled-only OpenCode composition.
 
@@ -256,7 +256,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Verification:** Bootstrap, Pi and Claude Code suites pass. `registry:drift` and the Pi persona check are clean, and the diff shows no registry change.
 
-- [ ] **Unit 5: Docs**
+- [x] **Unit 5: Docs**
 
 **Goal:** Every doc states the new default and the restore path.
 
