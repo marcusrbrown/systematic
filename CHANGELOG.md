@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.22.7](https://github.com/marcusrbrown/systematic/compare/v3.22.6...v3.22.7) (2026-10-18)
+
+### Bug Fixes
+
+* **observer:** read submodule and nested repository contents in the local snapshot ([#1151](https://github.com/marcusrbrown/systematic/issues/1151)) ([52ce22b](https://github.com/marcusrbrown/systematic/commit/52ce22bb8cb8a7f6dc592f1dfc96bd8195ee53cc))
+
 ## [3.22.6](https://github.com/marcusrbrown/systematic/compare/v3.22.5...v3.22.6) (2026-10-18)
 
 ### Bug Fixes
