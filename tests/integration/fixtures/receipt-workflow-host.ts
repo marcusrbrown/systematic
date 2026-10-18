@@ -95,6 +95,90 @@ export function destroyIsolatedFixture(fixture: IsolatedFixture): void {
   fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
 }
 
+export type WorkflowGuardMode = 'observe' | 'protected' | 'disabled'
+
+/**
+ * Sets `workflow_guard.mode` for the plugin the fixture's host loads. The
+ * plugin reads `systematic.json` from `OPENCODE_CONFIG_DIR`, which
+ * `buildIsolatedOpencodeEnv` points at `fixture.configDir`. Any other
+ * Systematic config already in that file, including other `workflow_guard`
+ * keys, is kept. A guard suite calls this explicitly, so what it asserts does
+ * not depend on the default mode.
+ */
+export function writeWorkflowGuardMode(
+  fixture: Pick<IsolatedFixture, 'configDir'>,
+  mode: WorkflowGuardMode,
+): void {
+  if (fs.existsSync(path.join(fixture.configDir, 'systematic.jsonc'))) {
+    // The plugin prefers systematic.jsonc, and JSONC cannot be merged here.
+    throw new Error('writeWorkflowGuardMode cannot merge into systematic.jsonc')
+  }
+  const file = path.join(fixture.configDir, 'systematic.json')
+  let existing: Record<string, unknown> = {}
+  if (fs.existsSync(file)) {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (!isRecord(parsed)) {
+      throw new Error(`${file} must hold a JSON object`)
+    }
+    existing = parsed
+  }
+  const guard = isRecord(existing.workflow_guard) ? existing.workflow_guard : {}
+  fs.mkdirSync(fixture.configDir, { recursive: true })
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ ...existing, workflow_guard: { ...guard, mode } }),
+  )
+}
+
+/**
+ * The `state` of the first completed `systematic_workflow_*` tool part in a
+ * session transcript, or `undefined` when the model never called one.
+ */
+export function firstWorkflowGuardState(messages: unknown): string | undefined {
+  if (!Array.isArray(messages)) return undefined
+  for (const message of messages) {
+    if (!isRecord(message) || !Array.isArray(message.parts)) continue
+    for (const part of message.parts) {
+      if (
+        !isRecord(part) ||
+        part.type !== 'tool' ||
+        typeof part.tool !== 'string' ||
+        !part.tool.startsWith('systematic_workflow_') ||
+        !isRecord(part.state) ||
+        part.state.status !== 'completed' ||
+        !isRecord(part.state.metadata)
+      ) {
+        continue
+      }
+      const state = part.state.metadata.state
+      if (typeof state === 'string') return state
+    }
+  }
+  return undefined
+}
+
+/**
+ * Fails unless the guard was enabled for this run. A suite that opted in with
+ * `writeWorkflowGuardMode` calls this on a transcript where the model used a
+ * workflow tool, so a missed opt-in fails here and does not pass vacuously
+ * through assertions that a disabled guard also satisfies. The first state is
+ * the one that counts: a run may end disabled on purpose, after a control call.
+ */
+export function assertWorkflowGuardEnabled(
+  messages: unknown,
+  label: string,
+): void {
+  const state = firstWorkflowGuardState(messages)
+  if (state === undefined) {
+    throw new Error(
+      `${label}: no systematic_workflow_* tool result in the transcript, so the guard cannot be shown enabled`,
+    )
+  }
+  if (state === 'disabled') {
+    throw new Error(`${label}: the guard reported state "disabled"`)
+  }
+}
+
 const REDACT_PATTERNS = [/TOKEN/i, /KEY/i, /SECRET/i, /PAT/i, /AUTH/i]
 
 const ENV_ALLOWLIST = new Set([
