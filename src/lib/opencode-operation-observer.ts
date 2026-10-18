@@ -1767,11 +1767,6 @@ interface RawListings {
 /** Everything the final pass compares against, taken during the first pass. */
 interface FirstPass extends RawListings {
   readonly ignoreSources: readonly IgnoreSourceFact[]
-  /**
-   * Where the first pass found `core.excludesFile`, or `undefined` when there
-   * is none. The final pass re-reads this path and does not ask git again.
-   */
-  readonly excludesFilePath: string | undefined
 }
 
 /** Lists the index, the untracked files and the self-ignored `.gitignore` files. */
@@ -1944,15 +1939,15 @@ function verifyListingsUnchanged(
 }
 
 function verifyIgnoreSourcesUnchanged(
+  runner: OperationObserverCommandRunner,
   context: RepositoryContext,
+  limits: Limits,
   first: FirstPass,
 ): StabilityResult {
-  // The path the first pass resolved is re-read as it is: a re-pointed config
-  // shows in the relisting that follows, and an edit of the file shows here.
-  const fresh = readIgnoreSourcesFrom(context, () => ({
-    status: 'ok',
-    filePath: first.excludesFilePath,
-  }))
+  // Resolved again, not reused: git may now be using a different file, and
+  // the digest covers the bytes of whichever file it uses. A re-pointed config
+  // with no change to the file the first pass read still differs here.
+  const fresh = readIgnoreSources(runner, context, limits)
   if (fresh.status === 'error') return fresh
   return sameIgnoreSources(first.ignoreSources, fresh.facts)
     ? { status: 'ok' }
@@ -2007,7 +2002,12 @@ function runFinalPass(
   const { context, head, first, observations, verifiedDirectories } = pass
   // Ignore sources first: a source swapped for a FIFO or a huge file must be
   // caught by our own bounded read before any git listing reads it.
-  const sources = verifyIgnoreSourcesUnchanged(context, first)
+  const sources = verifyIgnoreSourcesUnchanged(
+    readers.runner,
+    context,
+    limits,
+    first,
+  )
   if (sources.status === 'error') return sources
   const ancestors = verifyAncestorsUnchanged(verifiedDirectories)
   if (ancestors.status === 'error') return ancestors
@@ -2132,35 +2132,17 @@ function readIgnoreSources(
   runner: OperationObserverCommandRunner,
   context: RepositoryContext,
   limits: Limits,
-) {
-  return readIgnoreSourcesFrom(context, () =>
-    resolveExcludesFilePath(runner, context, limits),
-  )
-}
-
-/**
- * Reads `info/exclude`, then asks `resolvePath` where `core.excludesFile` is
- * and reads that. The resolution comes second, so a source git must not be
- * asked to read is rejected before any git call is made.
- */
-function readIgnoreSourcesFrom(
-  context: RepositoryContext,
-  resolvePath: () =>
-    | { status: 'ok'; filePath: string | undefined }
-    | { status: 'error'; reasonCode: OperationObserverReasonCode },
 ):
-  | {
-      status: 'ok'
-      facts: readonly IgnoreSourceFact[]
-      excludesFilePath: string | undefined
-    }
+  | { status: 'ok'; facts: readonly IgnoreSourceFact[] }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const infoExclude = readIgnoreSourceFile(
     'info-exclude',
     context.infoExcludePath,
   )
   if (infoExclude.status === 'error') return infoExclude
-  const configured = resolvePath()
+  // Resolved after `info/exclude` is read, so a source git must not be asked
+  // to read is rejected before any git call is made.
+  const configured = resolveExcludesFilePath(runner, context, limits)
   if (configured.status === 'error') return configured
   const global =
     configured.filePath === undefined
@@ -2170,11 +2152,7 @@ function readIgnoreSourcesFrom(
         } as const)
       : readIgnoreSourceFile('core-excludes-file', configured.filePath)
   if (global.status === 'error') return global
-  return {
-    status: 'ok',
-    facts: [infoExclude.fact, global.fact],
-    excludesFilePath: configured.filePath,
-  }
+  return { status: 'ok', facts: [infoExclude.fact, global.fact] }
 }
 
 function hashIgnoreSource(
@@ -2472,11 +2450,7 @@ function readRepositoryFirstPass(
     pass: {
       context,
       head,
-      first: {
-        ...listings.first,
-        ignoreSources: sources.facts,
-        excludesFilePath: sources.excludesFilePath,
-      },
+      first: { ...listings.first, ignoreSources: sources.facts },
       observations,
       verifiedDirectories,
     },

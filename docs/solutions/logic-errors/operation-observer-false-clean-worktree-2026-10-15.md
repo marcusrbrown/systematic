@@ -137,7 +137,7 @@ export function hashField(
 
 **Upgrade effect.** The digest domain is now `worktree:v4`; it was `worktree:v3` before submodule contents were observed. A unit that was in progress across either upgrade has its completion rejected once as `stale-receipt`. That rejection is retryable: the guard stays available, and the stale operations are rerun before completing again.
 
-**Cost.** A snapshot spawns 11 git processes instead of 9, and 10 more for each walked submodule or nested repository. On a loaded development machine, measured before the final pass stopped asking git for the excludes path again (one spawn fewer per repository), a warm snapshot took about 80 ms with no submodule and about 240 ms with one submodule of 2,000 files (20 MB).
+**Cost.** A snapshot spawns 12 git processes instead of 9, and 11 more for each walked submodule or nested repository. On a loaded development machine a warm snapshot took about 80 ms with no submodule and about 240 ms with one submodule of 2,000 files (20 MB).
 
 ## Prevention
 

@@ -4563,9 +4563,9 @@ describe('OpenCode operation observer submodule contents', () => {
   }, 30_000)
 
   test('a core.excludesFile re-pointed after the first pass is worktree-unstable through the relisting, and an edit of the file it named is worktree-unstable through the re-read', async () => {
-    // Two mechanisms, each pinned on its own: the final pass re-reads the path
-    // the first pass resolved without asking git for it again, and it relists
-    // the untracked files under whatever config is then in force.
+    // Two mechanisms, each pinned on its own: the final pass reads the ignore
+    // sources again, and it relists the untracked files under whatever config
+    // is then in force.
     const fixture = createGitFixture()
     try {
       fs.writeFileSync(path.join(fixture.root, 'hidden.txt'), 'hidden\n')
@@ -4607,6 +4607,44 @@ describe('OpenCode operation observer submodule contents', () => {
       })
       await expect(rereading.snapshot()).resolves.toEqual(UNSTABLE)
       expect(edited).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('a core.excludesFile re-pointed to a file of different rules is worktree-unstable even though no listing changes and the first file is untouched', async () => {
+    // The digest covers the bytes of whichever file git is using, so a snapshot
+    // that read file A and finishes with git using file B describes neither.
+    const fixture = createGitFixture()
+    try {
+      fs.writeFileSync(path.join(fixture.root, 'visible.txt'), 'visible\n')
+      const first = setExcludesFile(fixture.root, 'matches-nothing-one.never\n')
+      const second = path.join(fixture.root, '.git', 'other-excludes')
+      fs.writeFileSync(second, 'matches-nothing-two.never\n')
+      let repointed = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !repointed) {
+            repointed = true
+            expect(
+              runGit(fixture.root, ['config', 'core.excludesFile', second])
+                .status,
+            ).toBe(0)
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(repointed).toBe(true)
+      // Control: neither file was edited, so only the re-pointing can differ.
+      expect(fs.readFileSync(first, 'utf8')).toBe('matches-nothing-one.never\n')
+      // Control: with the config settled, the snapshot is available again.
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).resolves.toMatchObject({ status: 'available' })
     } finally {
       fixture.cleanup()
     }
@@ -4843,11 +4881,13 @@ describe('OpenCode operation observer submodule contents', () => {
       // Control: the submodule adds no spawn in the parent's own directory.
       expect(withSubmodule.outside).toBe(without.outside)
       // The parent: its anchor, the excludes lookup, the HEAD tree and three
-      // listings on the first pass, then three listings and the anchor again.
-      expect(without.outside).toBe(11)
+      // listings on the first pass, then the excludes lookup, three listings
+      // and the anchor again.
+      expect(without.outside).toBe(12)
       // A walked submodule: the same, with its own anchor read once. The final
-      // pass reads the ignore sources again without asking git for their path.
-      expect(withSubmodule.inside).toBe(10)
+      // pass resolves `core.excludesFile` again, because git may be using a
+      // different file by then.
+      expect(withSubmodule.inside).toBe(11)
     } finally {
       parent.cleanup()
       bare.cleanup()

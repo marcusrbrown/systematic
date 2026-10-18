@@ -424,14 +424,13 @@ directory moves between two snapshots, for example after `git submodule absorbgi
 normally. The digest domain is `worktree:v4`: a unit in progress across the upgrade has its
 completion rejected once as a retryable `stale-receipt`, and the stale operations are rerun.
 
-A snapshot spawns 11 git processes for the parent and 10 more for each walked repository, 8 more
-than the old check of a submodule's `HEAD`; the final pass re-reads the ignore sources from the paths
-the first pass found and does not ask git for them again. The times below were measured on a 10-core
-development machine under load before that change, when the counts were 12 and 11, so they are a
-little high: a warm snapshot took about 80 ms with no submodule, about 240 ms with one submodule of
-2,000 files (20 MB), and about 700 to 780 ms with four, where it had taken about 80 and 105 to
-125 ms. Reading the files dominates. The spawns are synchronous, so a large submodule blocks the
-process for that long.
+A snapshot spawns 12 git processes for the parent and 11 more for each walked repository, 9 more
+than the old check of a submodule's `HEAD`. The final pass asks git for `core.excludesFile` again,
+because git may be using a different file by then. Measured on a 10-core development machine under
+load, a warm snapshot took about 80 ms with no submodule, about 240 ms with one submodule of 2,000
+files (20 MB), and about 700 to 780 ms with four, where it had taken about 80 and 105 to 125 ms.
+Reading the files dominates. The spawns are synchronous, so a large submodule blocks the process for
+that long.
 
 The guard observes; it does not stop an agent that works to evade it, and a shell running as the
 same user can write any location a stored anchor could use (#1126). So these are limits. A snapshot
