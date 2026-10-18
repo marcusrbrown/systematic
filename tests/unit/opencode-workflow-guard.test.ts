@@ -32,6 +32,7 @@ import {
 } from '../../src/lib/opencode-workflow-guard.js'
 import {
   createReceiptClassifier,
+  parseReceiptOperationObservation,
   type ReceiptOperationObservation,
 } from '../../src/lib/receipt-classifier.js'
 import type {
@@ -16748,6 +16749,299 @@ describe('OpenCode workflow guard over a real observer', () => {
         }
       },
     )
+  })
+})
+
+describe('OpenCode workflow guard over a real observer with a submodule', () => {
+  interface SubmoduleRepository {
+    readonly root: string
+    readonly sub: string
+    readonly adapter: OpencodeWorkflowGuard
+    readonly observations: ReceiptOperationObservation[]
+    cleanup(): void
+  }
+
+  /**
+   * A parent repository holding one initialized submodule of two files, watched
+   * by a real observer (with `maxFiles` lowered when given) and a real guard.
+   * Both repositories' `core.excludesFile` point at an absent file, so no
+   * global ignore of the machine running the tests leaks in.
+   */
+  async function createSubmoduleRepository(
+    options: {
+      maxFiles?: number
+      requiredOperations?: readonly ReceiptOperation[]
+    } = {},
+  ): Promise<SubmoduleRepository> {
+    const {
+      maxFiles,
+      requiredOperations = ['implementation', 'verification'],
+    } = options
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-guard-submodule-')),
+    )
+    const source = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-guard-submodule-src-')),
+    )
+    const cleanup = () => {
+      for (const directory of [root, source]) {
+        fs.rmSync(directory, { recursive: true, force: true })
+      }
+    }
+    try {
+      for (const directory of [source, root]) {
+        realRepositoryGit(directory, ['init', '--quiet'])
+        realRepositoryGit(directory, [
+          'config',
+          'user.email',
+          'real@example.invalid',
+        ])
+        realRepositoryGit(directory, ['config', 'user.name', 'Real Observer'])
+      }
+      fs.writeFileSync(path.join(source, 's0.txt'), 's0\n')
+      fs.writeFileSync(path.join(source, 's1.txt'), 's1\n')
+      realRepositoryGit(source, ['add', 's0.txt', 's1.txt'])
+      realRepositoryGit(source, ['commit', '--quiet', '-m', 'source'])
+      realRepositoryGit(root, [
+        'config',
+        'core.excludesFile',
+        path.join(root, '.git', 'no-global-excludes'),
+      ])
+      fs.writeFileSync(path.join(root, 'f'), 'base\n')
+      realRepositoryGit(root, ['add', 'f'])
+      realRepositoryGit(root, ['commit', '--quiet', '-m', 'base'])
+      realRepositoryGit(root, [
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        '--quiet',
+        source,
+        'sub',
+      ])
+      realRepositoryGit(root, ['commit', '--quiet', '-m', 'add submodule'])
+      const sub = path.join(root, 'sub')
+      realRepositoryGit(sub, [
+        'config',
+        'core.excludesFile',
+        path.join(
+          realRepositoryGit(sub, ['rev-parse', '--absolute-git-dir']),
+          'no-global-excludes',
+        ),
+      ])
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: root,
+        ...(maxFiles === undefined ? {} : { limits: { maxFiles } }),
+      })
+      const initial = await observer.snapshot()
+      if (initial.status !== 'available') {
+        throw new Error(`observer unavailable: ${initial.reasonCode}`)
+      }
+      const observations: ReceiptOperationObservation[] = []
+      const classifier = createReceiptClassifier()
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: root,
+        sessionLocation: root,
+        observer,
+        classifier: {
+          ...classifier,
+          classifyOperation: async (input: unknown) => {
+            // Parsed with the classifier's own parser, so no cast is needed.
+            const observation = parseReceiptOperationObservation(input)
+            if (observation) observations.push(observation)
+            const classify = classifier.classifyOperation
+            if (!classify) {
+              throw new Error(
+                'expected classifier to implement classifyOperation',
+              )
+            }
+            return classify(input)
+          },
+        },
+        runtimeRequiredOperations: requiredOperations,
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      return { root, sub, adapter, observations, cleanup }
+    } catch (error) {
+      cleanup()
+      throw error
+    }
+  }
+
+  async function statusOutput(
+    adapter: OpencodeWorkflowGuard,
+  ): Promise<Record<string, unknown>> {
+    const result = await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
+    return JSON.parse(expectToolOutput(result).output)
+  }
+
+  test('a submodule that pushes the snapshot over the file limit blocks the unit, and shrinking it lets a status refresh clear the block and the unit complete', async () => {
+    // The parent holds `.gitmodules`, `f` and `sub`; the submodule two files.
+    // Four more files inside it make nine, over a limit of eight.
+    const repo = await createSubmoduleRepository({ maxFiles: 8 })
+    try {
+      const extras = [0, 1, 2, 3].map((index) =>
+        path.join(repo.sub, `extra${index}.txt`),
+      )
+      for (const extra of extras) fs.writeFileSync(extra, 'extra\n')
+
+      await observeFreshVerification(repo.adapter, repo.root, 'blocked-verify')
+
+      expect((await statusOutput(repo.adapter)).snapshotBlock).toEqual({
+        reasonCode: 'file-limit',
+      })
+      // The blocked call was skipped, not failed: nothing minted, nothing fatal.
+      expect(ledger(repo.adapter).listReceipts()).toHaveLength(0)
+      expect(status(repo.adapter).state).not.toBe('unavailable')
+      expect(status(repo.adapter).unit?.status).toBe('active')
+
+      // The submodule shrinks by a direct write, outside any observed call.
+      for (const extra of extras) fs.rmSync(extra)
+      const cleared = await statusOutput(repo.adapter)
+      expect(cleared.snapshotBlock).toBeUndefined()
+      expect(cleared.firstUnavailableCause).toBeUndefined()
+      expect(status(repo.adapter).state).not.toBe('unavailable')
+
+      // Operations are observed again, and the unit completes.
+      await observeFreshWrite(
+        repo.adapter,
+        path.join(repo.root, 'impl.txt'),
+        'implementation\n',
+        'cleared-write',
+      )
+      await observeFreshVerification(repo.adapter, repo.root, 'cleared-verify')
+      expect(ledger(repo.adapter).listReceipts()).toHaveLength(2)
+      const output = await completeUnit(repo.adapter, 'submodule-complete')
+      expect(output.output).toContain('workflow guard completed unit')
+      expect(status(repo.adapter).unit?.status).toBe('completed')
+    } finally {
+      repo.cleanup()
+    }
+  }, 120_000)
+
+  test('a submodule within the file limit is observed and not blocked', async () => {
+    // Control: the same repository without the extra files has no block.
+    const repo = await createSubmoduleRepository({ maxFiles: 8 })
+    try {
+      await observeFreshVerification(repo.adapter, repo.root, 'within-verify')
+      expect((await statusOutput(repo.adapter)).snapshotBlock).toBeUndefined()
+      expect(status(repo.adapter).state).not.toBe('unavailable')
+    } finally {
+      repo.cleanup()
+    }
+  }, 60_000)
+
+  describe('commit evidence', () => {
+    /** Runs a parent commit after minting evidence, with `edit` applied first. */
+    async function commitInParent(
+      repo: SubmoduleRepository,
+      edit?: () => void,
+    ): Promise<boolean | undefined> {
+      await observeFreshWrite(
+        repo.adapter,
+        path.join(repo.root, 'impl.txt'),
+        'implementation\n',
+        'commit-write',
+      )
+      await observeFreshVerification(repo.adapter, repo.root, 'commit-verify')
+      edit?.()
+      const input = {
+        tool: 'bash' as const,
+        sessionID: SESSION_A,
+        callID: 'commit-step',
+        args: { command: 'git commit -m "add impl"', workdir: repo.root },
+      }
+      await repo.adapter.hooks['tool.execute.before'](input, {
+        args: input.args,
+      })
+      realRepositoryGit(repo.root, ['add', 'impl.txt'])
+      realRepositoryGit(repo.root, ['commit', '--quiet', '-m', 'add impl'])
+      await repo.adapter.hooks['tool.execute.after'](input, {
+        title: 'commit complete',
+        output: 'committed',
+        metadata: { exit: 0 },
+      })
+      return repo.observations
+        .filter((entry) => entry.tool === 'bash' && entry.after !== undefined)
+        .at(-1)?.after?.commitClosure
+    }
+
+    const commitReceipts = (repo: SubmoduleRepository) =>
+      ledger(repo.adapter)
+        .listReceipts()
+        .filter((receipt) => receipt.canonical.operation === 'commit')
+
+    const REQUIRED: readonly ReceiptOperation[] = [
+      'implementation',
+      'verification',
+      'commit',
+    ]
+
+    test('a commit that leaves a submodule edited is observed as not closed and mints no commit receipt', async () => {
+      const repo = await createSubmoduleRepository({
+        requiredOperations: REQUIRED,
+      })
+      try {
+        const closure = await commitInParent(repo, () => {
+          fs.writeFileSync(path.join(repo.sub, 's0.txt'), 'edited\n')
+        })
+        expect(closure).toBe(false)
+        expect(commitReceipts(repo)).toHaveLength(0)
+        expect(status(repo.adapter).missingOperations).toContain('commit')
+      } finally {
+        repo.cleanup()
+      }
+    }, 120_000)
+
+    test('a commit that leaves the submodule untouched is observed as closed and mints a commit receipt', async () => {
+      // Control: the same flow without the edit.
+      const repo = await createSubmoduleRepository({
+        requiredOperations: REQUIRED,
+      })
+      try {
+        const closure = await commitInParent(repo)
+        expect(closure).toBe(true)
+        expect(commitReceipts(repo)).toHaveLength(1)
+      } finally {
+        repo.cleanup()
+      }
+    }, 120_000)
+
+    test('restoring an edited submodule before the commit observes it as closed', async () => {
+      // Control: the edit is seen while it is there, and undone before the commit.
+      const repo = await createSubmoduleRepository({
+        requiredOperations: REQUIRED,
+      })
+      try {
+        const file = path.join(repo.sub, 's0.txt')
+        const original = fs.readFileSync(file)
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: repo.root,
+        })
+        const closureNow = async () => {
+          const result = await observer.snapshot()
+          return result.status === 'available'
+            ? result.snapshot.commitClosure
+            : undefined
+        }
+        expect(await closureNow()).toBe(true)
+        fs.writeFileSync(file, 'edited\n')
+        expect(await closureNow()).toBe(false)
+        fs.writeFileSync(file, original)
+        expect(await closureNow()).toBe(true)
+        expect(await commitInParent(repo)).toBe(true)
+      } finally {
+        repo.cleanup()
+      }
+    }, 120_000)
   })
 })
 

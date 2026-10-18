@@ -8,6 +8,7 @@ import path from 'node:path'
 import {
   createOpencodeOperationObserver,
   findDisplacedGitlinks,
+  type GitlinkState,
   hashField,
   type OpencodeOperationObserver,
   type OperationObserverCommandResult,
@@ -2250,6 +2251,7 @@ function buildCharacterizationFixture(scenario: CharacterizationScenario): {
       { env: DETERMINISTIC_GIT_ENV, encoding: 'utf8' },
     )
     expect(clone.status).toBe(0)
+    pinCheckoutIgnoreSources(path.join(fixture.root, 'submodule'))
     addTracked(fixture.root, ['submodule'], 'gitlink')
   }
   if (wants('deleted')) {
@@ -2285,22 +2287,22 @@ describe('OpenCode operation observer worktree identity characterization', () =>
         fixture.cleanup()
       }
     }
-    // Captured with length-framed fields, the ignore-source facts and the
-    // worktree:v3 domain tag.
+    // Captured with length-framed fields, the ignore-source facts, a walked
+    // submodule's own digest and the worktree:v4 domain tag.
     expect(digests).toEqual({
       deleted:
-        '0baa1ab668ea96046860a2b0b5f44169fec087af6426adc47c7d3399edce5198',
+        '19026025702879c81452d40159484b7dd19fe88fea5f8d883bc4d71b84887801',
       executable:
-        '35a00917d572e51b6be8d8fa00e1342f82e35f2e8c74a3adec7610d94cd7ae9c',
+        '59af2eecb4a01ee9ff75d03d820d61e3a155ab5356749690f17515b88a6de6be',
       gitlink:
-        'b4efd196858ac6382342fdcbadd143bdd4f2bd3340d6c9a6a61c70e0665396bf',
-      mixed: '7d3855c074506dc40ddc6a1c18bfe3c92719627d98e8c91b805a383360b0b87a',
+        '9c5e65bb7b1303991c98874acfe9ca0ac1eb6ca22a83989ee387b39676bdb420',
+      mixed: '7ac6a022c25ab5030d6af570dcd3da94ffc39f598303fea5101ee44f75899498',
       regular:
-        '7c5ca1fe50a40aa3a057bd46c5be0ad9c7d2a1db1e3003577b6ade675cb0c0c3',
+        'cf66adcbae1f149c1d07a2511b5f2b0b45590cf364304e51d0c6a5430ecb2bf1',
       symlink:
-        '6a563113eac3c7567d2051744fb976d6d983a80cf719f595272d7cc90e060957',
+        '48d391824a989d1abffcfa26ff16eca50cf22ea800e2a7d3ede8dfb219b7742d',
       untracked:
-        '41b0c75c82ccdb96a6c1b22b2d1bdfe5e745368de65a141a90ce3631b05915d5',
+        '4d26c08f86332a956cd58be3b94f08c1880c1accbaa6d82a59a6458c236aafe4',
     })
   }, 30_000)
 
@@ -2450,7 +2452,7 @@ describe('OpenCode operation observer race-checked reads', () => {
     const fixture = createGitFixture()
     try {
       const target = path.join(fixture.root, 'tracked.txt')
-      // The path is touched on disk by the first command that runs after its
+      // The path is touched on disk by the first stat that runs after its
       // content was read and confirmed, so only the final pass can see it.
       let contentRead = false
       let touched = false
@@ -2461,14 +2463,14 @@ describe('OpenCode operation observer race-checked reads', () => {
           if (filePath.endsWith('tracked.txt')) contentRead = true
           return content
         },
-        commandRunner: interceptingRunner(() => {
+        statReader: (filePath) => {
           if (contentRead && !touched) {
             touched = true
             const later = new Date(Date.now() + 60_000)
             fs.utimesSync(target, later, later)
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
       expect(touched).toBe(true)
@@ -2760,6 +2762,26 @@ function setExcludesFile(root: string, content: string | null): string {
 
 function infoExcludePath(root: string): string {
   return path.join(root, '.git', 'info', 'exclude')
+}
+
+/**
+ * Pins a checkout's own ignore sources, which its digest includes: a fixed
+ * `info/exclude` (git's template varies) and an absent global ignore file in
+ * place of whatever the machine running the tests has configured.
+ */
+function pinCheckoutIgnoreSources(directory: string): void {
+  const gitDir = fs.realpathSync(
+    gitOutput(directory, ['rev-parse', '--absolute-git-dir']),
+  )
+  fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true })
+  fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), '# characterization\n')
+  expect(
+    runGit(directory, [
+      'config',
+      'core.excludesFile',
+      path.join(gitDir, 'test-excludes'),
+    ]).status,
+  ).toBe(0)
 }
 
 /** Runs git with the user's and the system's config switched off. */
@@ -3462,9 +3484,10 @@ describe('OpenCode operation observer gitlink hardening', () => {
     }
   })
 
-  test('a HEAD-only gitlink whose submodule is still checked out fails closed', async () => {
+  test('a HEAD-only gitlink whose submodule is still checked out is walked as an untracked nested repository and reads not closed', async () => {
     // After `git rm --cached`, git lists the checked-out submodule as an
-    // untracked nested repository (`sub/`), which cannot be read as a file.
+    // untracked nested repository (`sub/`), and the gitlink that only HEAD
+    // records is displaced by it.
     const fixture = createGitFixture()
     const source = createSubmoduleSource()
     try {
@@ -3476,10 +3499,16 @@ describe('OpenCode operation observer gitlink hardening', () => {
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
       })
-      await expect(observer.snapshot()).resolves.toEqual({
-        status: 'unavailable',
-        reasonCode: 'file-read-failed',
+      const before = await observer.snapshot()
+      expect(before).toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
       })
+      // What the nested walk reads is the digest: an edit inside it shows.
+      fs.writeFileSync(path.join(fixture.root, 'sub', 'sub.txt'), 'edited\n')
+      const after = await observer.snapshot()
+      expect(after.status).toBe('available')
+      expect(after).not.toEqual(before)
     } finally {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
@@ -3670,7 +3699,7 @@ describe('OpenCode operation observer commit closure from records', () => {
     }
   })
 
-  test('an uninitialized gitlink reads not closed', async () => {
+  test('an uninitialized gitlink reads closed when it is the only difference from HEAD', async () => {
     const fixture = createGitFixture()
     try {
       setExcludesFile(fixture.root, null)
@@ -3680,7 +3709,7 @@ describe('OpenCode operation observer commit closure from records', () => {
       ).toBe(0)
       fs.mkdirSync(path.join(fixture.root, 'sub'))
       expect(runGit(fixture.root, ['diff', '--quiet', 'HEAD']).status).toBe(0)
-      expect(await closureOf(fixture.root)).toBe(false)
+      expect(await closureOf(fixture.root)).toBe(true)
     } finally {
       fixture.cleanup()
     }
@@ -3837,6 +3866,1492 @@ describe('OpenCode operation observer commit closure from records', () => {
       fixture.cleanup()
     }
   }, 30_000)
+})
+
+const SUBMODULE_COMMIT_IDENTITY = [
+  '-c',
+  'user.email=observer@example.invalid',
+  '-c',
+  'user.name=Observer Test',
+] as const
+
+/**
+ * Puts the directory at `name` into one of the three submodule states. The
+ * parent index must already hold a gitlink for it.
+ */
+function setSubmoduleState(
+  root: string,
+  name: string,
+  state: GitlinkState,
+): void {
+  const directory = path.join(root, name)
+  fs.rmSync(directory, { recursive: true, force: true })
+  fs.mkdirSync(directory)
+  if (state === 'uninitialized') return
+  expect(runGit(directory, ['init', '--quiet']).status).toBe(0)
+  if (state === 'unborn') return
+  expect(
+    runGit(directory, [
+      ...SUBMODULE_COMMIT_IDENTITY,
+      'commit',
+      '--quiet',
+      '--allow-empty',
+      '-m',
+      'sub',
+    ]).status,
+  ).toBe(0)
+}
+
+/** A parent whose HEAD records a gitlink at `sub`; the directory is not made. */
+function createGitlinkFixture(): GitFixture {
+  const fixture = createGitFixture()
+  setExcludesFile(fixture.root, null)
+  stageGitlinks(fixture.root, ['sub'])
+  expect(
+    runGit(fixture.root, ['commit', '--quiet', '-m', 'gitlink']).status,
+  ).toBe(0)
+  return fixture
+}
+
+describe('OpenCode operation observer submodule state', () => {
+  test('an unborn submodule is available and its record carries no id', async () => {
+    const fixture = createGitlinkFixture()
+    try {
+      setSubmoduleState(fixture.root, 'sub', 'unborn')
+      expect(recordFor(readWorktreeRecords(fixture.root), 'sub')).toEqual({
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        id: undefined,
+      })
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const first = await observer.snapshot()
+      expect(first.status).toBe('available')
+      await expect(observer.snapshot()).resolves.toEqual(first)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an unborn submodule reads not closed even when it is the only difference from HEAD', async () => {
+    const fixture = createGitlinkFixture()
+    try {
+      setSubmoduleState(fixture.root, 'sub', 'uninitialized')
+      // Control: the same parent with the checkout absent is closed.
+      expect(await closureOf(fixture.root)).toBe(true)
+      setSubmoduleState(fixture.root, 'sub', 'unborn')
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('uninitialized, unborn and initialized submodules each digest differently', async () => {
+    const fixture = createGitlinkFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const digests: Record<GitlinkState, string> = {
+        uninitialized: '',
+        unborn: '',
+        initialized: '',
+      }
+      for (const state of ['uninitialized', 'unborn', 'initialized'] as const) {
+        setSubmoduleState(fixture.root, 'sub', state)
+        digests[state] = await digestOf(observer)
+      }
+      expect(new Set(Object.values(digests)).size).toBe(3)
+      // Control: the same state digests the same on a second snapshot.
+      setSubmoduleState(fixture.root, 'sub', 'unborn')
+      expect(await digestOf(observer)).toBe(digests.unborn)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an uninitialized gitlink that HEAD does not record reads not closed', async () => {
+    // Control: the closing rule matches an uninitialized submodule to its HEAD
+    // gitlink, so one that HEAD does not hold has nothing to match.
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      stageGitlinks(fixture.root, ['sub'])
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('an uninitialized gitlink does not close a repository with an edited tracked file', async () => {
+    // Control: the rule closes only the gitlink; every other record still has
+    // to equal HEAD.
+    const fixture = createGitlinkFixture()
+    try {
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      expect(await closureOf(fixture.root)).toBe(true)
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'edited\n')
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a gitlink in the index over a path that HEAD tracks as a file reads not closed', async () => {
+    // Control: an empty directory at a gitlink path closes only when HEAD
+    // records a gitlink there, so a tracked file at that path does not match.
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'sub'), 'a file\n')
+      addTracked(fixture.root, ['sub'], 'file named sub')
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'sub']).status,
+      ).toBe(0)
+      fs.rmSync(path.join(fixture.root, 'sub'))
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      stageGitlinks(fixture.root, ['sub'])
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test.each([
+    { from: 'uninitialized', to: 'unborn' },
+    { from: 'unborn', to: 'initialized' },
+    { from: 'unborn', to: 'uninitialized' },
+  ] as const)(
+    'a gitlink that goes from $from to $to between the first pass and the final pass is worktree-unstable',
+    async ({ from, to }) => {
+      const fixture = createGitlinkFixture()
+      try {
+        setSubmoduleState(fixture.root, 'sub', from)
+        const root = fs.realpathSync(fixture.root)
+        const submodule = path.join(root, 'sub')
+        // The change is keyed to a phase: it happens at the first stat of the
+        // submodule's directory after its state was read, which is the final
+        // pass looking at it again.
+        let stateRead = false
+        let changed = false
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+          statReader: (filePath) => {
+            if (filePath === path.join(submodule, '.git')) stateRead = true
+            else if (stateRead && !changed && filePath === submodule) {
+              changed = true
+              setSubmoduleState(fixture.root, 'sub', to)
+            }
+            return lstatWithIdentity(filePath)
+          },
+        })
+        await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+        expect(changed).toBe(true)
+      } finally {
+        fixture.cleanup()
+      }
+    },
+  )
+
+  test('a populated directory without a checkout and an empty .git directory stay file-read-failed', async () => {
+    // Control: reading the anchor after the existing checks must not let
+    // either of these resolve to the parent.
+    const populated = createGitlinkFixture()
+    const emptyGit = createGitlinkFixture()
+    try {
+      fs.mkdirSync(path.join(populated.root, 'sub'))
+      fs.writeFileSync(path.join(populated.root, 'sub', 'smuggled.txt'), 'x\n')
+      fs.mkdirSync(path.join(emptyGit.root, 'sub', '.git'), { recursive: true })
+      for (const fixture of [populated, emptyGit]) {
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        await expect(observer.snapshot()).resolves.toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-read-failed',
+        })
+      }
+    } finally {
+      populated.cleanup()
+      emptyGit.cleanup()
+    }
+  })
+})
+
+/** A committed repository holding `files`, to use as a submodule source. */
+function createSourceWithFiles(files: Record<string, string>): string {
+  const root = createSubmoduleSource()
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(root, name), content)
+  }
+  addTracked(root, Object.keys(files), 'files')
+  return root
+}
+
+interface SubmoduleParent {
+  readonly root: string
+  readonly sources: readonly string[]
+  cleanup(): void
+}
+
+/** A parent whose HEAD records one initialized submodule per name. */
+function createSubmoduleParent(
+  names: readonly string[] = ['sub'],
+  source = createSubmoduleSource(),
+): SubmoduleParent {
+  const fixture = createGitFixture()
+  setExcludesFile(fixture.root, null)
+  for (const name of names) addSubmodule(fixture.root, source, name)
+  return {
+    root: fixture.root,
+    sources: [source],
+    cleanup: () => {
+      fs.rmSync(source, { recursive: true, force: true })
+      fixture.cleanup()
+    },
+  }
+}
+
+/** Where the checkout at `directory` keeps its git directory. */
+function absoluteGitDir(directory: string): string {
+  return fs.realpathSync(
+    gitOutput(directory, ['rev-parse', '--absolute-git-dir']),
+  )
+}
+
+/** Runs `git submodule update --init --recursive`, which `file://` needs a flag for. */
+function updateSubmodules(root: string): void {
+  const updated = spawnSync(
+    'git',
+    [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'update',
+      '--init',
+      '--recursive',
+      '--quiet',
+    ],
+    { cwd: root, encoding: 'utf8' },
+  )
+  if (updated.status !== 0) {
+    throw new Error(`submodule update failed: ${updated.stderr}`)
+  }
+}
+
+/** A parent holding `mid`, which itself holds `inner`. */
+function createNestedSubmoduleParent(): SubmoduleParent {
+  const innerSource = createSubmoduleSource()
+  const middleSource = createSubmoduleSource()
+  addSubmodule(middleSource, innerSource, 'inner')
+  const fixture = createGitFixture()
+  setExcludesFile(fixture.root, null)
+  addSubmodule(fixture.root, middleSource, 'mid')
+  updateSubmodules(fixture.root)
+  return {
+    root: fixture.root,
+    sources: [innerSource, middleSource],
+    cleanup: () => {
+      for (const source of [innerSource, middleSource]) {
+        fs.rmSync(source, { recursive: true, force: true })
+      }
+      fixture.cleanup()
+    },
+  }
+}
+
+describe('OpenCode operation observer submodule contents', () => {
+  const EDITED = 'edited\n'
+
+  async function stateOf(root: string) {
+    const observer = createOpencodeOperationObserver({ targetDirectory: root })
+    const result = await observer.snapshot()
+    if (result.status !== 'available') {
+      throw new Error(`snapshot unavailable: ${result.reasonCode}`)
+    }
+    return {
+      digest: result.snapshot.worktreeRevisionDigest,
+      closed: result.snapshot.commitClosure,
+    }
+  }
+
+  test('a tracked edit inside an initialized submodule changes the digest and the closure, and restoring it restores both', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const file = path.join(parent.root, 'sub', 'sub.txt')
+      const original = fs.readFileSync(file)
+      const clean = await stateOf(parent.root)
+      expect(clean.closed).toBe(true)
+
+      fs.writeFileSync(file, EDITED)
+      const edited = await stateOf(parent.root)
+      expect(edited.digest).not.toBe(clean.digest)
+      expect(edited.closed).toBe(false)
+
+      fs.writeFileSync(file, original)
+      expect(await stateOf(parent.root)).toEqual(clean)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('an untracked file inside a submodule changes the digest and the closure', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const clean = await stateOf(parent.root)
+      const scratch = path.join(parent.root, 'sub', 'scratch.txt')
+      fs.writeFileSync(scratch, 'scratch\n')
+      const dirty = await stateOf(parent.root)
+      expect(dirty.digest).not.toBe(clean.digest)
+      expect(dirty.closed).toBe(false)
+
+      fs.rmSync(scratch)
+      expect(await stateOf(parent.root)).toEqual(clean)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a staged edit with the worktree also edited changes the digest by the worktree bytes alone', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      const file = path.join(sub, 'sub.txt')
+      const clean = await stateOf(parent.root)
+
+      fs.writeFileSync(file, 'worktree\n')
+      const worktreeOnly = await stateOf(parent.root)
+
+      fs.writeFileSync(file, 'staged\n')
+      expect(runGit(sub, ['add', 'sub.txt']).status).toBe(0)
+      fs.writeFileSync(file, 'worktree\n')
+      const stagedAndEdited = await stateOf(parent.root)
+
+      expect(stagedAndEdited.digest).not.toBe(clean.digest)
+      expect(stagedAndEdited.closed).toBe(false)
+      // The index is not an input: the same worktree bytes digest the same.
+      expect(stagedAndEdited.digest).toBe(worktreeOnly.digest)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('an edit inside a nested submodule changes the digest and the closure', async () => {
+    const parent = createNestedSubmoduleParent()
+    try {
+      const clean = await stateOf(parent.root)
+      expect(clean.closed).toBe(true)
+      fs.writeFileSync(
+        path.join(parent.root, 'mid', 'inner', 'sub.txt'),
+        EDITED,
+      )
+      const dirty = await stateOf(parent.root)
+      expect(dirty.digest).not.toBe(clean.digest)
+      expect(dirty.closed).toBe(false)
+    } finally {
+      parent.cleanup()
+    }
+  }, 60_000)
+
+  test('a submodule edit is reported as a changed digest, never as a failure', async () => {
+    // Control: a dirty submodule is available with closure false.
+    const parent = createSubmoduleParent()
+    try {
+      fs.writeFileSync(path.join(parent.root, 'sub', 'sub.txt'), EDITED)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+        snapshot: { commitClosure: false },
+      })
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('files in two submodules, each under the limit, are counted together', async () => {
+    const source = createSourceWithFiles({
+      'a.txt': 'a\n',
+      'b.txt': 'b\n',
+    })
+    const parent = createSubmoduleParent(['one', 'two'], source)
+    try {
+      // The parent holds .gitmodules, tracked.txt and two gitlinks; each
+      // submodule holds three files.
+      const limitFor = (maxFiles: number) =>
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+          limits: { maxFiles },
+        })
+      await expect(limitFor(10).snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+      // Control: either submodule alone fits under 8, both together do not.
+      await expect(limitFor(8).snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-limit',
+      })
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('bytes in two submodules, each under the limit, are counted together', async () => {
+    const source = createSourceWithFiles({ 'big.txt': 'x'.repeat(1000) })
+    const parent = createSubmoduleParent(['one', 'two'], source)
+    try {
+      const limitFor = (maxTotalFileBytes: number) =>
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+          limits: { maxTotalFileBytes },
+        })
+      await expect(limitFor(3000).snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+      await expect(limitFor(1500).snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-output-limit',
+      })
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a nested gitlink that pushes the total over the gitlink limit gives file-limit', async () => {
+    const parent = createNestedSubmoduleParent()
+    try {
+      // Two gitlinks in all: `mid` and `inner`.
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+          limits: { maxGitlinks: 2 },
+        }).snapshot(),
+      ).resolves.toMatchObject({ status: 'available' })
+      // Control: one fewer and the nested gitlink is what goes over.
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+          limits: { maxGitlinks: 1 },
+        }).snapshot(),
+      ).resolves.toEqual({ status: 'unavailable', reasonCode: 'file-limit' })
+    } finally {
+      parent.cleanup()
+    }
+  }, 60_000)
+
+  test("an edit to a submodule's info/exclude changes the digest", async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const exclude = path.join(
+        absoluteGitDir(path.join(parent.root, 'sub')),
+        'info',
+        'exclude',
+      )
+      const clean = await stateOf(parent.root)
+      fs.appendFileSync(exclude, '# changed\n')
+      const changed = await stateOf(parent.root)
+      expect(changed.digest).not.toBe(clean.digest)
+      // Control: ignore rules are not file contents, so closure is unchanged.
+      expect(changed.closed).toBe(clean.closed)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a file ignored inside a submodule stays outside the digest', async () => {
+    // Control: ignored content is not observed, in a submodule as in the parent.
+    const parent = createSubmoduleParent()
+    try {
+      const exclude = path.join(
+        absoluteGitDir(path.join(parent.root, 'sub')),
+        'info',
+        'exclude',
+      )
+      fs.appendFileSync(exclude, 'ignored.txt\n')
+      const clean = await stateOf(parent.root)
+      fs.writeFileSync(path.join(parent.root, 'sub', 'ignored.txt'), 'one\n')
+      expect(await stateOf(parent.root)).toEqual(clean)
+      fs.writeFileSync(path.join(parent.root, 'sub', 'ignored.txt'), 'two\n')
+      expect(await stateOf(parent.root)).toEqual(clean)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a staged-only edit whose worktree bytes equal HEAD stays closed', async () => {
+    // Control: the index is not an input, so this is the committed tree.
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      const file = path.join(sub, 'sub.txt')
+      const original = fs.readFileSync(file)
+      const clean = await stateOf(parent.root)
+      fs.writeFileSync(file, 'staged\n')
+      expect(runGit(sub, ['add', 'sub.txt']).status).toBe(0)
+      fs.writeFileSync(file, original)
+      expect(await stateOf(parent.root)).toEqual(clean)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule HEAD that differs from the recorded commit reads not closed', async () => {
+    // Control: the record check still covers the gitlink id.
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      expect(
+        runGit(sub, [
+          ...SUBMODULE_COMMIT_IDENTITY,
+          'commit',
+          '--quiet',
+          '--allow-empty',
+          '-m',
+          'moved',
+        ]).status,
+      ).toBe(0)
+      expect((await stateOf(parent.root)).closed).toBe(false)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule file that changes between the first pass and the final pass is worktree-unstable', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const file = path.join(parent.root, 'sub', 'sub.txt')
+      // Touched by the first stat after its content was read, so only the
+      // final pass can see it.
+      let contentRead = false
+      let touched = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith(path.join('sub', 'sub.txt'))) {
+            contentRead = true
+          }
+          return content
+        },
+        statReader: (filePath) => {
+          if (contentRead && !touched) {
+            touched = true
+            const later = new Date(Date.now() + 60_000)
+            fs.utimesSync(file, later, later)
+          }
+          return lstatWithIdentity(filePath)
+        },
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(contentRead).toBe(true)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule HEAD that moves between the first pass and the final pass is worktree-unstable', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      let contentRead = false
+      let moved = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith(path.join('sub', 'sub.txt'))) {
+            contentRead = true
+          }
+          return content
+        },
+        commandRunner: interceptingRunner(() => {
+          if (contentRead && !moved) {
+            moved = true
+            runGit(sub, [
+              ...SUBMODULE_COMMIT_IDENTITY,
+              'commit',
+              '--quiet',
+              '--allow-empty',
+              '-m',
+              'moved',
+            ])
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(moved).toBe(true)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule whose git directory changes between the first pass and the final pass is worktree-unstable', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      const modules = path.join(parent.root, '.git', 'modules')
+      let contentRead = false
+      let redirected = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith(path.join('sub', 'sub.txt'))) {
+            contentRead = true
+          }
+          return content
+        },
+        commandRunner: interceptingRunner(() => {
+          if (contentRead && !redirected) {
+            redirected = true
+            // The same repository, found through a different git directory.
+            fs.cpSync(path.join(modules, 'sub'), path.join(modules, 'copy'), {
+              recursive: true,
+            })
+            fs.writeFileSync(
+              path.join(sub, '.git'),
+              'gitdir: ../.git/modules/copy\n',
+            )
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(redirected).toBe(true)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule whose git directory breaks between the first pass and the final pass is worktree-unstable, not a git failure', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      let contentRead = false
+      let broken = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith(path.join('sub', 'sub.txt'))) {
+            contentRead = true
+          }
+          return content
+        },
+        commandRunner: interceptingRunner(() => {
+          if (contentRead && !broken) {
+            broken = true
+            // The checkout is still there, but its git directory is not.
+            fs.writeFileSync(
+              path.join(sub, '.git'),
+              'gitdir: ../.git/modules/missing\n',
+            )
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(broken).toBe(true)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a core.excludesFile re-pointed after the first pass is worktree-unstable through the relisting, and an edit of the file it named is worktree-unstable through the re-read', async () => {
+    // Two mechanisms, each pinned on its own: the final pass reads the ignore
+    // sources again, and it relists the untracked files under whatever config
+    // is then in force.
+    const fixture = createGitFixture()
+    try {
+      fs.writeFileSync(path.join(fixture.root, 'hidden.txt'), 'hidden\n')
+      const hiding = path.join(fixture.root, '.git', 'hiding-excludes')
+      fs.writeFileSync(hiding, 'hidden.txt\n')
+
+      // Relisting: the old file is untouched, and the new one hides a file.
+      setExcludesFile(fixture.root, 'unrelated.never\n')
+      let repointed = false
+      const relisting = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !repointed) {
+            repointed = true
+            expect(
+              runGit(fixture.root, ['config', 'core.excludesFile', hiding])
+                .status,
+            ).toBe(0)
+          }
+          return undefined
+        }),
+      })
+      await expect(relisting.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(repointed).toBe(true)
+
+      // Re-read: the config is untouched, and the file it names is edited.
+      const excludes = setExcludesFile(fixture.root, 'unrelated.never\n')
+      let edited = false
+      const rereading = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !edited) {
+            edited = true
+            // Matches nothing, so no listing changes: only the bytes do.
+            fs.writeFileSync(excludes, 'another.never\n')
+          }
+          return undefined
+        }),
+      })
+      await expect(rereading.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(edited).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('a core.excludesFile re-pointed to a file of different rules is worktree-unstable even though no listing changes and the first file is untouched', async () => {
+    // The digest covers the bytes of whichever file git is using, so a snapshot
+    // that read file A and finishes with git using file B describes neither.
+    const fixture = createGitFixture()
+    try {
+      fs.writeFileSync(path.join(fixture.root, 'visible.txt'), 'visible\n')
+      const first = setExcludesFile(fixture.root, 'matches-nothing-one.never\n')
+      const second = path.join(fixture.root, '.git', 'other-excludes')
+      fs.writeFileSync(second, 'matches-nothing-two.never\n')
+      let repointed = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !repointed) {
+            repointed = true
+            expect(
+              runGit(fixture.root, ['config', 'core.excludesFile', second])
+                .status,
+            ).toBe(0)
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(repointed).toBe(true)
+      // Control: neither file was edited, so only the re-pointing can differ.
+      expect(fs.readFileSync(first, 'utf8')).toBe('matches-nothing-one.never\n')
+      // Control: with the config settled, the snapshot is available again.
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        }).snapshot(),
+      ).resolves.toMatchObject({ status: 'available' })
+    } finally {
+      fixture.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule directory removed between the first pass and the final pass is worktree-unstable', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      let contentRead = false
+      let removed = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith(path.join('sub', 'sub.txt'))) {
+            contentRead = true
+          }
+          return content
+        },
+        commandRunner: interceptingRunner(() => {
+          if (contentRead && !removed) {
+            removed = true
+            fs.rmSync(sub, { recursive: true, force: true })
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(removed).toBe(true)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('an invalid info/exclude inside a submodule is file-read-failed', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const exclude = path.join(
+        absoluteGitDir(path.join(parent.root, 'sub')),
+        'info',
+        'exclude',
+      )
+      fs.rmSync(exclude, { force: true })
+      fs.mkdirSync(exclude)
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+        }).snapshot(),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a path over the length limit inside a submodule is file-read-failed', async () => {
+    const longName = `${'x'.repeat(220)}.txt`
+    const source = createSourceWithFiles({ [longName]: 'long\n' })
+    const parent = createSubmoduleParent(['sub'], source)
+    try {
+      // Control: the parent's own paths and anchors fit well under the limit.
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+          limits: { maxPathBytes: 200 },
+        }).snapshot(),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+      await expect(
+        createOpencodeOperationObserver({
+          targetDirectory: parent.root,
+        }).snapshot(),
+      ).resolves.toMatchObject({ status: 'available' })
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('non-UTF-8 output from git inside a submodule is file-read-failed', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+      })
+      await withGitShim(
+        `case "$(pwd)" in */sub) for a in "$@"; do if [ "$a" = "--others" ]; then printf 'b\\377\\000'; exit 0; fi; done;; esac`,
+        async () => {
+          await expect(observer.snapshot()).resolves.toEqual({
+            status: 'unavailable',
+            reasonCode: 'file-read-failed',
+          })
+        },
+      )
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  describe('layouts', () => {
+    /** A submodule cloned into place, so its git directory sits inside it. */
+    function addEmbeddedSubmodule(
+      parent: string,
+      source: string,
+      name: string,
+    ): void {
+      const clone = spawnSync('git', ['clone', '--quiet', source, name], {
+        cwd: parent,
+        encoding: 'utf8',
+      })
+      expect(clone.status).toBe(0)
+      for (const [key, value] of [
+        [`submodule.${name}.path`, name],
+        [`submodule.${name}.url`, source],
+      ] as const) {
+        expect(
+          runGit(parent, ['config', '-f', '.gitmodules', key, value]).status,
+        ).toBe(0)
+      }
+      expect(runGit(parent, ['add', '.gitmodules', name]).status).toBe(0)
+      expect(
+        runGit(parent, ['commit', '--quiet', '-m', 'embedded']).status,
+      ).toBe(0)
+    }
+
+    test('an embedded .git submodule is walked', async () => {
+      const source = createSubmoduleSource()
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        addEmbeddedSubmodule(fixture.root, source, 'sub')
+        expect(
+          fs.statSync(path.join(fixture.root, 'sub', '.git')).isDirectory(),
+        ).toBe(true)
+        const clean = await stateOf(fixture.root)
+        fs.writeFileSync(path.join(fixture.root, 'sub', 'sub.txt'), EDITED)
+        const dirty = await stateOf(fixture.root)
+        expect(dirty.digest).not.toBe(clean.digest)
+        expect(dirty.closed).toBe(false)
+      } finally {
+        fs.rmSync(source, { recursive: true, force: true })
+        fixture.cleanup()
+      }
+    }, 30_000)
+
+    test('an absorbed submodule is walked', async () => {
+      const parent = createSubmoduleParent()
+      try {
+        expect(
+          fs.statSync(path.join(parent.root, 'sub', '.git')).isFile(),
+        ).toBe(true)
+        const clean = await stateOf(parent.root)
+        fs.writeFileSync(path.join(parent.root, 'sub', 'sub.txt'), EDITED)
+        expect((await stateOf(parent.root)).digest).not.toBe(clean.digest)
+      } finally {
+        parent.cleanup()
+      }
+    }, 30_000)
+
+    test('a submodule of a linked worktree is walked', async () => {
+      const source = createSubmoduleSource()
+      const fixture = createRegisteredWorktreeFixture()
+      try {
+        setExcludesFile(fixture.parent.root, null)
+        addSubmodule(fixture.linkedWorktree, source, 'sub')
+        const clean = await stateOf(fixture.linkedWorktree)
+        expect(clean.closed).toBe(true)
+        fs.writeFileSync(
+          path.join(fixture.linkedWorktree, 'sub', 'sub.txt'),
+          EDITED,
+        )
+        const dirty = await stateOf(fixture.linkedWorktree)
+        expect(dirty.digest).not.toBe(clean.digest)
+        expect(dirty.closed).toBe(false)
+      } finally {
+        fs.rmSync(source, { recursive: true, force: true })
+        fixture.cleanup()
+      }
+    }, 30_000)
+
+    test('absorbing a submodule git directory between two snapshots changes nothing and does not fail', async () => {
+      const source = createSubmoduleSource()
+      const fixture = createGitFixture()
+      try {
+        setExcludesFile(fixture.root, null)
+        addEmbeddedSubmodule(fixture.root, source, 'sub')
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: fixture.root,
+        })
+        const before = await observer.snapshot()
+        expect(before.status).toBe('available')
+        expect(
+          runGit(fixture.root, ['submodule', 'absorbgitdirs']).status,
+        ).toBe(0)
+        expect(
+          fs.statSync(path.join(fixture.root, 'sub', '.git')).isFile(),
+        ).toBe(true)
+        await expect(observer.snapshot()).resolves.toEqual(before)
+      } finally {
+        fs.rmSync(source, { recursive: true, force: true })
+        fixture.cleanup()
+      }
+    }, 30_000)
+  })
+
+  test('a walked submodule costs a fixed number of spawns', async () => {
+    const parent = createSubmoduleParent()
+    const bare = createGitFixture()
+    try {
+      setExcludesFile(bare.root, null)
+      const count = (root: string) => {
+        const real = fs.realpathSync(root)
+        const sub = path.join(real, 'sub')
+        const calls: string[] = []
+        const observer = createOpencodeOperationObserver({
+          targetDirectory: root,
+          commandRunner: (args, cwd) => {
+            calls.push(cwd)
+            return runGit(cwd, args)
+          },
+        })
+        calls.length = 0
+        return observer.snapshot().then(() => ({
+          inside: calls.filter((cwd) => cwd === sub).length,
+          outside: calls.filter((cwd) => cwd !== sub).length,
+        }))
+      }
+      const withSubmodule = await count(parent.root)
+      const without = await count(bare.root)
+      // Control: the submodule adds no spawn in the parent's own directory.
+      expect(withSubmodule.outside).toBe(without.outside)
+      // The parent: its anchor, the excludes lookup, the HEAD tree and three
+      // listings on the first pass, then the excludes lookup, three listings
+      // and the anchor again.
+      expect(without.outside).toBe(12)
+      // A walked submodule: the same, with its own anchor read once. The final
+      // pass resolves `core.excludesFile` again, because git may be using a
+      // different file by then.
+      expect(withSubmodule.inside).toBe(11)
+    } finally {
+      parent.cleanup()
+      bare.cleanup()
+    }
+  }, 30_000)
+
+  describe('untracked nested repositories', () => {
+    /**
+     * An untracked repository at `name` under `root`. Its files are committed
+     * unless `commit` is false, and its ignore sources are pinned.
+     */
+    function addNestedRepository(
+      root: string,
+      name: string,
+      options: { files?: Record<string, string>; commit?: boolean } = {},
+    ): string {
+      const { files = { 'inner.txt': 'inner\n' }, commit = true } = options
+      const directory = path.join(root, name)
+      fs.mkdirSync(directory, { recursive: true })
+      expect(runGit(directory, ['init', '--quiet']).status).toBe(0)
+      pinCheckoutIgnoreSources(directory)
+      for (const [file, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(directory, file), content)
+      }
+      if (commit) {
+        expect(runGit(directory, ['add', ...Object.keys(files)]).status).toBe(0)
+        expect(
+          runGit(directory, [
+            ...SUBMODULE_COMMIT_IDENTITY,
+            'commit',
+            '--quiet',
+            '-m',
+            'nested',
+          ]).status,
+        ).toBe(0)
+      }
+      return directory
+    }
+
+    function commitEmptyInside(directory: string): void {
+      expect(
+        runGit(directory, [
+          ...SUBMODULE_COMMIT_IDENTITY,
+          'commit',
+          '--quiet',
+          '--allow-empty',
+          '-m',
+          'moved',
+        ]).status,
+      ).toBe(0)
+    }
+
+    function withParent<T>(run: (root: string) => Promise<T>): Promise<T> {
+      const fixture = createGitFixture()
+      setExcludesFile(fixture.root, null)
+      return run(fixture.root).finally(fixture.cleanup)
+    }
+
+    test(
+      'an untracked nested repository is available, never closed, and an edit inside it changes the digest',
+      () =>
+        withParent(async (root) => {
+          const baseline = await stateOf(root)
+          // Control: the parent is closed until the nested repository exists.
+          expect(baseline.closed).toBe(true)
+          const nested = addNestedRepository(root, 'inner-repo')
+          const clean = await stateOf(root)
+          expect(clean.digest).not.toBe(baseline.digest)
+          // Clean or dirty, a nested repository is never part of HEAD.
+          expect(clean.closed).toBe(false)
+
+          const file = path.join(nested, 'inner.txt')
+          const original = fs.readFileSync(file)
+          fs.writeFileSync(file, EDITED)
+          const dirty = await stateOf(root)
+          expect(dirty.digest).not.toBe(clean.digest)
+          expect(dirty.closed).toBe(false)
+
+          fs.writeFileSync(file, original)
+          expect(await stateOf(root)).toEqual(clean)
+
+          fs.writeFileSync(path.join(nested, 'untracked.txt'), 'new\n')
+          expect((await stateOf(root)).digest).not.toBe(clean.digest)
+
+          // Control: without the nested repository the parent is closed again.
+          fs.rmSync(nested, { recursive: true, force: true })
+          expect(await stateOf(root)).toEqual(baseline)
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository is recorded as a gitlink-shaped record at its slash-terminated path',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          expect(recordFor(readWorktreeRecords(root), 'inner-repo/')).toEqual({
+            path: 'inner-repo/',
+            kind: 'gitlink',
+            mode: '160000',
+            id: gitOutput(nested, ['rev-parse', 'HEAD']),
+          })
+        }),
+      30_000,
+    )
+
+    test(
+      'an unborn nested repository is available and not closed',
+      () =>
+        withParent(async (root) => {
+          const baseline = await stateOf(root)
+          const nested = addNestedRepository(root, 'inner-repo', {
+            files: {},
+            commit: false,
+          })
+          const unborn = await stateOf(root)
+          expect(unborn.digest).not.toBe(baseline.digest)
+          expect(unborn.closed).toBe(false)
+          expect(
+            recordFor(readWorktreeRecords(root), 'inner-repo/')?.id,
+          ).toBeUndefined()
+
+          // Its first commit is a new state.
+          fs.writeFileSync(path.join(nested, 'inner.txt'), 'inner\n')
+          expect(runGit(nested, ['add', 'inner.txt']).status).toBe(0)
+          commitEmptyInside(nested)
+          expect((await stateOf(root)).digest).not.toBe(unborn.digest)
+        }),
+      30_000,
+    )
+
+    test(
+      'moving a nested repository to another path changes the digest though its contents are identical',
+      () =>
+        withParent(async (root) => {
+          const first = path.join(root, 'a')
+          const second = path.join(root, 'b')
+          addNestedRepository(root, 'a')
+          const before = await stateOf(root)
+          fs.renameSync(first, second)
+          const moved = await stateOf(root)
+          expect(moved.digest).not.toBe(before.digest)
+          expect(moved.closed).toBe(false)
+          // Control: moving it back is the same state again.
+          fs.renameSync(second, first)
+          expect(await stateOf(root)).toEqual(before)
+        }),
+      30_000,
+    )
+
+    test(
+      'a commit inside a nested repository changes the digest though no file changed',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          const before = await stateOf(root)
+          commitEmptyInside(nested)
+          expect((await stateOf(root)).digest).not.toBe(before.digest)
+        }),
+      30_000,
+    )
+
+    test('a nested repository inside a submodule is walked the same way', async () => {
+      const parent = createSubmoduleParent()
+      try {
+        const sub = path.join(parent.root, 'sub')
+        const clean = await stateOf(parent.root)
+        expect(clean.closed).toBe(true)
+        const nested = addNestedRepository(sub, 'scratch-repo')
+        const withNested = await stateOf(parent.root)
+        expect(withNested.digest).not.toBe(clean.digest)
+        expect(withNested.closed).toBe(false)
+
+        fs.writeFileSync(path.join(nested, 'inner.txt'), EDITED)
+        const dirty = await stateOf(parent.root)
+        expect(dirty.digest).not.toBe(withNested.digest)
+        expect(dirty.closed).toBe(false)
+
+        // Control: removing it closes the submodule, and so the parent, again.
+        fs.rmSync(nested, { recursive: true, force: true })
+        expect(await stateOf(parent.root)).toEqual(clean)
+      } finally {
+        parent.cleanup()
+      }
+    }, 30_000)
+
+    test(
+      'a nested repository inside a nested repository is walked at every depth',
+      () =>
+        withParent(async (root) => {
+          const outer = addNestedRepository(root, 'outer-repo')
+          const innermost = addNestedRepository(outer, 'deeper-repo')
+          const clean = await stateOf(root)
+          expect(clean.closed).toBe(false)
+          fs.writeFileSync(path.join(innermost, 'inner.txt'), EDITED)
+          expect((await stateOf(root)).digest).not.toBe(clean.digest)
+        }),
+      60_000,
+    )
+
+    test('nested repositories and submodules draw on one gitlink budget, counted before any of them is read', async () => {
+      const parent = createSubmoduleParent()
+      try {
+        addNestedRepository(parent.root, 'inner-repo')
+        const root = fs.realpathSync(parent.root)
+        const snapshotWith = (maxGitlinks: number) => {
+          const cwds: string[] = []
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: parent.root,
+            limits: { maxGitlinks },
+            commandRunner: (args, cwd) => {
+              cwds.push(cwd)
+              return runGit(cwd, args)
+            },
+          })
+          cwds.length = 0
+          return observer.snapshot().then((result) => ({ result, cwds }))
+        }
+        // One submodule and one nested repository: two in all.
+        expect((await snapshotWith(2)).result).toMatchObject({
+          status: 'available',
+        })
+        const over = await snapshotWith(1)
+        expect(over.result).toEqual({
+          status: 'unavailable',
+          reasonCode: 'file-limit',
+        })
+        expect(
+          over.cwds.filter((cwd) => cwd !== root && cwd.startsWith(root)),
+        ).toEqual([])
+      } finally {
+        parent.cleanup()
+      }
+    }, 30_000)
+
+    test(
+      'the files of a nested repository count toward the shared file limit',
+      () =>
+        withParent(async (root) => {
+          addNestedRepository(root, 'inner-repo', {
+            files: { 'a.txt': 'a\n', 'b.txt': 'b\n' },
+          })
+          const limitFor = (maxFiles: number) =>
+            createOpencodeOperationObserver({
+              targetDirectory: root,
+              limits: { maxFiles },
+            }).snapshot()
+          // tracked.txt and `inner-repo/` in the parent, a.txt and b.txt inside.
+          await expect(limitFor(4)).resolves.toMatchObject({
+            status: 'available',
+          })
+          await expect(limitFor(3)).resolves.toEqual({
+            status: 'unavailable',
+            reasonCode: 'file-limit',
+          })
+        }),
+      30_000,
+    )
+
+    test(
+      'an ignored nested repository stays outside the digest',
+      () =>
+        withParent(async (root) => {
+          // Control: ignored content is not observed.
+          fs.appendFileSync(infoExcludePath(root), 'hidden-repo/\n')
+          const baseline = await stateOf(root)
+          const nested = addNestedRepository(root, 'hidden-repo')
+          expect(await stateOf(root)).toEqual(baseline)
+          fs.writeFileSync(path.join(nested, 'inner.txt'), EDITED)
+          expect(await stateOf(root)).toEqual(baseline)
+        }),
+      30_000,
+    )
+
+    test(
+      'untracked files in a plain directory are read as before',
+      () =>
+        withParent(async (root) => {
+          // Control: a directory without a repository lists its files, not itself.
+          const baseline = await stateOf(root)
+          fs.mkdirSync(path.join(root, 'plain'))
+          const file = path.join(root, 'plain', 'note.txt')
+          fs.writeFileSync(file, 'one\n')
+          const first = await stateOf(root)
+          expect(first.digest).not.toBe(baseline.digest)
+          expect(first.closed).toBe(false)
+          fs.writeFileSync(file, 'two\n')
+          expect((await stateOf(root)).digest).not.toBe(first.digest)
+          expect(
+            recordFor(readWorktreeRecords(root), 'plain/note.txt')?.kind,
+          ).toBe('regular')
+        }),
+      30_000,
+    )
+
+    test(
+      'an invalid info/exclude inside a nested repository is file-read-failed',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          // Control: the repository is readable until its exclude file is broken.
+          await expect(
+            createOpencodeOperationObserver({
+              targetDirectory: root,
+            }).snapshot(),
+          ).resolves.toMatchObject({ status: 'available' })
+          const exclude = path.join(
+            fs.realpathSync(
+              gitOutput(nested, ['rev-parse', '--absolute-git-dir']),
+            ),
+            'info',
+            'exclude',
+          )
+          fs.rmSync(exclude, { force: true })
+          fs.mkdirSync(exclude)
+          await expect(
+            createOpencodeOperationObserver({
+              targetDirectory: root,
+            }).snapshot(),
+          ).resolves.toEqual({
+            status: 'unavailable',
+            reasonCode: 'file-read-failed',
+          })
+        }),
+      30_000,
+    )
+
+    test(
+      'non-UTF-8 output from git inside a nested repository is file-read-failed',
+      () =>
+        withParent(async (root) => {
+          addNestedRepository(root, 'inner-repo')
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+          })
+          await withGitShim(
+            `case "$(pwd)" in */inner-repo) for a in "$@"; do if [ "$a" = "--others" ]; then printf 'b\\377\\000'; exit 0; fi; done;; esac`,
+            async () => {
+              await expect(observer.snapshot()).resolves.toEqual({
+                status: 'unavailable',
+                reasonCode: 'file-read-failed',
+              })
+            },
+          )
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository that loses its .git between the listing and the read is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          let stripped = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            commandRunner: interceptingRunner((args) => {
+              // Git listed `inner-repo/` because it held a `.git`; the directory
+              // stays populated, so only the checkout is gone.
+              if (args.includes('--others') && !stripped) {
+                stripped = true
+                fs.rmSync(path.join(nested, '.git'), {
+                  recursive: true,
+                  force: true,
+                })
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(stripped).toBe(true)
+          expect(fs.existsSync(path.join(nested, 'inner.txt'))).toBe(true)
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository that vanishes between the first pass and the final pass is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          let contentRead = false
+          let removed = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            fileReader: (filePath) => {
+              const content = fs.readFileSync(filePath)
+              if (filePath.endsWith(path.join('inner-repo', 'inner.txt'))) {
+                contentRead = true
+              }
+              return content
+            },
+            commandRunner: interceptingRunner(() => {
+              if (contentRead && !removed) {
+                removed = true
+                fs.rmSync(nested, { recursive: true, force: true })
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(removed).toBe(true)
+        }),
+      30_000,
+    )
+
+    test(
+      'the HEAD of a nested repository moving between the first pass and the final pass is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          let contentRead = false
+          let moved = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            fileReader: (filePath) => {
+              const content = fs.readFileSync(filePath)
+              if (filePath.endsWith(path.join('inner-repo', 'inner.txt'))) {
+                contentRead = true
+              }
+              return content
+            },
+            commandRunner: interceptingRunner(() => {
+              if (contentRead && !moved) {
+                moved = true
+                commitEmptyInside(nested)
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(moved).toBe(true)
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository that appears between the first pass and the final pass is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          // Control: the changed untracked listing already gave this result.
+          let contentRead = false
+          let appeared = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            fileReader: (filePath) => {
+              const content = fs.readFileSync(filePath)
+              if (filePath.endsWith('tracked.txt')) contentRead = true
+              return content
+            },
+            commandRunner: interceptingRunner(() => {
+              if (contentRead && !appeared) {
+                appeared = true
+                addNestedRepository(root, 'inner-repo')
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(appeared).toBe(true)
+        }),
+      30_000,
+    )
+  })
 })
 
 type RevisionFixtureKind = 'branch' | 'detached' | 'unborn'
@@ -4218,33 +5733,34 @@ describe('OpenCode operation observer gitlink final pass', () => {
       gitOutput(submodule, ['config', 'user.email', 'observer@example.invalid'])
       gitOutput(submodule, ['config', 'user.name', 'Observer Test'])
 
-      // The first `config` read is the first pass; the second is the first
-      // command of the final pass.
-      let configReads = 0
+      // The commit lands at the first stat of the submodule's directory after
+      // its `.git` was read, which is the final pass looking at it again.
+      let gitlinkRead = false
+      let moved = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        commandRunner: interceptingRunner((args, _result, cwd) => {
-          if (
-            cwd === fs.realpathSync(fixture.root) &&
-            args.includes('config')
+        statReader: (filePath) => {
+          if (filePath === path.join(fs.realpathSync(submodule), '.git')) {
+            gitlinkRead = true
+          } else if (
+            gitlinkRead &&
+            !moved &&
+            filePath === fs.realpathSync(submodule)
           ) {
-            configReads += 1
-            if (configReads === 2) {
-              gitOutput(submodule, [
-                'commit',
-                '--quiet',
-                '--allow-empty',
-                '-m',
-                'moved',
-              ])
-            }
+            moved = true
+            gitOutput(submodule, [
+              'commit',
+              '--quiet',
+              '--allow-empty',
+              '-m',
+              'moved',
+            ])
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
-      configReads = 0
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
-      expect(configReads).toBe(2)
+      expect(moved).toBe(true)
     } finally {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
@@ -4257,25 +5773,25 @@ describe('OpenCode operation observer gitlink final pass', () => {
       setExcludesFile(fixture.root, null)
       stageGitlinks(fixture.root, ['sub'])
       fs.mkdirSync(path.join(fixture.root, 'sub'))
-      let configReads = 0
+      const submodule = path.join(fs.realpathSync(fixture.root), 'sub')
+      // It is populated at the first stat of the directory after its `.git`
+      // was looked for, which is the final pass looking at it again.
+      let gitlinkRead = false
+      let populated = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        commandRunner: interceptingRunner((args, _result, cwd) => {
-          if (
-            cwd === fs.realpathSync(fixture.root) &&
-            args.includes('config')
-          ) {
-            configReads += 1
-            if (configReads === 2) {
-              fs.writeFileSync(path.join(fixture.root, 'sub', 'late.txt'), 'x')
-            }
+        statReader: (filePath) => {
+          if (filePath === path.join(submodule, '.git')) gitlinkRead = true
+          else if (gitlinkRead && !populated && filePath === submodule) {
+            populated = true
+            fs.writeFileSync(path.join(submodule, 'late.txt'), 'x')
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
-      configReads = 0
       const result = await observer.snapshot()
       expect(result.status).toBe('unavailable')
+      expect(populated).toBe(true)
     } finally {
       fixture.cleanup()
     }
@@ -4805,22 +6321,24 @@ describe('OpenCode operation observer submodule converted to ordinary files', ()
       setExcludesFile(fixture.root, null)
       stageGitlinks(fixture.root, ['sub'])
       fs.mkdirSync(path.join(fixture.root, 'sub'))
-      const root = fs.realpathSync(fixture.root)
-      // The second `config` read is the first command of the final pass.
-      let configReads = 0
+      const submodule = path.join(fs.realpathSync(fixture.root), 'sub')
+      // It is removed at the first stat of the directory after its `.git` was
+      // looked for, which is the final pass looking at it again.
+      let gitlinkRead = false
+      let removed = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        commandRunner: interceptingRunner((args, _result, cwd) => {
-          if (cwd === root && args.includes('config')) {
-            configReads += 1
-            if (configReads === 2) fs.rmdirSync(path.join(root, 'sub'))
+        statReader: (filePath) => {
+          if (filePath === path.join(submodule, '.git')) gitlinkRead = true
+          else if (gitlinkRead && !removed && filePath === submodule) {
+            removed = true
+            fs.rmdirSync(submodule)
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
-      configReads = 0
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
-      expect(configReads).toBe(2)
+      expect(removed).toBe(true)
     } finally {
       fixture.cleanup()
     }

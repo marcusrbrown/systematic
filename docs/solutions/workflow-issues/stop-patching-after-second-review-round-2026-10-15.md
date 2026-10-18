@@ -21,7 +21,7 @@ Three plan reviews in this repository followed the same arc. A real bug got a fi
 
 - **#1005, remote seeding timeout.** The rewritten plan added compare-only readbacks, repository and push-URL pins, and absence proofs. Round 2 found that compare-only readbacks had no defined drift outcome, pins had no way to reach the observer, and completion readbacks still wrote baselines. The scope was cut to per-operation deferral plus binding from the operation's own before-read, which shipped in #1082. The remote-evidence design went to #1081.
 - **#1095, snapshot budget.** A git-index identity was rejected because reviewers reproduced a forged index and a clean filter. Its replacement used chunked reads with a time ceiling. Reviewers found that chunked reads raced writers, and the ceiling did not cover per-entry git spawns. The change shipped as raised caps plus recorded causes, and read-race hardening moved to #1099.
-- **#1099, observer false-cleans.** The round-1 fixes compared against baselines captured when the observer starts. Round 2 defeated each one, because that state is agent-writable before capture and is reset by a restart. #1129 shipped only the fixes that need no captured baseline, and the rest became design issue #1126.
+- **#1099, observer false-cleans.** The round-1 fixes compared against baselines captured when the observer starts. Round 2 defeated each one, because that state is agent-writable before capture and is reset by a restart. #1129 shipped only the fixes that need no captured baseline, and the rest became design issue #1126. That issue is resolved: it shipped by observing the contents of submodules and nested repositories, and the anchor ideas are documented as limits, because a shell running as the same user can write any location an anchor could use.
 
 In #1099 the shared cause was state the agent can write, captured as a trusted baseline. In #1005 it was a new readback path with undefined drift semantics. Each time, a third patch round would have added another mechanism of the same family.
 
@@ -65,7 +65,7 @@ This does not apply to first-round findings, to independent findings in unchange
 
 ## Examples
 
-**#1099.** The second-round findings all traced back to baselines captured from agent-writable state. The shipped subset needs none; it is described in [the observer false-clean fix](../logic-errors/operation-observer-false-clean-worktree-2026-10-15.md). #1126 received both rounds' reproductions, and ARCHITECTURE.md's "Local observer snapshot" paragraph links it.
+**#1099.** The second-round findings all traced back to baselines captured from agent-writable state. The shipped subset needs none; it is described in [the observer false-clean fix](../logic-errors/operation-observer-false-clean-worktree-2026-10-15.md). #1126 received both rounds' reproductions, and ARCHITECTURE.md's "Local observer snapshot" paragraph links it. It later shipped the submodule-contents observation and recorded the anchor cases as documented limits.
 
 **#1005.** The deterministic subset was:
 

@@ -57,7 +57,7 @@ const STRICT_UTF8_DECODER = new TextDecoder('utf-8', {
 
 // The domain tag versions the worktree identity. v3 adds the ignore sources and
 // the HEAD-tree path set.
-const WORKTREE_DIGEST_DOMAIN = 'systematic:opencode-observer:worktree:v3\0'
+const WORKTREE_DIGEST_DOMAIN = 'systematic:opencode-observer:worktree:v4\0'
 
 // Self-ignored untracked `.gitignore` files never appear in the plain untracked
 // listing, yet they change what is hidden, so they are discovered separately.
@@ -300,11 +300,18 @@ export interface WorktreeRecord {
 }
 
 /**
- * The bytes read so far across the whole snapshot. The file and gitlink counts
- * are enforced up front against the path set, so only bytes need tracking.
+ * What one `snapshot()` has spent so far, shared by reference by everything
+ * that reads for it. The file and gitlink counts are enforced up front against
+ * a repository's path set; the bytes are spent as the files are read.
  */
-interface SnapshotBudget {
+interface WalkState {
   bytes: number
+  files: number
+  gitlinks: number
+}
+
+function createWalkState(): WalkState {
+  return { bytes: 0, files: 0, gitlinks: 0 }
 }
 
 type RegularReadOutcome =
@@ -334,6 +341,16 @@ interface PathObservation {
    * the directory is still the stable state the final pass must accept.
    */
   readonly displacedByDirectory?: true
+  /**
+   * What a gitlink held when it was hashed. The record carries only the
+   * commit, which an uninitialized and an unborn checkout both lack.
+   */
+  readonly gitlinkState?: GitlinkState
+  /**
+   * The checkout read for a gitlink that has one. Its own final pass replaces
+   * the parent's re-inspection of the gitlink.
+   */
+  readonly walked?: RepositorySnapshot
 }
 
 interface WorktreeReaders {
@@ -368,6 +385,8 @@ type RepositoryAnchorResult =
       insideWorkTree: boolean
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+type RepositoryAnchor = Extract<RepositoryAnchorResult, { status: 'ok' }>
 
 type ParentIdentityCaptureResult =
   | { status: 'ok'; identity: RegisteredWorktreeParentIdentity }
@@ -1033,6 +1052,8 @@ function observed(
   record: WorktreeRecord,
   stat: OperationObserverFileStat | undefined,
   displacedByDirectory = false,
+  gitlinkState?: GitlinkState,
+  walked?: RepositorySnapshot,
 ): ObservationResult {
   return {
     status: 'ok',
@@ -1041,6 +1062,8 @@ function observed(
       record,
       stat,
       ...(displacedByDirectory ? { displacedByDirectory: true as const } : {}),
+      ...(gitlinkState ? { gitlinkState } : {}),
+      ...(walked ? { walked } : {}),
     },
   }
 }
@@ -1227,8 +1250,17 @@ function adaptInjectedFileReader(
   }
 }
 
+/**
+ * What a gitlink path holds on disk: nothing checked out (`uninitialized`), a
+ * checkout with no commit yet (`unborn`), or a checkout at a commit.
+ *
+ * @internal Exported for tests only.
+ */
+export type GitlinkState = 'uninitialized' | 'unborn' | 'initialized'
+
 type GitlinkInspection =
-  | { status: 'initialized'; id: string }
+  | { status: 'initialized'; id: string; anchor: RepositoryAnchor }
+  | { status: 'unborn'; anchor: RepositoryAnchor }
   | { status: 'uninitialized' }
   /** Nothing on disk at the path, as after a submodule is removed. */
   | { status: 'absent' }
@@ -1259,39 +1291,35 @@ function directoryEmptiness(
 }
 
 /**
- * Reads the submodule's own toplevel and `HEAD` in one call. The toplevel must
- * be the submodule path itself: a bare or empty `.git` makes git walk up and
- * answer with the parent, which would otherwise hash the parent's `HEAD`.
+ * Reads the submodule's anchor in one call. The toplevel must be the submodule
+ * path itself: a bare or empty `.git` makes git walk up and answer with the
+ * parent, which would otherwise hash the parent's `HEAD`. A checkout with no
+ * commit is `unborn`, not a failure.
  */
-function readInitializedGitlink(
+function readCheckedOutGitlink(
   readers: WorktreeReaders,
   absolutePath: string,
   limits: Limits,
 ): GitlinkInspection {
-  const result = runCommand(
+  const anchor = readRepositoryAnchor(
     readers.runner,
-    ['rev-parse', '--show-toplevel', '--verify', '-q', 'HEAD'],
     absolutePath,
     limits,
+    readers.realPath,
   )
-  if (result.status === 'error') return result
-  const lines = result.output.stdout.split('\n')
-  if (lines.at(-1) === '') lines.pop()
-  const [toplevel, id] = lines
-  if (
-    lines.length !== 2 ||
-    toplevel === undefined ||
-    id === undefined ||
-    !GIT_OBJECT_ID.test(id) ||
-    !path.isAbsolute(toplevel)
-  ) {
-    return { status: 'error', reasonCode: 'file-read-failed' }
+  if (anchor.status === 'error') {
+    // Output that does not parse is a malformed checkout here, as it always was.
+    return anchor.reasonCode === 'target-unavailable'
+      ? { status: 'error', reasonCode: 'file-read-failed' }
+      : anchor
   }
   const submodule = canonicalPath(absolutePath, readers.realPath)
-  const reported = canonicalPath(toplevel, readers.realPath)
-  return submodule !== undefined && submodule === reported
-    ? { status: 'initialized', id: id.toLowerCase() }
-    : { status: 'error', reasonCode: 'file-read-failed' }
+  if (submodule === undefined || submodule !== anchor.toplevel) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  return anchor.head === undefined
+    ? { status: 'unborn', anchor }
+    : { status: 'initialized', id: anchor.head, anchor }
 }
 
 function inspectGitlink(
@@ -1329,7 +1357,7 @@ function inspectGitlink(
         return { status: 'error', reasonCode: 'file-read-failed' }
     }
   }
-  return readInitializedGitlink(readers, absolutePath, limits)
+  return readCheckedOutGitlink(readers, absolutePath, limits)
 }
 
 function appendSubmoduleFact(
@@ -1338,22 +1366,148 @@ function appendSubmoduleFact(
   absolutePath: string,
   relativePath: string,
   limits: Limits,
+  walk: WalkState,
 ): ObservationResult {
   const inspected = inspectGitlink(readers, absolutePath, limits)
   if (inspected.status === 'error') return inspected
   if (inspected.status === 'absent') {
     return missingObservation(absolutePath, relativePath)
   }
+  // A checkout is read like the parent: its files are part of the digest.
+  const walked =
+    inspected.status === 'uninitialized'
+      ? undefined
+      : readCheckoutFirstPass(readers, absolutePath, inspected, limits, walk)
+  if (walked?.status === 'error') return walked
   const id = inspected.status === 'initialized' ? inspected.id : undefined
   hash.update('gitlink')
   hashField(hash, relativePath)
-  // `uninitialized` is not hex, so it can never collide with a revision.
-  hashField(hash, id ?? 'uninitialized')
+  hashField(hash, gitlinkIdentity(inspected))
+  // The checkout's digest is folded in at the gitlink's own sorted position.
+  if (walked) hashField(hash, walked.digest)
   return observed(
     absolutePath,
     { path: relativePath, kind: 'gitlink', mode: '160000', id },
     undefined,
+    false,
+    inspected.status,
+    walked,
   )
+}
+
+/**
+ * An untracked nested repository, which git lists as `name/`. It is read like
+ * a checked-out submodule and folded in at its own sorted position under its
+ * own label. It has no entry in `HEAD`, so its record never matches one: a
+ * nested repository, clean or dirty, keeps the repository from being closed.
+ */
+function appendNestedRepositoryFact(
+  hash: ReturnType<typeof createHash>,
+  readers: WorktreeReaders,
+  absolutePath: string,
+  relativePath: string,
+  limits: Limits,
+  walk: WalkState,
+): ObservationResult {
+  const inspected = inspectGitlink(readers, absolutePath, limits)
+  // Git listed it as a repository a moment ago, because it held a `.git`. So
+  // one that is gone, that no longer holds a checkout, or whose directory is
+  // populated but has lost its `.git`, changed underneath the snapshot.
+  if (
+    inspected.status === 'absent' ||
+    inspected.status === 'uninitialized' ||
+    (inspected.status === 'error' &&
+      inspected.reasonCode === 'file-read-failed')
+  ) {
+    return { status: 'error', reasonCode: 'worktree-unstable' }
+  }
+  if (inspected.status === 'error') return inspected
+  const walked = readCheckoutFirstPass(
+    readers,
+    absolutePath,
+    inspected,
+    limits,
+    walk,
+  )
+  if (walked.status === 'error') return walked
+  hash.update('nested')
+  hashField(hash, relativePath)
+  hashField(hash, gitlinkIdentity(inspected))
+  hashField(hash, walked.digest)
+  return observed(
+    absolutePath,
+    {
+      path: relativePath,
+      kind: 'gitlink',
+      mode: '160000',
+      id: inspected.status === 'initialized' ? inspected.id : undefined,
+    },
+    undefined,
+    false,
+    undefined,
+    walked,
+  )
+}
+
+/** Git lists an untracked nested repository with a trailing slash, and nothing else. */
+function isNestedRepositoryEntry(relativePath: string): boolean {
+  return relativePath.endsWith('/')
+}
+
+/**
+ * The first pass over a checkout, from the anchor already taken. Its digest is
+ * unverified until `runFinalPass` has run on the returned `pass`; for a
+ * checkout that happens when its parent's final pass reaches it.
+ */
+function readCheckoutFirstPass(
+  readers: WorktreeReaders,
+  absolutePath: string,
+  checkout: Extract<GitlinkInspection, { status: 'initialized' | 'unborn' }>,
+  limits: Limits,
+  walk: WalkState,
+): RepositorySnapshotResult {
+  return readRepositoryFirstPass(
+    readers,
+    contextFromAnchor(absolutePath, checkout.anchor),
+    checkout.anchor.head,
+    limits,
+    walk,
+  )
+}
+
+/**
+ * A repository's own root, command directory and `info/exclude`, with its pin
+ * taken from `anchor`. The observer's root keeps the pin captured at
+ * construction instead, so `snapshot()` overrides `pin`.
+ */
+function contextFromAnchor(
+  commandDirectory: string,
+  anchor: RepositoryAnchor,
+): RepositoryContext {
+  return {
+    commandDirectory,
+    worktreeRoot: anchor.toplevel,
+    infoExcludePath: anchor.infoExcludePath,
+    pin: {
+      targetRoot: anchor.toplevel,
+      gitDir: anchor.gitDir,
+      commonDir: anchor.commonDir,
+    },
+  }
+}
+
+/**
+ * What a gitlink contributes to the digest: its commit when it has one, else
+ * its state. Neither state name is hex, so none can collide with a revision,
+ * and an unborn checkout digests differently from an absent one.
+ */
+function gitlinkIdentity(
+  inspected: Extract<
+    GitlinkInspection,
+    { status: 'initialized' | 'unborn' | 'uninitialized' }
+  >,
+): string {
+  return inspected.status === 'initialized' ? inspected.id : inspected.status
 }
 
 function appendSymlinkFact(
@@ -1363,7 +1517,7 @@ function appendSymlinkFact(
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
-  budget: SnapshotBudget,
+  walk: WalkState,
   format: ObjectFormat,
   tracked: boolean,
 ): ObservationResult {
@@ -1375,7 +1529,7 @@ function appendSymlinkFact(
       ? vanishedPath(tracked, absolutePath, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
-  const nextBytes = budget.bytes + target.byteLength
+  const nextBytes = walk.bytes + target.byteLength
   if (
     target.byteLength > limits.maxPathBytes ||
     nextBytes > limits.maxTotalFileBytes
@@ -1385,7 +1539,7 @@ function appendSymlinkFact(
   hash.update('symlink')
   hashField(hash, relativePath)
   hashField(hash, target)
-  budget.bytes = nextBytes
+  walk.bytes = nextBytes
   return observed(
     absolutePath,
     {
@@ -1406,14 +1560,14 @@ function appendRegularFact(
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
-  budget: SnapshotBudget,
+  walk: WalkState,
   format: ObjectFormat,
   tracked: boolean,
 ): ObservationResult {
   if (!stat.isFile || !Number.isSafeInteger(stat.size) || stat.size < 0) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
-  const remaining = limits.maxTotalFileBytes - budget.bytes
+  const remaining = limits.maxTotalFileBytes - walk.bytes
   if (stat.size > remaining) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
@@ -1429,7 +1583,7 @@ function appendRegularFact(
   hashField(hash, relativePath)
   hashField(hash, (stat.mode & 0o111) !== 0 ? 'executable' : 'non-executable')
   hashField(hash, content)
-  budget.bytes += content.byteLength
+  walk.bytes += content.byteLength
   return observed(
     absolutePath,
     {
@@ -1521,7 +1675,7 @@ function appendPathFact(
   context: RepositoryContext,
   entry: PathEntry,
   limits: Limits,
-  budget: SnapshotBudget,
+  walk: WalkState,
   format: ObjectFormat,
   verifiedDirectories: Set<string>,
 ): ObservationResult {
@@ -1540,7 +1694,18 @@ function appendPathFact(
   if (entry.displacedGitlink) {
     return missingObservation(absolutePath, relativePath, true)
   }
-  // A gitlink inspects its own directory, so it is dispatched before the stat.
+  // A nested repository and a gitlink inspect their own directory, so they are
+  // dispatched before the stat.
+  if (isNestedRepositoryEntry(relativePath)) {
+    return appendNestedRepositoryFact(
+      hash,
+      readers,
+      absolutePath,
+      relativePath,
+      limits,
+      walk,
+    )
+  }
   if (mode === '160000') {
     return appendSubmoduleFact(
       hash,
@@ -1548,6 +1713,7 @@ function appendPathFact(
       absolutePath,
       relativePath,
       limits,
+      walk,
     )
   }
   let stat: OperationObserverFileStat
@@ -1574,7 +1740,7 @@ function appendPathFact(
         relativePath,
         stat,
         limits,
-        budget,
+        walk,
         format,
         tracked,
       )
@@ -1585,7 +1751,7 @@ function appendPathFact(
         relativePath,
         stat,
         limits,
-        budget,
+        walk,
         format,
         tracked,
       )
@@ -1649,6 +1815,12 @@ const UNSTABLE: StabilityResult = {
   reasonCode: 'worktree-unstable',
 }
 
+/** The observer was bound to a root that has since moved. */
+const ROOT_MOVED: StabilityResult = {
+  status: 'error',
+  reasonCode: 'target-unavailable',
+}
+
 /**
  * A gitlink is re-inspected rather than re-stat'd: its directory times churn
  * with submodule activity, but its state and `HEAD` id are what was hashed.
@@ -1656,18 +1828,56 @@ const UNSTABLE: StabilityResult = {
 function verifyGitlinkUnchanged(
   readers: WorktreeReaders,
   limits: Limits,
-  { absolutePath, record }: PathObservation,
+  { absolutePath, record, gitlinkState, walked }: PathObservation,
 ): StabilityResult {
+  if (walked)
+    return verifyCheckoutUnchanged(readers, limits, absolutePath, walked)
   const fresh = inspectGitlink(readers, absolutePath, limits)
   if (fresh.status === 'error') {
     // The first read of this directory succeeded, so a read failure now means
     // the directory changed underneath the snapshot.
     return fresh.reasonCode === 'file-read-failed' ? UNSTABLE : fresh
   }
-  // A gitlink that vanished is not the checkout that was hashed.
-  if (fresh.status === 'absent') return UNSTABLE
+  // A gitlink that vanished is not the checkout that was hashed, and neither
+  // is one that changed state: a checkout appearing or going away, or a first
+  // commit landing, moved underneath the snapshot.
+  if (fresh.status === 'absent' || fresh.status !== gitlinkState) {
+    return UNSTABLE
+  }
   const id = fresh.status === 'initialized' ? fresh.id : undefined
   return id === record.id ? { status: 'ok' } : UNSTABLE
+}
+
+/**
+ * A walked checkout is verified the way the parent is: its own final pass,
+ * including a comparison of its whole anchor, any difference in which is
+ * `worktree-unstable`. The directory and its `.git` are stat'd first, because
+ * git run in a directory that is gone would fail for the wrong reason.
+ */
+function verifyCheckoutUnchanged(
+  readers: WorktreeReaders,
+  limits: Limits,
+  absolutePath: string,
+  walked: RepositorySnapshot,
+): StabilityResult {
+  for (const target of [absolutePath, path.join(absolutePath, '.git')]) {
+    try {
+      readers.statReader(target)
+    } catch (error) {
+      return hasErrorCode(error, 'ENOENT', 'ENOTDIR')
+        ? UNSTABLE
+        : { status: 'error', reasonCode: 'file-read-failed' }
+    }
+  }
+  const result = runFinalPass(readers, limits, walked.pass, false)
+  // Every step already succeeded in this checkout's first pass, so a git
+  // failure or an unreadable file now means it changed during the snapshot.
+  // The limits and a moved root keep their own results.
+  return result.status === 'error' &&
+    (result.reasonCode === 'command-failed' ||
+      result.reasonCode === 'file-read-failed')
+    ? UNSTABLE
+    : result
 }
 
 function verifyObservationUnchanged(
@@ -1734,6 +1944,9 @@ function verifyIgnoreSourcesUnchanged(
   limits: Limits,
   first: FirstPass,
 ): StabilityResult {
+  // Resolved again, not reused: git may now be using a different file, and
+  // the digest covers the bytes of whichever file it uses. A re-pointed config
+  // with no change to the file the first pass read still differs here.
   const fresh = readIgnoreSources(runner, context, limits)
   if (fresh.status === 'error') return fresh
   return sameIgnoreSources(first.ignoreSources, fresh.facts)
@@ -1747,13 +1960,16 @@ function verifyIgnoreSourcesUnchanged(
  * start redirected the git listings away from the files that were read, which
  * is the same condition `snapshot()` rejects up front, so it is reported the
  * same way (`target-unavailable`). A `HEAD` that moved is a transient change
- * (`worktree-unstable`).
+ * (`worktree-unstable`). A walked checkout was bound to nothing before its
+ * first pass, so for it a move of any part of the anchor is also
+ * `worktree-unstable`: `rootMoveIsFatal` is false.
  */
 function verifyAnchorUnchanged(
   readers: WorktreeReaders,
   context: RepositoryContext,
   limits: Limits,
   head: string | undefined,
+  rootMoveIsFatal: boolean,
 ): StabilityResult {
   const anchor = readRepositoryAnchor(
     readers.runner,
@@ -1768,7 +1984,7 @@ function verifyAnchorUnchanged(
     anchor.gitDir !== pin.gitDir ||
     anchor.commonDir !== pin.commonDir
   ) {
-    return { status: 'error', reasonCode: 'target-unavailable' }
+    return rootMoveIsFatal ? ROOT_MOVED : UNSTABLE
   }
   return anchor.head === head ? { status: 'ok' } : UNSTABLE
 }
@@ -1779,13 +1995,11 @@ function verifyAnchorUnchanged(
  */
 function runFinalPass(
   readers: WorktreeReaders,
-  context: RepositoryContext,
   limits: Limits,
-  head: string | undefined,
-  first: FirstPass,
-  observations: readonly PathObservation[],
-  verifiedDirectories: ReadonlySet<string>,
+  pass: RepositoryPass,
+  rootMoveIsFatal: boolean,
 ): StabilityResult {
+  const { context, head, first, observations, verifiedDirectories } = pass
   // Ignore sources first: a source swapped for a FIFO or a huge file must be
   // caught by our own bounded read before any git listing reads it.
   const sources = verifyIgnoreSourcesUnchanged(
@@ -1806,7 +2020,7 @@ function runFinalPass(
     first,
   )
   if (listings.status === 'error') return listings
-  return verifyAnchorUnchanged(readers, context, limits, head)
+  return verifyAnchorUnchanged(readers, context, limits, head, rootMoveIsFatal)
 }
 
 interface IgnoreSourceFact {
@@ -1926,6 +2140,8 @@ function readIgnoreSources(
     context.infoExcludePath,
   )
   if (infoExclude.status === 'error') return infoExclude
+  // Resolved after `info/exclude` is read, so a source git must not be asked
+  // to read is rejected before any git call is made.
   const configured = resolveExcludesFilePath(runner, context, limits)
   if (configured.status === 'error') return configured
   const global =
@@ -2116,20 +2332,45 @@ export function findDisplacedGitlinks(
   )
 }
 
-function readWorktreeSnapshot(
+/** What the final pass compares against, taken during one repository's first pass. */
+interface RepositoryPass {
+  readonly context: RepositoryContext
+  readonly head: string | undefined
+  readonly first: FirstPass
+  readonly observations: readonly PathObservation[]
+  readonly verifiedDirectories: ReadonlySet<string>
+}
+
+/** One repository's first pass: its digest, its records and what it must still prove. */
+interface RepositorySnapshot {
+  readonly digest: string
+  readonly records: readonly WorktreeRecord[]
+  /** The `HEAD` tree by path, for the commit closure. Empty when unborn. */
+  readonly headTree: ReadonlyMap<string, HeadTreeEntry>
+  /** What each observed gitlink held, for the commit closure. */
+  readonly gitlinkStates: ReadonlyMap<string, GitlinkState>
+  readonly pass: RepositoryPass
+}
+
+type RepositorySnapshotResult =
+  | ({ status: 'ok' } & RepositorySnapshot)
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
+/**
+ * The first pass over one repository, parent or checkout: ignore sources, the
+ * `HEAD` tree, the path set and a fact for every path. A gitlink with a
+ * checkout is read the same way from inside `appendPathFact`, sharing `walk`.
+ * The digest it returns is unverified until `runFinalPass` has run on its
+ * `pass`. That is the caller's: the root's runs in `readWorktreeSnapshot`, and a
+ * checkout's runs inside its parent's.
+ */
+function readRepositoryFirstPass(
   readers: WorktreeReaders,
   context: RepositoryContext,
   head: string | undefined,
   limits: Limits,
-):
-  | {
-      status: 'ok'
-      digest: string
-      records: readonly WorktreeRecord[]
-      /** The `HEAD` tree by path, for the commit closure. Empty when unborn. */
-      headTree: ReadonlyMap<string, HeadTreeEntry>
-    }
-  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  walk: WalkState,
+): RepositorySnapshotResult {
   const { runner } = readers
   // Ignore sources are read before any listing: git itself reads them while
   // listing, so a FIFO or a device must be rejected before that happens.
@@ -2147,9 +2388,11 @@ function readWorktreeSnapshot(
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
   const { paths } = listings
-  if (paths.length > limits.maxFiles) {
+  // Counted against everything this snapshot has read so far.
+  if (walk.files + paths.length > limits.maxFiles) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
+  walk.files += paths.length
   const modes = new Map(
     listings.stageEntries.map((entry) => [entry.relativePath, entry.mode]),
   )
@@ -2157,18 +2400,20 @@ function readWorktreeSnapshot(
     // Index first, then the HEAD tree; empty means not tracked at all.
     modes.get(relativePath) ?? tree.entries.get(relativePath)?.mode ?? ''
   const displacedGitlinks = findDisplacedGitlinks(paths, modes, tree.entries)
-  // Counted from the index and the HEAD tree before any submodule spawn. A
-  // displaced gitlink is never read, so it does not count.
-  if (
-    paths.filter(
-      (entry) => modeOf(entry) === '160000' && !displacedGitlinks.has(entry),
-    ).length > limits.maxGitlinks
-  ) {
+  // Counted from the index, the HEAD tree and the untracked listing before any
+  // checkout is read. A displaced gitlink is never read, so it does not count;
+  // a nested repository is read like a gitlink, so it does.
+  const gitlinkCount = paths.filter(
+    (entry) =>
+      isNestedRepositoryEntry(entry) ||
+      (modeOf(entry) === '160000' && !displacedGitlinks.has(entry)),
+  ).length
+  if (walk.gitlinks + gitlinkCount > limits.maxGitlinks) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
+  walk.gitlinks += gitlinkCount
   const hash = createHash('sha256')
   hash.update(WORKTREE_DIGEST_DOMAIN)
-  const budget: SnapshotBudget = { bytes: 0 }
   const observations: PathObservation[] = []
   const verifiedDirectories = new Set<string>()
   for (const relativePath of paths) {
@@ -2184,7 +2429,7 @@ function readWorktreeSnapshot(
           : {}),
       },
       limits,
-      budget,
+      walk,
       format,
       verifiedDirectories,
     )
@@ -2192,21 +2437,72 @@ function readWorktreeSnapshot(
     observations.push(result.observation)
   }
   for (const fact of sources.facts) hashIgnoreSource(hash, fact)
-  const stable = runFinalPass(
-    readers,
-    context,
-    limits,
-    head,
-    { ...listings.first, ignoreSources: sources.facts },
-    observations,
-    verifiedDirectories,
-  )
-  if (stable.status === 'error') return stable
   return {
     status: 'ok',
     digest: hash.digest('hex'),
     records: observations.map((observation) => observation.record),
     headTree: tree.entries,
+    gitlinkStates: new Map(
+      observations.flatMap(({ record, gitlinkState }) =>
+        gitlinkState ? [[record.path, gitlinkState] as const] : [],
+      ),
+    ),
+    pass: {
+      context,
+      head,
+      first: { ...listings.first, ignoreSources: sources.facts },
+      observations,
+      verifiedDirectories,
+    },
+  }
+}
+
+/**
+ * Closed means this repository equals its `HEAD` tree and so does every
+ * checkout it walked. A dirty checkout is not a failure: it is available, not
+ * closed, with a changed digest.
+ */
+function isRepositoryClosed(snapshot: RepositorySnapshot): boolean {
+  return (
+    deriveCommitClosure(
+      snapshot.records,
+      snapshot.headTree,
+      snapshot.pass.head,
+      snapshot.gitlinkStates,
+    ) &&
+    snapshot.pass.observations.every(
+      ({ walked }) => walked === undefined || isRepositoryClosed(walked),
+    )
+  )
+}
+
+function readWorktreeSnapshot(
+  readers: WorktreeReaders,
+  context: RepositoryContext,
+  head: string | undefined,
+  limits: Limits,
+  walk: WalkState,
+):
+  | {
+      status: 'ok'
+      digest: string
+      records: readonly WorktreeRecord[]
+      /** The `HEAD` tree by path. Empty when unborn. */
+      headTree: ReadonlyMap<string, HeadTreeEntry>
+      /** The parent and every walked checkout equal their `HEAD` trees. */
+      commitClosure: boolean
+    }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const snapshot = readRepositoryFirstPass(readers, context, head, limits, walk)
+  if (snapshot.status === 'error') return snapshot
+  const stable = runFinalPass(readers, limits, snapshot.pass, true)
+  if (stable.status === 'error') return stable
+  return {
+    status: 'ok',
+    digest: snapshot.digest,
+    records: snapshot.records,
+    headTree: snapshot.headTree,
+    commitClosure: isRepositoryClosed(snapshot),
   }
 }
 
@@ -2221,7 +2517,8 @@ function recordMatchesTreeEntry(
   record: WorktreeRecord,
   entry: HeadTreeEntry,
 ): boolean {
-  // An uninitialized gitlink and a `missing` path carry no id and never match.
+  // A `missing` path carries no id and never matches. An uninitialized gitlink
+  // has none either; `deriveCommitClosure` decides that case.
   return (
     record.id !== undefined &&
     record.id === entry.id &&
@@ -2238,19 +2535,32 @@ function recordMatchesTreeEntry(
  * has no tree to equal, so it is never closed. Only the records are compared,
  * so no git filter, replace ref or normalization can speak for the files, and
  * the index is not consulted.
+ *
+ * An untracked nested repository is an extra record: its path ends in a slash,
+ * which no `HEAD` entry does, so it is never closed, clean or dirty.
+ *
+ * Two gitlink states have no commit to compare. An uninitialized submodule is
+ * a clone that did not fetch it, so it matches the gitlink `HEAD` records. An
+ * unborn one holds a checkout with no commit, which `HEAD` cannot have
+ * recorded: its record has no id, so it matches nothing and is never closed.
  */
 function deriveCommitClosure(
   records: readonly WorktreeRecord[],
   headTree: ReadonlyMap<string, HeadTreeEntry>,
   head: string | undefined,
+  gitlinkStates: ReadonlyMap<string, GitlinkState>,
 ): boolean {
   if (head === undefined) return false
   let matched = 0
   for (const record of records) {
     const entry = headTree.get(record.path)
-    if (entry === undefined || !recordMatchesTreeEntry(record, entry)) {
-      return false
-    }
+    if (entry === undefined) return false
+    const state = gitlinkStates.get(record.path)
+    const matches =
+      state === 'uninitialized'
+        ? entry.mode === '160000'
+        : recordMatchesTreeEntry(record, entry)
+    if (!matches) return false
     matched += 1
   }
   // Records have unique paths, so this means every `HEAD` entry was observed.
@@ -2642,6 +2952,7 @@ export function readWorktreeRecords(
       digest: string
       records: readonly WorktreeRecord[]
       headTree: ReadonlyMap<string, HeadTreeEntry>
+      commitClosure: boolean
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const limits = mergeLimits(options.limits)
@@ -2653,18 +2964,10 @@ export function readWorktreeRecords(
   if (anchor.status === 'error') return anchor
   return readWorktreeSnapshot(
     resolveWorktreeReaders(runner, options),
-    {
-      commandDirectory: targetDirectory,
-      worktreeRoot: anchor.toplevel,
-      infoExcludePath: anchor.infoExcludePath,
-      pin: {
-        targetRoot: anchor.toplevel,
-        gitDir: anchor.gitDir,
-        commonDir: anchor.commonDir,
-      },
-    },
+    contextFromAnchor(targetDirectory, anchor),
     anchor.head,
     limits,
+    createWalkState(),
   )
 }
 
@@ -2734,9 +3037,7 @@ export function createOpencodeOperationObserver(
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
       const context: RepositoryContext = {
-        commandDirectory: targetDirectory,
-        worktreeRoot: anchor.toplevel,
-        infoExcludePath: anchor.infoExcludePath,
+        ...contextFromAnchor(targetDirectory, anchor),
         pin: rootPinResult.pin,
       }
       const repository = readRevision(
@@ -2752,6 +3053,7 @@ export function createOpencodeOperationObserver(
         context,
         anchor.head,
         limits,
+        createWalkState(),
       )
       if (worktree.status === 'error') return unavailable(worktree)
       return {
@@ -2760,11 +3062,7 @@ export function createOpencodeOperationObserver(
           targetDigest,
           repositoryRevisionDigest: repository.digest,
           worktreeRevisionDigest: worktree.digest,
-          commitClosure: deriveCommitClosure(
-            worktree.records,
-            worktree.headTree,
-            anchor.head,
-          ),
+          commitClosure: worktree.commitClosure,
         },
       }
     },
