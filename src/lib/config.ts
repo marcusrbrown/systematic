@@ -252,7 +252,7 @@ export const DEFAULT_CONFIG: SystematicConfig = {
     enabled: true,
   },
   workflow_guard: {
-    mode: 'observe',
+    mode: 'disabled',
     debug: false,
   },
   agents: {},

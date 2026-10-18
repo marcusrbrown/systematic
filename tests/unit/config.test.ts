@@ -63,11 +63,53 @@ describe('config', () => {
     return filePath
   }
 
+  /**
+   * An empty home and no custom config dir, so neither the developer's
+   * `~/.config/opencode` nor `OPENCODE_CONFIG_DIR` can set a mode that a
+   * default-asserting test would then read.
+   */
+  function hermeticLoad() {
+    return { homeDir: path.join(testDir, 'home'), customConfigDir: null }
+  }
+
   describe('loadConfig', () => {
     describe('no config files', () => {
       test('returns DEFAULT_CONFIG when no config files exist', () => {
         const result = loadConfig(testDir)
         expect(result).toEqual(DEFAULT_CONFIG)
+      })
+
+      test('resolves the workflow guard to disabled with no debug when nothing configures it', () => {
+        expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
+          mode: 'disabled',
+          debug: false,
+        })
+      })
+
+      test('keeps the workflow guard disabled when user config sets only debug', () => {
+        writeUserConfig({ workflow_guard: { debug: true } })
+        expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
+          mode: 'disabled',
+          debug: true,
+        })
+      })
+
+      test.each(['observe', 'protected'] as const)(
+        'a user-level %s workflow guard mode survives the merge',
+        (mode) => {
+          writeUserConfig({ workflow_guard: { mode } })
+          expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
+            mode,
+            debug: false,
+          })
+        },
+      )
+
+      test('rejects an invalid workflow guard mode in user config', () => {
+        writeUserConfig({ workflow_guard: { mode: 'enforced' } })
+        expect(() => loadConfig(testDir, hermeticLoad())).toThrow(
+          'workflow_guard',
+        )
       })
 
       test('returned config has empty disabled arrays', () => {
@@ -2151,9 +2193,9 @@ describe('config', () => {
       expect(DEFAULT_CONFIG.bootstrap.file).toBeUndefined()
     })
 
-    test('has workflow_guard observe mode and debug disabled by default', () => {
+    test('has workflow_guard disabled mode and debug disabled by default', () => {
       expect(DEFAULT_CONFIG.workflow_guard).toEqual({
-        mode: 'observe',
+        mode: 'disabled',
         debug: false,
       })
     })
@@ -2341,14 +2383,17 @@ describe('config', () => {
     })
 
     test('project workflow_guard is stripped by the trust boundary', () => {
+      // A payload that differs from the default in both fields, so a project
+      // config that got through would show.
       writeProjectConfig({
-        workflow_guard: { mode: 'disabled', debug: true },
+        workflow_guard: { mode: 'protected', debug: true },
       })
 
-      expect(() => loadConfig(testDir)).not.toThrow()
-      expect(loadConfig(testDir).workflow_guard).toEqual(
-        DEFAULT_CONFIG.workflow_guard,
-      )
+      expect(() => loadConfig(testDir, hermeticLoad())).not.toThrow()
+      expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
+        mode: 'disabled',
+        debug: false,
+      })
     })
 
     // `model` is a SECURITY_OVERLAY_FIELDS member: a project-trust source has

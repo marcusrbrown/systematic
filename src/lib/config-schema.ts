@@ -105,8 +105,9 @@ const workflowGuardModeSchema = z.enum([
 
 export const WorkflowGuardSchema = z
   .object({
-    mode: workflowGuardModeSchema.default('observe').meta({
-      description: 'Workflow guard mode',
+    mode: workflowGuardModeSchema.default('disabled').meta({
+      description:
+        'Workflow guard mode. The guard is off by default (`disabled`); set `observe` or `protected` to turn it on.',
       examples: ['observe', 'protected', 'disabled'],
     }),
     debug: z
@@ -118,9 +119,10 @@ export const WorkflowGuardSchema = z
       }),
   })
   .strict()
-  .default({ mode: 'observe', debug: false })
+  .default({ mode: 'disabled', debug: false })
   .meta({
-    description: 'Workflow guard configuration',
+    description:
+      'Workflow guard configuration. The guard is off by default; `mode: observe` or `mode: protected` turns it on.',
     examples: [{ mode: 'observe', debug: false }],
   })
 
