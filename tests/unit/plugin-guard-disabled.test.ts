@@ -27,12 +27,26 @@ interface PluginHooks {
   ) => Promise<void>
 }
 
+/** One host tool call as the host sequences it: before, execute, after. */
+interface ToolCall {
+  readonly title: string
+  readonly output: string
+  readonly metadata: Record<string, unknown>
+}
+
 interface Observed {
   readonly gitCalls: readonly string[]
   readonly messageReads: number
   readonly childReads: number
   readonly systemText: string
 }
+
+const WORKFLOW_TOOLS = [
+  'systematic_workflow_start',
+  'systematic_workflow_status',
+  'systematic_workflow_complete',
+  'systematic_workflow_control',
+] as const
 
 function run(cwd: string, args: readonly string[]): void {
   const result = Bun.spawnSync(['git', ...args], { cwd })
@@ -68,15 +82,21 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
   let priorConfigDir: string | undefined
   let priorPath: string | undefined
   let priorLog: string | undefined
+  let originalHomedir: () => string
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-guard-off-'))
     priorConfigDir = process.env.OPENCODE_CONFIG_DIR
     priorPath = process.env.PATH
     priorLog = process.env[SHIM_LOG_ENV]
+    // An empty home, so a user-level systematic.json on the machine cannot
+    // set the mode a default-asserting run reads.
+    originalHomedir = os.homedir
+    os.homedir = () => path.join(tempDir, 'home')
   })
 
   afterEach(() => {
+    os.homedir = originalHomedir
     if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
     else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
     if (priorPath === undefined) delete process.env.PATH
@@ -92,9 +112,12 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
    * workflow tools, the before and after hooks for bash, write and task, an
    * event, and the system transform.
    */
-  async function drive(
-    mode: 'disabled' | 'observe',
-  ): Promise<Observed & { readonly toolResults: Record<string, unknown> }> {
+  async function drive(mode: 'disabled' | 'observe'): Promise<
+    Observed & {
+      readonly toolResults: Record<string, ToolCall>
+      readonly completeReplay: ToolCall
+    }
+  > {
     const project = path.join(tempDir, 'project')
     fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
     run(project, ['init', '--quiet'])
@@ -141,20 +164,64 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
       directory: project,
     })
 
-    const toolResults: Record<string, unknown> = {}
-    for (const name of [
-      'systematic_workflow_start',
-      'systematic_workflow_status',
+    // One host tool call: before hook, the tool's own result, then the after
+    // hook over that result. `afterRuns` > 1 repeats the after hook, as a
+    // duplicate delivery would. Returns what the output held after each run.
+    const runTool = async (
+      name: (typeof WORKFLOW_TOOLS)[number],
+      args: Record<string, unknown>,
+      afterRuns = 1,
+    ): Promise<ToolCall[]> => {
+      const tool = hooks.tool[name]
+      if (!tool) throw new Error(`tool not registered: ${name}`)
+      const input = {
+        tool: name,
+        sessionID: SESSION,
+        callID: `guard-off-${name}`,
+      }
+      await hooks['tool.execute.before'](input, { args })
+      const result = (await tool.execute(args, toolContext())) as {
+        title?: string
+        output: string
+        metadata?: Record<string, unknown>
+      }
+      const call = {
+        title: result.title ?? '',
+        output: result.output,
+        metadata: { ...(result.metadata ?? {}) },
+      }
+      const afterEach: ToolCall[] = []
+      for (let run = 0; run < afterRuns; run++) {
+        await hooks['tool.execute.after']({ ...input, args }, call)
+        afterEach.push({ ...call, metadata: { ...call.metadata } })
+      }
+      return afterEach
+    }
+    for (const name of WORKFLOW_TOOLS) {
+      expect(hooks.tool[name]).toBeDefined()
+    }
+    const lastOf = (calls: readonly ToolCall[]): ToolCall => {
+      const last = calls.at(-1)
+      if (!last) throw new Error('no tool call recorded')
+      return last
+    }
+    const [completeFirst, completeReplay] = await runTool(
       'systematic_workflow_complete',
-      'systematic_workflow_control',
-    ]) {
-      const args =
-        name === 'systematic_workflow_complete'
-          ? { target: 'unit' }
-          : name === 'systematic_workflow_control'
-            ? { mode: 'disabled' }
-            : {}
-      toolResults[name] = await hooks.tool[name]?.execute(args, toolContext())
+      { target: 'unit' },
+      2,
+    )
+    if (!completeFirst || !completeReplay) throw new Error('no completion')
+    const toolResults: Record<string, ToolCall> = {
+      systematic_workflow_start: lastOf(
+        await runTool('systematic_workflow_start', {}),
+      ),
+      systematic_workflow_status: lastOf(
+        await runTool('systematic_workflow_status', {}),
+      ),
+      systematic_workflow_complete: completeFirst,
+      systematic_workflow_control: lastOf(
+        await runTool('systematic_workflow_control', { mode: 'disabled' }),
+      ),
     }
 
     const calls: Array<{ tool: string; args: object; output: object }> = [
@@ -204,6 +271,7 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
       childReads,
       systemText: output.system.join('\n'),
       toolResults,
+      completeReplay,
     }
   }
 
@@ -216,10 +284,39 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
     expect(observed.systemText).not.toContain(MARKER)
   })
 
+  test('a disabled plugin keeps the four workflow tools registered and answers each one terminally', async () => {
+    const { toolResults, completeReplay } = await drive('disabled')
+    const result = (name: (typeof WORKFLOW_TOOLS)[number]): ToolCall => {
+      const call = toolResults[name]
+      if (!call) throw new Error(`no result for ${name}`)
+      return call
+    }
+
+    expect(
+      JSON.parse(result('systematic_workflow_status').output),
+    ).toMatchObject({ state: 'disabled' })
+    expect(
+      result('systematic_workflow_start').metadata.workflowGuard,
+    ).toMatchObject({ status: 'rejected', reasonCode: 'disabled' })
+    expect(JSON.parse(result('systematic_workflow_complete').output)).toEqual({
+      status: 'rejected',
+      reasonCode: 'disabled',
+    })
+    // A duplicate after hook replays the same rejection.
+    expect(JSON.parse(completeReplay.output)).toEqual({
+      status: 'rejected',
+      reasonCode: 'disabled',
+    })
+    expect(JSON.parse(result('systematic_workflow_control').output)).toEqual({
+      status: 'disabled',
+    })
+  })
+
   test('control: an observe plugin does reach git, so the shim and counters are live', async () => {
     const observed = await drive('observe')
 
     expect(observed.gitCalls.length).toBeGreaterThan(0)
+    expect(observed.messageReads + observed.childReads).toBeGreaterThan(0)
   })
 })
 
@@ -235,13 +332,18 @@ describe('the workflow guard guidance in the OpenCode system prompt', () => {
 
   let tempDir: string
   let priorConfigDir: string | undefined
+  let originalHomedir: () => string
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-guidance-'))
     priorConfigDir = process.env.OPENCODE_CONFIG_DIR
+    // An empty home, so the default-mode cases cannot read a user config.
+    originalHomedir = os.homedir
+    os.homedir = () => path.join(tempDir, 'home')
   })
 
   afterEach(() => {
+    os.homedir = originalHomedir
     if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
     else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
     fs.rmSync(tempDir, { recursive: true, force: true })

@@ -143,25 +143,30 @@ const createHostReadback = ({
   }
 }
 
-// Builds the guard's options. A disabled guard gets no observer, no initial
-// snapshot, no host reader and no classifier, and a placeholder identity:
-// with those absent it has nothing to read, so it makes no git call and no
-// session read. The tools and hooks are still registered, and answer
-// `disabled`.
+// Builds the guard's options. `guardEnabled` is the one decision, made in
+// `initializePlugin`, that also gates the guard guidance. A disabled guard
+// gets no observer, no initial snapshot, no host reader and no classifier,
+// and a placeholder identity: with those absent it has nothing to read, so it
+// makes no git call and no session read. The tools and hooks are still
+// registered, and answer `disabled`.
 const workflowGuardOptions = async (
   { client, directory, worktree }: GuardInput,
   config: ReturnType<typeof loadConfig>,
+  guardEnabled: boolean,
 ): Promise<OpencodeWorkflowGuardOptions> => {
   const targetDirectory = typeof worktree === 'string' ? worktree : directory
-  if (config.workflow_guard.mode === 'disabled') {
+  const base = {
+    config: config.workflow_guard,
+    registrationIdentity: registrationSourceIdentity,
+    targetDirectory,
+    sessionLocation: directory,
+  }
+  if (!guardEnabled) {
     return {
-      config: config.workflow_guard,
+      ...base,
       workspaceIdentity: DISABLED_GUARD_IDENTITY,
       repositoryIdentity: DISABLED_GUARD_IDENTITY,
       worktreeIdentity: DISABLED_GUARD_IDENTITY,
-      registrationIdentity: registrationSourceIdentity,
-      targetDirectory,
-      sessionLocation: directory,
     }
   }
   const observer = createOpencodeOperationObserver({ targetDirectory })
@@ -183,13 +188,10 @@ const workflowGuardOptions = async (
           worktreeRevisionDigest: observer.targetDigest,
         }
   return {
-    config: config.workflow_guard,
+    ...base,
     workspaceIdentity: initialIdentities.targetDigest,
     repositoryIdentity: initialIdentities.repositoryRevisionDigest,
     worktreeIdentity: initialIdentities.worktreeRevisionDigest,
-    registrationIdentity: registrationSourceIdentity,
-    targetDirectory,
-    sessionLocation: directory,
     observer,
     classifier: createReceiptClassifier(),
     hostReadback: createHostReadback({ client, directory }),
@@ -217,6 +219,7 @@ const initializePlugin = async ({
   let userOutputLimitSet = false
   const skillOutputStore = createSkillOutputStore()
   const config = loadConfig(directory)
+  const guardEnabled = config.workflow_guard.mode !== 'disabled'
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
   // stable across requests. Custom bootstrap file edits take effect on restart.
   // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
@@ -224,7 +227,7 @@ const initializePlugin = async ({
     bundledSkillsDir,
     profileBlock: composeProfileBlock(
       readHarnessProfile(bundledSkillsDir, 'opencode'),
-      config.workflow_guard.mode !== 'disabled',
+      guardEnabled,
     ),
   })
 
@@ -235,7 +238,11 @@ const initializePlugin = async ({
     bundledCommandsDir,
   })
   const workflowGuard = createOpencodeWorkflowGuard(
-    await workflowGuardOptions({ client, directory, worktree }, config),
+    await workflowGuardOptions(
+      { client, directory, worktree },
+      config,
+      guardEnabled,
+    ),
   )
 
   const hooks: RegisteredPluginHooks = {
