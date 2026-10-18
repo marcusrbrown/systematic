@@ -145,11 +145,25 @@ function runTargetFixtureGit(
   readonly stdout: string
   readonly stderr: string
 } {
-  const result = Bun.spawnSync(['git', ...args], {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  )
+  const result = Bun.spawnSync(
+    [
+      'git',
+      '-c',
+      'user.name=Target Test',
+      '-c',
+      'user.email=target@example.invalid',
+      ...args,
+    ],
+    {
+      cwd,
+      env: { ...env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
   return {
     status: result.exitCode ?? -1,
     stdout: result.stdout.toString(),
@@ -173,8 +187,6 @@ function createTargetDerivationFixture(): TargetDerivationFixture {
     }
   }
   git(parentRoot, ['init', '--quiet'])
-  git(parentRoot, ['config', 'user.email', 'target@example.invalid'])
-  git(parentRoot, ['config', 'user.name', 'Target Test'])
   fs.writeFileSync(path.join(parentRoot, 'tracked.txt'), 'parent\n')
   fs.mkdirSync(path.join(parentRoot, 'nested'))
   git(parentRoot, ['add', '.'])
@@ -198,6 +210,66 @@ function createTargetDerivationFixture(): TargetDerivationFixture {
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
   }
 }
+
+describe('fixture Git isolation', () => {
+  test('ignores inherited repository and configuration routing', () => {
+    const fixture = createTargetDerivationFixture()
+    const configPath = path.join(fixture.unrelatedRoot, '.git', 'config')
+    const originalConfig = fs.readFileSync(configPath, 'utf8')
+    const inherited = {
+      GIT_DIR: path.join(fixture.unrelatedRoot, '.git'),
+      GIT_WORK_TREE: fixture.unrelatedRoot,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'user.name',
+      GIT_CONFIG_VALUE_0: 'Injected Identity',
+      GIT_CONFIG_GLOBAL: configPath,
+      GIT_AUTHOR_NAME: 'Injected Author',
+      GIT_AUTHOR_EMAIL: 'injected@example.invalid',
+      GIT_COMMITTER_NAME: 'Injected Committer',
+      GIT_COMMITTER_EMAIL: 'injected@example.invalid',
+    }
+    try {
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          'test',
+          import.meta.path,
+          '--test-name-pattern',
+          'supplies commit identity without persisting',
+        ],
+        {
+          env: { ...process.env, ...inherited },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(originalConfig)
+      expect(result.exitCode).toBe(0)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('supplies commit identity without persisting it in fixture config', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const config = fs.readFileSync(
+        path.join(fixture.parentRoot, '.git', 'config'),
+        'utf8',
+      )
+      expect(config).not.toContain('[user]')
+      expect(
+        runTargetFixtureGit(fixture.parentRoot, [
+          'log',
+          '-1',
+          '--format=%an <%ae>',
+        ]).stdout.trim(),
+      ).toBe('Target Test <target@example.invalid>')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+})
 
 function deriveWithFixture(
   fixture: TargetDerivationFixture,
@@ -12410,25 +12482,29 @@ describe('OpenCode workflow guard adapter', () => {
       await setup.adapter.hooks['tool.execute.before'](commitInput, {
         args: commitInput.args,
       })
-      const stageResult = Bun.spawnSync(['git', 'add', 'tracked.txt'], {
-        cwd: setup.targetRoot,
-      })
-      if (stageResult.exitCode !== 0) throw new Error('stage failed')
-      const commitResult = Bun.spawnSync(
-        ['git', 'commit', '-m', 'head drift baseline'],
-        { cwd: setup.targetRoot },
-      )
-      if (commitResult.exitCode !== 0) throw new Error('commit failed')
+      const stageResult = runTargetFixtureGit(setup.targetRoot, [
+        'add',
+        'tracked.txt',
+      ])
+      if (stageResult.status !== 0) throw new Error('stage failed')
+      const commitResult = runTargetFixtureGit(setup.targetRoot, [
+        'commit',
+        '-m',
+        'head drift baseline',
+      ])
+      if (commitResult.status !== 0) throw new Error('commit failed')
       await setup.adapter.hooks['tool.execute.after'](commitInput, {
         title: 'commit complete',
         output: 'committed',
         metadata: { exit: 0 },
       })
-      const emptyCommit = Bun.spawnSync(
-        ['git', 'commit', '--allow-empty', '-m', 'outside completion'],
-        { cwd: setup.targetRoot },
-      )
-      if (emptyCommit.exitCode !== 0) throw new Error('empty commit failed')
+      const emptyCommit = runTargetFixtureGit(setup.targetRoot, [
+        'commit',
+        '--allow-empty',
+        '-m',
+        'outside completion',
+      ])
+      if (emptyCommit.status !== 0) throw new Error('empty commit failed')
 
       const output = await completeUnit(setup.adapter, 'head-drift-completion')
 
@@ -16415,8 +16491,6 @@ async function createRealObserverRepository(
   const cleanup = () => fs.rmSync(root, { recursive: true, force: true })
   try {
     realRepositoryGit(root, ['init', '--quiet'])
-    realRepositoryGit(root, ['config', 'user.email', 'real@example.invalid'])
-    realRepositoryGit(root, ['config', 'user.name', 'Real Observer'])
     realRepositoryGit(root, [
       'config',
       'core.excludesFile',
