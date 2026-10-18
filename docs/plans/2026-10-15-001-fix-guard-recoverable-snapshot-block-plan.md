@@ -89,7 +89,7 @@ There is a second path to the same outcome. A finalize-time `stale-receipt` goes
 
 - `src/lib/opencode-workflow-guard.ts`:
   - `finishReadbackTimeout`, `finishRetryableReadback`, `abandonComplete(remember)`, `terminalCompletes` and `replayTerminalComplete` form the retryable completion pattern that R3 and R5 copy.
-  - `seedDeferralRecord` is cleared in `startFreshUnit` and surfaced through `statusForTool`. It is the per-unit runtime record pattern for R6. It is also the deferral that R8 reuses through `recordSeedDeferral`. `SeedDeferralReason` is `'command-timeout' | 'missing-resource'` today, `recordSeedDeferral` skips scopes that already have a baseline, and the record is cleared on every `started`, including a same-unit redeclaration.
+  - `seedDeferralRecord` is cleared in `startFreshUnit` and surfaced through `statusForTool`. It is the per-unit runtime record pattern for R6. It is also the deferral that R8 reuses through `recordSeedDeferral`. `SeedDeferralReason` is `'command-timeout' | 'missing-resource'` today, `recordSeedDeferral` skips scopes that already have a baseline (superseded by #1144: it now skips only declared resource scopes), and the record is cleared on every `started`, including a same-unit redeclaration.
   - `unitStartGeneration` and `isCurrentInitiator` are the existing monotonic generation, used for stale-clear protection.
   - `skippedOperations` and `takeOperationToFinish` keep the after-hook silent for skipped calls.
   - `readSnapshot` returns `ok`, `timeout` or `fatal` with the observer reason code. The local snapshot call sites classify blocking reasons directly. The pinned lookup goes through `validateRegisteredWorktree` and stays fatal.

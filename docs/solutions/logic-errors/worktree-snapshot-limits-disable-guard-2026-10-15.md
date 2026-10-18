@@ -80,7 +80,7 @@ function currentSnapshotBlock(): SnapshotBlockRecord | undefined {
 
 - **While blocked.** Every operation still runs, but skipped calls are not observed: the before-hook adds the call to `skippedOperations`, the after-hook stays silent, and no receipt is minted for that call. No tool call is refused; completion is rejected instead. A later clean snapshot of the effective target (a hook, a status refresh, completion, or a child-session rollup) mints normally and clears the block.
 - **Clearing.** A clean snapshot of the effective target clears the block. The clear applies a local-only readback first, so anything changed while blocked marks its receipts stale before completion.
-- **Seeding.** A blocking reason during remote seeding defers every remote scope that has no baseline as `snapshot-blocked`, through the existing seed-deferral record, and then sets the block. The baseline binds later from that operation's own clean before-read.
+- **Seeding.** A blocking reason during remote seeding defers every remote required operation the unit did not declare as a resource scope as `snapshot-blocked`, through the existing seed-deferral record, and then sets the block. The baseline binds later from that operation's own clean before-read. If a pull-request seed has propagated a baseline in the meantime, only that operation's own `available` before-read from the seed's observer and target clears the deferral, and the propagated baseline is not overwritten ([propagated pull-request baseline](./propagated-baseline-hid-seed-timeout-2026-10-17.md)).
 - **Completion.** A blocked readback, revision drift between completion snapshots, or a block found by a synchronous check just before finalize all return a retryable `rejected / snapshot-blocked`. The rejection has the same shape as the retryable `readback-timeout` rejection: the transition is abandoned and remembered, a terminal entry replays by call ID, and nothing is consumed. The output names the cause, so the agent can fix it even when status shows no block:
 
 ```json
@@ -105,7 +105,8 @@ markUnavailable(afterCause('transition-finalize-rejected', reasonCode))
   - unreadable inputs
   - a failure that is not a typed timeout: a throw, a target-digest mismatch, malformed output, and a classifier or parser failure
   - pinned-lookup failures
-  - remote-probe failures other than a typed timeout, which seals the one call, and a push whose upstream did not advance, which is sealed (see ARCHITECTURE.md)
+  - non-timeout remote-probe failures on the after-hook (a typed timeout seals the one call)
+  - a push whose upstream did not advance, unless both hooks classified it as a push and the after-read is `remote-not-advanced`, or `missing-resource` with a missing or timed-out before-read; then the call is sealed (see ARCHITECTURE.md)
   - a change of target identity or registration between completion snapshots
 - **Guidance.** The guidance in `skills/using-systematic/SKILL.md` gives the recovery order: read `blockReason` or `snapshotBlock.reasonCode`, fix the cause, call status, rerun stale or missing operations, then complete. It also says:
   - Check remote state before redoing a push or PR.
