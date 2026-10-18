@@ -4,6 +4,22 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.22.6](https://github.com/marcusrbrown/systematic/compare/v3.22.5...v3.22.6) (2026-10-18)
+
+### Bug Fixes
+
+* **guard:** fence core observations against redeclaration and keep seed timeouts visible ([#1144](https://github.com/marcusrbrown/systematic/issues/1144)) ([3e5667b](https://github.com/marcusrbrown/systematic/commit/3e5667b4a5521b4a7f0f9a86783cf4cd6ec64374))
+* **test:** isolate workflow guard fixture Git commands ([#1148](https://github.com/marcusrbrown/systematic/issues/1148)) ([95a761c](https://github.com/marcusrbrown/systematic/commit/95a761cc15d2a5338fac0a0500ead66d275c0590))
+
+### Documentation
+
+* **solutions:** record the declaration fence and the propagated-baseline seed rule ([#1146](https://github.com/marcusrbrown/systematic/issues/1146)) ([e70b070](https://github.com/marcusrbrown/systematic/commit/e70b070720c06868d5ad7cb90455c9d039faaa15))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.123.0 ([#1149](https://github.com/marcusrbrown/systematic/issues/1149)) ([c0cdb25](https://github.com/marcusrbrown/systematic/commit/c0cdb25ba6923707ab42dbcc9b3037fba5c69e3a))
+* **dev:** update dependency playwright to v1.64.1 ([#1141](https://github.com/marcusrbrown/systematic/issues/1141)) ([d1533e5](https://github.com/marcusrbrown/systematic/commit/d1533e56fd8fba54a836a28d59a63e7d4a0b802d))
+
 ## [3.22.5](https://github.com/marcusrbrown/systematic/compare/v3.22.4...v3.22.5) (2026-10-17)
 
 ### Bug Fixes
