@@ -1377,7 +1377,7 @@ function appendSubmoduleFact(
   const walked =
     inspected.status === 'uninitialized'
       ? undefined
-      : walkCheckout(readers, absolutePath, inspected, limits, walk)
+      : readCheckoutFirstPass(readers, absolutePath, inspected, limits, walk)
   if (walked?.status === 'error') return walked
   const id = inspected.status === 'initialized' ? inspected.id : undefined
   hash.update('gitlink')
@@ -1410,13 +1410,25 @@ function appendNestedRepositoryFact(
   walk: WalkState,
 ): ObservationResult {
   const inspected = inspectGitlink(readers, absolutePath, limits)
-  if (inspected.status === 'error') return inspected
-  // It was listed as a repository a moment ago, so one that is gone, or that
-  // no longer holds a checkout, changed underneath the snapshot.
-  if (inspected.status === 'absent' || inspected.status === 'uninitialized') {
+  // Git listed it as a repository a moment ago, because it held a `.git`. So
+  // one that is gone, that no longer holds a checkout, or whose directory is
+  // populated but has lost its `.git`, changed underneath the snapshot.
+  if (
+    inspected.status === 'absent' ||
+    inspected.status === 'uninitialized' ||
+    (inspected.status === 'error' &&
+      inspected.reasonCode === 'file-read-failed')
+  ) {
     return { status: 'error', reasonCode: 'worktree-unstable' }
   }
-  const walked = walkCheckout(readers, absolutePath, inspected, limits, walk)
+  if (inspected.status === 'error') return inspected
+  const walked = readCheckoutFirstPass(
+    readers,
+    absolutePath,
+    inspected,
+    limits,
+    walk,
+  )
   if (walked.status === 'error') return walked
   hash.update('nested')
   hashField(hash, relativePath)
@@ -1442,15 +1454,19 @@ function isNestedRepositoryEntry(relativePath: string): boolean {
   return relativePath.endsWith('/')
 }
 
-/** Reads a checkout the way the parent is read, from the anchor already taken. */
-function walkCheckout(
+/**
+ * The first pass over a checkout, from the anchor already taken. Its digest is
+ * unverified until `runFinalPass` has run on the returned `pass`; for a
+ * checkout that happens when its parent's final pass reaches it.
+ */
+function readCheckoutFirstPass(
   readers: WorktreeReaders,
   absolutePath: string,
   checkout: Extract<GitlinkInspection, { status: 'initialized' | 'unborn' }>,
   limits: Limits,
   walk: WalkState,
 ): RepositorySnapshotResult {
-  return readRepositorySnapshot(
+  return readRepositoryFirstPass(
     readers,
     contextFromAnchor(absolutePath, checkout.anchor),
     checkout.anchor.head,
@@ -1751,6 +1767,11 @@ interface RawListings {
 /** Everything the final pass compares against, taken during the first pass. */
 interface FirstPass extends RawListings {
   readonly ignoreSources: readonly IgnoreSourceFact[]
+  /**
+   * Where the first pass found `core.excludesFile`, or `undefined` when there
+   * is none. The final pass re-reads this path and does not ask git again.
+   */
+  readonly excludesFilePath: string | undefined
 }
 
 /** Lists the index, the untracked files and the self-ignored `.gitignore` files. */
@@ -1853,7 +1874,15 @@ function verifyCheckoutUnchanged(
         : { status: 'error', reasonCode: 'file-read-failed' }
     }
   }
-  return runFinalPass(readers, limits, walked.pass, false)
+  const result = runFinalPass(readers, limits, walked.pass, false)
+  // Every step already succeeded in this checkout's first pass, so a git
+  // failure or an unreadable file now means it changed during the snapshot.
+  // The limits and a moved root keep their own results.
+  return result.status === 'error' &&
+    (result.reasonCode === 'command-failed' ||
+      result.reasonCode === 'file-read-failed')
+    ? UNSTABLE
+    : result
 }
 
 function verifyObservationUnchanged(
@@ -1915,12 +1944,15 @@ function verifyListingsUnchanged(
 }
 
 function verifyIgnoreSourcesUnchanged(
-  runner: OperationObserverCommandRunner,
   context: RepositoryContext,
-  limits: Limits,
   first: FirstPass,
 ): StabilityResult {
-  const fresh = readIgnoreSources(runner, context, limits)
+  // The path the first pass resolved is re-read as it is: a re-pointed config
+  // shows in the relisting that follows, and an edit of the file shows here.
+  const fresh = readIgnoreSourcesFrom(context, () => ({
+    status: 'ok',
+    filePath: first.excludesFilePath,
+  }))
   if (fresh.status === 'error') return fresh
   return sameIgnoreSources(first.ignoreSources, fresh.facts)
     ? { status: 'ok' }
@@ -1975,12 +2007,7 @@ function runFinalPass(
   const { context, head, first, observations, verifiedDirectories } = pass
   // Ignore sources first: a source swapped for a FIFO or a huge file must be
   // caught by our own bounded read before any git listing reads it.
-  const sources = verifyIgnoreSourcesUnchanged(
-    readers.runner,
-    context,
-    limits,
-    first,
-  )
+  const sources = verifyIgnoreSourcesUnchanged(context, first)
   if (sources.status === 'error') return sources
   const ancestors = verifyAncestorsUnchanged(verifiedDirectories)
   if (ancestors.status === 'error') return ancestors
@@ -2105,15 +2132,35 @@ function readIgnoreSources(
   runner: OperationObserverCommandRunner,
   context: RepositoryContext,
   limits: Limits,
+) {
+  return readIgnoreSourcesFrom(context, () =>
+    resolveExcludesFilePath(runner, context, limits),
+  )
+}
+
+/**
+ * Reads `info/exclude`, then asks `resolvePath` where `core.excludesFile` is
+ * and reads that. The resolution comes second, so a source git must not be
+ * asked to read is rejected before any git call is made.
+ */
+function readIgnoreSourcesFrom(
+  context: RepositoryContext,
+  resolvePath: () =>
+    | { status: 'ok'; filePath: string | undefined }
+    | { status: 'error'; reasonCode: OperationObserverReasonCode },
 ):
-  | { status: 'ok'; facts: readonly IgnoreSourceFact[] }
+  | {
+      status: 'ok'
+      facts: readonly IgnoreSourceFact[]
+      excludesFilePath: string | undefined
+    }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const infoExclude = readIgnoreSourceFile(
     'info-exclude',
     context.infoExcludePath,
   )
   if (infoExclude.status === 'error') return infoExclude
-  const configured = resolveExcludesFilePath(runner, context, limits)
+  const configured = resolvePath()
   if (configured.status === 'error') return configured
   const global =
     configured.filePath === undefined
@@ -2123,7 +2170,11 @@ function readIgnoreSources(
         } as const)
       : readIgnoreSourceFile('core-excludes-file', configured.filePath)
   if (global.status === 'error') return global
-  return { status: 'ok', facts: [infoExclude.fact, global.fact] }
+  return {
+    status: 'ok',
+    facts: [infoExclude.fact, global.fact],
+    excludesFilePath: configured.filePath,
+  }
 }
 
 function hashIgnoreSource(
@@ -2331,9 +2382,11 @@ type RepositorySnapshotResult =
  * The first pass over one repository, parent or checkout: ignore sources, the
  * `HEAD` tree, the path set and a fact for every path. A gitlink with a
  * checkout is read the same way from inside `appendPathFact`, sharing `walk`.
- * The final pass is the caller's, so a checkout's runs inside its parent's.
+ * The digest it returns is unverified until `runFinalPass` has run on its
+ * `pass`. That is the caller's: the root's runs in `readWorktreeSnapshot`, and a
+ * checkout's runs inside its parent's.
  */
-function readRepositorySnapshot(
+function readRepositoryFirstPass(
   readers: WorktreeReaders,
   context: RepositoryContext,
   head: string | undefined,
@@ -2419,7 +2472,11 @@ function readRepositorySnapshot(
     pass: {
       context,
       head,
-      first: { ...listings.first, ignoreSources: sources.facts },
+      first: {
+        ...listings.first,
+        ignoreSources: sources.facts,
+        excludesFilePath: sources.excludesFilePath,
+      },
       observations,
       verifiedDirectories,
     },
@@ -2462,7 +2519,7 @@ function readWorktreeSnapshot(
       commitClosure: boolean
     }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const snapshot = readRepositorySnapshot(readers, context, head, limits, walk)
+  const snapshot = readRepositoryFirstPass(readers, context, head, limits, walk)
   if (snapshot.status === 'error') return snapshot
   const stable = runFinalPass(readers, limits, snapshot.pass, true)
   if (stable.status === 'error') return stable

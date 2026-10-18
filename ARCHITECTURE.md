@@ -242,9 +242,9 @@ validates each claim against observed workspace state, and mints integrity-check
 edit calls are observed only while an epoch is active or an allowlisted skill call is pending; any
 other call takes no snapshot and cannot change guard state, and disabled and unavailable guards never
 observe. A skipped call's after-hook is silent even if an epoch activates in between. Local
-snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
-command output, counted across the parent, its submodules, and its nested repositories; remote
-readback payloads have their own 4096-item cap. Exceeding a local limit
+snapshots run synchronously and are capped at 128 MiB of file bytes and 20,000 files, counted
+across the parent, its submodules, and its nested repositories, and at 8 MiB of output for each git
+command; remote readback payloads have their own 4096-item cap. Exceeding a local limit
 fails the snapshot as `file-output-limit`, `file-limit`, or `command-output-limit`, which blocks
 the unit rather than making the guard unavailable (see the snapshot block below). A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
@@ -387,8 +387,8 @@ refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot ide
   and non-UTF-8 git output fails closed. Each variable-length field is length-prefixed in the digest.
 - **Ignore sources** — the bytes of `info/exclude`, `core.excludesFile` (or its XDG default), and
   every untracked `.gitignore`, including self-ignored ones. An absent source differs from an empty
-  one, and a FIFO, device, or file over 1 MiB fails closed. Content that those rules hide is not
-  hashed.
+  one, and a FIFO, device, or file over 1 MiB fails closed. Each source is capped at 1 MiB on its
+  own and is not charged to the shared byte budget. Content that those rules hide is not hashed.
 - **Gitlinks** — an initialized or unborn submodule is read like the parent. Its files, its own
   ignore sources, and its `HEAD` id go into the digest at the gitlink's sorted position, and
   submodules inside it are read the same way. An unborn one (a checkout with no commit yet) digests
@@ -397,8 +397,10 @@ refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot ide
 - **Nested repositories** — an untracked repository, which git lists as `name/`, is read the same
   way at any depth, under its own label. An ignored one stays outside the identity.
 - **Shared budget** — every repository one snapshot reads draws on the same file, byte, and gitlink
-  counts. Each repository's file count is checked before its files are read, and more than 32
-  submodules and nested repositories in all fail with `file-limit` before any of them is read.
+  counts. Each repository's file count is checked before its files are read. The parent's gitlinks
+  and nested repositories are counted before any of them is read; those inside a walked checkout
+  are counted when that checkout is walked, so earlier siblings may already have been read when the
+  total passes 32 and the snapshot fails with `file-limit`.
 - **Root pin** — the repository root, git directory, and common directory are compared with the
   values captured when the observer was created. A mismatch fails closed as `target-unavailable`.
 
@@ -422,12 +424,14 @@ directory moves between two snapshots, for example after `git submodule absorbgi
 normally. The digest domain is `worktree:v4`: a unit in progress across the upgrade has its
 completion rejected once as a retryable `stale-receipt`, and the stale operations are rerun.
 
-A snapshot spawns 12 git processes for the parent and 11 more for each walked repository, about 9
-more than the old check of a submodule's `HEAD`. Measured on a 10-core development machine under
-load, a warm snapshot took about 80 ms with no submodule, about 240 ms with one submodule of 2,000
-files (20 MB), and about 700 to 780 ms with four, where it had taken about 80 and 105 to 125 ms.
-Reading the files dominates. The spawns are synchronous, so a large submodule blocks the process for
-that long.
+A snapshot spawns 11 git processes for the parent and 10 more for each walked repository, 8 more
+than the old check of a submodule's `HEAD`; the final pass re-reads the ignore sources from the paths
+the first pass found and does not ask git for them again. The times below were measured on a 10-core
+development machine under load before that change, when the counts were 12 and 11, so they are a
+little high: a warm snapshot took about 80 ms with no submodule, about 240 ms with one submodule of
+2,000 files (20 MB), and about 700 to 780 ms with four, where it had taken about 80 and 105 to
+125 ms. Reading the files dominates. The spawns are synchronous, so a large submodule blocks the
+process for that long.
 
 The guard observes; it does not stop an agent that works to evade it, and a shell running as the
 same user can write any location a stored anchor could use (#1126). So these are limits. A snapshot

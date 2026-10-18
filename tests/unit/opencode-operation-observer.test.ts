@@ -2452,7 +2452,7 @@ describe('OpenCode operation observer race-checked reads', () => {
     const fixture = createGitFixture()
     try {
       const target = path.join(fixture.root, 'tracked.txt')
-      // The path is touched on disk by the first command that runs after its
+      // The path is touched on disk by the first stat that runs after its
       // content was read and confirmed, so only the final pass can see it.
       let contentRead = false
       let touched = false
@@ -2463,14 +2463,14 @@ describe('OpenCode operation observer race-checked reads', () => {
           if (filePath.endsWith('tracked.txt')) contentRead = true
           return content
         },
-        commandRunner: interceptingRunner(() => {
+        statReader: (filePath) => {
           if (contentRead && !touched) {
             touched = true
             const later = new Date(Date.now() + 60_000)
             fs.utimesSync(target, later, later)
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
       expect(touched).toBe(true)
@@ -4032,24 +4032,21 @@ describe('OpenCode operation observer submodule state', () => {
         setSubmoduleState(fixture.root, 'sub', from)
         const root = fs.realpathSync(fixture.root)
         const submodule = path.join(root, 'sub')
-        // The change is keyed to a phase: it happens on the first command run
-        // outside the submodule after its state was read, which is the final
-        // pass's first command.
+        // The change is keyed to a phase: it happens at the first stat of the
+        // submodule's directory after its state was read, which is the final
+        // pass looking at it again.
         let stateRead = false
         let changed = false
         const observer = createOpencodeOperationObserver({
           targetDirectory: fixture.root,
           statReader: (filePath) => {
             if (filePath === path.join(submodule, '.git')) stateRead = true
-            return lstatWithIdentity(filePath)
-          },
-          commandRunner: interceptingRunner((_args, _result, cwd) => {
-            if (stateRead && !changed && !cwd.startsWith(submodule)) {
+            else if (stateRead && !changed && filePath === submodule) {
               changed = true
               setSubmoduleState(fixture.root, 'sub', to)
             }
-            return undefined
-          }),
+            return lstatWithIdentity(filePath)
+          },
         })
         await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
         expect(changed).toBe(true)
@@ -4427,7 +4424,7 @@ describe('OpenCode operation observer submodule contents', () => {
     const parent = createSubmoduleParent()
     try {
       const file = path.join(parent.root, 'sub', 'sub.txt')
-      // Touched by the first command after its content was read, so only the
+      // Touched by the first stat after its content was read, so only the
       // final pass can see it.
       let contentRead = false
       let touched = false
@@ -4440,14 +4437,14 @@ describe('OpenCode operation observer submodule contents', () => {
           }
           return content
         },
-        commandRunner: interceptingRunner(() => {
+        statReader: (filePath) => {
           if (contentRead && !touched) {
             touched = true
             const later = new Date(Date.now() + 60_000)
             fs.utimesSync(file, later, later)
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
       expect(contentRead).toBe(true)
@@ -4528,6 +4525,90 @@ describe('OpenCode operation observer submodule contents', () => {
       expect(redirected).toBe(true)
     } finally {
       parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a submodule whose git directory breaks between the first pass and the final pass is worktree-unstable, not a git failure', async () => {
+    const parent = createSubmoduleParent()
+    try {
+      const sub = path.join(parent.root, 'sub')
+      let contentRead = false
+      let broken = false
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+        fileReader: (filePath) => {
+          const content = fs.readFileSync(filePath)
+          if (filePath.endsWith(path.join('sub', 'sub.txt'))) {
+            contentRead = true
+          }
+          return content
+        },
+        commandRunner: interceptingRunner(() => {
+          if (contentRead && !broken) {
+            broken = true
+            // The checkout is still there, but its git directory is not.
+            fs.writeFileSync(
+              path.join(sub, '.git'),
+              'gitdir: ../.git/modules/missing\n',
+            )
+          }
+          return undefined
+        }),
+      })
+      await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(broken).toBe(true)
+    } finally {
+      parent.cleanup()
+    }
+  }, 30_000)
+
+  test('a core.excludesFile re-pointed after the first pass is worktree-unstable through the relisting, and an edit of the file it named is worktree-unstable through the re-read', async () => {
+    // Two mechanisms, each pinned on its own: the final pass re-reads the path
+    // the first pass resolved without asking git for it again, and it relists
+    // the untracked files under whatever config is then in force.
+    const fixture = createGitFixture()
+    try {
+      fs.writeFileSync(path.join(fixture.root, 'hidden.txt'), 'hidden\n')
+      const hiding = path.join(fixture.root, '.git', 'hiding-excludes')
+      fs.writeFileSync(hiding, 'hidden.txt\n')
+
+      // Relisting: the old file is untouched, and the new one hides a file.
+      setExcludesFile(fixture.root, 'unrelated.never\n')
+      let repointed = false
+      const relisting = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !repointed) {
+            repointed = true
+            expect(
+              runGit(fixture.root, ['config', 'core.excludesFile', hiding])
+                .status,
+            ).toBe(0)
+          }
+          return undefined
+        }),
+      })
+      await expect(relisting.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(repointed).toBe(true)
+
+      // Re-read: the config is untouched, and the file it names is edited.
+      const excludes = setExcludesFile(fixture.root, 'unrelated.never\n')
+      let edited = false
+      const rereading = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: interceptingRunner((args) => {
+          if (args.includes('--others') && !edited) {
+            edited = true
+            // Matches nothing, so no listing changes: only the bytes do.
+            fs.writeFileSync(excludes, 'another.never\n')
+          }
+          return undefined
+        }),
+      })
+      await expect(rereading.snapshot()).resolves.toEqual(UNSTABLE)
+      expect(edited).toBe(true)
+    } finally {
+      fixture.cleanup()
     }
   }, 30_000)
 
@@ -4761,9 +4842,12 @@ describe('OpenCode operation observer submodule contents', () => {
       const without = await count(bare.root)
       // Control: the submodule adds no spawn in the parent's own directory.
       expect(withSubmodule.outside).toBe(without.outside)
-      // Anchor, ignore sources, HEAD tree and three listings on the first
-      // pass, then ignore sources, three listings and the anchor again.
-      expect(withSubmodule.inside).toBe(11)
+      // The parent: its anchor, the excludes lookup, the HEAD tree and three
+      // listings on the first pass, then three listings and the anchor again.
+      expect(without.outside).toBe(11)
+      // A walked submodule: the same, with its own anchor read once. The final
+      // pass reads the ignore sources again without asking git for their path.
+      expect(withSubmodule.inside).toBe(10)
     } finally {
       parent.cleanup()
       bare.cleanup()
@@ -5108,6 +5192,34 @@ describe('OpenCode operation observer submodule contents', () => {
               })
             },
           )
+        }),
+      30_000,
+    )
+
+    test(
+      'a nested repository that loses its .git between the listing and the read is worktree-unstable',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          let stripped = false
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+            commandRunner: interceptingRunner((args) => {
+              // Git listed `inner-repo/` because it held a `.git`; the directory
+              // stays populated, so only the checkout is gone.
+              if (args.includes('--others') && !stripped) {
+                stripped = true
+                fs.rmSync(path.join(nested, '.git'), {
+                  recursive: true,
+                  force: true,
+                })
+              }
+              return undefined
+            }),
+          })
+          await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
+          expect(stripped).toBe(true)
+          expect(fs.existsSync(path.join(nested, 'inner.txt'))).toBe(true)
         }),
       30_000,
     )
@@ -5581,33 +5693,34 @@ describe('OpenCode operation observer gitlink final pass', () => {
       gitOutput(submodule, ['config', 'user.email', 'observer@example.invalid'])
       gitOutput(submodule, ['config', 'user.name', 'Observer Test'])
 
-      // The first `config` read is the first pass; the second is the first
-      // command of the final pass.
-      let configReads = 0
+      // The commit lands at the first stat of the submodule's directory after
+      // its `.git` was read, which is the final pass looking at it again.
+      let gitlinkRead = false
+      let moved = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        commandRunner: interceptingRunner((args, _result, cwd) => {
-          if (
-            cwd === fs.realpathSync(fixture.root) &&
-            args.includes('config')
+        statReader: (filePath) => {
+          if (filePath === path.join(fs.realpathSync(submodule), '.git')) {
+            gitlinkRead = true
+          } else if (
+            gitlinkRead &&
+            !moved &&
+            filePath === fs.realpathSync(submodule)
           ) {
-            configReads += 1
-            if (configReads === 2) {
-              gitOutput(submodule, [
-                'commit',
-                '--quiet',
-                '--allow-empty',
-                '-m',
-                'moved',
-              ])
-            }
+            moved = true
+            gitOutput(submodule, [
+              'commit',
+              '--quiet',
+              '--allow-empty',
+              '-m',
+              'moved',
+            ])
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
-      configReads = 0
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
-      expect(configReads).toBe(2)
+      expect(moved).toBe(true)
     } finally {
       fs.rmSync(source, { recursive: true, force: true })
       fixture.cleanup()
@@ -5620,25 +5733,25 @@ describe('OpenCode operation observer gitlink final pass', () => {
       setExcludesFile(fixture.root, null)
       stageGitlinks(fixture.root, ['sub'])
       fs.mkdirSync(path.join(fixture.root, 'sub'))
-      let configReads = 0
+      const submodule = path.join(fs.realpathSync(fixture.root), 'sub')
+      // It is populated at the first stat of the directory after its `.git`
+      // was looked for, which is the final pass looking at it again.
+      let gitlinkRead = false
+      let populated = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        commandRunner: interceptingRunner((args, _result, cwd) => {
-          if (
-            cwd === fs.realpathSync(fixture.root) &&
-            args.includes('config')
-          ) {
-            configReads += 1
-            if (configReads === 2) {
-              fs.writeFileSync(path.join(fixture.root, 'sub', 'late.txt'), 'x')
-            }
+        statReader: (filePath) => {
+          if (filePath === path.join(submodule, '.git')) gitlinkRead = true
+          else if (gitlinkRead && !populated && filePath === submodule) {
+            populated = true
+            fs.writeFileSync(path.join(submodule, 'late.txt'), 'x')
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
-      configReads = 0
       const result = await observer.snapshot()
       expect(result.status).toBe('unavailable')
+      expect(populated).toBe(true)
     } finally {
       fixture.cleanup()
     }
@@ -6168,22 +6281,24 @@ describe('OpenCode operation observer submodule converted to ordinary files', ()
       setExcludesFile(fixture.root, null)
       stageGitlinks(fixture.root, ['sub'])
       fs.mkdirSync(path.join(fixture.root, 'sub'))
-      const root = fs.realpathSync(fixture.root)
-      // The second `config` read is the first command of the final pass.
-      let configReads = 0
+      const submodule = path.join(fs.realpathSync(fixture.root), 'sub')
+      // It is removed at the first stat of the directory after its `.git` was
+      // looked for, which is the final pass looking at it again.
+      let gitlinkRead = false
+      let removed = false
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        commandRunner: interceptingRunner((args, _result, cwd) => {
-          if (cwd === root && args.includes('config')) {
-            configReads += 1
-            if (configReads === 2) fs.rmdirSync(path.join(root, 'sub'))
+        statReader: (filePath) => {
+          if (filePath === path.join(submodule, '.git')) gitlinkRead = true
+          else if (gitlinkRead && !removed && filePath === submodule) {
+            removed = true
+            fs.rmdirSync(submodule)
           }
-          return undefined
-        }),
+          return lstatWithIdentity(filePath)
+        },
       })
-      configReads = 0
       await expect(observer.snapshot()).resolves.toEqual(UNSTABLE)
-      expect(configReads).toBe(2)
+      expect(removed).toBe(true)
     } finally {
       fixture.cleanup()
     }
