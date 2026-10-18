@@ -19,6 +19,7 @@ import {
   createOpencodeWorkflowGuard,
   isWorkflowGuardBlockedError,
   type OpencodeWorkflowGuardOptions,
+  WORKFLOW_GUARD_GUIDANCE,
 } from './lib/opencode-workflow-guard.js'
 import { createReceiptClassifier } from './lib/receipt-classifier.js'
 import {
@@ -195,6 +196,18 @@ const workflowGuardOptions = async (
   }
 }
 
+// The OpenCode profile block: the harness profile, then the guard guidance
+// when the guard is enabled. Each part is optional, so an unreadable profile
+// does not drop the guidance. `undefined` when there is nothing to add.
+const composeProfileBlock = (
+  harnessProfile: string | null,
+  guardEnabled: boolean,
+): string | undefined => {
+  const parts = [harnessProfile, guardEnabled ? WORKFLOW_GUARD_GUIDANCE : null]
+  const present = parts.filter((part): part is string => part !== null)
+  return present.length > 0 ? present.join('\n\n') : undefined
+}
+
 const initializePlugin = async ({
   client,
   directory,
@@ -209,7 +222,10 @@ const initializePlugin = async ({
   // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
   const bootstrapContent = getBootstrapContent(config, {
     bundledSkillsDir,
-    profileBlock: readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
+    profileBlock: composeProfileBlock(
+      readHarnessProfile(bundledSkillsDir, 'opencode'),
+      config.workflow_guard.mode !== 'disabled',
+    ),
   })
 
   const configHandler = createConfigHandler({

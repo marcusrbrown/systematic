@@ -76,7 +76,7 @@ describe('getBootstrapContent', () => {
       { bundledSkillsDir: skillsDir },
     )
 
-    expect(content).toHaveLength(8322)
+    expect(content).toHaveLength(5898)
     expect(content).not.toContain('<available_skills>')
     expect(content).not.toContain('<location>')
     expect(
@@ -195,8 +195,6 @@ describe('getBootstrapContent', () => {
       The bootstrap inlines the active harness profile naming the exact mechanisms for this session—consult it.
 
       When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
-
-      Check the workflow guard availability once per execution unit. Guard state is per session; a child session starts \`inactive\`. \`inactive\` (reason \`no-active-epoch\`) means no guarded workflow has started in this session. It is not unavailable and not terminal: load a guarded skill to begin, and do not call \`systematic_workflow_start\` or \`systematic_workflow_complete\` before one is active. A completion rejected with \`readback-timeout\` is retryable: call \`systematic_workflow_complete\` again at most twice, then report it to the user. Probes listed in \`unconfirmedReadbacks\` on status output (\`local\`, \`pinned\`, or an operation name) are unverified until a later status call confirms them. A completion rejected with \`snapshot-blocked\` or \`stale-receipt\` is not terminal. For \`snapshot-blocked\`, read \`blockReason\` from the rejection or \`snapshotBlock.reasonCode\` from status, fix that cause in the worktree without deleting or hiding user files unless the user agrees, and call status to confirm the block is gone (when the rejection names \`blockTarget: parent-checkout\`, fix the parent checkout and retry completion instead). Files inside submodules and nested repositories count toward the snapshot limits. Operations run while blocked leave no receipts: rerun stale or missing operations, checking remote state before redoing a push or PR, then complete. If the same reason remains after one fix, report it to the user, who can disable the guard through \`systematic_workflow_control\`. A call the guard skipped or sealed after a timeout has already run: for a local call check the worktree state, for a push or PR creation check remote state (the upstream ref or the open PR), and rerun only if its effect is missing. After a rejected push, check remote state, fix the cause and retry (a first push needs \`git push -u\`); never force-push or delete a remote ref without the user's approval. If a push may have landed but left no receipt and later pushes are rejected as \`resource-mismatch\`, report it to the user. A verification that overlapped another local call is not receipted; rerun it alone once every local call from that request has returned. If the guard reports \`unavailable\` or \`guard-unavailable\`, treat it as terminal for that unit: do not retry \`systematic_workflow_start\` or \`systematic_workflow_complete\`. Use the documented unguarded fallback only when authorized, and report the unavailable state once.
 
       **Skills naming:**
       - Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:onboarding\`)
@@ -710,18 +708,33 @@ describe('using-systematic SKILL.md structural invariants', () => {
     expect(instructionPriority).toBeLessThan(howToAccess)
   })
 
-  test('bootstrap content tells agents not to retry workflow start or complete after guard-unavailable', () => {
+  test('the default bootstrap carries no workflow guard guidance, because only an enabled OpenCode guard adds it', () => {
     const content = getBootstrapContent(defaultConfig, {
       bundledSkillsDir: realBundledSkillsDir,
     })
     expect(content).not.toBeNull()
-    expect(content).toContain('guard reports `unavailable`')
-    expect(content).toContain('`inactive` (reason `no-active-epoch`)')
-    expect(content).toContain('It is not unavailable and not terminal')
-    expect(content).toContain('a child session starts `inactive`')
-    expect(content).toContain(
-      'do not retry `systematic_workflow_start` or `systematic_workflow_complete`',
+    expect(content).not.toContain('systematic_workflow_')
+    expect(content).not.toMatch(/workflow guard/i)
+    expect(content).not.toContain('guard reports `unavailable`')
+    expect(content).not.toContain('`inactive` (reason `no-active-epoch`)')
+  })
+
+  test('the using-systematic skill body carries no workflow guard guidance', () => {
+    const skill = fs.readFileSync(
+      path.join(realBundledSkillsDir, 'using-systematic', 'SKILL.md'),
+      'utf8',
     )
+    expect(skill).not.toContain('systematic_workflow_')
+    expect(skill).not.toMatch(/workflow guard/i)
+  })
+
+  test('the safe bootstrap computation carries no workflow guard guidance', () => {
+    const content = computeBootstrapContentSafe({
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+    expect(content).not.toContain('systematic_workflow_')
+    expect(content).not.toMatch(/workflow guard/i)
   })
 
   test('post-injection: applyBootstrapContent preserves SUBAGENT-STOP before EXTREMELY-IMPORTANT in rendered output.system[0]', () => {

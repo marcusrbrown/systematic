@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -220,5 +220,176 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
     const observed = await drive('observe')
 
     expect(observed.gitCalls.length).toBeGreaterThan(0)
+  })
+})
+
+describe('the workflow guard guidance in the OpenCode system prompt', () => {
+  // Distinctive wording from the guidance, so a match cannot come from the
+  // profile or from the shared skill text.
+  const GUIDANCE_OPENING =
+    'Check the workflow guard availability once per execution unit.'
+  const GUIDANCE_DISABLED_NOTE =
+    '`disabled` means the user turned the guard off; do not call the workflow tools.'
+  const BLOCK_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
+  const PROFILE_HEADING = '# OpenCode Capability Profile'
+
+  let tempDir: string
+  let priorConfigDir: string | undefined
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-guidance-'))
+    priorConfigDir = process.env.OPENCODE_CONFIG_DIR
+  })
+
+  afterEach(() => {
+    if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  interface TransformHooks {
+    'experimental.chat.system.transform': (
+      input: unknown,
+      output: { system: string[] },
+    ) => Promise<void>
+  }
+
+  function occurrences(text: string, needle: string): number {
+    return text.split(needle).length - 1
+  }
+
+  /**
+   * Registers the plugin `registrations` times against one project and runs the
+   * system transform of each registration, in order, over one system array.
+   * That is what the host does when a plugin is listed twice.
+   */
+  async function systemPrompt(
+    systematicConfig: Record<string, unknown>,
+    registrations = 1,
+  ): Promise<string> {
+    const project = path.join(tempDir, 'project')
+    fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
+    const configDir = path.join(tempDir, 'config')
+    fs.mkdirSync(configDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(configDir, 'systematic.json'),
+      JSON.stringify(systematicConfig),
+    )
+    process.env.OPENCODE_CONFIG_DIR = configDir
+
+    const pluginModule = (await import(
+      pathToFileURL(path.join(SRC_DIR, 'index.ts')).href
+    )) as { default: (args: object) => Promise<TransformHooks> }
+    const input = {
+      client: { app: { log: async () => {} }, session: {} },
+      directory: project,
+    }
+    const output = { system: ['base system prompt'] }
+    for (let index = 0; index < registrations; index++) {
+      const hooks = await pluginModule.default(input)
+      await hooks['experimental.chat.system.transform'](
+        { sessionID: 'guidance-session' },
+        output,
+      )
+    }
+    return output.system.join('\n')
+  }
+
+  test('an enabled guard puts the guidance in the workflow block once, after the profile and before the marker', async () => {
+    const text = await systemPrompt({ workflow_guard: { mode: 'observe' } })
+
+    expect(occurrences(text, GUIDANCE_OPENING)).toBe(1)
+    expect(occurrences(text, GUIDANCE_DISABLED_NOTE)).toBe(1)
+    const profile = text.indexOf(PROFILE_HEADING)
+    const guidance = text.indexOf(GUIDANCE_OPENING)
+    const blockClose = text.indexOf(BLOCK_CLOSE)
+    const marker = text.indexOf(MARKER)
+    expect(profile).toBeGreaterThan(-1)
+    expect(marker).toBeGreaterThan(-1)
+    expect(guidance).toBeGreaterThan(profile)
+    expect(blockClose).toBeGreaterThan(guidance)
+    expect(marker).toBeGreaterThan(blockClose)
+  })
+
+  test('a protected guard gets the same single copy of the guidance', async () => {
+    const text = await systemPrompt({ workflow_guard: { mode: 'protected' } })
+
+    expect(occurrences(text, GUIDANCE_OPENING)).toBe(1)
+  })
+
+  test('two registrations in one request still leave one copy of the guidance', async () => {
+    const text = await systemPrompt({ workflow_guard: { mode: 'observe' } }, 2)
+
+    expect(occurrences(text, GUIDANCE_OPENING)).toBe(1)
+    expect(occurrences(text, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+    expect(occurrences(text, MARKER)).toBe(1)
+  })
+
+  test('a disabled guard leaves the system prompt with no guard text at all', async () => {
+    const text = await systemPrompt({ workflow_guard: { mode: 'disabled' } })
+
+    expect(text).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(text).not.toContain(GUIDANCE_OPENING)
+    expect(text).not.toContain(GUIDANCE_DISABLED_NOTE)
+    expect(text).not.toContain('systematic_workflow_')
+    expect(text).not.toMatch(/workflow guard/i)
+    expect(text).not.toContain(MARKER)
+  })
+
+  test('a plugin with no workflow_guard setting is disabled and carries no guard text', async () => {
+    const text = await systemPrompt({})
+
+    expect(text).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(text).not.toMatch(/workflow guard/i)
+  })
+
+  test('an enabled guard adds no guidance when the bootstrap is turned off', async () => {
+    const text = await systemPrompt({
+      workflow_guard: { mode: 'observe' },
+      bootstrap: { enabled: false },
+    })
+
+    expect(text).not.toContain(GUIDANCE_OPENING)
+    expect(text).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+  })
+
+  test('an enabled guard adds no guidance to a custom bootstrap file', async () => {
+    const custom = path.join(tempDir, 'custom-bootstrap.md')
+    fs.writeFileSync(custom, 'CUSTOM BOOTSTRAP TEXT')
+
+    const text = await systemPrompt({
+      workflow_guard: { mode: 'observe' },
+      bootstrap: { enabled: true, file: custom },
+    })
+
+    expect(text).toContain('CUSTOM BOOTSTRAP TEXT')
+    expect(text).not.toContain(GUIDANCE_OPENING)
+    expect(text).not.toContain(PROFILE_HEADING)
+  })
+
+  test('an enabled guard still adds the guidance once when the harness profile cannot be read', async () => {
+    const realRead = fs.readFileSync.bind(fs)
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      ...rest: unknown[]
+    ) => {
+      if (String(file).endsWith('opencode-profile.md')) {
+        throw new Error('profile unreadable')
+      }
+      return (realRead as (...args: unknown[]) => unknown)(file, ...rest)
+    }) as typeof fs.readFileSync)
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const text = await systemPrompt({ workflow_guard: { mode: 'observe' } })
+
+      expect(text).not.toContain(PROFILE_HEADING)
+      expect(occurrences(text, GUIDANCE_OPENING)).toBe(1)
+      expect(text.indexOf(BLOCK_CLOSE)).toBeGreaterThan(
+        text.indexOf(GUIDANCE_OPENING),
+      )
+    } finally {
+      readSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
   })
 })
