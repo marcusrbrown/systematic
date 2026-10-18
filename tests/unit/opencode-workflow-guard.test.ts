@@ -21641,17 +21641,25 @@ describe('parent registration lookups that time out', () => {
 describe('a declaration change while the core classifies an operation', () => {
   const COMMAND = { command: 'bun test tests/unit/example.test.ts' }
   const PASSED = { title: 'tests', output: '1 pass', metadata: { exit: 0 } }
+  // Only the fields these tests read from the status document.
+  const StatusDocument = z.object({
+    state: z.string(),
+    firstUnavailableCause: z.unknown().optional(),
+  })
 
-  // The adapter and the core share one classifier and each classifies the
-  // call once, the adapter first. This one holds the second classification
-  // (the core's) until `release()`.
-  function holdSecondClassification(): {
+  // The adapter and the core share one classifier, and each classifies a call
+  // once with the same call ID and the same fields, the adapter first. So the
+  // call ID selects the call, and its second classification is the core's.
+  // This holds that one until `release()`; any other call, or other
+  // classifier traffic before it, passes straight through.
+  function holdSecondClassification(heldCallId: string): {
     readonly classifier: ReturnType<typeof createReceiptClassifier>
     calls(): number
     release(): void
   } {
     const real = createReceiptClassifier()
     let calls = 0
+    let heldCalls = 0
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -21660,8 +21668,14 @@ describe('a declaration change while the core classifies an operation', () => {
       classifier: {
         ...real,
         classifyOperation: async (input: unknown) => {
+          const isHeldCall =
+            typeof input === 'object' &&
+            input !== null &&
+            'callId' in input &&
+            input.callId === heldCallId
+          if (isHeldCall) heldCalls += 1
           calls += 1
-          if (calls === 2) await gate
+          if (isHeldCall && heldCalls === 2) await gate
           const classify = real.classifyOperation
           if (!classify) {
             throw new Error(
@@ -21677,7 +21691,7 @@ describe('a declaration change while the core classifies an operation', () => {
   }
 
   test('a changed redeclaration through the adapter leaves the call ignored, with no receipt and no cause', async () => {
-    const hold = holdSecondClassification()
+    const hold = holdSecondClassification('held-core')
     const adapter = createOpencodeWorkflowGuard({
       config: { mode: 'observe', debug: false },
       ...OPERATION_SCOPE,
@@ -21715,13 +21729,15 @@ describe('a declaration change while the core classifies an operation', () => {
         SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY
       ],
     ).toBeUndefined()
-    const document = JSON.parse(
-      expectToolOutput(
-        await getTool(adapter, 'systematic_workflow_status').execute(
-          {},
-          toolContext(),
-        ),
-      ).output,
+    const document = StatusDocument.parse(
+      JSON.parse(
+        expectToolOutput(
+          await getTool(adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        ).output,
+      ),
     )
     expect(document.state).not.toBe('unavailable')
     expect(document.firstUnavailableCause).toBeUndefined()

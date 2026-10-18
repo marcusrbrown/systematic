@@ -2177,8 +2177,8 @@ describe('operation observations that outlive their declaration', () => {
 
   interface GatedClassifier {
     readonly classifier: OperationClassifier & { close(): Promise<void> }
-    /** How many times the held call's classification has begun. */
-    heldStarts(): number
+    /** Resolves once the held call's classification has begun. */
+    readonly started: Promise<void>
     /** Lets the held call's classification go on. */
     release(): void
   }
@@ -2200,11 +2200,14 @@ describe('operation observations that outlive their declaration', () => {
    * classifies it for real or throws. Every other call is classified at once.
    */
   function gatedClassifier(
-    afterRelease: 'classify' | 'throw' = 'classify',
+    afterRelease: 'classify' | 'throw' | 'resolve-nothing' = 'classify',
   ): GatedClassifier {
     const real = createReceiptClassifier()
     const classifyReal = requireClassifyOperation(real)
-    let heldStarts = 0
+    let markStarted: () => void = () => {}
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -2213,16 +2216,22 @@ describe('operation observations that outlive their declaration', () => {
       classifier: {
         classifyOperation: async (input) => {
           if (callIdOf(input) !== HELD_CALL) return classifyReal(input)
-          heldStarts += 1
+          markStarted()
           await gate
           if (afterRelease === 'throw') {
             throw new Error('classifier failed while the call was held')
+          }
+          // A classifier that breaks its contract: it finishes without a
+          // verdict and without throwing, as plain JavaScript could.
+          if (afterRelease === 'resolve-nothing') {
+            const nothing: unknown = undefined
+            return nothing as ReceiptClassification
           }
           return classifyReal(input)
         },
         close: () => real.close(),
       },
-      heldStarts: () => heldStarts,
+      started,
       release: () => release(),
     }
     gates.push(gated)
@@ -2250,18 +2259,19 @@ describe('operation observations that outlive their declaration', () => {
   }
 
   /**
-   * Starts observing the held call. Its classification has begun by the time
-   * this returns, so whatever the test does next happens during the await.
+   * Starts observing the held call and waits until its classification has
+   * begun, so whatever the test does next happens during the await. `held` is
+   * the observation itself, still pending until `gate.release()`.
    */
-  function holdImplementation(
+  async function holdImplementation(
     guard: WorkflowGuard,
     gate: GatedClassifier,
-  ): Promise<EvidenceObservationResult> {
+  ): Promise<{ held: Promise<EvidenceObservationResult> }> {
     const held = guard.observeOperation(
       bindOperation(guard, implementationInput(HELD_CALL)),
     )
-    expect(gate.heldStarts()).toBe(1)
-    return held
+    await gate.started
+    return { held }
   }
 
   const CHANGED_DECLARATION = { expectedOperations: ['commit' as const] }
@@ -2275,7 +2285,7 @@ describe('operation observations that outlive their declaration', () => {
   test('a changed redeclaration during the classifier await supersedes the observation', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     expect(scenario.guard.startUnit(CHANGED_DECLARATION)).toMatchObject({
       status: 'started',
@@ -2310,7 +2320,7 @@ describe('operation observations that outlive their declaration', () => {
         ...verificationInput(HELD_CALL),
       }),
     )
-    expect(gate.heldStarts()).toBe(1)
+    await gate.started
 
     const prepared = guard.prepareTransition({
       callId: 'complete-during-await',
@@ -2347,7 +2357,7 @@ describe('operation observations that outlive their declaration', () => {
   test('a mode change during the classifier await supersedes the observation', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     expect(scenario.guard.setMode({ mode: 'disabled' })).toEqual({
       status: 'changed',
@@ -2370,7 +2380,7 @@ describe('operation observations that outlive their declaration', () => {
   test('a classifier that throws after a changed redeclaration records no issue on the new declaration', async () => {
     const gate = gatedClassifier('throw')
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     expect(scenario.guard.startUnit(CHANGED_DECLARATION)).toMatchObject({
       status: 'started',
@@ -2387,10 +2397,48 @@ describe('operation observations that outlive their declaration', () => {
     expect(receiptCount(scenario)).toBe(0)
   })
 
+  test('a classifier that resolves no verdict after a changed redeclaration supersedes the observation', async () => {
+    const gate = gatedClassifier('resolve-nothing')
+    const scenario = createScenario(gate.classifier)
+    const { held } = await holdImplementation(scenario.guard, gate)
+
+    expect(scenario.guard.startUnit(CHANGED_DECLARATION)).toMatchObject({
+      status: 'started',
+    })
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'declaration-superseded',
+    })
+    expect(receiptCount(scenario)).toBe(0)
+    expect(scenario.guard.status().reasonCode).not.toBe('guard-unavailable')
+    // The call is terminal: replaying it is refused, not re-classified.
+    await expect(
+      scenario.guard.observeOperation(
+        bindOperation(scenario.guard, implementationInput(HELD_CALL)),
+      ),
+    ).resolves.toEqual({ status: 'rejected', reasonCode: 'rejected-operation' })
+  })
+
+  test('control: a classifier that resolves no verdict with no declaration change still reports guard-unavailable', async () => {
+    const gate = gatedClassifier('resolve-nothing')
+    const scenario = createScenario(gate.classifier)
+    const { held } = await holdImplementation(scenario.guard, gate)
+
+    gate.release()
+
+    await expect(held).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'guard-unavailable',
+    })
+    expect(receiptCount(scenario)).toBe(0)
+  })
+
   test('a mode change to the mode already set during the classifier await leaves the observation accepted', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     expect(scenario.guard.setMode({ mode: 'protected' })).toEqual({
       status: 'unchanged',
@@ -2405,7 +2453,7 @@ describe('operation observations that outlive their declaration', () => {
   test('control: an observation with no declaration change during the await is accepted and mints', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     gate.release()
 
@@ -2422,7 +2470,7 @@ describe('operation observations that outlive their declaration', () => {
   test('control: an identical redeclaration during the await returns unit-active and the observation is accepted', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     expect(scenario.guard.startUnit({ expectedOperations: [] })).toEqual({
       status: 'rejected',
@@ -2437,7 +2485,7 @@ describe('operation observations that outlive their declaration', () => {
   test('control: replaying the call after a superseded result returns rejected-operation', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
     scenario.guard.startUnit(CHANGED_DECLARATION)
     gate.release()
     await held
@@ -2452,7 +2500,7 @@ describe('operation observations that outlive their declaration', () => {
   test('control: after a superseded seal, a changed redeclaration returns unit-active as it does after an accepted observation', async () => {
     const gate = gatedClassifier()
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
     scenario.guard.startUnit(CHANGED_DECLARATION)
     gate.release()
     await held
@@ -2465,7 +2513,7 @@ describe('operation observations that outlive their declaration', () => {
   test('control: a classifier that throws with no declaration change still reports guard-unavailable', async () => {
     const gate = gatedClassifier('throw')
     const scenario = createScenario(gate.classifier)
-    const held = holdImplementation(scenario.guard, gate)
+    const { held } = await holdImplementation(scenario.guard, gate)
 
     gate.release()
 

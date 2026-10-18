@@ -2822,10 +2822,11 @@ export function createWorkflowGuard(
     return settleClassifiedOperation(parsed, input, unit, generation, outcome)
   }
 
-  // Runs after the only await and before anything is written. If the
-  // declaration, the unit's completion state or the mode changed while the
-  // classifier ran, the observation was admitted against something that no
-  // longer holds and is superseded.
+  // Runs after the only await and before anything is written. The supersede
+  // check comes first, whatever the classifier produced: if the declaration,
+  // the unit's completion state or the mode changed while it ran, the
+  // observation was admitted against something that no longer holds, so a
+  // verdict, a failure and no verdict at all all end the same way.
   function settleClassifiedOperation(
     parsed: ParsedOperationObservation,
     input: unknown,
@@ -2833,11 +2834,11 @@ export function createWorkflowGuard(
     generation: number,
     outcome: ClassificationOutcome,
   ): EvidenceObservationResult {
-    if (outcome.kind === 'unclassified') {
-      return { status: 'rejected', reasonCode: 'guard-unavailable' }
-    }
     if (outcome.kind === 'stale' || generation !== declarationGeneration) {
       return supersedeOperation(parsed, input)
+    }
+    if (outcome.kind === 'unclassified') {
+      return { status: 'rejected', reasonCode: 'guard-unavailable' }
     }
     return finalizeOperation(parsed, input, unit, outcome.classification)
   }
@@ -2863,10 +2864,15 @@ export function createWorkflowGuard(
     return recordUnitEvidenceIssue(unit, parsed.operation, reasonCode)
   }
 
+  // `classified`: the classifier returned a verdict.
   // `stale`: the classifier threw after the declaration generation moved, so
-  // nothing may be written for the unit's current declaration. The caller
-  // supersedes the observation. `unclassified` keeps today's meaning: the
-  // classifier is missing or failed, and the issue is already recorded.
+  // nothing may be written for the unit's current declaration; the caller
+  // supersedes the observation.
+  // `unclassified`: no usable verdict. When the classifier is missing, or threw
+  // with the declaration unchanged, the call is already terminal and the
+  // unit's issue is recorded. When it resolved without a verdict and without
+  // throwing, nothing has been written yet: the caller reports
+  // `guard-unavailable` and leaves the prepared observation as it is.
   type ClassificationOutcome =
     | {
         readonly kind: 'classified'
