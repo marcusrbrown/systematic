@@ -9,7 +9,7 @@ date: 2026-10-18
 
 ## Overview
 
-The OpenCode workflow guard becomes opt-in. The default `workflow_guard.mode` changes from `observe` to `disabled`, and `disabled` becomes genuinely off: the plugin builds no operation observer, takes no init snapshot and makes no host session reads for the guard. The four `systematic_workflow_*` tools stay registered and return inert results. The guard guidance stops shipping in the shared bootstrap and appears only in OpenCode sessions with the guard enabled. Explicit `observe` and `protected` keep today's behaviour. This is a `feat` (minor) release with a behaviour-change note, not a breaking change.
+The OpenCode workflow guard becomes opt-in. The default `workflow_guard.mode` changes from `observe` to `disabled`, and `disabled` becomes genuinely off: the plugin builds no operation observer, takes no init snapshot and makes no host session reads for the guard. The four `systematic_workflow_*` tools stay registered and return inert, terminal results. The guard guidance stops shipping in the shared bootstrap and appears only in OpenCode sessions with the guard enabled. Explicit `observe` and `protected` keep today's behaviour. This is a `feat` (minor) release with a behaviour-change note, not a breaking change.
 
 ## Problem Frame
 
@@ -20,7 +20,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 - R1. With no `workflow_guard` key, or with `{debug: true}` only, the resolved mode is `disabled`. Explicit `observe` and `protected` resolve unchanged.
 - R2. A disabled plugin performs zero git invocations and zero guard host reads across init, the four tools, the tool hooks, `event` and the system transform.
 - R3. When disabled, the four tools stay registered and every call returns a terminal result. No call stays `pending`.
-- R4. The guard guidance appears in the OpenCode bootstrap exactly once when the guard is enabled. It never appears when the guard is disabled, and never in the Pi bootstrap or the Claude Code output style.
+- R4. The guard guidance follows the configured mode. It appears in the OpenCode bootstrap exactly once when the configured mode is `observe` or `protected`. It never appears when the configured mode is `disabled`, and never in the Pi bootstrap or the Claude Code output style. A mid-session disable through `systematic_workflow_control` leaves it in place.
 - R5. The guidance states what `disabled` means.
 - R6. The generated schema and config reference, the hand-written configuration prose, ARCHITECTURE.md, `src/lib/AGENTS.md` and the copilot instructions state the new default and how to restore the old behaviour.
 - R7. Tests that assert guard behaviour opt into a mode explicitly. Default-asserting tests are hermetic against the developer's home config.
@@ -29,9 +29,9 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 - No guard removal and no hardening. The guard stays frozen.
 - No change to explicit `observe` or `protected` behaviour.
-- No runtime fast-path that skips creating the guard runtime when disabled. Once the observer and host reader are absent, nothing left performs I/O.
+- No adapter-level fast-path for disabled hooks. The construction gate in `src/index.ts` (see Key Technical Decisions) is the mechanism. Once the observer and host reader are absent, nothing left performs I/O.
 - No warning when project config sets `workflow_guard`. Project config was already ignored for this key, so it is documented only.
-- With the guard enabled but `bootstrap.enabled: false` or a custom `bootstrap.file`, the guidance stays absent, as today.
+- With the guard enabled but `bootstrap.enabled: false` or a custom `bootstrap.file`, the guidance stays absent, as today. A configured `bootstrap.file` that is missing falls back to the bundled bootstrap, which carries the guidance when the guard is enabled. That is also today's behaviour.
 - No telemetry.
 
 ### Deferred to Separate Tasks
@@ -102,7 +102,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
       "path_or_symbol": "src/lib/opencode-workflow-guard.ts operationObservationApplies and observerReadbackApplies",
       "description": "Per-call gates that skip observation and readback outside an epoch, but not observer construction or host reads",
       "disposition": "insufficient",
-      "insufficiency_reason": "They run after observer construction and the init snapshot, and every hook still reads host session history"
+      "insufficiency_reason": "They run after observer construction and the init snapshot, and the guard still reads host session history at least once per session"
     },
     {
       "path_or_symbol": "src/lib/opencode-workflow-guard.ts transform disabled return",
@@ -152,9 +152,9 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Approach:**
 - Call the helper only in guard-asserting tests, with `observe`. `question-attestation` must not use `protected`, because protected throws on the first veto.
-- Make dogfood write config for both modes, not only `protected`.
+- In dogfood, keep the `protected` scenarios writing `protected`, and make the `observe` scenarios write `observe` explicitly. Today the `observe` scenarios rely on the implicit default.
 - The helper asserts an enabled-guard sentinel, either a marker or a `state` other than `disabled`, so a missed opt-in fails instead of passing vacuously.
-- Leave unchanged: `skill-command-probe`, `ce-review-return-validation`, `receipt-privacy`, the eval cases and `plugin.test.ts`. Guard-sensitive plugin tests already pin `protected`.
+- Leave unchanged: `tests/integration/skill-command-probe.test.ts`, `tests/integration/ce-review-return-validation.test.ts`, `tests/unit/receipt-privacy.test.ts`, the eval cases and `tests/unit/plugin.test.ts`. Guard-sensitive plugin tests already pin `protected`.
 - Do not add a new integration file. The host-contract guard hard-codes the integration list and a pass floor.
 
 **Test scenarios:**
@@ -202,7 +202,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Files:**
 - Modify: `src/index.ts`
-- Modify: `src/lib/opencode-workflow-guard.ts` (`writeBlockedCompleteResult` also writes a terminal `rejected/disabled` result)
+- Modify: `src/lib/opencode-workflow-guard.ts` (`writeBlockedCompleteResult` handles reason `disabled`: it builds a terminal `rejected/disabled` completion, records it in `terminalCompletes` and writes it with `writeTerminalCompletionResult`. It must not reuse the no-epoch writer, which derives its reason from epoch state. The terminal lasts for the session, because a disabled instance never re-enables.)
 - Test: `tests/unit/plugin.test.ts`, or a new `tests/unit/plugin-guard-disabled.test.ts`
 - Test: `tests/unit/opencode-workflow-guard.test.ts`
 
@@ -217,8 +217,9 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 
 **Test scenarios:**
 - Integration: with an explicit `disabled` config, a fake `git` shim first on `PATH` and a client that counts `session.messages` and `session.children`, drive init, all four tools, before and after hooks for `bash`, `write` and `task` (with a child session id), `event` and the transform. Expect 0 git calls, 0 session reads, no marker and no throw. The shim's log-path variable must not start with `GIT_`, because the observer strips those.
-- Integration: positive control. The same harness with `observe` shows more than 0 git calls, which proves the shim is live.
+- Integration: positive control. The same harness with `observe` shows more than 0 git calls, which proves the shim is live. The shim passes through to the real git so that observe-mode init runs fully.
 - Happy path: disabled `systematic_workflow_complete` returns terminal `rejected` with reason `disabled`, not `pending`.
+- Edge case: a duplicate after-hook for the same disabled completion replays `rejected/disabled`. It must not fall through to `unavailable/guard-unavailable`.
 - Happy path: disabled `status` reports `disabled`. `start` is rejected as `disabled`. `control` with `mode: 'disabled'` returns `disabled`, and other input returns `control-not-enabled`.
 - Edge case: an adapter built with `mode: 'disabled'` and no observer, reader or classifier throws from no tool or hook.
 
@@ -235,20 +236,22 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 **Files:**
 - Modify: `skills/using-systematic/SKILL.md` (remove the guard paragraph from `## Capability Resolution`)
 - Modify: `src/lib/opencode-workflow-guard.ts` (export the guidance constant: the moved paragraph, a one-line lead-in, and the sentence on `disabled`)
-- Modify: `src/index.ts` (append the constant to the OpenCode `profileBlock` only when the guard is enabled)
+- Modify: `src/index.ts` (compose the OpenCode `profileBlock` from its non-null parts: the harness profile, then the guidance when the guard is enabled. A missing profile must not drop the guidance.)
 - Modify: `src/lib/AGENTS.md` (note the constant in the guard module's row)
-- Test: `tests/unit/bootstrap.test.ts`, `tests/unit/__snapshots__/bootstrap.test.ts.snap`, `tests/unit/build-claude-code-plugin.test.ts`, the Pi bootstrap test
+- Test: `tests/unit/bootstrap.test.ts`, `tests/unit/__snapshots__/bootstrap.test.ts.snap`, `tests/unit/build-claude-code-plugin.test.ts`, `tests/unit/pi.test.ts`
 
 **Approach:**
 - The sentence on `disabled` reads: "`disabled` means the user turned the guard off; do not call the workflow tools."
 - The clause keeps its current wording otherwise. This is a move, not a rewrite.
 
 **Test scenarios:**
-- Happy path: with the guard enabled, the OpenCode bootstrap contains the clause exactly once, inside the workflow block, after the profile and before the guard marker.
+- Happy path: with the guard enabled, the OpenCode bootstrap contains the clause exactly once. It sits inside the workflow block, after the profile and before the `<SYSTEMATIC_WORKFLOW_GUARD>` marker.
 - Edge case: two plugin registrations in one request still yield one clause.
 - Happy path: with the guard disabled, the OpenCode bootstrap contains no `systematic_workflow_` or workflow-guard text.
 - Happy path: neither the Pi bootstrap nor the Claude Code output style built from the repository contains that text.
 - Edge case: with `bootstrap.enabled: false`, there is no clause even when the guard is enabled.
+- Edge case: with a custom `bootstrap.file`, there is no clause even when the guard is enabled.
+- Edge case: with the harness profile unreadable and the guard enabled, the clause still appears once.
 - Update: recompute the bootstrap length pin and the snapshots, and rewrite the test that asserted the clause is present in the default bootstrap.
 
 **Verification:** Bootstrap, Pi and Claude Code suites pass. `registry:drift` and the Pi persona check are clean, and the diff shows no registry change.
@@ -265,6 +268,7 @@ The guard is frozen and its removal is tracked in #1153. Today every OpenCode us
 - Modify: `docs/src/content/docs/reference/configuration.mdx` (edit the hand-written guard prose and example outside the generated sentinels; regenerate the generated block)
 - Modify: `ARCHITECTURE.md` (the hook list and the guard section: default off, and disabled builds no observer and takes no init snapshot)
 - Modify: `.github/copilot-instructions.md` (the guard default)
+- Modify: `src/lib/AGENTS.md` (the default and the restore path, alongside the Unit 4 constant note)
 - Modify: this plan (mark completed)
 
 **Approach:**
