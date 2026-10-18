@@ -354,8 +354,7 @@ whose tool name cannot be read, which cannot be told apart from a non-local call
 counted. Other residuals: a superseded observation leaves the call terminal, so a later changed
 redeclaration of that unit is rejected as `unit-active`, as after an accepted or rejected
 observation; sibling calls that move resource identities or write unit evidence during the
-classifier await are not fenced; a seed read after a changed redeclaration can replace a propagated
-identity; where a baseline is present the deferral's clear leaves the operation's revision baseline
+classifier await are not fenced; where a baseline is present the deferral's clear leaves the operation's revision baseline
 unset, so its first before-revision is unchecked; an `available` before-read for a different pull
 request clears the deferral and admission then rejects the call as `resource-mismatch`; a deferral
 recorded before the operation was declared stays until the operation's own `available` read or the

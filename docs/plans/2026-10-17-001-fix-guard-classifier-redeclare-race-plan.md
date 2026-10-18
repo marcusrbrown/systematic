@@ -42,7 +42,6 @@ On the seed side, `recordSeedDeferral` returns early whenever the core holds any
 - Operations with a declared resource scope keep today's behaviour. A seed timeout for one still records no deferral and gets no retry. Propagation never writes a declared operation, so the declared-and-propagated case cannot occur.
 - Residuals. These are not fenced and are documented in Unit 3:
   - Sibling calls that move resource identities or write unit evidence during the classifier await (pre-existing).
-  - A seed read after a changed redeclaration can replace a propagated identity (pre-existing; the seed path calls `observeReadback`).
   - On the bind-clear branch, the operation's revision baseline stays unset, so its first before-revision is unchecked (pre-existing).
   - An `available` before-read for a different pull request clears the deferral. Admission then rejects that call as `resource-mismatch`. The timeout record is gone, and an accepted receipt later clears the issue.
   - A deferral recorded before the operation was declared stays until the operation's own `available` read or the end of the unit.
