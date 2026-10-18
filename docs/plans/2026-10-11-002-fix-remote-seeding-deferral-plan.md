@@ -212,6 +212,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 
 - **Deferral lives in adapter runtime state, per operation.**
   - At seed, a remote `command-timeout`, or push `missing-resource`, puts the operation in a deferred set, unless the core already holds a baseline for it. That happens for a resource declared on the unit, or for a PR identity an earlier PR-creation seed propagated to check or review. Such an operation keeps that baseline, and its admission still needs an available before-read that matches it. The adapter asks through a small read-only core accessor.
+    - Superseded by #1083: the exemption now applies only to a resource declared on the unit. A baseline propagated from PR creation no longer suppresses the deferral, which clears only on the operation's own `available` before-read from the seed's observer and target.
   - Otherwise the core gets no readback for the deferred operation, so `resourceBeforeReason` keeps rejecting it until it is bound.
   - The deferred set is keyed by unit and cleared whenever a unit starts, matching the core's per-unit baselines.
   - The seed loop continues. Only fatal causes mark the session unavailable.
@@ -293,6 +294,7 @@ There is also a fail-open: when the PR-creation before-read isn't `available`, t
 - Error path: a local snapshot timeout stays fatal.
 - Edge case: the deferred operation never runs. Completing the unit is rejected for missing evidence.
 - Edge case: the PR-creation seed is available, then the check seed times out → no check deferral. Check admission still needs an available before-read matching the propagated identity.
+  - Superseded by #1083: this case now records a check deferral. Only a declared resource scope skips the record.
 - Edge case: an operation whose resource was declared on the unit times out at seed → no deferral.
 - Edge case: a deferral from one unit doesn't carry into the next; the next unit's seed starts clean.
 - Integration: the deferral diagnostic is absent from markers, receipts and digests, extending the existing `firstUnavailableCause` exclusion tests.

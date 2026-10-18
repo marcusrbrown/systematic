@@ -8325,7 +8325,7 @@ describe('OpenCode workflow guard adapter', () => {
       expect(status(adapter).unit?.status).toBe('active')
     })
 
-    test('g: a check timeout after pr-creation seeded records no check deferral', async () => {
+    test('g: a check timeout after pr-creation seeded records a check deferral over the propagated baseline', async () => {
       const adapter = deferralAdapter(
         'observe',
         ['pr-creation', 'check-readback'],
@@ -8338,7 +8338,54 @@ describe('OpenCode workflow guard adapter', () => {
       expect(status(adapter).state).not.toBe('unavailable')
       const parsed = await statusParsed(adapter)
       expect(parsed.firstUnavailableCause).toBeUndefined()
-      expect(parsed.seedDeferrals).toBeUndefined()
+      expect(parsed.seedDeferrals).toEqual([
+        { operation: 'check-readback', reasonCode: 'command-timeout' },
+      ])
+    })
+
+    test('a review timeout after pr-creation seeded records a review deferral over the propagated baseline', async () => {
+      const adapter = deferralAdapter(
+        'observe',
+        ['pr-creation', 'review-readback'],
+        {
+          'pr-creation:before': [prAvailable],
+          'review-readback:before': [TIMEOUT],
+        },
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+      const parsed = await statusParsed(adapter)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+      expect(parsed.seedDeferrals).toEqual([
+        { operation: 'review-readback', reasonCode: 'command-timeout' },
+      ])
+    })
+
+    // A seed pass that is blocked at its local snapshot defers every scope
+    // without a baseline. A propagated baseline is written by a remote seed,
+    // which makes the unit non-pristine, so no later start can seed again
+    // over it.
+    test('a unit holding a propagated baseline rejects a redeclaration, so no later seed pass runs over it', async () => {
+      const adapter = deferralAdapter(
+        'observe',
+        ['check-readback', 'pr-creation'],
+        {
+          'pr-creation:before': [prAvailable],
+          'check-readback:before': [TIMEOUT],
+        },
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+        { operation: 'check-readback', reasonCode: 'command-timeout' },
+      ])
+
+      expect(
+        adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+      ).toEqual({ status: 'rejected', reasonCode: 'unit-active' })
+
+      expect((await statusParsed(adapter)).seedDeferrals).toEqual([
+        { operation: 'check-readback', reasonCode: 'command-timeout' },
+      ])
     })
 
     test('h: a timeout for an operation whose resource the unit declared records no deferral', async () => {
@@ -8732,6 +8779,217 @@ describe('OpenCode workflow guard adapter', () => {
           { title: 'pr', output: 'created', metadata: { exit: 0 } },
         )
         expect(operations(adapter)).toContain('pr-creation')
+      })
+
+      describe('a deferral over a propagated baseline', () => {
+        const CHECKS = { command: 'gh pr checks 42' }
+        const CHECKS_OUTPUT = {
+          title: 'checks',
+          output: 'ok',
+          metadata: { exit: 0 },
+        }
+        const PR_OTHER = '2'.repeat(64)
+
+        function checkRead(
+          identity: string,
+          revision: string,
+          checkState: string,
+        ): OperationObserverRemoteResult {
+          return remoteAvailable(identity, revision, {
+            pullRequest: { identity, state: 'open' },
+            checkState,
+          })
+        }
+
+        async function checksBeforeOnly(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+          args: Record<string, unknown> = CHECKS,
+        ): Promise<void> {
+          await adapter.hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: SESSION_A, callID },
+            { args },
+          )
+        }
+
+        async function checksOperation(
+          adapter: OpencodeWorkflowGuard,
+          callID: string,
+        ): Promise<void> {
+          await observeOperationTool(
+            adapter,
+            'bash',
+            CHECKS,
+            CHECKS_OUTPUT,
+            callID,
+          )
+        }
+
+        const CHECK_DEFERRAL = [
+          { operation: 'check-readback', reasonCode: 'command-timeout' },
+        ]
+
+        test('a check seed that timed out before the pull request seed keeps its deferral through a timed-out before-read, and an available same-PR read clears it and is admitted', async () => {
+          const counts: Record<string, number> = {}
+          const adapter = pushAdapter(
+            {
+              'pr-creation:before': [prAvailable],
+              'check-readback:before': [
+                TIMEOUT,
+                TIMEOUT,
+                TIMEOUT,
+                checkRead(D, E, 'pending'),
+              ],
+              'check-readback:after': [
+                checkRead(D, FRESH, 'completed-success'),
+              ],
+            },
+            counts,
+            ['check-readback', 'pr-creation'],
+          )
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual(
+            CHECK_DEFERRAL,
+          )
+
+          await checksBeforeOnly(adapter, 'timed-out-checks')
+
+          expect(counts['check-readback:before']).toBe(3)
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual(
+            CHECK_DEFERRAL,
+          )
+
+          await checksOperation(adapter, 'admitted-checks')
+
+          expect(operations(adapter)).toContain('check-readback')
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+          expect(status(adapter).state).not.toBe('unavailable')
+        })
+
+        test('a before-read from another registered worktree observer does not clear the deferral', async () => {
+          const fixture = createTargetDerivationFixture()
+          try {
+            const parent = sequenceObserver(
+              [operationSnapshot(), operationSnapshot()],
+              {
+                'pr-creation:before': [prAvailable],
+                'check-readback:before': [TIMEOUT],
+              },
+            )
+            // The other worktree answers with an available read of the same
+            // pull request, so only the observer identity can keep the
+            // deferral.
+            const other = sequenceObserver(
+              [{ ...operationSnapshot(), targetDigest: 'f'.repeat(64) }],
+              { 'check-readback:before': [checkRead(D, E, 'pending')] },
+            )
+            const adapter = createOpencodeWorkflowGuard({
+              config: { mode: 'observe', debug: false },
+              ...OPERATION_SCOPE,
+              observer: parent,
+              createTargetObserver: () => other,
+              classifier: createReceiptClassifier(),
+              runtimeRequiredOperations: ['check-readback', 'pr-creation'],
+            })
+            await observeSkill(adapter, 'systematic_skill', 'ce:work')
+            expect((await statusParsed(adapter)).seedDeferrals).toEqual(
+              CHECK_DEFERRAL,
+            )
+
+            await checksBeforeOnly(adapter, 'other-worktree-checks', {
+              ...CHECKS,
+              workdir: fixture.linkedRoot,
+            })
+
+            expect(status(adapter).state).not.toBe('unavailable')
+            expect((await statusParsed(adapter)).seedDeferrals).toEqual(
+              CHECK_DEFERRAL,
+            )
+          } finally {
+            fixture.cleanup()
+          }
+        })
+
+        test('a timed-out before-read is retried exactly once while a deferral sits over the propagated baseline', async () => {
+          const counts: Record<string, number> = {}
+          const adapter = pushAdapter(
+            {
+              'pr-creation:before': [prAvailable],
+              'check-readback:before': [TIMEOUT],
+            },
+            counts,
+            ['pr-creation', 'check-readback'],
+          )
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect(counts['check-readback:before']).toBe(1)
+
+          await checksBeforeOnly(adapter, 'retried-checks')
+
+          // The seed, the call's own read, and exactly one retry.
+          expect(counts['check-readback:before']).toBe(3)
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual(
+            CHECK_DEFERRAL,
+          )
+        })
+
+        test('a timed-out before-read with no deferral is read once and not retried', async () => {
+          const counts: Record<string, number> = {}
+          const adapter = pushAdapter(
+            {
+              'check-readback:before': [checkRead(D, E, 'pending'), TIMEOUT],
+            },
+            counts,
+            ['check-readback'],
+          )
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+          expect(counts['check-readback:before']).toBe(1)
+
+          await checksBeforeOnly(adapter, 'unretried-checks')
+
+          expect(counts['check-readback:before']).toBe(2)
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+        })
+
+        // Known limit: an available read for a different pull request answers
+        // for the operation, so it clears the deferral. Admission then rejects
+        // it against the propagated baseline, which stays as it was.
+        test('an available before-read for a different pull request clears the deferral, is rejected as resource-mismatch, and leaves the baseline unchanged', async () => {
+          const adapter = pushAdapter(
+            {
+              'pr-creation:before': [prAvailable],
+              'check-readback:before': [
+                TIMEOUT,
+                checkRead(PR_OTHER, E, 'pending'),
+                checkRead(D, E, 'pending'),
+              ],
+              'check-readback:after': [
+                checkRead(PR_OTHER, FRESH, 'completed-success'),
+                checkRead(D, FRESH, 'completed-success'),
+              ],
+            },
+            {},
+            ['pr-creation', 'check-readback'],
+          )
+          await observeSkill(adapter, 'systematic_skill', 'ce:work')
+          expect((await statusParsed(adapter)).seedDeferrals).toEqual(
+            CHECK_DEFERRAL,
+          )
+
+          await checksOperation(adapter, 'other-pr-checks')
+
+          expect(operations(adapter)).not.toContain('check-readback')
+          expect(status(adapter)).toMatchObject({
+            state: 'rejected',
+            reasonCode: 'resource-mismatch',
+          })
+          expect((await statusParsed(adapter)).seedDeferrals).toBeUndefined()
+
+          await checksOperation(adapter, 'same-pr-checks')
+
+          expect(operations(adapter)).toContain('check-readback')
+          expect(status(adapter).state).not.toBe('unavailable')
+        })
       })
 
       test('m: an available before-read that observeReadback rejects binds nothing and keeps the deferral', async () => {
@@ -21378,4 +21636,118 @@ describe('parent registration lookups that time out', () => {
       }
     },
   )
+})
+
+describe('a declaration change while the core classifies an operation', () => {
+  const COMMAND = { command: 'bun test tests/unit/example.test.ts' }
+  const PASSED = { title: 'tests', output: '1 pass', metadata: { exit: 0 } }
+  // Only the fields these tests read from the status document.
+  const StatusDocument = z.object({
+    state: z.string(),
+    firstUnavailableCause: z.unknown().optional(),
+  })
+
+  // The adapter and the core share one classifier, and each classifies a call
+  // once with the same call ID and the same fields, the adapter first. So the
+  // call ID selects the call, and its second classification is the core's.
+  // This holds that one until `release()`; any other call, or other
+  // classifier traffic before it, passes straight through.
+  function holdSecondClassification(heldCallId: string): {
+    readonly classifier: ReturnType<typeof createReceiptClassifier>
+    calls(): number
+    release(): void
+  } {
+    const real = createReceiptClassifier()
+    let calls = 0
+    let heldCalls = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return {
+      classifier: {
+        ...real,
+        classifyOperation: async (input: unknown) => {
+          const isHeldCall =
+            typeof input === 'object' &&
+            input !== null &&
+            'callId' in input &&
+            input.callId === heldCallId
+          if (isHeldCall) heldCalls += 1
+          calls += 1
+          if (isHeldCall && heldCalls === 2) await gate
+          const classify = real.classifyOperation
+          if (!classify) {
+            throw new Error(
+              'expected classifier to implement classifyOperation',
+            )
+          }
+          return classify(input)
+        },
+      },
+      calls: () => calls,
+      release: () => release(),
+    }
+  }
+
+  test('a changed redeclaration through the adapter leaves the call ignored, with no receipt and no cause', async () => {
+    const hold = holdSecondClassification('held-core')
+    const adapter = createOpencodeWorkflowGuard({
+      config: { mode: 'observe', debug: false },
+      ...OPERATION_SCOPE,
+      observer: sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+      classifier: hold.classifier,
+      runtimeRequiredOperations: [],
+    })
+    await activateWorkEpoch(adapter)
+    const input = { tool: 'bash', sessionID: SESSION_A, callID: 'held-core' }
+    await adapter.hooks['tool.execute.before'](input, { args: COMMAND })
+    const output = { ...PASSED, metadata: { ...PASSED.metadata } }
+    const finishing = adapter.hooks['tool.execute.after'](
+      { ...input, args: COMMAND },
+      output,
+    )
+    // The adapter has classified and passed its ownership check; the core's
+    // classification is now held, out of the adapter's sight.
+    for (let tick = 0; tick < 50 && hold.calls() < 2; tick++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect(hold.calls()).toBe(2)
+
+    expect(
+      adapter.startUnit(SESSION_A, { expectedOperations: ['commit'] }),
+    ).toMatchObject({ status: 'started' })
+    hold.release()
+    await finishing
+
+    expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    expect(
+      (output.metadata as Record<string, unknown>)[
+        SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY
+      ],
+    ).toBeUndefined()
+    const document = StatusDocument.parse(
+      JSON.parse(
+        expectToolOutput(
+          await getTool(adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        ).output,
+      ),
+    )
+    expect(document.state).not.toBe('unavailable')
+    expect(document.firstUnavailableCause).toBeUndefined()
+    // The call is sealed: a duplicate after-hook is silent.
+    const calls = hold.calls()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: COMMAND },
+      { ...PASSED, metadata: { ...PASSED.metadata } },
+    )
+    expect(hold.calls()).toBe(calls)
+    expect(status(adapter).state).not.toBe('unavailable')
+  })
 })

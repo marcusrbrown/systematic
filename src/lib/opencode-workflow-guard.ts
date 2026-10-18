@@ -4586,14 +4586,15 @@ function createSessionRuntime(
     return undefined
   }
 
-  // A deferral is recorded only when the core has no baseline for the
-  // operation yet (neither declared on the unit nor propagated from PR
-  // creation): with a baseline there is nothing left to defer.
+  // A deferral is recorded unless the unit declared a resource scope for the
+  // operation: a declared scope is the operation's own baseline, so there is
+  // nothing left to defer. A baseline propagated from PR creation is not the
+  // operation's own evidence and does not suppress the record.
   function recordSeedDeferral(
     operation: RemoteOperation,
     reasonCode: SeedDeferralReason,
   ): void {
-    if (requireGuard().hasResourceBaseline(operation)) return
+    if (hasDeclaredResourceScope(operation)) return
     const observer = options.observer
     if (!observer) return
     seedDeferralEntries(true).push({
@@ -4602,6 +4603,11 @@ function createSessionRuntime(
       observer,
       targetIdentity: observer.targetDigest,
     })
+  }
+
+  function hasDeclaredResourceScope(operation: RemoteOperation): boolean {
+    const unit = requireGuard().status().unit
+    return unit?.requiredResourceOperations.includes(operation) ?? false
   }
 
   // The active unit's deferral entries. A record left by another unit is
@@ -4653,10 +4659,18 @@ function createSessionRuntime(
     const deferred = deferredSeedFor(operation)
     if (!deferred) return
     // A baseline established since the deferral was recorded (for example
-    // propagated from a PR-creation self-seed) makes it obsolete. Never
-    // overwrite it; admission compares the operation against it.
+    // propagated from a PR-creation seed) is never overwritten; admission
+    // compares the operation against it. The deferral clears only when this
+    // operation's own before-read answered, from the observer and target the
+    // seed used. A timeout, a missing resource, or another observer's read
+    // leaves it in place.
     if (requireGuard().hasResourceBaseline(operation)) {
-      clearSeedDeferral(operation)
+      if (
+        before?.status === 'available' &&
+        sameSeedObserver(deferred, observer)
+      ) {
+        clearSeedDeferral(operation)
+      }
       return
     }
     if (!before || !sameSeedObserver(deferred, observer)) return

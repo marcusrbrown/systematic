@@ -108,6 +108,17 @@ const overtaken = currentSnapshotBlock() !== captured
 const overtaken = snapshotBlockVersion !== capturedVersion
 ```
 
+The core applies the same rule to an operation observation that awaits its classifier (`src/lib/workflow-guard.ts`). A monotonic `declarationGeneration` is bumped by a changed redeclaration, the unit's completion, and a mode change. `processOperation` captures it before the await and compares it after. A mismatch supersedes the observation: nothing is minted, no issue is recorded, and the result is `declaration-superseded`, which the adapter seals and ignores.
+
+```ts
+// processOperation and settleClassifiedOperation (abbreviated)
+const generation = declarationGeneration
+// ...awaits the classifier...
+if (outcome.kind === 'stale' || generation !== declarationGeneration) {
+  return supersedeOperation(parsed, input)
+}
+```
+
 Test outline. These are the deferred-step tests in `tests/unit/opencode-workflow-guard.test.ts`, such as "a status snapshot taken with no block, then a block set and cleared before it returns, applies no readback and probes no remote".
 
 1. Mint real evidence at known revisions.
@@ -127,4 +138,4 @@ Test outline. These are the deferred-step tests in `tests/unit/opencode-workflow
 - [The operation observer reported a changed worktree as unchanged or committed](../logic-errors/operation-observer-false-clean-worktree-2026-10-15.md): the same "change during the read" concern inside one snapshot, solved there with a final re-check pass.
 - [A mutation that fails nothing needs a decision](./a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md).
 - [A verification that overlapped another local call could still mint a receipt](../logic-errors/verification-overlap-mints-receipt-2026-10-17.md): the same capture-before-await rule, applied to verification receipts, which describe a whole run.
-- #1083 (an open classifier race on same-ID redeclaration, which needs the same kind of ownership fencing).
+- #1083 (resolved): a classifier race on same-ID redeclaration, fenced by the core declaration generation described above.
