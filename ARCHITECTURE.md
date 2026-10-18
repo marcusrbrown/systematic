@@ -243,7 +243,8 @@ edit calls are observed only while an epoch is active or an allowlisted skill ca
 other call takes no snapshot and cannot change guard state, and disabled and unavailable guards never
 observe. A skipped call's after-hook is silent even if an epoch activates in between. Local
 snapshots run synchronously and are capped at 128 MiB of file bytes, 20,000 files, and 8 MiB of
-command output; remote readback payloads have their own 4096-item cap. Exceeding a local limit
+command output, counted across the parent, its submodules, and its nested repositories; remote
+readback payloads have their own 4096-item cap. Exceeding a local limit
 fails the snapshot as `file-output-limit`, `file-limit`, or `command-output-limit`, which blocks
 the unit rather than making the guard unavailable (see the snapshot block below). A guarded transition that lacks its required receipts is rejected. Only three skill loads activate an epoch: `ce:work` (work family) and `git-commit` / `git-commit-push-pr` (shipping family), each with or without the `systematic:` prefix; any other skill load neither starts nor changes an epoch, in any state. A session with no epoch reports
 `inactive` (`no-active-epoch`); `unavailable` is reserved for real failures. When remote-scope
@@ -388,27 +389,60 @@ refs cannot hide a path, redirect `HEAD`'s tree, or run a hook. The snapshot ide
   every untracked `.gitignore`, including self-ignored ones. An absent source differs from an empty
   one, and a FIFO, device, or file over 1 MiB fails closed. Content that those rules hide is not
   hashed.
-- **Gitlinks** — an initialized submodule contributes its `HEAD` id. An existing empty directory is
-  recorded as uninitialized, a non-empty one without a checkout fails closed, and an absent path is
-  a deletion. More than 32 gitlinks fail with `file-limit` before any submodule is read.
+- **Gitlinks** — an initialized or unborn submodule is read like the parent. Its files, its own
+  ignore sources, and its `HEAD` id go into the digest at the gitlink's sorted position, and
+  submodules inside it are read the same way. An unborn one (a checkout with no commit yet) digests
+  differently from an uninitialized one. An existing empty directory is recorded as uninitialized, a
+  non-empty one without a checkout fails closed, and an absent path is a deletion.
+- **Nested repositories** — an untracked repository, which git lists as `name/`, is read the same
+  way at any depth, under its own label. An ignored one stays outside the identity.
+- **Shared budget** — every repository one snapshot reads draws on the same file, byte, and gitlink
+  counts. Each repository's file count is checked before its files are read, and more than 32
+  submodules and nested repositories in all fail with `file-limit` before any of them is read.
 - **Root pin** — the repository root, git directory, and common directory are compared with the
   values captured when the observer was created. A mismatch fails closed as `target-unavailable`.
 
 `commitClosure` compares the same raw records with `HEAD`'s tree by path, kind, mode, and object
 id. Git's `diff`, clean filters, and the index are not consulted, and an unborn `HEAD` reads not
-closed. A tracked path that is now a directory, or whose parent is now a file, is a deletion; the
+closed. A walked repository is closed only when it equals its own `HEAD` tree, so a submodule with an
+edit is available and not closed. The parent is closed when its own records match, every walked
+submodule is closed, and each submodule's `HEAD` is the commit the parent records. An uninitialized
+submodule counts as closed, so a commit receipt can mint after a plain clone or in a new linked
+worktree. An unborn submodule, or an untracked nested repository, clean or dirty, keeps closure
+false. A tracked path that is now a directory, or whose parent is now a file, is a deletion; the
 paths that replaced it are observed on their own. A final pass re-stats every path and each checked
 directory, re-inspects every gitlink, re-lists the index, untracked files, and discovered
 `.gitignore` files, re-reads the ignore sources, and re-runs the repository anchor. A root, git
 directory, or common directory that moved fails as `target-unavailable`, and any other difference
 fails the snapshot as `worktree-unstable`. The first is fatal; the second blocks the unit, as the
-limit failures do.
+limit failures do. Each walked repository runs its own final pass inside the same snapshot, and its
+root, git directory, common directory, and `HEAD` are compared with what its first pass read; any
+difference is `worktree-unstable`. Nothing is kept between snapshots, so a submodule whose git
+directory moves between two snapshots, for example after `git submodule absorbgitdirs`, is read
+normally. The digest domain is `worktree:v4`: a unit in progress across the upgrade has its
+completion rejected once as a retryable `stale-receipt`, and the stale operations are rerun.
 
-A snapshot does not see ignored content, dirty submodule contents, a redirect or ignore rule
-installed before the observer started (#1126), a write that lands after the final pass, or a
-same-second rewrite on a volume with 1-second timestamps. Some trees read not closed by design:
-files git normalizes (CRLF conversion), `core.filemode=false` mounts, and case-only renames on
-case-insensitive volumes. A FIFO or device named `.gitignore` makes git block until the per-command
+A snapshot spawns 12 git processes for the parent and 11 more for each walked repository, about 9
+more than the old check of a submodule's `HEAD`. Measured on a 10-core development machine under
+load, a warm snapshot took about 80 ms with no submodule, about 240 ms with one submodule of 2,000
+files (20 MB), and about 700 to 780 ms with four, where it had taken about 80 and 105 to 125 ms.
+Reading the files dominates. The spawns are synchronous, so a large submodule blocks the process for
+that long.
+
+The guard observes; it does not stop an agent that works to evade it, and a shell running as the
+same user can write any location a stored anchor could use (#1126). So these are limits. A snapshot
+does not see ignored content, including content that a submodule's own `info/exclude` or an ignored
+nested repository hides, a write that lands after the final pass, or a same-second rewrite on a
+volume with 1-second timestamps. A redirect of a repository's root or admin directory made before
+the observer started, or between two snapshots, is read as the redirected repository: the root pin
+covers the parent only, and nothing is stored across snapshots or restarts. Errors that are terminal
+in the parent stay terminal inside a walked repository: a non-UTF-8 filename, an invalid
+`info/exclude`, a path over the length limit, a populated directory without a checkout, and a
+tracked directory replaced by a symlink fail the snapshot until that repository changes or the guard
+is disabled. Some trees read not closed by design, in a walked repository as in the parent: files
+git normalizes (CRLF conversion), `core.filemode=false` mounts, sparse checkouts, and case-only
+renames on case-insensitive volumes. Commit receipts do not mint for them. A FIFO or device named
+`.gitignore` makes git block until the per-command
 timeout, and the snapshot then times out. That timeout skips, seals or halts the one call, is
 reported as unconfirmed on status, or rejects completion as `readback-timeout`; it never makes the
 guard unavailable.

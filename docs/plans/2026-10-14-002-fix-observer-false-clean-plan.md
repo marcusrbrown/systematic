@@ -188,7 +188,7 @@ Issue #1095 rejected a design that trusts git's index and clean filters for file
   - Stat values never enter the identity.
   - `worktree-unstable` is added to `OperationObserverReasonCode` only.
 - **Closure is derived from the records.** Every `HEAD` entry must be present with an equal kind, id and mode, and no other path may exist. A gitlink must be initialized with `HEAD` equal to the tree's id. The executable comparison uses git's owner-bit rule, and `core.filemode` is not honored. The index is not required to match `HEAD`. `diff --quiet` and the closure's second untracked listing are removed. An unborn `HEAD` gives `closed=false` and stays available.
-- **Domain tag `worktree:v2` becomes `worktree:v3`.** This changes the value, not the field shape, so no receipt, marker or protocol bump is needed. A receipt minted before the upgrade no longer matches. A status refresh reports it as stale with a fresh-readback repair. A completion against it is rejected as `stale-receipt`, and under the guard's existing completion rule that leaves the session `unavailable`, just as any post-evidence drift does today.
+- **Domain tag `worktree:v2` becomes `worktree:v3`.** This changes the value, not the field shape, so no receipt, marker or protocol bump is needed. A receipt minted before the upgrade no longer matches. A status refresh reports it as stale with a fresh-readback repair. A completion against it is rejected as `stale-receipt`. That rejection is retryable: the session stays available and the stale operations are rerun.
 
 ## Open Questions
 
@@ -414,7 +414,7 @@ Every local git call carries the forced prefix.
   - `worktree-unstable`;
   - `file-limit` for gitlinks;
   - `file-read-failed` for invalid output, an invalid ignore source, or an uninitialized non-empty submodule.
-- **State lifecycle risks:** The identity value changes on upgrade, so receipts that exist at upgrade time go stale once. A completion attempted against one is rejected and leaves the session `unavailable`, which is the existing rule for any drift between evidence and completion. An ignore-source edit by another process during a completion readback counts as drift within the snapshot.
+- **State lifecycle risks:** The identity value changes on upgrade, so receipts that exist at upgrade time go stale once. A completion attempted against one is rejected as a retryable `stale-receipt`, and the session stays available. An ignore-source edit by another process during a completion readback counts as drift within the snapshot.
 - **Unchanged invariants:** Raw-byte identity, stale-versus-fatal semantics, receipt and marker versions, and remote readback.
 
 ## Risks & Dependencies

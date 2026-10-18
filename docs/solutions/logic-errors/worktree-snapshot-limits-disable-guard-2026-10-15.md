@@ -26,7 +26,7 @@ The OpenCode guard adapter (`src/lib/opencode-workflow-guard.ts`) treated every 
 ## Symptoms
 
 - These observer reasons reached `markUnavailable` from the before-hook, the after-hook, child rollup, remote seeding, status refresh and completion readback:
-  - `file-limit` (over 20,000 files or 32 gitlinks)
+  - `file-limit` (over 20,000 files or 32 gitlinks, counted across the parent, its submodules and its nested repositories)
   - `file-output-limit` (over 128 MiB of content, or a path that is too long)
   - `command-output-limit` (a local listing over 8 MiB)
   - `worktree-unstable` (the tree changed during the snapshot)
@@ -128,7 +128,7 @@ Recording only the effective target keeps the block and its clear in the same pl
 - A blocked snapshot of a target that is not the effective target skips the call without recording a block, so status does not show it.
 - Block-and-fix cycles have no attempt cap. Completion rejections are retryable and consume nothing, and the one-fix escalation is the agent's judgment. Disabling the guard still needs the user's answer to an attestation question.
 - A snapshot timeout no longer makes the guard unavailable. A before-hook timeout skips the call, an after-hook timeout seals it, a child-rollup timeout halts the pass, a status refresh reports the probe as unconfirmed, and completion rejects it as the retryable `readback-timeout`. The attestation model, the unreceipted-push residual and the rollup residual are in ARCHITECTURE.md and [the transient-timeout doc](./transient-timeout-disables-workflow-guard-2026-10-15.md) (#1084).
-- Open: #1126 (ignore rules and other agent-written state can hide work from the snapshot).
+- Submodule and nested-repository contents count toward the same limits, so a large submodule can block the unit. Shrinking it is the way out. Ignore rules and redirects that hide work from the snapshot are documented limits in ARCHITECTURE.md (#1126).
 
 ## Prevention
 
@@ -147,7 +147,7 @@ Recording only the effective target keeps the block and its clear in the same pl
 
 ## Related Issues
 
-- #1124, #1134. #1084 (snapshot timeouts skip, seal or halt the one call instead of making the guard unavailable), #1126 (open: anchor observer roots and ignore rules so agent-written state cannot hide work).
+- #1124, #1134. #1084 (snapshot timeouts skip, seal or halt the one call instead of making the guard unavailable), #1126 (submodule and nested-repository contents are observed and count toward the limits; anchors are a documented limit).
 - [The operation observer reported a changed worktree as unchanged or committed](./operation-observer-false-clean-worktree-2026-10-15.md): the snapshot reasons this fix classifies.
 - [Workflow guard digests collapsed long values, and large operation arguments disabled the guard](./workflow-guard-digest-collapse-long-identities-2026-10-14.md): a separate oversized-input path that stays `operation-input-invalid`.
 - [Receipt guard missed worktree-targeted child operations](../integration-issues/worktree-targeted-receipt-observation-2026-08-02.md): the effective-target and pinned-worktree rules.

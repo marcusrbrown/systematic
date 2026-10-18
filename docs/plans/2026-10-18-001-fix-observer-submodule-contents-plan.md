@@ -1,7 +1,7 @@
 ---
 title: "fix: Observe the contents of submodules and nested repositories in the local snapshot"
 type: fix
-status: active
+status: completed
 date: 2026-10-18
 ---
 
@@ -141,7 +141,7 @@ Issue #1126 also asked for anchors stored where the agent cannot write. With a s
 
 ## Implementation Units
 
-- [ ] **Unit 1: Walk state and explicit submodule state**
+- [x] **Unit 1: Walk state and explicit submodule state**
 
 **Goal:** One budget per snapshot, an explicit submodule state, an unborn submodule available instead of terminal, and an uninitialized submodule closed.
 
@@ -171,7 +171,7 @@ Issue #1126 also asked for anchors stored where the agent cannot write. With a s
 
 **Verification:** observer tests pass; removing the state, the unborn literal or the uninitialized closure rule fails a named test.
 
-- [ ] **Unit 2: Walk submodule contents into the digest and closure**
+- [x] **Unit 2: Walk submodule contents into the digest and closure**
 
 **Goal:** Honest edits inside an initialized or unborn submodule, at any depth, change the digest and make closure false.
 
@@ -210,7 +210,7 @@ Issue #1126 also asked for anchors stored where the agent cannot write. With a s
 
 **Verification:** observer tests pass; removing the fold, the sub-closure term, the shared file count, the walked final pass or the anchor comparison each fails a named test.
 
-- [ ] **Unit 3: Walk untracked nested repositories**
+- [x] **Unit 3: Walk untracked nested repositories**
 
 **Goal:** An untracked nested repository in the parent or in a walked repository is walked instead of failing the snapshot.
 
@@ -236,7 +236,7 @@ Issue #1126 also asked for anchors stored where the agent cannot write. With a s
 
 **Verification:** observer tests pass; removing the recognition fails a named test.
 
-- [ ] **Unit 4: Guard path for submodules**
+- [x] **Unit 4: Guard path for submodules**
 
 **Goal:** Show the guard-level effects: a submodule over a limit blocks and then clears, and a dirty submodule keeps a commit from closing.
 
@@ -256,7 +256,7 @@ Issue #1126 also asked for anchors stored where the agent cannot write. With a s
 
 **Verification:** guard tests pass.
 
-- [ ] **Unit 5: Docs and guidance**
+- [x] **Unit 5: Docs and guidance**
 
 **Goal:** Docs describe the walk, its cost and its limits, and the guidance names submodule contents in the limit recovery.
 
