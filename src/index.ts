@@ -18,6 +18,7 @@ import {
 import {
   createOpencodeWorkflowGuard,
   isWorkflowGuardBlockedError,
+  type OpencodeWorkflowGuardOptions,
 } from './lib/opencode-workflow-guard.js'
 import { createReceiptClassifier } from './lib/receipt-classifier.js'
 import {
@@ -68,6 +69,132 @@ const getPackageVersion = (): string => {
   }
 }
 
+// The identity a disabled guard carries in place of a snapshot digest. A
+// disabled guard reads no repository, so there is nothing real to name.
+const DISABLED_GUARD_IDENTITY = '0'.repeat(64)
+
+type GuardInput = Pick<PluginInput, 'client' | 'directory' | 'worktree'>
+
+// The session-history reads the guard uses for recovery and child rollup. The
+// installed SDK exposes session.messages / session.children as generic
+// RequestResult<T> shapes that don't directly assign to the narrow readback
+// contract, so a single boundary cast is needed; the consumer validates the
+// data payload before use.
+const createHostReadback = ({
+  client,
+  directory,
+}: Pick<GuardInput, 'client' | 'directory'>) => {
+  type SessionReadMethod = (input: {
+    path: { id: string }
+    query?: { directory?: string }
+  }) => Promise<{ data?: unknown }>
+  type SessionMessagesResponse = { data?: unknown; error?: unknown }
+  const readMessages = async (
+    sessionID: string,
+  ): Promise<SessionMessagesResponse> => {
+    const messages = client.session.messages.bind(
+      client.session,
+    ) as unknown as (input: {
+      path: { id: string }
+      query?: { directory?: string }
+    }) => Promise<SessionMessagesResponse>
+    return messages({ path: { id: sessionID }, query: { directory } })
+  }
+  return {
+    // Lenient: child-rollup reads. SDK error or non-array data -> [].
+    readSessionParts: async (sessionID: string) => {
+      const response = await readMessages(sessionID)
+      return Array.isArray(response.data) ? response.data : []
+    },
+    // Strict: initialization/recovery reads of the session's own history.
+    // An SDK error or non-array data throws instead of looking like an
+    // empty history.
+    readSessionPartsStrict: async (sessionID: string) => {
+      const response = await readMessages(sessionID)
+      if (response.error !== undefined && response.error !== null) {
+        throw new Error('session history read failed')
+      }
+      if (!Array.isArray(response.data)) {
+        throw new Error('session history read returned malformed data')
+      }
+      return response.data
+    },
+    listChildren: async (sessionID: string) => {
+      const children = client.session.children.bind(
+        client.session,
+      ) as unknown as SessionReadMethod
+      const response = await children({
+        path: { id: sessionID },
+        query: { directory },
+      })
+      if (!Array.isArray(response.data)) return []
+      return response.data.flatMap((entry) => {
+        if (
+          typeof entry !== 'object' ||
+          entry === null ||
+          typeof entry.id !== 'string'
+        ) {
+          return []
+        }
+        return [{ sessionId: entry.id, parentID: entry.parentID }]
+      })
+    },
+  }
+}
+
+// Builds the guard's options. A disabled guard gets no observer, no initial
+// snapshot, no host reader and no classifier, and a placeholder identity:
+// with those absent it has nothing to read, so it makes no git call and no
+// session read. The tools and hooks are still registered, and answer
+// `disabled`.
+const workflowGuardOptions = async (
+  { client, directory, worktree }: GuardInput,
+  config: ReturnType<typeof loadConfig>,
+): Promise<OpencodeWorkflowGuardOptions> => {
+  const targetDirectory = typeof worktree === 'string' ? worktree : directory
+  if (config.workflow_guard.mode === 'disabled') {
+    return {
+      config: config.workflow_guard,
+      workspaceIdentity: DISABLED_GUARD_IDENTITY,
+      repositoryIdentity: DISABLED_GUARD_IDENTITY,
+      worktreeIdentity: DISABLED_GUARD_IDENTITY,
+      registrationIdentity: registrationSourceIdentity,
+      targetDirectory,
+      sessionLocation: directory,
+    }
+  }
+  const observer = createOpencodeOperationObserver({ targetDirectory })
+  let initialSnapshot: OperationObserverResult
+  try {
+    initialSnapshot = await observer.snapshot()
+  } catch {
+    initialSnapshot = {
+      status: 'unavailable' as const,
+      reasonCode: 'target-unavailable' as const,
+    }
+  }
+  const initialIdentities =
+    initialSnapshot.status === 'available'
+      ? initialSnapshot.snapshot
+      : {
+          targetDigest: observer.targetDigest,
+          repositoryRevisionDigest: observer.targetDigest,
+          worktreeRevisionDigest: observer.targetDigest,
+        }
+  return {
+    config: config.workflow_guard,
+    workspaceIdentity: initialIdentities.targetDigest,
+    repositoryIdentity: initialIdentities.repositoryRevisionDigest,
+    worktreeIdentity: initialIdentities.worktreeRevisionDigest,
+    registrationIdentity: registrationSourceIdentity,
+    targetDirectory,
+    sessionLocation: directory,
+    observer,
+    classifier: createReceiptClassifier(),
+    hostReadback: createHostReadback({ client, directory }),
+  }
+}
+
 const initializePlugin = async ({
   client,
   directory,
@@ -91,99 +218,9 @@ const initializePlugin = async ({
     bundledAgentsDir,
     bundledCommandsDir,
   })
-  const observer = createOpencodeOperationObserver({
-    targetDirectory: typeof worktree === 'string' ? worktree : directory,
-  })
-  let initialSnapshot: OperationObserverResult
-  try {
-    initialSnapshot = await observer.snapshot()
-  } catch {
-    initialSnapshot = {
-      status: 'unavailable' as const,
-      reasonCode: 'target-unavailable' as const,
-    }
-  }
-  const initialIdentities =
-    initialSnapshot.status === 'available'
-      ? initialSnapshot.snapshot
-      : {
-          targetDigest: observer.targetDigest,
-          repositoryRevisionDigest: observer.targetDigest,
-          worktreeRevisionDigest: observer.targetDigest,
-        }
-  const workflowGuard = createOpencodeWorkflowGuard({
-    config: config.workflow_guard,
-    workspaceIdentity: initialIdentities.targetDigest,
-    repositoryIdentity: initialIdentities.repositoryRevisionDigest,
-    worktreeIdentity: initialIdentities.worktreeRevisionDigest,
-    registrationIdentity: registrationSourceIdentity,
-    targetDirectory: typeof worktree === 'string' ? worktree : directory,
-    sessionLocation: directory,
-    observer,
-    classifier: createReceiptClassifier(),
-    hostReadback: (() => {
-      // The installed SDK exposes session.messages / session.children as generic
-      // RequestResult<T> shapes that don't directly assign to the narrow readback
-      // contract used by hostReadback. A single boundary cast is required here;
-      // the data payload is validated by the consumer before use.
-      type SessionReadMethod = (input: {
-        path: { id: string }
-        query?: { directory?: string }
-      }) => Promise<{ data?: unknown }>
-      type SessionMessagesResponse = { data?: unknown; error?: unknown }
-      const readMessages = async (
-        sessionID: string,
-      ): Promise<SessionMessagesResponse> => {
-        const messages = client.session.messages.bind(
-          client.session,
-        ) as unknown as (input: {
-          path: { id: string }
-          query?: { directory?: string }
-        }) => Promise<SessionMessagesResponse>
-        return messages({ path: { id: sessionID }, query: { directory } })
-      }
-      return {
-        // Lenient: child-rollup reads. SDK error or non-array data -> [].
-        readSessionParts: async (sessionID) => {
-          const response = await readMessages(sessionID)
-          return Array.isArray(response.data) ? response.data : []
-        },
-        // Strict: initialization/recovery reads of the session's own history.
-        // An SDK error or non-array data throws instead of looking like an
-        // empty history.
-        readSessionPartsStrict: async (sessionID) => {
-          const response = await readMessages(sessionID)
-          if (response.error !== undefined && response.error !== null) {
-            throw new Error('session history read failed')
-          }
-          if (!Array.isArray(response.data)) {
-            throw new Error('session history read returned malformed data')
-          }
-          return response.data
-        },
-        listChildren: async (sessionID) => {
-          const children = client.session.children.bind(
-            client.session,
-          ) as unknown as SessionReadMethod
-          const response = await children({
-            path: { id: sessionID },
-            query: { directory },
-          })
-          if (!Array.isArray(response.data)) return []
-          return response.data.flatMap((entry) => {
-            if (
-              typeof entry !== 'object' ||
-              entry === null ||
-              typeof entry.id !== 'string'
-            ) {
-              return []
-            }
-            return [{ sessionId: entry.id, parentID: entry.parentID }]
-          })
-        },
-      }
-    })(),
-  })
+  const workflowGuard = createOpencodeWorkflowGuard(
+    await workflowGuardOptions({ client, directory, worktree }, config),
+  )
 
   const hooks: RegisteredPluginHooks = {
     config: async (incomingConfig: Config): Promise<void> => {
@@ -253,6 +290,7 @@ const initializePlugin = async ({
               extra: {
                 version: packageVersion,
                 bootstrapEnabled: config.bootstrap.enabled,
+                workflowGuardMode: config.workflow_guard.mode,
                 disabledSkillsCount: config.disabled_skills.length,
                 disabledAgentsCount: config.disabled_agents.length,
                 disabledCommandsCount: config.disabled_commands.length,

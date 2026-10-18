@@ -3829,8 +3829,28 @@ function createSessionRuntime(
     writeTerminalCompletionResult(output, terminal, target, terminal.title)
   }
 
-  // Only the no-epoch block is guard-owned output; every other blocked
-  // reason keeps writing nothing here.
+  // A disabled guard answers a completion with a terminal rejection. The
+  // reason does not depend on epoch state, so this does not go through the
+  // no-epoch writer. It is recorded as the call's terminal result, so a
+  // duplicate after-hook replays it. A disabled instance never re-enables,
+  // so the record is valid for the rest of the session.
+  function writeDisabledBlockedResult(
+    callDigest: string,
+    output: unknown,
+    target: TransitionTarget,
+  ): void {
+    const terminal: TerminalComplete = {
+      target,
+      status: 'rejected',
+      reasonCode: 'disabled',
+      title: 'Workflow transition rejected',
+    }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
+  }
+
+  // The no-epoch block and the disabled guard are guard-owned output; every
+  // other blocked reason keeps writing nothing here.
   function writeBlockedCompleteResult(
     callDigest: string,
     output: unknown,
@@ -3838,6 +3858,8 @@ function createSessionRuntime(
   ): void {
     if (blocked?.reasonCode === 'no-active-epoch') {
       writeNoEpochBlockedResult(callDigest, output, blocked.target)
+    } else if (blocked?.reasonCode === 'disabled') {
+      writeDisabledBlockedResult(callDigest, output, blocked.target)
     }
   }
 
