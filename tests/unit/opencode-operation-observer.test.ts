@@ -8,6 +8,7 @@ import path from 'node:path'
 import {
   createOpencodeOperationObserver,
   findDisplacedGitlinks,
+  type GitlinkState,
   hashField,
   type OpencodeOperationObserver,
   type OperationObserverCommandResult,
@@ -3867,8 +3868,6 @@ describe('OpenCode operation observer commit closure from records', () => {
   }, 30_000)
 })
 
-type SubmoduleState = 'uninitialized' | 'unborn' | 'initialized'
-
 const SUBMODULE_COMMIT_IDENTITY = [
   '-c',
   'user.email=observer@example.invalid',
@@ -3883,7 +3882,7 @@ const SUBMODULE_COMMIT_IDENTITY = [
 function setSubmoduleState(
   root: string,
   name: string,
-  state: SubmoduleState,
+  state: GitlinkState,
 ): void {
   const directory = path.join(root, name)
   fs.rmSync(directory, { recursive: true, force: true })
@@ -3955,7 +3954,7 @@ describe('OpenCode operation observer submodule state', () => {
       const observer = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
       })
-      const digests: Record<SubmoduleState, string> = {
+      const digests: Record<GitlinkState, string> = {
         uninitialized: '',
         unborn: '',
         initialized: '',
@@ -3995,6 +3994,26 @@ describe('OpenCode operation observer submodule state', () => {
       fs.mkdirSync(path.join(fixture.root, 'sub'))
       expect(await closureOf(fixture.root)).toBe(true)
       fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'edited\n')
+      expect(await closureOf(fixture.root)).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('a gitlink in the index over a path that HEAD tracks as a file reads not closed', async () => {
+    // Control: an empty directory at a gitlink path closes only when HEAD
+    // records a gitlink there, so a tracked file at that path does not match.
+    const fixture = createGitFixture()
+    try {
+      setExcludesFile(fixture.root, null)
+      fs.writeFileSync(path.join(fixture.root, 'sub'), 'a file\n')
+      addTracked(fixture.root, ['sub'], 'file named sub')
+      expect(
+        runGit(fixture.root, ['rm', '--cached', '--quiet', 'sub']).status,
+      ).toBe(0)
+      fs.rmSync(path.join(fixture.root, 'sub'))
+      fs.mkdirSync(path.join(fixture.root, 'sub'))
+      stageGitlinks(fixture.root, ['sub'])
       expect(await closureOf(fixture.root)).toBe(false)
     } finally {
       fixture.cleanup()
@@ -5036,6 +5055,59 @@ describe('OpenCode operation observer submodule contents', () => {
           expect(
             recordFor(readWorktreeRecords(root), 'plain/note.txt')?.kind,
           ).toBe('regular')
+        }),
+      30_000,
+    )
+
+    test(
+      'an invalid info/exclude inside a nested repository is file-read-failed',
+      () =>
+        withParent(async (root) => {
+          const nested = addNestedRepository(root, 'inner-repo')
+          // Control: the repository is readable until its exclude file is broken.
+          await expect(
+            createOpencodeOperationObserver({
+              targetDirectory: root,
+            }).snapshot(),
+          ).resolves.toMatchObject({ status: 'available' })
+          const exclude = path.join(
+            fs.realpathSync(
+              gitOutput(nested, ['rev-parse', '--absolute-git-dir']),
+            ),
+            'info',
+            'exclude',
+          )
+          fs.rmSync(exclude, { force: true })
+          fs.mkdirSync(exclude)
+          await expect(
+            createOpencodeOperationObserver({
+              targetDirectory: root,
+            }).snapshot(),
+          ).resolves.toEqual({
+            status: 'unavailable',
+            reasonCode: 'file-read-failed',
+          })
+        }),
+      30_000,
+    )
+
+    test(
+      'non-UTF-8 output from git inside a nested repository is file-read-failed',
+      () =>
+        withParent(async (root) => {
+          addNestedRepository(root, 'inner-repo')
+          const observer = createOpencodeOperationObserver({
+            targetDirectory: root,
+          })
+          await withGitShim(
+            `case "$(pwd)" in */inner-repo) for a in "$@"; do if [ "$a" = "--others" ]; then printf 'b\\377\\000'; exit 0; fi; done;; esac`,
+            async () => {
+              await expect(observer.snapshot()).resolves.toEqual({
+                status: 'unavailable',
+                reasonCode: 'file-read-failed',
+              })
+            },
+          )
         }),
       30_000,
     )

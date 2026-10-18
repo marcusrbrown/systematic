@@ -1253,8 +1253,10 @@ function adaptInjectedFileReader(
 /**
  * What a gitlink path holds on disk: nothing checked out (`uninitialized`), a
  * checkout with no commit yet (`unborn`), or a checkout at a commit.
+ *
+ * @internal Exported for tests only.
  */
-type GitlinkState = 'uninitialized' | 'unborn' | 'initialized'
+export type GitlinkState = 'uninitialized' | 'unborn' | 'initialized'
 
 type GitlinkInspection =
   | { status: 'initialized'; id: string; anchor: RepositoryAnchor }
@@ -1450,20 +1452,24 @@ function walkCheckout(
 ): RepositorySnapshotResult {
   return readRepositorySnapshot(
     readers,
-    contextForCheckout(absolutePath, checkout.anchor),
+    contextFromAnchor(absolutePath, checkout.anchor),
     checkout.anchor.head,
     limits,
     walk,
   )
 }
 
-/** A checkout's own root, command directory and `info/exclude`, bound to its anchor. */
-function contextForCheckout(
-  absolutePath: string,
+/**
+ * A repository's own root, command directory and `info/exclude`, with its pin
+ * taken from `anchor`. The observer's root keeps the pin captured at
+ * construction instead, so `snapshot()` overrides `pin`.
+ */
+function contextFromAnchor(
+  commandDirectory: string,
   anchor: RepositoryAnchor,
 ): RepositoryContext {
   return {
-    commandDirectory: absolutePath,
+    commandDirectory,
     worktreeRoot: anchor.toplevel,
     infoExcludePath: anchor.infoExcludePath,
     pin: {
@@ -1495,7 +1501,7 @@ function appendSymlinkFact(
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
-  budget: WalkState,
+  walk: WalkState,
   format: ObjectFormat,
   tracked: boolean,
 ): ObservationResult {
@@ -1507,7 +1513,7 @@ function appendSymlinkFact(
       ? vanishedPath(tracked, absolutePath, relativePath)
       : { status: 'error', reasonCode: 'file-read-failed' }
   }
-  const nextBytes = budget.bytes + target.byteLength
+  const nextBytes = walk.bytes + target.byteLength
   if (
     target.byteLength > limits.maxPathBytes ||
     nextBytes > limits.maxTotalFileBytes
@@ -1517,7 +1523,7 @@ function appendSymlinkFact(
   hash.update('symlink')
   hashField(hash, relativePath)
   hashField(hash, target)
-  budget.bytes = nextBytes
+  walk.bytes = nextBytes
   return observed(
     absolutePath,
     {
@@ -1538,14 +1544,14 @@ function appendRegularFact(
   relativePath: string,
   stat: OperationObserverFileStat,
   limits: Limits,
-  budget: WalkState,
+  walk: WalkState,
   format: ObjectFormat,
   tracked: boolean,
 ): ObservationResult {
   if (!stat.isFile || !Number.isSafeInteger(stat.size) || stat.size < 0) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
-  const remaining = limits.maxTotalFileBytes - budget.bytes
+  const remaining = limits.maxTotalFileBytes - walk.bytes
   if (stat.size > remaining) {
     return { status: 'error', reasonCode: 'file-output-limit' }
   }
@@ -1561,7 +1567,7 @@ function appendRegularFact(
   hashField(hash, relativePath)
   hashField(hash, (stat.mode & 0o111) !== 0 ? 'executable' : 'non-executable')
   hashField(hash, content)
-  budget.bytes += content.byteLength
+  walk.bytes += content.byteLength
   return observed(
     absolutePath,
     {
@@ -1653,7 +1659,7 @@ function appendPathFact(
   context: RepositoryContext,
   entry: PathEntry,
   limits: Limits,
-  budget: WalkState,
+  walk: WalkState,
   format: ObjectFormat,
   verifiedDirectories: Set<string>,
 ): ObservationResult {
@@ -1681,7 +1687,7 @@ function appendPathFact(
       absolutePath,
       relativePath,
       limits,
-      budget,
+      walk,
     )
   }
   if (mode === '160000') {
@@ -1691,7 +1697,7 @@ function appendPathFact(
       absolutePath,
       relativePath,
       limits,
-      budget,
+      walk,
     )
   }
   let stat: OperationObserverFileStat
@@ -1718,7 +1724,7 @@ function appendPathFact(
         relativePath,
         stat,
         limits,
-        budget,
+        walk,
         format,
         tracked,
       )
@@ -1729,7 +1735,7 @@ function appendPathFact(
         relativePath,
         stat,
         limits,
-        budget,
+        walk,
         format,
         tracked,
       )
@@ -1847,7 +1853,7 @@ function verifyCheckoutUnchanged(
         : { status: 'error', reasonCode: 'file-read-failed' }
     }
   }
-  return runFinalPass(readers, limits, walked.pass, UNSTABLE)
+  return runFinalPass(readers, limits, walked.pass, false)
 }
 
 function verifyObservationUnchanged(
@@ -1928,15 +1934,15 @@ function verifyIgnoreSourcesUnchanged(
  * is the same condition `snapshot()` rejects up front, so it is reported the
  * same way (`target-unavailable`). A `HEAD` that moved is a transient change
  * (`worktree-unstable`). A walked checkout was bound to nothing before its
- * first pass, so for it a move of any part of the anchor is `moved` as given
- * (`worktree-unstable`).
+ * first pass, so for it a move of any part of the anchor is also
+ * `worktree-unstable`: `rootMoveIsFatal` is false.
  */
 function verifyAnchorUnchanged(
   readers: WorktreeReaders,
   context: RepositoryContext,
   limits: Limits,
   head: string | undefined,
-  moved: StabilityResult,
+  rootMoveIsFatal: boolean,
 ): StabilityResult {
   const anchor = readRepositoryAnchor(
     readers.runner,
@@ -1951,7 +1957,7 @@ function verifyAnchorUnchanged(
     anchor.gitDir !== pin.gitDir ||
     anchor.commonDir !== pin.commonDir
   ) {
-    return moved
+    return rootMoveIsFatal ? ROOT_MOVED : UNSTABLE
   }
   return anchor.head === head ? { status: 'ok' } : UNSTABLE
 }
@@ -1964,7 +1970,7 @@ function runFinalPass(
   readers: WorktreeReaders,
   limits: Limits,
   pass: RepositoryPass,
-  moved: StabilityResult,
+  rootMoveIsFatal: boolean,
 ): StabilityResult {
   const { context, head, first, observations, verifiedDirectories } = pass
   // Ignore sources first: a source swapped for a FIFO or a huge file must be
@@ -1987,7 +1993,7 @@ function runFinalPass(
     first,
   )
   if (listings.status === 'error') return listings
-  return verifyAnchorUnchanged(readers, context, limits, head, moved)
+  return verifyAnchorUnchanged(readers, context, limits, head, rootMoveIsFatal)
 }
 
 interface IgnoreSourceFact {
@@ -2458,7 +2464,7 @@ function readWorktreeSnapshot(
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const snapshot = readRepositorySnapshot(readers, context, head, limits, walk)
   if (snapshot.status === 'error') return snapshot
-  const stable = runFinalPass(readers, limits, snapshot.pass, ROOT_MOVED)
+  const stable = runFinalPass(readers, limits, snapshot.pass, true)
   if (stable.status === 'error') return stable
   return {
     status: 'ok',
@@ -2927,16 +2933,7 @@ export function readWorktreeRecords(
   if (anchor.status === 'error') return anchor
   return readWorktreeSnapshot(
     resolveWorktreeReaders(runner, options),
-    {
-      commandDirectory: targetDirectory,
-      worktreeRoot: anchor.toplevel,
-      infoExcludePath: anchor.infoExcludePath,
-      pin: {
-        targetRoot: anchor.toplevel,
-        gitDir: anchor.gitDir,
-        commonDir: anchor.commonDir,
-      },
-    },
+    contextFromAnchor(targetDirectory, anchor),
     anchor.head,
     limits,
     createWalkState(),
@@ -3009,9 +3006,7 @@ export function createOpencodeOperationObserver(
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
       const context: RepositoryContext = {
-        commandDirectory: targetDirectory,
-        worktreeRoot: anchor.toplevel,
-        infoExcludePath: anchor.infoExcludePath,
+        ...contextFromAnchor(targetDirectory, anchor),
         pin: rootPinResult.pin,
       }
       const repository = readRevision(

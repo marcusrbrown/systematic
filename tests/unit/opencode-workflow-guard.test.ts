@@ -32,6 +32,7 @@ import {
 } from '../../src/lib/opencode-workflow-guard.js'
 import {
   createReceiptClassifier,
+  parseReceiptOperationObservation,
   type ReceiptOperationObservation,
 } from '../../src/lib/receipt-classifier.js'
 import type {
@@ -16850,7 +16851,9 @@ describe('OpenCode workflow guard over a real observer with a submodule', () => 
         classifier: {
           ...classifier,
           classifyOperation: async (input: unknown) => {
-            observations.push(input as ReceiptOperationObservation)
+            // Parsed with the classifier's own parser, so no cast is needed.
+            const observation = parseReceiptOperationObservation(input)
+            if (observation) observations.push(observation)
             const classify = classifier.classifyOperation
             if (!classify) {
               throw new Error(
