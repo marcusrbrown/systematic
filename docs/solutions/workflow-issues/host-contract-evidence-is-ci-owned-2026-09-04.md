@@ -1,6 +1,6 @@
 ---
 title: "Host-contract evidence is CI-owned: nobody re-runs the suite by hand"
-module: ".github/workflows/main.yaml host-contract job + scripts/host-contract-guard.ts + scripts/lib/opencode-pin.ts"
+module: ".github/workflows/main.yaml host-contract jobs + scripts/host-contract-guard.ts + scripts/lib/opencode-pin.ts"
 date: 2026-09-04
 problem_type: workflow_issue
 component: testing_framework
@@ -49,18 +49,30 @@ on `PATH` and never `npx` (#928). `probeOpencodeAvailability()`
 memoizes. Every fixture-consuming suite wraps it in a memoizing
 `isOpencodeAvailable()` (`tests/integration/fixtures/receipt-workflow-host.ts:199`).
 
-The evidence itself is the `host-contract` job in
-`.github/workflows/main.yaml`. Its "Run host contract suite" step sets
-`SYSTEMATIC_REQUIRE_OPENCODE=1` and runs `bun test tests/integration` with a
-JUnit reporter. `Host Contract` is a required status check in the `main`
-ruleset and in the classic branch protection (`.github/settings.yml`), so a red
-`host-contract` job blocks the merge of any pull request, including the release
-PR. For pull requests the job is path-gated on
-`src/**`, `tests/**`, `scripts/**`, `evals/**`, `skills/**`, `agents/**`,
-`registry/**`, `package.json`, `bun.lock`, and the workflow file itself, via
-the job's "Detect relevant path changes" step; on push to `main` it always
-runs. A Renovate OpenCode-group bump touches `package.json`, so it always
-triggers the job.
+The evidence itself is three jobs in `.github/workflows/main.yaml`:
+
+- `host-contract-gate` runs the path filter and exposes its verdict as the
+  output `run`.
+- `host-contract-shard` is a four-way matrix named `Host Contract shard N/4`.
+  Each shard sets `SYSTEMATIC_REQUIRE_OPENCODE=1`, runs
+  `bun test tests/integration --shard=N/4
+  --timings=tests/integration/host-contract-timings.json` with a JUnit
+  reporter, and uploads its report and log.
+- `host-contract`, named `Host Contract`, is the aggregator. It always runs
+  (`if: always()`) and judges the other two.
+
+`Host Contract` is a required status check in the `main` ruleset and in the
+classic branch protection (`.github/settings.yml`), so a red `host-contract`
+job blocks the merge of any pull request, including the release PR. For pull
+requests the gate filters on `src/**`, `tests/**`, `scripts/**`, `evals/**`,
+`skills/**`, `agents/**`, `registry/**`, `package.json`, `bun.lock`, and
+`.github/**`, via its "Detect relevant path changes" step. On push to `main`
+the suite does not run and the gate reports it as not required: the release
+gate reads the check runs on the release PR's head
+(`scripts/release/gate-decide.ts`), and the strict up-to-date merge policy
+(`.github/settings.yml`) means `main` receives a tree that was already tested.
+A Renovate OpenCode-group bump touches `package.json`, so it always triggers
+the suite.
 
 ## Guidance
 
@@ -70,16 +82,17 @@ to.** There is no follow-up command to run, no pass count to transcribe into a
 doc, and no background process to babysit — the job already did that, against
 the exact pin the PR proposes, on a clean checkout.
 
-**Green is evidence only when the suite actually ran.** The job has no
-top-level `if:` — gating happens per step, in the job's "Determine whether to
-run the host contract suite" step (`id: gate`) — so on a PR that the path
-filter excludes (a docs-only change, for example) every gated step is skipped
-and the job still reports success. A green check on an unrelated PR is not
-host evidence; it is the job correctly declining to run. This never
-undermines a Renovate OpenCode bump specifically: the path filter in the
-"Detect relevant path changes" step includes `package.json`, which a pin
-bump always touches (and `bun.lock`, which it touches in practice), so that
-PR's `host-contract` green always means the suite ran. The qualifier matters for
+**Green is evidence only when the suite actually ran.** A skipped required
+check reads as passing, so the aggregator always runs, and it states its own
+verdict. It fails unless the gate succeeded. When the gate says the suite was
+not required (a docs-only PR the path filter excludes, or a push to `main`),
+it reports success with a notice. When the suite was required, it fails unless
+every shard succeeded; a skipped or cancelled shard is not a pass. A green
+check on an unrelated PR is not host evidence; it is the aggregator correctly
+declining to require the suite. This never undermines a Renovate OpenCode bump
+specifically: the path filter includes `package.json`, which a pin bump always
+touches (and `bun.lock`, which it touches in practice), so that PR's
+`host-contract` green always means the suite ran. The qualifier matters for
 any other PR whose green check might be mistaken for host coverage.
 
 ### Skip-vs-fail is the mechanism that makes this safe
@@ -94,30 +107,35 @@ consequence differs by design:
   (`opencodeAvailabilityReason()`). `bun test tests/unit` and the required
   `test` job never spawn the launcher at all, so nothing about local
   development requires a live host.
-- **In CI**, `SYSTEMATIC_REQUIRE_OPENCODE=1` is set only by the `host-contract`
-  job. Every fixture-consuming suite calls `requireOpencodeAvailable()`
+- **In CI**, `SYSTEMATIC_REQUIRE_OPENCODE=1` is set only by the
+  `host-contract-shard` jobs. Every fixture-consuming suite calls `requireOpencodeAvailable()`
   (`scripts/lib/opencode-availability.ts:192-201`) at module scope right after
   `isOpencodeAvailable()`. When the classification is not `available`, that
   call throws — a module-scope throw fails the file to load, Bun reports it as
-  a suite error, the `host-contract` job goes red, and the required `Host Contract` check
-  blocks the merge. There is no path where a missing host quietly skips in CI.
+  a suite error, that shard goes red, the aggregator goes red with it, and the
+  required `Host Contract` check blocks the merge. There is no path where a missing host quietly skips in CI.
 
 That module-scope throw covers a missing or mismatched host, but not a
 narrower failure: a single `test.skipIf(...)` inside an otherwise-loaded file
 skipping for an unrelated reason while the job still reports green. The
-host-contract job's "Guard skipped tests and pass floor" step closes that
-gap by running `scripts/host-contract-guard.ts`, a standalone, unit-tested
-script (extracted from an inline heredoc in #949) — not YAML. It parses the
-JUnit output (`parseJUnitXml()`) and fails the job — `evaluate()` returns one
-or more violations, and the script's CLI wrapper exits non-zero — on any of
-five independent conditions:
+aggregator's "Guard skipped tests and pass floor" step closes that gap by
+running `scripts/host-contract-guard.ts`, a standalone, unit-tested script
+(extracted from an inline heredoc in #949) — not YAML. The step runs under
+`!cancelled()`, so a failed shard still gets its diagnosis. It reads all four
+shards' reports and logs as alternating `<junit> <log>` arguments and merges
+them with `mergeEvidence()`: the union of produced files, every skipped case,
+and the summed pass count. A shard whose log has no `<N> pass` line makes the
+sum unknown, which fails as `no-pass-line`, and a missing or unreadable shard
+report is a violation of its own. The guard parses the JUnit output
+(`parseJUnitXml()`) and fails the job — `evaluate()` returns one or more
+violations, and the script's CLI wrapper exits non-zero — on any of five
+independent conditions over the merged evidence:
 
-1. `missingFiles.length > 0` — a known integration test file (the eleven
-   listed in `scripts/host-contract-guard.ts`'s `EXPECTED_SUITE_FILES`)
-   produced no `<testsuite>` entry at all, meaning `bun test` never actually
-   ran it.
-2. `unexpected.length > 0` — a skipped test case is outside the exempt set.
-3. `missingExempt.length > 0` — a known-exempt case did **not** skip. The
+1. `missing-files` — a known integration test file (the fifteen listed in
+   `scripts/host-contract-guard.ts`'s `EXPECTED_SUITE_FILES`) produced no
+   `<testsuite>` entry in any shard, meaning `bun test` never actually ran it.
+2. `unexpected-skips` — a skipped test case is outside the exempt set.
+3. `missing-exempt-skips` — a known-exempt case did **not** skip. The
    exempt set (`scripts/host-contract-guard.ts`'s `EXEMPT_SKIPS`, today
    exactly one entry: the mixed-version test, which stays opt-in because
    running it would put a fetch of a published `@fro.bot/systematic` release
@@ -125,13 +143,13 @@ five independent conditions:
    permits that skip and asserts it happens. A future change that enables
    the mixed-version test without pruning the exempt set trips this branch
    instead of silently passing.
-4. `!lastPassMatch` — no `<N> pass` summary line could be parsed from the
-   captured log at all. This fails independently of the floor below; a log
-   with zero parseable summary lines never reaches the floor comparison.
-5. `passCount < PASS_FLOOR` — the parsed pass count is below
+4. `no-pass-line` — no `<N> pass` summary line could be parsed from a shard's
+   captured log. This fails independently of the floor below; a sum with an
+   unreadable term never reaches the floor comparison.
+5. `below-pass-floor` — the summed pass count is below
    `scripts/host-contract-guard.ts`'s `PASS_FLOOR = 120`.
 
-The combination — module-scope throw for "no host at all", five-way JUnit
+The combination — module-scope throw for "no host at all", five-way merged
 guard for every shape of "host present but the run didn't actually cover
 what it claims to" — is why "green with everything skipped" is not a
 reachable state for this job. The bidirectional exempt check (condition 3)
@@ -177,8 +195,14 @@ definition that pins the exact environment.
   set is the first thing to inspect.
 - Adding a new suite that reaches a real OpenCode host — it needs its own
   module-scope `isOpencodeAvailable()` + `requireOpencodeAvailable()` pair to
-  inherit fail-closed behavior, and its file name needs adding to
-  `EXPECTED_SUITE_FILES`.
+  inherit fail-closed behavior, its file name needs adding to
+  `EXPECTED_SUITE_FILES`, and the file belongs in a refreshed timings file.
+  Regenerate it locally with `bun test tests/integration
+  --timings=tests/integration/host-contract-timings.json --update-timings`
+  (with `SYSTEMATIC_REQUIRE_OPENCODE=1`, on an idle machine); CI never writes
+  it.
+- Shard times drifting apart — one shard running well past the others means
+  the committed timings no longer match the suite; refresh them the same way.
 
 ## Examples
 
@@ -199,7 +223,7 @@ required job already does on every relevant PR.
 
 ### Right: let the required job be the evidence
 
-Open the Renovate PR, wait for `host-contract` to report a conclusion. Green
+Open the Renovate PR, wait for `Host Contract` to report a conclusion. Green
 means the bump is proven at the new pin; red means the guard, the
 module-scope throw, or a real test assertion caught something, and the PR is
 not ready to merge until it is fixed.
@@ -209,4 +233,4 @@ not ready to merge until it is fixed.
 - [`docs/solutions/workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md`](version-pinned-evidence-must-be-reproven-2026-08-16.md) — superseded by this doc; the invariant it stated survives, the manual mechanism it prescribed does not.
 - [`docs/solutions/integration-issues/availability-guards-must-check-executability-2026-08-16.md`](../integration-issues/availability-guards-must-check-executability-2026-08-16.md) — the same "report the real underlying condition, not a proxy" discipline `probeOpencodeAvailability()` follows.
 - `docs/plans/2026-09-04-001-refactor-ci-owned-host-contract-suite-plan.md` — the plan that shipped this mechanism across Units 1-5.
-- PRs: #916 (pin from `package.json`), #928 (bunx launcher + availability gate), #930 (scripted provider replaces hosted model), #931 (required `host-contract` job), #932/#933/#936 (real-host fixes the job caught).
+- PRs: #916 (pin from `package.json`), #928 (bunx launcher + availability gate), #930 (scripted provider replaces hosted model), #931 (required `host-contract` job), #932/#933/#936 (real-host fixes the job caught), #1161 (four timed shards behind an always-running aggregator).
