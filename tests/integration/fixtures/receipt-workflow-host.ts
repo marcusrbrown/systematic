@@ -109,25 +109,55 @@ export function writeWorkflowGuardMode(
   fixture: Pick<IsolatedFixture, 'configDir'>,
   mode: WorkflowGuardMode,
 ): void {
-  if (fs.existsSync(path.join(fixture.configDir, 'systematic.jsonc'))) {
-    // The plugin prefers systematic.jsonc, and JSONC cannot be merged here.
+  // The plugin prefers systematic.jsonc, and JSONC cannot be merged here.
+  // Probed with lstat, which tolerates a missing file; nothing reads or writes
+  // this path afterwards.
+  if (pathExists(path.join(fixture.configDir, 'systematic.jsonc'))) {
     throw new Error('writeWorkflowGuardMode cannot merge into systematic.jsonc')
   }
   const file = path.join(fixture.configDir, 'systematic.json')
-  let existing: Record<string, unknown> = {}
-  if (fs.existsSync(file)) {
-    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
-    if (!isRecord(parsed)) {
-      throw new Error(`${file} must hold a JSON object`)
-    }
-    existing = parsed
+  const parsed = readJsonOrUndefined(file)
+  if (parsed !== undefined && !isRecord(parsed)) {
+    throw new Error(`${file} must hold a JSON object`)
   }
+  const existing = parsed ?? {}
   const guard = isRecord(existing.workflow_guard) ? existing.workflow_guard : {}
   fs.mkdirSync(fixture.configDir, { recursive: true })
   fs.writeFileSync(
     file,
     JSON.stringify({ ...existing, workflow_guard: { ...guard, mode } }),
   )
+}
+
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+/** Whether `target` exists, without a separate check that a later use can race. */
+function pathExists(target: string): boolean {
+  try {
+    fs.lstatSync(target)
+    return true
+  } catch (error) {
+    if (isMissingFile(error)) return false
+    throw error
+  }
+}
+
+/**
+ * The parsed JSON in `file`, or `undefined` when the file does not exist.
+ * The read itself decides: a missing file is the only error treated as "no
+ * config yet", and every other failure, including malformed JSON, is rethrown.
+ */
+function readJsonOrUndefined(file: string): unknown {
+  let text: string
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch (error) {
+    if (isMissingFile(error)) return undefined
+    throw error
+  }
+  return JSON.parse(text)
 }
 
 /**

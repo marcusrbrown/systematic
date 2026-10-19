@@ -22487,6 +22487,125 @@ describe('an adapter built with the guard disabled and no observer', () => {
     },
   )
 
+  /**
+   * One host tool call whose arguments differ between the guard's before-hook
+   * and the tool and after-hook, as when a later plugin's before-hook rewrites
+   * them: the guard prepares from `beforeArgs`, and the tool and the after-hook
+   * see `finalArgs`.
+   */
+  async function runRewrittenTool(
+    adapter: OpencodeWorkflowGuard,
+    tool: string,
+    beforeArgs: Record<string, unknown>,
+    finalArgs: Record<string, unknown>,
+    callID: string,
+  ): Promise<HostCall> {
+    const input = { tool, sessionID: DISABLED_SESSION, callID }
+    await adapter.hooks['tool.execute.before'](input, { args: beforeArgs })
+    const result = expectToolOutput(
+      await getTool(adapter, tool).execute(
+        finalArgs,
+        toolContext(DISABLED_SESSION),
+      ),
+    )
+    const call: HostCall = {
+      title: result.title ?? '',
+      output: result.output,
+      metadata: { ...(result.metadata ?? {}) },
+    }
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: finalArgs },
+      call,
+    )
+    return call
+  }
+
+  test('a start whose arguments are rewritten after the guard prepared it is still rejected as disabled', async () => {
+    const adapter = disabledAdapter()
+
+    const call = await runRewrittenTool(
+      adapter,
+      'systematic_workflow_start',
+      {},
+      { expected_operations: ['verification'] },
+      'disabled-rewritten-start',
+    )
+
+    expect(JSON.parse(call.output)).toEqual({
+      status: 'rejected',
+      reasonCode: 'disabled',
+    })
+    expect(call.metadata.workflowGuard).toMatchObject({
+      status: 'rejected',
+      reasonCode: 'disabled',
+    })
+  })
+
+  test.each([
+    { label: 'another target', finalArgs: { target: 'epoch' } },
+    {
+      label: 'an extra argument that fails validation',
+      finalArgs: { target: 'unit', extra: 1 },
+    },
+  ])(
+    'a completion whose arguments are rewritten to $label after the guard prepared it is still rejected as disabled',
+    async ({ finalArgs }) => {
+      const adapter = disabledAdapter()
+
+      const call = await runRewrittenTool(
+        adapter,
+        'systematic_workflow_complete',
+        { target: 'unit' },
+        finalArgs,
+        'disabled-rewritten-complete',
+      )
+
+      expect(JSON.parse(call.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'disabled',
+      })
+      expect(call.metadata.workflowGuard).toMatchObject({
+        status: 'rejected',
+        target: 'unit',
+        reasonCode: 'disabled',
+      })
+    },
+  )
+
+  describe('control: an enabled guard still handles rewritten arguments as a lifecycle mismatch', () => {
+    test('a start rewritten after preparation in observe mode makes the guard unavailable and leaves the tool output pending', async () => {
+      const adapter = createAdapter('observe')
+
+      const call = await runRewrittenTool(
+        adapter,
+        'systematic_workflow_start',
+        {},
+        { expected_operations: ['verification'] },
+        'observe-rewritten-start',
+      )
+
+      expect(status(adapter, DISABLED_SESSION).state).toBe('unavailable')
+      expect(JSON.parse(call.output)).toEqual({
+        status: 'pending',
+        operation: 'start',
+      })
+    })
+
+    test('a completion rewritten after preparation in observe mode makes the guard unavailable', async () => {
+      const adapter = createAdapter('observe')
+
+      await runRewrittenTool(
+        adapter,
+        'systematic_workflow_complete',
+        { target: 'unit' },
+        { target: 'epoch' },
+        'observe-rewritten-complete',
+      )
+
+      expect(status(adapter, DISABLED_SESSION).state).toBe('unavailable')
+    })
+  })
+
   describe('control: an enabled guard still reports a malformed call as unavailable', () => {
     test.each(['observe', 'protected'] as const)(
       'a malformed completion in %s mode is unavailable as guard-unavailable',

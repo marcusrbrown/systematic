@@ -48,9 +48,46 @@ const WORKFLOW_TOOLS = [
   'systematic_workflow_control',
 ] as const
 
+/** The environment a git command sees with every `GIT_*` variable removed. */
+function withoutGitEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] =>
+        !entry[0].startsWith('GIT_') && entry[1] !== undefined,
+    ),
+  )
+}
+
+// Fixture git commands run with no inherited `GIT_*` variables, so a hook or
+// runner that sets GIT_DIR or GIT_WORK_TREE cannot point them at another
+// repository, and with no global or system config. The identity comes from
+// `-c`, so nothing is written to any config file.
 function run(cwd: string, args: readonly string[]): void {
-  const result = Bun.spawnSync(['git', ...args], { cwd })
+  const result = Bun.spawnSync(
+    [
+      'git',
+      '-c',
+      'user.name=Guard Off',
+      '-c',
+      'user.email=guard-off@example.invalid',
+      ...args,
+    ],
+    {
+      cwd,
+      env: {
+        ...withoutGitEnv(),
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+      },
+    },
+  )
   if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed`)
+}
+
+/** Initializes the repository the plugin runs against, with one commit. */
+function initFixtureRepo(project: string): void {
+  run(project, ['init', '--quiet'])
+  run(project, ['commit', '--quiet', '--allow-empty', '-m', 'initial'])
 }
 
 /** A `git` that logs its arguments, then hands off to the real binary. */
@@ -76,6 +113,20 @@ function toolContext(): object {
     ask: async () => {},
   }
 }
+
+const FIXTURE_SETUP_DIR_ENV = 'SYSTEMATIC_TEST_FIXTURE_SETUP_DIR'
+const FIXTURE_SETUP_TEST = 'fixture git setup in a subprocess'
+
+// Runs only in the subprocess the test below starts, with GIT_DIR and
+// GIT_WORK_TREE in its starting environment. Skipped in a normal run.
+test.skipIf(process.env[FIXTURE_SETUP_DIR_ENV] === undefined)(
+  FIXTURE_SETUP_TEST,
+  () => {
+    const project = process.env[FIXTURE_SETUP_DIR_ENV]
+    if (!project) throw new Error(`${FIXTURE_SETUP_DIR_ENV} is not set`)
+    initFixtureRepo(project)
+  },
+)
 
 describe('a plugin whose workflow guard mode is set explicitly', () => {
   let tempDir: string
@@ -122,10 +173,7 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
   > {
     const project = path.join(tempDir, 'project')
     fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
-    run(project, ['init', '--quiet'])
-    run(project, ['config', 'user.email', 'guard-off@example.invalid'])
-    run(project, ['config', 'user.name', 'Guard Off'])
-    run(project, ['commit', '--quiet', '--allow-empty', '-m', 'initial'])
+    initFixtureRepo(project)
 
     const configDir = path.join(tempDir, 'config')
     fs.mkdirSync(configDir)
@@ -301,6 +349,76 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
       malformedComplete: [malformedFirst, malformedReplay],
     }
   }
+
+  test('fixture git setup leaves a repository named by GIT_DIR and GIT_WORK_TREE untouched', () => {
+    const sentinel = path.join(tempDir, 'sentinel')
+    const project = path.join(tempDir, 'project-under-test')
+    fs.mkdirSync(sentinel)
+    fs.mkdirSync(project)
+    const sentinelGit = (...args: string[]): string => {
+      const result = Bun.spawnSync(
+        [
+          'git',
+          '-c',
+          'user.name=Sentinel',
+          '-c',
+          'user.email=sentinel@example.invalid',
+          ...args,
+        ],
+        {
+          cwd: sentinel,
+          env: {
+            ...withoutGitEnv(),
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_NOSYSTEM: '1',
+          },
+        },
+      )
+      if (result.exitCode !== 0) throw new Error(`sentinel ${args[0]} failed`)
+      return result.stdout.toString().trim()
+    }
+    sentinelGit('init', '--quiet')
+    sentinelGit('commit', '--quiet', '--allow-empty', '-m', 'sentinel')
+    const gitDir = path.join(sentinel, '.git')
+    const snapshot = () => ({
+      head: fs.readFileSync(path.join(gitDir, 'HEAD')),
+      config: fs.readFileSync(path.join(gitDir, 'config')),
+      commit: sentinelGit('rev-parse', 'HEAD'),
+    })
+    const before = snapshot()
+
+    // A hook or another runner starts the test process with GIT_DIR and
+    // GIT_WORK_TREE already set. Bun hands a child only the environment the
+    // process started with, so the setup runs in a process that starts that way.
+    const child = Bun.spawnSync(
+      [
+        process.execPath,
+        'test',
+        path.join(import.meta.dirname, 'plugin-guard-disabled.test.ts'),
+        '-t',
+        FIXTURE_SETUP_TEST,
+      ],
+      {
+        cwd: path.resolve(import.meta.dirname, '../..'),
+        env: {
+          ...withoutGitEnv(),
+          GIT_DIR: gitDir,
+          GIT_WORK_TREE: sentinel,
+          [FIXTURE_SETUP_DIR_ENV]: project,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+
+    expect(child.exitCode).toBe(0)
+    const after = snapshot()
+    expect(after.head.equals(before.head)).toBe(true)
+    expect(after.config.equals(before.config)).toBe(true)
+    expect(after.commit).toBe(before.commit)
+    // The fixture repository itself was set up.
+    expect(fs.existsSync(path.join(project, '.git', 'HEAD'))).toBe(true)
+  })
 
   test('a disabled plugin makes no git call, reads no session, and injects no guard marker', async () => {
     const observed = await drive('disabled')

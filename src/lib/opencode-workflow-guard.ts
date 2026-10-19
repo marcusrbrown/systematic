@@ -5150,13 +5150,16 @@ function createSessionRuntime(
     const callDigest = digestCall(ledger, host.callID)
     const pending = pendingStarts.get(callDigest)
     pendingStarts.delete(callDigest)
+    // A disabled guard answers every start the same way, before any argument
+    // check: the arguments the after-hook sees may differ from the ones it
+    // prepared (a later plugin can rewrite them), or it may have prepared
+    // nothing (malformed arguments). Neither may leave the tool's own pending
+    // output standing.
+    if (options.config.mode === 'disabled') {
+      writeStartResult(output, { status: 'rejected', reasonCode: 'disabled' })
+      return
+    }
     if (!pending) {
-      // A disabled guard answers a start it never prepared (malformed
-      // arguments) the way it answers a valid one.
-      if (options.config.mode === 'disabled') {
-        writeStartResult(output, { status: 'rejected', reasonCode: 'disabled' })
-        return
-      }
       markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
@@ -5736,6 +5739,24 @@ function createSessionRuntime(
   const completionFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
     observerReadbackFailedCause(reasonCode, 'complete-readback')
 
+  // A disabled guard answers every completion with the terminal disabled
+  // rejection, whatever arguments the after-hook sees: they may differ from the
+  // ones it prepared (a later plugin can rewrite them). The target it was
+  // rejected for is the one recorded for the call, else the one in the
+  // arguments, so a replay carries the same target as the first answer.
+  function finishDisabledComplete(
+    callDigest: string,
+    finalTarget: TransitionTarget | undefined,
+    output: unknown,
+  ): void {
+    const target =
+      terminalCompletes.get(callDigest)?.target ??
+      blockedCompletes.get(callDigest)?.target ??
+      finalTarget
+    blockedCompletes.delete(callDigest)
+    writeDisabledBlockedResult(callDigest, output, target)
+  }
+
   async function finishComplete(
     host: HostToolAfter,
     output: unknown,
@@ -5743,6 +5764,10 @@ function createSessionRuntime(
     const callDigest = digestCall(ledger, host.callID)
     const pending = pendingCompletes.get(callDigest)
     const finalTarget = normalizeTarget(host.args)
+    if (options.config.mode === 'disabled') {
+      finishDisabledComplete(callDigest, finalTarget, output)
+      return
+    }
     if (pending && (!finalTarget || finalTarget !== pending.target)) {
       finishMismatchedTarget(callDigest, pending, output)
       return
