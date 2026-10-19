@@ -393,8 +393,13 @@ jobs:
 
           # Arms auto-merge pinned to a head commit. A failure is not fatal: the
           # manual merge and a re-run of this workflow remain available.
+          # Auto-merge is disabled first because re-arming an already-armed PR
+          # keeps the stored squash subject and head pin; disabling lets the
+          # new ones replace them. The disable errors when nothing is armed, so
+          # its result is ignored.
           arm_auto_merge() {
             local pr="$1" head="$2" armed=false
+            gh pr merge "$pr" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
             for _ in 1 2 3; do
               if gh pr merge "$pr" --repo "$REPO" --auto --squash \
                 --match-head-commit "$head" --subject "$TITLE" --body ""; then
