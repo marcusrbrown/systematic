@@ -7,6 +7,7 @@ import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import { readOpencodeSdkPin } from '../../scripts/lib/opencode-pin.js'
 import {
+  assertWorkflowGuardEnabled,
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
@@ -18,6 +19,7 @@ import {
   startExactOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
+  writeWorkflowGuardMode,
 } from './fixtures/receipt-workflow-host.js'
 
 // See question-attestation-opencode.test.ts for why this call lives here
@@ -434,6 +436,7 @@ async function runObserveCell(
   version: string,
   pluginUrls: readonly string[],
 ): Promise<HostEvidence> {
+  writeWorkflowGuardMode(fixture, 'observe')
   initializeRepository(fixture.projectDir)
   fs.writeFileSync(
     path.join(fixture.projectDir, 'u7-check.test.ts'),
@@ -519,6 +522,7 @@ async function runObserveCell(
         directory: fixture.projectDir,
       }),
     )
+    assertWorkflowGuardEnabled(messages, 'real-host observe cell')
     const markers = markerKinds(messages)
     console.log(
       `U7_CELL_EVIDENCE ${JSON.stringify({

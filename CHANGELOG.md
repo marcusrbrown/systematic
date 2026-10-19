@@ -4,6 +4,16 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.23.0](https://github.com/marcusrbrown/systematic/compare/v3.22.7...v3.23.0) (2026-10-19)
+
+### Features
+
+* **guard:** turn the workflow guard off by default ([#1158](https://github.com/marcusrbrown/systematic/issues/1158)) ([317e7ed](https://github.com/marcusrbrown/systematic/commit/317e7edd0fdaed1a301d81995e3812559e02b8ed))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.123.1 ([#1150](https://github.com/marcusrbrown/systematic/issues/1150)) ([7d67734](https://github.com/marcusrbrown/systematic/commit/7d67734312087fc0470d9baa921772f814a58a2e))
+
 ## [3.22.7](https://github.com/marcusrbrown/systematic/compare/v3.22.6...v3.22.7) (2026-10-18)
 
 ### Bug Fixes

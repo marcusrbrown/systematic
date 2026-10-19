@@ -5,6 +5,7 @@ import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
+  assertWorkflowGuardEnabled,
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
@@ -17,6 +18,7 @@ import {
   startExactOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
+  writeWorkflowGuardMode,
 } from './fixtures/receipt-workflow-host.js'
 
 // See tests/integration/question-attestation-opencode.test.ts for why this
@@ -499,15 +501,8 @@ async function runScenario(
     name === 'push'
       ? gitOutput(fixture.projectDir, ['rev-parse', '--verify', '@{upstream}'])
       : undefined
-  if (mode === 'protected') {
-    fs.mkdirSync(fixture.configDir, {
-      recursive: true,
-    })
-    fs.writeFileSync(
-      path.join(fixture.configDir, 'systematic.json'),
-      JSON.stringify({ workflow_guard: { mode: 'protected' } }),
-    )
-  }
+  // Every scenario names its mode, so none relies on the default.
+  writeWorkflowGuardMode(fixture, mode)
   const pluginUrl = extractPackagedPlugin(fixture).pluginUrl
   const model = startModel([
     ...callsFor(name, index).map((call) => ({ toolCalls: [call] })),
@@ -543,6 +538,7 @@ async function runScenario(
         directory: fixture.projectDir,
       }),
     )
+    assertWorkflowGuardEnabled(messages, `dogfood ${mode} ${name}`)
     const upstreamAfter =
       name === 'push'
         ? gitOutput(fixture.projectDir, [

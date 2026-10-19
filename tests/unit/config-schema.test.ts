@@ -113,7 +113,7 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.skills_as_commands).toBe(true)
       expect(result.data.allow_project_profiles).toBe(false)
       expect(result.data.workflow_guard).toEqual({
-        mode: 'observe',
+        mode: 'disabled',
         debug: false,
       })
       expect(result.data.pi_subagents).toEqual({
@@ -139,13 +139,26 @@ describe('SystematicConfigSchema', () => {
   })
 
   describe('workflow_guard', () => {
-    test('defaults mode to observe and debug to false', () => {
+    test('defaults mode to disabled and debug to false', () => {
       const result = SystematicConfigSchema.safeParse({})
       expect(result.success).toBe(true)
       if (result.success) {
         expect(result.data.workflow_guard).toEqual({
-          mode: 'observe',
+          mode: 'disabled',
           debug: false,
+        })
+      }
+    })
+
+    test('keeps mode disabled when only debug is set', () => {
+      const result = SystematicConfigSchema.safeParse({
+        workflow_guard: { debug: true },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.workflow_guard).toEqual({
+          mode: 'disabled',
+          debug: true,
         })
       }
     })
@@ -1558,7 +1571,7 @@ describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
       disabled_agents: [],
       disabled_commands: [],
       bootstrap: { enabled: true },
-      workflow_guard: { mode: 'observe', debug: false },
+      workflow_guard: { mode: 'disabled', debug: false },
       pi_subagents: { categories: {}, agents: {} },
       skills_as_commands: true,
       allow_project_profiles: false,

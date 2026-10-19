@@ -137,6 +137,10 @@ The plugin exposes these hooks. Changes to any of these are high-risk:
 - **`event`** — workflow-guard observation of host events
 - **`experimental.chat.system.transform`** — injects bootstrap prompt into conversations
 
+The workflow guard is off by default (`workflow_guard.mode` is `disabled`): a disabled plugin builds
+no observer and does no guard work, and the guard guidance is left out of the bootstrap. `observe` or
+`protected` in user-level `systematic.json` turns it on.
+
 Treat modifications to `src/index.ts` hook implementations as breaking-change candidates.
 
 ## Bundled Content

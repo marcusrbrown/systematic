@@ -67,18 +67,24 @@ A typo in `agents.<key>`, `disabled_agents`, or `disabled_skills` fails loudly w
 
 The workflow guard records privacy-safe receipts for supported engineering operations and surfaces whether guarded workflow requirements are satisfied. It covers local implementation and verification work, commits, pushes, and GitHub pull-request, check, and review readback when the required Git and GitHub environment is available.
 
-The guard ships in **observe** mode by default. It records and reports workflow state without blocking operations. **Protected** mode is opt-in; it can reject a guarded transition when required evidence is missing or stale. **Disabled** mode turns the guard off for the configured scope.
+The guard is **off by default** (`disabled`). A disabled plugin does no guard work: it builds no operation observer, takes no snapshot of your repository, and reads no session history. The four `systematic_workflow_*` tools stay registered and report that the guard is disabled, and the guard guidance is left out of the bootstrap.
+
+Turn the guard on by setting a mode:
+
+- **`observe`** records and reports workflow state without blocking operations.
+- **`protected`** does the same and can also reject a guarded transition when required evidence is missing or stale.
+
+To restore the earlier behaviour, where the guard observed by default, add this to your user-level `systematic.json`:
 
 ```json
 {
   "workflow_guard": {
-    "mode": "observe",
-    "debug": false
+    "mode": "observe"
   }
 }
 ```
 
-`workflow_guard` is trust-protected. Set it in user configuration (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`; project-level `.opencode/systematic.json` cannot set this field.
+`workflow_guard` is trust-protected. Set it in user configuration (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`; project-level `.opencode/systematic.json` cannot set this field. A `workflow_guard` block that sets only `debug` leaves the mode `disabled`.
 
 ## Agent and Category Overlays
 
@@ -765,10 +771,10 @@ Path to a custom bootstrap prompt file
 
 ## workflow_guard
 
-Workflow guard configuration
+Workflow guard configuration. The guard is off by default; `mode: observe` or `mode: protected` turns it on.
 
 **Type:** `object`
-**Default:** `{"mode":"observe","debug":false}`
+**Default:** `{"mode":"disabled","debug":false}`
 **Examples:**
 
 ```json

@@ -56,6 +56,7 @@ import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
+  assertWorkflowGuardEnabled,
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
@@ -69,6 +70,7 @@ import {
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
+  writeWorkflowGuardMode,
 } from './fixtures/receipt-workflow-host.js'
 
 requireOpencodeAvailable(getOpencodeAvailability())
@@ -823,6 +825,8 @@ describe.skipIf(!isOpencodeAvailable())(
       } = {},
     ): Promise<SkillLoadReadback> {
       const fixture: IsolatedFixture = createIsolatedFixture()
+      // The guard assertions below need it on, whatever the default is.
+      writeWorkflowGuardMode(fixture, 'observe')
       initializeRepository(fixture.projectDir)
       const packaged = extractPackagedPlugin(fixture)
       const model = startScriptedModel(
@@ -864,6 +868,9 @@ describe.skipIf(!isOpencodeAvailable())(
           )
         }
         const messages = messagesResult.data as unknown[]
+        if (options.readGuardStatus === true) {
+          assertWorkflowGuardEnabled(messages, `skill-delivery ${label}`)
+        }
         const skillParts = toolPartsNamed(messages, 'systematic_skill')
         expect(skillParts).toHaveLength(1)
         const [skillPart] = skillParts

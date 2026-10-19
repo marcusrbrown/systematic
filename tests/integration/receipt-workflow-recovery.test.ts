@@ -6,6 +6,7 @@ import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
+  assertWorkflowGuardEnabled,
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
@@ -19,6 +20,7 @@ import {
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
+  writeWorkflowGuardMode,
 } from './fixtures/receipt-workflow-host.js'
 
 // See question-attestation-opencode.test.ts for why this call lives here
@@ -663,6 +665,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'persists built-in tool metadata across an isolated host restart',
       async () => {
         fixture = createIsolatedFixture()
+        writeWorkflowGuardMode(fixture, 'observe')
         const probe = writeReceiptProbePlugin(fixture)
         packagedPluginUrl = extractPackagedPlugin(fixture).pluginUrl
         const model = startMockModelServer([
@@ -806,6 +809,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'characterizes fork identity and persisted tool-part field continuity',
       async () => {
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         const probe = writeReceiptProbePlugin(localFixture)
         const localPackagedPluginUrl =
           extractPackagedPlugin(localFixture).pluginUrl
@@ -930,6 +934,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'characterizes foreground task child identity and completion ordering',
       async () => {
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         const probe = writeTaskLineageProbePlugin(localFixture)
         const localPackagedPluginUrl =
           extractPackagedPlugin(localFixture).pluginUrl
@@ -1071,6 +1076,7 @@ describe.skipIf(!isOpencodeAvailable())(
       async () => {
         const before = snapshotRepositoryTree()
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         const probe = writeReceiptProbePlugin(localFixture)
         const localPackagedPluginUrl =
           extractPackagedPlugin(localFixture).pluginUrl
@@ -1118,6 +1124,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'recovers persisted workflow state across a real host restart',
       async () => {
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         initializeIsolatedRepository(localFixture)
         const hookProbe = writeReceiptProbePlugin(localFixture)
         const localPackagedPluginUrl =
@@ -1346,6 +1353,7 @@ describe.skipIf(!isOpencodeAvailable())(
               directory: localFixture.projectDir,
             }),
           )
+          assertWorkflowGuardEnabled(afterRecovery, 'recovered workflow')
           const completionParts = completedToolParts(
             afterRecovery,
             'systematic_workflow_complete',
@@ -1373,6 +1381,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'does not recover a satisfied workflow from a session without markers',
       async () => {
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         const localPackagedPluginUrl =
           extractPackagedPlugin(localFixture).pluginUrl
         const model = startMockModelServer([
@@ -1434,6 +1443,7 @@ describe.skipIf(!isOpencodeAvailable())(
               directory: localFixture.projectDir,
             }),
           )
+          assertWorkflowGuardEnabled(messages, 'session without markers')
           const statusParts = completedToolParts(
             messages,
             'systematic_workflow_status',
@@ -1464,6 +1474,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'observes a real foreground child lineage and parent rollup marker',
       async () => {
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         initializeIsolatedRepository(localFixture)
         const localPackagedPluginUrl =
           extractPackagedPlugin(localFixture).pluginUrl
@@ -1616,6 +1627,7 @@ describe.skipIf(!isOpencodeAvailable())(
       'rolls up a foreground child commit despite a stale earlier implementation receipt',
       async () => {
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         initializeIsolatedRepository(localFixture)
         const localPackagedPluginUrl =
           extractPackagedPlugin(localFixture).pluginUrl
@@ -1806,6 +1818,7 @@ describe.skipIf(!isOpencodeAvailable())(
               directory: localFixture.projectDir,
             }),
           )
+          assertWorkflowGuardEnabled(afterStatusMessages, 'child rollup')
           const statusParts = completedToolParts(
             afterStatusMessages,
             'systematic_workflow_status',
@@ -1847,6 +1860,7 @@ describe.skipIf(!isOpencodeAvailable())(
         // worktree. The former fixed-root observer therefore saw no change,
         // minted no parent receipts, and blocked completion.
         const localFixture = createIsolatedFixture()
+        writeWorkflowGuardMode(localFixture, 'observe')
         // Mirror the real repo's gitignored .worktrees/ directory and the
         // actual #678 dogfood worktree so the parent observer skips nested
         // worktree contents during its untracked-file walk.
