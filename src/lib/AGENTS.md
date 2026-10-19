@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-Modules implementing plugin logic: discovery, config, schema validation, harness adapters, and receipt-backed workflow enforcement.
+Modules implementing plugin logic: discovery, config, schema validation, and harness adapters.
 
 ## Data Flow
 
@@ -13,7 +13,6 @@ loadConfig() → createConfigHandler() → {
 
 createSkillTool() → buildSkillToolDescription()/buildSkillToolParameterHint()/buildSkillContentOutput()/resolveSkill() → OpenCode tool
 getBootstrapContent() → reads using-systematic SKILL.md → system prompt
-createOpencodeWorkflowGuard() → OpenCode hooks/tools → operation observer + receipt classifier/ledger/readback → guarded transitions
 buildCapabilitySnapshot() → normalized capability/config-observation snapshot → CLI output
 pi-subagents lifecycle → generate personas → transactional export/refresh/cleanup → Pi agents directory
 ```
@@ -75,18 +74,6 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `pi-subagents-personas.ts` | `CURATED_PERSONAS`, `sanitizeName`, `classifyCompatibility`, `generatePersonaContent`, `generatePersonaManifest`, `generateAll` | Pure curated-persona screening and content/manifest generation for pi-subagents; excludes critical Systematic-coupled personas and marks optional integrations as warnings |
 | `pi-subagents-export.ts` | `resolveAgentsRoot`, `resolveAnchor`, `readManifestStrict`, `readManifest`, `writeManifest`, `preview`, `exportPersonas`, `refresh`, `cleanup`, `runWithRollback`, `MANIFEST_FILENAME`, `LOCK_FILENAME` | Scope-aware, locked and transactional Pi persona export lifecycle; validates manifest/path ownership and rolls back failed mutations |
 
-### Workflow Guard & Receipt Evidence
-
-| Module | Key Exports | Role |
-|--------|-------------|------|
-| `opencode-operation-observer.ts` | `createOpencodeOperationObserver`, `validateRegisteredWorktree`, `OperationObserverResult`, `OperationObserverRemoteResult` | Bounded local/remote Git and filesystem evidence snapshots, including worktree registration validation, for guarded operation readback |
-| `opencode-workflow-guard.ts` | `createOpencodeWorkflowGuard`, `createWorkflowGuardBlockedError`, `isWorkflowGuardBlockedError`, `SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY`, `WORKFLOW_GUARD_GUIDANCE`, `OpencodeWorkflowGuard` | OpenCode adapter that exposes guarded workflow tools and hooks, persists/reconstructs receipt markers, and fails closed on identity, malformed, or untyped failures (typed timeouts and snapshot blocks isolate one call or unit). Owns the guard guidance constant, which `src/index.ts` adds to the OpenCode profile block only when the guard is enabled. |
-| `receipt-classifier.ts` | `createReceiptClassifier`, `parseReceiptOperationAfter`, `parseReceiptOperationObservation`, `ReceiptClassifier`, `ReceiptOperationObservation` | Parses tool-operation observations and classifies safe shell/non-shell commands into receipt operations with terminal and evidence outcomes |
-| `receipt-ledger.ts` | `createReceiptLedger`, `isLocalOperation`, `ReceiptLedger`, `ReceiptEnvelope`, `ReceiptClassification` | In-memory lifecycle for preparing, finalizing, validating, consuming, and recovering integrity-checked operation receipts |
-| `receipt-readback.ts` | `validateReceiptMarker`, `filterMarkersByRegistration`, `extractReceiptReadbackSeed`, `foldReceiptReadback`, `projectReceiptMintMarker`, `projectReceiptConsumptionMarker`, `projectReceiptProgressionMarker`, `receiptReadbackExpectationFromMetadata`, `digestReceiptIdentity` | Validates authenticated receipt/progression markers and folds persisted markers into recoverable receipt and workflow state |
-| `workflow-guard.ts` | `createWorkflowGuard`, `WorkflowGuard`, `WorkflowStatus`, `WorkflowGuardOptions`, `WorkflowReasonCode` | Core receipt-backed state machine: activates epochs, starts units, records evidence, enforces transitions, handles recovery, and supports explicit guard modes |
-| `question-attestation.ts` | `CANONICAL_QUESTION_WORDING`, `classifyQuestionAnswer`, `createQuestionAttestation`, `QuestionAttestationMachine`, `QuestionAttestation` | Challenge/bind/reply/reject/consume state machine for authenticated user confirmation of guarded transitions |
-
 ## Module table exclusions
 
 No `src/lib` modules are intentionally excluded from these tables.
@@ -95,7 +82,6 @@ No `src/lib` modules are intentionally excluded from these tables.
 
 - **Discovery:** `SkillInfo`, `AgentInfo`, `CommandInfo`, `WalkEntry` — all have `name` + path/file fields
 - **Config:** `SystematicConfig` (disabled lists + bootstrap), `ConfigHandlerDeps` (directory paths), validated agent/category overlays, and capability observations
-- **Workflow evidence:** `ReceiptEnvelope`, `ReceiptClassification`, `ReceiptReadbackState`, `WorkflowStatus` — typed contracts for observed operations, persisted markers, and guarded progression
 
 ## Patterns
 
@@ -104,7 +90,6 @@ No `src/lib` modules are intentionally excluded from these tables.
 - **Null returns**: Non-critical failures return `null`/`undefined` (not throws)
 - **Type guards**: `validation.ts` provides safe extraction from `unknown` frontmatter data
 - **Const enums**: `AgentMode`, `PermissionSetting` for compile-time safety
-- **Fail-closed evidence**: receipt and marker parsers reject malformed, foreign, stale, or unauthenticated state rather than guessing
 
 ## Notes
 
@@ -115,6 +100,4 @@ No `src/lib` modules are intentionally excluded from these tables.
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
 - `config-handler.ts` contains internal `loadAgentAsConfig`/`loadCommandAsConfig`/`loadSkillAsCommand` — the glue between discovery and OpenCode config output
-- The workflow guard is OpenCode-only; Pi has the delegate/export integration but no runtime receipt guard
-- `src/index.ts` no longer builds the workflow guard, so `workflow_guard.mode` has no effect and the guard modules below are unused until they are deleted
-- Receipt markers are authenticated and registration-scoped; do not treat persisted host metadata as trusted until `receipt-readback.ts` validates it
+- The plugin builds no workflow guard. A `workflow_guard` key in config is still accepted and has no effect
