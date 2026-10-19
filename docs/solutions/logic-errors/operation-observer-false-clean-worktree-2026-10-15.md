@@ -13,7 +13,12 @@ root_cause: wrong_api
 resolution_type: code_fix
 severity: high
 tags: [workflow-guard, operation-observer, worktree-digest, commit-closure, git-plumbing, fail-closed]
+status: superseded
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the operation observer this learning describes was removed with the workflow guard ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # The operation observer reported a changed worktree as unchanged or committed
 

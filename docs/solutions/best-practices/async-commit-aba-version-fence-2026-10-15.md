@@ -19,7 +19,12 @@ symptoms:
 root_cause: async_timing
 resolution_type: code_fix
 tags: [workflow-guard, aba-race, async-commit, monotonic-version, stale-readback, ownership-token, concurrency-race, deferred-observer-test]
+status: superseded
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the workflow guard this learning describes was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](workflow-guard-removed-2026-10-19.md). The pattern below, that a read which commits on return must detect any change made while it waited, still applies. The body below is preserved as history.
 
 # An async read that commits on return must detect any change made while it waited
 

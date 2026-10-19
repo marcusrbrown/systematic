@@ -13,7 +13,12 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: high
 tags: [workflow-guard, snapshot-block, worktree, operation-observer, guard-unavailable, stale-receipt, completion-readback]
+status: superseded
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the workflow guard this learning describes was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # Worktree snapshot limits turned workflow guard enforcement off for the session
 

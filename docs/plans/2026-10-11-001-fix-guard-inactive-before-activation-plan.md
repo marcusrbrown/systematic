@@ -1,9 +1,13 @@
 ---
 title: "fix: Report the workflow guard as inactive before activation"
 type: fix
-status: completed
+status: superseded
 date: 2026-10-11
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the workflow guard this plan describes was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../solutions/best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # fix: Report the workflow guard as inactive before activation
 

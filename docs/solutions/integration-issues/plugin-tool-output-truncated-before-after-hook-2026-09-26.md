@@ -15,6 +15,8 @@ severity: high
 tags: [opencode, plugin-tool, truncation, tool-execute-after, systematic-skill, host-contract]
 ---
 
+> **Note (2026-10-19):** The workflow guard mentioned below was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)). The output restore described here is unchanged.
+
 # OpenCode truncates plugin tool output before any hook runs
 
 ## Problem

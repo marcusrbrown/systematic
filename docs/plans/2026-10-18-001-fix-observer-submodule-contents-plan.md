@@ -1,9 +1,13 @@
 ---
 title: "fix: Observe the contents of submodules and nested repositories in the local snapshot"
 type: fix
-status: completed
+status: superseded
 date: 2026-10-18
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the operation observer this plan describes was removed with the workflow guard ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../solutions/best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # fix: Observe the contents of submodules and nested repositories in the local snapshot
 
