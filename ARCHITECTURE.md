@@ -19,24 +19,16 @@ these hooks:
   config. Existing user config wins; Systematic fills in what's missing.
 - **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand
   (an optional `arguments` string is text-substituted into `$ARGUMENTS`/`$N` placeholders via
-  `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist), alongside
-  the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`, `_control`).
-- **`tool.execute.before`** — workflow-guard observation of pending shell and edit operations while guarded work is live. Blocks execution by
-  rethrowing a guard error when a guarded transition is unsatisfied.
-- **`tool.execute.after`** — workflow-guard observation of completed shell and edit operations, feeding receipt
-  classification, and epoch activation for allowlisted `skill` / `systematic_skill` loads; then restores the full `systematic_skill` output when OpenCode truncated it,
-  unless the user set `tool_output` limits. Fail-closed; never blocks the host.
-- **`event`** — workflow-guard observation of host events. Fail-closed; never blocks the host.
+  `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist).
+- **`tool.execute.after`** — restores the full `systematic_skill` output when OpenCode truncated it,
+  unless the user set `tool_output` limits. Best effort; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
-  suppresses title generation for internal agents. When the guard is enabled, the bootstrap also
-  carries the guard guidance.
+  suppresses title generation for internal agents.
 
-The last four are the receipt-backed workflow guard (see Cross-Cutting Concerns). The registered set
-is authoritative in `src/index.ts`; do not restate a count here.
+The registered set is authoritative in `src/index.ts`; do not restate a count here.
 
-The guard is off by default (`workflow_guard.mode` is `disabled`). A disabled plugin still registers
-every hook and the four workflow tools, but it builds no operation observer, takes no initial
-snapshot, reads no session history, and builds no receipt classifier, so none of them does guard work.
+The plugin builds no workflow guard: it registers no workflow tools and no guard hooks, and takes no
+repository snapshot. A `workflow_guard` key in config is still accepted and has no effect.
 
 The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `capabilities`,
 `validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, and `pi-subagents`

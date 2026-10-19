@@ -78,10 +78,9 @@
 //
 // Process hygiene: this file is invoked directly, never through the full
 // suite, per the exact `pgrep`/`bun test`/`comm` sequence documented in the
-// task that produced it. See tests/integration/receipt-workflow-guard-real-host.test.ts
-// and tests/integration/ce-review-return-validation.test.ts for the shared
-// server + SDK client + mock OpenAI-compatible provider wiring this test
-// reuses.
+// task that produced it. See tests/integration/ce-review-return-validation.test.ts
+// for the shared server + SDK client + mock OpenAI-compatible provider wiring
+// this test reuses.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'

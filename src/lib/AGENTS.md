@@ -116,5 +116,5 @@ No `src/lib` modules are intentionally excluded from these tables.
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
 - `config-handler.ts` contains internal `loadAgentAsConfig`/`loadCommandAsConfig`/`loadSkillAsCommand` — the glue between discovery and OpenCode config output
 - The workflow guard is OpenCode-only; Pi has the delegate/export integration but no runtime receipt guard
-- The workflow guard is off by default (`workflow_guard.mode` is `disabled`). A disabled plugin builds no observer, snapshot, host reader or classifier. Restore the old behaviour with `{"workflow_guard":{"mode":"observe"}}` in the user-level `systematic.json` (`~/.config/opencode/` or `$OPENCODE_CONFIG_DIR`); project config cannot set it. The guidance constant is added to the OpenCode bootstrap only when the guard is enabled
+- `src/index.ts` no longer builds the workflow guard, so `workflow_guard.mode` has no effect and the guard modules below are unused until they are deleted
 - Receipt markers are authenticated and registration-scoped; do not treat persisted host metadata as trusted until `receipt-readback.ts` validates it

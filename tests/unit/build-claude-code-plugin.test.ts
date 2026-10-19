@@ -427,18 +427,6 @@ describe('buildHookFacts — payload cap edge case', () => {
 // ---------------------------------------------------------------------------
 // Error paths
 
-describe('buildOutputStyleContent — repository content', () => {
-  test('the output style built from the repository carries no workflow guard guidance', () => {
-    const repoRoot = path.resolve(import.meta.dirname, '../..')
-
-    const content = buildOutputStyleContent(repoRoot)
-
-    expect(content).toContain('Instruction Priority')
-    expect(content).not.toContain('systematic_workflow_')
-    expect(content).not.toMatch(/workflow guard/i)
-  })
-})
-
 describe('buildOutputStyleContent — error paths', () => {
   test('missing using-systematic/SKILL.md fails the build with a clear diagnostic', () => {
     const root = makeFixtureRepo()

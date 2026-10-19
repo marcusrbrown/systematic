@@ -227,6 +227,48 @@ describe('plugin loading', () => {
   })
 })
 
+describe('registered plugin surface', () => {
+  async function loadSurface(): Promise<Record<string, unknown>> {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-surface-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: object) => Promise<Record<string, unknown>>
+      }
+      return await pluginModule.default({
+        client: { app: { log: async () => {} } },
+        directory: tempDir,
+      })
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  test('the plugin registers exactly the skill tool', async () => {
+    const hooks = await loadSurface()
+
+    expect(Object.keys(hooks.tool as Record<string, unknown>)).toEqual([
+      'systematic_skill',
+    ])
+  })
+
+  test('the plugin registers exactly the config, tool, after and system transform hooks', async () => {
+    const hooks = await loadSurface()
+
+    // Written out because the plugin entry keeps its hook inventory private;
+    // the content-integrity gate keeps that inventory and the docs in step.
+    expect(Object.keys(hooks).sort()).toEqual([
+      'config',
+      'experimental.chat.system.transform',
+      'tool',
+      'tool.execute.after',
+    ])
+  })
+})
+
 describe('bundled content', () => {
   test('skills directory exists at top level', () => {
     expect(fs.existsSync(path.join(ROOT_DIR, 'skills'))).toBe(true)
@@ -373,7 +415,7 @@ describe('per-invocation plugin registration', () => {
     }
   })
 
-  test('each invocation returns distinct function references for all three hook surfaces', async () => {
+  test('each invocation returns distinct function references for every registered hook surface', async () => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-per-init-'),
     )
@@ -399,19 +441,6 @@ describe('per-invocation plugin registration', () => {
         'Expected result2.tool to be defined',
       )
       expect(tool1.systematic_skill).not.toBe(tool2.systematic_skill)
-      expect(Object.keys(tool1).sort()).toEqual([
-        'systematic_skill',
-        'systematic_workflow_complete',
-        'systematic_workflow_control',
-        'systematic_workflow_start',
-        'systematic_workflow_status',
-      ])
-      expect(tool1.systematic_workflow_start).not.toBe(
-        tool2.systematic_workflow_start,
-      )
-      expect(result1['tool.execute.before']).not.toBe(
-        result2['tool.execute.before'],
-      )
       expect(result1['tool.execute.after']).not.toBe(
         result2['tool.execute.after'],
       )
@@ -424,22 +453,11 @@ describe('per-invocation plugin registration', () => {
     }
   })
 
-  test('two independent registrations leave exactly one marker block in the system array', async () => {
+  test('two independent registrations leave exactly one bootstrap block in the system array', async () => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-per-init-'),
     )
     fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
-    // The marker is only emitted while the guard is enabled. Pin the mode through
-    // the custom config source so a user config that disables the guard cannot
-    // leak into this test.
-    const customConfigDir = path.join(tempDir, 'custom-config')
-    fs.mkdirSync(customConfigDir)
-    fs.writeFileSync(
-      path.join(customConfigDir, 'systematic.json'),
-      JSON.stringify({ workflow_guard: { mode: 'protected' } }),
-    )
-    const priorConfigDir = process.env.OPENCODE_CONFIG_DIR
-    process.env.OPENCODE_CONFIG_DIR = customConfigDir
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
@@ -466,18 +484,7 @@ describe('per-invocation plugin registration', () => {
 
       const joined = output.system.join('\n')
       expect((joined.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []).length).toBe(1)
-      expect((joined.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length).toBe(
-        1,
-      )
-      const markerBody = joined.match(
-        /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
-      )?.[1]
-      if (!markerBody) throw new Error('workflow guard marker missing')
-      const marker = JSON.parse(markerBody) as { sources: unknown[] }
-      expect(marker.sources).toHaveLength(2)
     } finally {
-      if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
-      else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
@@ -563,49 +570,6 @@ describe('per-invocation plugin registration', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
-
-  test('workflow-guard transform failure is fail-closed and does not propagate to the host', async () => {
-    // This test verifies the adapter's transform wrapper is symmetric with after/event hooks:
-    // all three must be fail-closed (never propagate a throw to the host).
-    //
-    // RED before fix: the adapter's transform delegation had no try/catch, so if
-    // workflowGuard.hooks['experimental.chat.system.transform'] threw for any reason
-    // (e.g. unguarded state machine failure) it would escape to the host.
-    // GREEN after fix: the adapter wraps the delegation in try/catch matching after/event.
-    //
-    // We test by verifying that even when the adapter's bootstrapContent path is
-    // skipped and the guard path is reached with a session that was never initialised,
-    // the transform hook still resolves without throwing.
-    const tempDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-transform-failclosed-'),
-    )
-    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
-    try {
-      const pluginPath = path.join(SRC_DIR, 'index.ts')
-      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: ReturnType<typeof makeInput>) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
-      }
-      const plugin = await pluginModule.default(makeInput(tempDir))
-      const output = { system: ['base'] }
-
-      // A call with a fresh sessionID that has no prior state still must not throw.
-      await expect(
-        plugin['experimental.chat.system.transform'](
-          { sessionID: 'never-touched-session-id' },
-          output,
-        ),
-      ).resolves.toBeUndefined()
-      // Output is intact and not corrupted.
-      expect(output.system.length).toBeGreaterThan(0)
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true })
-    }
-  })
 })
 
 describe('applyBootstrapContent marker-based idempotency', () => {
@@ -659,15 +623,13 @@ describe('applyBootstrapContent marker-based idempotency', () => {
 
   /**
    * `applyBootstrapContent` receives `output` from OpenCode's
-   * `experimental.chat.system.transform` hook, and a sibling hook in the
-   * same pipeline (`opencode-workflow-guard.ts`'s `appendMarker`) captures
-   * `output.system` by reference and mutates it directly. If this function
-   * ever reassigns `output.system` to a new array instead of mutating the
+   * `experimental.chat.system.transform` hook. If this function ever
+   * reassigns `output.system` to a new array instead of mutating the
    * existing one in place, a caller holding the original reference (the
-   * host, or that sibling hook) would silently stop seeing the injected
-   * bootstrap content — no error, just missing `<SYSTEMATIC_WORKFLOWS>`
-   * content. Array identity is part of this function's real contract with
-   * its caller, not an implementation detail.
+   * host) would silently stop seeing the injected bootstrap content — no
+   * error, just missing `<SYSTEMATIC_WORKFLOWS>` content. Array identity is
+   * part of this function's real contract with its caller, not an
+   * implementation detail.
    */
   test('mutates output.system in place rather than replacing the array reference', () => {
     const output = { system: ['existing system prompt'] }
@@ -1161,240 +1123,131 @@ describe('skill tool output restoration wiring', () => {
   })
 })
 
-describe('workflow guard host history readback wiring', () => {
-  interface MessagesResponse {
-    data?: unknown
-    error?: unknown
-  }
+// Fixture git commands run with no inherited `GIT_*` variables, so a hook or
+// runner that sets GIT_DIR or GIT_WORK_TREE cannot point them at another
+// repository, and with no global or system config. The identity comes from
+// `-c`, so nothing is written to any config file.
+describe('fixture git isolation', () => {
+  const FIXTURE_SETUP_DIR_ENV = 'SYSTEMATIC_TEST_FIXTURE_SETUP_DIR'
+  const FIXTURE_SETUP_TEST = 'fixture git setup in a subprocess'
 
-  interface WiringHooks {
-    tool: {
-      systematic_workflow_status: {
-        execute: (args: object, context: object) => Promise<unknown>
-      }
-    }
-    'tool.execute.before': (input: unknown, output: unknown) => Promise<void>
-    'tool.execute.after': (input: unknown, output: unknown) => Promise<void>
-  }
-
-  const PARENT = 'wiring-parent'
-  const CHILD = 'wiring-child'
-
-  test('wiring fixture leaves an inherited caller repository untouched', () => {
-    const caller = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-caller-'))
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  /** The environment a git command sees with every `GIT_*` variable removed. */
+  function withoutGitEnv(): Record<string, string> {
+    return Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] =>
+          !entry[0].startsWith('GIT_') && entry[1] !== undefined,
+      ),
     )
-    const isolatedEnv = {
-      ...env,
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_NOSYSTEM: '1',
-    }
+  }
+
+  function run(cwd: string, args: readonly string[]): void {
+    const result = Bun.spawnSync(
+      [
+        'git',
+        '-c',
+        'user.name=Guard Off',
+        '-c',
+        'user.email=guard-off@example.invalid',
+        ...args,
+      ],
+      {
+        cwd,
+        env: {
+          ...withoutGitEnv(),
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+        },
+      },
+    )
+    if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed`)
+  }
+
+  /** Initializes a repository with one commit. */
+  function initFixtureRepo(project: string): void {
+    run(project, ['init', '--quiet'])
+    run(project, ['commit', '--quiet', '--allow-empty', '-m', 'initial'])
+  }
+
+  // Runs only in the subprocess the test below starts, with GIT_DIR and
+  // GIT_WORK_TREE in its starting environment. Skipped in a normal run.
+  test.skipIf(process.env[FIXTURE_SETUP_DIR_ENV] === undefined)(
+    FIXTURE_SETUP_TEST,
+    () => {
+      const project = process.env[FIXTURE_SETUP_DIR_ENV]
+      if (!project) throw new Error(`${FIXTURE_SETUP_DIR_ENV} is not set`)
+      initFixtureRepo(project)
+    },
+  )
+
+  test('fixture git setup leaves a repository named by GIT_DIR and GIT_WORK_TREE untouched', () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-git-isolation-'),
+    )
     try {
-      const init = Bun.spawnSync(['git', 'init', '--quiet'], {
-        cwd: caller,
-        env: isolatedEnv,
+      const sentinel = path.join(tempDir, 'sentinel')
+      const project = path.join(tempDir, 'project-under-test')
+      fs.mkdirSync(sentinel)
+      fs.mkdirSync(project)
+      const sentinelGit = (...args: string[]): string => {
+        const result = Bun.spawnSync(
+          [
+            'git',
+            '-c',
+            'user.name=Sentinel',
+            '-c',
+            'user.email=sentinel@example.invalid',
+            ...args,
+          ],
+          {
+            cwd: sentinel,
+            env: {
+              ...withoutGitEnv(),
+              GIT_CONFIG_GLOBAL: '/dev/null',
+              GIT_CONFIG_NOSYSTEM: '1',
+            },
+          },
+        )
+        if (result.exitCode !== 0) throw new Error(`sentinel ${args[0]} failed`)
+        return result.stdout.toString().trim()
+      }
+      sentinelGit('init', '--quiet')
+      sentinelGit('commit', '--quiet', '--allow-empty', '-m', 'sentinel')
+      const gitDir = path.join(sentinel, '.git')
+      const snapshot = () => ({
+        head: fs.readFileSync(path.join(gitDir, 'HEAD')),
+        config: fs.readFileSync(path.join(gitDir, 'config')),
+        commit: sentinelGit('rev-parse', 'HEAD'),
       })
-      expect(init.exitCode).toBe(0)
-      const configPath = path.join(caller, '.git', 'config')
-      const originalConfig = fs.readFileSync(configPath, 'utf8')
-      const originalHead = fs.readFileSync(path.join(caller, '.git', 'HEAD'))
+      const before = snapshot()
+
+      // A hook or another runner starts the test process with GIT_DIR and
+      // GIT_WORK_TREE already set. Bun hands a child only the environment the
+      // process started with, so the setup runs in a process that starts that way.
       const child = Bun.spawnSync(
-        [
-          process.execPath,
-          'test',
-          import.meta.path,
-          '--test-name-pattern',
-          '^workflow guard host history readback wiring a successful empty history read initializes as inactive$',
-        ],
+        [process.execPath, 'test', import.meta.path, '-t', FIXTURE_SETUP_TEST],
         {
+          cwd: ROOT_DIR,
           env: {
-            ...isolatedEnv,
-            GIT_DIR: path.join(caller, '.git'),
-            GIT_WORK_TREE: caller,
-            GIT_CONFIG_GLOBAL: configPath,
-            GIT_CONFIG_COUNT: '1',
-            GIT_CONFIG_KEY_0: 'user.name',
-            GIT_CONFIG_VALUE_0: 'Injected Identity',
-            GIT_AUTHOR_NAME: 'Injected Author',
-            GIT_AUTHOR_EMAIL: 'injected@example.invalid',
-            GIT_COMMITTER_NAME: 'Injected Committer',
-            GIT_COMMITTER_EMAIL: 'injected@example.invalid',
+            ...withoutGitEnv(),
+            GIT_DIR: gitDir,
+            GIT_WORK_TREE: sentinel,
+            [FIXTURE_SETUP_DIR_ENV]: project,
           },
           stdout: 'pipe',
           stderr: 'pipe',
         },
       )
-      expect(fs.readFileSync(configPath, 'utf8')).toBe(originalConfig)
-      expect(fs.readFileSync(path.join(caller, '.git', 'HEAD'))).toEqual(
-        originalHead,
-      )
-      expect(fs.existsSync(path.join(caller, '.git', 'index'))).toBe(false)
-      expect(fs.existsSync(path.join(caller, '.git', 'logs', 'HEAD'))).toBe(
-        false,
-      )
-      expect(child.stderr.toString()).toContain('1 pass')
-      expect(child.exitCode).toBe(0)
-    } finally {
-      fs.rmSync(caller, { recursive: true, force: true })
-    }
-  })
 
-  async function withPlugin(
-    messages: (sessionID: string) => MessagesResponse,
-    run: (hooks: WiringHooks) => Promise<void>,
-  ): Promise<void> {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-wiring-'))
-    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
-    const customConfigDir = path.join(tempDir, 'custom-config')
-    fs.mkdirSync(customConfigDir)
-    fs.writeFileSync(
-      path.join(customConfigDir, 'systematic.json'),
-      JSON.stringify({ workflow_guard: { mode: 'protected' } }),
-    )
-    // The observer needs a real git worktree to produce a readback snapshot.
-    const gitEnv = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
-    )
-    for (const args of [
-      ['init', '--quiet'],
-      ['commit', '--quiet', '--allow-empty', '-m', 'initial'],
-    ]) {
-      const git = Bun.spawnSync(
-        [
-          'git',
-          '-c',
-          'user.name=Wiring Test',
-          '-c',
-          'user.email=wiring@example.invalid',
-          ...args,
-        ],
-        {
-          cwd: tempDir,
-          env: {
-            ...gitEnv,
-            GIT_CONFIG_GLOBAL: '/dev/null',
-            GIT_CONFIG_NOSYSTEM: '1',
-          },
-        },
-      )
-      if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed`)
-    }
-    const priorConfigDir = process.env.OPENCODE_CONFIG_DIR
-    process.env.OPENCODE_CONFIG_DIR = customConfigDir
-    try {
-      const pluginPath = path.join(SRC_DIR, 'index.ts')
-      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: object) => Promise<WiringHooks>
-      }
-      const hooks = await pluginModule.default({
-        client: {
-          app: { log: async () => {} },
-          session: {
-            messages: async (input: { path: { id: string } }) =>
-              messages(input.path.id),
-            children: async (input: { path: { id: string } }) => ({
-              data:
-                input.path.id === PARENT
-                  ? [{ id: CHILD, parentID: PARENT }]
-                  : [],
-            }),
-          },
-        },
-        directory: tempDir,
-      })
-      await run(hooks)
+      expect(child.exitCode).toBe(0)
+      const after = snapshot()
+      expect(after.head.equals(before.head)).toBe(true)
+      expect(after.config.equals(before.config)).toBe(true)
+      expect(after.commit).toBe(before.commit)
+      // The fixture repository itself was set up.
+      expect(fs.existsSync(path.join(project, '.git', 'HEAD'))).toBe(true)
     } finally {
-      if (priorConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
-      else process.env.OPENCODE_CONFIG_DIR = priorConfigDir
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
-  }
-
-  async function readStatus(
-    hooks: WiringHooks,
-  ): Promise<Record<string, unknown>> {
-    const result = await hooks.tool.systematic_workflow_status.execute(
-      {},
-      {
-        sessionID: PARENT,
-        messageID: 'wiring-message',
-        agent: 'systematic',
-        directory: process.cwd(),
-        worktree: process.cwd(),
-        abort: new AbortController().signal,
-        metadata: () => {},
-        ask: async () => {},
-      },
-    )
-    const text =
-      typeof result === 'string'
-        ? result
-        : (result as { output: string }).output
-    return JSON.parse(text)
-  }
-
-  const failedReads: ReadonlyArray<{
-    name: string
-    response: MessagesResponse
-  }> = [
-    {
-      name: 'an SDK error',
-      response: { data: undefined, error: { name: 'UnknownError' } },
-    },
-    { name: 'non-array data', response: { data: { not: 'an array' } } },
-    { name: 'missing data', response: {} },
-  ]
-
-  for (const failed of failedReads) {
-    test(`initialization treats ${failed.name} as a failed read: unavailable / history-read-failed, never inactive`, async () => {
-      await withPlugin(
-        () => failed.response,
-        async (hooks) => {
-          const parsed = await readStatus(hooks)
-          expect(parsed.state).toBe('unavailable')
-          expect(parsed.firstUnavailableCause).toEqual({
-            site: 'initialize-session',
-            kind: 'history-read-failed',
-            timedOut: false,
-          })
-        },
-      )
-    })
-  }
-
-  test('a successful empty history read initializes as inactive', async () => {
-    await withPlugin(
-      () => ({ data: [] }),
-      async (hooks) => {
-        const parsed = await readStatus(hooks)
-        expect(parsed.state).toBe('inactive')
-        expect(parsed.firstUnavailableCause).toBeUndefined()
-      },
-    )
   })
-
-  for (const failed of failedReads) {
-    test(`the lenient child-rollup read treats ${failed.name} as no parts and leaves the parent untouched`, async () => {
-      await withPlugin(
-        (sessionID) => (sessionID === CHILD ? failed.response : { data: [] }),
-        async (hooks) => {
-          expect((await readStatus(hooks)).state).toBe('inactive')
-          const input = { tool: 'task', sessionID: PARENT, callID: 'task-1' }
-          await hooks['tool.execute.before'](input, { args: {} })
-          await hooks['tool.execute.after'](
-            { ...input, args: {} },
-            {
-              title: 'task result',
-              output: 'done',
-              metadata: { sessionId: CHILD },
-            },
-          )
-          const parsed = await readStatus(hooks)
-          expect(parsed.state).toBe('inactive')
-          expect(parsed.firstUnavailableCause).toBeUndefined()
-        },
-      )
-    })
-  }
 })
