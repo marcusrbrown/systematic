@@ -31,7 +31,7 @@ gh api repos/marcusrbrown/systematic \
 #  "title":"COMMIT_OR_PR_TITLE","msg":"COMMIT_MESSAGES"}
 ```
 
-`squash_merge_commit_title: COMMIT_OR_PR_TITLE` means the PR title becomes the squash commit's subject line whenever a branch has more than one commit. That subject is the only thing `@semantic-release/commit-analyzer` reads to decide the release type.
+`squash_merge_commit_title: COMMIT_OR_PR_TITLE` means the PR title becomes the squash commit's subject line whenever a branch has more than one commit. That subject is the only thing `@semantic-release/commit-analyzer` reads to decide the release type. Auto-merge is the exception. It keeps the `--subject` it stored when it was enabled, and in #1160 enabling it again did not replace that subject (the mechanism is inferred; see [Re-arming auto-merge kept the release PR's stale squash subject](../logic-errors/auto-merge-rearm-keeps-stale-squash-subject-2026-10-19.md)).
 
 `.releaserc.yaml` uses `preset: conventionalcommits` and adds exactly these rules:
 
