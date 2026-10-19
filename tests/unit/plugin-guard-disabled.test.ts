@@ -116,6 +116,8 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
     Observed & {
       readonly toolResults: Record<string, ToolCall>
       readonly completeReplay: ToolCall
+      readonly completeDuplicates: readonly [ToolCall, ToolCall]
+      readonly malformedComplete: readonly [ToolCall, ToolCall]
     }
   > {
     const project = path.join(tempDir, 'project')
@@ -166,19 +168,20 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
 
     // One host tool call: before hook, the tool's own result, then the after
     // hook over that result. `afterRuns` > 1 repeats the after hook, as a
-    // duplicate delivery would. Returns what the output held after each run.
+    // duplicate delivery would. `duplicateArgs` adds further deliveries that
+    // carry other arguments and the tool's own output again, so whatever they
+    // hold afterwards was written by the replay. Returns what the output held
+    // after each delivery.
     const runTool = async (
       name: (typeof WORKFLOW_TOOLS)[number],
       args: Record<string, unknown>,
       afterRuns = 1,
+      callID = `guard-off-${name}`,
+      duplicateArgs: readonly Record<string, unknown>[] = [],
     ): Promise<ToolCall[]> => {
       const tool = hooks.tool[name]
       if (!tool) throw new Error(`tool not registered: ${name}`)
-      const input = {
-        tool: name,
-        sessionID: SESSION,
-        callID: `guard-off-${name}`,
-      }
+      const input = { tool: name, sessionID: SESSION, callID }
       await hooks['tool.execute.before'](input, { args })
       const result = (await tool.execute(args, toolContext())) as {
         title?: string
@@ -195,6 +198,15 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
         await hooks['tool.execute.after']({ ...input, args }, call)
         afterEach.push({ ...call, metadata: { ...call.metadata } })
       }
+      for (const other of duplicateArgs) {
+        const duplicate = {
+          title: result.title ?? '',
+          output: result.output,
+          metadata: { ...(result.metadata ?? {}) },
+        }
+        await hooks['tool.execute.after']({ ...input, args: other }, duplicate)
+        afterEach.push(duplicate)
+      }
       return afterEach
     }
     for (const name of WORKFLOW_TOOLS) {
@@ -205,12 +217,25 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
       if (!last) throw new Error('no tool call recorded')
       return last
     }
-    const [completeFirst, completeReplay] = await runTool(
+    const [completeFirst, completeReplay, withoutArgs, withOtherTarget] =
+      await runTool(
+        'systematic_workflow_complete',
+        { target: 'unit' },
+        2,
+        undefined,
+        [{}, { target: 'epoch' }],
+      )
+    if (!completeFirst || !completeReplay || !withoutArgs || !withOtherTarget) {
+      throw new Error('no completion')
+    }
+    // A completion whose arguments fail validation: no target at all.
+    const [malformedFirst, malformedReplay] = await runTool(
       'systematic_workflow_complete',
-      { target: 'unit' },
+      {},
       2,
+      'guard-off-malformed-complete',
     )
-    if (!completeFirst || !completeReplay) throw new Error('no completion')
+    if (!malformedFirst || !malformedReplay) throw new Error('no completion')
     const toolResults: Record<string, ToolCall> = {
       systematic_workflow_start: lastOf(
         await runTool('systematic_workflow_start', {}),
@@ -272,6 +297,8 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
       systemText: output.system.join('\n'),
       toolResults,
       completeReplay,
+      completeDuplicates: [withoutArgs, withOtherTarget],
+      malformedComplete: [malformedFirst, malformedReplay],
     }
   }
 
@@ -285,7 +312,8 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
   })
 
   test('a disabled plugin keeps the four workflow tools registered and answers each one terminally', async () => {
-    const { toolResults, completeReplay } = await drive('disabled')
+    const { toolResults, completeReplay, completeDuplicates } =
+      await drive('disabled')
     const result = (name: (typeof WORKFLOW_TOOLS)[number]): ToolCall => {
       const call = toolResults[name]
       if (!call) throw new Error(`no result for ${name}`)
@@ -302,14 +330,37 @@ describe('a plugin whose workflow guard mode is set explicitly', () => {
       status: 'rejected',
       reasonCode: 'disabled',
     })
-    // A duplicate after hook replays the same rejection.
-    expect(JSON.parse(completeReplay.output)).toEqual({
-      status: 'rejected',
-      reasonCode: 'disabled',
-    })
+    // A duplicate after hook replays the same rejection, target included, even
+    // when that delivery carries no target or another one.
+    for (const call of [
+      result('systematic_workflow_complete'),
+      completeReplay,
+      ...completeDuplicates,
+    ]) {
+      expect(JSON.parse(call.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'disabled',
+      })
+      expect(call.metadata.workflowGuard).toEqual({
+        status: 'rejected',
+        target: 'unit',
+        reasonCode: 'disabled',
+      })
+    }
     expect(JSON.parse(result('systematic_workflow_control').output)).toEqual({
       status: 'disabled',
     })
+  })
+
+  test('a disabled plugin answers a malformed completion as rejected and disabled, and replays it', async () => {
+    const { malformedComplete } = await drive('disabled')
+
+    for (const call of malformedComplete) {
+      expect(JSON.parse(call.output)).toEqual({
+        status: 'rejected',
+        reasonCode: 'disabled',
+      })
+    }
   })
 
   test('control: an observe plugin does reach git, so the shim and counters are live', async () => {

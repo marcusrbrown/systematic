@@ -3844,10 +3844,10 @@ function createSessionRuntime(
   function writeDisabledBlockedResult(
     callDigest: string,
     output: unknown,
-    target: TransitionTarget,
+    target: TransitionTarget | undefined,
   ): void {
     const terminal: TerminalComplete = {
-      target,
+      ...(target ? { target } : {}),
       status: 'rejected',
       reasonCode: 'disabled',
       title: 'Workflow transition rejected',
@@ -5151,6 +5151,12 @@ function createSessionRuntime(
     const pending = pendingStarts.get(callDigest)
     pendingStarts.delete(callDigest)
     if (!pending) {
+      // A disabled guard answers a start it never prepared (malformed
+      // arguments) the way it answers a valid one.
+      if (options.config.mode === 'disabled') {
+        writeStartResult(output, { status: 'rejected', reasonCode: 'disabled' })
+        return
+      }
       markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
     }
@@ -5565,9 +5571,17 @@ function createSessionRuntime(
   }
 
   function finishUnreplayableComplete(
+    callDigest: string,
     finalTarget: TransitionTarget | undefined,
     output: unknown,
   ): void {
+    // A disabled guard has no transition to prepare, so a completion it never
+    // prepared (malformed arguments) is still answered `disabled`, and
+    // recorded so a duplicate after-hook replays it.
+    if (options.config.mode === 'disabled') {
+      writeDisabledBlockedResult(callDigest, output, finalTarget)
+      return
+    }
     markUnavailable(afterCause('call-lifecycle-mismatch'))
     // No pending transition and nothing replayable: `finalTarget` is
     // whatever normalizeTarget() could read out of this call's own args
@@ -5735,7 +5749,7 @@ function createSessionRuntime(
     }
     if (!pending) {
       if (replayTerminalComplete(callDigest, finalTarget, output)) return
-      finishUnreplayableComplete(finalTarget, output)
+      finishUnreplayableComplete(callDigest, finalTarget, output)
       return
     }
     const generation = unitStartGeneration
@@ -6554,6 +6568,15 @@ function unavailableToolResult(): string {
   })
 }
 
+// What a disabled guard answers to a start or completion whose arguments fail
+// validation: the same rejection a valid one gets, not a broken-guard result.
+function disabledRejectionResult(title: string): ToolResultContent {
+  return {
+    title,
+    output: JSON.stringify({ status: 'rejected', reasonCode: 'disabled' }),
+  }
+}
+
 function makeWorkflowTool(
   description: string,
   args: unknown,
@@ -6613,9 +6636,27 @@ function makeWorkflowTool(
   } as unknown as ToolDefinition
 }
 
+// A disabled guard does no guard work, and what lets it do none is the absence
+// of an observer, a host reader and a classifier: with them it would read git
+// and session history while reporting `disabled`. So supplying any of them with
+// that mode is a programmer error, caught where the guard is built.
+function assertDisabledGuardHasNoDependencies(
+  options: OpencodeWorkflowGuardOptions,
+): void {
+  if (options.config.mode !== 'disabled') return
+  const supplied = (['observer', 'hostReadback', 'classifier'] as const).filter(
+    (name) => options[name] !== undefined,
+  )
+  if (supplied.length === 0) return
+  throw new TypeError(
+    `A disabled workflow guard must be built without ${supplied.join(', ')}`,
+  )
+}
+
 export function createOpencodeWorkflowGuard(
   options: OpencodeWorkflowGuardOptions,
 ): OpencodeWorkflowGuard {
+  assertDisabledGuardHasNoDependencies(options)
   const sessions = new Map<string, SessionRuntime>()
   const operationObservers: OperationObserverRegistry = new Map()
   const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
@@ -6652,10 +6693,12 @@ export function createOpencodeWorkflowGuard(
               title: 'Workflow guard start pending',
               output: JSON.stringify({ status: 'pending', operation: 'start' }),
             }
-          : {
-              title: 'Workflow guard unavailable',
-              output: unavailableToolResult(),
-            },
+          : options.config.mode === 'disabled'
+            ? disabledRejectionResult('Workflow unit rejected')
+            : {
+                title: 'Workflow guard unavailable',
+                output: unavailableToolResult(),
+              },
     ),
     systematic_workflow_status: makeWorkflowTool(
       'Read the bounded guarded workflow status.',
@@ -6690,10 +6733,12 @@ export function createOpencodeWorkflowGuard(
                 operation: 'complete',
               }),
             }
-          : {
-              title: 'Workflow guard unavailable',
-              output: unavailableToolResult(),
-            },
+          : options.config.mode === 'disabled'
+            ? disabledRejectionResult('Workflow transition rejected')
+            : {
+                title: 'Workflow guard unavailable',
+                output: unavailableToolResult(),
+              },
     ),
     systematic_workflow_control: makeWorkflowTool(
       'Report the future trusted workflow control surface.',
