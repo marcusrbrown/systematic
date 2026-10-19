@@ -4,6 +4,34 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.24.0](https://github.com/marcusrbrown/systematic/compare/v3.23.0...v3.24.0) (2026-10-19)
+
+### Features
+
+* **guard:** remove the workflow guard ([#1169](https://github.com/marcusrbrown/systematic/issues/1169)) ([a36df25](https://github.com/marcusrbrown/systematic/commit/a36df2573e1ec0f5e661b5e1325f1f32ed521be3))
+
+### Bug Fixes
+
+* **test:** isolate plugin wiring fixture Git commands ([#1157](https://github.com/marcusrbrown/systematic/issues/1157)) ([2adcc71](https://github.com/marcusrbrown/systematic/commit/2adcc71da5f64378fa6c887ce3ff3e30fc4c641d))
+
+### Build System
+
+* **dev:** update OpenCode to v1.19.3 ([#1154](https://github.com/marcusrbrown/systematic/issues/1154)) ([1a91ea9](https://github.com/marcusrbrown/systematic/commit/1a91ea9b57573cea0b4b4179d5727db2bfe31216))
+
+### Documentation
+
+* **solutions:** describe the sharded host contract job ([#1162](https://github.com/marcusrbrown/systematic/issues/1162)) ([ecba5de](https://github.com/marcusrbrown/systematic/commit/ecba5de3231c8acb25d836ed90182b8758a529bf))
+
+### Continuous Integration
+
+* **host-contract:** run the host contract suite in four timed shards ([#1161](https://github.com/marcusrbrown/systematic/issues/1161)) ([d781d84](https://github.com/marcusrbrown/systematic/commit/d781d8457bdd332dbce385f716d5f368ce5c4ce9))
+
+### Miscellaneous Chores
+
+* **deps:** update bfra-me/.github action to v4.40.0 ([#1155](https://github.com/marcusrbrown/systematic/issues/1155)) ([90bf636](https://github.com/marcusrbrown/systematic/commit/90bf6364fa5afd2ee02e3e5743e7b3f2959c432a))
+* **deps:** update fro-bot/agent to v0.124.0 ([#1156](https://github.com/marcusrbrown/systematic/issues/1156)) ([9a81ac0](https://github.com/marcusrbrown/systematic/commit/9a81ac0428e652a44a3d2af5c6897b736ec95c6b))
+* **dev:** update dependency agent-browser to v0.39.1 ([#1167](https://github.com/marcusrbrown/systematic/issues/1167)) ([f253766](https://github.com/marcusrbrown/systematic/commit/f253766ddf4fb200317f50beba435bf3043320af))
+
 ## [3.23.0](https://github.com/marcusrbrown/systematic/compare/v3.22.7...v3.23.0) (2026-10-19)
 
 ### Features
