@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "files": {
+    "tests/integration/eval-runner.test.ts": 420304,
+    "tests/integration/receipt-workflow-recovery.test.ts": 261530,
+    "tests/integration/opencode.test.ts": 214879,
+    "tests/integration/receipt-workflow-dogfood.test.ts": 173802,
+    "tests/integration/skill-delivery.test.ts": 153275,
+    "tests/integration/question-attestation-opencode.test.ts": 99999,
+    "tests/integration/receipt-workflow-guard-real-host.test.ts": 86511,
+    "tests/integration/ce-review-return-validation.test.ts": 72046,
+    "tests/integration/eval-artifact.test.ts": 29878,
+    "tests/integration/skill-command-probe.test.ts": 25263,
+    "tests/integration/release-notes-ci.test.ts": 21395,
+    "tests/integration/pi.test.ts": 15839,
+    "tests/integration/validate-release-target.test.ts": 4947,
+    "tests/integration/claude-code.test.ts": 587,
+    "tests/integration/eval-fixture.test.ts": 92
+  }
+}

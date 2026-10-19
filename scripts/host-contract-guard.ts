@@ -1,5 +1,12 @@
 /**
- * Guards the `host-contract` CI job's skip/pass floor.
+ * Guards the host contract suite's skip/pass floor.
+ *
+ * The suite runs as several shards, each writing a JUnit report and a log. The
+ * guard reads one report/log pair per shard, given on the command line as
+ * alternating paths (`<junit> <log> [<junit> <log> ...]`), merges them, and
+ * judges the union: every expected file must appear in some shard's report,
+ * every skip must be exempt, and the pass counts summed across the logs must
+ * clear the floor. A single pair is the one-shard case of the same rule.
  *
  * The module-scope throw (`SYSTEMATIC_REQUIRE_OPENCODE=1`) already covers a
  * missing or mismatched host. This guard covers what it cannot: a per-test
@@ -214,6 +221,29 @@ export interface EvaluateInput {
   readonly passCount: number | undefined
 }
 
+/**
+ * Merges the evidence of several shards into the evidence of one run: the
+ * union of produced files, every skipped case, and the sum of the pass
+ * counts. A shard whose log had no pass line makes the sum unknown
+ * (`undefined`), which {@link evaluate} reports as `no-pass-line`: a total
+ * built from the counts that were readable would understate the run and could
+ * still clear the floor. Merging nothing gives an empty union.
+ */
+export function mergeEvidence(shards: readonly EvaluateInput[]): EvaluateInput {
+  const producedFiles = new Set<string>()
+  const skipped: SkippedTestCase[] = []
+  let passCount: number | undefined = shards.length === 0 ? undefined : 0
+  for (const shard of shards) {
+    for (const file of shard.parsed.producedFiles) producedFiles.add(file)
+    skipped.push(...shard.parsed.skipped)
+    passCount =
+      passCount === undefined || shard.passCount === undefined
+        ? undefined
+        : passCount + shard.passCount
+  }
+  return { parsed: { producedFiles, skipped }, passCount }
+}
+
 function skipKey(s: SkippedTestCase): string {
   return `${s.classname}::${s.name}`
 }
@@ -315,47 +345,83 @@ export function readArtifact(path: string): ArtifactRead {
   }
 }
 
-function main(): void {
-  const [, , junitPath, logPath] = process.argv
-  if (junitPath === undefined || logPath === undefined) {
-    console.error(
-      'Usage: bun scripts/host-contract-guard.ts <junit-path> <log-path>',
-    )
-    process.exit(1)
+const USAGE =
+  'Usage: bun scripts/host-contract-guard.ts <junit-path> <log-path> [<junit-path> <log-path> ...]'
+
+interface ShardRead {
+  readonly junit: ArtifactRead
+  readonly log: ArtifactRead
+}
+
+/** Splits alternating `<junit> <log>` arguments into pairs; `undefined` on an odd or empty count. */
+function pairArguments(
+  args: readonly string[],
+): { readonly junitPath: string; readonly logPath: string }[] | undefined {
+  if (args.length === 0 || args.length % 2 !== 0) return undefined
+  const pairs: { junitPath: string; logPath: string }[] = []
+  for (let index = 0; index < args.length; index += 2) {
+    const junitPath = args[index]
+    const logPath = args[index + 1]
+    if (junitPath === undefined || logPath === undefined) return undefined
+    pairs.push({ junitPath, logPath })
   }
+  return pairs
+}
 
-  const junit = readArtifact(junitPath)
-  const log = readArtifact(logPath)
-
-  if (junit.readError !== undefined) {
-    console.error(junit.readError)
+function reportReadErrors(read: ShardRead): boolean {
+  if (read.junit.readError !== undefined) {
+    console.error(read.junit.readError)
     console.error(
       'Treating this as the suite producing no test evidence, not as a guard pass.',
     )
   }
-  if (log.readError !== undefined) {
-    console.error(log.readError)
+  if (read.log.readError !== undefined) {
+    console.error(read.log.readError)
     console.error(
       'Treating this as the suite producing no pass-count evidence, not as a guard pass.',
     )
   }
+  return read.junit.readError !== undefined || read.log.readError !== undefined
+}
 
-  const parsed = parseJUnitXml(junit.content)
-  const passCount = parseLogPassCount(log.content)
-
-  if (passCount !== undefined) {
-    console.log(`Observed pass count: ${passCount} (floor: ${PASS_FLOOR})`)
+function main(): void {
+  const pairs = pairArguments(process.argv.slice(2))
+  if (pairs === undefined) {
+    console.error(USAGE)
+    process.exit(1)
   }
 
-  const violations = evaluate({ parsed, passCount })
+  let hadReadError = false
+  const shards: EvaluateInput[] = []
+  for (const { junitPath, logPath } of pairs) {
+    const read: ShardRead = {
+      junit: readArtifact(junitPath),
+      log: readArtifact(logPath),
+    }
+    hadReadError = reportReadErrors(read) || hadReadError
+    const passCount = parseLogPassCount(read.log.content)
+    if (pairs.length > 1) {
+      console.log(
+        `${logPath}: ${passCount === undefined ? 'no pass line' : `${passCount} pass`}`,
+      )
+    }
+    shards.push({ parsed: parseJUnitXml(read.junit.content), passCount })
+  }
+
+  const merged = mergeEvidence(shards)
+  if (merged.passCount !== undefined) {
+    console.log(
+      `Observed pass count: ${merged.passCount} (floor: ${PASS_FLOOR})`,
+    )
+  }
+
+  const violations = evaluate(merged)
 
   for (const violation of violations) {
     console.error(violation.message)
     for (const detail of violation.details) console.error(`  - ${detail}`)
   }
 
-  const hadReadError =
-    junit.readError !== undefined || log.readError !== undefined
   if (hadReadError || violations.length > 0) process.exit(1)
   console.log('host-contract skip/pass guard passed.')
 }

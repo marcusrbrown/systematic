@@ -109,10 +109,22 @@ describe('settings: main ruleset', () => {
     expect(classicContexts()).toContain('Host Contract')
   })
 
+  // The required check must report on every run: a skipped job reads as
+  // success, so the aggregator carries `if: always()` and nothing narrower.
+  // Anything else (a path filter, `success()`, `always() && ...`) could skip
+  // the job and leave the required context unreported.
+  function isExactlyAlways(condition: unknown): boolean {
+    if (typeof condition !== 'string') return false
+    const text = condition.trim()
+    const wrapped = /^\$\{\{\s*([\s\S]*?)\s*\}\}$/.exec(text)
+    return (wrapped?.[1] ?? text).trim() === 'always()'
+  }
+
   test('the required Host Contract check is reported on every pull request and push', () => {
-    // A required check that never reports blocks merges forever. The job must
-    // keep that display name, have no job-level `if:`, and the workflow must
-    // have no workflow-level path filter (which would suppress the whole run).
+    // A required check that never reports blocks merges forever. Exactly one
+    // job must carry that display name, it must run unconditionally
+    // (`if: always()`), and the workflow must have no workflow-level path
+    // filter (which would suppress the whole run).
     const workflow = asRecord(
       yaml.load(
         fs.readFileSync(
@@ -128,7 +140,7 @@ describe('settings: main ruleset', () => {
       ([, job]) => asRecord(job, 'job').name === 'Host Contract',
     )
     expect(named.map(([id]) => id)).toEqual(['host-contract'])
-    expect(asRecord(named[0]?.[1], 'job')).not.toHaveProperty('if')
+    expect(isExactlyAlways(asRecord(named[0]?.[1], 'job').if)).toBe(true)
 
     const on = asRecord(workflow.on, 'on')
     for (const event of ['pull_request', 'push']) {
@@ -137,6 +149,33 @@ describe('settings: main ruleset', () => {
       expect(trigger, event).not.toHaveProperty('paths-ignore')
     }
   })
+
+  test.each([
+    { label: 'always()', condition: 'always()', accepted: true },
+    {
+      label: 'always() in an expression wrapper',
+      condition: `$${'{{'} always() }}`,
+      accepted: true,
+    },
+    { label: 'no condition', condition: undefined, accepted: false },
+    { label: 'success()', condition: 'success()', accepted: false },
+    { label: '!cancelled()', condition: '!cancelled()', accepted: false },
+    {
+      label: 'always() with a further clause',
+      condition: "always() && github.event_name == 'pull_request'",
+      accepted: false,
+    },
+    {
+      label: 'a gate output',
+      condition: "needs.host-contract-gate.outputs.run == 'true'",
+      accepted: false,
+    },
+  ])(
+    'the job-level condition check accepts only exactly always(): $label is $accepted',
+    ({ condition, accepted }) => {
+      expect(isExactlyAlways(condition)).toBe(accepted)
+    },
+  )
 
   test('every check has an integration_id, and CodeQL maps to 57789', () => {
     for (const check of rulesetChecks()) {
