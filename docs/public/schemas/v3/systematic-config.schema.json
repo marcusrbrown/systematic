@@ -2173,11 +2173,6 @@
     },
     "__schema84": {
       "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
-      "examples": [
-        {
-          "mode": "disabled"
-        }
-      ],
       "deprecated": true,
       "allOf": [
         {

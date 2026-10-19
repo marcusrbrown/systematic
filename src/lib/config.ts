@@ -218,20 +218,6 @@ export interface SourceAwareConfigResult {
    * for a symlinked config directory.
    */
   activeProfileSourcePath: string | null
-  /**
-   * Each removed top-level key (see `REMOVED_CONFIG_KEYS`) found in a loaded
-   * config file, once per distinct real file -- the same list the load warned
-   * about. Deliberately lives here and NOT on `ConfigSourceMetadata`, for the
-   * same reason as `activeProfileSourcePath`: `capability-snapshot.ts` throws
-   * on any unknown metadata key, and presence of a dead key is not a
-   * capability fact. `path` is the file's non-canonical path.
-   */
-  removedKeys: readonly RemovedConfigKeyReport[]
-}
-
-export interface RemovedConfigKeyReport {
-  readonly key: string
-  readonly path: string
 }
 
 export interface PiSubagentsOverlayMap {
@@ -1517,29 +1503,26 @@ const REMOVED_SETTINGS_DOCS_URL =
   'https://fro.bot/systematic/reference/configuration#removed-settings'
 
 /**
- * Warn once per real file and removed key in this load, and return what was
- * found. Keyed on the canonical path, so a user and custom config that are the
- * same file warn once. The value is never read. Uses the raw sink so the
- * project cap and alias notice cannot absorb it.
+ * Warn once per real file and removed key in this load. Keyed on the canonical
+ * path, so a user and custom config that are the same file warn once. The
+ * value is never read. Uses the raw sink so the project cap and alias notice
+ * cannot absorb it.
  */
 function warnRemovedKeys(
   sources: readonly FileConfigSource[],
   warningSink: (message: string) => void,
-): readonly RemovedConfigKeyReport[] {
+): void {
   const reported = new Set<string>()
-  const found: RemovedConfigKeyReport[] = []
   for (const source of sources) {
     for (const key of source.removedKeys) {
       const identity = `${source.canonicalPath}\0${key}`
       if (reported.has(identity)) continue
       reported.add(identity)
-      found.push({ key, path: source.path })
       warningSink(
         `[systematic] \`${key}\` in config (${sanitizeDiagnosticText(source.path)}) has been removed and is ignored. Delete it from that file to silence this warning. See ${REMOVED_SETTINGS_DOCS_URL} for details.`,
       )
     }
   }
-  return found
 }
 
 /**
@@ -1725,7 +1708,7 @@ export function loadConfigWithSources(
   const sources = [userSource, projectSource, customSource].filter(
     (source): source is FileConfigSource => source !== null,
   )
-  const removedKeys = warnRemovedKeys(sources, warningSink)
+  warnRemovedKeys(sources, warningSink)
   const userConfig = userSource?.config
   const projectConfig = projectSource?.config
   const customConfig = customSource?.config
@@ -1961,7 +1944,6 @@ export function loadConfigWithSources(
     overlays,
     piSubagentsOverlays: mergedPiSubagentsOverlays,
     activeProfileSourcePath: profileSelection.bundleSource?.path ?? null,
-    removedKeys,
   }
 }
 

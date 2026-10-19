@@ -489,6 +489,40 @@ describe('per-invocation plugin registration', () => {
     }
   })
 
+  test('the default OpenCode system prompt names no workflow tool and carries no guard marker', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-no-guard-text-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: ReturnType<typeof makeInput>) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+      const plugin = await pluginModule.default(makeInput(tempDir))
+
+      const output = { system: ['base system prompt'] }
+      await plugin['experimental.chat.system.transform'](
+        { sessionID: 'no-guard-text-session' },
+        output,
+      )
+
+      const joined = output.system.join('\n')
+      // Control: the bootstrap is there, so the absence below is not vacuous.
+      expect((joined.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []).length).toBe(1)
+      expect(joined).not.toContain('systematic_workflow_')
+      expect(joined).not.toContain('SYSTEMATIC_WORKFLOW_GUARD')
+      expect(joined).not.toMatch(/workflow guard/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('each independent registration logs its own init message', async () => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-per-init-'),

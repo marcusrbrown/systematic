@@ -106,15 +106,11 @@ const modeSchema = z.enum(['subagent', 'primary', 'all'] as const).meta({
  * marker so they can say why. The top-level object stays strict, so a
  * misspelling of the key is still rejected.
  */
-const removedWorkflowGuardSchema = z
-  .unknown()
-  .optional()
-  .meta({
-    description:
-      'Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.',
-    examples: [{ mode: 'disabled' }],
-    deprecated: true,
-  })
+const removedWorkflowGuardSchema = z.unknown().optional().meta({
+  description:
+    'Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.',
+  deprecated: true,
+})
 
 /**
  * Color schema as a union of named tokens and hex literals.

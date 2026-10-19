@@ -249,7 +249,7 @@ describe('generateSchemaContent', () => {
     expect(props).toHaveProperty('bootstrap')
   })
 
-  test('the removed workflow_guard key stays a property, marked deprecated, with a description and an example', () => {
+  test('the removed workflow_guard key stays a property, marked deprecated, with a description and no suggested value', () => {
     const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
     const props = parsed.properties as Record<string, Record<string, unknown>>
     const definitions = parsed.definitions as Record<
@@ -268,7 +268,9 @@ describe('generateSchemaContent', () => {
     expect(field?.deprecated).toBe(true)
     expect(typeof field?.description).toBe('string')
     expect(field?.description).toMatch(/no effect|ignored/i)
-    expect(field?.examples).toBeDefined()
+    // Editors suggest an example as a value to type. A removed setting has
+    // nothing worth suggesting, so none is published.
+    expect(field).not.toHaveProperty('examples')
     // A stub, not a guard schema: it describes no fields and no enum.
     expect(field).not.toHaveProperty('properties')
     expect(field).not.toHaveProperty('enum')

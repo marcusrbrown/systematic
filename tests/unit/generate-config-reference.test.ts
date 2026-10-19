@@ -238,6 +238,48 @@ describe('validateFieldExamples', () => {
     expect(errors).toContain('name')
   })
 
+  test('a deprecated field with a description needs no example, while a live one still does', () => {
+    const schema: Record<string, unknown> = {
+      type: 'object',
+      properties: {
+        removed: {
+          description: 'Removed setting',
+          deprecated: true,
+          // No examples: a deprecated field has nothing to suggest.
+        },
+        live: {
+          type: 'string',
+          description: 'Live field',
+          // No examples!
+        },
+      },
+    }
+    const errors = validateFn(schema)
+    expect(errors).toEqual(['live'])
+  })
+
+  test('a deprecated field inside a record of fields needs no example either', () => {
+    const schema: Record<string, unknown> = {
+      type: 'object',
+      properties: {
+        agents: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              old: {
+                description: 'Old overlay field',
+                deprecated: true,
+              },
+              live: { type: 'string', description: 'Live field' },
+            },
+          },
+        },
+      },
+    }
+    expect(validateFn(schema)).toEqual(['agents.<name>.live'])
+  })
+
   test('error for nested field with description but no examples', () => {
     const schema: Record<string, unknown> = {
       type: 'object',

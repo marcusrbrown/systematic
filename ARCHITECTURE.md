@@ -289,9 +289,9 @@ feature has been deleted stays in the schema as a deprecated, optional, untyped 
 written for an earlier release still loads whatever the key holds and from whichever source (user,
 custom, or project). The top-level object stays strict, so a misspelling is still rejected. The loader
 notes which files carry such a key and warns once per distinct real file per load, through the raw
-warning sink and without reading the value. The list is returned on the load result and not on the
-source metadata, and `systematic capabilities` keeps its silent sink. `workflow_guard` is the only
-entry.
+warning sink and without reading the value. The warning is the only report: nothing is added to the
+load result or the source metadata, and `systematic capabilities` keeps its silent sink.
+`workflow_guard` is the only entry.
 
 **Config priority** — `$OPENCODE_CONFIG_DIR/systematic.json` > project `.opencode/systematic.json`
 > user `~/.config/opencode/systematic.json` > defaults. Disabled lists union-merge across all

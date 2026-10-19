@@ -5978,7 +5978,12 @@ describe('a removed workflow_guard key', () => {
   }
 
   /** Loads with a collecting sink; an empty home and no custom dir unless given. */
-  function load(options: { customConfigDir?: string | null } = {}) {
+  function load(
+    options: {
+      customConfigDir?: string | null
+      invalidSource?: 'throw' | 'report'
+    } = {},
+  ) {
     const warnings: string[] = []
     const result = loadConfigWithSources(testDir, {
       homeDir: path.join(testDir, 'home'),
@@ -6002,7 +6007,9 @@ describe('a removed workflow_guard key', () => {
     expect(guardWarnings(warnings)).toHaveLength(1)
     expect(guardWarnings(warnings)[0]).toContain(file)
     expect('workflow_guard' in result.config).toBe(false)
-    expect(result.removedKeys).toEqual([{ key: 'workflow_guard', path: file }])
+    // The warning list is the only report: nothing else reads the keys, so the
+    // load result carries no field for them.
+    expect(result).not.toHaveProperty('removedKeys')
   })
 
   test('a user systematic.jsonc, a custom config dir and a project config each warn once, naming their own file', () => {
@@ -6026,9 +6033,6 @@ describe('a removed workflow_guard key', () => {
     for (const file of [userFile, customFile, projectFile]) {
       expect(named.filter((message) => message.includes(file))).toHaveLength(1)
     }
-    expect(result.removedKeys.map((entry) => entry.path).sort()).toEqual(
-      [userFile, customFile, projectFile].sort(),
-    )
     expect('workflow_guard' in result.config).toBe(false)
   })
 
@@ -6043,10 +6047,9 @@ describe('a removed workflow_guard key', () => {
   ])('a file whose workflow_guard is $label loads and warns', ({ value }) => {
     writeIn(userDir(), 'systematic.json', { workflow_guard: value })
 
-    const { result, warnings } = load()
+    const { warnings } = load()
 
     expect(guardWarnings(warnings)).toHaveLength(1)
-    expect(result.removedKeys).toHaveLength(1)
   })
 
   test('a project config that carries the key no longer fails on a malformed value', () => {
@@ -6059,14 +6062,67 @@ describe('a removed workflow_guard key', () => {
     expect(guardWarnings(warnings)).toHaveLength(1)
   })
 
+  test('a project config that trips the 20-warning cap still gets its removed-key warning', () => {
+    const categories: Record<string, Record<string, unknown>> = {}
+    for (let index = 0; index < 7; index++) {
+      categories[`cat${index}`] = {
+        model: 'openai/x',
+        variant: 'v',
+        skills: ['s'],
+        permission: { bash: 'allow' },
+        opencode: {},
+        pi: {},
+      }
+    }
+    const file = writeIn(projectDir(), 'systematic.json', {
+      categories,
+      workflow_guard: { mode: 'observe' },
+    })
+
+    const { warnings } = load()
+
+    // The cap is spent on protected-field strips: 20 details plus one summary.
+    expect(
+      warnings.filter((message) =>
+        message.includes('is only valid in user config'),
+      ),
+    ).toHaveLength(20)
+    expect(
+      warnings.filter((message) => message.includes('were suppressed')),
+    ).toHaveLength(1)
+    // The removed-key warning goes through the raw sink, so the cap and the
+    // alias buffer cannot absorb it.
+    const named = guardWarnings(warnings)
+    expect(named).toHaveLength(1)
+    expect(named[0]).toContain(file)
+  })
+
+  test('a file that carries the key and is otherwise invalid is reported invalid, and its removed-key warning is dropped with the file', () => {
+    writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+      not_a_real_key: true,
+    })
+
+    const { result, warnings } = load({ invalidSource: 'report' })
+
+    expect(result.metadata.sources).toContainEqual({
+      errorCode: 'schema-invalid',
+      kind: 'user',
+      presence: 'invalid',
+    })
+    // The file never becomes a source, so nothing is left to warn about; the
+    // schema error is the report the user sees.
+    expect(guardWarnings(warnings)).toEqual([])
+    expect(() => load({ invalidSource: 'throw' })).toThrow()
+  })
+
   test('a file without the key does not warn', () => {
     writeIn(userDir(), 'systematic.json', { skills_as_commands: false })
     writeIn(projectDir(), 'systematic.json', { skills_as_commands: true })
 
-    const { result, warnings } = load()
+    const { warnings } = load()
 
     expect(guardWarnings(warnings)).toEqual([])
-    expect(result.removedKeys).toEqual([])
   })
 
   test('a config whose root is not an object still fails, as it does for any other key', () => {
@@ -6082,14 +6138,13 @@ describe('a removed workflow_guard key', () => {
     const alias = path.join(testDir, 'custom-alias')
     fs.symlinkSync(userDir(), alias)
 
-    const { result, warnings } = load({ customConfigDir: alias })
+    const { warnings } = load({ customConfigDir: alias })
 
-    expect(guardWarnings(warnings)).toHaveLength(1)
-    expect(result.removedKeys).toHaveLength(1)
-    expect(result.removedKeys[0]?.key).toBe('workflow_guard')
-    expect(fs.realpathSync(result.removedKeys[0]?.path ?? file)).toBe(
-      fs.realpathSync(file),
-    )
+    const named = guardWarnings(warnings)
+    expect(named).toHaveLength(1)
+    // The warning names the first source that carried the file, by its own
+    // (non-canonical) path.
+    expect(named[0]).toContain(file)
   })
 
   test('two files with different real paths are two warnings, whatever their content', () => {
@@ -6202,12 +6257,12 @@ describe('a removed workflow_guard key', () => {
     )
   })
 
-  test('the removed-key list is returned on the load result and not on the source metadata', () => {
+  test('the removed key is reported by the warning and not on the source metadata', () => {
     writeIn(userDir(), 'systematic.json', { workflow_guard: true })
 
-    const { result } = load()
+    const { result, warnings } = load()
 
-    expect(result.removedKeys).toHaveLength(1)
+    expect(guardWarnings(warnings)).toHaveLength(1)
     for (const source of result.metadata.sources) {
       expect(Object.keys(source).sort()).toEqual(
         expect.arrayContaining(['kind', 'presence']),
