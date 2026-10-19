@@ -61,4 +61,5 @@ Guard plans and learnings keep their text and carry `status: superseded` with a 
 ## Related
 
 - [#1153](https://github.com/marcusrbrown/systematic/issues/1153), the removal
+- [Removing a top-level config key without breaking existing configs](removing-config-key-strict-schema-2026-10-19.md), how the `workflow_guard` key was retired
 - [Configuration reference: Removed Settings](https://fro.bot/systematic/reference/configuration#removed-settings)
