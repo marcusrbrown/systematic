@@ -67,3 +67,16 @@ export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [
 export const REMOVED_BUNDLED_AGENT_CATEGORIES: readonly string[] = [
   'docs',
 ] as const
+
+/**
+ * Known-removed top-level config keys.
+ *
+ * A key listed here is still accepted by the config schema, warned about once
+ * per file that carries it, and then ignored, so upgrading does not brick a
+ * config that still sets it. Any other unknown top-level key is still rejected
+ * by strict validation. Add a key here only when its feature is deleted, and
+ * keep the matching deprecated stub in `config-schema.ts`.
+ */
+export const REMOVED_CONFIG_KEYS: readonly string[] = [
+  'workflow_guard',
+] as const

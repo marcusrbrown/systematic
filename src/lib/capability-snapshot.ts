@@ -25,8 +25,6 @@ const CONFIG_AUTHORITY_FIELD_PATHS = [
   'bootstrap.enabled',
   'bootstrap.file',
   'skills_as_commands',
-  'workflow_guard.debug',
-  'workflow_guard.mode',
 ] as const
 
 const CONFIG_SOURCE_ERROR_CODES = [

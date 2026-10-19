@@ -28,7 +28,8 @@ these hooks:
 The registered set is authoritative in `src/index.ts`; do not restate a count here.
 
 The plugin builds no workflow guard: it registers no workflow tools and no guard hooks, and takes no
-repository snapshot. A `workflow_guard` key in config is still accepted and has no effect.
+repository snapshot. A `workflow_guard` key in config is still accepted and has no effect, and each file
+that carries it logs one warning per load.
 
 The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `capabilities`,
 `validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, and `pi-subagents`
@@ -89,7 +90,7 @@ Config overlays and validation
 Supporting utilities
   src/lib/bundled-names.ts        — generated bundled agent and skill name sets for typed config validation
   src/lib/capability-snapshot.ts  — normalize and serialize capability and config-observation snapshots
-  src/lib/removed-names.ts        — compatibility lists of removed bundled names accepted by config validation
+  src/lib/removed-names.ts        — compatibility lists of removed bundled names and removed config keys accepted by config validation
 
 Skill discovery and resolution
   src/lib/discovered-skills.ts — discover user and project skills across external and OpenCode config roots
@@ -283,6 +284,15 @@ not merely present, before the job pushes to the branch users install from.
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config
 regardless of what the user writes.
 
+**Removed config keys** (`REMOVED_CONFIG_KEYS` in `src/lib/removed-names.ts`) — a top-level key whose
+feature has been deleted stays in the schema as a deprecated, optional, untyped stub, so a config
+written for an earlier release still loads whatever the key holds and from whichever source (user,
+custom, or project). The top-level object stays strict, so a misspelling is still rejected. The loader
+notes which files carry such a key and warns once per distinct real file per load, through the raw
+warning sink and without reading the value. The list is returned on the load result and not on the
+source metadata, and `systematic capabilities` keeps its silent sink. `workflow_guard` is the only
+entry.
+
 **Config priority** — `$OPENCODE_CONFIG_DIR/systematic.json` > project `.opencode/systematic.json`
 > user `~/.config/opencode/systematic.json` > defaults. Disabled lists union-merge across all
 sources; bootstrap config shallow-merges.
@@ -322,11 +332,11 @@ first and would have thrown with project attribution instead. No test asserting 
 that combination broke; this is a real, observable change in which trust level a thrown diagnostic
 names for an aliased-and-malformed file, not a claim that the reorder has zero effect on
 exception-path behavior.
-`workflow_guard` and `allow_project_profiles` are in `PROJECT_ALWAYS_PROTECTED_FIELDS`
-(`src/lib/config.ts`) — a top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS`
-above, and unconditional: no project source can ever set either field, regardless of anything else
-that project source contains. `profiles` is deliberately NOT in that always-protected set; whether a
-project `systematic.json` may define its own `profiles` map depends on the opt-in below.
+`allow_project_profiles` is in `PROJECT_ALWAYS_PROTECTED_FIELDS` (`src/lib/config.ts`) — a
+top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS` above, and unconditional:
+no project source can ever set it, regardless of anything else that project source contains.
+`profiles` is deliberately NOT in that always-protected set; whether a project `systematic.json` may
+define its own `profiles` map depends on the opt-in below.
 
 **Opt-in project-defined profiles** (`allow_project_profiles`, `src/lib/config.ts`
 `stripProjectProtectedFields`/`collectProjectProtectedFields`/`lookupProfileBundle`/

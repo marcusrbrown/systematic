@@ -458,6 +458,51 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
   })
 })
 
+describe('src/pi.ts config loading', () => {
+  test('a user config that still carries the removed workflow_guard key loads and warns once, naming the file and no value', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pi-removed-key-'),
+    )
+    const originalHomedir = os.homedir
+    const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => tempDir
+    const configFile = path.join(
+      tempDir,
+      '.config',
+      'opencode',
+      'systematic.json',
+    )
+    fs.mkdirSync(path.dirname(configFile), { recursive: true })
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({ workflow_guard: { mode: 'SENTINEL_PI_VALUE' } }),
+    )
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      await piExtension(createFakeExtensionApi())
+
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]))
+      const removed = messages.filter((message) =>
+        message.includes('workflow_guard'),
+      )
+      expect(removed).toHaveLength(1)
+      expect(removed[0]).toContain(configFile)
+      expect(removed[0]).not.toContain('SENTINEL_PI_VALUE')
+    } finally {
+      warnSpy.mockRestore()
+      os.homedir = originalHomedir
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('OpenCode native skill discovery fallback', () => {
   test('keeps bundled skills in native skills.paths without relying on systematic_skill', async () => {
     const tempDir = fs.mkdtempSync(

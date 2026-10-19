@@ -19,7 +19,6 @@
  * `config.ts`.
  */
 export const CONFIG_PROTECTED_FIELD_PATHS = [
-  'workflow_guard',
   'profiles',
   'allow_project_profiles',
   'agents.*.model',

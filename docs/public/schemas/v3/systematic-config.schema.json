@@ -36,10 +36,10 @@
       "$ref": "#/definitions/__schema84"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema88"
+      "$ref": "#/definitions/__schema86"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema99"
+      "$ref": "#/definitions/__schema97"
     }
   },
   "additionalProperties": false,
@@ -2172,57 +2172,21 @@
       "type": "string"
     },
     "__schema84": {
-      "default": {
-        "mode": "disabled",
-        "debug": false
-      },
-      "description": "Workflow guard configuration. The guard is off by default; `mode: observe` or `mode: protected` turns it on.",
+      "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
       "examples": [
         {
-          "mode": "observe",
-          "debug": false
+          "mode": "disabled"
         }
       ],
+      "deprecated": true,
       "allOf": [
         {
           "$ref": "#/definitions/__schema85"
         }
       ]
     },
-    "__schema85": {
-      "type": "object",
-      "properties": {
-        "mode": {
-          "default": "disabled",
-          "description": "Workflow guard mode. The guard is off by default (`disabled`); set `observe` or `protected` to turn it on.",
-          "examples": ["observe", "protected", "disabled"],
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema86"
-            }
-          ]
-        },
-        "debug": {
-          "default": false,
-          "description": "Enable workflow guard debugging",
-          "examples": [false, true],
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema87"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
+    "__schema85": {},
     "__schema86": {
-      "type": "string",
-      "enum": ["observe", "protected", "disabled"]
-    },
-    "__schema87": {
-      "type": "boolean"
-    },
-    "__schema88": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2244,11 +2208,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema89"
+          "$ref": "#/definitions/__schema87"
         }
       ]
     },
-    "__schema89": {
+    "__schema87": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2264,7 +2228,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema90"
+              "$ref": "#/definitions/__schema88"
             }
           ]
         },
@@ -2281,14 +2245,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema98"
+              "$ref": "#/definitions/__schema96"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema90": {
+    "__schema88": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2302,12 +2266,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema97"
+            "$ref": "#/definitions/__schema95"
           }
         ]
       }
     },
-    "__schema91": {
+    "__schema89": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2315,7 +2279,7 @@
         }
       ]
     },
-    "__schema92": {
+    "__schema90": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2323,48 +2287,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema93": {
+    "__schema91": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema94": {
+    "__schema92": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema95"
+          "$ref": "#/definitions/__schema93"
         },
         {
-          "$ref": "#/definitions/__schema96"
+          "$ref": "#/definitions/__schema94"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema95": {
+    "__schema93": {
       "type": "boolean",
       "const": true
     },
-    "__schema96": {
+    "__schema94": {
       "type": "string",
       "minLength": 1
     },
-    "__schema97": {
+    "__schema95": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema91"
+          "$ref": "#/definitions/__schema89"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema92"
+          "$ref": "#/definitions/__schema90"
         },
         "tools": {
-          "$ref": "#/definitions/__schema93"
+          "$ref": "#/definitions/__schema91"
         },
         "skills": {
-          "$ref": "#/definitions/__schema94"
+          "$ref": "#/definitions/__schema92"
         }
       },
       "additionalProperties": false,
@@ -2376,26 +2340,26 @@
         }
       ]
     },
-    "__schema98": {
+    "__schema96": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema97"
+        "$ref": "#/definitions/__schema95"
       }
     },
-    "__schema99": {
+    "__schema97": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema100"
+          "$ref": "#/definitions/__schema98"
         }
       ]
     },
-    "__schema100": {
+    "__schema98": {
       "type": "boolean"
     }
   }

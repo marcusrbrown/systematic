@@ -137,6 +137,45 @@ function runObservedCapabilities(
   return { status, stderr: stderr.join('\n'), stdout: stdout.join('\n') }
 }
 
+/**
+ * A user config that still carries the removed `workflow_guard` key, in an
+ * otherwise empty home, with no custom config and an empty project.
+ */
+function withRemovedKeyConfig(
+  run: (input: {
+    configFile: string
+    custom: string
+    home: string
+    project: string
+    xdg: string
+  }) => void,
+): void {
+  const root = mkTempCwd()
+  const home = path.join(root, 'home')
+  const xdg = path.join(root, 'xdg')
+  const custom = path.join(root, 'custom')
+  const project = path.join(root, 'project')
+  try {
+    for (const dir of [
+      path.join(home, '.config/opencode'),
+      path.join(xdg, 'opencode'),
+      custom,
+      project,
+    ]) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    const configFile = path.join(home, '.config/opencode/systematic.json')
+    const content = JSON.stringify({ workflow_guard: { mode: 'protected' } })
+    fs.writeFileSync(configFile, content)
+    // `capabilities` reads the user config from XDG_CONFIG_HOME, `config show`
+    // from the home directory; both hold the same file.
+    fs.writeFileSync(path.join(xdg, 'opencode/systematic.json'), content)
+    run({ configFile, custom, home, project, xdg })
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
 describe('cli setup --harness', () => {
   it('help text documents both harness values', () => {
     const cwd = mkTempCwd()
@@ -424,6 +463,29 @@ describe('cli capabilities', () => {
 
     expect(capabilityPath).not.toMatch(/setupHarness|exportPersonas|refresh\(/)
     expect(capabilityPath).not.toMatch(/provider|generated|manifest/i)
+  })
+
+  it('stays silent, exits 0, reports the source as present, and lists no guard facts when a user config carries the removed workflow_guard key', () => {
+    withRemovedKeyConfig(({ custom, home, project, xdg }) => {
+      const result = runCli(['capabilities'], project, {
+        HOME: home,
+        OPENCODE_CONFIG_DIR: custom,
+        XDG_CONFIG_HOME: xdg,
+      })
+      const parsed = JSON.parse(result.stdout) as {
+        sources: Array<Record<string, unknown>>
+      }
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toBe('')
+      expect(parsed.sources).toContainEqual({
+        kind: 'source',
+        presence: 'present',
+        sourceId: 'config:user',
+        sourceKind: 'user',
+      })
+      expect(result.stdout).not.toContain('workflow_guard')
+    })
   })
 })
 
@@ -1699,6 +1761,28 @@ describe('cli config show', () => {
       }
     })
   })
+
+  it('prints the removed-setting warning once, naming the file, and still exits 0 when a user config carries the removed workflow_guard key', () => {
+    withRemovedKeyConfig(({ configFile, custom, home, project, xdg }) => {
+      const result = runCli(['config', 'show'], project, {
+        HOME: home,
+        OPENCODE_CONFIG_DIR: custom,
+        XDG_CONFIG_HOME: xdg,
+      })
+
+      expect(result.exitCode).toBe(0)
+      const warnings = result.stderr
+        .split('\n')
+        .filter((line) => line.includes('workflow_guard'))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(configFile)
+      expect(warnings[0]).toContain('/reference/configuration#removed-settings')
+      // The command prints the user file as written, but the resolved
+      // configuration carries no guard setting.
+      const resolved = result.stdout.split('Resolved configuration')[1] ?? ''
+      expect(resolved).not.toContain('workflow_guard')
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -2199,7 +2283,7 @@ describe('cli pi-subagents', () => {
         name: 'valid',
         project: JSON.stringify({
           bootstrap: { enabled: false },
-          workflow_guard: { mode: 'protected' },
+          allow_project_profiles: true,
         }),
         assert: (parsed: Record<string, unknown>) => {
           const facts = parsed.facts as Array<Record<string, unknown>>
@@ -2219,7 +2303,7 @@ describe('cli pi-subagents', () => {
           })
           expect(facts).toContainEqual({
             factId: 'config-protected-field',
-            fieldPath: 'workflow_guard',
+            fieldPath: 'allow_project_profiles',
             kind: 'protection',
             outcome: 'blocked',
             sourceId: 'config:project',

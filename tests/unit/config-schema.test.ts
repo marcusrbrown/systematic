@@ -18,6 +18,7 @@ import {
   SystematicConfigSchema,
   validateConfig,
 } from '../../src/lib/config-schema.js'
+import { REMOVED_CONFIG_KEYS } from '../../src/lib/removed-names.js'
 
 /**
  * Zod's `SafeParseError` always carries at least one issue; this narrows the
@@ -71,10 +72,6 @@ describe('SystematicConfigSchema', () => {
         enabled: false,
         file: '/tmp/prompt.md',
       },
-      workflow_guard: {
-        mode: 'protected' as const,
-        debug: true,
-      },
     }
 
     const result = SystematicConfigSchema.safeParse(input)
@@ -92,10 +89,6 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.disabled_commands).toEqual(['cmd-1'])
       expect(parsed.bootstrap.enabled).toBe(false)
       expect(parsed.bootstrap.file).toBe('/tmp/prompt.md')
-      expect(parsed.workflow_guard).toEqual({
-        mode: 'protected',
-        debug: true,
-      })
     }
   })
 
@@ -112,10 +105,6 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.profiles).toEqual({})
       expect(result.data.skills_as_commands).toBe(true)
       expect(result.data.allow_project_profiles).toBe(false)
-      expect(result.data.workflow_guard).toEqual({
-        mode: 'disabled',
-        debug: false,
-      })
       expect(result.data.pi_subagents).toEqual({
         categories: {},
         agents: {},
@@ -133,88 +122,56 @@ describe('SystematicConfigSchema', () => {
         'pi_subagents',
         'profiles',
         'skills_as_commands',
-        'workflow_guard',
       ])
     }
   })
 
-  describe('workflow_guard', () => {
-    test('defaults mode to disabled and debug to false', () => {
-      const result = SystematicConfigSchema.safeParse({})
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.workflow_guard).toEqual({
-          mode: 'disabled',
-          debug: false,
-        })
-      }
-    })
-
-    test('keeps mode disabled when only debug is set', () => {
-      const result = SystematicConfigSchema.safeParse({
-        workflow_guard: { debug: true },
-      })
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.workflow_guard).toEqual({
-          mode: 'disabled',
-          debug: true,
-        })
-      }
-    })
-
-    test.each(['observe', 'protected', 'disabled'] as const)(
-      'accepts explicit mode %s',
-      (mode) => {
-        const result = SystematicConfigSchema.safeParse({
-          workflow_guard: { mode },
-        })
-        expect(result.success).toBe(true)
-        if (result.success) {
-          const parsed = result.data
-          expect(parsed.workflow_guard.mode).toBe(mode)
-          expect(parsed.workflow_guard.debug).toBe(false)
-        }
+  describe('workflow_guard (a removed setting)', () => {
+    test.each([
+      {
+        label: 'a valid former value',
+        value: { mode: 'observe', debug: true },
       },
-    )
+      { label: 'an unknown mode', value: { mode: 'enforced' } },
+      { label: 'an unknown field', value: { telemetry: true } },
+      { label: 'a non-boolean debug', value: { debug: 'yes' } },
+      { label: 'a boolean', value: true },
+      { label: 'null', value: null },
+      { label: 'an array', value: [] },
+      { label: 'a string', value: 'observe' },
+    ])('accepts $label and passes it through untouched', ({ value }) => {
+      const result = SystematicConfigSchema.safeParse({ workflow_guard: value })
 
-    test('rejects an invalid mode', () => {
-      const result = SystematicConfigSchema.safeParse({
-        workflow_guard: { mode: 'enforced' },
-      })
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.error.issues[0]?.path).toEqual(['workflow_guard', 'mode'])
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect((result.data as Record<string, unknown>).workflow_guard).toEqual(
+          value,
+        )
       }
     })
 
-    test('rejects a non-boolean debug value', () => {
-      const result = SystematicConfigSchema.safeParse({
-        workflow_guard: { debug: 'yes' },
-      })
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.error.issues[0]?.path).toEqual([
-          'workflow_guard',
-          'debug',
-        ])
+    test('leaves the key out of the parsed data when the input omits it', () => {
+      const result = SystematicConfigSchema.safeParse({})
+
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(Object.hasOwn(result.data, 'workflow_guard')).toBe(false)
       }
     })
 
-    test('rejects unknown workflow_guard fields', () => {
-      const result = SystematicConfigSchema.safeParse({
-        workflow_guard: { telemetry: true },
-      })
+    test('every listed removed key is a property of the schema', () => {
+      for (const key of REMOVED_CONFIG_KEYS) {
+        expect(Object.hasOwn(SystematicConfigSchema.shape, key)).toBe(true)
+      }
+    })
+
+    test('a misspelling of the key is still an unrecognized key', () => {
+      const result = SystematicConfigSchema.safeParse({ workflow_gaurd: {} })
+
       expect(result.success).toBe(false)
       if (!result.success) {
-        const issue = result.error.issues[0] as {
-          code: string
-          keys?: string[]
-          path: (string | number)[]
-        }
+        const issue = firstIssue(result.error.issues)
         expect(issue.code).toBe('unrecognized_keys')
-        expect(issue.keys).toContain('telemetry')
-        expect(issue.path).toEqual(['workflow_guard'])
       }
     })
   })
@@ -1508,10 +1465,6 @@ describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
         enabled: false,
         file: '/tmp/prompt.md',
       },
-      workflow_guard: {
-        mode: 'protected' as const,
-        debug: true,
-      },
     }
 
     const result = SystematicConfigSchema.safeParse(input)
@@ -1548,10 +1501,6 @@ describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
         enabled: false,
         file: '/tmp/prompt.md',
       },
-      workflow_guard: {
-        mode: 'protected',
-        debug: true,
-      },
       pi_subagents: { categories: {}, agents: {} },
       skills_as_commands: true,
       allow_project_profiles: false,
@@ -1571,7 +1520,6 @@ describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
       disabled_agents: [],
       disabled_commands: [],
       bootstrap: { enabled: true },
-      workflow_guard: { mode: 'disabled', debug: false },
       pi_subagents: { categories: {}, agents: {} },
       skills_as_commands: true,
       allow_project_profiles: false,
