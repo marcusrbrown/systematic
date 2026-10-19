@@ -5,6 +5,7 @@ import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
+  assertWorkflowGuardEnabled,
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
@@ -17,6 +18,7 @@ import {
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
+  writeWorkflowGuardMode,
 } from './fixtures/receipt-workflow-host.js'
 
 // Computed once at this module's own scope, never at the fixture module's
@@ -457,6 +459,8 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
     'runs the real native question ask reply and one-time consume flow',
     async () => {
       const fixture = createIsolatedFixture()
+      // `observe`, not `protected`: protected throws on the first veto.
+      writeWorkflowGuardMode(fixture, 'observe')
       const probe = writeQuestionProbePlugin(fixture)
       const packagedPlugin = extractPackagedPlugin(fixture).pluginUrl
       const model = startMockModelServer([
@@ -640,6 +644,7 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
             directory: fixture.projectDir,
           }),
         )
+        assertWorkflowGuardEnabled(messages, 'question attestation flow')
         const markers = systemMarkers(messages)
         expect(markers.length).toBeGreaterThan(0)
         expect(JSON.stringify(markers)).not.toContain('wrong')
@@ -685,6 +690,8 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
     'rejects a real native question without minting attestation',
     async () => {
       const fixture = createIsolatedFixture()
+      // `observe`, not `protected`: protected throws on the first veto.
+      writeWorkflowGuardMode(fixture, 'observe')
       const probe = writeQuestionProbePlugin(fixture)
       const packagedPlugin = extractPackagedPlugin(fixture).pluginUrl
       const model = startMockModelServer([
@@ -773,6 +780,7 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
             directory: fixture.projectDir,
           }),
         )
+        assertWorkflowGuardEnabled(messages, 'rejected question flow')
         const serializedMarkers = JSON.stringify(systemMarkers(messages))
         expect(serializedMarkers).not.toContain('attested')
         expect(serializedMarkers).not.toContain('declined')
@@ -811,6 +819,8 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
     'does not treat ordinary user text as Question evidence',
     async () => {
       const fixture = createIsolatedFixture()
+      // `observe`, not `protected`: protected throws on the first veto.
+      writeWorkflowGuardMode(fixture, 'observe')
       const probe = writeQuestionProbePlugin(fixture)
       const packagedPlugin = extractPackagedPlugin(fixture).pluginUrl
       const model = startMockModelServer([{ text: 'acknowledged' }])
@@ -849,6 +859,8 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
     'disables one session only after affirmative native confirmation',
     async () => {
       const fixture = createIsolatedFixture()
+      // `observe`, not `protected`: protected throws on the first veto.
+      writeWorkflowGuardMode(fixture, 'observe')
       const probe = writeQuestionProbePlugin(fixture)
       const packagedPlugin = extractPackagedPlugin(fixture).pluginUrl
       const model = startMockModelServer([
@@ -932,6 +944,7 @@ describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
             directory: fixture.projectDir,
           }),
         )
+        assertWorkflowGuardEnabled(beforeReply, 'disablement flow')
         expect(JSON.stringify(beforeReply)).toContain('question-attestation')
         expect(JSON.stringify(beforeReply)).not.toContain('"state":"disabled"')
 

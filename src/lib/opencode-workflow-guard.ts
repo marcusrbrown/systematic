@@ -188,6 +188,13 @@ export function isWorkflowGuardBlockedError(
   )
 }
 
+// Guidance for an agent in a session where the workflow guard runs. The plugin
+// adds it to the OpenCode bootstrap only when the configured mode is `observe`
+// or `protected`, so it never reaches a disabled guard or another harness.
+// `disabled` is the user's choice, so the last sentence tells the agent what a
+// guard that reports it means.
+export const WORKFLOW_GUARD_GUIDANCE = `In this OpenCode session the workflow guard is on. Check the workflow guard availability once per execution unit. Guard state is per session; a child session starts \`inactive\`. \`inactive\` (reason \`no-active-epoch\`) means no guarded workflow has started in this session. It is not unavailable and not terminal: load a guarded skill to begin, and do not call \`systematic_workflow_start\` or \`systematic_workflow_complete\` before one is active. A completion rejected with \`readback-timeout\` is retryable: call \`systematic_workflow_complete\` again at most twice, then report it to the user. Probes listed in \`unconfirmedReadbacks\` on status output (\`local\`, \`pinned\`, or an operation name) are unverified until a later status call confirms them. A completion rejected with \`snapshot-blocked\` or \`stale-receipt\` is not terminal. For \`snapshot-blocked\`, read \`blockReason\` from the rejection or \`snapshotBlock.reasonCode\` from status, fix that cause in the worktree without deleting or hiding user files unless the user agrees, and call status to confirm the block is gone (when the rejection names \`blockTarget: parent-checkout\`, fix the parent checkout and retry completion instead). Files inside submodules and nested repositories count toward the snapshot limits. Operations run while blocked leave no receipts: rerun stale or missing operations, checking remote state before redoing a push or PR, then complete. If the same reason remains after one fix, report it to the user, who can disable the guard through \`systematic_workflow_control\`. A call the guard skipped or sealed after a timeout has already run: for a local call check the worktree state, for a push or PR creation check remote state (the upstream ref or the open PR), and rerun only if its effect is missing. After a rejected push, check remote state, fix the cause and retry (a first push needs \`git push -u\`); never force-push or delete a remote ref without the user's approval. If a push may have landed but left no receipt and later pushes are rejected as \`resource-mismatch\`, report it to the user. A verification that overlapped another local call is not receipted; rerun it alone once every local call from that request has returned. If the guard reports \`unavailable\` or \`guard-unavailable\`, treat it as terminal for that unit: do not retry \`systematic_workflow_start\` or \`systematic_workflow_complete\`. Use the documented unguarded fallback only when authorized, and report the unavailable state once. \`disabled\` means the user turned the guard off; do not call the workflow tools.`
+
 export interface OpencodeWorkflowGuardOptions {
   config: OpencodeWorkflowGuardConfig
   workspaceIdentity: string
@@ -3829,8 +3836,28 @@ function createSessionRuntime(
     writeTerminalCompletionResult(output, terminal, target, terminal.title)
   }
 
-  // Only the no-epoch block is guard-owned output; every other blocked
-  // reason keeps writing nothing here.
+  // A disabled guard answers a completion with a terminal rejection. The
+  // reason does not depend on epoch state, so this does not go through the
+  // no-epoch writer. It is recorded as the call's terminal result, so a
+  // duplicate after-hook replays it. A disabled instance never re-enables,
+  // so the record is valid for the rest of the session.
+  function writeDisabledBlockedResult(
+    callDigest: string,
+    output: unknown,
+    target: TransitionTarget | undefined,
+  ): void {
+    const terminal: TerminalComplete = {
+      ...(target ? { target } : {}),
+      status: 'rejected',
+      reasonCode: 'disabled',
+      title: 'Workflow transition rejected',
+    }
+    terminalCompletes.set(callDigest, terminal)
+    writeTerminalCompletionResult(output, terminal, target, terminal.title)
+  }
+
+  // The no-epoch block and the disabled guard are guard-owned output; every
+  // other blocked reason keeps writing nothing here.
   function writeBlockedCompleteResult(
     callDigest: string,
     output: unknown,
@@ -3838,6 +3865,8 @@ function createSessionRuntime(
   ): void {
     if (blocked?.reasonCode === 'no-active-epoch') {
       writeNoEpochBlockedResult(callDigest, output, blocked.target)
+    } else if (blocked?.reasonCode === 'disabled') {
+      writeDisabledBlockedResult(callDigest, output, blocked.target)
     }
   }
 
@@ -5121,6 +5150,15 @@ function createSessionRuntime(
     const callDigest = digestCall(ledger, host.callID)
     const pending = pendingStarts.get(callDigest)
     pendingStarts.delete(callDigest)
+    // A disabled guard answers every start the same way, before any argument
+    // check: the arguments the after-hook sees may differ from the ones it
+    // prepared (a later plugin can rewrite them), or it may have prepared
+    // nothing (malformed arguments). Neither may leave the tool's own pending
+    // output standing.
+    if (options.config.mode === 'disabled') {
+      writeStartResult(output, { status: 'rejected', reasonCode: 'disabled' })
+      return
+    }
     if (!pending) {
       markUnavailable(afterCause('call-lifecycle-mismatch'))
       return
@@ -5536,9 +5574,17 @@ function createSessionRuntime(
   }
 
   function finishUnreplayableComplete(
+    callDigest: string,
     finalTarget: TransitionTarget | undefined,
     output: unknown,
   ): void {
+    // A disabled guard has no transition to prepare, so a completion it never
+    // prepared (malformed arguments) is still answered `disabled`, and
+    // recorded so a duplicate after-hook replays it.
+    if (options.config.mode === 'disabled') {
+      writeDisabledBlockedResult(callDigest, output, finalTarget)
+      return
+    }
     markUnavailable(afterCause('call-lifecycle-mismatch'))
     // No pending transition and nothing replayable: `finalTarget` is
     // whatever normalizeTarget() could read out of this call's own args
@@ -5693,6 +5739,24 @@ function createSessionRuntime(
   const completionFailureCause: SnapshotBlockFailureCause = (reasonCode) =>
     observerReadbackFailedCause(reasonCode, 'complete-readback')
 
+  // A disabled guard answers every completion with the terminal disabled
+  // rejection, whatever arguments the after-hook sees: they may differ from the
+  // ones it prepared (a later plugin can rewrite them). The target it was
+  // rejected for is the one recorded for the call, else the one in the
+  // arguments, so a replay carries the same target as the first answer.
+  function finishDisabledComplete(
+    callDigest: string,
+    finalTarget: TransitionTarget | undefined,
+    output: unknown,
+  ): void {
+    const target =
+      terminalCompletes.get(callDigest)?.target ??
+      blockedCompletes.get(callDigest)?.target ??
+      finalTarget
+    blockedCompletes.delete(callDigest)
+    writeDisabledBlockedResult(callDigest, output, target)
+  }
+
   async function finishComplete(
     host: HostToolAfter,
     output: unknown,
@@ -5700,13 +5764,17 @@ function createSessionRuntime(
     const callDigest = digestCall(ledger, host.callID)
     const pending = pendingCompletes.get(callDigest)
     const finalTarget = normalizeTarget(host.args)
+    if (options.config.mode === 'disabled') {
+      finishDisabledComplete(callDigest, finalTarget, output)
+      return
+    }
     if (pending && (!finalTarget || finalTarget !== pending.target)) {
       finishMismatchedTarget(callDigest, pending, output)
       return
     }
     if (!pending) {
       if (replayTerminalComplete(callDigest, finalTarget, output)) return
-      finishUnreplayableComplete(finalTarget, output)
+      finishUnreplayableComplete(callDigest, finalTarget, output)
       return
     }
     const generation = unitStartGeneration
@@ -6525,6 +6593,15 @@ function unavailableToolResult(): string {
   })
 }
 
+// What a disabled guard answers to a start or completion whose arguments fail
+// validation: the same rejection a valid one gets, not a broken-guard result.
+function disabledRejectionResult(title: string): ToolResultContent {
+  return {
+    title,
+    output: JSON.stringify({ status: 'rejected', reasonCode: 'disabled' }),
+  }
+}
+
 function makeWorkflowTool(
   description: string,
   args: unknown,
@@ -6584,9 +6661,27 @@ function makeWorkflowTool(
   } as unknown as ToolDefinition
 }
 
+// A disabled guard does no guard work, and what lets it do none is the absence
+// of an observer, a host reader and a classifier: with them it would read git
+// and session history while reporting `disabled`. So supplying any of them with
+// that mode is a programmer error, caught where the guard is built.
+function assertDisabledGuardHasNoDependencies(
+  options: OpencodeWorkflowGuardOptions,
+): void {
+  if (options.config.mode !== 'disabled') return
+  const supplied = (['observer', 'hostReadback', 'classifier'] as const).filter(
+    (name) => options[name] !== undefined,
+  )
+  if (supplied.length === 0) return
+  throw new TypeError(
+    `A disabled workflow guard must be built without ${supplied.join(', ')}`,
+  )
+}
+
 export function createOpencodeWorkflowGuard(
   options: OpencodeWorkflowGuardOptions,
 ): OpencodeWorkflowGuard {
+  assertDisabledGuardHasNoDependencies(options)
   const sessions = new Map<string, SessionRuntime>()
   const operationObservers: OperationObserverRegistry = new Map()
   const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
@@ -6623,10 +6718,12 @@ export function createOpencodeWorkflowGuard(
               title: 'Workflow guard start pending',
               output: JSON.stringify({ status: 'pending', operation: 'start' }),
             }
-          : {
-              title: 'Workflow guard unavailable',
-              output: unavailableToolResult(),
-            },
+          : options.config.mode === 'disabled'
+            ? disabledRejectionResult('Workflow unit rejected')
+            : {
+                title: 'Workflow guard unavailable',
+                output: unavailableToolResult(),
+              },
     ),
     systematic_workflow_status: makeWorkflowTool(
       'Read the bounded guarded workflow status.',
@@ -6661,10 +6758,12 @@ export function createOpencodeWorkflowGuard(
                 operation: 'complete',
               }),
             }
-          : {
-              title: 'Workflow guard unavailable',
-              output: unavailableToolResult(),
-            },
+          : options.config.mode === 'disabled'
+            ? disabledRejectionResult('Workflow transition rejected')
+            : {
+                title: 'Workflow guard unavailable',
+                output: unavailableToolResult(),
+              },
     ),
     systematic_workflow_control: makeWorkflowTool(
       'Report the future trusted workflow control surface.',
