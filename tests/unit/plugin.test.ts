@@ -1180,6 +1180,66 @@ describe('workflow guard host history readback wiring', () => {
   const PARENT = 'wiring-parent'
   const CHILD = 'wiring-child'
 
+  test('wiring fixture leaves an inherited caller repository untouched', () => {
+    const caller = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-caller-'))
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    )
+    const isolatedEnv = {
+      ...env,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    }
+    try {
+      const init = Bun.spawnSync(['git', 'init', '--quiet'], {
+        cwd: caller,
+        env: isolatedEnv,
+      })
+      expect(init.exitCode).toBe(0)
+      const configPath = path.join(caller, '.git', 'config')
+      const originalConfig = fs.readFileSync(configPath, 'utf8')
+      const originalHead = fs.readFileSync(path.join(caller, '.git', 'HEAD'))
+      const child = Bun.spawnSync(
+        [
+          process.execPath,
+          'test',
+          import.meta.path,
+          '--test-name-pattern',
+          '^workflow guard host history readback wiring a successful empty history read initializes as inactive$',
+        ],
+        {
+          env: {
+            ...isolatedEnv,
+            GIT_DIR: path.join(caller, '.git'),
+            GIT_WORK_TREE: caller,
+            GIT_CONFIG_GLOBAL: configPath,
+            GIT_CONFIG_COUNT: '1',
+            GIT_CONFIG_KEY_0: 'user.name',
+            GIT_CONFIG_VALUE_0: 'Injected Identity',
+            GIT_AUTHOR_NAME: 'Injected Author',
+            GIT_AUTHOR_EMAIL: 'injected@example.invalid',
+            GIT_COMMITTER_NAME: 'Injected Committer',
+            GIT_COMMITTER_EMAIL: 'injected@example.invalid',
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(originalConfig)
+      expect(fs.readFileSync(path.join(caller, '.git', 'HEAD'))).toEqual(
+        originalHead,
+      )
+      expect(fs.existsSync(path.join(caller, '.git', 'index'))).toBe(false)
+      expect(fs.existsSync(path.join(caller, '.git', 'logs', 'HEAD'))).toBe(
+        false,
+      )
+      expect(child.stderr.toString()).toContain('1 pass')
+      expect(child.exitCode).toBe(0)
+    } finally {
+      fs.rmSync(caller, { recursive: true, force: true })
+    }
+  })
+
   async function withPlugin(
     messages: (sessionID: string) => MessagesResponse,
     run: (hooks: WiringHooks) => Promise<void>,
@@ -1193,13 +1253,31 @@ describe('workflow guard host history readback wiring', () => {
       JSON.stringify({ workflow_guard: { mode: 'protected' } }),
     )
     // The observer needs a real git worktree to produce a readback snapshot.
+    const gitEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    )
     for (const args of [
       ['init', '--quiet'],
-      ['config', 'user.email', 'wiring@example.invalid'],
-      ['config', 'user.name', 'Wiring Test'],
       ['commit', '--quiet', '--allow-empty', '-m', 'initial'],
     ]) {
-      const git = Bun.spawnSync(['git', ...args], { cwd: tempDir })
+      const git = Bun.spawnSync(
+        [
+          'git',
+          '-c',
+          'user.name=Wiring Test',
+          '-c',
+          'user.email=wiring@example.invalid',
+          ...args,
+        ],
+        {
+          cwd: tempDir,
+          env: {
+            ...gitEnv,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_NOSYSTEM: '1',
+          },
+        },
+      )
       if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed`)
     }
     const priorConfigDir = process.env.OPENCODE_CONFIG_DIR
