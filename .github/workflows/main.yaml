@@ -162,20 +162,19 @@ jobs:
       - name: Run tests
         run: bun test tests/unit
 
-  host-contract:
-    name: Host Contract
+  # The host contract suite runs in three jobs. The gate decides whether the
+  # suite is required, the shards run it, and the aggregator (`Host Contract`)
+  # is the one required status check: it always reports, and it is red unless
+  # the suite was either not required or fully passed.
+  host-contract-gate:
+    name: Host Contract gate
     runs-on: ubuntu-latest
-    # Measured on the first real CI run; not summed from per-test ceilings
-    # (see the plan's Key Technical Decisions / Unit 4). Re-tune once this
-    # job has actually run against a live OpenCode host.
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Path gating applies only to pull requests, and only at step level:
-      # this job has no top-level `if:`, so it always runs to completion and
-      # reports a status. A skipped required check would otherwise read as
-      # success.
       - name: Detect relevant path changes
         id: filter
         if: github.event_name == 'pull_request'
@@ -192,12 +191,11 @@ jobs:
               - 'registry/**'
               - 'package.json'
               - 'bun.lock'
-              - '.github/workflows/main.yaml'
+              - '.github/**'
 
-      # On push to main the filter step above is bypassed entirely, so this
-      # always resolves to true there. On a pull request it mirrors the
-      # filter's verdict. Every later step reads this single output instead
-      # of repeating the push-vs-pull_request branch.
+      # Only a pull request runs the suite, and only when the filter above
+      # says a relevant path changed. Every other event, push to main
+      # included, skips it.
       - name: Determine whether to run the host contract suite
         id: gate
         env:
@@ -205,7 +203,7 @@ jobs:
           FILTER_RESULT: ${{ steps.filter.outputs.host-contract }}
         run: |
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "run=false" >> "$GITHUB_OUTPUT"
           elif [[ "$FILTER_RESULT" == "true" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif [[ "$FILTER_RESULT" == "false" ]]; then
@@ -213,87 +211,154 @@ jobs:
           else
             # Fail closed: a malformed or empty paths-filter output must never
             # be treated as "skip and report success", since that would
-            # silently satisfy the required status check for this job.
+            # silently satisfy the required status check.
             echo "::error::paths-filter returned an unexpected value: '$FILTER_RESULT' (expected 'true' or 'false')"
             exit 1
           fi
 
+  host-contract-shard:
+    name: Host Contract shard ${{ matrix.shard }}/4
+    needs: host-contract-gate
+    if: needs.host-contract-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # The committed timings split the suite by measured duration; the longest
+    # shard is about a third of the old 8-11 minute serial run. 20 minutes
+    # leaves wide margin for setup and a slow host, and still fails a hung
+    # one well before the old 30-minute ceiling.
+    timeout-minutes: 20
+    strategy:
+      # Let every shard finish: the aggregator needs all four reports to
+      # diagnose a red run.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Setup Node.js
-        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
       - name: Setup Bun
-        if: steps.gate.outputs.run == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies
-        if: steps.gate.outputs.run == 'true'
         run: bun install --frozen-lockfile
 
-      # Load-bearing: dist/ is gitignored, opencode.test.ts computes
-      # DIST_LOCAL_AVAILABLE from dist/index.js at module scope, and
-      # packTarballOnce() builds inside a beforeAll — too late for that gate.
-      # Building first makes the dist-local assertion run for real and turns
-      # the in-beforeAll build into a warm no-op.
+      # Load-bearing: dist/ is gitignored and opencode.test.ts computes
+      # DIST_LOCAL_AVAILABLE from dist/index.js at module scope, before any
+      # beforeAll can build it. Building first makes that assertion run for real.
       - name: Build
-        if: steps.gate.outputs.run == 'true'
         run: bun run build
 
       - name: Run host contract suite
         id: suite
-        if: steps.gate.outputs.run == 'true'
         env:
           SYSTEMATIC_REQUIRE_OPENCODE: '1'
         run: |
           set -o pipefail
           bun test tests/integration \
-            --reporter=junit --reporter-outfile=host-contract-junit.xml \
-            2>&1 | tee host-contract-log.txt
+            --shard=${{ matrix.shard }}/4 \
+            --timings=tests/integration/host-contract-timings.json \
+            --reporter=junit --reporter-outfile=host-contract-junit-${{ matrix.shard }}.xml \
+            2>&1 | tee host-contract-log-${{ matrix.shard }}.txt
+
+      # `!cancelled()` keeps this running after a failed suite, which is when
+      # the aggregator most needs the reports. A missing report fails the step.
+      - name: Upload shard results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-contract-shard-${{ matrix.shard }}
+          path: |
+            host-contract-junit-${{ matrix.shard }}.xml
+            host-contract-log-${{ matrix.shard }}.txt
+          if-no-files-found: error
+
+  host-contract:
+    name: Host Contract
+    needs: [host-contract-gate, host-contract-shard]
+    # The required status check. `always()` makes it report whatever the jobs
+    # it needs did: a skipped required check reads as success, so this job
+    # must never be skipped, and it states its own verdict below.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Decide whether the suite was required
+        id: verdict
+        env:
+          GATE_RESULT: ${{ needs.host-contract-gate.result }}
+          GATE_RUN: ${{ needs.host-contract-gate.outputs.run }}
+        run: |
+          if [[ "$GATE_RESULT" != "success" ]]; then
+            echo "::error::The host contract gate ended '$GATE_RESULT', not 'success'"
+            exit 1
+          fi
+          if [[ "$GATE_RUN" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$GATE_RUN" == "false" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The host contract suite was not required for this run"
+          else
+            echo "::error::The host contract gate returned an unexpected value: '$GATE_RUN' (expected 'true' or 'false')"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.verdict.outputs.run == 'true'
+
+      - name: Setup Bun
+        if: steps.verdict.outputs.run == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        if: steps.verdict.outputs.run == 'true'
+        run: bun install --frozen-lockfile
+
+      # Runs after a failed shard too: a shard that failed after writing its
+      # reports still gets the guard's diagnosis.
+      - name: Download shard results
+        if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: host-contract-shard-*
+          merge-multiple: true
+          path: host-contract-shards
 
       # The module-scope throw (SYSTEMATIC_REQUIRE_OPENCODE=1) already covers
       # a missing or mismatched host. This guard covers what it cannot: a
-      # per-test gate such as test.skipIf(!DIST_LOCAL_AVAILABLE) skipping for
-      # an unexpected reason while the job stays green, or a whole-file
-      # collapse (a crash or an early exit) that still leaves the console
-      # summary and pass floor looking plausible. The exempt set, the
-      # expected-file list, and the floor all live in scripts/host-contract-guard.ts,
-      # next to the guard, so widening any of them is a reviewed change.
+      # per-test gate skipping for an unexpected reason while the job stays
+      # green, or a whole-file collapse that still leaves the console summary
+      # and pass floor looking plausible. It judges the union of the four
+      # shards. The exempt set, the expected-file list, and the floor all live
+      # in scripts/host-contract-guard.ts, so widening any of them is a
+      # reviewed change.
       #
-      # `!cancelled()` is load-bearing, not decorative: an `if:` with no
-      # status check function gets an IMPLICIT `success()` ANDed in by
-      # GitHub Actions, which would make this step skip on exactly the
-      # failing suite run it exists to diagnose (success() is job-scoped and
-      # goes false the moment "Run host contract suite" fails). Any status
-      # check function in the expression overrides that implicit default;
-      # `!cancelled()` is the one that does so while staying true on both a
-      # passing AND a failing suite, and false only when the run itself was
-      # cancelled. The steps.suite.outcome check does the rest of the work:
-      # it requires "Run host contract suite" to have actually executed and
-      # concluded (excluding 'skipped', which is what its outcome is when an
-      # earlier step such as Install dependencies or Build fails first, and
-      # excluding 'cancelled', which is what its outcome is if it was
-      # cancelled mid-run). It is also gated on steps.gate.outputs.run so it
-      # still does not run on a path-gated-out pull request. This step only
-      # reports additional diagnosis: it does not (and cannot) flip the
-      # suite step's own conclusion, so a red suite still fails the job
-      # regardless of what this step finds.
+      # `!cancelled()`, not the implicit `success()`, so a failed shard still
+      # gets its diagnosis. A missing report is a violation, not a skip.
       - name: Guard skipped tests and pass floor
-        if: |
-          steps.gate.outputs.run == 'true' && !cancelled() &&
-          (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
-        run: bun scripts/host-contract-guard.ts host-contract-junit.xml host-contract-log.txt
+        if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
+        run: |
+          bun scripts/host-contract-guard.ts \
+            host-contract-shards/host-contract-junit-1.xml host-contract-shards/host-contract-log-1.txt \
+            host-contract-shards/host-contract-junit-2.xml host-contract-shards/host-contract-log-2.txt \
+            host-contract-shards/host-contract-junit-3.xml host-contract-shards/host-contract-log-3.txt \
+            host-contract-shards/host-contract-junit-4.xml host-contract-shards/host-contract-log-4.txt
 
-      - name: Upload test log on failure
-        if: failure() && steps.gate.outputs.run == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: host-contract-log
-          path: |
-            host-contract-log.txt
-            host-contract-junit.xml
-          if-no-files-found: ignore
+      # The check is red unless every shard succeeded. `always()` so it
+      # decides even after the steps above failed or were skipped; a skipped
+      # or cancelled shard is not a pass.
+      - name: Require every shard to have succeeded
+        if: ${{ always() && steps.verdict.outputs.run == 'true' }}
+        env:
+          SHARD_RESULT: ${{ needs.host-contract-shard.result }}
+        run: |
+          if [[ "$SHARD_RESULT" != "success" ]]; then
+            echo "::error::The host contract shards ended '$SHARD_RESULT', not 'success'"
+            exit 1
+          fi
 
   registry:
     name: Registry

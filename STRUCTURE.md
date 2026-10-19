@@ -129,9 +129,10 @@ bundled assets before editing or building the docs site.
 
 **Key files:**
 - `scripts/content-integrity.ts` — CI gate: validates frontmatter contracts, catches phantom refs
-- `scripts/host-contract-guard.ts` — CI gate for the `host-contract` job: parses its JUnit XML and
-  console log, then fails on any unexpected test skip, a listed exempt skip that went missing, a
-  listed integration suite file that produced no results at all, or a pass count under
+- `scripts/host-contract-guard.ts` — CI gate for the `host-contract` job: parses each shard's JUnit
+  XML and console log (alternating `<junit> <log>` arguments), merges them, then fails on any
+  unexpected test skip, a listed exempt skip that went missing, a listed integration suite file
+  that produced no results in any shard, an unreadable report, or a summed pass count under
   `PASS_FLOOR`; invoked directly in `.github/workflows/main.yaml`, not via a `bun run` script
 - `scripts/generate-registry.ts` — regenerates `registry/registry.jsonc` from skill/agent frontmatter
   (source of truth); pass `--check` for drift detection (`bun run registry:drift`)
@@ -184,8 +185,9 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
   `docs/scripts/` generation scripts, and bundled skill helper scripts under `skills/*/scripts/`
   (e.g. `ce-review-cleanup-*.test.ts`, `ce-review-ensure-ignore.test.ts`)
 - `tests/integration/` — integration tests (skip automatically if deps unavailable locally;
-  `SYSTEMATIC_REQUIRE_OPENCODE=1` in the required `host-contract` CI job turns those skips into
-  failures against a real, pinned OpenCode host)
+  `SYSTEMATIC_REQUIRE_OPENCODE=1` in the `host-contract-shard` CI jobs, behind the required
+  `Host Contract` check, turns those skips into failures against a real, pinned OpenCode host);
+  `host-contract-timings.json` holds the per-file durations that balance the four shards
 
 **Pattern:** Tests use `bun:test` with `describe`/`it`. Filesystem tests use real temp directories;
 no mocking libraries.

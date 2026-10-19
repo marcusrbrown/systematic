@@ -7,6 +7,7 @@ import {
   EXPECTED_SUITE_FILES,
   evaluate,
   type GuardViolation,
+  mergeEvidence,
   PASS_FLOOR,
   parseJUnitXml,
   parseLogPassCount,
@@ -16,11 +17,12 @@ import {
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
 const GUARD_SCRIPT = path.join(REPO_ROOT, 'scripts/host-contract-guard.ts')
 
-function runGuard(
-  junitPath: string,
-  logPath: string,
-): { exitCode: number; stdout: string; stderr: string } {
-  const result = Bun.spawnSync(['bun', GUARD_SCRIPT, junitPath, logPath], {
+function runGuard(...paths: string[]): {
+  exitCode: number
+  stdout: string
+  stderr: string
+} {
+  const result = Bun.spawnSync(['bun', GUARD_SCRIPT, ...paths], {
     cwd: REPO_ROOT,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -619,6 +621,253 @@ describe('CLI wrapper', () => {
       expect(result.stderr).toContain(
         `Pass count ${PASS_FLOOR - 1} is below the floor`,
       )
+      expect(result.stderr).not.toContain('Could not read')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Several shards: the guard reads one junit/log pair per shard and judges the
+// union. Files, skips and pass counts are merged before the same checks run.
+// ---------------------------------------------------------------------------
+
+const SHARD_COUNT = 4
+
+/** Splits the expected suite files round-robin into `SHARD_COUNT` groups. */
+function partitionFiles(): string[][] {
+  const groups: string[][] = Array.from({ length: SHARD_COUNT }, () => [])
+  for (const [index, file] of EXPECTED_SUITE_FILES.entries()) {
+    groups[index % SHARD_COUNT]?.push(file)
+  }
+  return groups
+}
+
+/** A healthy shard report: its files, plus the exempt skip when it owns opencode.test.ts. */
+function buildShardJUnit(files: readonly string[]): string {
+  const suites = files.map((file) =>
+    testsuite(file, testcase(`${file} suite`, 'passes')),
+  )
+  if (files.includes('tests/integration/opencode.test.ts')) {
+    suites.push(
+      testsuite(
+        'tests/integration/opencode.test.ts',
+        testcase(EXEMPT.classname, EXEMPT.name, { skipped: true }),
+      ),
+    )
+  }
+  return `<?xml version="1.0"?><testsuites>${suites.join('')}</testsuites>`
+}
+
+/** A pass count per shard that sums to exactly the floor. */
+function shardPassCounts(): number[] {
+  const base = Math.floor(PASS_FLOOR / SHARD_COUNT)
+  const counts = Array.from({ length: SHARD_COUNT }, () => base)
+  counts[0] = (counts[0] ?? 0) + (PASS_FLOOR - base * SHARD_COUNT)
+  return counts
+}
+
+function evidenceOf(
+  junit: string,
+  passCount: number | undefined,
+): { parsed: ReturnType<typeof parseJUnitXml>; passCount: number | undefined } {
+  return { parsed: parseJUnitXml(junit), passCount }
+}
+
+function healthyShardEvidence() {
+  const counts = shardPassCounts()
+  return partitionFiles().map((files, index) =>
+    evidenceOf(buildShardJUnit(files), counts[index]),
+  )
+}
+
+describe('mergeEvidence', () => {
+  test('a file produced by only one shard still counts for the union', () => {
+    const merged = mergeEvidence(healthyShardEvidence())
+
+    expect([...merged.parsed.producedFiles].sort()).toEqual(
+      [...EXPECTED_SUITE_FILES].sort(),
+    )
+    expect(evaluate(merged)).toEqual([])
+  })
+
+  test('judged alone, a single shard misses the files the others ran', () => {
+    const [first] = healthyShardEvidence()
+    if (!first) throw new Error('no shard evidence')
+
+    const kinds = evaluate(first).map((violation) => violation.kind)
+
+    expect(kinds).toContain('missing-files')
+  })
+
+  test('an expected file produced by no shard is reported missing', () => {
+    const dropped = 'tests/integration/pi.test.ts'
+    const counts = shardPassCounts()
+    const shards = partitionFiles().map((files, index) =>
+      evidenceOf(
+        buildShardJUnit(files.filter((file) => file !== dropped)),
+        counts[index],
+      ),
+    )
+
+    const violations = evaluate(mergeEvidence(shards))
+
+    const missing = violations.find((v) => v.kind === 'missing-files')
+    expect(missing?.details).toEqual([dropped])
+  })
+
+  test('pass counts sum across shards', () => {
+    const merged = mergeEvidence(healthyShardEvidence())
+
+    expect(merged.passCount).toBe(PASS_FLOOR)
+  })
+
+  test('shards that each clear a quarter of the floor but sum below it fail the floor', () => {
+    const shards = partitionFiles().map((files) =>
+      evidenceOf(
+        buildShardJUnit(files),
+        Math.floor(PASS_FLOOR / SHARD_COUNT) - 1,
+      ),
+    )
+
+    const violations = evaluate(mergeEvidence(shards))
+
+    expect(violations.map((v) => v.kind)).toEqual(['below-pass-floor'])
+  })
+
+  test('a shard whose log has no pass line leaves the sum unknown and fails', () => {
+    const shards = healthyShardEvidence()
+    shards[2] = evidenceOf(
+      buildShardJUnit(partitionFiles()[2] ?? []),
+      undefined,
+    )
+
+    const merged = mergeEvidence(shards)
+
+    expect(merged.passCount).toBeUndefined()
+    expect(evaluate(merged).map((v) => v.kind)).toContain('no-pass-line')
+  })
+
+  test('the exempt skip may sit in any one shard', () => {
+    const merged = mergeEvidence(healthyShardEvidence())
+
+    expect(merged.parsed.skipped).toHaveLength(1)
+    expect(evaluate(merged)).toEqual([])
+  })
+
+  test('an unexpected skip in any shard fails the union', () => {
+    const counts = shardPassCounts()
+    const shards = partitionFiles().map((files, index) => {
+      const extra =
+        index === 3
+          ? testsuite(
+              files[0] ?? 'tests/integration/x.test.ts',
+              testcase('other', 'skips', { skipped: true }),
+            )
+          : ''
+      return evidenceOf(
+        buildShardJUnit(files).replace(
+          '</testsuites>',
+          `${extra}</testsuites>`,
+        ),
+        counts[index],
+      )
+    })
+
+    const kinds = evaluate(mergeEvidence(shards)).map((v) => v.kind)
+
+    expect(kinds).toEqual(['unexpected-skips'])
+  })
+
+  test('merging nothing yields an empty union that fails every check', () => {
+    const kinds = evaluate(mergeEvidence([])).map((v) => v.kind)
+
+    expect(kinds).toContain('missing-files')
+    expect(kinds).toContain('no-pass-line')
+  })
+})
+
+describe('CLI wrapper with several shards', () => {
+  function writeShardPairs(
+    dir: string,
+    { skipJunit }: { skipJunit?: number } = {},
+  ): string[] {
+    const counts = shardPassCounts()
+    return partitionFiles().flatMap((files, index) => {
+      const junitPath = path.join(dir, `junit-${index + 1}.xml`)
+      const logPath = path.join(dir, `log-${index + 1}.txt`)
+      if (skipJunit !== index) {
+        fs.writeFileSync(junitPath, buildShardJUnit(files), 'utf8')
+      }
+      fs.writeFileSync(logPath, buildLog(counts[index] ?? 0), 'utf8')
+      return [junitPath, logPath]
+    })
+  }
+
+  test('four healthy pairs pass and report the summed pass count', () => {
+    const dir = makeTempDir()
+    try {
+      const result = runGuard(...writeShardPairs(dir))
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(`Observed pass count: ${PASS_FLOOR}`)
+      expect(result.stdout).toContain('host-contract skip/pass guard passed.')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a missing artifact for one pair is a violation, named by path', () => {
+    const dir = makeTempDir()
+    try {
+      const result = runGuard(...writeShardPairs(dir, { skipJunit: 2 }))
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain(
+        `Could not read ${path.join(dir, 'junit-3.xml')}`,
+      )
+      expect(result.stderr).toContain(
+        'Expected integration test file(s) produced no JUnit suite',
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a shard missing from the arguments leaves its files unproduced and fails', () => {
+    const dir = makeTempDir()
+    try {
+      const result = runGuard(...writeShardPairs(dir).slice(0, 6))
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain(
+        'Expected integration test file(s) produced no JUnit suite',
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test.each([
+    { label: 'no arguments', count: 0 },
+    { label: 'one path', count: 1 },
+    { label: 'three paths', count: 3 },
+    { label: 'seven paths', count: 7 },
+  ])('$label is a usage error', ({ count }) => {
+    const dir = makeTempDir()
+    try {
+      const paths = Array.from({ length: count }, (_, i) =>
+        path.join(dir, `arg-${i}`),
+      )
+
+      const result = runGuard(...paths)
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain(
+        'Usage: bun scripts/host-contract-guard.ts <junit-path> <log-path>',
+      )
+      expect(result.stderr).toContain('[<junit-path> <log-path> ...]')
       expect(result.stderr).not.toContain('Could not read')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })

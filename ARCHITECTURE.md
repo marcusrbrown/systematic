@@ -641,13 +641,21 @@ updated in lockstep with the merged value itself rather than derived afterward f
 entry's `sourcePath` — `sourcePath` is last-writer-wins across the whole entry and would misattribute
 a field whose value survived from an earlier merge step than whichever source touched that key last.
 
-**Host-contract gate** (`.github/workflows/main.yaml` `host-contract` job,
-`scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`) — runs `tests/integration` against
-a real OpenCode host pinned to the `@opencode-ai/sdk` devDependency version
-(`SYSTEMATIC_REQUIRE_OPENCODE=1`), then guards the run's JUnit output and console log against a
-fixed expected-suite-file list, an exempt-skip list, and a pass floor
-(`scripts/host-contract-guard.ts`). `host-contract` runs on pull requests and on pushes to `main`
-and is a required status check (`Host Contract`) in the `main` ruleset and classic branch
-protection, so a red run blocks the merge; evidence gathered at one pinned OpenCode version is not
-evidence at another, so a Renovate OpenCode bump is only complete when this job is green on that
-bump.
+**Host-contract gate** (`.github/workflows/main.yaml` `host-contract-gate`, `host-contract-shard`,
+and `host-contract` jobs, `scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`,
+`tests/integration/host-contract-timings.json`) — runs `tests/integration` against a real OpenCode
+host pinned to the `@opencode-ai/sdk` devDependency version (`SYSTEMATIC_REQUIRE_OPENCODE=1`) in
+three jobs. The gate runs the suite only on a pull request that changes a relevant path (anything
+under `src`, `tests`, `scripts`, `evals`, `skills`, `agents`, `registry`, or `.github`, or
+`package.json` or `bun.lock`); a push to `main` skips it, and a malformed filter value fails closed.
+Four shards run it with `bun test --shard`, split by the measured per-file durations in the
+committed timings file, and each uploads its JUnit report and log. The aggregator, named
+`Host Contract`, always runs, fails unless the gate succeeded and (when the suite was required)
+every shard did, and runs the guard over all four report pairs even after a shard failure. The
+guard merges the pairs and judges the union against a fixed expected-suite-file list, an
+exempt-skip list, and a pass floor on the summed pass counts; a missing report is a violation.
+Regenerate the timings file with `bun test tests/integration --timings=tests/integration/host-contract-timings.json
+--update-timings` on an idle machine when the suite's file mix changes. `Host Contract` is a required
+status check in the `main` ruleset and classic branch protection, so a red run blocks the merge;
+evidence gathered at one pinned OpenCode version is not evidence at another, so a Renovate OpenCode
+bump is only complete when this check is green on that bump.
