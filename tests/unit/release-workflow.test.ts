@@ -999,6 +999,7 @@ describe('refresh job', () => {
       remoteBlob?: string
       refCount?: number
       mergeFails?: boolean
+      disableFails?: boolean
       treeMatchesBase?: boolean
     }
 
@@ -1032,6 +1033,7 @@ describe('refresh job', () => {
         STUB_REMOTE_BLOB: scenario.remoteBlob ?? localBlob,
         STUB_REF_COUNT: String(scenario.refCount ?? 0),
         STUB_MERGE_FAIL: scenario.mergeFails ? '1' : '',
+        STUB_DISABLE_FAIL: scenario.disableFails ? '1' : '',
         STUB_TREE_SHA: scenario.treeMatchesBase ? 'basetree' : 'treesha',
       }
     }
@@ -1071,6 +1073,7 @@ describe('refresh job', () => {
             'case "$args" in',
             '  "pr list "*) printf \'%s\' "$STUB_PRS" ;;',
             '  "pr create "*) echo "https://github.com/o/r/pull/7" ;;',
+            '  "pr merge "*"--disable-auto"*) if [ -n "$STUB_DISABLE_FAIL" ]; then exit 1; fi ;;',
             '  "pr merge "*) if [ -n "$STUB_MERGE_FAIL" ]; then exit 1; fi ;;',
             '  "pr "*) ;;',
             '  *"git/ref/heads/main"*) printf \'%s\\n\' "$STUB_TIP" ;;',
@@ -1182,7 +1185,11 @@ describe('refresh job', () => {
       expect(outcome.status).toBe(0)
       expect(outcome.output).toContain('::warning::')
       expect(
-        outcome.log.split('\n').filter((l) => l.startsWith('gh pr merge 9 ')),
+        outcome.log
+          .split('\n')
+          .filter(
+            (l) => l.startsWith('gh pr merge 9 ') && l.includes('--auto'),
+          ),
       ).toHaveLength(3)
       expect(outcome.log).not.toMatch(/--method/)
     })
@@ -1296,6 +1303,75 @@ describe('refresh job', () => {
         )
       },
     )
+
+    /** The log's `gh pr merge` lines, in call order. */
+    function mergeCalls(log: string): string[] {
+      return log.split('\n').filter((l) => l.startsWith('gh pr merge '))
+    }
+
+    const ENABLE = '--auto --squash --match-head-commit'
+
+    test('a refresh with new content disables auto-merge on the PR before it arms the new subject', () => {
+      const outcome = runRefresh({
+        refCount: 1,
+        prs: [pr()],
+        parent: 'd'.repeat(40),
+      })
+
+      expect(outcome.status).toBe(0)
+      const calls = mergeCalls(outcome.log)
+      const disable = calls.indexOf('gh pr merge 9 --repo o/r --disable-auto')
+      const enable = calls.findIndex((l) => l.includes(ENABLE))
+      expect(disable).toBeGreaterThanOrEqual(0)
+      expect(enable).toBeGreaterThan(disable)
+      expect(calls[enable]).toContain('--subject chore(release): v3.22.0')
+    })
+
+    test('a refresh that opens a new PR also disables before it arms', () => {
+      const outcome = runRefresh({ refCount: 0 })
+
+      expect(outcome.status).toBe(0)
+      const calls = mergeCalls(outcome.log)
+      expect(calls[0]).toBe('gh pr merge 7 --repo o/r --disable-auto')
+      expect(calls[1]).toContain(ENABLE)
+    })
+
+    test('the no-op re-arm disables auto-merge before it arms, so a renamed release replaces the stored subject', () => {
+      const outcome = runRefresh({ prs: [pr()], parent: BASE })
+
+      expect(outcome.status).toBe(0)
+      const calls = mergeCalls(outcome.log)
+      expect(calls).toHaveLength(2)
+      expect(calls[0]).toBe('gh pr merge 9 --repo o/r --disable-auto')
+      expect(calls[1]).toContain(ENABLE)
+      expect(calls[1]).toContain('--subject chore(release): v3.22.0')
+    })
+
+    test('a disable that fails does not fail the step or skip the arm', () => {
+      const outcome = runRefresh({
+        prs: [pr()],
+        parent: BASE,
+        disableFails: true,
+      })
+
+      expect(outcome.status).toBe(0)
+      expect(outcome.output).not.toContain('::warning::')
+      const calls = mergeCalls(outcome.log)
+      expect(calls[0]).toBe('gh pr merge 9 --repo o/r --disable-auto')
+      expect(calls.some((l) => l.includes(ENABLE))).toBe(true)
+    })
+
+    test('the disable runs once; the arm keeps its three tries', () => {
+      const outcome = runRefresh({
+        prs: [pr()],
+        parent: BASE,
+        mergeFails: true,
+      })
+
+      const calls = mergeCalls(outcome.log)
+      expect(calls.filter((l) => l.includes('--disable-auto'))).toHaveLength(1)
+      expect(calls.filter((l) => l.includes(ENABLE))).toHaveLength(3)
+    })
 
     test('warns instead of failing when auto-merge cannot be armed', () => {
       const outcome = runRefresh({ mergeFails: true })
