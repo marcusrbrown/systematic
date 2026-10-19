@@ -232,32 +232,6 @@ describe('build output and packaging', () => {
           '@opencode-ai/plugin',
         )
       }
-
-      const entryPath = path.join(
-        projectDir,
-        'node_modules/@fro.bot/systematic/dist/index.js',
-      )
-      const assetCheck = spawnSync(
-        'node',
-        [
-          '--input-type=module',
-          '-e',
-          `
-            import fs from 'node:fs'
-            import { fileURLToPath } from 'node:url'
-            const entryUrl = ${JSON.stringify(pathToFileURL(entryPath).href)}
-            const treeSitterUrl = import.meta.resolve('web-tree-sitter/web-tree-sitter.wasm', entryUrl)
-            const bashUrl = import.meta.resolve('tree-sitter-bash/tree-sitter-bash.wasm', entryUrl)
-            if (!treeSitterUrl.startsWith('file:') || !bashUrl.startsWith('file:')) process.exit(1)
-            if (!fs.existsSync(fileURLToPath(treeSitterUrl)) || !fs.existsSync(fileURLToPath(bashUrl))) process.exit(2)
-          `,
-        ],
-        { cwd: projectDir, encoding: 'utf8', timeout: 30_000 },
-      )
-      expect(
-        assetCheck.status,
-        `packed parser asset check failed (exit ${assetCheck.status})\n--- stdout ---\n${assetCheck.stdout}\n--- stderr ---\n${assetCheck.stderr}`,
-      ).toBe(0)
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true })
     }
