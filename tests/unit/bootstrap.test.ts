@@ -708,35 +708,6 @@ describe('using-systematic SKILL.md structural invariants', () => {
     expect(instructionPriority).toBeLessThan(howToAccess)
   })
 
-  test('the default bootstrap carries no workflow guard guidance, because only an enabled OpenCode guard adds it', () => {
-    const content = getBootstrapContent(defaultConfig, {
-      bundledSkillsDir: realBundledSkillsDir,
-    })
-    expect(content).not.toBeNull()
-    expect(content).not.toContain('systematic_workflow_')
-    expect(content).not.toMatch(/workflow guard/i)
-    expect(content).not.toContain('guard reports `unavailable`')
-    expect(content).not.toContain('`inactive` (reason `no-active-epoch`)')
-  })
-
-  test('the using-systematic skill body carries no workflow guard guidance', () => {
-    const skill = fs.readFileSync(
-      path.join(realBundledSkillsDir, 'using-systematic', 'SKILL.md'),
-      'utf8',
-    )
-    expect(skill).not.toContain('systematic_workflow_')
-    expect(skill).not.toMatch(/workflow guard/i)
-  })
-
-  test('the safe bootstrap computation carries no workflow guard guidance', () => {
-    const content = computeBootstrapContentSafe({
-      bundledSkillsDir: realBundledSkillsDir,
-    })
-    expect(content).not.toBeNull()
-    expect(content).not.toContain('systematic_workflow_')
-    expect(content).not.toMatch(/workflow guard/i)
-  })
-
   test('post-injection: applyBootstrapContent preserves SUBAGENT-STOP before EXTREMELY-IMPORTANT in rendered output.system[0]', () => {
     // CORRECTNESS: pre-injection tests against getBootstrapContent() can pass
     // while applyBootstrapContent's assembly logic silently breaks the

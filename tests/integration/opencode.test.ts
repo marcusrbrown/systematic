@@ -42,8 +42,9 @@ import {
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
 
-// See tests/integration/question-attestation-opencode.test.ts for why this
-// call lives here rather than in the fixture module.
+// This call lives here rather than in the fixture module, so importing the
+// fixture never spawns the launcher at module scope (see
+// tests/unit/receipt-workflow-host-no-spawn.test.ts).
 requireOpencodeAvailable(getOpencodeAvailability())
 if (!isOpencodeAvailable()) {
   console.warn(

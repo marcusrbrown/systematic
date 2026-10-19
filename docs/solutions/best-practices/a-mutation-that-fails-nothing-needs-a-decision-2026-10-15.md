@@ -13,6 +13,8 @@ applies_when:
 tags: [mutation-testing, mutation-proof, test-first, unreachable-code, defense-in-depth, public-interface, workflow-guard]
 ---
 
+> **Note (2026-10-19):** The guard examples below are historical: the workflow guard was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153); see [the decision note](workflow-guard-removed-2026-10-19.md)). The lesson is general and still applies.
+
 # A mutation that fails nothing needs a decision
 
 ## Context

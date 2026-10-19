@@ -63,28 +63,13 @@ Fields that control provider routing or capability policy — `model`, `variant`
 
 A typo in `agents.<key>`, `disabled_agents`, or `disabled_skills` fails loudly with a clear error that names the offending key — no silent misconfiguration.
 
-## Workflow Guard
+## Removed Settings
 
-The workflow guard records privacy-safe receipts for supported engineering operations and surfaces whether guarded workflow requirements are satisfied. It covers local implementation and verification work, commits, pushes, and GitHub pull-request, check, and review readback when the required Git and GitHub environment is available.
+The `workflow_guard` setting has been removed along with the workflow guard it configured. A `workflow_guard` key is still accepted in every config file (user, `$OPENCODE_CONFIG_DIR`, and project), with any value, so a config written for an earlier release keeps loading. The key has no effect.
 
-The guard is **off by default** (`disabled`). A disabled plugin does no guard work: it builds no operation observer, takes no snapshot of your repository, and reads no session history. The four `systematic_workflow_*` tools stay registered and report that the guard is disabled, and the guard guidance is left out of the bootstrap.
+Each config file that carries the key logs one warning per load. The warning names the file and the key, never prints the value, and links to this section. Delete the key from that file to silence it.
 
-Turn the guard on by setting a mode:
-
-- **`observe`** records and reports workflow state without blocking operations.
-- **`protected`** does the same and can also reject a guarded transition when required evidence is missing or stale.
-
-To restore the earlier behaviour, where the guard observed by default, add this to your user-level `systematic.json`:
-
-```json
-{
-  "workflow_guard": {
-    "mode": "observe"
-  }
-}
-```
-
-`workflow_guard` is trust-protected. Set it in user configuration (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`; project-level `.opencode/systematic.json` cannot set this field. A `workflow_guard` block that sets only `debug` leaves the mode `disabled`.
+The guard was off by default, so a configuration that never set `workflow_guard` behaves as it did before. If you had turned on `observe`, the receipts, status tools, and guidance it produced are gone. If you had turned on `protected`, it no longer blocks guarded commits, pushes, pull-request creation, or completions.
 
 ## Agent and Category Overlays
 
@@ -150,7 +135,7 @@ Setting `allow_project_profiles: true` in your **user** (or `$OPENCODE_CONFIG_DI
 }
 ```
 
-`allow_project_profiles` is **user-owned only** — exactly like `profiles` itself and `workflow_guard`, a project config can never set this field; doing so is stripped before the project config is even parsed and produces the same "ignored" warning as any other project-trust field. A project cannot grant itself a permission it does not already have. The opt-in is resolved from your user and `$OPENCODE_CONFIG_DIR` config only, before the project config is loaded, so setting it in the SAME file as a `profiles` map does not work either — both are stripped together, as if neither had been written.
+`allow_project_profiles` is **user-owned only** — exactly like `profiles` itself, a project config can never set this field; doing so is stripped before the project config is even parsed and produces the same "ignored" warning as any other project-trust field. A project cannot grant itself a permission it does not already have. The opt-in is resolved from your user and `$OPENCODE_CONFIG_DIR` config only, before the project config is loaded, so setting it in the SAME file as a `profiles` map does not work either — both are stripped together, as if neither had been written.
 
 A project-defined bundle is **advisory**, not authoritative: it supplies routing only where your own config is silent for that field, and can never override a value you set — not even partially. If you set `agents.correctness-reviewer.model` yourself, a project bundle that also sets it has no effect on that agent's model at all; the project's value never applies and never appears anywhere in the resolved config. This is enforced structurally by where the project bundle sits in the merge chain (before your base config, not after) combined with field-by-field merging — not by a policy check that a future change could accidentally bypass. A repository whose entire suggested profile is already covered by your own config is a normal, silent no-op: `systematic config show` shows you exactly which fields, if any, actually came from the project (see the [model profiles guide](/systematic/guides/model-profiles/#checking-active-routing)).
 
@@ -771,19 +756,9 @@ Path to a custom bootstrap prompt file
 
 ## workflow_guard
 
-Workflow guard configuration. The guard is off by default; `mode: observe` or `mode: protected` turns it on.
+Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.
 
-**Type:** `object`
-**Default:** `{"mode":"disabled","debug":false}`
-**Examples:**
-
-```json
-{
-  "mode": "observe",
-  "debug": false
-}
-```
-
+**Type:** `unknown`
 
 ## pi_subagents
 

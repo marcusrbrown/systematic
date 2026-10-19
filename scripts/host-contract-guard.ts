@@ -62,10 +62,6 @@ export const EXPECTED_SUITE_FILES: readonly string[] = [
   'tests/integration/eval-runner.test.ts',
   'tests/integration/opencode.test.ts',
   'tests/integration/pi.test.ts',
-  'tests/integration/question-attestation-opencode.test.ts',
-  'tests/integration/receipt-workflow-dogfood.test.ts',
-  'tests/integration/receipt-workflow-guard-real-host.test.ts',
-  'tests/integration/receipt-workflow-recovery.test.ts',
   'tests/integration/release-notes-ci.test.ts',
   'tests/integration/skill-command-probe.test.ts',
   'tests/integration/skill-delivery.test.ts',
@@ -73,12 +69,13 @@ export const EXPECTED_SUITE_FILES: readonly string[] = [
 ]
 
 /**
- * Measured: 139 test()/it() call sites exist across the twelve integration
- * files as of this writing. The prior floor of 50 exactly equalled the
- * host-free test count (claude-code 18 + eval-artifact 7 + eval-fixture 5 +
- * release-notes-ci 20 = 50), so a total collapse of every host-touching
- * file could still clear it silently. Raise this floor as the suite grows;
- * do not lower it without a documented reason.
+ * The floor catches a mass collapse of the suite: a run that passes far fewer
+ * tests than it should. It does not prove that any host-touching file ran, so
+ * it is not the host-coverage check. Host coverage rests on
+ * {@link EXPECTED_SUITE_FILES} (every listed file must appear in some shard's
+ * report), the per-file results, and the exempt-skip check. The suite passes
+ * 179 tests (one exempt skip) across the eleven listed files. Raise the floor as
+ * the suite grows, and do not lower it without a documented reason.
  */
 export const PASS_FLOOR = 120
 

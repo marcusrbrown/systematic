@@ -12,7 +12,12 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: high
 tags: [workflow-guard, skill-activation, output-cap, receipts, epoch]
+status: superseded
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the workflow guard this learning describes was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # Workflow guard silently skipped activation for skills over 32 KB
 

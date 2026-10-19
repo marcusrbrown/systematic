@@ -23,6 +23,7 @@ import {
 import {
   REMOVED_BUNDLED_AGENT_CATEGORIES,
   REMOVED_BUNDLED_AGENT_NAMES,
+  REMOVED_CONFIG_KEYS,
 } from '../../src/lib/removed-names.js'
 import {
   type RoutingTarget,
@@ -79,37 +80,19 @@ describe('config', () => {
         expect(result).toEqual(DEFAULT_CONFIG)
       })
 
-      test('resolves the workflow guard to disabled with no debug when nothing configures it', () => {
-        expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
-          mode: 'disabled',
-          debug: false,
-        })
-      })
-
-      test('keeps the workflow guard disabled when user config sets only debug', () => {
-        writeUserConfig({ workflow_guard: { debug: true } })
-        expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
-          mode: 'disabled',
-          debug: true,
-        })
-      })
-
-      test.each(['observe', 'protected'] as const)(
-        'a user-level %s workflow guard mode survives the merge',
-        (mode) => {
-          writeUserConfig({ workflow_guard: { mode } })
-          expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
-            mode,
-            debug: false,
-          })
-        },
-      )
-
-      test('rejects an invalid workflow guard mode in user config', () => {
-        writeUserConfig({ workflow_guard: { mode: 'enforced' } })
-        expect(() => loadConfig(testDir, hermeticLoad())).toThrow(
-          'workflow_guard',
+      test('the loaded config carries no workflow_guard field, whatever the files hold', () => {
+        expect('workflow_guard' in loadConfig(testDir, hermeticLoad())).toBe(
+          false,
         )
+        writeUserConfig({ workflow_guard: { mode: 'protected', debug: true } })
+        const warn = spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          expect('workflow_guard' in loadConfig(testDir, hermeticLoad())).toBe(
+            false,
+          )
+        } finally {
+          warn.mockRestore()
+        }
       })
 
       test('returned config has empty disabled arrays', () => {
@@ -227,8 +210,7 @@ describe('config', () => {
     describe('read-only observation metadata', () => {
       test('reports source presence and field-specific authority without values', () => {
         writeUserConfig({
-          bootstrap: { enabled: false },
-          workflow_guard: { mode: 'protected' },
+          bootstrap: { enabled: false, file: 'user-prompt.md' },
           skills_as_commands: false,
           agents: {
             'correctness-reviewer': {
@@ -244,7 +226,7 @@ describe('config', () => {
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
             bootstrap: { enabled: true },
-            workflow_guard: { mode: 'disabled' },
+            allow_project_profiles: true,
             skills_as_commands: true,
             agents: {
               'correctness-reviewer': { temperature: 0.4 },
@@ -276,15 +258,15 @@ describe('config', () => {
             expect.arrayContaining([
               { fieldPath: 'bootstrap.enabled', sourceKind: 'project' },
               { fieldPath: 'skills_as_commands', sourceKind: 'custom' },
-              { fieldPath: 'workflow_guard.mode', sourceKind: 'user' },
+              { fieldPath: 'bootstrap.file', sourceKind: 'user' },
             ]),
           )
           expect(result.metadata.authorities).not.toContainEqual({
-            fieldPath: 'workflow_guard.mode',
+            fieldPath: 'bootstrap.file',
             sourceKind: 'project',
           })
           expect(result.metadata.protectedFields).toContainEqual({
-            fieldPath: 'workflow_guard',
+            fieldPath: 'allow_project_profiles',
             outcome: 'blocked',
             sourceKind: 'project',
           })
@@ -292,7 +274,7 @@ describe('config', () => {
           expect(JSON.stringify(result.metadata)).not.toContain('permission')
           expect(result.config.skills_as_commands).toBe(false)
           expect(result.config.bootstrap.enabled).toBe(true)
-          expect(result.config.workflow_guard.mode).toBe('protected')
+          expect(result.config.bootstrap.file).toBe('user-prompt.md')
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
           fs.rmSync(customDir, { recursive: true, force: true })
@@ -582,14 +564,13 @@ describe('config', () => {
         }
       })
 
-      test('alias success (top-level-only: `profiles`/`workflow_guard`, no agents/categories overlay) actually applies them, emits no false "ignored"/"not selectable" warning, and gives exactly one accurate alias notice', () => {
+      test('alias success (top-level-only: `profiles`, no agents/categories overlay) actually applies it, emits no false "ignored"/"not selectable" warning, and gives exactly one accurate alias notice', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
             profile: 'personal',
-            workflow_guard: { mode: 'protected', debug: true },
             profiles: {
               personal: {
                 agents: { 'correctness-reviewer': { model: 'a/personal' } },
@@ -605,14 +586,9 @@ describe('config', () => {
 
           const result = loadConfigWithSources(testDir, { warningSink })
 
-          // Real effect, not just "no blocked record": workflow_guard took
-          // hold (project-trust would have stripped it to DEFAULT_CONFIG's
-          // observe/false) and the project-selected `personal` profile's
-          // overlay actually merged into the effective config.
-          expect(result.config.workflow_guard).toEqual({
-            mode: 'protected',
-            debug: true,
-          })
+          // Real effect, not just "no blocked record": the project-selected
+          // `personal` profile's overlay actually merged into the effective
+          // config.
           expect(result.metadata.activeProfile).toBe('personal')
           expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
             'a/personal',
@@ -639,8 +615,8 @@ describe('config', () => {
             'apply through the custom-trust pass instead',
           )
 
-          // Both top-level protected fields applied through the custom-trust
-          // pass of the identical file -- neither should be reported blocked.
+          // The top-level protected field applied through the custom-trust
+          // pass of the identical file -- it should not be reported blocked.
           expect(result.metadata.protectedFields).toEqual([])
 
           // Consumer evidence: the capability snapshot the CLI ships (and
@@ -673,7 +649,6 @@ describe('config', () => {
           JSON.stringify({
             allow_project_profiles: true,
             profile: 'personal',
-            workflow_guard: { mode: 'protected', debug: true },
             profiles: {
               personal: {
                 agents: { 'correctness-reviewer': { model: 'a/personal' } },
@@ -689,10 +664,7 @@ describe('config', () => {
 
           const result = loadConfigWithSources(testDir, { warningSink })
 
-          expect(result.config.workflow_guard).toEqual({
-            mode: 'protected',
-            debug: true,
-          })
+          expect(result.config.allow_project_profiles).toBe(true)
           expect(result.metadata.activeProfile).toBe('personal')
           expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
             'a/personal',
@@ -704,7 +676,7 @@ describe('config', () => {
           // pass ran, means the project pass never even blocked `profiles`
           // in the first place; `allow_project_profiles` itself is still
           // unconditionally blocked in the project pass but applies through
-          // the custom-trust pass, same as `workflow_guard`.
+          // the custom-trust pass.
           expect(
             warnings.some((message) =>
               message.includes('is only valid in user config'),
@@ -725,14 +697,12 @@ describe('config', () => {
         }
       })
 
-      test('alias success (workflow_guard-only, no `profiles`/no overlay fields) still gets one truthful alias notice, not silence', () => {
+      test('alias success (`allow_project_profiles`-only, no `profiles`/no overlay fields) still gets one truthful alias notice, not silence', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
-          JSON.stringify({
-            workflow_guard: { mode: 'protected', debug: true },
-          }),
+          JSON.stringify({ allow_project_profiles: true }),
         )
         process.env.OPENCODE_CONFIG_DIR = projectConfigDir
 
@@ -742,13 +712,7 @@ describe('config', () => {
 
           const result = loadConfigWithSources(testDir, { warningSink })
 
-          // workflow_guard has no dedicated "ignored" warning at all, so this
-          // case previously produced zero buffered messages and emitAliasDiagnostics
-          // stayed silent even though the field genuinely applied via custom trust.
-          expect(result.config.workflow_guard).toEqual({
-            mode: 'protected',
-            debug: true,
-          })
+          expect(result.config.allow_project_profiles).toBe(true)
           expect(result.metadata.protectedFields).toEqual([])
           expect(warnings).toEqual([
             expect.stringContaining('resolve to the same file'),
@@ -761,13 +725,13 @@ describe('config', () => {
         }
       })
 
-      test('alias + top-level-only invalid `workflow_guard` + report mode: the `profiles`-ignored warning is flushed verbatim (not silently dropped) and blocked-field metadata is retained', () => {
+      test('alias + top-level-only invalid `allow_project_profiles` + report mode: the `profiles`-ignored warning is flushed verbatim (not silently dropped) and blocked-field metadata is retained', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            workflow_guard: { mode: 'bogus-mode' },
+            allow_project_profiles: 'bogus',
             profiles: {
               personal: {
                 agents: { 'correctness-reviewer': { model: 'a/personal' } },
@@ -786,8 +750,8 @@ describe('config', () => {
             invalidSource: 'report',
           })
 
-          // The custom-trust pass of the aliased file failed (invalid mode
-          // enum value), so `profiles` never actually applied -- its ignored
+          // The custom-trust pass of the aliased file failed (a non-boolean
+          // opt-in), so `profiles` never actually applied -- its ignored
           // warning must still surface, not be silently swallowed the way
           // the successful-alias case swallows it.
           expect(
@@ -809,12 +773,12 @@ describe('config', () => {
           )
           expect(result.metadata.protectedFields).toEqual([
             {
-              fieldPath: 'profiles',
+              fieldPath: 'allow_project_profiles',
               outcome: 'blocked',
               sourceKind: 'project',
             },
             {
-              fieldPath: 'workflow_guard',
+              fieldPath: 'profiles',
               outcome: 'blocked',
               sourceKind: 'project',
             },
@@ -2193,11 +2157,8 @@ describe('config', () => {
       expect(DEFAULT_CONFIG.bootstrap.file).toBeUndefined()
     })
 
-    test('has workflow_guard disabled mode and debug disabled by default', () => {
-      expect(DEFAULT_CONFIG.workflow_guard).toEqual({
-        mode: 'disabled',
-        debug: false,
-      })
+    test('has no workflow_guard field, because the setting was removed', () => {
+      expect(Object.hasOwn(DEFAULT_CONFIG, 'workflow_guard')).toBe(false)
     })
   })
 
@@ -2380,20 +2341,6 @@ describe('config', () => {
       const configPath = writeProjectConfig({ agnts: {} })
       expect(() => loadConfig(testDir)).toThrow(configPath)
       expect(() => loadConfig(testDir)).toThrow('agnts')
-    })
-
-    test('project workflow_guard is stripped by the trust boundary', () => {
-      // A payload that differs from the default in both fields, so a project
-      // config that got through would show.
-      writeProjectConfig({
-        workflow_guard: { mode: 'protected', debug: true },
-      })
-
-      expect(() => loadConfig(testDir, hermeticLoad())).not.toThrow()
-      expect(loadConfig(testDir, hermeticLoad()).workflow_guard).toEqual({
-        mode: 'disabled',
-        debug: false,
-      })
     })
 
     // `model` is a SECURITY_OVERLAY_FIELDS member: a project-trust source has
@@ -2703,62 +2650,6 @@ describe('config', () => {
 
         const result = loadConfig(testDir)
         expect(result.bootstrap.enabled).toBe(false)
-      } finally {
-        delete process.env.OPENCODE_CONFIG_DIR
-        fs.rmSync(customDir, { recursive: true, force: true })
-      }
-    })
-
-    test('user workflow_guard values survive empty project and custom configs', () => {
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
-      )
-      process.env.OPENCODE_CONFIG_DIR = customDir
-
-      try {
-        writeUserConfig({
-          workflow_guard: { mode: 'protected', debug: true },
-        })
-        writeProjectConfig({})
-        fs.writeFileSync(
-          path.join(customDir, 'systematic.json'),
-          JSON.stringify({}),
-        )
-
-        const result = loadConfig(testDir)
-
-        expect(result.workflow_guard).toEqual({
-          mode: 'protected',
-          debug: true,
-        })
-      } finally {
-        delete process.env.OPENCODE_CONFIG_DIR
-        fs.rmSync(customDir, { recursive: true, force: true })
-      }
-    })
-
-    test('custom workflow_guard partially overrides only the specified fields', () => {
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
-      )
-      process.env.OPENCODE_CONFIG_DIR = customDir
-
-      try {
-        writeUserConfig({
-          workflow_guard: { mode: 'protected', debug: true },
-        })
-        writeProjectConfig({})
-        fs.writeFileSync(
-          path.join(customDir, 'systematic.json'),
-          JSON.stringify({ workflow_guard: { mode: 'disabled' } }),
-        )
-
-        const result = loadConfig(testDir)
-
-        expect(result.workflow_guard).toEqual({
-          mode: 'disabled',
-          debug: true,
-        })
       } finally {
         delete process.env.OPENCODE_CONFIG_DIR
         fs.rmSync(customDir, { recursive: true, force: true })
@@ -6053,6 +5944,337 @@ describe('pi_subagents merge and trust', () => {
 // directly to end users in validation error messages. These tests catch two
 // classes of drift on that URL: the host and base-path (correct DNS target)
 // and the fragment (a heading that actually exists in the rendered docs).
+
+describe('a removed workflow_guard key', () => {
+  const REMOVED_SETTINGS_URL =
+    'https://fro.bot/systematic/reference/configuration#removed-settings'
+  const SENTINEL = 'SENTINEL_VALUE_9X7Q'
+
+  let testDir: string
+  let originalOsHomedir: (() => string) | undefined
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-removed-key-'))
+    originalOsHomedir = os.homedir
+    os.homedir = () => path.join(testDir, 'home')
+  })
+
+  afterEach(() => {
+    if (originalOsHomedir) os.homedir = originalOsHomedir
+    fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  const userDir = () => path.join(testDir, 'home', '.config', 'opencode')
+  const projectDir = () => path.join(testDir, '.opencode')
+
+  function writeIn(dir: string, name: string, content: unknown): string {
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, name)
+    fs.writeFileSync(
+      file,
+      typeof content === 'string' ? content : JSON.stringify(content),
+    )
+    return file
+  }
+
+  /** Loads with a collecting sink; an empty home and no custom dir unless given. */
+  function load(
+    options: {
+      customConfigDir?: string | null
+      invalidSource?: 'throw' | 'report'
+    } = {},
+  ) {
+    const warnings: string[] = []
+    const result = loadConfigWithSources(testDir, {
+      homeDir: path.join(testDir, 'home'),
+      customConfigDir: null,
+      warningSink: (message) => warnings.push(message),
+      ...options,
+    })
+    return { result, warnings }
+  }
+
+  const guardWarnings = (warnings: readonly string[]) =>
+    warnings.filter((message) => message.includes('workflow_guard'))
+
+  test('a user systematic.json that carries the key loads, warns once naming that file, and the key has no effect', () => {
+    const file = writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+    })
+
+    const { result, warnings } = load()
+
+    expect(guardWarnings(warnings)).toHaveLength(1)
+    expect(guardWarnings(warnings)[0]).toContain(file)
+    expect('workflow_guard' in result.config).toBe(false)
+    // The warning list is the only report: nothing else reads the keys, so the
+    // load result carries no field for them.
+    expect(result).not.toHaveProperty('removedKeys')
+  })
+
+  test('a user systematic.jsonc, a custom config dir and a project config each warn once, naming their own file', () => {
+    const userFile = writeIn(
+      userDir(),
+      'systematic.jsonc',
+      '{ // old setting\n "workflow_guard": { "mode": "protected" } }',
+    )
+    const customDir = path.join(testDir, 'custom')
+    const customFile = writeIn(customDir, 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+    })
+    const projectFile = writeIn(projectDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+    })
+
+    const { result, warnings } = load({ customConfigDir: customDir })
+
+    const named = guardWarnings(warnings)
+    expect(named).toHaveLength(3)
+    for (const file of [userFile, customFile, projectFile]) {
+      expect(named.filter((message) => message.includes(file))).toHaveLength(1)
+    }
+    expect('workflow_guard' in result.config).toBe(false)
+  })
+
+  test.each([
+    { label: 'only debug', value: { debug: true } },
+    { label: 'an unknown mode', value: { mode: 'enforced' } },
+    { label: 'a boolean', value: true },
+    { label: 'null', value: null },
+    { label: 'an array', value: [] },
+    { label: 'a string', value: 'observe' },
+    { label: 'a number', value: 42 },
+  ])('a file whose workflow_guard is $label loads and warns', ({ value }) => {
+    writeIn(userDir(), 'systematic.json', { workflow_guard: value })
+
+    const { warnings } = load()
+
+    expect(guardWarnings(warnings)).toHaveLength(1)
+  })
+
+  test('a project config that carries the key no longer fails on a malformed value', () => {
+    writeIn(projectDir(), 'systematic.json', {
+      workflow_guard: { mode: 'enforced', telemetry: true },
+    })
+
+    const { warnings } = load()
+
+    expect(guardWarnings(warnings)).toHaveLength(1)
+  })
+
+  test('a project config that trips the 20-warning cap still gets its removed-key warning', () => {
+    const categories: Record<string, Record<string, unknown>> = {}
+    for (let index = 0; index < 7; index++) {
+      categories[`cat${index}`] = {
+        model: 'openai/x',
+        variant: 'v',
+        skills: ['s'],
+        permission: { bash: 'allow' },
+        opencode: {},
+        pi: {},
+      }
+    }
+    const file = writeIn(projectDir(), 'systematic.json', {
+      categories,
+      workflow_guard: { mode: 'observe' },
+    })
+
+    const { warnings } = load()
+
+    // The cap is spent on protected-field strips: 20 details plus one summary.
+    expect(
+      warnings.filter((message) =>
+        message.includes('is only valid in user config'),
+      ),
+    ).toHaveLength(20)
+    expect(
+      warnings.filter((message) => message.includes('were suppressed')),
+    ).toHaveLength(1)
+    // The removed-key warning goes through the raw sink, so the cap and the
+    // alias buffer cannot absorb it.
+    const named = guardWarnings(warnings)
+    expect(named).toHaveLength(1)
+    expect(named[0]).toContain(file)
+  })
+
+  test('a file that carries the key and is otherwise invalid is reported invalid, and its removed-key warning is dropped with the file', () => {
+    writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+      not_a_real_key: true,
+    })
+
+    const { result, warnings } = load({ invalidSource: 'report' })
+
+    expect(result.metadata.sources).toContainEqual({
+      errorCode: 'schema-invalid',
+      kind: 'user',
+      presence: 'invalid',
+    })
+    // The file never becomes a source, so nothing is left to warn about; the
+    // schema error is the report the user sees.
+    expect(guardWarnings(warnings)).toEqual([])
+    expect(() => load({ invalidSource: 'throw' })).toThrow()
+  })
+
+  test('a file without the key does not warn', () => {
+    writeIn(userDir(), 'systematic.json', { skills_as_commands: false })
+    writeIn(projectDir(), 'systematic.json', { skills_as_commands: true })
+
+    const { warnings } = load()
+
+    expect(guardWarnings(warnings)).toEqual([])
+  })
+
+  test('a config whose root is not an object still fails, as it does for any other key', () => {
+    writeIn(userDir(), 'systematic.json', '[]')
+
+    expect(() => load()).toThrow('root must be an object')
+  })
+
+  test('a user and a custom config that resolve to the same real file warn once for the load', () => {
+    const file = writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+    })
+    const alias = path.join(testDir, 'custom-alias')
+    fs.symlinkSync(userDir(), alias)
+
+    const { warnings } = load({ customConfigDir: alias })
+
+    const named = guardWarnings(warnings)
+    expect(named).toHaveLength(1)
+    // The warning names the first source that carried the file, by its own
+    // (non-canonical) path.
+    expect(named[0]).toContain(file)
+  })
+
+  test('two files with different real paths are two warnings, whatever their content', () => {
+    writeIn(userDir(), 'systematic.json', { workflow_guard: true })
+    const customDir = path.join(testDir, 'custom')
+    writeIn(customDir, 'systematic.json', { workflow_guard: true })
+
+    const { warnings } = load({ customConfigDir: customDir })
+
+    expect(guardWarnings(warnings)).toHaveLength(2)
+  })
+
+  test('two loads in one start may each warn, because nothing is remembered across loads', () => {
+    writeIn(userDir(), 'systematic.json', { workflow_guard: true })
+    const warnings: string[] = []
+    const options = {
+      homeDir: path.join(testDir, 'home'),
+      customConfigDir: null,
+      warningSink: (message: string) => warnings.push(message),
+    }
+
+    loadConfigWithSources(testDir, options)
+    loadConfigWithSources(testDir, options)
+
+    expect(guardWarnings(warnings)).toHaveLength(2)
+  })
+
+  test('when systematic.json and systematic.jsonc both exist, only a key in the file that wins warns', () => {
+    writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+    })
+    writeIn(userDir(), 'systematic.jsonc', '{ "skills_as_commands": false }')
+
+    const shadowed = load()
+    expect(guardWarnings(shadowed.warnings)).toEqual([])
+
+    const winner = writeIn(
+      userDir(),
+      'systematic.jsonc',
+      '{ "workflow_guard": { "mode": "observe" } }',
+    )
+    const winning = load()
+    expect(guardWarnings(winning.warnings)).toHaveLength(1)
+    expect(guardWarnings(winning.warnings)[0]).toContain(winner)
+  })
+
+  test.each([{ typo: 'workflow_gaurd' }, { typo: 'agnts' }])(
+    'the misspelled key $typo still fails validation',
+    ({ typo }) => {
+      writeIn(userDir(), 'systematic.json', { [typo]: {} })
+
+      expect(() => load()).toThrow(typo)
+    },
+  )
+
+  test('the warning names the file and the key, links to the reference, and never echoes the value', () => {
+    const file = writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: SENTINEL, debug: SENTINEL },
+    })
+
+    const { warnings } = load()
+
+    const [message] = guardWarnings(warnings)
+    expect(message).toStartWith('[systematic]')
+    expect(message).toContain('`workflow_guard`')
+    expect(message).toContain(file)
+    expect(message).toContain(REMOVED_SETTINGS_URL)
+    expect(message).not.toContain(SENTINEL)
+    expect(message).toContain('ignored')
+    // Pi reads the same user file, so the text must not name one harness.
+    expect(message?.replace(file, '')).not.toMatch(/opencode|pi\b/i)
+  })
+
+  test('a path with a control character is sanitized in the warning', () => {
+    const customDir = path.join(testDir, 'bad\ndir')
+    writeIn(customDir, 'systematic.json', { workflow_guard: true })
+
+    const { warnings } = load({ customConfigDir: customDir })
+
+    const [message] = guardWarnings(warnings)
+    expect(message).toContain('\\u000a')
+    expect(message).not.toContain('\n')
+  })
+
+  test('an aliased project file that sets only workflow_guard warns about the removed key and gives no alias notice', () => {
+    writeIn(projectDir(), 'systematic.json', { workflow_guard: { mode: 'x' } })
+
+    const { warnings } = load({ customConfigDir: projectDir() })
+
+    expect(guardWarnings(warnings)).toHaveLength(1)
+    expect(warnings.some((m) => m.includes('resolve to the same file'))).toBe(
+      false,
+    )
+  })
+
+  test('the key is neither an authority field nor a protected field in the observation metadata', () => {
+    writeIn(userDir(), 'systematic.json', {
+      workflow_guard: { mode: 'observe' },
+    })
+    writeIn(projectDir(), 'systematic.json', { workflow_guard: { mode: 'x' } })
+
+    const { result } = load()
+
+    expect(JSON.stringify(result.metadata)).not.toContain('workflow_guard')
+    expect(result.metadata.sources).toEqual(
+      expect.arrayContaining([
+        { kind: 'user', presence: 'present' },
+        { kind: 'project', presence: 'present' },
+      ]),
+    )
+  })
+
+  test('the removed key is reported by the warning and not on the source metadata', () => {
+    writeIn(userDir(), 'systematic.json', { workflow_guard: true })
+
+    const { result, warnings } = load()
+
+    expect(guardWarnings(warnings)).toHaveLength(1)
+    for (const source of result.metadata.sources) {
+      expect(Object.keys(source).sort()).toEqual(
+        expect.arrayContaining(['kind', 'presence']),
+      )
+      expect(Object.keys(source)).not.toContain('removedKeys')
+    }
+  })
+
+  test('the removed-key list names workflow_guard', () => {
+    expect(REMOVED_CONFIG_KEYS).toEqual(['workflow_guard'])
+  })
+})
 
 describe('TYPED_VALIDATION_DOCS_URL', () => {
   const __dirname = path.dirname(fileURLToPath(import.meta.url))

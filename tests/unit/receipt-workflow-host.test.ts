@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -16,7 +14,6 @@ import {
   spawnOpencodeChild,
   startScriptedSkillModelServer,
   withScriptedProvider,
-  writeWorkflowGuardMode,
 } from '../integration/fixtures/receipt-workflow-host.js'
 
 // Absolute file:// URL to the real fixture source, resolved from THIS file
@@ -776,108 +773,5 @@ describe('isProcessGroupAlive error classification (ESRCH vs EPERM vs unknown)',
     expect(isKillErrorProofOfDeath(null)).toBe(false)
     expect(isKillErrorProofOfDeath(undefined)).toBe(false)
     expect(isKillErrorProofOfDeath('boom')).toBe(false)
-  })
-})
-
-describe('writeWorkflowGuardMode', () => {
-  function withConfigDir(
-    body: (configDir: string) => void,
-    { create = true }: { create?: boolean } = {},
-  ): void {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-mode-fixture-'))
-    const configDir = path.join(root, 'config')
-    if (create) fs.mkdirSync(configDir)
-    try {
-      body(configDir)
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  }
-
-  const read = (configDir: string): unknown =>
-    JSON.parse(fs.readFileSync(path.join(configDir, 'systematic.json'), 'utf8'))
-
-  test('writes the mode into a config directory that holds no config yet', () => {
-    withConfigDir((configDir) => {
-      writeWorkflowGuardMode({ configDir }, 'observe')
-
-      expect(read(configDir)).toEqual({ workflow_guard: { mode: 'observe' } })
-    })
-  })
-
-  test('creates the config directory when it does not exist', () => {
-    withConfigDir(
-      (configDir) => {
-        writeWorkflowGuardMode({ configDir }, 'protected')
-
-        expect(read(configDir)).toEqual({
-          workflow_guard: { mode: 'protected' },
-        })
-      },
-      { create: false },
-    )
-  })
-
-  test('keeps the other Systematic config and the other workflow_guard keys', () => {
-    withConfigDir((configDir) => {
-      fs.writeFileSync(
-        path.join(configDir, 'systematic.json'),
-        JSON.stringify({
-          bootstrap: { enabled: false },
-          workflow_guard: { debug: true, mode: 'disabled' },
-        }),
-      )
-
-      writeWorkflowGuardMode({ configDir }, 'observe')
-
-      expect(read(configDir)).toEqual({
-        bootstrap: { enabled: false },
-        workflow_guard: { debug: true, mode: 'observe' },
-      })
-    })
-  })
-
-  test('refuses to overwrite a config that is not a JSON object', () => {
-    withConfigDir((configDir) => {
-      fs.writeFileSync(path.join(configDir, 'systematic.json'), '[1, 2]')
-
-      expect(() => writeWorkflowGuardMode({ configDir }, 'observe')).toThrow(
-        'must hold a JSON object',
-      )
-      expect(
-        fs.readFileSync(path.join(configDir, 'systematic.json'), 'utf8'),
-      ).toBe('[1, 2]')
-    })
-  })
-
-  test('rethrows a read failure that is not a missing file', () => {
-    withConfigDir((configDir) => {
-      // systematic.json is a directory: reading it fails with EISDIR, which
-      // is not "no config yet" and must not be treated as an empty config.
-      fs.mkdirSync(path.join(configDir, 'systematic.json'))
-
-      expect(() => writeWorkflowGuardMode({ configDir }, 'observe')).toThrow()
-    })
-  })
-
-  test('rethrows malformed JSON', () => {
-    withConfigDir((configDir) => {
-      fs.writeFileSync(path.join(configDir, 'systematic.json'), '{ not json')
-
-      expect(() => writeWorkflowGuardMode({ configDir }, 'observe')).toThrow(
-        SyntaxError,
-      )
-    })
-  })
-
-  test('refuses a config directory that holds systematic.jsonc', () => {
-    withConfigDir((configDir) => {
-      fs.writeFileSync(path.join(configDir, 'systematic.jsonc'), '{}')
-
-      expect(() => writeWorkflowGuardMode({ configDir }, 'observe')).toThrow(
-        'cannot merge into systematic.jsonc',
-      )
-      expect(fs.existsSync(path.join(configDir, 'systematic.json'))).toBe(false)
-    })
   })
 })

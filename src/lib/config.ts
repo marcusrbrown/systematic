@@ -21,7 +21,10 @@ import {
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
-import { REMOVED_BUNDLED_AGENT_CATEGORIES } from './removed-names.js'
+import {
+  REMOVED_BUNDLED_AGENT_CATEGORIES,
+  REMOVED_CONFIG_KEYS,
+} from './removed-names.js'
 import {
   collectWrittenLegacyPiSubagentsThinkingWarnings,
   qualifierResolvesWithoutModel,
@@ -32,13 +35,6 @@ import {
 export interface BootstrapConfig {
   enabled: boolean
   file?: string
-}
-
-export type WorkflowGuardMode = 'observe' | 'protected' | 'disabled'
-
-export interface WorkflowGuardConfig {
-  mode: WorkflowGuardMode
-  debug: boolean
 }
 
 export type OverlayConfig = Record<string, unknown>
@@ -120,8 +116,6 @@ export const CONFIG_AUTHORITY_FIELD_PATHS = [
   'bootstrap.enabled',
   'bootstrap.file',
   'skills_as_commands',
-  'workflow_guard.debug',
-  'workflow_guard.mode',
 ] as const
 
 export { CONFIG_PROTECTED_FIELD_PATHS, type ConfigProtectedFieldPath }
@@ -236,7 +230,6 @@ export interface SystematicConfig {
   disabled_agents: string[]
   disabled_commands: string[]
   bootstrap: BootstrapConfig
-  workflow_guard: WorkflowGuardConfig
   agents?: OverlayConfigMap
   categories?: OverlayConfigMap
   pi_subagents?: PiSubagentsOverlayMap
@@ -251,20 +244,11 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   bootstrap: {
     enabled: true,
   },
-  workflow_guard: {
-    mode: 'disabled',
-    debug: false,
-  },
   agents: {},
   categories: {},
   pi_subagents: { categories: {}, agents: {} },
   skills_as_commands: true,
   allow_project_profiles: false,
-}
-
-interface RawWorkflowGuardConfig {
-  mode?: WorkflowGuardMode
-  debug?: boolean
 }
 
 /**
@@ -282,12 +266,11 @@ interface RawProfileBundle {
 interface RawSystematicConfig
   extends Omit<
     Partial<SystematicConfig>,
-    'agents' | 'categories' | 'pi_subagents' | 'workflow_guard'
+    'agents' | 'categories' | 'pi_subagents'
   > {
   agents?: unknown
   categories?: unknown
   pi_subagents?: { categories?: unknown; agents?: unknown }
-  workflow_guard?: RawWorkflowGuardConfig
   profiles?: Record<string, RawProfileBundle>
   profile?: string | null
 }
@@ -302,6 +285,8 @@ interface ConfigSourceBase {
 /** A config source loaded from an actual file: user, project, or custom. */
 interface FileConfigSource extends ConfigSourceBase {
   readonly kind: 'file'
+  /** Keys from `REMOVED_CONFIG_KEYS` this file carries, whatever their value. */
+  readonly removedKeys: readonly string[]
   readonly trust: ConfigSourceKind
 }
 
@@ -385,16 +370,13 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
   Record<SecurityOverlayField, ConfigProtectedFieldPath>
 >
 
-// `workflow_guard` and `allow_project_profiles` are unconditionally
-// project-protected. `profiles` is deliberately NOT in this set -- it is
-// conditionally protected on the effective `allow_project_profiles` opt-in
-// (see `stripProjectProtectedFields`/`collectProjectProtectedFields`). A
-// project can never grant itself that opt-in, since `allow_project_profiles`
-// itself is always stripped regardless of its value.
-const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set([
-  'workflow_guard',
-  'allow_project_profiles',
-])
+// `allow_project_profiles` is unconditionally project-protected. `profiles` is
+// deliberately NOT in this set -- it is conditionally protected on the
+// effective `allow_project_profiles` opt-in (see
+// `stripProjectProtectedFields`/`collectProjectProtectedFields`). A project can
+// never grant itself that opt-in, since `allow_project_profiles` itself is
+// always stripped regardless of its value.
+const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set(['allow_project_profiles'])
 
 /** Max rendered length (including a truncation ellipsis) for untrusted text interpolated into a diagnostic message. */
 const MAX_DIAGNOSTIC_TEXT = 200
@@ -885,6 +867,9 @@ function loadConfigSource(
         config,
         path: filePath,
         protectedFields,
+        removedKeys: REMOVED_CONFIG_KEYS.filter((key) =>
+          Object.hasOwn(rawConfig, key),
+        ),
         trust,
       },
     }
@@ -952,9 +937,8 @@ function emitTopLevelProtectedFieldWarning(
 /**
  * @param allowProjectProfiles The effective (already-resolved custom ??
  * user) opt-in value. Gates whether a project-set `profiles` is reported as
- * blocked -- `workflow_guard` and `allow_project_profiles` itself are
- * always blocked regardless of this value (see
- * `PROJECT_ALWAYS_PROTECTED_FIELDS`).
+ * blocked -- `allow_project_profiles` itself is always blocked regardless of
+ * this value (see `PROJECT_ALWAYS_PROTECTED_FIELDS`).
  */
 function collectProjectProtectedFields(
   rawConfig: RawSystematicConfig,
@@ -964,15 +948,6 @@ function collectProjectProtectedFields(
   if (trust !== 'project') return []
 
   return [
-    ...(Object.hasOwn(rawConfig, 'workflow_guard')
-      ? [
-          {
-            fieldPath: 'workflow_guard' as const,
-            outcome: 'blocked' as const,
-            sourceKind: 'project' as const,
-          },
-        ]
-      : []),
     ...(!allowProjectProfiles && Object.hasOwn(rawConfig, 'profiles')
       ? [
           {
@@ -1020,8 +995,7 @@ function collectProtectedOverlayValue(
 }
 
 /**
- * `workflow_guard` and `allow_project_profiles` are stripped unconditionally.
- * `profiles` is stripped only when `allowProjectProfiles` is false (the
+ * `allow_project_profiles` is stripped unconditionally. `profiles` is stripped only when `allowProjectProfiles` is false (the
  * resolved custom ?? user opt-in) -- when true, `profiles` survives intact
  * into the parsed project source for `SystematicConfigSchema.safeParse` to
  * validate normally, same as it does for a user/custom source.
@@ -1446,19 +1420,16 @@ function createAliasStripTracker(
 
 /**
  * Determine whether an aliased-load notice (success or buffered-failure) is
- * eligible at all. `workflow_guard` has no dedicated ignored-warning, so a
- * workflow_guard-only project config buffers nothing yet still needs the
- * notice -- `hasProtectedFields` covers that.
+ * eligible at all. Every protected field a project source can carry has its
+ * own ignored-warning (an overlay strip, `profiles`, or
+ * `allow_project_profiles`), so a project pass that stripped anything has
+ * buffered something.
  */
 function isAliasNoticeEligible(input: {
   readonly aliasedCustomConfigPath: string | undefined
   readonly bufferedCount: number
-  readonly hasProtectedFields: boolean
 }): boolean {
-  return (
-    input.aliasedCustomConfigPath !== undefined &&
-    (input.bufferedCount > 0 || input.hasProtectedFields)
-  )
+  return input.aliasedCustomConfigPath !== undefined && input.bufferedCount > 0
 }
 
 /**
@@ -1474,7 +1445,6 @@ function emitAliasFailureDiagnostics(input: {
   readonly aliasedCustomConfigPath: string | undefined
   readonly buffered: readonly string[]
   readonly customLoaded: boolean
-  readonly hasProtectedFields: boolean
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
 }): void {
@@ -1482,7 +1452,6 @@ function emitAliasFailureDiagnostics(input: {
     !isAliasNoticeEligible({
       aliasedCustomConfigPath: input.aliasedCustomConfigPath,
       bufferedCount: input.buffered.length,
-      hasProtectedFields: input.hasProtectedFields,
     })
   ) {
     return
@@ -1505,7 +1474,6 @@ function buildAliasSuccessNotice(input: {
   readonly aliasedCustomConfigPath: string | undefined
   readonly bufferedCount: number
   readonly customLoaded: boolean
-  readonly hasProtectedFields: boolean
   readonly projectConfigPath: string
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
@@ -1514,7 +1482,6 @@ function buildAliasSuccessNotice(input: {
     !isAliasNoticeEligible({
       aliasedCustomConfigPath: input.aliasedCustomConfigPath,
       bufferedCount: input.bufferedCount,
-      hasProtectedFields: input.hasProtectedFields,
     }) ||
     !(input.projectLoaded && input.customLoaded) ||
     input.aliasedCustomConfigPath === undefined
@@ -1526,8 +1493,35 @@ function buildAliasSuccessNotice(input: {
   const warningSink = input.warningSink
   return () => {
     warningSink(
-      `[systematic] project config (${sanitizeDiagnosticText(projectConfigPath)}) and custom config (${sanitizeDiagnosticText(aliasedCustomConfigPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`workflow_guard\`) apply through the custom-trust pass instead.`,
+      `[systematic] project config (${sanitizeDiagnosticText(projectConfigPath)}) and custom config (${sanitizeDiagnosticText(aliasedCustomConfigPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`allow_project_profiles\`) apply through the custom-trust pass instead.`,
     )
+  }
+}
+
+/** Where the removed-settings note lives; the warning links to it. */
+const REMOVED_SETTINGS_DOCS_URL =
+  'https://fro.bot/systematic/reference/configuration#removed-settings'
+
+/**
+ * Warn once per real file and removed key in this load. Keyed on the canonical
+ * path, so a user and custom config that are the same file warn once. The
+ * value is never read. Uses the raw sink so the project cap and alias notice
+ * cannot absorb it.
+ */
+function warnRemovedKeys(
+  sources: readonly FileConfigSource[],
+  warningSink: (message: string) => void,
+): void {
+  const reported = new Set<string>()
+  for (const source of sources) {
+    for (const key of source.removedKeys) {
+      const identity = `${source.canonicalPath}\0${key}`
+      if (reported.has(identity)) continue
+      reported.add(identity)
+      warningSink(
+        `[systematic] \`${key}\` in config (${sanitizeDiagnosticText(source.path)}) has been removed and is ignored. Delete it from that file to silence this warning. See ${REMOVED_SETTINGS_DOCS_URL} for details.`,
+      )
+    }
   }
 }
 
@@ -1699,7 +1693,6 @@ export function loadConfigWithSources(
     aliasedCustomConfigPath,
     buffered: projectStrip.buffered,
     customLoaded: custom.source !== null,
-    hasProtectedFields: (projectSource?.protectedFields.length ?? 0) > 0,
     projectLoaded: project.source !== null,
     warningSink,
   })
@@ -1707,7 +1700,6 @@ export function loadConfigWithSources(
     aliasedCustomConfigPath,
     bufferedCount: projectStrip.buffered.length,
     customLoaded: custom.source !== null,
-    hasProtectedFields: (projectSource?.protectedFields.length ?? 0) > 0,
     projectConfigPath: paths.projectConfig,
     projectLoaded: project.source !== null,
     warningSink,
@@ -1716,6 +1708,7 @@ export function loadConfigWithSources(
   const sources = [userSource, projectSource, customSource].filter(
     (source): source is FileConfigSource => source !== null,
   )
+  warnRemovedKeys(sources, warningSink)
   const userConfig = userSource?.config
   const projectConfig = projectSource?.config
   const customConfig = customSource?.config
@@ -1776,7 +1769,7 @@ export function loadConfigWithSources(
       : null
 
   // Overlay merging uses the four-entry chain; every other merge in this
-  // function (pi_subagents, disabled_*, bootstrap, workflow_guard,
+  // function (pi_subagents, disabled_*, bootstrap,
   // skills_as_commands, and the observation metadata below) uses the
   // original three-entry `sources`, since a profile bundle carries no
   // fields outside agents/categories and must not be double-counted as a
@@ -1869,11 +1862,6 @@ export function loadConfigWithSources(
       ...projectConfig?.bootstrap,
       ...customConfig?.bootstrap,
     },
-    workflow_guard: {
-      ...DEFAULT_CONFIG.workflow_guard,
-      ...userConfig?.workflow_guard,
-      ...customConfig?.workflow_guard,
-    },
     agents: overlayValues(overlays.agents),
     categories: overlayValues(overlays.categories),
     pi_subagents: {
@@ -1886,8 +1874,7 @@ export function loadConfigWithSources(
       userConfig?.skills_as_commands ??
       DEFAULT_CONFIG.skills_as_commands,
     // `allow_project_profiles` is protected (stripped from `projectConfig`
-    // before this point, same as `workflow_guard`) so only user/custom are
-    // consulted here -- mirrors the `workflow_guard` merge above.
+    // before this point) so only user/custom are consulted here.
     allow_project_profiles:
       customConfig?.allow_project_profiles ??
       userConfig?.allow_project_profiles ??
@@ -1998,8 +1985,6 @@ function buildConfigObservationMetadata(
     'bootstrap.enabled': ['custom', 'project', 'user'],
     'bootstrap.file': ['custom', 'project', 'user'],
     skills_as_commands: ['custom', 'project', 'user'],
-    'workflow_guard.debug': ['custom', 'user'],
-    'workflow_guard.mode': ['custom', 'user'],
   }
   for (const fieldPath of CONFIG_AUTHORITY_FIELD_PATHS) {
     const authority = firstDefinedSource(fieldPath, fieldCandidates[fieldPath])

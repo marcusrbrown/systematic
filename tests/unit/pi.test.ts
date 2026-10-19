@@ -402,29 +402,6 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     )
   })
 
-  test('Pi bootstrap carries no workflow guard guidance', async () => {
-    const api = createFakeExtensionApi()
-    await piExtension(api)
-    const handler = api.handlers.before_agent_start as ExtensionHandler<
-      BeforeAgentStartEvent,
-      BeforeAgentStartEventResult
-    >
-    const event: BeforeAgentStartEvent = {
-      type: 'before_agent_start',
-      prompt: 'do the thing',
-      systemPrompt: 'Earlier extension prompt contribution.',
-      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
-    }
-
-    const result = await handler(event, fakeExtensionContext)
-
-    const systemPrompt = (result as BeforeAgentStartEventResult)
-      .systemPrompt as string
-    expect(systemPrompt).toContain('<SYSTEMATIC_WORKFLOWS>')
-    expect(systemPrompt).not.toContain('systematic_workflow_')
-    expect(systemPrompt).not.toMatch(/workflow guard/i)
-  })
-
   test('Pi bootstrap uses native skill guidance and omits the generic skill tool instruction', async () => {
     const api = createFakeExtensionApi()
     await piExtension(api)
@@ -478,6 +455,51 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
 
     expect(second.split(profileMarker)).toHaveLength(2)
     expect(second).toBe(first)
+  })
+})
+
+describe('src/pi.ts config loading', () => {
+  test('a user config that still carries the removed workflow_guard key loads and warns once, naming the file and no value', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pi-removed-key-'),
+    )
+    const originalHomedir = os.homedir
+    const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => tempDir
+    const configFile = path.join(
+      tempDir,
+      '.config',
+      'opencode',
+      'systematic.json',
+    )
+    fs.mkdirSync(path.dirname(configFile), { recursive: true })
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({ workflow_guard: { mode: 'SENTINEL_PI_VALUE' } }),
+    )
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      await piExtension(createFakeExtensionApi())
+
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]))
+      const removed = messages.filter((message) =>
+        message.includes('workflow_guard'),
+      )
+      expect(removed).toHaveLength(1)
+      expect(removed[0]).toContain(configFile)
+      expect(removed[0]).not.toContain('SENTINEL_PI_VALUE')
+    } finally {
+      warnSpy.mockRestore()
+      os.homedir = originalHomedir
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
 

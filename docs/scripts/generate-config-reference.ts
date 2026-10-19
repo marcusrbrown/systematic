@@ -730,6 +730,8 @@ function checkExamples(
   fieldPath: string,
   errors: string[],
 ): void {
+  // A removed setting has nothing worth suggesting as a value.
+  if (schema.deprecated === true) return
   const examples = schema.examples
   if (!examples || !Array.isArray(examples) || examples.length === 0) {
     errors.push(fieldPath)

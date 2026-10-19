@@ -13,7 +13,12 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: medium
 tags: [workflow-guard, seed-deferral, propagated-baseline, pr-creation-seed, check-readback, review-readback, command-timeout, status-diagnostics]
+status: superseded
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the workflow guard this learning describes was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # A propagated pull-request baseline hid seed timeouts
 

@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-Modules implementing plugin logic: discovery, config, schema validation, harness adapters, and receipt-backed workflow enforcement.
+Modules implementing plugin logic: discovery, config, schema validation, and harness adapters.
 
 ## Data Flow
 
@@ -13,7 +13,6 @@ loadConfig() → createConfigHandler() → {
 
 createSkillTool() → buildSkillToolDescription()/buildSkillToolParameterHint()/buildSkillContentOutput()/resolveSkill() → OpenCode tool
 getBootstrapContent() → reads using-systematic SKILL.md → system prompt
-createOpencodeWorkflowGuard() → OpenCode hooks/tools → operation observer + receipt classifier/ledger/readback → guarded transitions
 buildCapabilitySnapshot() → normalized capability/config-observation snapshot → CLI output
 pi-subagents lifecycle → generate personas → transactional export/refresh/cleanup → Pi agents directory
 ```
@@ -54,7 +53,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `routing-resolver.ts` | `resolveRouting`, `qualifierResolvesWithoutModel`, `collectWrittenLegacyPiSubagentsThinkingWarnings`, `toSourcedOverlayMap`, `toSourcedPiSubagentsOverlays`, `RoutingTarget`, `RoutingResolution` | Pure per-target/harness routing precedence (agent block > agent flat > category block > category flat) for `model` and the opencode `variant` / pi `thinking` qualifier, with legacy `pi_subagents.thinking` fallback; backs the loader's post-merge qualifier-requires-model check; the legacy-deprecation warning collector dedupes by the WRITTEN `pi_subagents.<scope>.<key>` field, one warning per field regardless of how many agents it resolves for; also exports the shared plain-overlay-map → `SourcedOverlayConfigMap` shape adapter used by the Pi delegate tool and Pi persona export |
 | `bundled-names.ts` | `BUNDLED_AGENT_NAMES`, `BUNDLED_AGENT_QUALIFIED_IDS`, `BUNDLED_SKILL_NAMES`, `BundledAgentName`, `BundledSkillName` | Generated typed inventory of bundled agent and skill names; regenerate rather than editing by hand |
 | `capability-snapshot.ts` | `CapabilityFactInput`, `ConfigObservationMetadata`, `buildCapabilitySnapshot`, `serializeCapabilitySnapshot` | Validates, canonicalizes, sorts, and serializes the read-only capability/config-observation snapshot emitted by the CLI |
-| `removed-names.ts` | `REMOVED_BUNDLED_SKILL_NAMES`, `REMOVED_BUNDLED_AGENT_NAMES`, `REMOVED_BUNDLED_AGENT_CATEGORIES` | Compatibility allowlists for bundled names removed from the catalog; strict config validation warns-and-ignores these without accepting arbitrary unknown names |
+| `removed-names.ts` | `REMOVED_BUNDLED_SKILL_NAMES`, `REMOVED_BUNDLED_AGENT_NAMES`, `REMOVED_BUNDLED_AGENT_CATEGORIES`, `REMOVED_CONFIG_KEYS` | Compatibility allowlists for bundled names and top-level config keys removed from Systematic; strict config validation warns-and-ignores these without accepting arbitrary unknown names or keys |
 | `review-artifact-schema.ts` | `ReviewArtifactSchema`, `ReviewArtifact`, `InputFindingSchema`, `REVIEW_ARTIFACT_CUSTOM_MESSAGES`, `DispatchOutcomeSchema`, `DispositionSchema`, `HarnessSchema` | Canonical Zod source of truth for the `ce:review` run-level `review-summary.json` artifact. Generates the committed JSON Schema at `skills/ce-review/references/review-summary-schema.json` via `scripts/generate-review-artifact-schema.ts`, and backs the `systematic validate-review-artifact` CLI command. `input_findings` is a discriminated union on `record_type` so admitted rows and rejected-payload summaries stay machine-separable; `superRefine` carries the two invariants JSON Schema cannot express, using the exported message constants so the CLI's output allowlist can safely print them |
 | `review-artifact-path.ts` | `ArtifactPathResult`, `ReadArtifactResult`, `ValidateReviewArtifactArguments`, `ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG`, `VALIDATE_REVIEW_ARTIFACT_USAGE`, `parseValidateReviewArtifactArguments`, `hasParentDirectoryTraversal`, `pathContainsSymlink`, `resolveReviewArtifactPath`, `readReviewArtifact`, `isLegacyReviewArtifact`, `formatReviewArtifactIssuePath`, `formatReviewArtifactSuccessMessage` | Shared review-artifact CLI argument parsing (including the idempotent `--allow-outside-artifact-root` flag), path containment, JSON reading, legacy detection, validation-issue projection, and success-message formatting for the CLI and Claude Code validator entry, so the two entries stay structurally identical rather than hand-maintained copies |
 | `review-return-validator.ts` | `runReviewReturnValidator`, `validateReviewReturnValue`, `VALIDATE_REVIEW_RETURN_USAGE`, `MAX_REVIEW_RETURN_BYTES`, `MAX_PROJECTED_ISSUE_LINES`, `formatReviewReturnValidationFailure`, `ReviewReturnValidatorOptions`, `ReviewReturnValidation`, `ReviewReturnIssue`, `ReadChunk` | Bounded, no-write structural validator for one raw `ce:review` persona return read synchronously from stdin (1 MiB byte cap, stops at cap + 1); backs `systematic validate-review-return`. Accepts only `SubAgentReturnSchema`; exit 0 valid, 1 empty/oversized/invalid-UTF-8/malformed/schema-invalid, 2 usage/TTY/read failure. Injectable `argv`/fd/TTY/chunk-reader/sinks keep it unit-testable without global mutation, and diagnostics project only safe Zod paths plus issue codes (never messages, key names, or values) |
@@ -75,18 +74,6 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `pi-subagents-personas.ts` | `CURATED_PERSONAS`, `sanitizeName`, `classifyCompatibility`, `generatePersonaContent`, `generatePersonaManifest`, `generateAll` | Pure curated-persona screening and content/manifest generation for pi-subagents; excludes critical Systematic-coupled personas and marks optional integrations as warnings |
 | `pi-subagents-export.ts` | `resolveAgentsRoot`, `resolveAnchor`, `readManifestStrict`, `readManifest`, `writeManifest`, `preview`, `exportPersonas`, `refresh`, `cleanup`, `runWithRollback`, `MANIFEST_FILENAME`, `LOCK_FILENAME` | Scope-aware, locked and transactional Pi persona export lifecycle; validates manifest/path ownership and rolls back failed mutations |
 
-### Workflow Guard & Receipt Evidence
-
-| Module | Key Exports | Role |
-|--------|-------------|------|
-| `opencode-operation-observer.ts` | `createOpencodeOperationObserver`, `validateRegisteredWorktree`, `OperationObserverResult`, `OperationObserverRemoteResult` | Bounded local/remote Git and filesystem evidence snapshots, including worktree registration validation, for guarded operation readback |
-| `opencode-workflow-guard.ts` | `createOpencodeWorkflowGuard`, `createWorkflowGuardBlockedError`, `isWorkflowGuardBlockedError`, `SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY`, `WORKFLOW_GUARD_GUIDANCE`, `OpencodeWorkflowGuard` | OpenCode adapter that exposes guarded workflow tools and hooks, persists/reconstructs receipt markers, and fails closed on identity, malformed, or untyped failures (typed timeouts and snapshot blocks isolate one call or unit). Owns the guard guidance constant, which `src/index.ts` adds to the OpenCode profile block only when the guard is enabled. |
-| `receipt-classifier.ts` | `createReceiptClassifier`, `parseReceiptOperationAfter`, `parseReceiptOperationObservation`, `ReceiptClassifier`, `ReceiptOperationObservation` | Parses tool-operation observations and classifies safe shell/non-shell commands into receipt operations with terminal and evidence outcomes |
-| `receipt-ledger.ts` | `createReceiptLedger`, `isLocalOperation`, `ReceiptLedger`, `ReceiptEnvelope`, `ReceiptClassification` | In-memory lifecycle for preparing, finalizing, validating, consuming, and recovering integrity-checked operation receipts |
-| `receipt-readback.ts` | `validateReceiptMarker`, `filterMarkersByRegistration`, `extractReceiptReadbackSeed`, `foldReceiptReadback`, `projectReceiptMintMarker`, `projectReceiptConsumptionMarker`, `projectReceiptProgressionMarker`, `receiptReadbackExpectationFromMetadata`, `digestReceiptIdentity` | Validates authenticated receipt/progression markers and folds persisted markers into recoverable receipt and workflow state |
-| `workflow-guard.ts` | `createWorkflowGuard`, `WorkflowGuard`, `WorkflowStatus`, `WorkflowGuardOptions`, `WorkflowReasonCode` | Core receipt-backed state machine: activates epochs, starts units, records evidence, enforces transitions, handles recovery, and supports explicit guard modes |
-| `question-attestation.ts` | `CANONICAL_QUESTION_WORDING`, `classifyQuestionAnswer`, `createQuestionAttestation`, `QuestionAttestationMachine`, `QuestionAttestation` | Challenge/bind/reply/reject/consume state machine for authenticated user confirmation of guarded transitions |
-
 ## Module table exclusions
 
 No `src/lib` modules are intentionally excluded from these tables.
@@ -95,7 +82,6 @@ No `src/lib` modules are intentionally excluded from these tables.
 
 - **Discovery:** `SkillInfo`, `AgentInfo`, `CommandInfo`, `WalkEntry` — all have `name` + path/file fields
 - **Config:** `SystematicConfig` (disabled lists + bootstrap), `ConfigHandlerDeps` (directory paths), validated agent/category overlays, and capability observations
-- **Workflow evidence:** `ReceiptEnvelope`, `ReceiptClassification`, `ReceiptReadbackState`, `WorkflowStatus` — typed contracts for observed operations, persisted markers, and guarded progression
 
 ## Patterns
 
@@ -104,7 +90,6 @@ No `src/lib` modules are intentionally excluded from these tables.
 - **Null returns**: Non-critical failures return `null`/`undefined` (not throws)
 - **Type guards**: `validation.ts` provides safe extraction from `unknown` frontmatter data
 - **Const enums**: `AgentMode`, `PermissionSetting` for compile-time safety
-- **Fail-closed evidence**: receipt and marker parsers reject malformed, foreign, stale, or unauthenticated state rather than guessing
 
 ## Notes
 
@@ -115,6 +100,4 @@ No `src/lib` modules are intentionally excluded from these tables.
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
 - `config-handler.ts` contains internal `loadAgentAsConfig`/`loadCommandAsConfig`/`loadSkillAsCommand` — the glue between discovery and OpenCode config output
-- The workflow guard is OpenCode-only; Pi has the delegate/export integration but no runtime receipt guard
-- The workflow guard is off by default (`workflow_guard.mode` is `disabled`). A disabled plugin builds no observer, snapshot, host reader or classifier. Restore the old behaviour with `{"workflow_guard":{"mode":"observe"}}` in the user-level `systematic.json` (`~/.config/opencode/` or `$OPENCODE_CONFIG_DIR`); project config cannot set it. The guidance constant is added to the OpenCode bootstrap only when the guard is enabled
-- Receipt markers are authenticated and registration-scoped; do not treat persisted host metadata as trusted until `receipt-readback.ts` validates it
+- The plugin builds no workflow guard. A `workflow_guard` key in config is still accepted, warns once per file per load, and has no effect

@@ -238,12 +238,12 @@ describe('capability snapshot contract', () => {
     const config: ConfigObservationMetadata = {
       authorities: [
         { fieldPath: 'bootstrap.enabled', sourceKind: 'project' },
-        { fieldPath: 'workflow_guard.mode', sourceKind: 'user' },
+        { fieldPath: 'bootstrap.file', sourceKind: 'user' },
         { fieldPath: 'skills_as_commands', sourceKind: 'custom' },
       ],
       protectedFields: [
         {
-          fieldPath: 'workflow_guard',
+          fieldPath: 'allow_project_profiles',
           outcome: 'blocked',
           sourceKind: 'project',
         },
@@ -298,7 +298,7 @@ describe('capability snapshot contract', () => {
     })
     expect(snapshot.facts).toContainEqual({
       factId: 'config-field-authority',
-      fieldPath: 'workflow_guard.mode',
+      fieldPath: 'bootstrap.file',
       kind: 'authority',
       sourceId: 'config:user',
       status: 'available',
@@ -312,7 +312,7 @@ describe('capability snapshot contract', () => {
     })
     expect(snapshot.facts).toContainEqual({
       factId: 'config-protected-field',
-      fieldPath: 'workflow_guard',
+      fieldPath: 'allow_project_profiles',
       kind: 'protection',
       outcome: 'blocked',
       sourceId: 'config:project',

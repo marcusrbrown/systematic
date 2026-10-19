@@ -260,7 +260,7 @@ Command template for ${name}.`,
         ],
         protectedFields: [
           {
-            fieldPath: 'workflow_guard',
+            fieldPath: 'allow_project_profiles',
             outcome: 'blocked',
             sourceKind: 'project',
           },

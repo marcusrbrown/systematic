@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import type { Config, Hooks, Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   applyBootstrapContent,
@@ -11,17 +10,6 @@ import {
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
-import {
-  createOpencodeOperationObserver,
-  type OperationObserverResult,
-} from './lib/opencode-operation-observer.js'
-import {
-  createOpencodeWorkflowGuard,
-  isWorkflowGuardBlockedError,
-  type OpencodeWorkflowGuardOptions,
-  WORKFLOW_GUARD_GUIDANCE,
-} from './lib/opencode-workflow-guard.js'
-import { createReceiptClassifier } from './lib/receipt-classifier.js'
 import {
   createSkillOutputStore,
   createSkillTool,
@@ -35,9 +23,7 @@ import { isRecord } from './lib/validation.js'
 const REGISTERED_PLUGIN_HOOKS = [
   'config',
   'tool',
-  'tool.execute.before',
   'tool.execute.after',
-  'event',
   'experimental.chat.system.transform',
 ] as const satisfies readonly (keyof Hooks)[]
 
@@ -52,12 +38,6 @@ const bundledSkillsDir = path.join(packageRoot, 'skills')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
-const canonicalPackageSource = pathToFileURL(fs.realpathSync(packageRoot)).href
-const registrationSourceIdentity = createHash('sha256')
-  .update(
-    `systematic/opencode-registration-source/v1/${canonicalPackageSource}`,
-  )
-  .digest('hex')
 
 const getPackageVersion = (): string => {
   try {
@@ -70,165 +50,17 @@ const getPackageVersion = (): string => {
   }
 }
 
-// The identity a disabled guard carries in place of a snapshot digest. A
-// disabled guard reads no repository, so there is nothing real to name.
-const DISABLED_GUARD_IDENTITY = '0'.repeat(64)
-
-type GuardInput = Pick<PluginInput, 'client' | 'directory' | 'worktree'>
-
-// The session-history reads the guard uses for recovery and child rollup. The
-// installed SDK exposes session.messages / session.children as generic
-// RequestResult<T> shapes that don't directly assign to the narrow readback
-// contract, so a single boundary cast is needed; the consumer validates the
-// data payload before use.
-const createHostReadback = ({
-  client,
-  directory,
-}: Pick<GuardInput, 'client' | 'directory'>) => {
-  type SessionReadMethod = (input: {
-    path: { id: string }
-    query?: { directory?: string }
-  }) => Promise<{ data?: unknown }>
-  type SessionMessagesResponse = { data?: unknown; error?: unknown }
-  const readMessages = async (
-    sessionID: string,
-  ): Promise<SessionMessagesResponse> => {
-    const messages = client.session.messages.bind(
-      client.session,
-    ) as unknown as (input: {
-      path: { id: string }
-      query?: { directory?: string }
-    }) => Promise<SessionMessagesResponse>
-    return messages({ path: { id: sessionID }, query: { directory } })
-  }
-  return {
-    // Lenient: child-rollup reads. SDK error or non-array data -> [].
-    readSessionParts: async (sessionID: string) => {
-      const response = await readMessages(sessionID)
-      return Array.isArray(response.data) ? response.data : []
-    },
-    // Strict: initialization/recovery reads of the session's own history.
-    // An SDK error or non-array data throws instead of looking like an
-    // empty history.
-    readSessionPartsStrict: async (sessionID: string) => {
-      const response = await readMessages(sessionID)
-      if (response.error !== undefined && response.error !== null) {
-        throw new Error('session history read failed')
-      }
-      if (!Array.isArray(response.data)) {
-        throw new Error('session history read returned malformed data')
-      }
-      return response.data
-    },
-    listChildren: async (sessionID: string) => {
-      const children = client.session.children.bind(
-        client.session,
-      ) as unknown as SessionReadMethod
-      const response = await children({
-        path: { id: sessionID },
-        query: { directory },
-      })
-      if (!Array.isArray(response.data)) return []
-      return response.data.flatMap((entry) => {
-        if (
-          typeof entry !== 'object' ||
-          entry === null ||
-          typeof entry.id !== 'string'
-        ) {
-          return []
-        }
-        return [{ sessionId: entry.id, parentID: entry.parentID }]
-      })
-    },
-  }
-}
-
-// Builds the guard's options. `guardEnabled` is the one decision, made in
-// `initializePlugin`, that also gates the guard guidance. A disabled guard
-// gets no observer, no initial snapshot, no host reader and no classifier,
-// and a placeholder identity: with those absent it has nothing to read, so it
-// makes no git call and no session read. The tools and hooks are still
-// registered, and answer `disabled`.
-const workflowGuardOptions = async (
-  { client, directory, worktree }: GuardInput,
-  config: ReturnType<typeof loadConfig>,
-  guardEnabled: boolean,
-): Promise<OpencodeWorkflowGuardOptions> => {
-  const targetDirectory = typeof worktree === 'string' ? worktree : directory
-  const base = {
-    config: config.workflow_guard,
-    registrationIdentity: registrationSourceIdentity,
-    targetDirectory,
-    sessionLocation: directory,
-  }
-  if (!guardEnabled) {
-    return {
-      ...base,
-      workspaceIdentity: DISABLED_GUARD_IDENTITY,
-      repositoryIdentity: DISABLED_GUARD_IDENTITY,
-      worktreeIdentity: DISABLED_GUARD_IDENTITY,
-    }
-  }
-  const observer = createOpencodeOperationObserver({ targetDirectory })
-  let initialSnapshot: OperationObserverResult
-  try {
-    initialSnapshot = await observer.snapshot()
-  } catch {
-    initialSnapshot = {
-      status: 'unavailable' as const,
-      reasonCode: 'target-unavailable' as const,
-    }
-  }
-  const initialIdentities =
-    initialSnapshot.status === 'available'
-      ? initialSnapshot.snapshot
-      : {
-          targetDigest: observer.targetDigest,
-          repositoryRevisionDigest: observer.targetDigest,
-          worktreeRevisionDigest: observer.targetDigest,
-        }
-  return {
-    ...base,
-    workspaceIdentity: initialIdentities.targetDigest,
-    repositoryIdentity: initialIdentities.repositoryRevisionDigest,
-    worktreeIdentity: initialIdentities.worktreeRevisionDigest,
-    observer,
-    classifier: createReceiptClassifier(),
-    hostReadback: createHostReadback({ client, directory }),
-  }
-}
-
-// The OpenCode profile block: the harness profile, then the guard guidance
-// when the guard is enabled. Each part is optional, so an unreadable profile
-// does not drop the guidance. `undefined` when there is nothing to add.
-const composeProfileBlock = (
-  harnessProfile: string | null,
-  guardEnabled: boolean,
-): string | undefined => {
-  const parts = [harnessProfile, guardEnabled ? WORKFLOW_GUARD_GUIDANCE : null]
-  const present = parts.filter((part): part is string => part !== null)
-  return present.length > 0 ? present.join('\n\n') : undefined
-}
-
-const initializePlugin = async ({
-  client,
-  directory,
-  worktree,
-}: PluginInput) => {
+const initializePlugin = async ({ client, directory }: PluginInput) => {
   let hasLoggedInit = false
   let userOutputLimitSet = false
   const skillOutputStore = createSkillOutputStore()
   const config = loadConfig(directory)
-  const guardEnabled = config.workflow_guard.mode !== 'disabled'
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
   // stable across requests. Custom bootstrap file edits take effect on restart.
   // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
   const bootstrapContent = getBootstrapContent(config, {
     bundledSkillsDir,
-    profileBlock: composeProfileBlock(
-      readHarnessProfile(bundledSkillsDir, 'opencode'),
-      guardEnabled,
-    ),
+    profileBlock: readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
   })
 
   const configHandler = createConfigHandler({
@@ -237,13 +69,6 @@ const initializePlugin = async ({
     bundledAgentsDir,
     bundledCommandsDir,
   })
-  const workflowGuard = createOpencodeWorkflowGuard(
-    await workflowGuardOptions(
-      { client, directory, worktree },
-      config,
-      guardEnabled,
-    ),
-  )
 
   const hooks: RegisteredPluginHooks = {
     config: async (incomingConfig: Config): Promise<void> => {
@@ -263,37 +88,15 @@ const initializePlugin = async ({
         disabledSkills: config.disabled_skills,
         outputStore: skillOutputStore,
       }),
-      ...workflowGuard.tools,
-    },
-
-    'tool.execute.before': async (input: unknown, output: unknown) => {
-      try {
-        await workflowGuard.hooks['tool.execute.before'](input, output)
-      } catch (error) {
-        if (isWorkflowGuardBlockedError(error)) throw error
-      }
     },
 
     'tool.execute.after': async (input: unknown, output: unknown) => {
-      try {
-        await workflowGuard.hooks['tool.execute.after'](input, output)
-      } catch {
-        // Adapter after hooks are fail-closed and never block the host.
-      }
       try {
         restoreSkillOutput(skillOutputStore, input, output, {
           userOutputLimitSet,
         })
       } catch {
         // Output restoration is best-effort and never blocks the host.
-      }
-    },
-
-    event: async (input: unknown) => {
-      try {
-        await workflowGuard.hooks.event(input)
-      } catch {
-        // Event observation is fail-closed and never blocks the host.
       }
     },
 
@@ -313,7 +116,6 @@ const initializePlugin = async ({
               extra: {
                 version: packageVersion,
                 bootstrapEnabled: config.bootstrap.enabled,
-                workflowGuardMode: config.workflow_guard.mode,
                 disabledSkillsCount: config.disabled_skills.length,
                 disabledAgentsCount: config.disabled_agents.length,
                 disabledCommandsCount: config.disabled_commands.length,
@@ -348,14 +150,6 @@ const initializePlugin = async ({
 
       if (bootstrapContent) {
         applyBootstrapContent(output, bootstrapContent)
-      }
-      try {
-        await workflowGuard.hooks['experimental.chat.system.transform'](
-          _input,
-          output,
-        )
-      } catch {
-        // Transform observation is fail-closed and never blocks the host.
       }
     },
   }

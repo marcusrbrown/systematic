@@ -15,6 +15,8 @@ severity: high
 tags: [opencode, plugin-tool, truncation, tool-execute-after, systematic-skill, host-contract]
 ---
 
+> **Note (2026-10-19):** The workflow guard mentioned below was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)). The output restore described here is unchanged.
+
 # OpenCode truncates plugin tool output before any hook runs
 
 ## Problem
@@ -72,7 +74,7 @@ output.metadata.truncated = false
 delete output.metadata.outputPath
 ```
 
-In `src/index.ts`, the existing after-hook wrapper runs the workflow guard first and the restore second, each in its own `try`. The config hook recomputes the user-limit flag on every call:
+In `src/index.ts`, the after-hook wrapper restores the output inside a `try` and never blocks the host. (When this was written the same wrapper ran the workflow guard first and the restore second, each in its own `try`; the guard has since been removed.) The config hook recomputes the user-limit flag on every call:
 
 ```ts
 config: async (incomingConfig: Config): Promise<void> => {

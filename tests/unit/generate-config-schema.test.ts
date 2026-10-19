@@ -249,6 +249,33 @@ describe('generateSchemaContent', () => {
     expect(props).toHaveProperty('bootstrap')
   })
 
+  test('the removed workflow_guard key stays a property, marked deprecated, with a description and no suggested value', () => {
+    const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
+    const props = parsed.properties as Record<string, Record<string, unknown>>
+    const definitions = parsed.definitions as Record<
+      string,
+      Record<string, unknown>
+    >
+    // The generator reuses shapes by reference, so follow the property's
+    // `$ref` to the definition that carries its metadata.
+    const ref = props.workflow_guard?.$ref
+    const field =
+      typeof ref === 'string'
+        ? definitions[ref.replace('#/definitions/', '')]
+        : props.workflow_guard
+
+    expect(props).toHaveProperty('workflow_guard')
+    expect(field?.deprecated).toBe(true)
+    expect(typeof field?.description).toBe('string')
+    expect(field?.description).toMatch(/no effect|ignored/i)
+    // Editors suggest an example as a value to type. A removed setting has
+    // nothing worth suggesting, so none is published.
+    expect(field).not.toHaveProperty('examples')
+    // A stub, not a guard schema: it describes no fields and no enum.
+    expect(field).not.toHaveProperty('properties')
+    expect(field).not.toHaveProperty('enum')
+  })
+
   test('produces byte-identical output on consecutive calls', () => {
     const first = generateSchemaContentFn('3.0.0')
     const second = generateSchemaContentFn('3.0.0')
@@ -871,6 +898,26 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       // SystematicConfigSchema uses .strict() so unknown top-level keys are rejected.
       name: 'unknown top-level field "agnts" rejected by both (strict mode)',
       value: { agnts: {} },
+      accepted: false,
+    },
+    {
+      name: 'removed workflow_guard with a former value accepted by both',
+      value: { workflow_guard: { mode: 'observe', debug: true } },
+      accepted: true,
+    },
+    {
+      name: 'removed workflow_guard with a malformed value accepted by both',
+      value: { workflow_guard: { mode: 'enforced', telemetry: 1 } },
+      accepted: true,
+    },
+    {
+      name: 'removed workflow_guard as a scalar accepted by both',
+      value: { workflow_guard: true },
+      accepted: true,
+    },
+    {
+      name: 'misspelled workflow_gaurd rejected by both (strict mode)',
+      value: { workflow_gaurd: {} },
       accepted: false,
     },
     {

@@ -1,9 +1,13 @@
 ---
 title: "fix: Isolate operation timeouts and rejected pushes to the one call instead of disabling the guard"
 type: fix
-status: completed
+status: superseded
 date: 2026-10-15
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the workflow guard this plan describes was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../solutions/best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # fix: Isolate operation timeouts and rejected pushes to the one call instead of disabling the guard
 

@@ -97,34 +97,20 @@ const modeSchema = z.enum(['subagent', 'primary', 'all'] as const).meta({
   examples: ['subagent', 'primary', 'all'],
 })
 
-const workflowGuardModeSchema = z.enum([
-  'observe',
-  'protected',
-  'disabled',
-] as const)
-
-export const WorkflowGuardSchema = z
-  .object({
-    mode: workflowGuardModeSchema.default('disabled').meta({
-      description:
-        'Workflow guard mode. The guard is off by default (`disabled`); set `observe` or `protected` to turn it on.',
-      examples: ['observe', 'protected', 'disabled'],
-    }),
-    debug: z
-      .boolean()
-      .default(false)
-      .meta({
-        description: 'Enable workflow guard debugging',
-        examples: [false, true],
-      }),
-  })
-  .strict()
-  .default({ mode: 'disabled', debug: false })
-  .meta({
-    description:
-      'Workflow guard configuration. The guard is off by default; `mode: observe` or `mode: protected` turns it on.',
-    examples: [{ mode: 'observe', debug: false }],
-  })
+/**
+ * The removed `workflow_guard` setting. The workflow guard no longer exists,
+ * so the key is accepted with any value and then ignored: a config written
+ * for an older release still loads, and the loader warns once per file that
+ * carries it (see `REMOVED_CONFIG_KEYS`). It stays a property of the schema
+ * so editors do not flag an unmigrated config, and carries a deprecated
+ * marker so they can say why. The top-level object stays strict, so a
+ * misspelling of the key is still rejected.
+ */
+const removedWorkflowGuardSchema = z.unknown().optional().meta({
+  description:
+    'Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.',
+  deprecated: true,
+})
 
 /**
  * Color schema as a union of named tokens and hex literals.
@@ -666,7 +652,7 @@ export function createSystematicConfigSchema(
           { enabled: false, file: '.opencode/custom-prompt.md' },
         ],
       }),
-      workflow_guard: WorkflowGuardSchema,
+      workflow_guard: removedWorkflowGuardSchema,
       pi_subagents: PiSubagentsSchema,
       skills_as_commands: z
         .boolean()

@@ -1,9 +1,13 @@
 ---
 title: "fix: Stop the operation observer from reporting a changed worktree as unchanged"
 type: fix
-status: completed
+status: superseded
 date: 2026-10-14
+superseded_by: docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md
+superseded_date: 2026-10-19
 ---
+
+> **Superseded (2026-10-19):** the operation observer this plan describes was removed with the workflow guard ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)); see [the decision note](../solutions/best-practices/workflow-guard-removed-2026-10-19.md). The body below is preserved as history.
 
 # fix: Stop the operation observer from reporting a changed worktree as unchanged
 
