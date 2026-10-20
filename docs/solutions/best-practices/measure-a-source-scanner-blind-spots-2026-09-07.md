@@ -28,9 +28,9 @@ tags:
 
 `tests/unit/opencode-pin.test.ts` holds two guards that scan repository source text:
 
-- **R1** (`:175`) — the real OpenCode pin literal must appear nowhere under `scripts/` or `tests/`;
+- **R1** (`tests/unit/opencode-pin.test.ts:175`) — the real OpenCode pin literal must appear nowhere under `scripts/` or `tests/`;
   code that needs it calls `readOpencodeSdkPin()` (`scripts/lib/opencode-pin.ts:120`).
-- **R2** (`:522`) — fixture files must use unpinnable sentinel versions, never realistic ones.
+- **R2** (`tests/unit/opencode-pin.test.ts:558`) — fixture files must use unpinnable sentinel versions, never realistic ones.
 
 R2 exists because R1 had a design flaw. `probeOpencodeAvailability` takes `pin` as a *parameter*,
 so `tests/unit/opencode-availability.test.ts` held ~30 arbitrary literals like `'1.18.28'`. When a
@@ -83,10 +83,10 @@ measurement found.
 
 2. **Prefer a structural bound over another heuristic patch.** A `'` or `"` string cannot span a
    newline in JS/TS, so an unterminated string ends at the line break
-   (`tryConsumeStringLiteral`, `tests/unit/opencode-pin.test.ts:364-373`). That caps how far *any*
+   (`tryConsumeStringLiteral`, `tests/unit/opencode-pin.test.ts:398-409`). That caps how far *any*
    mis-detection can blind the scan, whatever caused it — including causes not yet known. It is
    worth more than a third refinement of the heuristic that keeps being wrong: `precedesRegexLiteral`
-   (`:386`) still only recognises a regex after `(`, `,`, `=`, or `[`, and the bound makes that
+   (`tests/unit/opencode-pin.test.ts:411-419`) still only recognises a regex after `(`, `,`, `=`, or `[`, and the bound makes that
    residual harmless.
 
 3. **Never put a realistic value in a parameterised fixture.** If the argument does not need to be

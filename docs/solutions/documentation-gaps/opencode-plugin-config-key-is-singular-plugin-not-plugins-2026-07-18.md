@@ -56,8 +56,8 @@ The failure is **silent**: OpenCode does not warn on an unknown `plugins` key, t
 
 Ground truth confirming the singular key:
 
-- OpenCode runtime reads `config.plugin` — `.slim/clonedeps/repos/anomalyco__opencode/packages/opencode/src/config/config.ts:101-108`.
-- OpenCode's config schema: `plugin: Schema.optional(Schema.Array(PluginSpec))` — `.slim/clonedeps/repos/anomalyco__opencode/packages/tui/src/config/index.tsx:53-58`.
+- OpenCode runtime reads `config.plugin` — [`config.ts` lines 101–108 at v1.18.8](https://github.com/anomalyco/opencode/blob/v1.18.8/packages/opencode/src/config/config.ts#L101-L108).
+- OpenCode's config schema: `plugin: Schema.optional(Schema.Array(PluginSpec))` — [`index.tsx` lines 53–58 at v1.18.8](https://github.com/anomalyco/opencode/blob/v1.18.8/packages/tui/src/config/index.tsx#L53-L58).
 - Systematic's own setup code **already rejects** the plural at runtime — `src/lib/setup.ts:296-316`: *"`plugins` (plural) is not supported by OpenCode's schema; use singular `plugin`."*
 - Systematic's OpenCode integration test uses `{ plugin: [pluginPath] }` — `tests/integration/opencode.test.ts:751-759`.
 

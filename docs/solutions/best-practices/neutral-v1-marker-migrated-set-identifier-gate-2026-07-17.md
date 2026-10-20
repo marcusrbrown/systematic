@@ -48,7 +48,7 @@ metadata:
 - **Bounded lexical vocabulary.** Exactly nine identifier patterns:
   `task(`, `subagent_type`, `todowrite`, `TodoWrite`, `request_user_input`,
   `ask_user`, `AskUserQuestion`, `update_plan`, and backtick-wrapped
-  `` `question` `` (`scripts/content-integrity.ts:1135-1169`). Word-boundary
+  `` `question` `` (`MIGRATED_SKILL_IDENTIFIER_PATTERNS`, `scripts/content-integrity.ts:3399-3433`). Word-boundary
   regexes prevent prose false positives ("task" as an English word passes;
   `task(` fails). The scope is intentionally lexical — paraphrases are not
   detected, and the gate says so in its doc comment (honest-ban rule).

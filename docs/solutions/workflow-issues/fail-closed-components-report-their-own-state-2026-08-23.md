@@ -114,7 +114,7 @@ Converting four `js-yaml` imports would have compiled but shipped a regression:
 load('')   // v4: {}   v5: throws YAMLException
 ```
 
-`frontmatter.ts:54` depends on the v4 behavior and `tests/unit/frontmatter.test.ts:122-130`
+`src/lib/frontmatter.ts:54` depends on the v4 behavior and `tests/unit/frontmatter.test.ts:122-130`
 pins it. An API migration that typechecks is not a behavioral migration.
 
 ## Why This Matters
@@ -146,13 +146,11 @@ The asset rename, in full:
 0.26.12   ./web-tree-sitter.wasm    ./debug/web-tree-sitter.wasm
 ```
 
-Three call sites resolved the old name:
+Three call sites resolved the old name. All three are pinned to the commit current when this was written:
 
-```
-src/lib/receipt-classifier.ts:638
-tests/unit/receipt-classifier.test.ts:382
-tests/unit/package-exports.test.ts:249
-```
+- [`receipt-classifier.ts`, line 638](https://github.com/marcusrbrown/systematic/blob/3420c5cbd62860eaca31cc12d6bfba1ed58c08b7/src/lib/receipt-classifier.ts#L638), inside a template literal
+- [`receipt-classifier.test.ts`, line 382](https://github.com/marcusrbrown/systematic/blob/3420c5cbd62860eaca31cc12d6bfba1ed58c08b7/tests/unit/receipt-classifier.test.ts#L382)
+- [`package-exports.test.ts`, line 249](https://github.com/marcusrbrown/systematic/blob/3420c5cbd62860eaca31cc12d6bfba1ed58c08b7/tests/unit/package-exports.test.ts#L249)
 
 One sits inside a template literal, so a TypeScript structural search found only two of
 three. Enumerate the matches and check the count.

@@ -5571,6 +5571,17 @@ describe('integration: real repo', () => {
       'Agent temperature violations in repo',
     )
 
+    assertNoViolations(
+      result.solutionCitationViolations,
+      (v) => {
+        const cv = v as (typeof result.solutionCitationViolations)[number]
+        return `${cv.file}:${cv.line}  ${cv.citation}  ${cv.class}${
+          cv.suggestion ? `  (try ${cv.suggestion})` : ''
+        }`
+      },
+      'Solution citation violations in repo',
+    )
+
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
@@ -5609,7 +5620,101 @@ describe('integration: real repo', () => {
 // CLI smoke: the script exits 0 on a clean repo.
 // ---------------------------------------------------------------------------
 
+describe('checkContentIntegrity — solution citation wiring', () => {
+  function writeCitingDoc(root: string, body: string): void {
+    writeFile(
+      root,
+      'src/lib/cited.ts',
+      'export const citedValue = 1\nexport const other = 2\n',
+    )
+    writeFile(root, 'docs/solutions/note.md', body)
+  }
+
+  test('surfaces a stale citation on the result', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCitingDoc(root, 'The value is at src/lib/cited.ts:99.\n')
+      expect(checkContentIntegrity(root).solutionCitationViolations).toEqual([
+        expect.objectContaining({
+          file: 'docs/solutions/note.md',
+          line: 1,
+          citation: 'src/lib/cited.ts:99',
+          class: 'out-of-range',
+        }),
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports nothing when every citation holds', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCitingDoc(root, '`citedValue` is at src/lib/cited.ts:1.\n')
+      expect(checkContentIntegrity(root).solutionCitationViolations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('CLI', () => {
+  test('exits 1 and prints the citation when a solution doc cites a stale line', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/cited.ts', 'export const citedValue = 1\n')
+      writeFile(
+        root,
+        'docs/solutions/note.md',
+        '`citedValue` was at src/lib/cited.ts:99 and is at src/lib/cited.ts:1.\n',
+      )
+
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(result.exitCode).toBe(1)
+      const stderr = result.stderr.toString()
+      expect(stderr).toContain('Solution citation violations (1)')
+      expect(stderr).toContain('docs/solutions/note.md:1')
+      expect(stderr).toContain('src/lib/cited.ts:99')
+      expect(stderr).toContain('out-of-range')
+      expect(result.stdout.toString()).not.toContain('content-integrity: clean')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('prints the suggested definition line for a moved symbol', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'src/lib/cited.ts',
+        'export const first = 0\nexport const citedValue = 1\n',
+      )
+      writeFile(
+        root,
+        'docs/solutions/note.md',
+        '`citedValue` is at src/lib/cited.ts:1.\n',
+      )
+
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain('symbol-absent')
+      expect(result.stderr.toString()).toContain('src/lib/cited.ts:2')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('exits 0 against a clean fixture repo', () => {
     const root = makeFixtureRepo()
     try {

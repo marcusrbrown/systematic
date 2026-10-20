@@ -69,8 +69,10 @@
  * parity because they are contributor-facing inventories of the system's
  * registered surface; they are not merged into the full markdown scan.
  * Additionally, `docs/solutions/**\/*.md` is scanned for frontmatter parse-safety
- * only (flags any unquoted inline comment — whitespace-before-`#` or value-start
- * `#` — in frontmatter; remediation is to quote the value or remove the comment).
+ * (flags any unquoted inline comment — whitespace-before-`#` or value-start
+ * `#` — in frontmatter; remediation is to quote the value or remove the comment),
+ * for compound-schema conformance, and for `path:line` citations that no longer
+ * point at what their sentence describes (`checkSolutionCitations`).
  * The gate does not scan `.opencode/`, `dist/`, `node_modules/`, `registry/`, or
  * markdown files under `src/` — those intentionally contain historical or
  * documented CC/CEP references.
@@ -356,6 +358,7 @@ export interface CheckResult {
   frontmatterViolations: FrontmatterViolation[]
   parseSafetyViolations: FrontmatterViolation[]
   solutionSchemaViolations: FrontmatterViolation[]
+  solutionCitationViolations: SolutionCitationViolation[]
   agentModelViolations: AgentModelViolation[]
   agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
@@ -641,9 +644,9 @@ const INLINE_HOOK_REGEX = /`([^`\n]+)`/g
  *
  * - `markdown`: skills/ and agents/ markdown — full invariant suite.
  * - `typescript`: src/ TypeScript — banned-pattern scan.
- * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety plus
- *   compound-schema validation (`checkSolutionSchema`), not the full invariant
- *   suite. Deliberately NOT merged into `markdown` to keep banned-pattern
+ * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety,
+ *   compound-schema validation (`checkSolutionSchema`) and citation checks
+ *   (`checkSolutionCitations`), not the full invariant suite. Deliberately NOT merged into `markdown` to keep banned-pattern
  *   enforcement scoped to skills+agents+src; historical solution docs may
  *   legitimately reference CC/CEP terms.
  */
@@ -3735,6 +3738,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.solutionMarkdown,
   )
+  const solutionCitationViolations = checkSolutionCitations(
+    rootDir,
+    targets.solutionMarkdown,
+  )
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
   const agentModeViolations = checkAgentMode(rootDir, targets.markdown)
   const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
@@ -3789,6 +3796,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     frontmatterViolations,
     parseSafetyViolations,
     solutionSchemaViolations,
+    solutionCitationViolations,
     agentModelViolations,
     agentModeViolations,
     agentColorViolations,
@@ -3853,6 +3861,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
     result.solutionSchemaViolations,
     'Solution-doc schema violations',
   )
+  printSolutionCitationViolations(result.solutionCitationViolations)
   printAgentModelViolations(result.agentModelViolations)
   printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
@@ -3890,6 +3899,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
         `solutionSchemaViolations: ${result.solutionSchemaViolations.length}\n` +
+        `solutionCitationViolations: ${result.solutionCitationViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
         `agentModeViolations: ${result.agentModeViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
@@ -3934,6 +3944,21 @@ function printStaleSkillLoadNames(
   for (const v of violations) {
     process.stderr.write(
       `  ${v.file}:${v.line}  \`${v.token}\`  (use \`${v.suggestion}\`)\n`,
+    )
+  }
+}
+
+function printSolutionCitationViolations(
+  violations: readonly SolutionCitationViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nSolution citation violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    const suggestion = v.suggestion ? `  (try ${v.suggestion})` : ''
+    process.stderr.write(
+      `  ${v.file}:${v.line}  ${v.citation}  ${v.class}${suggestion}\n`,
     )
   }
 }
@@ -4152,6 +4177,7 @@ function totalViolations(result: CheckResult): number {
     result.frontmatterViolations.length +
     result.parseSafetyViolations.length +
     result.solutionSchemaViolations.length +
+    result.solutionCitationViolations.length +
     result.agentModelViolations.length +
     result.agentModeViolations.length +
     result.agentColorViolations.length +
