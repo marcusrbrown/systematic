@@ -15,25 +15,33 @@ The plugin is divided into two main parts:
 
 ## How It Works
 
-Systematic utilizes three primary OpenCode plugin hooks to integrate seamlessly:
+Systematic registers these OpenCode plugin hooks:
 
 ```mermaid
 flowchart TB
     A[Plugin Loaded] --> B[config hook]
     A --> C[tool hook]
-    A --> D[system.transform hook]
+    A --> D[tool.execute.after hook]
+    A --> E[messages.transform hook]
+    A --> F[system.transform hook]
 
-    B --> E[Merge bundled agents and skills into OpenCode config]
-    C --> F[Register systematic_skill tool]
-    D --> G[Inject bootstrap prompt into every conversation]
+    B --> G[Merge bundled agents and skills into OpenCode config]
+    C --> H[Register systematic_skill tool]
+    D --> I[Restore full skill output after host truncation]
+    E --> J[Keep pruned skill results readable in the request]
+    F --> K[Inject bootstrap prompt into every conversation]
 
     style A fill:#1e2530,stroke:#33b1c4,color:#fff
     style B fill:#1e2530,stroke:#33b1c4,color:#33b1c4
     style C fill:#1e2530,stroke:#c74a8a,color:#c74a8a
-    style D fill:#1e2530,stroke:#c4a033,color:#c4a033
-    style E fill:#141a22,stroke:#33b1c4,color:#8fd9d0
-    style F fill:#141a22,stroke:#c74a8a,color:#8fd9d0
-    style G fill:#141a22,stroke:#c4a033,color:#8fd9d0
+    style D fill:#1e2530,stroke:#7aa65a,color:#7aa65a
+    style E fill:#1e2530,stroke:#8a6fd1,color:#8a6fd1
+    style F fill:#1e2530,stroke:#c4a033,color:#c4a033
+    style G fill:#141a22,stroke:#33b1c4,color:#8fd9d0
+    style H fill:#141a22,stroke:#c74a8a,color:#8fd9d0
+    style I fill:#141a22,stroke:#7aa65a,color:#8fd9d0
+    style J fill:#141a22,stroke:#8a6fd1,color:#8fd9d0
+    style K fill:#141a22,stroke:#c4a033,color:#8fd9d0
 ```
 
 ### 1. `config` Hook
@@ -44,9 +52,18 @@ The plugin registers a custom tool called `systematic_skill`. This tool is used 
 
 `systematic_skill` takes an optional `arguments` string. If the skill text contains `$ARGUMENTS`, that gets replaced with the whole string. If it contains `$1`, `$2`, and so on, those get replaced with positional values (quoted text counts as one value, and the highest-numbered placeholder takes the rest of the string) — the same rules OpenCode uses for its own slash commands. If the skill has none of these placeholders, the argument text is appended after the skill body instead. Leaving `arguments` out entirely leaves any placeholders in the skill text untouched. This is text substitution only — it never executes anything.
 
-OpenCode truncates plugin tool output at 2,000 lines or 50 KB by default. Systematic restores the full skill text after that cut so large skills still arrive complete. If your own config sets `tool_output.max_lines` or `tool_output.max_bytes`, Systematic honors your limit and skips the restore. One caveat: if you enable OpenCode's `compaction.prune` setting, a `systematic_skill` result can still be cleared later in a long conversation — OpenCode only protects its own built-in `skill` tool from pruning.
+### 3. `tool.execute.after` Hook
+OpenCode truncates plugin tool output at 2,000 lines or 50 KB by default. This hook restores the full skill text after that cut so large skills still arrive complete. If your own config sets `tool_output.max_lines` or `tool_output.max_bytes`, Systematic honors your limit and skips the restore.
 
-### 3. `system.transform` Hook
+### 4. `messages.transform` Hook
+OpenCode's opt-in `compaction.prune` setting replaces older tool results with a placeholder, and it exempts only its own built-in `skill` tool. This hook clears that placeholder flag on completed `systematic_skill` results in the request being assembled, so the model receives the stored body again. What this covers:
+- With `compaction.prune` on, a loaded skill's body survives pruning and the retained tail, but not full-session summarization.
+- The edit applies only to the request. Storage still marks the result as pruned.
+- Prune still counts the body toward its protect window, which it skips for the native `skill` tool.
+- The full-session summarizer sees a 2,000-character slice of the body.
+- A host that predates the hook never calls it, and keeps the placeholder.
+
+### 5. `system.transform` Hook
 This hook allows Systematic to inject a "bootstrap" instruction into the AI's system prompt at the start of every conversation. This instruction (from the `using-systematic` skill) teaches the AI how to:
 - Discover available workflows.
 - Use the `systematic_skill` tool.

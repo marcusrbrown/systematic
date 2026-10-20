@@ -1,7 +1,7 @@
 ---
 title: "fix: Keep loaded systematic_skill output visible after OpenCode prunes it"
 type: fix
-status: active
+status: completed
 date: 2026-10-20
 ---
 
@@ -121,7 +121,7 @@ So a request-only edit to the flag restores the body the model sees and leaves s
 
 ## Implementation Units
 
-- [ ] **Unit 1: Request-only un-compact transform and its registration surfaces**
+- [x] **Unit 1: Request-only un-compact transform and its registration surfaces**
 
 **Goal:** Register `experimental.chat.messages.transform`, clear the compacted flag on completed `systematic_skill` parts in the request, and keep every registration surface in step so each commit stays green.
 
@@ -165,7 +165,7 @@ So a request-only edit to the flag restores the body the model sees and leaves s
 - Unit suites pass, and `bun scripts/content-integrity.ts` passes with the updated hook lists.
 - Mutation check: matching any tool name fails the `read` test, and assigning onto the original `time` in place fails the reference-identity test.
 
-- [ ] **Unit 2: Real-host prune scenario**
+- [x] **Unit 2: Real-host prune scenario**
 
 **Goal:** Prove R1–R3 against the pinned OpenCode host.
 
@@ -188,6 +188,7 @@ So a request-only edit to the flag restores the body the model sees and leaves s
   - Prompt 4 carries the assertions.
 - `toolResultContent` returns the first captured request that carries the `tool_call_id`, which is the pre-prune copy. Scope the lookup to the requests captured during prompt 4, by slicing from the request count recorded before prompt 4.
 - The read argument key and the filler sizes are calibrated during implementation.
+- The isolated test host sets `OPENCODE_DISABLE_PRUNE=1`, which forces prune off after the config merge, so the scenario clears it for its own host.
 - Before pruning, assert that the stored skill output contains `CE_REVIEW_FINAL_LINE`, which shows the truncation store hit.
 
 **Test scenarios:**
@@ -198,7 +199,7 @@ So a request-only edit to the flag restores the body the model sees and leaves s
 **Verification:**
 - Scenario f passes on the real host. Removing the hook registration makes the skill assertion fail while filler A still shows the placeholder. The host-contract guard still passes with the pass floor unchanged.
 
-- [ ] **Unit 3: Prose docs**
+- [x] **Unit 3: Prose docs**
 
 **Goal:** Make the prose docs state the guarantee and its limits exactly.
 
