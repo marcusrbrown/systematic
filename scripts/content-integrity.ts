@@ -69,8 +69,10 @@
  * parity because they are contributor-facing inventories of the system's
  * registered surface; they are not merged into the full markdown scan.
  * Additionally, `docs/solutions/**\/*.md` is scanned for frontmatter parse-safety
- * only (flags any unquoted inline comment — whitespace-before-`#` or value-start
- * `#` — in frontmatter; remediation is to quote the value or remove the comment).
+ * (flags any unquoted inline comment — whitespace-before-`#` or value-start
+ * `#` — in frontmatter; remediation is to quote the value or remove the comment),
+ * for compound-schema conformance, and for `path:line` citations that no longer
+ * point at what their sentence describes (`checkSolutionCitations`).
  * The gate does not scan `.opencode/`, `dist/`, `node_modules/`, `registry/`, or
  * markdown files under `src/` — those intentionally contain historical or
  * documented CC/CEP references.
@@ -356,6 +358,7 @@ export interface CheckResult {
   frontmatterViolations: FrontmatterViolation[]
   parseSafetyViolations: FrontmatterViolation[]
   solutionSchemaViolations: FrontmatterViolation[]
+  solutionCitationViolations: SolutionCitationViolation[]
   agentModelViolations: AgentModelViolation[]
   agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
@@ -641,9 +644,9 @@ const INLINE_HOOK_REGEX = /`([^`\n]+)`/g
  *
  * - `markdown`: skills/ and agents/ markdown — full invariant suite.
  * - `typescript`: src/ TypeScript — banned-pattern scan.
- * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety plus
- *   compound-schema validation (`checkSolutionSchema`), not the full invariant
- *   suite. Deliberately NOT merged into `markdown` to keep banned-pattern
+ * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety,
+ *   compound-schema validation (`checkSolutionSchema`) and citation checks
+ *   (`checkSolutionCitations`), not the full invariant suite. Deliberately NOT merged into `markdown` to keep banned-pattern
  *   enforcement scoped to skills+agents+src; historical solution docs may
  *   legitimately reference CC/CEP terms.
  */
@@ -841,6 +844,27 @@ function splitCodeSpans(text: string): { spans: string[]; prose: string } {
   const spans: string[] = []
   let prose = ''
   let cursor = 0
+  for (const range of findCodeSpans(text)) {
+    prose += `${text.slice(cursor, range.start)} `
+    spans.push(range.content)
+    cursor = range.end
+  }
+  return { spans, prose: prose + text.slice(cursor) }
+}
+
+/** One inline code span: `start`/`end` bound the delimiters, `content` is inside them. */
+interface CodeSpanRange {
+  start: number
+  end: number
+  content: string
+}
+
+/**
+ * The inline code spans of `text` in order, matched by the rule
+ * `splitCodeSpans` documents. `indexOf`-based, so the scan never backtracks.
+ */
+function findCodeSpans(text: string): CodeSpanRange[] {
+  const ranges: CodeSpanRange[] = []
   let index = text.indexOf('`')
   while (index !== -1) {
     const length = backtickRunLength(text, index)
@@ -849,12 +873,15 @@ function splitCodeSpans(text: string): { spans: string[]; prose: string } {
       index = text.indexOf('`', index + length)
       continue
     }
-    prose += `${text.slice(cursor, index)} `
-    spans.push(text.slice(index + length, close))
-    cursor = close + length
-    index = text.indexOf('`', cursor)
+    const end = close + length
+    ranges.push({
+      start: index,
+      end,
+      content: text.slice(index + length, close),
+    })
+    index = text.indexOf('`', end)
   }
-  return { spans, prose: prose + text.slice(cursor) }
+  return ranges
 }
 
 /**
@@ -1779,6 +1806,692 @@ export function checkSolutionSchema(
     scanSolutionSchema(relPath, content, schema, violations)
   }
 
+  return violations
+}
+
+// ---------------------------------------------------------------------------
+// Solution citation check
+// ---------------------------------------------------------------------------
+
+export type SolutionCitationClass =
+  | 'missing-file'
+  | 'disallowed-root'
+  | 'out-of-range'
+  | 'empty-span'
+  | 'symbol-absent'
+  | 'orphan-line'
+
+export interface SolutionCitationViolation {
+  file: string
+  /** 1-based line in the raw doc, frontmatter included. */
+  line: number
+  /** The citation as written, e.g. `src/a.ts:10-12`. */
+  citation: string
+  class: SolutionCitationClass
+  /** `path:line` of a definition of the missing identifier, when one exists. */
+  suggestion?: string
+}
+
+const CITATION_DISALLOWED_ROOTS: ReadonlySet<string> = new Set([
+  'dist',
+  'node_modules',
+  '.slim',
+  '.context',
+  '.worktrees',
+])
+
+const SLASH_COMMENT_PREFIXES: readonly string[] = ['//', '/*', '*']
+const HASH_COMMENT_PREFIXES: readonly string[] = ['#']
+
+/** Line prefixes that make a line a comment, by file extension. Others have none. */
+const CITATION_COMMENT_PREFIXES: ReadonlyMap<string, readonly string[]> =
+  new Map([
+    ['.ts', SLASH_COMMENT_PREFIXES],
+    ['.tsx', SLASH_COMMENT_PREFIXES],
+    ['.js', SLASH_COMMENT_PREFIXES],
+    ['.mjs', SLASH_COMMENT_PREFIXES],
+    ['.yaml', HASH_COMMENT_PREFIXES],
+    ['.yml', HASH_COMMENT_PREFIXES],
+    ['.sh', HASH_COMMENT_PREFIXES],
+    ['.toml', HASH_COMMENT_PREFIXES],
+    ['.py', HASH_COMMENT_PREFIXES],
+  ])
+
+/** Extensions whose definition lines (`function NAME`, `const NAME`, ...) can be suggested. */
+const CITATION_DEFINITION_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.ts',
+  '.tsx',
+  '.js',
+  '.mjs',
+])
+
+const CITATION_COMMENT_WORD = /\bcomments?\b/i
+const CITATION_IDENTIFIER_SHAPE =
+  /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?$/
+const CITATION_URL_END_CHARS: ReadonlySet<string> = new Set([
+  ' ',
+  '\n',
+  '\t',
+  '\r',
+  ')',
+  '>',
+  ']',
+  '"',
+  "'",
+  '`',
+])
+const CITATION_DEFINITION_KEYWORDS =
+  'function\\*?|const|let|var|class|interface|type|enum'
+
+interface CitationSpan {
+  start: number
+  end: number
+}
+
+interface CitationMatch {
+  /** Offset of the path in the block text. */
+  start: number
+  /** Offset just past the last span. */
+  end: number
+  /** Repo-relative path, with any leading `./` removed. */
+  path: string
+  spans: CitationSpan[]
+}
+
+interface CitedFile {
+  content: string
+  lines: string[]
+  extension: string
+  /** Whether an identifier occurs anywhere in the file, memoized. */
+  occurs: Map<string, boolean>
+}
+
+interface CitationSegment {
+  start: number
+  text: string
+  /** Code spans inside the segment, in order. */
+  spans: CodeSpanRange[]
+  commentExempt?: boolean
+  identifiers?: string[]
+}
+
+interface CitationState {
+  rootDir: string
+  directories: Map<string, ReadonlySet<string> | null>
+  files: Map<string, CitedFile | null>
+}
+
+interface CitationLine {
+  text: string
+  lineNo: number
+}
+
+interface CitationBlock {
+  lines: CitationLine[]
+  /** A fenced line: its own segment, structural checks only. */
+  fenced: boolean
+}
+
+interface CitationFinding {
+  class: SolutionCitationClass
+  suggestion?: string
+}
+
+function isDigitCode(code: number): boolean {
+  return code >= 48 && code <= 57
+}
+
+function isLetterCode(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+}
+
+const BACKSLASH_CODE = 92
+
+function isWordCode(code: number): boolean {
+  return isDigitCode(code) || isLetterCode(code) || code === 95
+}
+
+/** Characters a repo-relative path is made of: letters, digits, `_ . / @ + -`. */
+function isPathCode(code: number): boolean {
+  return (
+    isWordCode(code) ||
+    code === 46 ||
+    code === 47 ||
+    code === 64 ||
+    code === 43 ||
+    code === 45
+  )
+}
+
+function isSchemeCode(code: number): boolean {
+  return isDigitCode(code) || isLetterCode(code) || [43, 45, 46].includes(code)
+}
+
+/**
+ * Blank out URLs, keeping every offset. A URL can end in `:12`, and a path
+ * inside it is not a repo citation. Each `://` is found with `indexOf` and the
+ * scheme is read backwards only as far as the previous masked URL, so the pass
+ * is linear.
+ */
+function maskUrls(text: string): string {
+  let masked = ''
+  let cursor = 0
+  let index = text.indexOf('://')
+  while (index !== -1) {
+    let start = index
+    while (start > cursor && isSchemeCode(text.charCodeAt(start - 1))) start--
+    if (start === index) {
+      index = text.indexOf('://', index + 3)
+      continue
+    }
+    let end = index + 3
+    while (end < text.length && !CITATION_URL_END_CHARS.has(text.charAt(end))) {
+      end++
+    }
+    masked += text.slice(cursor, start) + ' '.repeat(end - start)
+    cursor = end
+    index = text.indexOf('://', end)
+  }
+  return cursor === 0 ? text : masked + text.slice(cursor)
+}
+
+function readNumber(
+  text: string,
+  position: number,
+): { value: number; end: number } | null {
+  let end = position
+  while (isDigitCode(text.charCodeAt(end))) end++
+  if (end === position) return null
+  return { value: Number(text.slice(position, end)), end }
+}
+
+/**
+ * Parse `N`, `N-M` or `N–M` spans joined by commas, starting at `position`.
+ * Every comma needs a digit right after it, so the loop makes progress on each
+ * pass and is linear in the input.
+ */
+function parseCitationSpans(
+  text: string,
+  position: number,
+): { spans: CitationSpan[]; end: number } | null {
+  const spans: CitationSpan[] = []
+  let cursor = position
+  let more = true
+  while (more) {
+    const first = readNumber(text, cursor)
+    if (first === null) break
+    let last = first.value
+    cursor = first.end
+    if (text.charAt(cursor) === '-' || text.charAt(cursor) === '–') {
+      const second = readNumber(text, cursor + 1)
+      if (second !== null) {
+        last = second.value
+        cursor = second.end
+      }
+    }
+    spans.push({ start: first.value, end: last })
+    more =
+      text.charAt(cursor) === ',' && isDigitCode(text.charCodeAt(cursor + 1))
+    if (more) cursor++
+  }
+  return spans.length === 0 ? null : { spans, end: cursor }
+}
+
+/** The repo-relative path of a token, or null when it cannot be a citation path. */
+function normalizeCitedPath(token: string): string | null {
+  if (token.startsWith('/')) return null
+  const rel = token.startsWith('./') ? token.slice(2) : token
+  const parts = rel.split('/')
+  if (parts.includes('..')) return null
+  const last = parts.at(-1) ?? ''
+  const extension = last.slice(last.lastIndexOf('.') + 1)
+  if (!last.includes('.') || !/^[A-Za-z][A-Za-z0-9]*$/.test(extension)) {
+    return null
+  }
+  return rel
+}
+
+/** `path:line:col` is a stack frame, and `path:12abc` is not a line number. */
+function endsCitationCleanly(text: string, end: number): boolean {
+  if (text.charAt(end) === ':' && isDigitCode(text.charCodeAt(end + 1))) {
+    return false
+  }
+  return !isWordCode(text.charCodeAt(end))
+}
+
+function readCitationAt(masked: string, colon: number): CitationMatch | null {
+  if (!isDigitCode(masked.charCodeAt(colon + 1))) return null
+  let start = colon
+  while (start > 0 && isPathCode(masked.charCodeAt(start - 1))) start--
+  // A backslash before the path means a Windows drive or UNC path (or a
+  // backslash-relative one): not a repo-relative citation, so not checked.
+  if (start > 0 && masked.charCodeAt(start - 1) === BACKSLASH_CODE) return null
+  const citedPath = normalizeCitedPath(masked.slice(start, colon))
+  if (citedPath === null) return null
+  const parsed = parseCitationSpans(masked, colon + 1)
+  if (parsed === null || !endsCitationCleanly(masked, parsed.end)) return null
+  return { start, end: parsed.end, path: citedPath, spans: parsed.spans }
+}
+
+/**
+ * Every `path:line[-end][,line]` citation in `text`, found from the colons
+ * outward. The path is read backwards from a colon that is followed by a digit,
+ * so no pattern runs over the whole line.
+ */
+function findCitations(text: string): CitationMatch[] {
+  const masked = maskUrls(text)
+  const found: CitationMatch[] = []
+  let colon = masked.indexOf(':')
+  while (colon !== -1) {
+    const citation = readCitationAt(masked, colon)
+    if (citation === null) {
+      colon = masked.indexOf(':', colon + 1)
+      continue
+    }
+    found.push(citation)
+    colon = masked.indexOf(':', citation.end)
+  }
+  return found
+}
+
+/** A backticked `:N` with no path. */
+function isOrphanLine(content: string): boolean {
+  const text = content.trim()
+  if (text.charAt(0) !== ':') return false
+  const parsed = parseCitationSpans(text, 1)
+  return parsed !== null && parsed.end === text.length
+}
+
+/** Offsets just past each `[.!?;]` that ends a sentence, outside code spans, plus the end of text. */
+function sentenceEnds(text: string, spans: readonly CodeSpanRange[]): number[] {
+  const ends: number[] = []
+  let spanIndex = 0
+  for (let index = 0; index < text.length; index++) {
+    while (spanIndex < spans.length && (spans[spanIndex]?.end ?? 0) <= index) {
+      spanIndex++
+    }
+    const span = spans[spanIndex]
+    if (span !== undefined && index >= span.start) {
+      index = span.end - 1
+      continue
+    }
+    if (!'.!?;'.includes(text.charAt(index))) continue
+    const next = text.charAt(index + 1)
+    if (next === '' || /\s/.test(next)) ends.push(index + 1)
+  }
+  if (ends.at(-1) !== text.length) ends.push(text.length)
+  return ends
+}
+
+function buildSegments(
+  text: string,
+  spans: readonly CodeSpanRange[],
+): CitationSegment[] {
+  const segments: CitationSegment[] = []
+  let start = 0
+  let spanIndex = 0
+  for (const end of sentenceEnds(text, spans)) {
+    const inside: CodeSpanRange[] = []
+    for (
+      let span = spans[spanIndex];
+      span !== undefined && span.start < end;
+      span = spans[spanIndex]
+    ) {
+      inside.push(span)
+      spanIndex++
+    }
+    segments.push({ start, text: text.slice(start, end), spans: inside })
+    start = end
+  }
+  return segments
+}
+
+/** The last element whose `start` is at or before `offset`. */
+function lastStartingAtOrBefore<T extends { start: number }>(
+  items: readonly T[],
+  offset: number,
+): T | undefined {
+  let low = 0
+  let high = items.length - 1
+  let found: T | undefined
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    const item = items[middle]
+    if (item !== undefined && item.start <= offset) {
+      found = item
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+  return found
+}
+
+function isCompoundIdentifier(text: string): boolean {
+  return (
+    text.includes('_') ||
+    /[a-z0-9][A-Z]/.test(text) ||
+    /^[A-Z][A-Z0-9]+$/.test(text)
+  )
+}
+
+/**
+ * The backticked spans of a sentence that name a compound identifier, in
+ * sentence order. The compound test reads the whole span text: `opts.strictMode`
+ * counts, `main()` and `opts.strict` do not.
+ */
+function segmentIdentifiers(segment: CitationSegment): string[] {
+  if (segment.identifiers !== undefined) return segment.identifiers
+  const identifiers: string[] = []
+  for (const span of segment.spans) {
+    const content = span.content.trim()
+    if (!CITATION_IDENTIFIER_SHAPE.test(content)) continue
+    if (!isCompoundIdentifier(content)) continue
+    const name = content.endsWith('()') ? content.slice(0, -2) : content
+    if (!identifiers.includes(name)) identifiers.push(name)
+  }
+  segment.identifiers = identifiers
+  return identifiers
+}
+
+function isCommentExempt(segment: CitationSegment): boolean {
+  segment.commentExempt ??= CITATION_COMMENT_WORD.test(segment.text)
+  return segment.commentExempt
+}
+
+function listDirectory(
+  state: CitationState,
+  dir: string,
+): ReadonlySet<string> | null {
+  const cached = state.directories.get(dir)
+  if (cached !== undefined) return cached
+  let entries: ReadonlySet<string> | null = null
+  try {
+    entries = new Set(fs.readdirSync(dir))
+  } catch {
+    entries = null
+  }
+  state.directories.set(dir, entries)
+  return entries
+}
+
+function isRegularFile(absPath: string): boolean {
+  try {
+    return fs.statSync(absPath).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A regular file at exactly this path. Every segment is matched against its
+ * parent directory's entries, so a wrong-case path fails on a case-insensitive
+ * filesystem too.
+ */
+function readCitedFile(state: CitationState, rel: string): CitedFile | null {
+  let dir = state.rootDir
+  for (const part of rel.split('/')) {
+    const entries = listDirectory(state, dir)
+    if (entries === null || !entries.has(part)) return null
+    dir = path.join(dir, part)
+  }
+  if (!isRegularFile(dir)) return null
+  const content = readFileSafe(dir)
+  if (content === null) return null
+  const lines = content.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  return {
+    content,
+    lines,
+    extension: path.extname(rel).toLowerCase(),
+    occurs: new Map(),
+  }
+}
+
+function loadCitedFile(state: CitationState, rel: string): CitedFile | null {
+  if (state.files.has(rel)) return state.files.get(rel) ?? null
+  const file = readCitedFile(state, rel)
+  state.files.set(rel, file)
+  return file
+}
+
+function isSpanInRange(span: CitationSpan, lineCount: number): boolean {
+  return span.start >= 1 && span.end >= span.start && span.end <= lineCount
+}
+
+function isEmptySpan(file: CitedFile, span: CitationSpan): boolean {
+  const prefixes = CITATION_COMMENT_PREFIXES.get(file.extension) ?? []
+  for (let index = span.start - 1; index < span.end; index++) {
+    const trimmed = (file.lines[index] ?? '').trim()
+    if (trimmed === '') continue
+    if (!prefixes.some((prefix) => trimmed.startsWith(prefix))) return false
+  }
+  return true
+}
+
+function spanText(file: CitedFile, span: CitationSpan): string {
+  return file.lines.slice(span.start - 1, span.end).join('\n')
+}
+
+/** A character an identifier is made of: a word character or `$`. */
+function isIdentifierCode(code: number): boolean {
+  return isWordCode(code) || code === 36
+}
+
+/**
+ * Whether `identifier` occurs in `text` as a whole name: no identifier
+ * character directly before or after the match. A dotted chain is matched as
+ * one name. `alphaBeta` is not found in `alphaBetaAsync` or `myalphaBeta`.
+ */
+function containsIdentifier(text: string, identifier: string): boolean {
+  let at = text.indexOf(identifier)
+  while (at !== -1) {
+    const end = at + identifier.length
+    if (
+      !isIdentifierCode(text.charCodeAt(at - 1)) &&
+      !isIdentifierCode(text.charCodeAt(end))
+    ) {
+      return true
+    }
+    at = text.indexOf(identifier, at + 1)
+  }
+  return false
+}
+
+function occursInFile(file: CitedFile, identifier: string): boolean {
+  let occurs = file.occurs.get(identifier)
+  if (occurs === undefined) {
+    occurs = containsIdentifier(file.content, identifier)
+    file.occurs.set(identifier, occurs)
+  }
+  return occurs
+}
+
+function isImportOrReexport(line: string): boolean {
+  if (/^\s*import\b/.test(line)) return true
+  return /^\s*export\b/.test(line) && /\bfrom\s+['"]/.test(line)
+}
+
+/** The first line that defines or keys `identifier`, as `path:line`. */
+function findDefinitionLine(
+  file: CitedFile,
+  rel: string,
+  identifier: string,
+): string | undefined {
+  const name = escapeRegex(identifier.split('.').at(-1) ?? identifier)
+  const key = new RegExp(`^\\s*["']?${name}["']?\\s*:`)
+  const definition = CITATION_DEFINITION_EXTENSIONS.has(file.extension)
+    ? new RegExp(`\\b(?:${CITATION_DEFINITION_KEYWORDS})\\s+${name}(?![\\w$])`)
+    : null
+  const index = file.lines.findIndex(
+    (line) =>
+      !isImportOrReexport(line) &&
+      (key.test(line) || (definition?.test(line) ?? false)),
+  )
+  return index === -1 ? undefined : `${rel}:${index + 1}`
+}
+
+function suggestDefinition(
+  file: CitedFile,
+  rel: string,
+  identifiers: readonly string[],
+): string | undefined {
+  for (const identifier of identifiers) {
+    const found = findDefinitionLine(file, rel, identifier)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function checkSymbolRule(
+  file: CitedFile,
+  citation: CitationMatch,
+  segment: CitationSegment,
+): CitationFinding | null {
+  const considered = segmentIdentifiers(segment).filter((identifier) =>
+    occursInFile(file, identifier),
+  )
+  if (considered.length === 0) return null
+  const found = citation.spans.some((span) => {
+    const text = spanText(file, span)
+    return considered.some((identifier) => containsIdentifier(text, identifier))
+  })
+  if (found) return null
+  const suggestion = suggestDefinition(file, citation.path, considered)
+  return suggestion === undefined
+    ? { class: 'symbol-absent' }
+    : { class: 'symbol-absent', suggestion }
+}
+
+/** The first failing rule of one citation, or null when it holds. */
+function evaluateCitation(
+  state: CitationState,
+  citation: CitationMatch,
+  segment: CitationSegment,
+  fenced: boolean,
+): CitationFinding | null {
+  const root = citation.path.split('/')[0] ?? ''
+  if (CITATION_DISALLOWED_ROOTS.has(root)) return { class: 'disallowed-root' }
+  const file = loadCitedFile(state, citation.path)
+  if (file === null) return { class: 'missing-file' }
+  if (!citation.spans.every((span) => isSpanInRange(span, file.lines.length))) {
+    return { class: 'out-of-range' }
+  }
+  if (fenced || isCommentExempt(segment)) return null
+  if (citation.spans.some((span) => isEmptySpan(file, span))) {
+    return { class: 'empty-span' }
+  }
+  return checkSymbolRule(file, citation, segment)
+}
+
+/** Paragraphs of consecutive prose lines, and one block per fenced line. */
+function splitCitationBlocks(docLines: readonly string[]): CitationBlock[] {
+  const blocks: CitationBlock[] = []
+  let paragraph: CitationLine[] = []
+  let marker: FenceMarker | null = null
+  const flush = (): void => {
+    if (paragraph.length > 0) blocks.push({ lines: paragraph, fenced: false })
+    paragraph = []
+  }
+  for (const [index, text] of docLines.entries()) {
+    const fence = updateFenceMarker(text, marker)
+    marker = fence.marker
+    if (fence.isFence || text.trim() === '') {
+      flush()
+    } else if (marker !== null) {
+      blocks.push({ lines: [{ text, lineNo: index + 1 }], fenced: true })
+    } else {
+      paragraph.push({ text, lineNo: index + 1 })
+    }
+  }
+  flush()
+  return blocks
+}
+
+function checkCitationBlock(
+  state: CitationState,
+  file: string,
+  block: CitationBlock,
+): SolutionCitationViolation[] {
+  const text = block.lines.map((line) => line.text).join('\n')
+  const lineStarts: Array<{ start: number; lineNo: number }> = []
+  let offset = 0
+  for (const line of block.lines) {
+    lineStarts.push({ start: offset, lineNo: line.lineNo })
+    offset += line.text.length + 1
+  }
+  const lineAt = (at: number): number =>
+    lastStartingAtOrBefore(lineStarts, at)?.lineNo ?? 1
+
+  const spans = block.fenced ? [] : findCodeSpans(text)
+  const segments = block.fenced
+    ? [{ start: 0, text, spans: [] }]
+    : buildSegments(text, spans)
+  const violations: SolutionCitationViolation[] = []
+  for (const span of spans) {
+    if (!isOrphanLine(span.content)) continue
+    violations.push({
+      file,
+      line: lineAt(span.start),
+      citation: span.content.trim(),
+      class: 'orphan-line',
+    })
+  }
+  for (const citation of findCitations(text)) {
+    const segment = lastStartingAtOrBefore(segments, citation.start)
+    if (segment === undefined) continue
+    const finding = evaluateCitation(state, citation, segment, block.fenced)
+    if (finding === null) continue
+    violations.push({
+      file,
+      line: lineAt(citation.start),
+      citation: text.slice(citation.start, citation.end),
+      ...finding,
+    })
+  }
+  return violations.sort((a, b) => a.line - b.line)
+}
+
+/**
+ * Verify the `path:line` citations in docs/solutions: each cited file exists,
+ * each cited line or range is inside it, a span is not only blank or comment
+ * lines, and an identifier the sentence names is inside the span.
+ *
+ * Lexical, not a parser. Known limits:
+ * - One violation per citation: the first failing rule, in the order
+ *   missing-file or disallowed-root, out-of-range, empty-span, symbol-absent.
+ * - A citation is a repo-relative `path.ext:N[-M][,N...]`. URLs, `path:N:M`
+ *   stack frames, `..` and absolute paths are not citations, and prose such
+ *   as "lines 30-31" is not checked.
+ * - A sentence is text up to `[.!?;]` followed by whitespace or end of line,
+ *   outside backtick spans. Abbreviations split it early.
+ * - Only a backticked span names an identifier, and only if it is a plain
+ *   identifier, dotted chain or `name()` call that has `_`, an interior capital
+ *   or is ALL_CAPS, and occurs somewhere in the cited file. A sentence with no
+ *   such identifier gets no symbol check.
+ * - Comment lines are found by line prefix per extension, not by a lexer. A
+ *   template literal line starting with `//` reads as a comment. The word
+ *   "comment" in the citing sentence skips the comment and symbol rules.
+ * - A fenced line is its own sentence with no spans, so it gets the file and
+ *   range checks only.
+ */
+export function checkSolutionCitations(
+  rootDir: string,
+  solutionMarkdownFiles: readonly string[],
+): SolutionCitationViolation[] {
+  const state: CitationState = {
+    rootDir,
+    directories: new Map(),
+    files: new Map(),
+  }
+  const violations: SolutionCitationViolation[] = []
+  for (const relPath of solutionMarkdownFiles) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    for (const block of splitCitationBlocks(content.split('\n'))) {
+      violations.push(...checkCitationBlock(state, relPath, block))
+    }
+  }
   return violations
 }
 
@@ -3052,6 +3765,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.solutionMarkdown,
   )
+  const solutionCitationViolations = checkSolutionCitations(
+    rootDir,
+    targets.solutionMarkdown,
+  )
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
   const agentModeViolations = checkAgentMode(rootDir, targets.markdown)
   const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
@@ -3106,6 +3823,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     frontmatterViolations,
     parseSafetyViolations,
     solutionSchemaViolations,
+    solutionCitationViolations,
     agentModelViolations,
     agentModeViolations,
     agentColorViolations,
@@ -3170,6 +3888,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
     result.solutionSchemaViolations,
     'Solution-doc schema violations',
   )
+  printSolutionCitationViolations(result.solutionCitationViolations)
   printAgentModelViolations(result.agentModelViolations)
   printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
@@ -3207,6 +3926,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
         `solutionSchemaViolations: ${result.solutionSchemaViolations.length}\n` +
+        `solutionCitationViolations: ${result.solutionCitationViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
         `agentModeViolations: ${result.agentModeViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
@@ -3251,6 +3971,21 @@ function printStaleSkillLoadNames(
   for (const v of violations) {
     process.stderr.write(
       `  ${v.file}:${v.line}  \`${v.token}\`  (use \`${v.suggestion}\`)\n`,
+    )
+  }
+}
+
+function printSolutionCitationViolations(
+  violations: readonly SolutionCitationViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nSolution citation violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    const suggestion = v.suggestion ? `  (try ${v.suggestion})` : ''
+    process.stderr.write(
+      `  ${v.file}:${v.line}  ${v.citation}  ${v.class}${suggestion}\n`,
     )
   }
 }
@@ -3469,6 +4204,7 @@ function totalViolations(result: CheckResult): number {
     result.frontmatterViolations.length +
     result.parseSafetyViolations.length +
     result.solutionSchemaViolations.length +
+    result.solutionCitationViolations.length +
     result.agentModelViolations.length +
     result.agentModeViolations.length +
     result.agentColorViolations.length +

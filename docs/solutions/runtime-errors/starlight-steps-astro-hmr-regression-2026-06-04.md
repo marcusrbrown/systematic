@@ -33,7 +33,7 @@ While iterating on docs-site CSS, the Starlight dev server (`bun run --cwd docs 
 
 ```
 AstroUserError: The `<Steps>` component expects its content to be a single ordered list (`<ol>`) but found no child elements.
-  at @astrojs/starlight/user-components/rehype-steps.ts:32
+  at @astrojs/starlight/user-components/rehype-steps.ts (line number varies by Starlight release)
 ```
 
 The crash is dev-only — the static build and the live site were never affected — which makes it easy to misdiagnose as a transient glitch.

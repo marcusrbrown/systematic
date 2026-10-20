@@ -2,6 +2,8 @@
 
 Choose the template matching the problem_type track (see `references/schema.yaml`).
 
+**Citing code:** write a repo-relative path with the line or range (`<file>:<line>` or `<file>:<start>-<end>`), never a bare file name, and put the backticked symbol it points at in the same sentence. Link a tag or commit for code outside the repo or deleted code. Write placeholders such as `<file>:<line>` in examples. The content-integrity gate checks citations in `docs/solutions/`.
+
 ---
 
 ## Bug Track Template

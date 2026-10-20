@@ -25,6 +25,7 @@ import {
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
   checkSkillReferenceIntegrity,
+  checkSolutionCitations,
   checkSolutionSchema,
   checkStalePlanStatus,
   checkStaleSkillLoadNames,
@@ -33,6 +34,7 @@ import {
   discoverCategories,
   loadAllowlist,
   matchesPathGlob,
+  type SolutionCitationViolation,
   SUBFILE_DIRECTORY_NAMES,
 } from '../../scripts/content-integrity.ts'
 
@@ -4360,6 +4362,651 @@ describe('checkSolutionSchema', () => {
 })
 
 // ---------------------------------------------------------------------------
+// checkSolutionCitations
+// ---------------------------------------------------------------------------
+
+describe('checkSolutionCitations', () => {
+  /** 15 lines. Line 3 defines alphaBeta, 8-12 are comments, 14 is a key. */
+  const CITED_SOURCE = `${[
+    "import { helper } from './helper'",
+    '',
+    'export const alphaBeta = 1',
+    'export function runThing() {',
+    '  return alphaBeta',
+    '}',
+    '',
+    '// first note',
+    '// second note',
+    '/* block',
+    ' * continued',
+    ' */',
+    'export const settings = {',
+    '  strictMode: true,',
+    '}',
+  ].join('\n')}\n`
+
+  /** Writes `files` and one doc, then checks only that doc. */
+  function check(
+    doc: string,
+    files: Record<string, string> = { 'src/code.ts': CITED_SOURCE },
+  ): SolutionCitationViolation[] {
+    const root = makeFixtureRepo()
+    try {
+      for (const [relPath, content] of Object.entries(files)) {
+        writeFile(root, relPath, content)
+      }
+      writeFile(root, 'docs/solutions/note.md', doc)
+      return checkSolutionCitations(root, ['docs/solutions/note.md'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  function classes(violations: readonly SolutionCitationViolation[]): string[] {
+    return violations.map((violation) => violation.class)
+  }
+
+  describe('passing citations', () => {
+    test('a span that holds the named identifier passes', () => {
+      expect(check('`alphaBeta` is defined at `src/code.ts:3`.')).toEqual([])
+    })
+
+    test('a citation with no identifier passes when its span holds code', () => {
+      expect(check('The block lives at src/code.ts:13-15.')).toEqual([])
+    })
+
+    test('a doc that cannot be read is skipped', () => {
+      const root = makeFixtureRepo()
+      try {
+        expect(
+          checkSolutionCitations(root, ['docs/solutions/gone.md']),
+        ).toEqual([])
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  })
+
+  describe('one violation per class', () => {
+    test('a missing file is missing-file', () => {
+      const [violation, ...rest] = check('See src/gone.ts:3.')
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({
+        file: 'docs/solutions/note.md',
+        line: 1,
+        citation: 'src/gone.ts:3',
+        class: 'missing-file',
+      })
+    })
+
+    test('a directory with a file-like name is missing-file', () => {
+      const root = makeFixtureRepo()
+      try {
+        fs.mkdirSync(path.join(root, 'weird.ts'), { recursive: true })
+        writeFile(root, 'docs/solutions/note.md', 'See weird.ts:1.')
+        expect(
+          classes(checkSolutionCitations(root, ['docs/solutions/note.md'])),
+        ).toEqual(['missing-file'])
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    test.each([
+      'dist/index.js',
+      'node_modules/pkg/index.js',
+      '.slim/clonedeps/repo/a.ts',
+      '.context/notes.md',
+      '.worktrees/branch/a.ts',
+    ])(
+      'a citation under %s is disallowed-root even when the file exists',
+      (cited) => {
+        const violations = check(`See ${cited}:1.`, { [cited]: 'one\n' })
+        expect(classes(violations)).toEqual(['disallowed-root'])
+      },
+    )
+
+    test.each([
+      ['a line past the end', 'src/code.ts:16'],
+      ['a range past the end', 'src/code.ts:14-99'],
+      ['a reversed range', 'src/code.ts:9-3'],
+      ['line zero', 'src/code.ts:0'],
+      ['a zero start', 'src/code.ts:0-3'],
+    ])('%s is out-of-range', (_label, citation) => {
+      expect(classes(check(`See ${citation}.`))).toEqual(['out-of-range'])
+    })
+
+    test.each([
+      ['an all-blank span', 'src/blank.ts:2-3', 'one\n\n  \nfour\n'],
+      ['an all-comment span', 'src/code.ts:8-9', CITED_SOURCE],
+      ['a block comment span', 'src/code.ts:10-12', CITED_SOURCE],
+    ])('%s is empty-span', (_label, citation, content) => {
+      const file = citation.split(':')[0] ?? ''
+      expect(classes(check(`See ${citation}.`, { [file]: content }))).toEqual([
+        'empty-span',
+      ])
+    })
+
+    test('an identifier that is only outside the span is symbol-absent', () => {
+      const [violation, ...rest] = check(
+        '`alphaBeta` lives at `src/code.ts:13-15`.',
+      )
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({
+        class: 'symbol-absent',
+        citation: 'src/code.ts:13-15',
+        suggestion: 'src/code.ts:3',
+      })
+    })
+
+    test('a backticked :N with no path is orphan-line', () => {
+      const [violation, ...rest] = check(
+        'The call is at `src/code.ts:4` and then `:5`.',
+      )
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({ class: 'orphan-line', citation: ':5' })
+    })
+
+    test('an orphan range and list are orphan-line too', () => {
+      expect(classes(check('See `:5-9` and `:1,2`.'))).toEqual([
+        'orphan-line',
+        'orphan-line',
+      ])
+    })
+  })
+
+  describe('suggestions', () => {
+    test('a moved const gets the line of its definition', () => {
+      const [violation] = check('`runThing` is at `src/code.ts:13-15`.')
+      expect(violation?.suggestion).toBe('src/code.ts:4')
+    })
+
+    test('a key form gets the line of its key', () => {
+      const [violation] = check('`strictMode` is set at `src/code.ts:3`.')
+      expect(violation?.suggestion).toBe('src/code.ts:14')
+    })
+
+    test('a JSON key form gets its key line', () => {
+      const pkg =
+        '{\n  "name": "x",\n  "scripts": {\n    "lintAll": "biome"\n  }\n}\n'
+      const [violation] = check(
+        '`lintAll` is the script at `package.json:2`.',
+        {
+          'package.json': pkg,
+        },
+      )
+      expect(violation).toMatchObject({
+        class: 'symbol-absent',
+        suggestion: 'package.json:4',
+      })
+    })
+
+    test('an identifier that occurs only in an import gets no suggestion', () => {
+      const [violation] = check('`ExampleThing` is at `src/imp.ts:2`.', {
+        'src/imp.ts':
+          "import { type ExampleThing } from './x'\nexport const other = 1\n",
+      })
+      expect(violation?.class).toBe('symbol-absent')
+      expect(violation?.suggestion).toBeUndefined()
+    })
+
+    test('a re-export line gives no suggestion', () => {
+      const [violation] = check('`ExampleThing` is at `src/re.ts:2`.', {
+        'src/re.ts':
+          "export type ExampleThing = 1 from 'x'\nexport const other = 1\n",
+      })
+      expect(violation?.class).toBe('symbol-absent')
+      expect(violation?.suggestion).toBeUndefined()
+    })
+
+    test('a file that is not TypeScript or JavaScript gets no definition suggestion', () => {
+      const [violation] = check('`fooBar` is at `src/m.py:4`.', {
+        'src/m.py': 'def fooBar():\n    pass\n\nx = 1\n',
+      })
+      expect(violation?.class).toBe('symbol-absent')
+      expect(violation?.suggestion).toBeUndefined()
+    })
+
+    test('with two missing identifiers the first in sentence order is used', () => {
+      const [violation] = check(
+        '`firstOne` and `secondOne` are at `src/two.ts:3`.',
+        {
+          'src/two.ts':
+            'export const secondOne = 2\nexport const firstOne = 1\nexport const third = 3\n',
+        },
+      )
+      expect(violation?.suggestion).toBe('src/two.ts:2')
+    })
+
+    test('the first definition in file order wins and the suggestion is one line', () => {
+      const [violation] = check('`dupName` is at `src/dup.ts:4`.', {
+        'src/dup.ts':
+          'export const dupName = 1\nexport const dupName2 = 1\nfunction dupName() {}\nexport const z = 1\n',
+      })
+      expect(violation?.suggestion).toBe('src/dup.ts:1')
+      expect(violation?.suggestion).not.toContain('\n')
+    })
+  })
+
+  describe('comment rule and exemption', () => {
+    const COMMENTS = '// a\n// b\nexport const realThing = 1\n'
+
+    test.each([
+      ['comment', 'The explanation is a comment at src/c.ts:1-2.'],
+      ['Comment', 'Comment: src/c.ts:1-2 explains why.'],
+      ['COMMENTS', 'The COMMENTS at src/c.ts:1-2 explain why.'],
+    ])('the word %s exempts a comment span', (_word, doc) => {
+      expect(check(doc, { 'src/c.ts': COMMENTS })).toEqual([])
+    })
+
+    test('a sentence with the word comment is exempt from the symbol rule too', () => {
+      expect(
+        check('`realThing` is a comment at `src/c.ts:1-2`.', {
+          'src/c.ts': COMMENTS,
+        }),
+      ).toEqual([])
+    })
+
+    test.each([
+      ['commented is not the word', 'This commented line is src/c.ts:1-2.'],
+      ['uncomment is not the word', 'To uncomment, see src/c.ts:1-2.'],
+      [
+        'the word in another sentence does not exempt',
+        'The note is a comment. See src/c.ts:1-2.',
+      ],
+    ])('%s', (_label, doc) => {
+      expect(classes(check(doc, { 'src/c.ts': COMMENTS }))).toEqual([
+        'empty-span',
+      ])
+    })
+
+    test('a span that mixes comment and code passes', () => {
+      expect(check('See src/c.ts:2-3.', { 'src/c.ts': COMMENTS })).toEqual([])
+    })
+
+    test('a # line in a TypeScript file is not a comment', () => {
+      expect(
+        check('See src/h.ts:1.', { 'src/h.ts': '# not a comment\n' }),
+      ).toEqual([])
+    })
+
+    test.each([
+      ['a.yaml', '# only a comment\n'],
+      ['a.yml', '# only a comment\n'],
+      ['a.sh', '# only a comment\n'],
+      ['a.toml', '# only a comment\n'],
+      ['a.py', '# only a comment\n'],
+      ['a.mjs', '// only a comment\n'],
+      ['a.tsx', '/* only a comment */\n'],
+    ])('%s has a comment rule', (name, content) => {
+      expect(classes(check(`See ${name}:1.`, { [name]: content }))).toEqual([
+        'empty-span',
+      ])
+    })
+
+    test.each([
+      ['a.md', '// not a comment here\n'],
+      ['a.json', '// not a comment here\n'],
+      ['a.txt', '# not a comment here\n'],
+    ])('%s has no comment rule', (name, content) => {
+      expect(check(`See ${name}:1.`, { [name]: content })).toEqual([])
+    })
+  })
+
+  describe('extraction', () => {
+    test.each([
+      ['a URL', 'See https://example.com/src/gone.ts:3 for details.'],
+      [
+        'a path inside a URL',
+        'See https://github.com/o/r/blob/v1/src/gone.ts:12 for details.',
+      ],
+      ['a stack frame with a column', 'at src/gone.ts:3:7 in the trace.'],
+      ['a parent-relative path', 'See ../src/gone.ts:3 now.'],
+      ['an absolute path', 'See /abs/src/gone.ts:3 now.'],
+      ['a markdown link to a URL', '[x](https://example.com/src/gone.ts:3)'],
+      ['a URL with a port', 'See https://localhost:3000/src/gone.ts:3 now.'],
+      [
+        'a URL with the path in its query',
+        'See https://example.dev/view?file=src/gone.ts:3 now.',
+      ],
+    ])('does not match %s', (_label, doc) => {
+      expect(check(doc)).toEqual([])
+    })
+
+    test('strips a leading ./ and keeps the citation as written', () => {
+      const [violation] = check('See ./src/code.ts:99.')
+      expect(violation).toMatchObject({
+        class: 'out-of-range',
+        citation: './src/code.ts:99',
+      })
+    })
+
+    test('reads an en-dash range', () => {
+      expect(classes(check('See src/code.ts:3–99.'))).toEqual(['out-of-range'])
+      expect(check('See src/code.ts:13–15.')).toEqual([])
+    })
+
+    test('a comma list checks every span structurally', () => {
+      expect(classes(check('See src/code.ts:3,99.'))).toEqual(['out-of-range'])
+      expect(check('See src/code.ts:3,13-15.')).toEqual([])
+    })
+
+    test('a comma list passes the symbol rule when any span matches', () => {
+      expect(check('`alphaBeta` is at `src/code.ts:13,3`.')).toEqual([])
+      expect(classes(check('`alphaBeta` is at `src/code.ts:13,14`.'))).toEqual([
+        'symbol-absent',
+      ])
+    })
+
+    test('a citation in a code fence gets the structural checks only', () => {
+      const doc = [
+        'Output:',
+        '',
+        '```',
+        'src/gone.ts:3',
+        'src/code.ts:99',
+        'src/code.ts:8-9',
+        '```',
+      ].join('\n')
+      const violations = check(doc)
+      expect(violations.map((v) => [v.line, v.class])).toEqual([
+        [4, 'missing-file'],
+        [5, 'out-of-range'],
+      ])
+    })
+
+    test('a fenced line takes no identifiers from the prose around it', () => {
+      const doc = [
+        '`alphaBeta` is the name.',
+        '',
+        '```',
+        'src/code.ts:13-15',
+        '```',
+      ].join('\n')
+      expect(check(doc)).toEqual([])
+    })
+
+    test('a path that ends a sentence is not cut by the sentence split', () => {
+      expect(
+        check('Open src/code.ts:13-15. Then `alphaBeta` appears elsewhere.'),
+      ).toEqual([])
+      expect(
+        classes(check('Then `alphaBeta` appears in src/code.ts:13-15.')),
+      ).toEqual(['symbol-absent'])
+    })
+
+    test('a dotted path inside a sentence is not split at its dots', () => {
+      const [violation] = check('The file src/lib/a.b.ts:3 is gone.', {
+        'src/code.ts': CITED_SOURCE,
+      })
+      expect(violation).toMatchObject({
+        class: 'missing-file',
+        citation: 'src/lib/a.b.ts:3',
+      })
+    })
+
+    test('each sentence takes the identifiers of its own segment', () => {
+      expect(
+        check(
+          '`alphaBeta` is at src/code.ts:3; `strictMode` is at src/code.ts:14.',
+        ),
+      ).toEqual([])
+      expect(
+        classes(
+          check(
+            '`alphaBeta` is at src/code.ts:14; `strictMode` is at src/code.ts:3.',
+          ),
+        ),
+      ).toEqual(['symbol-absent', 'symbol-absent'])
+    })
+
+    test('identifiers do not carry over a sentence boundary', () => {
+      expect(
+        check('`alphaBeta` is defined. The block is src/code.ts:13-15.'),
+      ).toEqual([])
+    })
+
+    test('a backtick span with a semicolon is not a sentence boundary', () => {
+      expect(check('`alphaBeta; x` is at src/code.ts:3.')).toEqual([])
+    })
+  })
+
+  describe('identifier filter', () => {
+    test.each([
+      ['plain words', '`Read` and `bun` run before `src/m.ts:4`.'],
+      ['a plain call', '`main()` runs before `src/m.ts:4`.'],
+      ['a lowercase dotted chain', '`opts.strict` is set before `src/m.ts:4`.'],
+      [
+        'an identifier that is not in the file',
+        '`neverInFile` is at `src/m.ts:4`.',
+      ],
+    ])('%s are not considered', (_label, doc) => {
+      expect(
+        check(doc, {
+          'src/m.ts': 'Read bun\nmain()\nopts.strict = 2\nconst z = 3\n',
+        }),
+      ).toEqual([])
+    })
+
+    test.each([
+      [
+        'a dotted chain with a capital',
+        '`opts.strictMode` is at `src/m.ts:3`.',
+      ],
+      ['a call with a capital', '`runThing()` is at `src/m.ts:3`.'],
+      ['an underscored name', '`PASS_FLOOR` is at `src/m.ts:3`.'],
+      ['a snake_case name', '`max_items` is at `src/m.ts:3`.'],
+      ['an all-caps name', '`LIMIT` is at `src/m.ts:3`.'],
+    ])('%s is considered', (_label, doc) => {
+      const violations = check(doc, {
+        'src/m.ts':
+          'opts.strictMode = 1\nrunThing()\nconst z = 3\nPASS_FLOOR; max_items; LIMIT\n',
+      })
+      expect(classes(violations)).toEqual(['symbol-absent'])
+    })
+
+    test('a considered identifier inside the span passes', () => {
+      expect(
+        check('`opts.strictMode` is at `src/m.ts:1`.', {
+          'src/m.ts': 'opts.strictMode = 1\nconst z = 3\n',
+        }),
+      ).toEqual([])
+    })
+  })
+
+  describe('line numbers', () => {
+    test('a citation after a 10-line frontmatter reports its real file line', () => {
+      const frontmatter = [
+        '---',
+        ...Array.from({ length: 8 }, (_, i) => `k${i}: v`),
+        '---',
+      ]
+      const doc = [...frontmatter, '', 'See src/gone.ts:3.'].join('\n')
+      expect(frontmatter).toHaveLength(10)
+      expect(check(doc)[0]?.line).toBe(12)
+    })
+
+    test('a citation on the second line of a paragraph reports that line', () => {
+      const doc = [
+        'First line of prose',
+        'continues at src/gone.ts:3 here.',
+      ].join('\n')
+      expect(check(doc)[0]?.line).toBe(2)
+    })
+
+    test('violations come back in doc order', () => {
+      const doc = ['See src/gone.ts:1.', '', 'And src/code.ts:99.'].join('\n')
+      expect(check(doc).map((v) => v.line)).toEqual([1, 3])
+    })
+  })
+
+  describe('exact-case regular files', () => {
+    test.each([
+      ['a wrong-case file name', 'src/lib/foo.ts'],
+      ['a wrong-case directory', 'Src/lib/Foo.ts'],
+    ])('%s is missing-file', (_label, cited) => {
+      const violations = check(`See ${cited}:1.`, { 'src/lib/Foo.ts': 'one\n' })
+      expect(classes(violations)).toEqual(['missing-file'])
+    })
+
+    test('the exact case resolves', () => {
+      expect(
+        check('See src/lib/Foo.ts:1.', { 'src/lib/Foo.ts': 'one\n' }),
+      ).toEqual([])
+    })
+  })
+
+  describe('Windows and UNC paths', () => {
+    test.each([
+      ['a drive-qualified path', 'See C:\\repo\\src\\code.ts:1 here.'],
+      ['a UNC path', 'See \\\\server\\share\\code.ts:1 here.'],
+      ['a backslash-relative path', 'See src\\code.ts:1 here.'],
+    ])('%s is not reported', (_label, doc) => {
+      expect(check(doc)).toEqual([])
+    })
+
+    test('a repo citation on the same line as a drive path is still checked', () => {
+      const violations = check(
+        'The log said C:\\repo\\src\\code.ts:1 but the repo has src/gone.ts:3.',
+      )
+      expect(violations).toMatchObject([
+        { citation: 'src/gone.ts:3', class: 'missing-file' },
+      ])
+    })
+
+    test('a bare repo citation is still checked', () => {
+      expect(classes(check('See src/gone.ts:3.'))).toEqual(['missing-file'])
+    })
+  })
+
+  describe('identifier boundaries', () => {
+    const SOURCE = `${[
+      'export const alphaBeta = 1',
+      'export const alphaBetaAsync = 2',
+      'const dollar$valueOne = 3',
+      'const dollar$valueOneMore = 4',
+      'const useIt = alphaBeta(1)',
+    ].join('\n')}\n`
+
+    test('a span holding only a longer identifier does not satisfy the name', () => {
+      const [violation, ...rest] = check(
+        '`alphaBeta` is defined at `src/code.ts:2`.',
+        { 'src/code.ts': SOURCE },
+      )
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({
+        class: 'symbol-absent',
+        suggestion: 'src/code.ts:1',
+      })
+    })
+
+    test('a span that holds the name followed by a call passes', () => {
+      expect(
+        check('`alphaBeta` is called at `src/code.ts:5`.', {
+          'src/code.ts': SOURCE,
+        }),
+      ).toEqual([])
+    })
+
+    test('a name that occurs only as part of longer identifiers is not considered', () => {
+      expect(
+        check('`alphaBet` is cited at `src/code.ts:3`.', {
+          'src/code.ts': SOURCE,
+        }),
+      ).toEqual([])
+    })
+
+    test('a dollar-bearing identifier is matched whole and found by the suggestion', () => {
+      const [violation, ...rest] = check(
+        '`dollar$valueOne` is defined at `src/code.ts:4`.',
+        { 'src/code.ts': SOURCE },
+      )
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({
+        class: 'symbol-absent',
+        suggestion: 'src/code.ts:3',
+      })
+    })
+
+    test('a dollar-bearing identifier passes in a span that holds it', () => {
+      expect(
+        check('`dollar$valueOne` is defined at `src/code.ts:3`.', {
+          'src/code.ts': SOURCE,
+        }),
+      ).toEqual([])
+    })
+
+    test('a dotted chain is matched whole', () => {
+      const dotted =
+        'const a = settings.strictMode\nconst b = settings.strictModeOff\n'
+      expect(
+        check('`settings.strictMode` is read at `src/code.ts:1`.', {
+          'src/code.ts': dotted,
+        }),
+      ).toEqual([])
+      expect(
+        classes(
+          check('`settings.strictMode` is read at `src/code.ts:2`.', {
+            'src/code.ts': dotted,
+          }),
+        ),
+      ).toEqual(['symbol-absent'])
+    })
+  })
+
+  describe('worst-case input', () => {
+    const budgetMs = 1000
+
+    function timed(doc: string): {
+      violations: SolutionCitationViolation[]
+      ms: number
+    } {
+      const started = performance.now()
+      const violations = check(doc)
+      return { violations, ms: performance.now() - started }
+    }
+
+    test('a 100 KB line of a.a.a finishes quickly', () => {
+      const { ms } = timed('a.'.repeat(50_000))
+      expect(ms).toBeLessThan(budgetMs)
+    })
+
+    test.each([
+      ['one run of 10,000 backticks', '`'.repeat(10_000)],
+      ['10,000 spaced backticks', '` '.repeat(10_000)],
+      [
+        '10,000 unmatched backtick runs of rising length',
+        Array.from({ length: 140 }, (_, i) => '`'.repeat(i + 1)).join('a '),
+      ],
+    ])('%s finishes quickly', (_label, doc) => {
+      const { ms } = timed(doc)
+      expect(ms).toBeLessThan(budgetMs)
+    })
+
+    test.each([
+      ['a bare run', `:${'1,'.repeat(50_000)}1`],
+      ['a backticked run', `\`:${'1,'.repeat(50_000)}1\``],
+      ['a run after a real path', `src/code.ts:${'1,'.repeat(50_000)}1`],
+    ])('a long :1,1,1 run (%s) finishes quickly', (_label, doc) => {
+      const { ms, violations } = timed(doc)
+      expect(ms).toBeLessThan(budgetMs)
+      expect(violations.length).toBeLessThanOrEqual(1)
+    })
+
+    test('many citations in one paragraph finish quickly', () => {
+      const { ms, violations } = timed('src/code.ts:3 '.repeat(8_000))
+      expect(ms).toBeLessThan(budgetMs)
+      expect(violations).toEqual([])
+    })
+
+    test('a long URL-looking run finishes quickly', () => {
+      const { ms } = timed('a'.repeat(50_000) + '://x '.repeat(10_000))
+      expect(ms).toBeLessThan(budgetMs)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
 // loadCompoundSchema — malformed schema.yaml (exercised via checkSolutionSchema,
 // since loadCompoundSchema itself is not exported)
 // ---------------------------------------------------------------------------
@@ -5022,6 +5669,17 @@ describe('integration: real repo', () => {
       'Agent temperature violations in repo',
     )
 
+    assertNoViolations(
+      result.solutionCitationViolations,
+      (v) => {
+        const cv = v as (typeof result.solutionCitationViolations)[number]
+        return `${cv.file}:${cv.line}  ${cv.citation}  ${cv.class}${
+          cv.suggestion ? `  (try ${cv.suggestion})` : ''
+        }`
+      },
+      'Solution citation violations in repo',
+    )
+
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
@@ -5060,7 +5718,101 @@ describe('integration: real repo', () => {
 // CLI smoke: the script exits 0 on a clean repo.
 // ---------------------------------------------------------------------------
 
+describe('checkContentIntegrity — solution citation wiring', () => {
+  function writeCitingDoc(root: string, body: string): void {
+    writeFile(
+      root,
+      'src/lib/cited.ts',
+      'export const citedValue = 1\nexport const other = 2\n',
+    )
+    writeFile(root, 'docs/solutions/note.md', body)
+  }
+
+  test('surfaces a stale citation on the result', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCitingDoc(root, 'The value is at src/lib/cited.ts:99.\n')
+      expect(checkContentIntegrity(root).solutionCitationViolations).toEqual([
+        expect.objectContaining({
+          file: 'docs/solutions/note.md',
+          line: 1,
+          citation: 'src/lib/cited.ts:99',
+          class: 'out-of-range',
+        }),
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports nothing when every citation holds', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCitingDoc(root, '`citedValue` is at src/lib/cited.ts:1.\n')
+      expect(checkContentIntegrity(root).solutionCitationViolations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('CLI', () => {
+  test('exits 1 and prints the citation when a solution doc cites a stale line', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/cited.ts', 'export const citedValue = 1\n')
+      writeFile(
+        root,
+        'docs/solutions/note.md',
+        '`citedValue` was at src/lib/cited.ts:99 and is at src/lib/cited.ts:1.\n',
+      )
+
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(result.exitCode).toBe(1)
+      const stderr = result.stderr.toString()
+      expect(stderr).toContain('Solution citation violations (1)')
+      expect(stderr).toContain('docs/solutions/note.md:1')
+      expect(stderr).toContain('src/lib/cited.ts:99')
+      expect(stderr).toContain('out-of-range')
+      expect(result.stdout.toString()).not.toContain('content-integrity: clean')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('prints the suggested definition line for a moved symbol', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'src/lib/cited.ts',
+        'export const first = 0\nexport const citedValue = 1\n',
+      )
+      writeFile(
+        root,
+        'docs/solutions/note.md',
+        '`citedValue` is at src/lib/cited.ts:1.\n',
+      )
+
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain('symbol-absent')
+      expect(result.stderr.toString()).toContain('src/lib/cited.ts:2')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('exits 0 against a clean fixture repo', () => {
     const root = makeFixtureRepo()
     try {
