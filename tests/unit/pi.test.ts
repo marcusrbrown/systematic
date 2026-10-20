@@ -285,6 +285,18 @@ describe('src/pi.ts systematic_skill tool registration', () => {
   })
 })
 
+// `messageType` exists only in newer Pi releases; assigning a variable (not a literal) skips the excess-property check, so one fixture types on both.
+function userEvent(systemPrompt: string): BeforeAgentStartEvent {
+  const event = {
+    type: 'before_agent_start' as const,
+    messageType: 'user' as const,
+    prompt: 'do the thing',
+    systemPrompt,
+    systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
+  }
+  return event
+}
+
 describe('src/pi.ts before_agent_start bootstrap injection', () => {
   test('registers exactly one before_agent_start handler', async () => {
     const api = createFakeExtensionApi()
@@ -379,12 +391,7 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     expect(handler).toBeDefined()
 
     const earlierContribution = 'Earlier extension prompt contribution.'
-    const event: BeforeAgentStartEvent = {
-      type: 'before_agent_start',
-      prompt: 'do the thing',
-      systemPrompt: earlierContribution,
-      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
-    }
+    const event = userEvent(earlierContribution)
 
     const result = await handler(event, fakeExtensionContext)
 
@@ -409,12 +416,7 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       BeforeAgentStartEvent,
       BeforeAgentStartEventResult
     >
-    const event: BeforeAgentStartEvent = {
-      type: 'before_agent_start',
-      prompt: 'do the thing',
-      systemPrompt: 'Earlier extension prompt contribution.',
-      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
-    }
+    const event = userEvent('Earlier extension prompt contribution.')
 
     const result = await handler(event, fakeExtensionContext)
 
@@ -439,12 +441,7 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       BeforeAgentStartEvent,
       BeforeAgentStartEventResult
     >
-    const event: BeforeAgentStartEvent = {
-      type: 'before_agent_start',
-      prompt: 'do the thing',
-      systemPrompt: 'Earlier extension prompt contribution.',
-      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
-    }
+    const event = userEvent('Earlier extension prompt contribution.')
 
     const first = (await handler(event, fakeExtensionContext))
       ?.systemPrompt as string
@@ -455,6 +452,40 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
 
     expect(second.split(profileMarker)).toHaveLength(2)
     expect(second).toBe(first)
+  })
+
+  test('a run started by a custom message, which carries no prompt, still gets the bootstrap', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    // Typed on `unknown`: a prompt-less custom event is not a `BeforeAgentStartEvent` in older Pi releases.
+    const handler = api.handlers.before_agent_start as ExtensionHandler<
+      unknown,
+      BeforeAgentStartEventResult
+    >
+    const earlierContribution = 'Earlier extension prompt contribution.'
+
+    const result = await handler(
+      {
+        type: 'before_agent_start',
+        messageType: 'custom',
+        message: {
+          role: 'custom',
+          customType: 'note',
+          content: 'a custom message',
+          display: true,
+          timestamp: 0,
+        },
+        systemPrompt: earlierContribution,
+        systemPromptOptions: {},
+      },
+      fakeExtensionContext,
+    )
+
+    const prompt = (result as BeforeAgentStartEventResult)
+      .systemPrompt as string
+    expect(prompt.indexOf(earlierContribution)).toBe(0)
+    expect(prompt.split('<SYSTEMATIC_WORKFLOWS>')).toHaveLength(2)
+    expect(prompt).toContain('# Pi Capability Profile')
   })
 })
 
