@@ -46,6 +46,8 @@ tags: [keyword1, keyword2, keyword3]
 
 [The actual fix that worked - provide specific details]
 
+[Cite code as a repo-relative `<file>:<line>` or `<file>:<start>-<end>`, with the backticked symbol in the same sentence. Link a tag or commit for code outside the repo or deleted code. The content-integrity gate checks these citations.]
+
 **Code changes** (if applicable):
 ```ruby
 # Before (broken):
