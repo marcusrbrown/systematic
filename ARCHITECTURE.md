@@ -22,6 +22,9 @@ these hooks:
   `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist).
 - **`tool.execute.after`** — restores the full `systematic_skill` output when OpenCode truncated it,
   unless the user set `tool_output` limits. Best effort; never blocks the host.
+- **`experimental.chat.messages.transform`** — clears the prune placeholder flag on completed
+  `systematic_skill` results in the request being assembled, so the model receives the stored body.
+  Request-only: nothing is written to storage. Best effort; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 

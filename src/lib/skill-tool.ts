@@ -10,6 +10,9 @@ import { isRecord } from './validation.js'
 
 export { discoverSkillFiles } from './skill-resolver.js'
 
+/** The registry key of the skill tool; the host reports it as the part's `tool`. */
+export const SKILL_TOOL_NAME = 'systematic_skill'
+
 export interface SkillOutputStore {
   put(sessionID: string, callID: string, output: string): void
   take(sessionID: string, callID: string): string | undefined
@@ -72,7 +75,7 @@ export function restoreSkillOutput(
   output: unknown,
   options: { userOutputLimitSet: boolean },
 ): void {
-  if (!isRecord(input) || input.tool !== 'systematic_skill') return
+  if (!isRecord(input) || input.tool !== SKILL_TOOL_NAME) return
   const { sessionID, callID } = input
   if (typeof sessionID !== 'string' || sessionID === '') return
   if (typeof callID !== 'string' || callID === '') return
@@ -94,6 +97,32 @@ export function restoreSkillOutput(
   output.output = full
   output.metadata.truncated = false
   delete output.metadata.outputPath
+}
+
+/**
+ * Clears the `compacted` flag of completed skill-tool results in a request the
+ * host is assembling, so the model receives the stored body and not the prune
+ * placeholder. Each part gets a fresh `state.time` without `compacted`, so a
+ * failure partway through leaves every part valid. The host rebuilds the
+ * request from storage each time, so nothing persists.
+ */
+export function restoreCompactedSkillResults(output: unknown): void {
+  if (!isRecord(output) || !Array.isArray(output.messages)) return
+  for (const message of output.messages) {
+    if (!isRecord(message) || !Array.isArray(message.parts)) continue
+    for (const part of message.parts) restoreCompactedPart(part)
+  }
+}
+
+function restoreCompactedPart(part: unknown): void {
+  if (!isRecord(part) || part.type !== 'tool') return
+  if (part.tool !== SKILL_TOOL_NAME) return
+  const { state } = part
+  if (!isRecord(state) || state.status !== 'completed') return
+  const { time } = state
+  if (!isRecord(time) || Array.isArray(time) || !time.compacted) return
+  const { compacted: _compacted, ...rest } = time
+  state.time = rest
 }
 
 export interface SkillToolOptions {

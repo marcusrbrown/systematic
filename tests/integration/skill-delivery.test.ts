@@ -6,7 +6,7 @@
 // than the host's `session.messages()` readback, so what is asserted is
 // exactly what the wire carries.
 //
-// Five scenarios (a-e), matching the "skill-delivery" verification plan:
+// Six scenarios (a-f), matching the "skill-delivery" verification plan:
 //   a) a small bundled skill (well under any truncation threshold) --
 //      its final body line reaches the provider verbatim.
 //   b) `ce:review` (skills/ce-review/SKILL.md, ~71KB, wrapped output >50KiB)
@@ -28,6 +28,12 @@
 //      (src/lib/config-handler.ts's `loadDiscoveredSkillAsCommand`) neither
 //      truncates nor drops the tail, and OpenCode's own command-argument
 //      substitution still reaches the provider.
+//   f) `compaction.prune` enabled -- OpenCode replaces older completed tool
+//      results with a placeholder, but the plugin's messages transform keeps a
+//      pruned `systematic_skill` result readable: the request that follows
+//      carries the skill's final body line while an older pruned `read`
+//      result carries the placeholder, and storage still marks the skill
+//      part compacted (the plugin never writes it back).
 //
 // Process hygiene: this file is invoked directly, never through the full
 // suite, per the pgrep/bun-test/comm sequence documented for real-host
@@ -82,12 +88,14 @@ function buildProviderConfig(
   pluginUrls: readonly string[],
   baseUrl: string,
   toolOutput?: { max_bytes?: number; max_lines?: number },
+  compaction?: { prune: boolean },
 ): string {
   return JSON.stringify({
     formatter: false,
     lsp: false,
     plugin: pluginUrls,
     ...(toolOutput ? { tool_output: toolOutput } : {}),
+    ...(compaction ? { compaction } : {}),
     provider: {
       [MOCK_PROVIDER_ID]: {
         name: 'Skill Delivery Provider',
@@ -219,6 +227,84 @@ function toolResultContent(
   )
 }
 
+/**
+ * Like `toolResultContent`, but reads only the requests at and after
+ * `fromIndex`, and takes the newest one that carries the result. The unscoped
+ * helper returns the first match, which for a result that was later pruned is
+ * the copy from before pruning.
+ */
+function latestToolResultContent(
+  requests: readonly Record<string, unknown>[],
+  toolCallId: string,
+  fromIndex: number,
+): string {
+  const scoped = requests.slice(fromIndex)
+  for (const body of [...scoped].reverse()) {
+    const messages = body.messages
+    if (!Array.isArray(messages)) continue
+    for (const message of messages) {
+      const content = matchingToolResultContent(message, toolCallId)
+      if (content !== undefined) return content
+    }
+  }
+  throw new Error(
+    `no request from index ${fromIndex} carried a tool-result message for tool_call_id ${toolCallId}`,
+  )
+}
+
+/** The stored tool part for `callID`, as the host's session readback reports it. */
+async function storedToolPart(
+  client: ReturnType<typeof createOpencodeClient>,
+  fixture: IsolatedFixture,
+  sessionID: string,
+  callID: string,
+): Promise<Record<string, unknown> | undefined> {
+  const result = await client.session.messages({
+    sessionID,
+    directory: fixture.projectDir,
+  })
+  if (result.data === undefined) {
+    throw new Error(`session messages failed: ${JSON.stringify(result.error)}`)
+  }
+  for (const message of result.data) {
+    for (const part of message.parts) {
+      if (isRecord(part) && part.type === 'tool' && part.callID === callID) {
+        return part
+      }
+    }
+  }
+  return undefined
+}
+
+/** The `state.time.compacted` stamp of a stored tool part, if prune set one. */
+function compactedStamp(part: Record<string, unknown> | undefined): unknown {
+  const state = part?.state
+  if (!isRecord(state) || !isRecord(state.time)) return undefined
+  return state.time.compacted
+}
+
+/** The stored `state.output` of a completed tool part. */
+function storedOutput(part: Record<string, unknown> | undefined): string {
+  const state = part?.state
+  if (!isRecord(state) || typeof state.output !== 'string') {
+    throw new Error('stored tool part carries no output string')
+  }
+  return state.output
+}
+
+/** Polls until `ready()` holds or `deadlineMs` passes; returns whether it held. */
+async function pollUntil(
+  ready: () => Promise<boolean>,
+  deadlineMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs
+  while (Date.now() < deadline) {
+    if (await ready()) return true
+    await Bun.sleep(500)
+  }
+  return ready()
+}
+
 /** The single `role: "user"` message content in the first captured request
  * -- the fully assembled slash-command text OpenCode sends on the one
  * chat turn a `session.command()` call with no scripted tool call produces. */
@@ -275,6 +361,29 @@ const CE_REVIEW_FINAL_LINE = '@./references/review-output-template.md'
  * `<input_document> #$ARGUMENTS </input_document>`. */
 const CE_WORK_NAME = 'ce:work'
 const CE_WORK_ARG_SENTINEL = 'SKILL_DELIVERY_ARG_SENTINEL_9F3B21'
+
+/** OpenCode's placeholder for a pruned tool result (session/message-v2.ts). */
+const PRUNED_PLACEHOLDER = '[Old tool result content cleared]'
+
+/**
+ * A `read` filler file. Each file is under the read tool's own 50 KB output
+ * cap, and the host estimates tokens from characters, so five of them sit
+ * above prune's 40k-token protect window while one older file plus the skill
+ * clear its 20k-token minimum.
+ */
+const FILLER_LINES = 420
+const FILLER_LINE_BYTES = 96
+
+function writeFillerFile(dir: string, name: string, marker: string): string {
+  const filePath = path.join(dir, name)
+  const body = Array.from(
+    { length: FILLER_LINES },
+    (_unused, i) =>
+      `${marker} line ${i} ${'.'.repeat(FILLER_LINE_BYTES - marker.length - 10)}`,
+  ).join('\n')
+  fs.writeFileSync(filePath, `${body}\n`)
+  return filePath
+}
 
 describe.skipIf(!isOpencodeAvailable())(
   'systematic_skill delivery — real OpenCode host, provider-visible content',
@@ -697,6 +806,170 @@ describe.skipIf(!isOpencodeAvailable())(
         }
       },
       TIMEOUT_MS * 3,
+    )
+
+    test(
+      'f) with compaction.prune on, a pruned systematic_skill result still reaches the provider while an older pruned read keeps the placeholder',
+      async () => {
+        const fixture: IsolatedFixture = createIsolatedFixture()
+        const packaged = extractPackagedPlugin(fixture)
+        const fillerA = writeFillerFile(
+          fixture.projectDir,
+          'filler-a.txt',
+          'PRUNE_FILLER_A',
+        )
+        const newerFillers = [1, 2, 3, 4, 5].map((n) =>
+          writeFillerFile(
+            fixture.projectDir,
+            `filler-${n}.txt`,
+            `PRUNE_FILLER_${n}`,
+          ),
+        )
+        const skillCallID = 'ce-review-prune-call'
+        const fillerACallID = 'prune-filler-a-call'
+        // Prompt 1 runs filler A (the older, negative-control result), then
+        // the skill, then newer fillers inside prune's protect window. Prompts
+        // 2 and 3 are short: prune skips everything newer than the
+        // second-newest user message and runs once per prompt after the loop,
+        // so only at the end of prompt 3 are prompt 1's parts eligible.
+        const model = startScriptedModel([
+          {
+            toolCalls: [
+              {
+                id: fillerACallID,
+                name: 'read',
+                arguments: { filePath: fillerA },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: skillCallID,
+                name: 'systematic_skill',
+                arguments: { name: CE_REVIEW_NAME },
+              },
+            ],
+          },
+          ...newerFillers.map((filePath, i) => ({
+            toolCalls: [
+              {
+                id: `prune-filler-${i + 1}-call`,
+                name: 'read',
+                arguments: { filePath },
+              },
+            ],
+          })),
+          { text: 'prompt 1 done' },
+          { text: 'prompt 2 done' },
+          { text: 'prompt 3 done' },
+          { text: 'prompt 4 done' },
+        ])
+        const host = await startOpencodeServer(
+          fixture,
+          buildProviderConfig([packaged.pluginUrl], model.url, undefined, {
+            prune: true,
+          }),
+          // The isolated fixture sets OPENCODE_DISABLE_PRUNE=1, which forces
+          // compaction.prune off after the config merge. This scenario needs
+          // prune on, so the flag is cleared for this host only.
+          { OPENCODE_DISABLE_PRUNE: '0' },
+        )
+        try {
+          const client = createOpencodeClient({
+            baseUrl: host.url,
+            directory: fixture.projectDir,
+          })
+          const sessionID = await createAllowAllSession(
+            client,
+            fixture,
+            'skill-delivery f',
+          )
+          const prompt = async (text: string): Promise<void> => {
+            await client.session.prompt({
+              sessionID,
+              directory: fixture.projectDir,
+              model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
+              parts: [{ type: 'text', text }],
+            })
+          }
+
+          await prompt('Read the files and load the requested skill.')
+          // Before anything is pruned: the truncation restore hit, so the
+          // stored skill output already carries the whole body.
+          const beforePrune = await storedToolPart(
+            client,
+            fixture,
+            sessionID,
+            skillCallID,
+          )
+          expect(storedOutput(beforePrune)).toContain(CE_REVIEW_FINAL_LINE)
+          expect(compactedStamp(beforePrune)).toBeUndefined()
+
+          await prompt('Short follow-up two.')
+          await prompt('Short follow-up three.')
+
+          const pruned = await pollUntil(async () => {
+            const skill = await storedToolPart(
+              client,
+              fixture,
+              sessionID,
+              skillCallID,
+            )
+            const filler = await storedToolPart(
+              client,
+              fixture,
+              sessionID,
+              fillerACallID,
+            )
+            return (
+              compactedStamp(skill) !== undefined &&
+              compactedStamp(filler) !== undefined
+            )
+          }, 60_000)
+          expect(pruned).toBe(true)
+
+          const requestsBeforePrompt4 = model.requests.length
+          await prompt('Short follow-up four.')
+
+          const skillContent = latestToolResultContent(
+            model.requests,
+            skillCallID,
+            requestsBeforePrompt4,
+          )
+          const fillerContent = latestToolResultContent(
+            model.requests,
+            fillerACallID,
+            requestsBeforePrompt4,
+          )
+          console.log(
+            `SKILL_DELIVERY_F ${JSON.stringify({
+              requestsDuringPrompt4:
+                model.requests.length - requestsBeforePrompt4,
+              skillBytes: Buffer.byteLength(skillContent, 'utf8'),
+              fillerBytes: Buffer.byteLength(fillerContent, 'utf8'),
+            })}`,
+          )
+          expect(skillContent).toContain(CE_REVIEW_FINAL_LINE)
+          expect(skillContent).not.toContain(PRUNED_PLACEHOLDER)
+          // Negative control: prune was active, and only the skill was spared.
+          expect(fillerContent).toContain(PRUNED_PLACEHOLDER)
+
+          // The plugin never writes the change back: storage still says pruned.
+          const afterPrompt4 = await storedToolPart(
+            client,
+            fixture,
+            sessionID,
+            skillCallID,
+          )
+          expect(compactedStamp(afterPrompt4)).toBeDefined()
+        } finally {
+          await host.stop()
+          model.stop()
+          destroyIsolatedFixture(fixture)
+        }
+      },
+      TIMEOUT_MS * 4,
     )
   },
 )

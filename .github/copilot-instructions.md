@@ -133,6 +133,7 @@ The plugin exposes these hooks. Changes to any of these are high-risk:
 - **`config`** — merges bundled skills/agents/commands into OpenCode config
 - **`tool`** — registers the `systematic_skill` tool
 - **`tool.execute.after`** — restores the full `systematic_skill` output when the host truncated it
+- **`experimental.chat.messages.transform`** — clears the prune placeholder flag on `systematic_skill` results in the request
 - **`experimental.chat.system.transform`** — injects bootstrap prompt into conversations
 
 Treat modifications to `src/index.ts` hook implementations as breaking-change candidates.

@@ -7,6 +7,7 @@ import { buildCatalogEntries } from '../../src/lib/skill-catalog.ts'
 import {
   createSkillOutputStore,
   createSkillTool,
+  restoreCompactedSkillResults,
   restoreSkillOutput,
 } from '../../src/lib/skill-tool.ts'
 
@@ -1036,5 +1037,188 @@ describe('restoreSkillOutput', () => {
     expect(output.output).toBe(12345)
     expect(output.metadata.truncated).toBe(true)
     expect(store.take('s', 'c')).toBeUndefined()
+  })
+})
+
+describe('restoreCompactedSkillResults', () => {
+  const COMPACTED_TIME = { start: 10, end: 20, compacted: 30 }
+
+  /** A tool part as the host hands it to the messages transform. */
+  function toolPart(
+    tool: string,
+    options: { status?: string; time?: unknown; output?: string } = {},
+  ) {
+    return {
+      type: 'tool',
+      tool,
+      callID: `${tool}-call`,
+      state: {
+        status: options.status ?? 'completed',
+        input: {},
+        output: options.output ?? `${tool} body`,
+        time: 'time' in options ? options.time : { ...COMPACTED_TIME },
+      },
+    }
+  }
+
+  function messagesOf(...parts: unknown[]) {
+    return { messages: [{ info: {}, parts }] }
+  }
+
+  test('clears the compacted flag of a completed systematic_skill part and keeps the rest of its time', () => {
+    const part = toolPart('systematic_skill', { output: 'full skill body' })
+
+    restoreCompactedSkillResults(messagesOf(part))
+
+    expect(part.state.time).toEqual({ start: 10, end: 20 })
+    expect(part.state.time).not.toHaveProperty('compacted')
+    expect(part.state.output).toBe('full skill body')
+    expect(part.state.status).toBe('completed')
+  })
+
+  test('assigns a fresh time object and leaves the old one as it was', () => {
+    const original = { ...COMPACTED_TIME }
+    const part = toolPart('systematic_skill', { time: original })
+
+    restoreCompactedSkillResults(messagesOf(part))
+
+    expect(part.state.time).not.toBe(original)
+    expect(original).toEqual(COMPACTED_TIME)
+  })
+
+  test('leaves a compacted result of any other tool alone', () => {
+    const read = toolPart('read')
+    const skill = toolPart('systematic_skill')
+
+    restoreCompactedSkillResults(messagesOf(read, skill))
+
+    expect(read.state.time).toEqual(COMPACTED_TIME)
+    expect(skill.state.time).not.toHaveProperty('compacted')
+  })
+
+  test('matches the exact tool name, not a prefix, suffix or the native skill tool', () => {
+    const lookalikes = [
+      toolPart('skill'),
+      toolPart('systematic_skill_extra'),
+      toolPart('my_systematic_skill'),
+      toolPart('Systematic_Skill'),
+    ]
+
+    restoreCompactedSkillResults(messagesOf(...lookalikes))
+
+    for (const part of lookalikes) {
+      expect(part.state.time).toEqual(COMPACTED_TIME)
+    }
+  })
+
+  test.each(['pending', 'running', 'error'])(
+    'leaves a %s systematic_skill part untouched',
+    (status) => {
+      const part = toolPart('systematic_skill', { status })
+
+      restoreCompactedSkillResults(messagesOf(part))
+
+      expect(part.state.time).toEqual(COMPACTED_TIME)
+    },
+  )
+
+  test('keeps the reference of state.time for a part that was never compacted', () => {
+    const time = { start: 1, end: 2 }
+    const part = toolPart('systematic_skill', { time })
+
+    restoreCompactedSkillResults(messagesOf(part))
+
+    expect(part.state.time).toBe(time)
+  })
+
+  test('applying it twice gives the same result as once', () => {
+    const once = messagesOf(toolPart('systematic_skill'), toolPart('read'))
+    const twice = messagesOf(toolPart('systematic_skill'), toolPart('read'))
+
+    restoreCompactedSkillResults(once)
+    restoreCompactedSkillResults(twice)
+    restoreCompactedSkillResults(twice)
+
+    expect(twice).toEqual(once)
+  })
+
+  test('keeps the messages array and each parts array as they were', () => {
+    const output = messagesOf(toolPart('systematic_skill'))
+    const messages = output.messages
+    const parts = output.messages[0]?.parts
+
+    restoreCompactedSkillResults(output)
+
+    expect(output.messages).toBe(messages)
+    expect(output.messages[0]?.parts).toBe(parts)
+  })
+
+  test('restores parts in every message of the request', () => {
+    const first = toolPart('systematic_skill')
+    const second = toolPart('systematic_skill')
+    const output = {
+      messages: [
+        { info: {}, parts: [first] },
+        { info: {}, parts: [{ type: 'text', text: 'hi' }, second] },
+      ],
+    }
+
+    restoreCompactedSkillResults(output)
+
+    expect(first.state.time).not.toHaveProperty('compacted')
+    expect(second.state.time).not.toHaveProperty('compacted')
+  })
+
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['a string', 'text'],
+    ['no messages', {}],
+    ['messages that is not an array', { messages: 'nope' }],
+    ['a message that is not an object', { messages: [null, 3] }],
+    ['a message without parts', { messages: [{ info: {} }] }],
+    ['parts that is not an array', { messages: [{ info: {}, parts: {} }] }],
+    ['parts that are not objects', { messages: [{ parts: [null, 'x', 4] }] }],
+    [
+      'a part without state',
+      { messages: [{ parts: [{ type: 'tool', tool: 'systematic_skill' }] }] },
+    ],
+    [
+      'a part whose state is not an object',
+      {
+        messages: [
+          { parts: [{ type: 'tool', tool: 'systematic_skill', state: 'x' }] },
+        ],
+      },
+    ],
+  ])('leaves %s as it was without throwing', (_label, input) => {
+    const before = structuredClone(input)
+
+    expect(() => restoreCompactedSkillResults(input)).not.toThrow()
+    expect(input).toEqual(before)
+  })
+
+  test.each([
+    ['missing', undefined],
+    ['a number', 7],
+    ['null', null],
+    ['an array', [1, 2]],
+  ])(
+    'leaves a completed systematic_skill part whose time is %s untouched',
+    (_label, time) => {
+      const part = toolPart('systematic_skill', { time })
+
+      expect(() => restoreCompactedSkillResults(messagesOf(part))).not.toThrow()
+      expect(part.state.time).toBe(time)
+    },
+  )
+
+  test('does not treat a falsy compacted value as compacted', () => {
+    const time = { start: 1, compacted: undefined }
+    const part = toolPart('systematic_skill', { time })
+
+    restoreCompactedSkillResults(messagesOf(part))
+
+    expect(part.state.time).toBe(time)
   })
 })
