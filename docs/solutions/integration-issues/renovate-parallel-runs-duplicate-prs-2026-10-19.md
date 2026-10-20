@@ -67,7 +67,7 @@ According to GitHub's [concurrency documentation](https://docs.github.com/en/act
 
 With every write run in the `...-write` group, one Renovate run executes at a time and the rest wait their turn. A run that starts after another has finished finds the branch and PR already there, so it creates nothing. No waiting run is replaced, so every run that a pull request triggered reports its own check. The cost is that a burst of events runs one full pass per event, one after another.
 
-Local actionlint 1.7.12 rejects the `queue` key with "unexpected key". GitHub accepts it: this repository's `docs.yaml` has used `queue: max` on a job-level group without failures.
+`queue` is documented for both `concurrency` and `jobs.<job_id>.concurrency` in GitHub's [workflow syntax reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency). `max` allows up to 100 waiting runs and cancels any beyond that. Combining it with `cancel-in-progress: true` is a validation error. actionlint 1.7.12 doesn't know the key yet and reports "unexpected key".
 
 Dry runs use `github.run_id`, so each keeps its own group and never waits on or replaces a write run.
 
