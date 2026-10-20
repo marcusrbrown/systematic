@@ -3,7 +3,7 @@
   "files": {
     "tests/integration/eval-runner.test.ts": 420304,
     "tests/integration/opencode.test.ts": 214879,
-    "tests/integration/skill-delivery.test.ts": 153275,
+    "tests/integration/skill-delivery.test.ts": 144029,
     "tests/integration/ce-review-return-validation.test.ts": 72046,
     "tests/integration/eval-artifact.test.ts": 29878,
     "tests/integration/skill-command-probe.test.ts": 25263,

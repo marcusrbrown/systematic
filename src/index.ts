@@ -13,6 +13,7 @@ import { createConfigHandler } from './lib/config-handler.js'
 import {
   createSkillOutputStore,
   createSkillTool,
+  restoreCompactedSkillResults,
   restoreSkillOutput,
 } from './lib/skill-tool.js'
 import { isRecord } from './lib/validation.js'
@@ -24,6 +25,7 @@ const REGISTERED_PLUGIN_HOOKS = [
   'config',
   'tool',
   'tool.execute.after',
+  'experimental.chat.messages.transform',
   'experimental.chat.system.transform',
 ] as const satisfies readonly (keyof Hooks)[]
 
@@ -97,6 +99,19 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
         })
       } catch {
         // Output restoration is best-effort and never blocks the host.
+      }
+    },
+
+    // Request-only: clears the prune placeholder flag on skill results so the
+    // model sees the stored body. Best effort; a throw would fail the turn.
+    'experimental.chat.messages.transform': async (
+      _input: unknown,
+      output: unknown,
+    ) => {
+      try {
+        restoreCompactedSkillResults(output)
+      } catch {
+        // Never blocks the host.
       }
     },
 

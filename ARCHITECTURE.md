@@ -22,6 +22,9 @@ these hooks:
   `substituteSkillArguments` in `src/lib/skill-resolver.ts`, or appended when none exist).
 - **`tool.execute.after`** — restores the full `systematic_skill` output when OpenCode truncated it,
   unless the user set `tool_output` limits. Best effort; never blocks the host.
+- **`experimental.chat.messages.transform`** — clears the prune placeholder flag on completed
+  `systematic_skill` results in the request being assembled, so the model receives the stored body.
+  Request-only: nothing is written to storage. Best effort; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 
@@ -220,7 +223,10 @@ additionally validates every `docs/solutions/**` frontmatter against
 schema file at runtime, so changing a vocabulary there takes effect without editing the gate. The
 required-field list is hardcoded in the gate, and schema constraints such as array maximums and
 optional-field patterns are not enforced — changing either still requires a matching validator
-change. Must pass before any release.
+change. `checkSolutionCitations` verifies every `path:line` citation in `docs/solutions/**`: the cited
+file exists as a regular file outside `dist/`, `node_modules/`, `.slim/`, `.context/` and `.worktrees/`, the
+line or range is inside it, the span is not only blank or comment lines, and a compound identifier
+named in the citing sentence is inside the span. Must pass before any release.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

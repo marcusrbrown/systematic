@@ -426,13 +426,21 @@ Documentation is successful when ALL of the following are true:
 **Good documentation has:**
 
 - ✅ Exact error messages (copy-paste from output)
-- ✅ Specific file:line references
+- ✅ Specific file:line references (see Citing code below)
 - ✅ Observable symptoms (what you saw, not interpretations)
 - ✅ Failed attempts documented (helps avoid wrong paths)
 - ✅ Technical explanation (not just "what" but "why")
 - ✅ Code examples (before/after if applicable)
 - ✅ Prevention guidance (how to catch early)
 - ✅ Cross-references (related issues)
+
+**Citing code:**
+
+- Write a repo-relative path with the line or range, as `<file>:<line>` or `<file>:<start>-<end>`. Never cite a bare file name.
+- Put the backticked symbol the citation points at in the same sentence, so a moved line is caught.
+- For code outside the repo, or code that has been deleted, link a tag or commit, not a path.
+- In examples, write placeholders such as `<file>:<line>`, not real citations.
+- The content-integrity gate checks the citations in `docs/solutions/` and fails on a missing file, a line outside the file, a span of only blanks or comments, or a named symbol that is not in the span.
 
 **Avoid:**
 

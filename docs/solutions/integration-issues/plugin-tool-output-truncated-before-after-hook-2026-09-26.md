@@ -1,6 +1,7 @@
 ---
 title: OpenCode truncates plugin tool output before any hook runs
 date: 2026-09-26
+last_updated: 2026-10-20
 category: integration-issues
 module: systematic-plugin
 problem_type: integration_issue
@@ -112,9 +113,20 @@ Slash-command templates don't go through this path: `SessionPrompt.command` turn
 - **Mutate host-owned objects in place.** Merge metadata keys; never replace the object.
 - **Re-check after every OpenCode pin bump.** The suite is listed in `scripts/host-contract-guard.ts`, so the required `host-contract` job catches marker or ordering changes.
 
+## Pruning
+
+OpenCode's opt-in `compaction.prune` setting is a separate stage from truncation. It marks older completed tool results with `state.time.compacted`, keeps `state.output`, and the request builder then sends a placeholder, `[Old tool result content cleared]`, for each marked result. Only the tool named `skill` is exempt, so a `systematic_skill` result loses its body once pruned.
+
+The prompt loop rebuilds its messages from storage on every iteration and runs `experimental.chat.messages.transform` just before converting them for the model. Clearing the flag in that hook therefore changes only the request being assembled. Storage still marks the result as pruned.
+
+- **Coverage:** the body survives pruning and the retained tail, but not full-session summarization.
+- **Cost:** prune still counts the body toward its protect window, which it skips for the native `skill` tool, and the full-session summarizer sees a 2,000-character slice of the body.
+- **Older hosts:** a host that predates the hook never calls it and keeps the placeholder.
+- **Timing:** prune runs once per prompt and skips everything newer than the second-newest user message, so only parts from two prompts back are eligible. `tests/integration/skill-delivery.test.ts` therefore drives four prompts and asserts on the fourth request. [Testing host prune from a plugin](../best-practices/testing-host-prune-from-a-plugin-2026-10-20.md) covers the fixture flag, request scoping and the in-run control.
+
 ## Related Issues
 
-- #1029 (fix), #1028 (opt-in `compaction.prune` can still clear an older `systematic_skill` result; only the tool named `skill` is protected)
+- #1029 (fix), #1028 (`compaction.prune` clearing older `systematic_skill` results, because only the tool named `skill` is protected; see Pruning)
 - [`workflow-guard-skipped-skills-over-32kb-2026-09-26.md`](workflow-guard-skipped-skills-over-32kb-2026-09-26.md), found while designing this fix
 - [`opencode-plugin-hook-silent-defect-swallow-2026-05-19.md`](opencode-plugin-hook-silent-defect-swallow-2026-05-19.md)
 - [`../workflow-issues/verify-installed-artifacts-not-just-build-gates-2026-07-18.md`](../workflow-issues/verify-installed-artifacts-not-just-build-gates-2026-07-18.md)

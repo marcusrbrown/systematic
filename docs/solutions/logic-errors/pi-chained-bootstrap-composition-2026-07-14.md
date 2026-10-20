@@ -117,15 +117,14 @@ A sentinel pattern identifies syntax, not authorship; foreign content can legiti
 The harness-portability increment (PR #653, v3.1.0) widened the same seam this
 doc established. `BootstrapDeps` now carries an optional `profileBlock`
 alongside `usageTemplate`; `getBootstrapContent` appends it inside the
-`<SYSTEMATIC_WORKFLOWS>` zone in fixed order: usage template → profile block →
-skill catalog (`src/lib/bootstrap.ts:108-239`).
+`<SYSTEMATIC_WORKFLOWS>` zone in fixed order: usage template → profile block (`src/lib/bootstrap.ts:198-236`).
 
 - Harness capability profiles are plain markdown under
   `skills/using-systematic/references/{opencode,pi}-profile.md`, read by
-  `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:114-131`).
+  `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:117-134`).
 - Per-harness population at the entry points: OpenCode passes
-  `readHarnessProfile(..., 'opencode')` (`src/index.ts:40-43`); Pi passes the
-  `'pi'` profile through `computeBootstrapContentSafe` (`src/pi.ts:63-70`).
+  `readHarnessProfile(..., 'opencode')` (`src/index.ts:65`); Pi passes the
+  `'pi'` profile through `computeBootstrapContentSafe` (`computeBootstrapContentSafe`, `src/pi.ts:77-86`).
 - The seam is nullable and fail-soft: any read failure emits one stderr
   diagnostic and returns `null`, so the bootstrap composes without the profile
   rather than crashing plugin load — the diagnostic requirement from this

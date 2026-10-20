@@ -42,7 +42,7 @@ subdirectory of core modules.
 
 **Key files:**
 - `src/index.ts` — plugin factory (`SystematicPlugin`), registers every OpenCode hook Systematic
-  provides (config, tool, the after hook, and the system transform)
+  provides (config, tool, the after hook, the messages transform, and the system transform)
 - `src/pi.ts` — Pi extension factory (`systematicPiExtension`), registers `before_agent_start` for
   bootstrap injection plus the `systematic_skill` and `systematic_delegate` tools.
 - `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,

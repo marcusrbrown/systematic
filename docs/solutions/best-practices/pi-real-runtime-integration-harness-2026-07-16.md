@@ -27,12 +27,12 @@ Unit-level adapter parity tests only prove the shared core and adapter envelope 
 `tests/integration/pi.test.ts` proves what fake-SDK tests miss:
 
 - real CLI boot (`node .../dist/cli.js --mode rpc`) with the **exact devDependency**; a missing CLI
-  is a hard failure, not a skip (`pi.test.ts:70-79`)
-- real packaged plugin loading from an **`npm pack` tarball**, not source (`pi.test.ts:234-298`)
+  is a hard failure, not a skip (the `PI_CLI` check, `tests/integration/pi.test.ts:72-81`)
+- real packaged plugin loading from an **`npm pack` tarball**, not source (`packTarballOnce` and `extractPackagedPluginAndConfigurePi`, `tests/integration/pi.test.ts:239-335`)
 - real manifest-driven wiring of `pi.extensions` / `pi.skills`
-- real RPC/JSONL plumbing between subprocess and test harness (`pi.test.ts:485-657`)
+- real RPC/JSONL plumbing between subprocess and test harness (`spawnPiRpc`, `tests/integration/pi.test.ts:549-695`)
 - real model-driven tool execution over SSE, so bootstrap and tool results are observed through the
-  same path the agent uses (`pi.test.ts:341-483`, `:692-930`)
+  same path the agent uses (`startMockModelServer`, `tests/integration/pi.test.ts:408-520`; the scripted tool-call test, `tests/integration/pi.test.ts:864-911`)
 
 That is the boundary where packaged-runtime regressions actually live.
 
@@ -42,7 +42,7 @@ That is the boundary where packaged-runtime regressions actually live.
 
 Mirror the OpenCode discipline: temp `HOME` + temp XDG roots + narrow env allowlist + agent/session
 dirs overridden. The Pi dir env names were verified against the installed source
-(`dist/config.js:397-398`, `ENV_AGENT_DIR` / `ENV_SESSION_DIR`).
+(`ENV_AGENT_DIR` / `ENV_SESSION_DIR` at lines 397–398 of [`dist/config.js` in Pi 0.80.6](https://unpkg.com/@earendil-works/pi-coding-agent@0.80.6/dist/config.js)).
 
 ```ts
 const ENV_ALLOWLIST = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', ...])
@@ -59,7 +59,7 @@ return {
 }
 ```
 
-Refs: `pi.test.ts:103-193`, `:676-704`; shared OpenCode pattern: `opencode.test.ts:142-212`.
+Refs: `createIsolatedFixture` and `buildChildEnv`, `tests/integration/pi.test.ts:128-230`; the child spawn, `tests/integration/pi.test.ts:553-565`; shared OpenCode pattern: `assertFixtureEnvironmentRoots`, `tests/integration/opencode.test.ts:213-227`.
 
 ### 2) Install packaged code offline
 
@@ -75,7 +75,7 @@ fs.writeFileSync(
 
 The key is an offline local source, not npm spec resolution. That exercises real manifest loading
 without network. Use Pi's `--approve` flag for non-interactive project trust. See
-`pi.test.ts:234-298`.
+`extractPackagedPluginAndConfigurePi`, `tests/integration/pi.test.ts:277-335`.
 
 ### 3) Put mock model config in the agent dir
 
@@ -89,7 +89,7 @@ fs.writeFileSync(path.join(fixture.agentDir, 'models.json'), JSON.stringify(...)
 
 A project-local `.pi/models.json` is silently ignored (verified empirically — it is not a Pi config
 scope). Scripted multi-turn responses, including `tool_calls` chunks, drive real tool execution.
-Refs: `pi.test.ts:300-338`, `:371-483`.
+Refs: `writeMockModelsConfig`, `tests/integration/pi.test.ts:337-375`; `startMockModelServer`, `tests/integration/pi.test.ts:408-520`.
 
 ### 4) Drive RPC by id, and keep tails for failures
 
@@ -100,19 +100,19 @@ const responsePromise = waitFor((msg) => msg.type === 'response' && msg.id === i
 stdin.write(`${JSON.stringify(withId)}\n`)
 ```
 
-Timeout errors include stdout/stderr tails for diagnosis. Refs: `pi.test.ts:486-657`.
+Timeout errors include stdout/stderr tails for diagnosis. Refs: `waitFor`, `tests/integration/pi.test.ts:639-663`.
 
 ### 5) Ground observability in what the runtime actually exposes
 
 Do not rely on a command that does not exist.
 
 - The system prompt is **not** exposed by RPC; assert the bootstrap marker in the mock model's
-  captured request payload instead (`pi.test.ts:792-820`).
+  captured request payload instead (`tests/integration/pi.test.ts:832-849`).
 - Extension load is proven by **absence of `extension_error`** plus behavioral markers, not by
-  slash commands (`pi.test.ts:692-735`).
-- Tool success is proven via `tool_execution_end` frames (`pi.test.ts:855-869`).
+  slash commands (`extensionErrors`, `tests/integration/pi.test.ts:756-761`).
+- Tool success is proven via `tool_execution_end` frames (`tests/integration/pi.test.ts:895-899`).
 - Pi registers tools, not commands, so `get_commands` is the wrong load signal
-  (`pi.test.ts:697-704`).
+  (explained in the comment at `tests/integration/pi.test.ts:735-742`).
 
 ### 6) Hard-fail exact devDependencies
 
@@ -126,7 +126,7 @@ if (!fs.existsSync(PI_CLI)) {
 
 Rule of thumb: **skip guards are for genuinely optional external deps**. If the repo declares an
 exact devDependency, a silent skip creates false-green CI.
-Ref: `pi.test.ts:70-79`.
+Ref: `PI_CLI`, `tests/integration/pi.test.ts:72-81`.
 
 ## Why This Matters
 

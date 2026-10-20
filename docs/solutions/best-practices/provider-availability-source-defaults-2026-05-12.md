@@ -76,7 +76,7 @@ async function getAvailableModels(client: Client): Promise<Set<string>> {
 **Pattern:**
 
 ```ts
-// src/lib/model-availability.ts:27-50
+// src/lib/model-availability.ts (excerpt)
 export type DiscoveryStatus = 'api' | 'cache' | 'unknown'
 
 export interface ModelAvailability {
@@ -84,6 +84,8 @@ export interface ModelAvailability {
   models: Set<string>
 }
 ```
+
+Source: [`DiscoveryStatus` and `ModelAvailability`, lines 49–61 of `model-availability.ts`](https://github.com/marcusrbrown/systematic/blob/3420c5cbd62860eaca31cc12d6bfba1ed58c08b7/src/lib/model-availability.ts#L49-L61), pinned to the last commit before the file was removed. The excerpt drops the doc comments.
 
 - `api`: live answer with at least one connected model; safe to pin source-default models against it
 - `cache`: degraded but informed; the cached `provider/model` keys are plausibly still authoritative
@@ -145,7 +147,7 @@ When integration tests inject partial client stubs, the production code should t
 **Pattern:** Production code states its actual contract through a defensive guard. Partial clients gracefully degrade to the documented fallback path.
 
 ```ts
-// src/lib/model-availability.ts:213-220
+// src/lib/model-availability.ts (excerpt)
 export async function getAvailableModels(
   client: OpencodeClientLike,
   options: AvailabilityOptions = {},
@@ -158,6 +160,8 @@ export async function getAvailableModels(
   // ... real API call ...
 }
 ```
+
+Source: [`getAvailableModels` and its defensive guard, lines 288–324 of `model-availability.ts`](https://github.com/marcusrbrown/systematic/blob/3420c5cbd62860eaca31cc12d6bfba1ed58c08b7/src/lib/model-availability.ts#L288-L324), pinned to the last commit before the file was removed. The guard follows a memoization fast path that the excerpt omits.
 
 Two regression tests assert the behavior: one with a cache present (expects `status: 'cache'`), one without (expects `status: 'unknown'`). Future plugin-input variations and third-party callers degrade safely instead of crashing.
 

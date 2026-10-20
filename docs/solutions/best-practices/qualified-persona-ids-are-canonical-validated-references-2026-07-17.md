@@ -47,7 +47,7 @@ Only (1) is a defect. (2) is correct, validated, and conventional.
   ``Dispatch `systematic:research:X` — pass ...``. The qualified ID stays.
 - **Never bulk-convert qualified persona IDs to bare names.** The qualified form
   `systematic:<category>:<name>` is validated by `checkReferenceIntegrity`
-  (`scripts/content-integrity.ts:568-617`), which builds a regex for that shape
+  (`scripts/content-integrity.ts:716-766`), which builds a regex for that shape
   and asserts each match resolves to a real `agents/<category>/<name>.md`. A bare
   name (`correctness-reviewer`) does not match that regex, so converting silently
   **removes validation coverage** — a later typo would no longer be caught.
@@ -58,7 +58,7 @@ Only (1) is a defect. (2) is correct, validated, and conventional.
 - **Do not add a gate banning qualified IDs in skill bodies.** It would directly
   conflict with `checkReferenceIntegrity`, which *requires* the qualified form to
   validate references. The migrated-set identifier gate
-  (`checkMigratedSkillIdentifiers`, `scripts/content-integrity.ts:1135-1179`) bans
+  (`checkMigratedSkillIdentifiers`, `scripts/content-integrity.ts:3399-3464`) bans
   harness-specific tool syntax (`task(`, `subagent_type`, `todowrite`, …) and
   correctly does **not** list qualified persona IDs.
 

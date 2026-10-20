@@ -255,13 +255,14 @@ describe('registered plugin surface', () => {
     ])
   })
 
-  test('the plugin registers exactly the config, tool, after and system transform hooks', async () => {
+  test('the plugin registers exactly the config, tool, after, messages transform and system transform hooks', async () => {
     const hooks = await loadSurface()
 
     // Written out because the plugin entry keeps its hook inventory private;
     // the content-integrity gate keeps that inventory and the docs in step.
     expect(Object.keys(hooks).sort()).toEqual([
       'config',
+      'experimental.chat.messages.transform',
       'experimental.chat.system.transform',
       'tool',
       'tool.execute.after',
@@ -1284,4 +1285,111 @@ describe('fixture git isolation', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+})
+
+describe('the messages transform', () => {
+  type MessagesTransform = (input: unknown, output: unknown) => Promise<void>
+
+  async function registerPlugin(
+    tempDir: string,
+  ): Promise<{ transform: MessagesTransform }> {
+    const pluginPath = path.join(SRC_DIR, 'index.ts')
+    const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+      default: (args: object) => Promise<Record<string, unknown>>
+    }
+    const hooks = await pluginModule.default({
+      client: { app: { log: async () => {} } },
+      directory: tempDir,
+    })
+    const transform = hooks['experimental.chat.messages.transform']
+    if (typeof transform !== 'function') {
+      throw new Error('the messages transform is not registered')
+    }
+    return { transform: transform as MessagesTransform }
+  }
+
+  function compactedPart(tool: string) {
+    return {
+      type: 'tool',
+      tool,
+      state: {
+        status: 'completed',
+        output: `${tool} body`,
+        time: { start: 1, end: 2, compacted: 3 } as Record<string, number>,
+      },
+    }
+  }
+
+  async function withPluginDir<T>(
+    run: (tempDir: string) => Promise<T>,
+  ): Promise<T> {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-messages-transform-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      return await run(tempDir)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  test('clears the compacted flag of a systematic_skill result and keeps other pruned results', async () => {
+    await withPluginDir(async (tempDir) => {
+      const { transform } = await registerPlugin(tempDir)
+      const skill = compactedPart('systematic_skill')
+      const read = compactedPart('read')
+
+      await transform({}, { messages: [{ info: {}, parts: [read, skill] }] })
+
+      expect(skill.state.time).toEqual({ start: 1, end: 2 })
+      expect(read.state.time).toEqual({ start: 1, end: 2, compacted: 3 })
+    })
+  })
+
+  test('two plugin instances run in sequence give the same result as one', async () => {
+    await withPluginDir(async (tempDir) => {
+      const first = await registerPlugin(tempDir)
+      const second = await registerPlugin(tempDir)
+      const request = () => ({
+        messages: [
+          {
+            parts: [compactedPart('systematic_skill'), compactedPart('read')],
+          },
+        ],
+      })
+      const single = request()
+      const double = request()
+
+      await first.transform({}, single)
+      await first.transform({}, double)
+      await second.transform({}, double)
+
+      expect(double).toEqual(single)
+    })
+  })
+
+  test('a throwing messages getter resolves without rejecting', async () => {
+    await withPluginDir(async (tempDir) => {
+      const { transform } = await registerPlugin(tempDir)
+      const output = {
+        get messages(): unknown {
+          throw new Error('host handed over a broken request')
+        },
+      }
+
+      await expect(transform({}, output)).resolves.toBeUndefined()
+    })
+  })
+
+  test.each([undefined, null, 'text', {}, { messages: 'nope' }])(
+    'resolves for malformed output %p',
+    async (output) => {
+      await withPluginDir(async (tempDir) => {
+        const { transform } = await registerPlugin(tempDir)
+
+        await expect(transform({}, output)).resolves.toBeUndefined()
+      })
+    },
+  )
 })
