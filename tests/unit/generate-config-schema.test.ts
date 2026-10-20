@@ -43,6 +43,67 @@ function parseSchema(content: string): Record<string, unknown> {
   return JSON.parse(content) as Record<string, unknown>
 }
 
+/** The environment a git command sees with every `GIT_*` variable removed. */
+function withoutGitEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] =>
+        !entry[0].startsWith('GIT_') && entry[1] !== undefined,
+    ),
+  )
+}
+
+// Fixture git runs with no inherited `GIT_*` variables and no global or system
+// config. The identity and signing options come from `-c`, so nothing is
+// written to any config file.
+function isolatedGit(cwd: string, args: readonly string[]): string {
+  const result = Bun.spawnSync(
+    [
+      'git',
+      '-c',
+      'user.name=test',
+      '-c',
+      'user.email=t@t.test',
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'tag.gpgsign=false',
+      ...args,
+    ],
+    {
+      cwd,
+      env: {
+        ...withoutGitEnv(),
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+      },
+    },
+  )
+  if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed`)
+  return result.stdout.toString().trim()
+}
+
+function initTaggedRepo(dir: string, tags: readonly string[]): void {
+  isolatedGit(dir, ['init', '-q'])
+  isolatedGit(dir, ['add', 'package.json'])
+  isolatedGit(dir, ['commit', '-q', '-m', 'init', '--no-verify'])
+  for (const tag of tags) isolatedGit(dir, ['tag', tag])
+}
+
+function addUnrelatedCommit(dir: string): void {
+  // An orphan commit is not an ancestor of any tag.
+  isolatedGit(dir, ['checkout', '-q', '--orphan', 'unrelated'])
+  isolatedGit(dir, ['reset', '-q'])
+  isolatedGit(dir, [
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'unrelated',
+    '--no-verify',
+  ])
+}
+
 afterAll(() => {
   for (const root of TEMP_ROOTS) {
     fs.rmSync(root, { recursive: true, force: true })
@@ -140,15 +201,7 @@ describe('resolveVersion', () => {
     // of CI checkout depth and of the real repo's tag state.
     const tmp = makeTempRepo()
     writePackageJson(tmp, '0.0.0-semantic-release') // would otherwise be rejected
-    const gitOpts = { cwd: tmp, stdio: 'ignore' } as const
-    execSync('git init -q', gitOpts)
-    execSync('git config user.email t@t.test', gitOpts)
-    execSync('git config user.name test', gitOpts)
-    execSync('git config commit.gpgsign false', gitOpts)
-    execSync('git config tag.gpgsign false', gitOpts)
-    execSync('git add package.json', gitOpts)
-    execSync('git commit -q -m init --no-verify', gitOpts)
-    execSync('git tag v1.2.3', gitOpts)
+    initTaggedRepo(tmp, ['v1.2.3'])
 
     const result = resolveVersionFn(null, tmp)
     expect(result).toBe('1.2.3')
@@ -161,24 +214,94 @@ describe('resolveVersion', () => {
     // `git tag -l --sort=-v:refname` to find the most-recent semver tag.
     const tmp = makeTempRepo()
     writePackageJson(tmp, '0.0.0-semantic-release') // would otherwise be rejected
-    const gitOpts = { cwd: tmp, stdio: 'ignore' } as const
-    execSync('git init -q', gitOpts)
-    execSync('git config user.email t@t.test', gitOpts)
-    execSync('git config user.name test', gitOpts)
-    execSync('git config commit.gpgsign false', gitOpts)
-    execSync('git config tag.gpgsign false', gitOpts)
-    execSync('git add package.json', gitOpts)
-    execSync('git commit -q -m init --no-verify', gitOpts)
-    execSync('git tag v2.5.0', gitOpts)
-    execSync('git tag v2.12.0', gitOpts)
-    // Create an orphan commit so it isn't an ancestor of either tag.
-    execSync('git checkout -q --orphan unrelated', gitOpts)
-    execSync('git reset -q', gitOpts)
-    execSync('git commit -q --allow-empty -m unrelated --no-verify', gitOpts)
+    initTaggedRepo(tmp, ['v2.5.0', 'v2.12.0'])
+    addUnrelatedCommit(tmp)
 
     // git describe will fail here; the fallback must pick v2.12.0 (newest).
     const result = resolveVersionFn(null, tmp)
     expect(result).toBe('2.12.0')
+  })
+})
+
+// Fixture git commands run with no inherited `GIT_*` variables, so a hook or
+// runner that sets GIT_DIR or GIT_WORK_TREE cannot point them at another
+// repository.
+describe('version fixture git isolation', () => {
+  const SETUP_DIR_ENV = 'SYSTEMATIC_TEST_SCHEMA_FIXTURE_DIR'
+  const SETUP_TEST = 'schema version fixture setup in a subprocess'
+
+  // Runs only in the subprocess the test below starts, with GIT_DIR and
+  // GIT_WORK_TREE already in its starting environment. Skipped in a normal run.
+  test.skipIf(process.env[SETUP_DIR_ENV] === undefined)(SETUP_TEST, () => {
+    const project = process.env[SETUP_DIR_ENV]
+    if (!project) throw new Error(`${SETUP_DIR_ENV} is not set`)
+    writePackageJson(project, '0.0.0-semantic-release')
+    initTaggedRepo(project, ['v2.5.0', 'v2.12.0'])
+    addUnrelatedCommit(project)
+  })
+
+  test('fixture setup leaves a repository named by GIT_DIR and GIT_WORK_TREE untouched', () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'schema-git-isolation-'),
+    )
+    try {
+      const sentinel = path.join(tempDir, 'sentinel')
+      const project = path.join(tempDir, 'project-under-test')
+      fs.mkdirSync(sentinel)
+      fs.mkdirSync(project)
+      isolatedGit(sentinel, ['init', '--quiet'])
+      isolatedGit(sentinel, [
+        '-c',
+        'user.name=Sentinel',
+        '-c',
+        'user.email=sentinel@example.invalid',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'sentinel',
+      ])
+      const gitDir = path.join(sentinel, '.git')
+      const snapshot = () => ({
+        head: fs.readFileSync(path.join(gitDir, 'HEAD')),
+        config: fs.readFileSync(path.join(gitDir, 'config')),
+        commit: isolatedGit(sentinel, ['rev-parse', 'HEAD']),
+        tags: isolatedGit(sentinel, ['tag', '-l']),
+      })
+      const before = snapshot()
+
+      // Bun hands a child only the environment the process started with, so
+      // the setup runs in a process that starts with the variables set.
+      const child = Bun.spawnSync(
+        [process.execPath, 'test', import.meta.path, '-t', SETUP_TEST],
+        {
+          cwd: path.resolve(__dirname, '../..'),
+          env: {
+            ...withoutGitEnv(),
+            GIT_DIR: gitDir,
+            GIT_WORK_TREE: sentinel,
+            [SETUP_DIR_ENV]: project,
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+
+      expect(child.exitCode).toBe(0)
+      const after = snapshot()
+      expect(after.head.equals(before.head)).toBe(true)
+      expect(after.config.equals(before.config)).toBe(true)
+      expect(after.commit).toBe(before.commit)
+      expect(after.tags).toBe(before.tags)
+      // The fixture repository itself was set up, with its own tags.
+      expect(fs.existsSync(path.join(project, '.git', 'HEAD'))).toBe(true)
+      expect(isolatedGit(project, ['tag', '-l']).split('\n').sort()).toEqual([
+        'v2.12.0',
+        'v2.5.0',
+      ])
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
 
