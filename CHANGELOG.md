@@ -4,6 +4,42 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.24.1](https://github.com/marcusrbrown/systematic/compare/v3.24.0...v3.24.1) (2026-10-20)
+
+### Bug Fixes
+
+* **deps:** update dependency @astrojs/starlight to ^0.42.0 ([#1168](https://github.com/marcusrbrown/systematic/issues/1168)) ([519d5bb](https://github.com/marcusrbrown/systematic/commit/519d5bb903590413d2e99e8f6231e8c276aae491))
+* **plugin:** keep loaded skill output visible after OpenCode prunes it ([#1178](https://github.com/marcusrbrown/systematic/issues/1178)) ([1a43e25](https://github.com/marcusrbrown/systematic/commit/1a43e25d2db7f008d717542db75f52a6faeded59))
+
+### Build System
+
+* **deps:** update Pi to v0.99.2 ([#1165](https://github.com/marcusrbrown/systematic/issues/1165)) ([030406b](https://github.com/marcusrbrown/systematic/commit/030406b73ab9f5c4f073df2cb1c4654807b10295))
+* **dev:** add the Markdown dependencies Starlight 0.42 needs ([#1183](https://github.com/marcusrbrown/systematic/issues/1183)) ([012da0a](https://github.com/marcusrbrown/systematic/commit/012da0a34f67c770a95d0d45898915f2fb046d0b))
+
+### Documentation
+
+* **solutions:** record how to test host prune from a plugin ([#1180](https://github.com/marcusrbrown/systematic/issues/1180)) ([dc79ac8](https://github.com/marcusrbrown/systematic/commit/dc79ac8bc8adab15dc4e341a9f2c3ea49dcc14be))
+* **solutions:** record the config-key removal pattern and two release-automation races ([#1172](https://github.com/marcusrbrown/systematic/issues/1172)) ([913c2c6](https://github.com/marcusrbrown/systematic/commit/913c2c69508d490a460220212d31895ed6903264))
+* **solutions:** record the queue: max fix for cancelled Renovate checks ([#1176](https://github.com/marcusrbrown/systematic/issues/1176)) ([041aeaf](https://github.com/marcusrbrown/systematic/commit/041aeaf9e74c70b048dfd86d6e9bcd170a6ec064))
+
+### Tests
+
+* **config-schema:** keep the version fixture's git commands out of an inherited repository ([#1174](https://github.com/marcusrbrown/systematic/issues/1174)) ([265948a](https://github.com/marcusrbrown/systematic/commit/265948a6ff8d36da80fed21c4240fe404b55a406))
+* isolate eval cleanup fixture Git initialization ([#1173](https://github.com/marcusrbrown/systematic/issues/1173)) ([41f57ec](https://github.com/marcusrbrown/systematic/commit/41f57ec73e011ba30fc9c71fbc9b37038cb680d6))
+* **pi:** derive the delegate tool's execute context from the tool definition ([#1182](https://github.com/marcusrbrown/systematic/issues/1182)) ([885cd5c](https://github.com/marcusrbrown/systematic/commit/885cd5cdebab7b6215e3bbec4f3f30c4d6415287))
+
+### Continuous Integration
+
+* **content-integrity:** verify path:line citations in solution docs ([#1181](https://github.com/marcusrbrown/systematic/issues/1181)) ([6d2d12a](https://github.com/marcusrbrown/systematic/commit/6d2d12a61f11e96f03a002c3c6466f014531f253))
+* **release:** replace the release PR's merge subject when re-arming auto-merge ([#1170](https://github.com/marcusrbrown/systematic/issues/1170)) ([db76640](https://github.com/marcusrbrown/systematic/commit/db76640dd9168fcde4b027a7c501e94fb50e89b8))
+
+### Miscellaneous Chores
+
+* **deps:** update bfra-me/.github to v4.41.0 ([#1171](https://github.com/marcusrbrown/systematic/issues/1171)) ([c1d9d07](https://github.com/marcusrbrown/systematic/commit/c1d9d07de6f6ec653357434727e98700ec8b0cee))
+* **deps:** update bfra-me/.github to v4.42.0 ([#1177](https://github.com/marcusrbrown/systematic/issues/1177)) ([066a8ef](https://github.com/marcusrbrown/systematic/commit/066a8ef01821d7902678eb3a462ddb4115828ef4))
+* **deps:** update fro-bot/agent to v0.124.1 ([#1175](https://github.com/marcusrbrown/systematic/issues/1175)) ([9c65c71](https://github.com/marcusrbrown/systematic/commit/9c65c719766d1515c9d13f529affc28557e97b17))
+* **dev:** update dependency typebox to v1.4.1 ([#1163](https://github.com/marcusrbrown/systematic/issues/1163)) ([c6488f7](https://github.com/marcusrbrown/systematic/commit/c6488f7c4de9317863c68e056313e4a0542f7c38))
+
 ## [3.24.0](https://github.com/marcusrbrown/systematic/compare/v3.23.0...v3.24.0) (2026-10-19)
 
 ### Features
