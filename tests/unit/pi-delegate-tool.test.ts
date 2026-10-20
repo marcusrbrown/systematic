@@ -1,8 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type {
-  ExtensionContext,
-  ToolDefinition,
-} from '@earendil-works/pi-coding-agent'
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentCatalogEntry } from '../../src/lib/agent-resolver.js'
 import type {
   OverlayConfig,
@@ -129,18 +126,31 @@ function createFakeSession(turnsToEmit: number): FakeSession {
   return session
 }
 
+/** The installed Pi's tool `execute` context: `ExtensionContext` before 0.99, `ExtensionToolContext` after. */
+type ToolExecuteContext = Parameters<
+  ToolDefinition<never, DelegateToolDetails>['execute']
+>[4]
+
+// The delegate never runs a nested tool.
+function unavailableExecuteTool(): never {
+  throw new Error('executeTool is not available in this fixture')
+}
+
+// Only the fields the delegate reads, so the fixture is cast.
 function fakeCtx(
   model: unknown = { provider: 'p', id: 'm' },
   hasModel = true,
   modelRegistry: { find: (provider: string, id: string) => unknown } = {
     find: () => undefined,
   },
-): ExtensionContext {
+): ToolExecuteContext {
   return {
     cwd: '/fake/cwd',
     model: hasModel ? model : undefined,
     modelRegistry,
-  } as unknown as ExtensionContext
+    tools: [],
+    executeTool: unavailableExecuteTool,
+  } as unknown as ToolExecuteContext
 }
 
 /** Fake `ctx.modelRegistry` that resolves exactly the given `provider/id` strings to distinct sentinel model objects, for asserting the delegate passed the resolved (not the inherited) model. */
@@ -248,7 +258,7 @@ async function execute(
   tool: ToolDefinition<never, DelegateToolDetails>,
   params: { agent: string; task: string },
   signal: AbortSignal | undefined,
-  ctx: ExtensionContext,
+  ctx: ToolExecuteContext,
 ) {
   return tool.execute('call-1', params as never, signal, undefined, ctx)
 }
