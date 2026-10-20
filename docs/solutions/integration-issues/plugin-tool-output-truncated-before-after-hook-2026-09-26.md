@@ -122,7 +122,7 @@ The prompt loop rebuilds its messages from storage on every iteration and runs `
 - **Coverage:** the body survives pruning and the retained tail, but not full-session summarization.
 - **Cost:** prune still counts the body toward its protect window, which it skips for the native `skill` tool, and the full-session summarizer sees a 2,000-character slice of the body.
 - **Older hosts:** a host that predates the hook never calls it and keeps the placeholder.
-- **Testing:** the test host sets `OPENCODE_DISABLE_PRUNE=1`, which forces prune off after config merging, so a prune test must clear it for its own host. Prune also runs once per prompt and skips everything newer than the second-newest user message, so only parts from two prompts back are eligible. `tests/integration/skill-delivery.test.ts` therefore drives four prompts and asserts on the fourth request.
+- **Timing:** prune runs once per prompt and skips everything newer than the second-newest user message, so only parts from two prompts back are eligible. `tests/integration/skill-delivery.test.ts` therefore drives four prompts and asserts on the fourth request. [Testing host prune from a plugin](../best-practices/testing-host-prune-from-a-plugin-2026-10-20.md) covers the fixture flag, request scoping and the in-run control.
 
 ## Related Issues
 
