@@ -1487,6 +1487,59 @@ describe('local OpenCode eval runner', () => {
     }
   })
 
+  test('cleanup checkout initialization ignores caller Git routing', () => {
+    const callerRoot = runParent()
+    const cleanEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    )
+    const env = {
+      ...cleanEnv,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    }
+    try {
+      const init = Bun.spawnSync(['git', 'init', '-q'], {
+        cwd: callerRoot,
+        env,
+      })
+      expect(init.exitCode).toBe(0)
+      const callerGitDir = path.join(callerRoot, '.git')
+      const configBefore = fs.readFileSync(path.join(callerGitDir, 'config'))
+      const headBefore = fs.readFileSync(path.join(callerGitDir, 'HEAD'))
+      const child = Bun.spawnSync(
+        [
+          process.execPath,
+          'test',
+          import.meta.filename,
+          '--test-name-pattern',
+          '^.*cleanup precedence keeps privacy cleanup failure when checkout readback also changes$',
+        ],
+        {
+          cwd: ROOT_DIR,
+          env: {
+            ...env,
+            GIT_DIR: callerGitDir,
+            GIT_WORK_TREE: callerRoot,
+            GIT_INDEX_FILE: path.join(callerGitDir, 'caller-index'),
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      expect(fs.readFileSync(path.join(callerGitDir, 'config'))).toEqual(
+        configBefore,
+      )
+      expect(fs.readFileSync(path.join(callerGitDir, 'HEAD'))).toEqual(
+        headBefore,
+      )
+      expect(fs.existsSync(path.join(callerGitDir, 'caller-index'))).toBe(false)
+      expect(child.exitCode, child.stderr.toString()).toBe(0)
+      expect(child.stderr.toString()).toContain('1 pass')
+    } finally {
+      fs.rmSync(callerRoot, { recursive: true, force: true })
+    }
+  })
+
   test('cleanup precedence keeps privacy cleanup failure when checkout readback also changes', async () => {
     const parentDir = runParent()
     const checkoutRoot = path.join(parentDir, 'checkout')
@@ -1507,10 +1560,17 @@ describe('local OpenCode eval runner', () => {
       ),
       manifestPath,
     )
-    const init = Bun.spawnSync(['git', 'init', '-q'], { cwd: checkoutRoot })
-    expect(init.exitCode).toBe(0)
-
     try {
+      const init = Bun.spawnSync(['git', 'init', '-q'], {
+        cwd: checkoutRoot,
+        env: {
+          PATH: process.env.PATH ?? '',
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+        },
+      })
+      expect(init.exitCode).toBe(0)
+      expect(fs.existsSync(path.join(checkoutRoot, '.git'))).toBe(true)
       const result = normalizeResult(
         await runSourceEval({
           caseId: 'bootstrap-loading',
