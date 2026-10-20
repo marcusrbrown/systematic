@@ -1071,7 +1071,8 @@ describe('probe: R2 catches a planted violation, in every historical shape, at e
     }
 
     expect(totalMisses).toBe(0)
-  })
+    // The full sweep takes 2-5 s on CI runners, too close to bun's 5 s default.
+  }, 30_000)
 })
 
 describe('probe classifier: a multi-line template literal is not a code-injection point for every shape', () => {
