@@ -4856,6 +4856,104 @@ describe('checkSolutionCitations', () => {
     })
   })
 
+  describe('Windows and UNC paths', () => {
+    test.each([
+      ['a drive-qualified path', 'See C:\\repo\\src\\code.ts:1 here.'],
+      ['a UNC path', 'See \\\\server\\share\\code.ts:1 here.'],
+      ['a backslash-relative path', 'See src\\code.ts:1 here.'],
+    ])('%s is not reported', (_label, doc) => {
+      expect(check(doc)).toEqual([])
+    })
+
+    test('a repo citation on the same line as a drive path is still checked', () => {
+      const violations = check(
+        'The log said C:\\repo\\src\\code.ts:1 but the repo has src/gone.ts:3.',
+      )
+      expect(violations).toMatchObject([
+        { citation: 'src/gone.ts:3', class: 'missing-file' },
+      ])
+    })
+
+    test('a bare repo citation is still checked', () => {
+      expect(classes(check('See src/gone.ts:3.'))).toEqual(['missing-file'])
+    })
+  })
+
+  describe('identifier boundaries', () => {
+    const SOURCE = `${[
+      'export const alphaBeta = 1',
+      'export const alphaBetaAsync = 2',
+      'const dollar$valueOne = 3',
+      'const dollar$valueOneMore = 4',
+      'const useIt = alphaBeta(1)',
+    ].join('\n')}\n`
+
+    test('a span holding only a longer identifier does not satisfy the name', () => {
+      const [violation, ...rest] = check(
+        '`alphaBeta` is defined at `src/code.ts:2`.',
+        { 'src/code.ts': SOURCE },
+      )
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({
+        class: 'symbol-absent',
+        suggestion: 'src/code.ts:1',
+      })
+    })
+
+    test('a span that holds the name followed by a call passes', () => {
+      expect(
+        check('`alphaBeta` is called at `src/code.ts:5`.', {
+          'src/code.ts': SOURCE,
+        }),
+      ).toEqual([])
+    })
+
+    test('a name that occurs only as part of longer identifiers is not considered', () => {
+      expect(
+        check('`alphaBet` is cited at `src/code.ts:3`.', {
+          'src/code.ts': SOURCE,
+        }),
+      ).toEqual([])
+    })
+
+    test('a dollar-bearing identifier is matched whole and found by the suggestion', () => {
+      const [violation, ...rest] = check(
+        '`dollar$valueOne` is defined at `src/code.ts:4`.',
+        { 'src/code.ts': SOURCE },
+      )
+      expect(rest).toEqual([])
+      expect(violation).toMatchObject({
+        class: 'symbol-absent',
+        suggestion: 'src/code.ts:3',
+      })
+    })
+
+    test('a dollar-bearing identifier passes in a span that holds it', () => {
+      expect(
+        check('`dollar$valueOne` is defined at `src/code.ts:3`.', {
+          'src/code.ts': SOURCE,
+        }),
+      ).toEqual([])
+    })
+
+    test('a dotted chain is matched whole', () => {
+      const dotted =
+        'const a = settings.strictMode\nconst b = settings.strictModeOff\n'
+      expect(
+        check('`settings.strictMode` is read at `src/code.ts:1`.', {
+          'src/code.ts': dotted,
+        }),
+      ).toEqual([])
+      expect(
+        classes(
+          check('`settings.strictMode` is read at `src/code.ts:2`.', {
+            'src/code.ts': dotted,
+          }),
+        ),
+      ).toEqual(['symbol-absent'])
+    })
+  })
+
   describe('worst-case input', () => {
     const budgetMs = 1000
 

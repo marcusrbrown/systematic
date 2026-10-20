@@ -1945,6 +1945,8 @@ function isLetterCode(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
 }
 
+const BACKSLASH_CODE = 92
+
 function isWordCode(code: number): boolean {
   return isDigitCode(code) || isLetterCode(code) || code === 95
 }
@@ -2061,6 +2063,9 @@ function readCitationAt(masked: string, colon: number): CitationMatch | null {
   if (!isDigitCode(masked.charCodeAt(colon + 1))) return null
   let start = colon
   while (start > 0 && isPathCode(masked.charCodeAt(start - 1))) start--
+  // A backslash before the path means a Windows drive or UNC path (or a
+  // backslash-relative one): not a repo-relative citation, so not checked.
+  if (start > 0 && masked.charCodeAt(start - 1) === BACKSLASH_CODE) return null
   const citedPath = normalizeCitedPath(masked.slice(start, colon))
   if (citedPath === null) return null
   const parsed = parseCitationSpans(masked, colon + 1)
@@ -2268,10 +2273,35 @@ function spanText(file: CitedFile, span: CitationSpan): string {
   return file.lines.slice(span.start - 1, span.end).join('\n')
 }
 
+/** A character an identifier is made of: a word character or `$`. */
+function isIdentifierCode(code: number): boolean {
+  return isWordCode(code) || code === 36
+}
+
+/**
+ * Whether `identifier` occurs in `text` as a whole name: no identifier
+ * character directly before or after the match. A dotted chain is matched as
+ * one name. `alphaBeta` is not found in `alphaBetaAsync` or `myalphaBeta`.
+ */
+function containsIdentifier(text: string, identifier: string): boolean {
+  let at = text.indexOf(identifier)
+  while (at !== -1) {
+    const end = at + identifier.length
+    if (
+      !isIdentifierCode(text.charCodeAt(at - 1)) &&
+      !isIdentifierCode(text.charCodeAt(end))
+    ) {
+      return true
+    }
+    at = text.indexOf(identifier, at + 1)
+  }
+  return false
+}
+
 function occursInFile(file: CitedFile, identifier: string): boolean {
   let occurs = file.occurs.get(identifier)
   if (occurs === undefined) {
-    occurs = file.content.includes(identifier)
+    occurs = containsIdentifier(file.content, identifier)
     file.occurs.set(identifier, occurs)
   }
   return occurs
@@ -2288,10 +2318,7 @@ function findDefinitionLine(
   rel: string,
   identifier: string,
 ): string | undefined {
-  const name = (identifier.split('.').at(-1) ?? identifier).replace(
-    /\$/g,
-    '\\$',
-  )
+  const name = escapeRegex(identifier.split('.').at(-1) ?? identifier)
   const key = new RegExp(`^\\s*["']?${name}["']?\\s*:`)
   const definition = CITATION_DEFINITION_EXTENSIONS.has(file.extension)
     ? new RegExp(`\\b(?:${CITATION_DEFINITION_KEYWORDS})\\s+${name}(?![\\w$])`)
@@ -2327,7 +2354,7 @@ function checkSymbolRule(
   if (considered.length === 0) return null
   const found = citation.spans.some((span) => {
     const text = spanText(file, span)
-    return considered.some((identifier) => text.includes(identifier))
+    return considered.some((identifier) => containsIdentifier(text, identifier))
   })
   if (found) return null
   const suggestion = suggestDefinition(file, citation.path, considered)
