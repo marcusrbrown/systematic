@@ -157,8 +157,10 @@ regular file.
 
 ### Make mutations transactional and recheck before unlink
 
-Writes and deletes run through one rollback-protected batch. If any write or delete fails,
-previously watched files are restored and rollback failures are reported explicitly.
+Writes and deletes run through one rollback-protected batch. If any write or delete fails, the
+files its completed steps changed are restored and rollback failures are reported explicitly. The
+failing step's file and the files of steps that never ran are left as they are on disk, so a file
+the user saved after the snapshot is not overwritten with older content.
 
 Deletion rechecks the manifest hash inside the unlink closure, immediately before mutation:
 
@@ -203,7 +205,8 @@ the generator's internal representation.
 - Classify every new overlay field by trust level before adding it to merge logic.
 - Read the ownership manifest inside the exclusive mutation lock.
 - Validate lexical and canonical containment before mutation.
-- Snapshot all watched paths before the first write or delete.
+- Snapshot every step's path before the first write or delete, and restore only the paths of steps
+  that completed.
 - Recheck content hashes in the unlink operation, not only during planning.
 - Keep absent-root cleanup idempotent without weakening checks for existing symlinked roots.
 - Test malformed manifests, hostile filenames, lock contention, rollback, remove-only plans, and

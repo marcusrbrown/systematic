@@ -561,10 +561,11 @@ function snapshotFiles(filePaths: string[]): SnapshotResult {
   return { ok: true, backup }
 }
 
-/** Restore each path to its pre-operation state. Returns paths that failed to restore. */
-function restoreFromBackup(backup: Backup): string[] {
+/** Restore the given paths to their pre-operation state. Returns paths that failed to restore. */
+function restoreFromBackup(backup: Backup, paths: Iterable<string>): string[] {
   const failed: string[] = []
-  for (const [p, content] of backup) {
+  for (const p of paths) {
+    const content = backup.get(p)
     try {
       if (content === undefined) {
         if (fs.existsSync(p)) fs.unlinkSync(p)
@@ -591,31 +592,46 @@ export interface TxResult {
 }
 
 /**
- * Run a sequence of filesystem operations under snapshot/rollback protection.
+ * One filesystem operation and the single path it mutates. Pairing them keeps
+ * the snapshot and the operations from drifting apart.
  *
- * 1. Snapshot `pathsToWatch` (current content or absent marker).
- * 2. Execute each `op` in order. On the first throw, stop.
- * 3. On any failure: restore all watched paths to their snapshotted state.
- *    Returns `{ ok: false, error, rollbackFailed }` — `rollbackFailed` lists
- *    paths whose restoration itself failed (partial rollback, reported honestly).
+ * An operation must leave its path unchanged when it throws: the atomic
+ * writers write a temporary file and rename it, and the hash-gated deletes
+ * check before they unlink. `runWithRollback` relies on that.
+ */
+export interface TxStep {
+  path: string
+  run: () => void
+}
+
+/**
+ * Run a sequence of filesystem steps under snapshot/rollback protection.
+ *
+ * 1. Snapshot each step's path (current content or absent marker).
+ * 2. Execute each step in order. On the first throw, stop.
+ * 3. On any failure: restore only the paths of steps that completed. The
+ *    failing step and every step that never ran are left exactly as they are
+ *    on disk, so a file the user saved after the snapshot is not overwritten
+ *    with older content. Returns `{ ok: false, error, rollbackFailed }` —
+ *    `rollbackFailed` lists paths whose restoration itself failed (partial
+ *    rollback, reported honestly).
  * 4. On full success: returns `{ ok: true, rollbackFailed: [] }`.
  *
  * Exported for direct testing; also used by all production commit/delete paths.
  */
-export function runWithRollback(
-  pathsToWatch: string[],
-  ops: Array<() => void>,
-): TxResult {
-  const snapshot = snapshotFiles(pathsToWatch)
+export function runWithRollback(steps: TxStep[]): TxResult {
+  const snapshot = snapshotFiles(steps.map((step) => step.path))
   if (!snapshot.ok) {
     return { ok: false, error: snapshot.error, rollbackFailed: [] }
   }
   const backup = snapshot.backup
-  for (const op of ops) {
+  const completed: string[] = []
+  for (const step of steps) {
     try {
-      op()
+      step.run()
+      completed.push(step.path)
     } catch (err) {
-      const rollbackFailed = restoreFromBackup(backup)
+      const rollbackFailed = restoreFromBackup(backup, completed)
       const rb = rollbackMessage(rollbackFailed)
       return {
         ok: false,
@@ -1351,22 +1367,20 @@ export function exportPersonas(
       ),
     })
 
-    const tx = runWithRollback(
-      [
-        ...toWrite.map((x) => x.safePath),
-        ...staleOwned.map((x) => x.path),
-        path.join(absRoot, MANIFEST_FILENAME),
-      ],
-      [
-        ...toWrite.map(
-          ({ entry, safePath }) =>
-            () =>
-              atomicWriteString(safePath, entry.content ?? ''),
-        ),
-        ...staleOwned.map((target) => () => unlinkStaleOwned(target)),
-        () => writeManifest(absRoot, newManifest()),
-      ],
-    )
+    const tx = runWithRollback([
+      ...toWrite.map(({ entry, safePath }) => ({
+        path: safePath,
+        run: () => atomicWriteString(safePath, entry.content ?? ''),
+      })),
+      ...staleOwned.map((target) => ({
+        path: target.path,
+        run: () => unlinkStaleOwned(target),
+      })),
+      {
+        path: path.join(absRoot, MANIFEST_FILENAME),
+        run: () => writeManifest(absRoot, newManifest()),
+      },
+    ])
 
     if (!tx.ok)
       return {
@@ -1575,22 +1589,24 @@ export function refresh(
       ),
     })
 
-    const tx = runWithRollback(
-      [
-        ...toUpdate.map((x) => x.safePath),
-        ...stale.remove.map((x) => x.path),
-        path.join(absRoot, MANIFEST_FILENAME),
-      ],
-      [
-        ...toUpdate.map(
-          ({ entry, safePath }) =>
-            () =>
-              atomicWriteString(safePath, entry.content ?? ''),
-        ),
-        ...stale.remove.map((target) => () => unlinkStaleOwned(target)),
-        ...(needsManifest ? [() => writeManifest(absRoot, newManifest())] : []),
-      ],
-    )
+    const tx = runWithRollback([
+      ...toUpdate.map(({ entry, safePath }) => ({
+        path: safePath,
+        run: () => atomicWriteString(safePath, entry.content ?? ''),
+      })),
+      ...stale.remove.map((target) => ({
+        path: target.path,
+        run: () => unlinkStaleOwned(target),
+      })),
+      ...(needsManifest
+        ? [
+            {
+              path: path.join(absRoot, MANIFEST_FILENAME),
+              run: () => writeManifest(absRoot, newManifest()),
+            },
+          ]
+        : []),
+    ])
 
     if (!tx.ok)
       return makeRefreshError(tx.error ?? 'refresh failed', skippedUnowned)
@@ -1698,25 +1714,27 @@ export function cleanup(
     const manifest = manifestResult.manifest
 
     const { targets, manifestPath } = collectCleanupPaths(absRoot, manifest)
-    const pathsToWatch = [
-      ...targets.map((t) => t.path),
-      ...(manifestPath ? [manifestPath] : []),
-    ]
-    const tx = runWithRollback(pathsToWatch, [
-      ...targets.map(({ path: p, filename, hash }) => () => {
-        if (fs.existsSync(p)) {
-          // Recheck immediately before unlink: closes the TOCTOU window
-          // between collection (collectCleanupPaths, above) and this
-          // delete — a writer could have replaced the file's content in
-          // between.
-          assertHashMatchesOrThrow(p, hash, filename, 'delete')
-          fs.unlinkSync(p)
-        }
-      }),
+    const tx = runWithRollback([
+      ...targets.map(({ path: p, filename, hash }) => ({
+        path: p,
+        run: () => {
+          if (fs.existsSync(p)) {
+            // Recheck immediately before unlink: closes the TOCTOU window
+            // between collection (collectCleanupPaths, above) and this
+            // delete — a writer could have replaced the file's content in
+            // between.
+            assertHashMatchesOrThrow(p, hash, filename, 'delete')
+            fs.unlinkSync(p)
+          }
+        },
+      })),
       ...(manifestPath
         ? [
-            () => {
-              if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath)
+            {
+              path: manifestPath,
+              run: () => {
+                if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath)
+              },
             },
           ]
         : []),

@@ -1362,22 +1362,30 @@ describe('runWithRollback: direct transaction proof', () => {
     // File that does not exist yet (should be created then rolled back to absent)
     const newPath = path.join(tmp, 'new.md')
 
-    // Snapshot covers all paths that will be touched
-    const result = runWithRollback(
-      [existingPath, stalePath, newPath], // paths to snapshot
-      [
-        // Op 1: overwrite existing file (succeeds, mutates existingPath)
-        () => fs.writeFileSync(existingPath, 'overwritten content', 'utf-8'),
-        // Op 2: delete stale file (succeeds, removes stalePath)
-        () => fs.unlinkSync(stalePath),
-        // Op 3: create new file (succeeds, creates newPath)
-        () => fs.writeFileSync(newPath, 'new file content', 'utf-8'),
-        // Op 4: deterministic failure after prior mutations
-        () => {
+    // Every step names the path it mutates; the snapshot is taken from them
+    const failingPath = path.join(tmp, 'failing.md')
+    const result = runWithRollback([
+      // Op 1: overwrite existing file (succeeds, mutates existingPath)
+      {
+        path: existingPath,
+        run: () =>
+          fs.writeFileSync(existingPath, 'overwritten content', 'utf-8'),
+      },
+      // Op 2: delete stale file (succeeds, removes stalePath)
+      { path: stalePath, run: () => fs.unlinkSync(stalePath) },
+      // Op 3: create new file (succeeds, creates newPath)
+      {
+        path: newPath,
+        run: () => fs.writeFileSync(newPath, 'new file content', 'utf-8'),
+      },
+      // Op 4: deterministic failure after prior mutations
+      {
+        path: failingPath,
+        run: () => {
           throw new Error('injected failure after mutations')
         },
-      ],
-    )
+      },
+    ])
 
     // Transaction must report failure
     expect(result.ok).toBe(false)
@@ -1397,15 +1405,80 @@ describe('runWithRollback: direct transaction proof', () => {
     expect(fs.readdirSync(tmp).some((f) => f.includes('.tmp-'))).toBe(false)
   })
 
+  test('a failing op leaves its own path as the user saved it, while completed ops are undone and the manifest is untouched', () => {
+    const tmp = mkTmp('tx-concurrent-save-')
+    const aPath = path.join(tmp, 'a.md')
+    const bPath = path.join(tmp, 'b.md')
+    const manifestPath = path.join(tmp, MANIFEST_FILENAME)
+    fs.writeFileSync(aPath, 'a original', 'utf-8')
+    fs.writeFileSync(bPath, 'b exported', 'utf-8')
+    fs.writeFileSync(manifestPath, 'manifest original', 'utf-8')
+
+    const result = runWithRollback([
+      // Completes, so rollback must undo it.
+      {
+        path: aPath,
+        run: () => fs.writeFileSync(aPath, 'a rewritten', 'utf-8'),
+      },
+      // The user saved b after the snapshot; the hash check refuses to delete it.
+      {
+        path: bPath,
+        run: () => {
+          fs.writeFileSync(bPath, 'b edited by the user', 'utf-8')
+          throw new Error('Refusing to remove stale file "b.md"')
+        },
+      },
+      {
+        path: manifestPath,
+        run: () =>
+          fs.writeFileSync(manifestPath, 'manifest rewritten', 'utf-8'),
+      },
+    ])
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('Refusing to remove stale file')
+    expect(fs.readFileSync(aPath, 'utf-8')).toBe('a original')
+    expect(fs.readFileSync(bPath, 'utf-8')).toBe('b edited by the user')
+    expect(fs.readFileSync(manifestPath, 'utf-8')).toBe('manifest original')
+  })
+
+  test('a path whose op never ran is not rewritten, even if it changed on disk after the snapshot', () => {
+    const tmp = mkTmp('tx-never-ran-')
+    const aPath = path.join(tmp, 'a.md')
+    const bPath = path.join(tmp, 'b.md')
+    fs.writeFileSync(aPath, 'a original', 'utf-8')
+    fs.writeFileSync(bPath, 'b original', 'utf-8')
+
+    const result = runWithRollback([
+      {
+        path: aPath,
+        run: () => {
+          fs.writeFileSync(bPath, 'b saved by the user', 'utf-8')
+          throw new Error('first op fails')
+        },
+      },
+      {
+        path: bPath,
+        run: () => fs.writeFileSync(bPath, 'b rewritten', 'utf-8'),
+      },
+    ])
+
+    expect(result.ok).toBe(false)
+    expect(fs.readFileSync(aPath, 'utf-8')).toBe('a original')
+    expect(fs.readFileSync(bPath, 'utf-8')).toBe('b saved by the user')
+  })
+
   test('all ops succeed: ok=true, mutations persist', () => {
     const tmp = mkTmp('tx-success-')
     const filePath = path.join(tmp, 'file.md')
     fs.writeFileSync(filePath, 'original', 'utf-8')
 
-    const result = runWithRollback(
-      [filePath],
-      [() => fs.writeFileSync(filePath, 'updated', 'utf-8')],
-    )
+    const result = runWithRollback([
+      {
+        path: filePath,
+        run: () => fs.writeFileSync(filePath, 'updated', 'utf-8'),
+      },
+    ])
 
     expect(result.ok).toBe(true)
     expect(result.error).toBeUndefined()
@@ -1418,17 +1491,21 @@ describe('runWithRollback: direct transaction proof', () => {
     fs.writeFileSync(filePath, 'original', 'utf-8')
 
     // After mutation, make filePath itself read-only → rollback writeFileSync fails
-    const result = runWithRollback(
-      [filePath],
-      [
-        () => fs.writeFileSync(filePath, 'mutated', 'utf-8'),
-        () => {
+    const failingPath = path.join(tmp, 'failing.md')
+    const result = runWithRollback([
+      {
+        path: filePath,
+        run: () => fs.writeFileSync(filePath, 'mutated', 'utf-8'),
+      },
+      {
+        path: failingPath,
+        run: () => {
           // Make the file read-only so rollback cannot restore original content
           fs.chmodSync(filePath, 0o444)
           throw new Error('failure after mutation')
         },
-      ],
-    )
+      },
+    ])
     try {
       expect(result.ok).toBe(false)
       // Must report partial rollback (not claim "rolled back")
@@ -1762,14 +1839,14 @@ describe('snapshotFiles: non-ENOENT read failures abort before mutation', () => 
     fs.mkdirSync(dirAsFilePath) // EISDIR on readFileSync, not ENOENT
 
     let opRan = false
-    const result = runWithRollback(
-      [dirAsFilePath],
-      [
-        () => {
+    const result = runWithRollback([
+      {
+        path: dirAsFilePath,
+        run: () => {
           opRan = true
         },
-      ],
-    )
+      },
+    ])
 
     expect(result.ok).toBe(false)
     expect(opRan).toBe(false)
