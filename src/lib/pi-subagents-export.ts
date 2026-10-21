@@ -818,7 +818,7 @@ function applyConfigToEntries(
   piSubagentsOverlays: SourcedOverlayConfigMap,
 ): ManifestEntry[] {
   return entries.map((entry) => {
-    if (entry.status === 'excluded-critical' || !entry.content) return entry
+    if (!isWrittenEntry(entry)) return entry
     const { category, agentKey } = parseSourceCategoryAndKey(
       entry.sourceRelPath,
     )
@@ -841,6 +841,18 @@ function applyConfigToEntries(
  * Throws (schema/config errors) or generator errors propagate to the caller,
  * which must fail closed before any write.
  */
+/** Whether the export writes this entry: critical exclusions and entries with no content never reach disk. */
+function isWrittenEntry(
+  entry: ManifestEntry,
+): entry is ManifestEntry & { content: string } {
+  return entry.status !== 'excluded-critical' && Boolean(entry.content)
+}
+
+/** The filenames the export wants on disk; any owned file outside this set is stale. */
+function wantedFilenames(entries: ManifestEntry[]): Set<string> {
+  return new Set(entries.filter(isWrittenEntry).map((e) => e.filename))
+}
+
 function generateEntries(
   repoRoot: string,
   configOptions: ExportConfigOptions | undefined,
@@ -909,8 +921,7 @@ function planExistingEntry(
   hash: string,
   owned: Set<string>,
 ): PlanAction {
-  const diskContent = fs.readFileSync(path.join(absRoot, filename), 'utf-8')
-  const diskHash = crypto.createHash('sha256').update(diskContent).digest('hex')
+  const diskHash = hashOfFile(path.join(absRoot, filename))
   if (owned.has(filename)) {
     return diskHash !== hash
       ? { action: 'update', filename }
@@ -930,7 +941,7 @@ function planEntryActions(
 ): PlanAction[] {
   const actions: PlanAction[] = []
   for (const entry of entries) {
-    if (entry.status === 'excluded-critical' || !entry.content) continue
+    if (!isWrittenEntry(entry)) continue
     const exists = fs.existsSync(path.join(absRoot, entry.filename))
     actions.push(
       exists
@@ -1003,11 +1014,7 @@ export function preview(
   const { entries, disabledFilenames } = generated
 
   const owned = ownedFilenames(manifest)
-  const currentFilenames = new Set(
-    entries
-      .filter((e) => e.status !== 'excluded-critical' && e.content)
-      .map((e) => e.filename),
-  )
+  const currentFilenames = wantedFilenames(entries)
 
   try {
     return {
@@ -1070,11 +1077,7 @@ function classifyOneExportEntry(
       reason: 'File exists but is not owned by a previous export (user file)',
     }
   if (fs.existsSync(safePath)) {
-    const diskHash = crypto
-      .createHash('sha256')
-      .update(fs.readFileSync(safePath, 'utf-8'))
-      .digest('hex')
-    if (diskHash === entry.hash) return { kind: 'skip', safePath }
+    if (hashOfFile(safePath) === entry.hash) return { kind: 'skip', safePath }
   }
   return { kind: 'write', safePath }
 }
@@ -1092,11 +1095,10 @@ function classifyExportEntries(
   const toWrite: ExportPair[] = []
   const toSkip: ExportPair[] = []
   const refused: RefuseRecord[] = []
-  const currentFilenames = new Set<string>()
+  const currentFilenames = wantedFilenames(entries)
 
   for (const entry of entries) {
-    if (entry.status === 'excluded-critical' || !entry.content) continue
-    currentFilenames.add(entry.filename)
+    if (!isWrittenEntry(entry)) continue
     const result = classifyOneExportEntry(absRoot, entry, owned)
     if (result.kind === 'refuse') {
       refused.push({
@@ -1170,9 +1172,7 @@ function assertHashMatchesOrThrow(
   filename: string,
   verb: string,
 ): void {
-  const diskContent = fs.readFileSync(filePath, 'utf-8')
-  const diskHash = crypto.createHash('sha256').update(diskContent).digest('hex')
-  if (diskHash !== expectedHash) {
+  if (hashOfFile(filePath) !== expectedHash) {
     throw new Error(
       `Refusing to ${verb} "${filename}": content on disk does not match the ` +
         `manifest hash (drifted or tampered). Resolve manually or re-export/refresh first.`,
@@ -1416,11 +1416,7 @@ function classifyOneRefreshEntry(
     return { kind: 'skip-unowned', safePath }
   if (!exists && !owned.has(entry.filename)) return { kind: 'skip-unexported' }
   if (exists) {
-    const diskHash = crypto
-      .createHash('sha256')
-      .update(fs.readFileSync(safePath, 'utf-8'))
-      .digest('hex')
-    if (diskHash === entry.hash) return { kind: 'keep', safePath }
+    if (hashOfFile(safePath) === entry.hash) return { kind: 'keep', safePath }
   }
   return { kind: 'update', safePath }
 }
@@ -1435,7 +1431,7 @@ function classifyRefreshEntries(
   let skippedUnowned = 0
 
   for (const entry of entries) {
-    if (entry.status === 'excluded-critical' || !entry.content) continue
+    if (!isWrittenEntry(entry)) continue
     const result = classifyOneRefreshEntry(absRoot, entry, owned)
     if (result.kind === 'skip-unowned') {
       skippedUnowned++
@@ -1532,11 +1528,7 @@ export function refresh(
     )
     // Owned files that left the desired set (a disabled persona, or one dropped
     // from the curated set) are removed when unchanged and retained when edited.
-    const currentFilenames = new Set(
-      entries
-        .filter((e) => e.status !== 'excluded-critical' && e.content)
-        .map((e) => e.filename),
-    )
+    const currentFilenames = wantedFilenames(entries)
     let stale: ReturnType<typeof findStalePaths>
     try {
       stale = findStalePaths(

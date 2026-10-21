@@ -919,13 +919,31 @@ function parsePiSubagentsArgs(rest: string[]): {
 function printActionLine(
   a: ReturnType<typeof preview>['actions'][number],
 ): void {
-  if (a.action === 'create') console.log(`  + ${a.filename}  (create)`)
-  else if (a.action === 'update') console.log(`  ~ ${a.filename}  (update)`)
-  else if (a.action === 'refuse')
-    console.log(`  ! ${a.filename}  (refuse: ${a.reason})`)
-  else if (a.action === 'remove')
-    console.log(`  - ${a.filename}  (remove stale)`)
-  else if (a.action === 'skip') console.log(`  = ${a.filename}  (up to date)`)
+  switch (a.action) {
+    case 'create':
+      console.log(`  + ${a.filename}  (create)`)
+      break
+    case 'update':
+      console.log(`  ~ ${a.filename}  (update)`)
+      break
+    case 'refuse':
+      console.log(`  ! ${a.filename}  (refuse: ${a.reason})`)
+      break
+    case 'remove':
+      console.log(`  - ${a.filename}  (remove stale)`)
+      break
+    case 'skip':
+      console.log(`  = ${a.filename}  (up to date)`)
+      break
+    case 'retain':
+      // Edited files are listed in the still-active block, not as action lines.
+      break
+    default: {
+      // A new PlanAction variant must be handled above or this stops compiling.
+      const unreachable: never = a
+      throw new Error(`Unhandled plan action: ${JSON.stringify(unreachable)}`)
+    }
+  }
 }
 
 /** Owned stale files the user edited: pi-subagents keeps loading them, so each run says so. */

@@ -2858,7 +2858,7 @@ describe('export honors disabled personas', () => {
   })
 
   test('the committed generator output stays config-neutral', () => {
-    withProject(({ cwd, agentsRoot }) => {
+    withProject(({ agentsRoot }) => {
       writeUserConfig({ disabled_agents: [DISABLED_KEY] })
 
       // Without configOptions nothing reads config, so nothing is filtered.
@@ -2866,7 +2866,6 @@ describe('export honors disabled personas', () => {
 
       expect(result.status).toBe('ok')
       expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(true)
-      expect(cwd.length).toBeGreaterThan(0)
     })
   })
 })
