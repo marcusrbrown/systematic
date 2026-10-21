@@ -20,7 +20,7 @@ import type {
   SourcedOverlayConfigMap,
   SystematicConfig,
 } from './config.js'
-import { loadConfigWithSources } from './config.js'
+import { isAgentDisabled, loadConfigWithSources } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 import type { ManifestEntry } from './pi-subagents-personas.js'
 import { generateAll } from './pi-subagents-personas.js'
@@ -649,6 +649,7 @@ export type PlanAction =
   | { action: 'update'; filename: string }
   | { action: 'refuse'; filename: string; reason: string }
   | { action: 'remove'; filename: string }
+  | { action: 'retain'; filename: string; reason: string }
   | { action: 'skip'; filename: string }
 
 export interface ExportPlan {
@@ -843,14 +844,45 @@ function applyConfigToEntries(
 function generateEntries(
   repoRoot: string,
   configOptions: ExportConfigOptions | undefined,
-): ManifestEntry[] {
+): GeneratedEntries {
   const entries = generateAll(repoRoot)
-  if (!configOptions) return entries
+  if (!configOptions) return { entries, disabledFilenames: new Set() }
   const { config, overlays } = loadConfigWithSources(configOptions.cwd, {
     includeProject: configOptions.scope === 'project',
   })
+  // Filtered here and not in `generateAll`, which stays config-neutral so the
+  // committed fixtures keep seeing every curated persona.
+  const disabledAgents = new Set(config.disabled_agents)
+  const enabled: ManifestEntry[] = []
+  const disabledFilenames = new Set<string>()
+  for (const entry of entries) {
+    const { category, agentKey } = parseSourceCategoryAndKey(
+      entry.sourceRelPath,
+    )
+    if (
+      isAgentDisabled(disabledAgents, overlays.agents, category ?? '', agentKey)
+    ) {
+      disabledFilenames.add(entry.filename)
+    } else {
+      enabled.push(entry)
+    }
+  }
   const piSubagentsOverlays = toSourcedPiSubagentsOverlays(config.pi_subagents)
-  return applyConfigToEntries(entries, config, overlays, piSubagentsOverlays)
+  return {
+    entries: applyConfigToEntries(
+      enabled,
+      config,
+      overlays,
+      piSubagentsOverlays,
+    ),
+    disabledFilenames,
+  }
+}
+
+/** The curated entries to export, plus the filenames of curated personas the user's settings disable. */
+interface GeneratedEntries {
+  entries: ManifestEntry[]
+  disabledFilenames: Set<string>
 }
 
 // ── Package root discovery ─────────────────────────────────────────────────────
@@ -909,20 +941,32 @@ function planEntryActions(
   return actions
 }
 
+/** Stale owned files are removed when unchanged and retained when edited, exactly as export treats them. */
 function planRemoveActions(
   absRoot: string,
   manifest: PiSubagentsManifest | null,
   currentFilenames: Set<string>,
+  disabledFilenames: Set<string>,
 ): PlanAction[] {
   if (!manifest) return []
-  const removes: PlanAction[] = []
-  for (const mEntry of manifest.files) {
-    if (currentFilenames.has(mEntry.filename)) continue
-    const safe = safeFilePath(absRoot, mEntry.filename)
-    if (safe !== null && fs.existsSync(safe))
-      removes.push({ action: 'remove', filename: mEntry.filename })
-  }
-  return removes
+  const { remove, retained } = findStalePaths(
+    absRoot,
+    manifest,
+    currentFilenames,
+    disabledFilenames,
+  )
+  return [
+    ...remove.map(
+      (target): PlanAction => ({ action: 'remove', filename: target.filename }),
+    ),
+    ...retained.map(
+      (r): PlanAction => ({
+        action: 'retain',
+        filename: r.filename,
+        reason: r.reason,
+      }),
+    ),
+  ]
 }
 
 // ── Preview ───────────────────────────────────────────────────────────────────
@@ -945,9 +989,9 @@ export function preview(
   }
   const manifest = manifestResult.kind === 'ok' ? manifestResult.manifest : null
 
-  let entries: ManifestEntry[]
+  let generated: GeneratedEntries
   try {
-    entries = generateEntries(findPackageRoot(), configOptions)
+    generated = generateEntries(findPackageRoot(), configOptions)
   } catch (err) {
     return {
       status: 'error',
@@ -956,6 +1000,7 @@ export function preview(
       actions: [],
     }
   }
+  const { entries, disabledFilenames } = generated
 
   const owned = ownedFilenames(manifest)
   const currentFilenames = new Set(
@@ -964,23 +1009,45 @@ export function preview(
       .map((e) => e.filename),
   )
 
-  return {
-    status: 'ok',
-    agentsRoot: absRoot,
-    actions: [
-      ...planEntryActions(absRoot, entries, owned),
-      ...planRemoveActions(absRoot, manifest, currentFilenames),
-    ],
+  try {
+    return {
+      status: 'ok',
+      agentsRoot: absRoot,
+      actions: [
+        ...planEntryActions(absRoot, entries, owned),
+        ...planRemoveActions(
+          absRoot,
+          manifest,
+          currentFilenames,
+          disabledFilenames,
+        ),
+      ],
+    }
+  } catch (err) {
+    return {
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+      agentsRoot: absRoot,
+      actions: [],
+    }
   }
 }
 
 // ── ExportResult ──────────────────────────────────────────────────────────────
+
+/** An owned file that stays on disk because the user edited it; pi-subagents keeps loading it. */
+export interface RetainedFile {
+  filename: string
+  reason: string
+}
 
 export interface ExportResult {
   status: 'ok' | 'error'
   written: number
   skipped: number
   refused: Array<{ filename: string; reason: string }>
+  /** Owned stale files left in place because they were edited since export. */
+  retained: RetainedFile[]
   error?: string
 }
 
@@ -1049,6 +1116,7 @@ function classifyExportEntries(
 function buildNewManifestFiles(
   toWrite: Array<{ entry: ManifestEntry; safePath: string }>,
   toSkip: Array<{ entry: ManifestEntry; safePath: string }>,
+  carriedOver: ManifestFileEntry[] = [],
 ): ManifestFileEntry[] {
   const toFileEntry = (e: ManifestEntry): ManifestFileEntry => ({
     filename: e.filename,
@@ -1061,11 +1129,19 @@ function buildNewManifestFiles(
   return [
     ...toSkip.map(({ entry }) => toFileEntry(entry)),
     ...toWrite.map(({ entry }) => toFileEntry(entry)),
+    ...carriedOver,
   ]
 }
 
 function makeExportError(error: string): ExportResult {
-  return { status: 'error', written: 0, skipped: 0, refused: [], error }
+  return {
+    status: 'error',
+    written: 0,
+    skipped: 0,
+    refused: [],
+    retained: [],
+    error,
+  }
 }
 
 function prepareExportRoot(agentsRoot: string): string | ExportResult {
@@ -1111,26 +1187,56 @@ interface DeletionTarget {
   hash: string
 }
 
+/** A stale owned file the user edited: it is left in place and its previous manifest entry is carried over unchanged. */
+interface RetainedStale extends RetainedFile {
+  entry: ManifestFileEntry
+}
+
+function retainedReason(filename: string, disabled: Set<string>): string {
+  return disabled.has(filename)
+    ? 'persona disabled, but the file was edited since export; left in place'
+    : 'persona is no longer in the curated set, but the file was edited since export; left in place'
+}
+
+/**
+ * Splits manifest-owned files that left the desired set into those safe to
+ * remove (disk content still matches the manifest hash) and those to retain
+ * (edited since export). A file already gone is neither: it just drops out of
+ * the next manifest. Retained entries keep their previous manifest entry
+ * verbatim and are never rehashed, so an edited file never looks owned and
+ * unchanged on the next run.
+ */
 function findStalePaths(
   absRoot: string,
   prevManifest: PiSubagentsManifest | null,
   currentFilenames: Set<string>,
-): DeletionTarget[] {
-  if (!prevManifest) return []
-  const stale: DeletionTarget[] = []
+  disabledFilenames: Set<string>,
+): { remove: DeletionTarget[]; retained: RetainedStale[] } {
+  const remove: DeletionTarget[] = []
+  const retained: RetainedStale[] = []
+  if (!prevManifest) return { remove, retained }
   for (const mEntry of prevManifest.files) {
     if (currentFilenames.has(mEntry.filename)) continue
     const safe = safeFilePath(absRoot, mEntry.filename)
     if (safe === null || !fs.existsSync(safe)) continue
-    assertHashMatchesOrThrow(
-      safe,
-      mEntry.hash,
-      mEntry.filename,
-      'remove stale file',
-    )
-    stale.push({ path: safe, filename: mEntry.filename, hash: mEntry.hash })
+    if (hashOfFile(safe) === mEntry.hash) {
+      remove.push({ path: safe, filename: mEntry.filename, hash: mEntry.hash })
+    } else {
+      retained.push({
+        filename: mEntry.filename,
+        reason: retainedReason(mEntry.filename, disabledFilenames),
+        entry: mEntry,
+      })
+    }
   }
-  return stale
+  return { remove, retained }
+}
+
+function hashOfFile(filePath: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(filePath, 'utf-8'))
+    .digest('hex')
 }
 
 // ── exportPersonas ────────────────────────────────────────────────────────────
@@ -1140,14 +1246,15 @@ export function exportPersonas(
   configOptions?: ExportConfigOptions,
 ): ExportResult {
   // Resolve config first (fail closed before any mutation, including mkdir).
-  let entries: ManifestEntry[]
+  let generated: GeneratedEntries
   try {
-    entries = generateEntries(findPackageRoot(), configOptions)
+    generated = generateEntries(findPackageRoot(), configOptions)
   } catch (err) {
     return makeExportError(
       `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
+  const { entries, disabledFilenames } = generated
 
   // Scope-anchored lexical ancestor walk before any mutation (including mkdir).
   const anchor = anchorForScope(configOptions, agentsRoot)
@@ -1187,16 +1294,30 @@ export function exportPersonas(
     const owned = ownedFilenames(prevManifest)
     const { toWrite, toSkip, refused, currentFilenames } =
       classifyExportEntries(absRoot, entries, owned)
-    let staleOwned: DeletionTarget[]
+    let stale: ReturnType<typeof findStalePaths>
     try {
-      staleOwned = findStalePaths(absRoot, prevManifest, currentFilenames)
+      stale = findStalePaths(
+        absRoot,
+        prevManifest,
+        currentFilenames,
+        disabledFilenames,
+      )
     } catch (err) {
       return makeExportError(err instanceof Error ? err.message : String(err))
     }
+    const staleOwned = stale.remove
+    const retained = stale.retained.map(({ filename, reason }) => ({
+      filename,
+      reason,
+    }))
     const newManifest = (): PiSubagentsManifest => ({
       generatedAt: new Date().toISOString(),
       agentsRoot: absRoot,
-      files: buildNewManifestFiles(toWrite, toSkip),
+      files: buildNewManifestFiles(
+        toWrite,
+        toSkip,
+        stale.retained.map((r) => r.entry),
+      ),
     })
 
     const tx = runWithRollback(
@@ -1230,6 +1351,7 @@ export function exportPersonas(
         written: 0,
         skipped: toSkip.length,
         refused,
+        retained,
         error: tx.error,
       }
 
@@ -1238,6 +1360,7 @@ export function exportPersonas(
       written: toWrite.length,
       skipped: toSkip.length,
       refused,
+      retained,
     }
   })
 
@@ -1348,7 +1471,7 @@ export function refresh(
   // Resolve config first (fail closed before any mutation).
   let entries: ManifestEntry[]
   try {
-    entries = generateEntries(findPackageRoot(), configOptions)
+    entries = generateEntries(findPackageRoot(), configOptions).entries
   } catch (err) {
     return {
       status: 'error',

@@ -925,7 +925,45 @@ function printActionLine(
     console.log(`  ! ${a.filename}  (refuse: ${a.reason})`)
   else if (a.action === 'remove')
     console.log(`  - ${a.filename}  (remove stale)`)
-  else console.log(`  = ${a.filename}  (up to date)`)
+  else if (a.action === 'skip') console.log(`  = ${a.filename}  (up to date)`)
+}
+
+/** Owned stale files the user edited: pi-subagents keeps loading them, so each run says so. */
+function printStillActive(
+  retained: ReadonlyArray<{ filename: string; reason: string }>,
+): void {
+  if (retained.length === 0) return
+  console.log(
+    '\nStill active in pi-subagents (edited since export, left in place):',
+  )
+  for (const r of retained) {
+    console.log(`  ! ${r.filename}: ${r.reason}`)
+  }
+  console.log(
+    '  Revert each file to its exported content or delete it, then run this command again to finish.',
+  )
+}
+
+function retainedFromPlan(
+  plan: ReturnType<typeof preview>,
+): Array<{ filename: string; reason: string }> {
+  return plan.actions.flatMap((a) =>
+    a.action === 'retain' ? [{ filename: a.filename, reason: a.reason }] : [],
+  )
+}
+
+function summarizePlan(plan: ReturnType<typeof preview>): void {
+  const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
+  for (const a of plan.actions) {
+    if (a.action === 'retain') continue
+    counts[a.action]++
+    printActionLine(a)
+  }
+  console.log('')
+  console.log(
+    `Summary: ${counts.create} create, ${counts.update} update, ` +
+      `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
+  )
 }
 
 function runPreview(agentsRoot: string, scope: 'project' | 'global'): void {
@@ -940,16 +978,8 @@ function runPreview(agentsRoot: string, scope: 'project' | 'global'): void {
     console.log('No actions needed (nothing to export).')
     return
   }
-  const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
-  for (const a of plan.actions) {
-    counts[a.action]++
-    printActionLine(a)
-  }
-  console.log('')
-  console.log(
-    `Summary: ${counts.create} create, ${counts.update} update, ` +
-      `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
-  )
+  summarizePlan(plan)
+  printStillActive(retainedFromPlan(plan))
 }
 
 function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
@@ -971,19 +1001,11 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
   )
   if (plan.actions.length > 0) {
     console.log('')
-    const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
-    for (const a of plan.actions) {
-      counts[a.action]++
-      printActionLine(a)
-    }
-    console.log('')
-    console.log(
-      `Summary: ${counts.create} create, ${counts.update} update, ` +
-        `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
-    )
+    summarizePlan(plan)
   }
   if (!hasWork) {
     console.log('All persona files are already up to date. No changes.')
+    printStillActive(retainedFromPlan(plan))
     return
   }
   const result = exportPersonas(agentsRoot, configOptions)
@@ -1004,6 +1026,7 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     for (const r of result.refused)
       console.log(`  ! ${r.filename}: ${r.reason}`)
   }
+  printStillActive(result.retained)
 }
 
 function runRefresh(agentsRoot: string, scope: 'project' | 'global'): void {

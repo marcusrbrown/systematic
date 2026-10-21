@@ -1643,12 +1643,10 @@ describe('manifest ownership hardening: hash-gated deletion', () => {
     expect(fs.existsSync(path.join(agentsRoot, MANIFEST_FILENAME))).toBe(true)
   })
 
-  test('exportPersonas: stale-deletion hash guard is re-verified per-target at delete time, not only at collection — real fs, no mocks', () => {
-    // Regression proof for the collect/delete TOCTOU fix on the export
-    // stale-removal path (findStalePaths / exportPersonas transaction):
-    // two stale manifest-owned entries, tamper only the second. The whole
-    // transaction must fail closed — including refusing to delete the
-    // first (untampered) stale file.
+  test('exportPersonas: of two stale manifest-owned files, the unchanged one is removed and the edited one is retained, not fatal', () => {
+    // Stale-file removal is hash-gated per file: an unchanged owned file is
+    // deleted, a hand-edited one stays on disk with its manifest entry intact,
+    // and neither outcome aborts the export.
     const cwd = mkTmp()
     const agentsRoot = path.join(cwd, '.pi', 'agents')
     fs.mkdirSync(agentsRoot, { recursive: true })
@@ -1674,69 +1672,37 @@ describe('manifest ownership hardening: hash-gated deletion', () => {
     writeFile(
       agentsRoot,
       secondStaleFilename,
-      'TAMPERED — does not match manifest hash',
+      'EDITED — does not match manifest hash',
     )
 
     const result = exportPersonas(agentsRoot)
-    expect(result.status).toBe('error')
-    expect(result.error).toMatch(/hash|drift|mismatch|tampered/i)
 
-    // Nothing deleted or overwritten, including the untampered first stale
-    // file: manifest still lists both entries, both files intact.
-    expect(
-      fs.readFileSync(path.join(agentsRoot, firstStaleFilename), 'utf-8'),
-    ).toBe(firstContent)
+    expect(result.status).toBe('ok')
+    expect(fs.existsSync(path.join(agentsRoot, firstStaleFilename))).toBe(false)
     expect(
       fs.readFileSync(path.join(agentsRoot, secondStaleFilename), 'utf-8'),
-    ).toBe('TAMPERED — does not match manifest hash')
+    ).toBe('EDITED — does not match manifest hash')
+    expect(result.retained.map((r) => r.filename)).toEqual([
+      secondStaleFilename,
+    ])
     const manifestAfter = readManifest(agentsRoot)
-    expect(manifestAfter).not.toBeNull()
     expect(
       manifestAfter?.files.some((f) => f.filename === firstStaleFilename),
-    ).toBe(true)
+    ).toBe(false)
     expect(
-      manifestAfter?.files.some((f) => f.filename === secondStaleFilename),
-    ).toBe(true)
+      manifestAfter?.files.find((f) => f.filename === secondStaleFilename),
+    ).toEqual({
+      filename: secondStaleFilename,
+      hash: secondHash,
+      status: 'exported',
+    })
   })
 
-  test('refresh refuses to remove a stale owned file whose disk content has drifted from the manifest hash', () => {
-    const cwd = mkTmp()
-    const agentsRoot = path.join(cwd, '.pi', 'agents')
-    exportPersonas(agentsRoot)
-
-    const manifest = readManifest(agentsRoot)
-    expect(manifest).not.toBeNull()
-    if (!manifest) return
-    const firstEntry = manifest.files[0]
-    expect(firstEntry).toBeDefined()
-    if (!firstEntry) return
-
-    // Simulate the persona becoming stale (no longer curated) AND tampered:
-    // rewrite the manifest to claim ownership of a filename that is no
-    // longer in the current generated set, with a hash that doesn't match
-    // disk content, by tampering the actual owned file's content first,
-    // then forcing a stale-removal path is exercised via cleanup instead
-    // (refresh only ever writes/keeps entries still in the curated set).
-    // This test verifies refresh's tamper guard on an UPDATE path: corrupt a
-    // currently-owned file with mismatched-from-manifest-AND-mismatched-from-source
-    // content, then ensure refresh still safely overwrites (source wins for
-    // legitimate drift) — the guard specifically blocks *deletion*, not
-    // in-place regeneration of owned files.
-    const target = path.join(agentsRoot, firstEntry.filename)
-    fs.writeFileSync(target, 'drifted user edit', 'utf-8')
-    const result = refresh(agentsRoot)
-    expect(result.status).toBe('ok')
-    expect(result.updated).toBeGreaterThan(0)
-  })
-
-  test('exportPersonas refuses to remove a stale manifest-owned file whose disk content has drifted from the manifest hash (tampered)', () => {
-    // Regression: exportPersonas's stale-removal path (findStalePaths) must
-    // apply the same tamper/drift guard as cleanup's. A manifest entry for a
-    // systematic-*.md file that is no longer in the current curated set is
-    // "stale" and would normally be deleted; if its on-disk content no
-    // longer matches the manifest hash, export must refuse before deleting
-    // it or writing anything else — the file and manifest must remain
-    // exactly as they were.
+  test('exportPersonas retains a stale manifest-owned file whose disk content has drifted from the manifest hash, saying it is no longer in the curated set', () => {
+    // A manifest entry for a systematic-*.md file that is no longer in the
+    // current curated set is stale. If its on-disk content no longer matches
+    // the manifest hash the file is the user's now: export leaves it in place,
+    // keeps its previous manifest entry byte-for-byte, and reports it.
     const cwd = mkTmp()
     const agentsRoot = path.join(cwd, '.pi', 'agents')
     fs.mkdirSync(agentsRoot, { recursive: true })
@@ -1751,23 +1717,21 @@ describe('manifest ownership hardening: hash-gated deletion', () => {
       { filename: staleFilename, hash, status: 'exported' },
     ])
     writeManifest(agentsRoot, manifest)
-    // Disk content differs from the manifest hash (tampered/drifted).
-    const tamperedContent = 'TAMPERED — does not match manifest hash'
-    writeFile(agentsRoot, staleFilename, tamperedContent)
+    const editedContent = 'EDITED — does not match manifest hash'
+    writeFile(agentsRoot, staleFilename, editedContent)
 
     const result = exportPersonas(agentsRoot)
-    expect(result.status).toBe('error')
-    expect(result.error).toMatch(/hash|drift|mismatch|tampered/i)
 
-    // Nothing deleted or overwritten: stale file and manifest both intact.
+    expect(result.status).toBe('ok')
+    expect(result.retained).toHaveLength(1)
+    expect(result.retained[0]?.filename).toBe(staleFilename)
+    expect(result.retained[0]?.reason).toMatch(/no longer.*curated/i)
     expect(fs.readFileSync(path.join(agentsRoot, staleFilename), 'utf-8')).toBe(
-      tamperedContent,
+      editedContent,
     )
-    const manifestAfter = readManifest(agentsRoot)
-    expect(manifestAfter).not.toBeNull()
-    expect(manifestAfter?.files.some((f) => f.filename === staleFilename)).toBe(
-      true,
-    )
+    expect(
+      readManifest(agentsRoot)?.files.find((f) => f.filename === staleFilename),
+    ).toEqual({ filename: staleFilename, hash, status: 'exported' })
   })
 
   test('cleanup with a hostile manifest entry outside the generated namespace refuses before any delete', () => {
@@ -2348,5 +2312,368 @@ describe('config-aware export: model + pi_subagents field application', () => {
     } finally {
       restoreHome()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Disabled personas: the export honors the same disable settings as OpenCode
+// ---------------------------------------------------------------------------
+
+describe('export honors disabled personas', () => {
+  const DISABLED_KEY = 'repo-research-analyst'
+  const DISABLED_FILE = 'systematic-repo-research-analyst.md'
+  const OTHER_FILE = 'systematic-best-practices-researcher.md'
+
+  let fakeHome: string
+  let originalOsHomedir: (() => string) | undefined
+  let originalConfigDir: string | undefined
+
+  function useFakeHome(): void {
+    fakeHome = mkTmp('pi-export-disable-home-')
+    originalOsHomedir = os.homedir
+    originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => fakeHome
+  }
+
+  function restoreHome(): void {
+    if (originalOsHomedir) os.homedir = originalOsHomedir
+    if (originalConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+  }
+
+  function writeUserConfig(config: Record<string, unknown>): void {
+    const dir = path.join(fakeHome, '.config', 'opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'systematic.json'), JSON.stringify(config))
+  }
+
+  function writeProjectConfig(cwd: string, config: Record<string, unknown>) {
+    const dir = path.join(cwd, '.opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'systematic.json'), JSON.stringify(config))
+  }
+
+  /** Runs `body` against an isolated home with a project directory. */
+  function withProject(
+    body: (ctx: { cwd: string; agentsRoot: string }) => void,
+  ): void {
+    useFakeHome()
+    try {
+      const cwd = mkTmp('pi-export-disable-project-')
+      body({ cwd, agentsRoot: path.join(cwd, '.pi', 'agents') })
+    } finally {
+      restoreHome()
+    }
+  }
+
+  function exportProject(cwd: string, agentsRoot: string) {
+    return exportPersonas(agentsRoot, { scope: 'project', cwd })
+  }
+
+  function listing(root: string): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const name of fs.readdirSync(root).sort())
+      out[name] = fs.readFileSync(path.join(root, name), 'utf-8')
+    return out
+  }
+
+  function manifestEntry(agentsRoot: string, filename: string) {
+    return readManifest(agentsRoot)?.files.find((f) => f.filename === filename)
+  }
+
+  test('disabling an exported persona removes its owned, unchanged file and manifest entry, and touches nothing else', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      expect(exportProject(cwd, agentsRoot).status).toBe('ok')
+      const before = listing(agentsRoot)
+      expect(Object.keys(before)).toContain(DISABLED_FILE)
+
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toEqual([])
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+      const after = listing(agentsRoot)
+      for (const [name, content] of Object.entries(before)) {
+        if (name === DISABLED_FILE || name === MANIFEST_FILENAME) continue
+        expect(after[name]).toBe(content)
+      }
+    })
+  })
+
+  test("preview lists the disabled persona's owned, unchanged file as a removal", () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+      const plan = preview(agentsRoot, { scope: 'project', cwd })
+
+      expect(plan.status).toBe('ok')
+      expect(plan.actions).toContainEqual({
+        action: 'remove',
+        filename: DISABLED_FILE,
+      })
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(true)
+    })
+  })
+
+  test('a hand-edited file of a disabled persona stays, keeps its manifest entry byte-identical, and the rest of the export still runs', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      const entryBefore = manifestEntry(agentsRoot, DISABLED_FILE)
+      expect(entryBefore).toBeDefined()
+      const edited = '# my own notes on this persona\n'
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), edited)
+      // Another persona needs an update in the same run.
+      const otherExported = fs.readFileSync(
+        path.join(agentsRoot, OTHER_FILE),
+        'utf-8',
+      )
+      fs.writeFileSync(path.join(agentsRoot, OTHER_FILE), 'drifted')
+
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toHaveLength(1)
+      expect(result.retained[0]?.filename).toBe(DISABLED_FILE)
+      expect(result.retained[0]?.reason).toMatch(/disabled/i)
+      expect(
+        fs.readFileSync(path.join(agentsRoot, DISABLED_FILE), 'utf-8'),
+      ).toBe(edited)
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toEqual(entryBefore)
+      expect(JSON.stringify(manifestEntry(agentsRoot, DISABLED_FILE))).toBe(
+        JSON.stringify(entryBefore),
+      )
+      // The export did its other work: the drifted file was rewritten.
+      expect(fs.readFileSync(path.join(agentsRoot, OTHER_FILE), 'utf-8')).toBe(
+        otherExported,
+      )
+    })
+  })
+
+  test('preview reports a hand-edited file of a disabled persona as retained, not removed', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'edited')
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+      const plan = preview(agentsRoot, { scope: 'project', cwd })
+
+      expect(plan.status).toBe('ok')
+      const retain = plan.actions.find((a) => a.action === 'retain')
+      expect(retain?.filename).toBe(DISABLED_FILE)
+      expect(
+        plan.actions.some(
+          (a) => a.action === 'remove' && a.filename === DISABLED_FILE,
+        ),
+      ).toBe(false)
+    })
+  })
+
+  test('a second export after a retained file does not delete it, and keeps reporting it', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'edited')
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      exportProject(cwd, agentsRoot)
+      const entryAfterFirst = manifestEntry(agentsRoot, DISABLED_FILE)
+
+      const second = exportProject(cwd, agentsRoot)
+
+      expect(second.status).toBe('ok')
+      expect(second.retained.map((r) => r.filename)).toEqual([DISABLED_FILE])
+      expect(
+        fs.readFileSync(path.join(agentsRoot, DISABLED_FILE), 'utf-8'),
+      ).toBe('edited')
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toEqual(entryAfterFirst)
+    })
+  })
+
+  test('once the user reverts the retained file to its exported content the next export removes it', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      const exported = fs.readFileSync(
+        path.join(agentsRoot, DISABLED_FILE),
+        'utf-8',
+      )
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'edited')
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      exportProject(cwd, agentsRoot)
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), exported)
+
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toEqual([])
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+    })
+  })
+
+  test('deleting the retained file drops its manifest entry on the next export', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'edited')
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      exportProject(cwd, agentsRoot)
+      fs.unlinkSync(path.join(agentsRoot, DISABLED_FILE))
+
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toEqual([])
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+    })
+  })
+
+  test("an unowned file with a disabled persona's name is left untouched and not reported", () => {
+    withProject(({ cwd, agentsRoot }) => {
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      fs.mkdirSync(agentsRoot, { recursive: true })
+      fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'mine')
+
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toEqual([])
+      expect(result.refused.map((r) => r.filename)).not.toContain(DISABLED_FILE)
+      expect(
+        fs.readFileSync(path.join(agentsRoot, DISABLED_FILE), 'utf-8'),
+      ).toBe('mine')
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+    })
+  })
+
+  test('a manifest entry whose file is already gone is dropped without error', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      fs.unlinkSync(path.join(agentsRoot, DISABLED_FILE))
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toEqual([])
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+    })
+  })
+
+  test('disabling a persona outside the curated set changes nothing', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      const before = listing(agentsRoot)
+      expect(Object.keys(before)).not.toContain('systematic-design-iterator.md')
+
+      writeUserConfig({ disabled_agents: ['design-iterator'] })
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(result.retained).toEqual([])
+      const after = listing(agentsRoot)
+      for (const [name, content] of Object.entries(before)) {
+        if (name === MANIFEST_FILENAME) continue
+        expect(after[name]).toBe(content)
+      }
+      expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort())
+    })
+  })
+
+  test('re-enabling a removed persona and exporting re-creates its file', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      const original = fs.readFileSync(
+        path.join(agentsRoot, DISABLED_FILE),
+        'utf-8',
+      )
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+      exportProject(cwd, agentsRoot)
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+
+      writeUserConfig({})
+      const result = exportProject(cwd, agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(
+        fs.readFileSync(path.join(agentsRoot, DISABLED_FILE), 'utf-8'),
+      ).toBe(original)
+      expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeDefined()
+    })
+  })
+
+  test('a qualified disabled_agents entry and a bare overlay disable remove the file too', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+
+      writeUserConfig({ disabled_agents: [`research/${DISABLED_KEY}`] })
+      exportProject(cwd, agentsRoot)
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+
+      writeUserConfig({})
+      exportProject(cwd, agentsRoot)
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(true)
+
+      writeUserConfig({ agents: { [DISABLED_KEY]: { disable: true } } })
+      exportProject(cwd, agentsRoot)
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+    })
+  })
+
+  test('a project-only disable leaves a global export unchanged, while a project export honors it', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      writeProjectConfig(cwd, { disabled_agents: [DISABLED_KEY] })
+
+      const globalRoot = mkTmp('pi-export-disable-global-')
+      const globalAgents = path.join(globalRoot, 'agents')
+      const originalEnv = process.env.PI_CODING_AGENT_DIR
+      process.env.PI_CODING_AGENT_DIR = globalRoot
+      try {
+        const globalResult = exportPersonas(globalAgents, {
+          scope: 'global',
+          cwd,
+        })
+        expect(globalResult.status).toBe('ok')
+        expect(fs.existsSync(path.join(globalAgents, DISABLED_FILE))).toBe(true)
+      } finally {
+        if (originalEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
+        else process.env.PI_CODING_AGENT_DIR = originalEnv
+      }
+
+      const projectResult = exportProject(cwd, agentsRoot)
+      expect(projectResult.status).toBe('ok')
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+      expect(fs.existsSync(path.join(agentsRoot, OTHER_FILE))).toBe(true)
+    })
+  })
+
+  test('cleanup ignores disable settings and removes every owned file', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      exportProject(cwd, agentsRoot)
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+      const result = cleanup(agentsRoot, { scope: 'project', cwd })
+
+      expect(result.status).toBe('ok')
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+      expect(fs.existsSync(path.join(agentsRoot, OTHER_FILE))).toBe(false)
+      expect(fs.existsSync(path.join(agentsRoot, MANIFEST_FILENAME))).toBe(
+        false,
+      )
+    })
+  })
+
+  test('the committed generator output stays config-neutral', () => {
+    withProject(({ cwd, agentsRoot }) => {
+      writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+      // Without configOptions nothing reads config, so nothing is filtered.
+      const result = exportPersonas(agentsRoot)
+
+      expect(result.status).toBe('ok')
+      expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(true)
+      expect(cwd.length).toBeGreaterThan(0)
+    })
   })
 })
