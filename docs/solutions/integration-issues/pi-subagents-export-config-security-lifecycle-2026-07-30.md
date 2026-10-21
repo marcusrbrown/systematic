@@ -77,8 +77,9 @@ systematic pi-subagents cleanup  --scope project|global
 ```
 
 `preview` is read-only. `export` prints the same per-file preflight actions before mutation.
-`refresh` rewrites current manifest-owned projections but does not delete stale entries. `cleanup`
-removes only files proven to be owned by the manifest.
+`refresh` rewrites current manifest-owned projections and removes unchanged owned files that are no
+longer wanted, leaving edited ones in place. `cleanup` removes only files proven to be owned by the
+manifest.
 
 ### Screen portable personas before rendering
 
