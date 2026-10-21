@@ -16,6 +16,7 @@ import {
   computeDroppedNames,
   DEFAULT_CONFIG,
   getConfigPaths,
+  isAgentDisabled,
   loadConfig,
   loadConfigWithSources,
   warnDroppedNames,
@@ -6342,5 +6343,102 @@ describe('TYPED_VALIDATION_DOCS_URL', () => {
     const mdx = fs.readFileSync(CONFIG_MDX, 'utf-8')
     const slugs = extractHeadingSlugs(mdx)
     expect(slugs.has('typed-validation')).toBe(true)
+  })
+})
+
+describe('isAgentDisabled', () => {
+  /** A raw overlay entry as the loader returns it. */
+  function overlay(disable?: boolean) {
+    return {
+      value: disable === undefined ? {} : { disable },
+      sourcePath: '/test/systematic.json',
+      keyPath: 'agents.test',
+    }
+  }
+  const NONE = new Set<string>()
+
+  test('a bare disabled_agents entry disables the persona in every category', () => {
+    const disabled = new Set(['repo-research-analyst'])
+    expect(
+      isAgentDisabled(disabled, {}, 'research', 'repo-research-analyst'),
+    ).toBe(true)
+    expect(
+      isAgentDisabled(disabled, {}, 'elsewhere', 'repo-research-analyst'),
+    ).toBe(true)
+  })
+
+  test('a qualified disabled_agents entry disables only its own category', () => {
+    const disabled = new Set(['research/repo-research-analyst'])
+    expect(
+      isAgentDisabled(disabled, {}, 'research', 'repo-research-analyst'),
+    ).toBe(true)
+    expect(
+      isAgentDisabled(disabled, {}, 'review', 'repo-research-analyst'),
+    ).toBe(false)
+  })
+
+  test('a bare overlay with disable: true disables the persona', () => {
+    const agents = { 'repo-research-analyst': overlay(true) }
+    expect(
+      isAgentDisabled(NONE, agents, 'research', 'repo-research-analyst'),
+    ).toBe(true)
+  })
+
+  test('a qualified overlay with disable: true disables the persona', () => {
+    const agents = { 'research/repo-research-analyst': overlay(true) }
+    expect(
+      isAgentDisabled(NONE, agents, 'research', 'repo-research-analyst'),
+    ).toBe(true)
+  })
+
+  test('an overlay that does not set disable: true leaves the persona enabled', () => {
+    for (const entry of [overlay(), overlay(false)]) {
+      expect(
+        isAgentDisabled(
+          NONE,
+          { 'repo-research-analyst': entry },
+          'research',
+          'repo-research-analyst',
+        ),
+      ).toBe(false)
+    }
+  })
+
+  test('a bare and a qualified overlay for one persona disable it when either sets disable: true', () => {
+    const pairs = [
+      {
+        'repo-research-analyst': overlay(true),
+        'research/repo-research-analyst': overlay(),
+      },
+      {
+        'repo-research-analyst': overlay(),
+        'research/repo-research-analyst': overlay(true),
+      },
+      {
+        'repo-research-analyst': overlay(false),
+        'research/repo-research-analyst': overlay(true),
+      },
+    ]
+    for (const agents of pairs) {
+      expect(
+        isAgentDisabled(NONE, agents, 'research', 'repo-research-analyst'),
+      ).toBe(true)
+    }
+  })
+
+  test('an unrelated name, category or overlay key disables nothing', () => {
+    const disabled = new Set(['other-agent', 'review/other-agent'])
+    const agents = { 'other-agent': overlay(true) }
+    expect(
+      isAgentDisabled(disabled, agents, 'research', 'repo-research-analyst'),
+    ).toBe(false)
+    expect(isAgentDisabled(NONE, {}, 'research', 'repo-research-analyst')).toBe(
+      false,
+    )
+  })
+
+  test('a persona without a category is matched by its bare key only', () => {
+    expect(isAgentDisabled(new Set(['loose']), {}, '', 'loose')).toBe(true)
+    expect(isAgentDisabled(new Set(['/loose']), {}, '', 'loose')).toBe(false)
   })
 })

@@ -13,7 +13,7 @@ import {
   computeBootstrapContentSafe,
   readHarnessProfile,
 } from './lib/bootstrap.js'
-import { loadConfigWithSources } from './lib/config.js'
+import { isAgentDisabled, loadConfigWithSources } from './lib/config.js'
 import { createRealPiDelegateSession } from './lib/pi-delegate-session.js'
 import { createPiDelegateTool } from './lib/pi-delegate-tool.js'
 import {
@@ -57,8 +57,6 @@ export default async function systematicPiExtension(
   deps: PiExtensionDependencies = defaultPiExtensionDependencies,
 ): Promise<void> {
   const { buildAgentCatalog: buildAgentCatalogFn = buildAgentCatalog } = deps
-  const disabledSkills: string[] = []
-  const resolverOptions = { bundledSkillsDir, disabledSkills }
 
   // Loaded once at extension init, same as OpenCode's `loadConfig(directory)`
   // call in src/index.ts — not wrapped in try/catch, so an invalid config
@@ -72,6 +70,13 @@ export default async function systematicPiExtension(
     metadata: piConfigMetadata,
     overlays: piRoutingOverlays,
   } = loadConfigWithSources(process.cwd())
+
+  // Honors `disabled_skills` the same way OpenCode's `src/index.ts` does. Pi's
+  // native `pi.skills` discovery is a separate path and is not filtered.
+  const resolverOptions = {
+    bundledSkillsDir,
+    disabledSkills: piConfig.disabled_skills,
+  }
 
   // Match OpenCode's process-lifetime bootstrap snapshot.
   const bootstrapContent = computeBootstrapContentSafe(
@@ -118,7 +123,19 @@ export default async function systematicPiExtension(
   })
 
   try {
-    const catalog = buildAgentCatalogFn(bundledAgentsDir)
+    // Filtered after building so `buildAgentCatalog` keeps checking the full
+    // inventory for duplicate names; one filter covers the tool's description,
+    // hint, lookup and unknown-persona error.
+    const disabledAgents = new Set(piConfig.disabled_agents)
+    const catalog = buildAgentCatalogFn(bundledAgentsDir).filter(
+      (entry) =>
+        !isAgentDisabled(
+          disabledAgents,
+          piRoutingOverlays.agents,
+          entry.category,
+          entry.key,
+        ),
+    )
     pi.registerTool(
       createPiDelegateTool({
         catalog,

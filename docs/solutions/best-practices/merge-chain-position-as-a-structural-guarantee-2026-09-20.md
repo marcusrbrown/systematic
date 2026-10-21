@@ -50,7 +50,7 @@ it is authoritative and overrides, which is the point of a profile. A project-so
 bundle goes *first*, so user base merges over it.
 
 The merge itself is field-additive (`mergeProfileOverlayValue`,
-`src/lib/config.ts:2509`):
+`src/lib/config.ts:2530`):
 
 ```ts
 const result: OverlayConfig = { ...previous, ...next }
@@ -71,7 +71,7 @@ single property makes one function serve both directions purely by argument orde
 | Normal (user/custom bundle) | user base | profile bundle | profile — unchanged behavior |
 | Advisory (project bundle) | project bundle | user overlay | user, project fills gaps |
 
-`resolveOverlayEntryValue` (`src/lib/config.ts:2405`) routes to it with a per-source
+`resolveOverlayEntryValue` (`src/lib/config.ts:2426`) routes to it with a per-source
 branch, not a per-field test.
 
 ## Why This Matters

@@ -2083,6 +2083,38 @@ function sortProtectedFields(
 }
 
 /**
+ * Whether a bundled persona is disabled by config, for harnesses that filter
+ * after building their persona list (Pi's delegate catalog and the
+ * pi-subagents export).
+ *
+ * The persona is disabled when its bare key or its qualified `category/key`
+ * id is in `disabledAgents` (the merged `disabled_agents` list), or when an
+ * agent overlay under either of those keys sets `disable: true`. Matching is
+ * on the file stem and the category, never on the frontmatter name.
+ *
+ * Either overlay key disables. OpenCode rejects a config that overlays one
+ * persona under both keys, so only a config OpenCode would not load can reach
+ * the case where they disagree; disabling is the fail-safe reading.
+ *
+ * OpenCode applies the same rule inline in `config-handler.ts` and
+ * `agent-overlays.ts` over resolved data; `tests/unit/disable-parity.test.ts`
+ * pins the two together.
+ */
+export function isAgentDisabled(
+  disabledAgents: ReadonlySet<string>,
+  agentOverlays: SourcedOverlayConfigMap['agents'],
+  category: string,
+  key: string,
+): boolean {
+  const qualifiedId = category ? `${category}/${key}` : key
+  if (disabledAgents.has(key) || disabledAgents.has(qualifiedId)) return true
+  return (
+    agentOverlays[key]?.value.disable === true ||
+    agentOverlays[qualifiedId]?.value.disable === true
+  )
+}
+
+/**
  * Enumerate every routing-resolver target implied by the merged overlays:
  * every raw agent-overlay key that resolves to a real bundled agent (bare or
  * qualified `category/key`), plus every bundled agent whose category has a
@@ -2097,13 +2129,10 @@ function sortProtectedFields(
  * routing target and this check has no stronger claim to make about it than
  * schema validation already does elsewhere.
  *
- * A disabled agent is excluded from the result: matched by bare key or
- * qualified `category/key` id in `disabledAgents` (the merged
- * `disabled_agents` list), or by its own effective overlay's
- * `disable: true` (bare key checked before the qualified id, mirroring
- * `config-handler.ts`'s `collectAgents`/`applyAgentOverlays` precedence).
- * A disabled agent is never emitted to OpenCode at all, so it must never
- * block config load over a routing invariant it can't violate in practice.
+ * A disabled agent (see {@link isAgentDisabled}) is excluded from the
+ * result. A disabled agent is never emitted to OpenCode at all, so it must
+ * never block config load over a routing invariant it can't violate in
+ * practice.
  */
 export function collectRoutingTargets(
   overlays: SourcedOverlayConfigMap,
@@ -2111,18 +2140,10 @@ export function collectRoutingTargets(
 ): RoutingTarget[] {
   const targets = new Map<string, RoutingTarget>()
 
-  const isDisabled = (agentKey: string, category: string): boolean => {
-    const qualifiedId = `${category}/${agentKey}`
-    if (disabledAgents.has(agentKey) || disabledAgents.has(qualifiedId)) {
-      return true
-    }
-    const overlay =
-      overlays.agents[agentKey]?.value ?? overlays.agents[qualifiedId]?.value
-    return overlay?.disable === true
-  }
-
   const addTarget = (agentKey: string, category: string): void => {
-    if (isDisabled(agentKey, category)) return
+    if (isAgentDisabled(disabledAgents, overlays.agents, category, agentKey)) {
+      return
+    }
     targets.set(`${category}/${agentKey}`, { agentKey, category })
   }
 
