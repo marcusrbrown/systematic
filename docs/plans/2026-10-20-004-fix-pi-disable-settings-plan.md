@@ -11,9 +11,9 @@ date: 2026-10-20
 
 Pi will honor the same per-user disable settings as OpenCode:
 - `disabled_skills` removes a skill from `systematic_skill`.
-- `disabled_agents` (bare or `category/name`) and `agents.<name>.disable` remove a persona from the `systematic_delegate` catalog and from the pi-subagents persona export.
+- `disabled_agents` (bare stem or `category/stem`) and `agents.<key>.disable` remove a persona from the `systematic_delegate` catalog and from the pi-subagents persona export.
 
-When a persona leaves the desired set, `refresh` now removes its manifest-owned file. A hand-edited file no longer aborts the export.
+When a persona leaves the desired set, `refresh` now removes its manifest-owned file if the file is unchanged since export. A hand-edited file stays in place with a clear warning, and no longer aborts the export.
 
 ## Problem Frame
 
@@ -39,7 +39,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 **Export**
 - R3. Export generation excludes disabled curated personas, using the same rule.
 - R4. `refresh` removes manifest-owned stale files whose hash matches, with the lock and rollback that `export` already uses. It reports the removals.
-- R5. A manifest-owned stale file whose hash has drifted is left in place and kept in the manifest. Preview, export and refresh report it as refused and continue.
+- R5. A manifest-owned stale file whose hash has drifted is left in place and retained in the manifest with its previous entry unchanged. Preview, export and refresh list it in a separate "still active" section that names the file, and the run continues and exits 0.
 - R6. Preview's planned removals agree with what export actually does, including the hash check.
 
 **Parity and docs**
@@ -221,12 +221,16 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - **Filter after building, not inside the builders.** Pi filters the catalog right after `buildAgentCatalog`. The export filters inside `generateEntries`, after `generateAll`.
   - Both builders stay config-neutral, so duplicate-name checks and the committed fixtures still cover the full inventory.
   - One catalog filter covers the delegate's description, hint, lookup and error.
+- **A conflicting bare and qualified overlay disables.** OpenCode rejects a config that holds both a bare and a qualified overlay for one persona, as a duplicate overlay target. Pi's predicate treats the persona as disabled when either key disables it. That is the fail-safe direction for a config OpenCode won't load anyway.
 - **Match on stem and category, never on the frontmatter name.** `disabled_agents` keys on the file stem. Catalog entries carry `key` and `category`, and export entries carry `sourceRelPath`.
   - The frontmatter name equals the stem for every bundled persona today. A test pins that equality.
 - **Config loads before the skill resolver is built.** Pi already loads config at init and fails hard on invalid names. Only the order changes, and the bootstrap inputs stay the same.
 - **`refresh` removes stale owned files, matching `export`.** It reuses `findStalePaths` inside its existing transaction. The new manifest keeps desired entries plus retained drifted entries.
   - Without this, disabling a persona and running `refresh` leaves a live, unowned file that nothing can remove.
-- **Hand-edited stale files are skipped, not fatal.** A drifted, manifest-owned stale file stays on disk and stays in the manifest, and the run reports it as refused and continues. Marcus chose this over keeping the abort.
+- **Hand-edited stale files are skipped, not fatal.** A drifted, manifest-owned stale file stays on disk and stays in the manifest, and the run continues. Marcus chose this over keeping the abort.
+  - pi-subagents keeps loading that persona until the file is gone. The CLI therefore prints it under its own heading, "Still active in pi-subagents (edited since export, left in place)". Each line names the file and says to revert or delete it to finish. The exit code stays 0, a choice Marcus made over a non-zero exit.
+  - The reason text depends on the case. One case is a persona the user disabled. The other is a persona dropped from the curated set on upgrade.
+  - The retained file's previous manifest entry (filename, hash, status) carries over to the new manifest unchanged. It is never rehashed from disk. Rehashing would make the user's edited file look owned and unchanged, and the next run would delete it.
   - Ownership stays truthful, and the file is removed on the first run after the user reverts or deletes it.
   - The same tolerance applies when a package upgrade drops a persona from the curated set.
   - Re-enabling the persona overwrites the owned file, as export already does for any enabled drifted file.
@@ -241,11 +245,12 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - Can profiles disable personas? No. The strict profile bundle schema rejects both `disabled_agents` and `disable`.
 - Does the Pi bootstrap need filtering? No. It lists no skills.
 - What does an invalid disable name do? It fails config load, as it does today. That fails Pi init and export generation, by design.
+- What does the refresh result carry? `removed` and `retained` arrays of `{filename, reason}`, mirroring `ExportResult.refused`. Summary counts derive from them, and the CLI prints filenames from them.
+- Do the config reference docs need new wording? No. The `disabled_skills` and `disabled_agents` schema descriptions already say the settings apply globally, so the generated reference stays as it is.
 
 ### Deferred to Implementation
 
 - The exact name and argument shape of the exported predicate. Settle these against `collectRoutingTargets` and `lookupOverlay` when extracting.
-- Whether `RefreshResult` gains `removed` and `retained` counts, or reuses an existing refused channel. Follow the existing `ExportResult` shape.
 
 ## Implementation Units
 
@@ -262,6 +267,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - Modify: `src/pi.ts`
 - Test: `tests/unit/pi.test.ts`
 - Test: `tests/unit/config.test.ts`
+- Test: `tests/unit/disable-parity.test.ts`
 
 **Approach:**
 - Extract the disable closure into an exported function in `config.ts`, and have `collectRoutingTargets` call it.
@@ -279,8 +285,14 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - Edge case: disabling every persona registers the tool with an empty catalog and does not throw.
 - Edge case: a known-removed name in `disabled_agents` or `disabled_skills` warns and has no other effect.
 - Edge case: every bundled persona's frontmatter name equals its file stem.
-- Integration (parity): for a fixture matrix of bare, qualified, overlay-bare, overlay-qualified and non-matching names, the personas the predicate disables equal the personas `collectAgents` omits.
-- Isolation: every config test uses a temp HOME, a temp `OPENCODE_CONFIG_DIR` and a temp cwd, with no ambient user config.
+- Integration (parity): build a fixture matrix with rows for bare names, qualified names, overlay-bare, overlay-qualified and non-matching names. For each row, assert:
+  - the predicate's disabled set equals a literal expected list;
+  - the personas OpenCode's exported `createConfigHandler` omits equal the same list;
+  - every disabling row yields a non-empty set.
+
+  `collectAgents` is private, so the test goes through the handler.
+- Edge case: a bare plus a qualified overlay for one persona, where only one sets `disable`, leaves the persona disabled on Pi.
+- Isolation: Pi tests mock `os.homedir` (the existing `pi.test.ts` pattern) and unset `OPENCODE_CONFIG_DIR`. Project-scope cases `process.chdir` to a temp dir and restore it in `finally`. There is no ambient user config.
 
 **Verification:**
 - The unit suite passes.
@@ -296,13 +308,16 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 
 **Files:**
 - Modify: `src/lib/pi-subagents-export.ts`
+- Modify: `src/cli.ts`
 - Test: `tests/unit/pi-subagents-export.test.ts`
+- Test: `tests/unit/cli.test.ts`
 
 **Approach:**
 - In `generateEntries`, drop entries whose category and key the predicate disables, after config loads for the chosen scope.
 - `findStalePaths` separates hash-matching stale files, which it removes, from drifted ones, which it retains.
-- The export manifest keeps retained entries. Retained files go into the refused list with the reason "persona disabled but file modified since export; left in place".
-- `planRemoveActions` applies the same hash check and reports drifted files as refused.
+- The export manifest carries each retained file's previous entry over unchanged.
+- `runExport` prints retained files under the "still active" heading. The existing refused heading is reserved for unowned files.
+- `planRemoveActions` applies the same hash check, and preview shows drifted files in the same "still active" form.
 
 **Execution note:** Implement test-first.
 
@@ -312,7 +327,9 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 **Test scenarios:**
 - Happy path: after an export, disabling an exported persona and exporting again removes its owned, unchanged file and drops it from the manifest. Other files are untouched.
 - Happy path: preview for the same state lists that file as a removal.
-- Edge case: a hand-edited owned file for a disabled persona remains on disk and in the manifest. Export returns ok, lists the file as refused, and still updates the other personas. Preview lists it as refused.
+- Edge case: a hand-edited owned file for a disabled persona remains on disk, and its manifest entry is byte-identical to the previous one. Export returns ok, the CLI prints the file under "still active" and exits 0, and the other personas are still updated. Preview shows it the same way.
+- Edge case: a second export or refresh after that does not delete the hand-edited file.
+- Edge case: once the user reverts the file to its exported content, the next export removes it.
 - Edge case: an unowned file with a disabled persona's name is untouched.
 - Edge case: a manifest entry whose file is already gone is dropped without error.
 - Edge case: a disabled persona outside the curated set changes nothing.
@@ -339,9 +356,11 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - Test: `tests/unit/cli.test.ts`
 
 **Approach:**
-- `refresh` collects stale paths with the Unit 2 split, unlinks the hash-matching ones inside its existing `runWithRollback` transaction (rechecking the hash before each unlink), and builds the manifest from updated, kept and retained entries.
-- The refresh result reports removed and retained counts.
-- `runRefresh` prints removals and retained files. It prints "No changes" only when nothing changed.
+- `refresh` collects stale paths with the Unit 2 split. It unlinks the hash-matching ones inside its existing `runWithRollback` transaction, rechecking the hash before each unlink. It builds the manifest from updated and kept entries plus the retained entries carried over unchanged.
+- If a file drifts between planning and unlink, the hash recheck throws. The whole refresh then rolls back and returns an error. This is deliberately fail-closed.
+- `RefreshResult` gains `removed` and `retained` arrays.
+- `runRefresh` prints removals and "still active" files. It prints "No changes" only when nothing changed.
+- CLI tests pass a temp `HOME` and `OPENCODE_CONFIG_DIR` through `runCli`'s `extraEnv`, as the config-show tests do.
 
 **Execution note:** Implement test-first.
 
@@ -350,6 +369,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - Edge case: a hand-edited owned file for a disabled persona is retained in the manifest and reported. Refresh succeeds.
 - Edge case: when the only changes are removals, refresh does not print "No changes".
 - Error path: if an unlink fails partway, rollback restores the removed files and the previous manifest.
+- Error path: a file edited after planning but before unlink makes refresh roll back and report an error, and the file is untouched.
 
 **Verification:**
 - The unit suite passes.
@@ -366,8 +386,6 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 **Files:**
 - Modify: `HARNESSES.md` (the "Pi does not consume `disabled_skills`" paragraph and the stale PI-6 evidence citation)
 - Modify: `docs/src/content/docs/guides/pi-subagents.mdx`
-- Modify: `src/lib/config-schema.ts` (the `disabled_skills` and `disabled_agents` descriptions, if they say OpenCode only)
-- Modify: `docs/src/content/docs/reference/configuration.mdx` (regenerated, not hand-edited)
 
 **Approach:**
 - `HARNESSES.md` and the guide cover:
@@ -375,15 +393,14 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
   - that native `pi.skills` and `/skill:name` still list disabled skills;
   - export and refresh removal of owned, unchanged files;
   - hand-edited files that are left in place;
-  - that project disables don't affect a global export;
-  - that personas outside the curated set are unaffected.
-- Regenerate the config reference from the schema.
+  - that project disables don't affect a global export, so hiding a persona everywhere needs a user-config disable;
+  - that a disabled persona outside the curated set is still removed from the Pi delegate catalog, and that export ignores it;
+  - that re-enabling a persona overwrites a hand-edited exported file.
 
 **Test scenarios:**
 - Test expectation: none. This is documentation, and the gates below check it.
 
 **Verification:**
-- `bun run docs:generate` leaves no drift.
 - `bun run docs:build` succeeds.
 - `bun scripts/content-integrity.ts` is clean, including solution-doc citations.
 - markdownlint passes on the changed Markdown.
@@ -414,7 +431,9 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 | Users who set disable fields long ago are surprised when personas or skills vanish on Pi | A behavior-change note in the PR, commit bodies and docs. |
 | `refresh` deleting a file the user still wants | It deletes only manifest-owned, hash-matching files for personas that left the desired set, under rollback. Drifted files are kept. |
 | The skip-on-drift tolerance hides a persona dropped from the curated set on upgrade | It is reported as refused on every run until resolved, and the PR notes it. |
-| The predicate drifts from OpenCode | Parity matrix test. |
+| The predicate drifts from OpenCode | Parity matrix test with literal expected sets. |
+| A project disable leaves a globally exported persona live in that project's pi-subagents | Documented. A user-config disable hides it everywhere. |
+| A disabled persona with a hand-edited file stays live in pi-subagents | A separate "still active" CLI section names the file and the fix on every run. |
 
 ## Documentation / Operational Notes
 
