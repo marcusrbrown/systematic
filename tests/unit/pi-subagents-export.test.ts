@@ -16,6 +16,7 @@
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import os from 'node:os'
@@ -2662,6 +2663,198 @@ describe('export honors disabled personas', () => {
         false,
       )
     })
+  })
+
+  describe('refresh', () => {
+    const SECOND_KEY = 'best-practices-researcher'
+    const SECOND_FILE = 'systematic-best-practices-researcher.md'
+
+    function refreshProject(cwd: string, agentsRoot: string) {
+      return refresh(agentsRoot, { scope: 'project', cwd })
+    }
+
+    test('refresh removes the file of a persona disabled since export and drops it from the manifest', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+        const others = listing(agentsRoot)
+        writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+        const result = refreshProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.removed).toEqual([{ filename: DISABLED_FILE }])
+        expect(result.retained).toEqual([])
+        expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+        expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+        const after = listing(agentsRoot)
+        for (const [name, content] of Object.entries(others)) {
+          if (name === DISABLED_FILE || name === MANIFEST_FILENAME) continue
+          expect(after[name]).toBe(content)
+        }
+      })
+    })
+
+    test('after a refresh removal, re-enabling the persona and exporting does not refuse its file as unowned', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+        writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+        refreshProject(cwd, agentsRoot)
+        writeUserConfig({})
+
+        const result = exportProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.refused).toEqual([])
+        expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(true)
+        expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeDefined()
+      })
+    })
+
+    test('refresh retains a hand-edited file of a disabled persona, keeps its manifest entry byte-identical and still succeeds', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+        const entryBefore = manifestEntry(agentsRoot, DISABLED_FILE)
+        fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'my edits\n')
+        writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+
+        const result = refreshProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.removed).toEqual([])
+        expect(result.retained).toHaveLength(1)
+        expect(result.retained[0]?.filename).toBe(DISABLED_FILE)
+        expect(result.retained[0]?.reason).toMatch(/disabled/i)
+        expect(
+          fs.readFileSync(path.join(agentsRoot, DISABLED_FILE), 'utf-8'),
+        ).toBe('my edits\n')
+        expect(JSON.stringify(manifestEntry(agentsRoot, DISABLED_FILE))).toBe(
+          JSON.stringify(entryBefore),
+        )
+      })
+    })
+
+    test('a file retained by refresh is still owned: reverting it lets the next refresh remove it', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+        const exported = fs.readFileSync(
+          path.join(agentsRoot, DISABLED_FILE),
+          'utf-8',
+        )
+        fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), 'my edits\n')
+        writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+        refreshProject(cwd, agentsRoot)
+        fs.writeFileSync(path.join(agentsRoot, DISABLED_FILE), exported)
+
+        const result = refreshProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.removed).toEqual([{ filename: DISABLED_FILE }])
+        expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+        expect(manifestEntry(agentsRoot, DISABLED_FILE)).toBeUndefined()
+      })
+    })
+
+    test("refresh removes one disabled persona's file and retains another's edited file in the same run", () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+        fs.writeFileSync(path.join(agentsRoot, SECOND_FILE), 'my edits\n')
+        writeUserConfig({ disabled_agents: [DISABLED_KEY, SECOND_KEY] })
+
+        const result = refreshProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.removed).toEqual([{ filename: DISABLED_FILE }])
+        expect(result.retained.map((r) => r.filename)).toEqual([SECOND_FILE])
+        expect(fs.existsSync(path.join(agentsRoot, DISABLED_FILE))).toBe(false)
+        expect(fs.existsSync(path.join(agentsRoot, SECOND_FILE))).toBe(true)
+      })
+    })
+
+    test('refresh retains an edited file whose persona left the curated set, saying so', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        fs.mkdirSync(agentsRoot, { recursive: true })
+        const filename = 'systematic-no-longer-curated.md'
+        const hash = crypto
+          .createHash('sha256')
+          .update('original')
+          .digest('hex')
+        writeManifest(
+          agentsRoot,
+          makeManifest(agentsRoot, [{ filename, hash, status: 'exported' }]),
+        )
+        writeFile(agentsRoot, filename, 'edited')
+
+        const result = refreshProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.retained).toHaveLength(1)
+        expect(result.retained[0]?.reason).toMatch(/no longer.*curated/i)
+        expect(fs.readFileSync(path.join(agentsRoot, filename), 'utf-8')).toBe(
+          'edited',
+        )
+        expect(manifestEntry(agentsRoot, filename)?.hash).toBe(hash)
+      })
+    })
+
+    test('a refresh with nothing to update, remove or retain reports empty lists', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+
+        const result = refreshProject(cwd, agentsRoot)
+
+        expect(result.status).toBe('ok')
+        expect(result.updated).toBe(0)
+        expect(result.removed).toEqual([])
+        expect(result.retained).toEqual([])
+      })
+    })
+
+    test('a failing removal leaves every file and the manifest as they were', () => {
+      withProject(({ cwd, agentsRoot }) => {
+        exportProject(cwd, agentsRoot)
+        const before = listing(agentsRoot)
+        writeUserConfig({ disabled_agents: [DISABLED_KEY] })
+        fs.chmodSync(agentsRoot, 0o555)
+        try {
+          const result = refreshProject(cwd, agentsRoot)
+
+          expect(result.status).toBe('error')
+          expect(result.removed).toEqual([])
+        } finally {
+          fs.chmodSync(agentsRoot, 0o755)
+        }
+        expect(listing(agentsRoot)).toEqual(before)
+      })
+    })
+
+    // A file the user cannot unlink makes the second removal fail after the
+    // first succeeded. Only macOS lets an owner make a file immutable without
+    // privileges, so the mid-transaction rollback is proven there.
+    test.skipIf(process.platform !== 'darwin')(
+      'when a later removal fails, earlier removals are restored along with the manifest',
+      () => {
+        withProject(({ cwd, agentsRoot }) => {
+          exportProject(cwd, agentsRoot)
+          const before = listing(agentsRoot)
+          writeUserConfig({ disabled_agents: [DISABLED_KEY, SECOND_KEY] })
+          const order = (readManifest(agentsRoot)?.files ?? [])
+            .map((f) => f.filename)
+            .filter((f) => f === DISABLED_FILE || f === SECOND_FILE)
+          const locked = path.join(agentsRoot, order.at(-1) ?? '')
+          expect(order).toHaveLength(2)
+          spawnSync('chflags', ['uchg', locked])
+          try {
+            const result = refreshProject(cwd, agentsRoot)
+
+            expect(result.status).toBe('error')
+            expect(result.removed).toEqual([])
+          } finally {
+            spawnSync('chflags', ['nouchg', locked])
+          }
+          expect(listing(agentsRoot)).toEqual(before)
+        })
+      },
+    )
   })
 
   test('the committed generator output stays config-neutral', () => {

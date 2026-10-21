@@ -2518,6 +2518,59 @@ describe('cli pi-subagents with disabled personas', () => {
     }
   })
 
+  it('refresh removes the file of a disabled persona and does not report "No changes"', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+      writeUserConfig(box, { disabled_agents: ['repo-research-analyst'] })
+
+      const result = runCli(['pi-subagents', 'refresh'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(DISABLED_FILE)
+      expect(result.stdout).toMatch(/Removed 1 /)
+      expect(result.stdout).not.toMatch(/No changes/)
+      expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
+      expect(fs.existsSync(path.join(box.agentsDir, DISABLED_FILE))).toBe(false)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('refresh prints a hand-edited file of a disabled persona under its own heading, leaves it, and exits 0', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'refresh'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(result.stdout).toContain(DISABLED_FILE)
+      expect(result.stdout).not.toMatch(/No changes/)
+      expect(
+        fs.readFileSync(path.join(box.agentsDir, DISABLED_FILE), 'utf-8'),
+      ).toBe('my edits\n')
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('refresh with nothing to update, remove or retain still says no changes', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      const result = runCli(['pi-subagents', 'refresh'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/No changes/)
+      expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
   it('a refused unowned file is still listed under the refused heading, not under still active', () => {
     const box = mkSandbox()
     try {

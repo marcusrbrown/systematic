@@ -1035,17 +1035,27 @@ function runRefresh(agentsRoot: string, scope: 'project' | 'global'): void {
     console.error(`Refresh failed: ${result.error ?? 'unknown error'}`)
     process.exit(1)
   }
-  if (result.updated === 0) {
+  const changed =
+    result.updated + result.removed.length + result.retained.length > 0
+  if (!changed) {
     console.log('All owned persona files are up to date. No changes.')
-  } else {
+  }
+  if (result.updated > 0) {
     console.log(
       `Refreshed: updated ${result.updated} file(s) in ${agentsRoot}/.`,
     )
+  }
+  if (result.removed.length > 0) {
+    console.log(
+      `Removed ${result.removed.length} file(s) from ${agentsRoot}/ (persona disabled or no longer exported):`,
+    )
+    for (const r of result.removed) console.log(`  - ${r.filename}`)
   }
   if (result.skippedUnowned > 0)
     console.log(
       `  Skipped ${result.skippedUnowned} unowned file(s) (not touched).`,
     )
+  printStillActive(result.retained)
 }
 
 function runCleanup(agentsRoot: string, scope: 'project' | 'global'): void {

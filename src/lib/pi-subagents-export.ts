@@ -1232,6 +1232,17 @@ function findStalePaths(
   return { remove, retained }
 }
 
+/**
+ * Deletes one stale owned file. The hash is rechecked immediately before the
+ * unlink: that closes the window between collection (`findStalePaths`) and
+ * this delete, in which a writer could have replaced the file's content.
+ */
+function unlinkStaleOwned({ path: p, filename, hash }: DeletionTarget): void {
+  if (!fs.existsSync(p)) return
+  assertHashMatchesOrThrow(p, hash, filename, 'remove stale file')
+  fs.unlinkSync(p)
+}
+
 function hashOfFile(filePath: string): string {
   return crypto
     .createHash('sha256')
@@ -1332,15 +1343,7 @@ export function exportPersonas(
             () =>
               atomicWriteString(safePath, entry.content ?? ''),
         ),
-        ...staleOwned.map(({ path: p, filename, hash }) => () => {
-          if (fs.existsSync(p)) {
-            // Recheck immediately before unlink: closes the TOCTOU window
-            // between collection (findStalePaths, above) and this delete —
-            // a writer could have replaced the file's content in between.
-            assertHashMatchesOrThrow(p, hash, filename, 'remove stale file')
-            fs.unlinkSync(p)
-          }
-        }),
+        ...staleOwned.map((target) => () => unlinkStaleOwned(target)),
         () => writeManifest(absRoot, newManifest()),
       ],
     )
@@ -1373,8 +1376,23 @@ export function exportPersonas(
 export interface RefreshResult {
   status: 'ok' | 'error'
   updated: number
+  /** Stale owned files that were deleted: unchanged since export, and no longer wanted. */
+  removed: Array<{ filename: string }>
+  /** Stale owned files left in place because they were edited since export. */
+  retained: RetainedFile[]
   skippedUnowned: number
   error?: string
+}
+
+function makeRefreshError(error: string, skippedUnowned = 0): RefreshResult {
+  return {
+    status: 'error',
+    updated: 0,
+    removed: [],
+    retained: [],
+    skippedUnowned,
+    error,
+  }
 }
 
 // ── refresh internals ─────────────────────────────────────────────────────────
@@ -1436,28 +1454,17 @@ function classifyRefreshEntries(
 function validateRefreshRoot(agentsRoot: string): string | RefreshResult {
   const absRoot = path.resolve(agentsRoot)
   if (!fs.existsSync(absRoot))
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: `Agents root does not exist: ${absRoot}. Run export first.`,
-    }
+    return makeRefreshError(
+      `Agents root does not exist: ${absRoot}. Run export first.`,
+    )
   try {
     const stat = fs.lstatSync(absRoot)
     if (stat.isSymbolicLink())
-      return {
-        status: 'error',
-        updated: 0,
-        skippedUnowned: 0,
-        error: `Refusing to write under ${absRoot}: not a real directory (symlink)`,
-      }
+      return makeRefreshError(
+        `Refusing to write under ${absRoot}: not a real directory (symlink)`,
+      )
   } catch (err) {
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: err instanceof Error ? err.message : String(err),
-    }
+    return makeRefreshError(err instanceof Error ? err.message : String(err))
   }
   return absRoot
 }
@@ -1469,17 +1476,15 @@ export function refresh(
   configOptions?: ExportConfigOptions,
 ): RefreshResult {
   // Resolve config first (fail closed before any mutation).
-  let entries: ManifestEntry[]
+  let generated: GeneratedEntries
   try {
-    entries = generateEntries(findPackageRoot(), configOptions).entries
+    generated = generateEntries(findPackageRoot(), configOptions)
   } catch (err) {
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
-    }
+    return makeRefreshError(
+      `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
+    )
   }
+  const { entries, disabledFilenames } = generated
 
   const absRootCandidate = path.resolve(agentsRoot)
 
@@ -1490,12 +1495,7 @@ export function refresh(
   try {
     assertAnchoredPathSafe(anchor, absRootCandidate)
   } catch (err) {
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: err instanceof Error ? err.message : String(err),
-    }
+    return makeRefreshError(err instanceof Error ? err.message : String(err))
   }
 
   const rootOrErr = validateRefreshRoot(agentsRoot)
@@ -1508,12 +1508,7 @@ export function refresh(
   try {
     absRoot = assertCanonicalRootWithinAnchor(anchor, rootOrErr)
   } catch (err) {
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: err instanceof Error ? err.message : String(err),
-    }
+    return makeRefreshError(err instanceof Error ? err.message : String(err))
   }
 
   // Manifest read happens INSIDE the lock (below), not here: reading it
@@ -1524,12 +1519,9 @@ export function refresh(
   const lockResult = withLock(absRoot, (): RefreshResult => {
     const manifestResult = readManifestStrict(absRoot)
     if (manifestResult.kind === 'malformed')
-      return {
-        status: 'error',
-        updated: 0,
-        skippedUnowned: 0,
-        error: `Malformed manifest — refusing to refresh: ${manifestResult.error}`,
-      }
+      return makeRefreshError(
+        `Malformed manifest — refusing to refresh: ${manifestResult.error}`,
+      )
     const manifest =
       manifestResult.kind === 'ok' ? manifestResult.manifest : null
 
@@ -1538,17 +1530,43 @@ export function refresh(
       entries,
       ownedFilenames(manifest),
     )
+    // Owned files that left the desired set (a disabled persona, or one dropped
+    // from the curated set) are removed when unchanged and retained when edited.
+    const currentFilenames = new Set(
+      entries
+        .filter((e) => e.status !== 'excluded-critical' && e.content)
+        .map((e) => e.filename),
+    )
+    let stale: ReturnType<typeof findStalePaths>
+    try {
+      stale = findStalePaths(
+        absRoot,
+        manifest,
+        currentFilenames,
+        disabledFilenames,
+      )
+    } catch (err) {
+      return makeRefreshError(
+        err instanceof Error ? err.message : String(err),
+        skippedUnowned,
+      )
+    }
     const needsManifest =
       manifest !== null || toUpdate.length + toKeep.length > 0
     const newManifest = (): PiSubagentsManifest => ({
       generatedAt: new Date().toISOString(),
       agentsRoot: absRoot,
-      files: buildNewManifestFiles(toUpdate, toKeep),
+      files: buildNewManifestFiles(
+        toUpdate,
+        toKeep,
+        stale.retained.map((r) => r.entry),
+      ),
     })
 
     const tx = runWithRollback(
       [
         ...toUpdate.map((x) => x.safePath),
+        ...stale.remove.map((x) => x.path),
         path.join(absRoot, MANIFEST_FILENAME),
       ],
       [
@@ -1557,23 +1575,27 @@ export function refresh(
             () =>
               atomicWriteString(safePath, entry.content ?? ''),
         ),
+        ...stale.remove.map((target) => () => unlinkStaleOwned(target)),
         ...(needsManifest ? [() => writeManifest(absRoot, newManifest())] : []),
       ],
     )
 
     if (!tx.ok)
-      return { status: 'error', updated: 0, skippedUnowned, error: tx.error }
+      return makeRefreshError(tx.error ?? 'refresh failed', skippedUnowned)
 
-    return { status: 'ok', updated: toUpdate.length, skippedUnowned }
+    return {
+      status: 'ok',
+      updated: toUpdate.length,
+      removed: stale.remove.map(({ filename }) => ({ filename })),
+      retained: stale.retained.map(({ filename, reason }) => ({
+        filename,
+        reason,
+      })),
+      skippedUnowned,
+    }
   })
 
-  if (!lockResult.locked)
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: lockResult.error,
-    }
+  if (!lockResult.locked) return makeRefreshError(lockResult.error)
   return lockResult.result
 }
 
