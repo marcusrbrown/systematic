@@ -102,7 +102,7 @@
     "@opencode-ai/plugin": "1.19.3",
     "@opencode-ai/sdk": "1.19.3",
     "@semantic-release/exec": "7.1.0",
-    "@tintinweb/pi-subagents": "0.14.3",
+    "@tintinweb/pi-subagents": "0.22.0",
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
     "@types/node": "26.6.5",
@@ -130,7 +130,8 @@
     "fast-uri": "~3.1.7",
     "markdown-it": "~14.3.3",
     "smol-toml": "~1.9.0",
-    "source-map-js": "^1.2.2"
+    "source-map-js": "^1.2.2",
+    "vite": "~8.1.6"
   },
   "publishConfig": {
     "access": "public",
