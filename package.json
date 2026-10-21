@@ -128,6 +128,7 @@
     "conventional-changelog-writer": ">=9",
     "devalue": "^5.9.3",
     "fast-uri": "~3.1.7",
+    "markdown-it": "~14.3.3",
     "smol-toml": "~1.9.0",
     "source-map-js": "^1.2.2"
   },
