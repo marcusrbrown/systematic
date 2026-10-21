@@ -4,6 +4,22 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.24.2](https://github.com/marcusrbrown/systematic/compare/v3.24.1...v3.24.2) (2026-10-21)
+
+### Build System
+
+* **deps:** update Pi to v1 ([#1184](https://github.com/marcusrbrown/systematic/issues/1184)) ([d2e6647](https://github.com/marcusrbrown/systematic/commit/d2e6647b97e95c489bd1df2b4f469e9f5ed8f0c0))
+
+### Tests
+
+* **evals:** give the R2 coverage probe an explicit timeout ([#1186](https://github.com/marcusrbrown/systematic/issues/1186)) ([c2bb180](https://github.com/marcusrbrown/systematic/commit/c2bb1808466dacfcefa1d6dad41279ee9084e911))
+* **pi:** ask the pi-subagents Agent tool for an inline result ([#1189](https://github.com/marcusrbrown/systematic/issues/1189)) ([14a12ab](https://github.com/marcusrbrown/systematic/commit/14a12ab828e9facf0101d1fff07465d335e61384))
+* **pi:** build before_agent_start fixtures that type on both Pi 0.99 and 1.x ([#1185](https://github.com/marcusrbrown/systematic/issues/1185)) ([cd8c2bc](https://github.com/marcusrbrown/systematic/commit/cd8c2bc8c1514c58e6db134042d7676d856c64df))
+
+### Miscellaneous Chores
+
+* **dev:** update dependency @tintinweb/pi-subagents to v0.22.0 ([#1166](https://github.com/marcusrbrown/systematic/issues/1166)) ([b291bf5](https://github.com/marcusrbrown/systematic/commit/b291bf560f99fedd642adc8e9220fc466a710953))
+
 ## [3.24.1](https://github.com/marcusrbrown/systematic/compare/v3.24.0...v3.24.1) (2026-10-20)
 
 ### Bug Fixes
