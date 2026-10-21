@@ -2571,6 +2571,64 @@ describe('cli pi-subagents with disabled personas', () => {
     }
   })
 
+  it('export whose only remaining entry is an edited file does not say "No changes" and counts it in the Summary', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).not.toMatch(/No changes/)
+      expect(result.stdout).toMatch(/Summary: .*, 1 still active/)
+      expect(result.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(result.stdout).toContain(DISABLED_FILE)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('export with nothing to write or report still says no changes, with a zero still-active count', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/No changes/)
+      expect(result.stdout).toMatch(/Summary: .*, 0 still active/)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('preview counts edited files in the same Summary line as export', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'preview'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/Summary: .*, 1 still active/)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('usage says refresh also removes unchanged owned files for personas that are no longer exported', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['pi-subagents'], cwd)
+
+      expect(result.stderr).toMatch(/no longer exported/i)
+      expect(result.stderr).toMatch(/edited .*still active/is)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('a refused unowned file is still listed under the refused heading, not under still active', () => {
     const box = mkSandbox()
     try {

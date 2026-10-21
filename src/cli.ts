@@ -155,7 +155,9 @@ const PI_SUBAGENTS_USAGE = `Usage: systematic pi-subagents <subcommand> [--scope
 Subcommands:
   preview   Show what export would do (no writes)
   export    Write persona files to agents dir
-  refresh   Replace stale owned files from current source
+  refresh   Replace stale owned files from current source, and remove unchanged
+            owned files for personas that are no longer exported (edited files
+            stay and are listed as still active)
   cleanup   Remove all generated files and manifest
 
 Scope:
@@ -971,16 +973,23 @@ function retainedFromPlan(
 }
 
 function summarizePlan(plan: ReturnType<typeof preview>): void {
-  const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
+  const counts = {
+    create: 0,
+    update: 0,
+    refuse: 0,
+    remove: 0,
+    skip: 0,
+    retain: 0,
+  }
   for (const a of plan.actions) {
-    if (a.action === 'retain') continue
     counts[a.action]++
     printActionLine(a)
   }
   console.log('')
   console.log(
     `Summary: ${counts.create} create, ${counts.update} update, ` +
-      `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
+      `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove, ` +
+      `${counts.retain} still active`,
   )
 }
 
@@ -1022,8 +1031,12 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     summarizePlan(plan)
   }
   if (!hasWork) {
-    console.log('All persona files are already up to date. No changes.')
-    printStillActive(retainedFromPlan(plan))
+    const stillActive = retainedFromPlan(plan)
+    // Edited files still need reporting, so only a run with nothing to report says "No changes".
+    if (stillActive.length === 0) {
+      console.log('All persona files are already up to date. No changes.')
+    }
+    printStillActive(stillActive)
     return
   }
   const result = exportPersonas(agentsRoot, configOptions)
@@ -1032,7 +1045,12 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     process.exit(1)
   }
   const hadRemovals = plan.actions.some((a) => a.action === 'remove')
-  if (result.written === 0 && result.refused.length === 0 && !hadRemovals) {
+  if (
+    result.written === 0 &&
+    result.refused.length === 0 &&
+    result.retained.length === 0 &&
+    !hadRemovals
+  ) {
     console.log('All persona files are already up to date. No changes.')
   } else {
     console.log(

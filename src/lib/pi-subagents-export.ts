@@ -1175,7 +1175,7 @@ function assertHashMatchesOrThrow(
   if (hashOfFile(filePath) !== expectedHash) {
     throw new Error(
       `Refusing to ${verb} "${filename}": content on disk does not match the ` +
-        `manifest hash (drifted or tampered). Resolve manually or re-export/refresh first.`,
+        `manifest hash (drifted or tampered). Resolve it manually: revert the file to its exported content or delete it by hand, then run the command again.`,
     )
   }
 }
@@ -1192,10 +1192,25 @@ interface RetainedStale extends RetainedFile {
   entry: ManifestFileEntry
 }
 
-function retainedReason(filename: string, disabled: Set<string>): string {
+/**
+ * Why an owned file left the desired set. Only a disable is named as one;
+ * every other cause (dropped from the curated set, or still curated but
+ * excluded from the export) is "no longer exported", which is true for all of
+ * them.
+ */
+function staleReason(filename: string, disabled: Set<string>): string {
   return disabled.has(filename)
-    ? 'persona disabled, but the file was edited since export; left in place'
-    : 'persona is no longer in the curated set, but the file was edited since export; left in place'
+    ? 'persona disabled'
+    : 'persona no longer exported'
+}
+
+function retainedReason(filename: string, disabled: Set<string>): string {
+  return `${staleReason(filename, disabled)}, but the file was edited since export; left in place`
+}
+
+/** A stale owned file that is safe to delete, with the reason it is stale. */
+interface StaleRemoval extends DeletionTarget {
+  reason: string
 }
 
 /**
@@ -1211,8 +1226,8 @@ function findStalePaths(
   prevManifest: PiSubagentsManifest | null,
   currentFilenames: Set<string>,
   disabledFilenames: Set<string>,
-): { remove: DeletionTarget[]; retained: RetainedStale[] } {
-  const remove: DeletionTarget[] = []
+): { remove: StaleRemoval[]; retained: RetainedStale[] } {
+  const remove: StaleRemoval[] = []
   const retained: RetainedStale[] = []
   if (!prevManifest) return { remove, retained }
   for (const mEntry of prevManifest.files) {
@@ -1220,7 +1235,12 @@ function findStalePaths(
     const safe = safeFilePath(absRoot, mEntry.filename)
     if (safe === null || !fs.existsSync(safe)) continue
     if (hashOfFile(safe) === mEntry.hash) {
-      remove.push({ path: safe, filename: mEntry.filename, hash: mEntry.hash })
+      remove.push({
+        path: safe,
+        filename: mEntry.filename,
+        hash: mEntry.hash,
+        reason: staleReason(mEntry.filename, disabledFilenames),
+      })
     } else {
       retained.push({
         filename: mEntry.filename,
@@ -1377,7 +1397,7 @@ export interface RefreshResult {
   status: 'ok' | 'error'
   updated: number
   /** Stale owned files that were deleted: unchanged since export, and no longer wanted. */
-  removed: Array<{ filename: string }>
+  removed: Array<{ filename: string; reason: string }>
   /** Stale owned files left in place because they were edited since export. */
   retained: RetainedFile[]
   skippedUnowned: number
@@ -1578,7 +1598,10 @@ export function refresh(
     return {
       status: 'ok',
       updated: toUpdate.length,
-      removed: stale.remove.map(({ filename }) => ({ filename })),
+      removed: stale.remove.map(({ filename, reason }) => ({
+        filename,
+        reason,
+      })),
       retained: stale.retained.map(({ filename, reason }) => ({
         filename,
         reason,

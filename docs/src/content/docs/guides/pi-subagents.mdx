@@ -152,9 +152,10 @@ The export honors the same disable settings as the rest of Systematic: a persona
 
 - **Pi reads the settings once, at start.** Restart Pi after changing them. The `systematic pi-subagents` commands read them each time they run.
 - **Unchanged files are removed.** `export` and `refresh` delete a disabled persona's file, and its manifest entry, only if the manifest owns it and its content still matches what Systematic exported.
-- **Edited files stay, and keep being listed.** If you edited the file, it is left in place. The command lists it under "Still active in pi-subagents (edited since export, left in place)" every time it runs, because pi-subagents keeps loading it. Revert the file to its exported content, or delete it, to finish the removal. The command still exits 0. A persona dropped from the curated set in a later Systematic release is handled the same way.
+- **Edited files stay, and keep being listed.** If you edited the file, it is left in place. The command lists it under "Still active in pi-subagents (edited since export, left in place)" every time it runs, because pi-subagents keeps loading it. Revert the file to its exported content, or delete it, to finish the removal. The command still exits 0. A persona that is no longer exported, such as one dropped from the curated set in a later Systematic release, is handled the same way.
 - **Re-enabling overwrites.** If you enable a persona again while its edited file is still there, the next `export` or `refresh` replaces the file with the generated content.
 - **Scope follows config loading.** A project-level disable does not change a `--scope global` export, which never reads project config. To hide a persona everywhere, disable it in your user config.
+- **Project config can remove files.** A `disabled_agents` entry or `agents.<name>.disable` in project config makes a project-scope `export` or `refresh` remove that persona's unchanged exported file. `preview` lists the removal first.
 - **Personas outside the export set.** A persona that is not in the curated export set can still be disabled. It disappears from `systematic_delegate`, and the export has nothing to remove.
 
 ## Ownership model and drift
@@ -177,7 +178,7 @@ Every operation walks the path from the scope anchor (the project cwd, or the re
 
 ### Hash-gated deletion
 
-`cleanup`, and the removal of files that are no longer wanted during `export` and `refresh`, only delete a manifest-owned file whose on-disk content hash still matches the hash recorded in the manifest. If you have edited the file, `cleanup` refuses and leaves both the file and the manifest untouched — you resolve the conflict manually first. `export` and `refresh` leave an edited file in place instead and report it as still active (see [Disabled personas](#disabled-personas)). `refresh` also overwrites current manifest-owned generated files that have drifted from source. Manifest content hashes are drift/ownership evidence, not a cryptographic integrity or authenticity guarantee.
+`cleanup`, and the removal of files that are no longer wanted during `export` and `refresh`, only delete a manifest-owned file whose on-disk content hash still matches the hash recorded in the manifest. If you have edited the file, `cleanup` refuses and leaves both the file and the manifest untouched. Revert the file to its exported content, or delete it by hand, then run `cleanup` again. Re-running `refresh` does not help for a disabled persona, because it leaves the edited file in place. `export` and `refresh` leave an edited file in place instead and report it as still active (see [Disabled personas](#disabled-personas)). `refresh` also overwrites current manifest-owned generated files that have drifted from source. If a manifest-owned file cannot be read at all (a directory in its place, for example), `export` and `refresh` stop with an error and change nothing. Manifest content hashes are drift/ownership evidence, not a cryptographic integrity or authenticity guarantee.
 
 ### Tested runtime contract
 
