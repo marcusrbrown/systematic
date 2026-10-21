@@ -1183,6 +1183,8 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
                 'Delegate to best-practices-researcher via systematic_delegate to summarize a best practice.',
               description: 'Delegate best-practice summary',
               subagent_type: 'general-purpose',
+              // Newer pi-subagents background an Agent call by default; the test needs the result inline.
+              run_in_background: false,
             },
           },
         ],
@@ -1363,6 +1365,8 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
               prompt: 'Give a one-sentence summary of this repository.',
               description: 'Repo research via exported persona',
               subagent_type: 'systematic-repo-research-analyst',
+              // Inline result, as above.
+              run_in_background: false,
             },
           },
         ],
