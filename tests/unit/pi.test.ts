@@ -14,6 +14,10 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { ToolResult } from '@opencode-ai/plugin'
 import type { Config } from '@opencode-ai/sdk'
+import {
+  type AgentCatalogEntry,
+  buildAgentCatalog,
+} from '../../src/lib/agent-resolver.ts'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
 import { formatSkillCommandName } from '../../src/lib/skill-loader.ts'
 import {
@@ -596,5 +600,339 @@ describe('src/pi.ts systematic_delegate tool registration', () => {
       (t) => t.name === 'systematic_delegate',
     )
     expect(delegateTool?.description).toContain('git-history-analyzer')
+  })
+})
+
+describe('src/pi.ts disabled skills and agents', () => {
+  const bundledAgentsDir = fileURLToPath(
+    new URL('../../agents', import.meta.url),
+  )
+  const catalog = buildAgentCatalog(bundledAgentsDir)
+  // The first persona by name appears in the delegate's parameter hint, so a
+  // hint that stops naming it is observable; the second stays enabled.
+  const disabledPersona = catalog[0] as AgentCatalogEntry
+  const enabledPersona = catalog[1] as AgentCatalogEntry
+  const DISABLED_SKILL = 'ce:brainstorm'
+  const ENABLED_SKILL = 'ce:plan'
+
+  interface PiConfigFiles {
+    /** Written to the user config file. */
+    user?: Record<string, unknown>
+    /** Written to `<cwd>/.opencode/systematic.json`. */
+    project?: Record<string, unknown>
+  }
+
+  /** Runs the extension against isolated config: no ambient user config reaches it. */
+  async function loadPiTools(
+    files: PiConfigFiles = {},
+    deps?: Parameters<typeof piExtension>[1],
+  ): Promise<ToolDefinition[]> {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pi-disable-'),
+    )
+    const originalHomedir = os.homedir
+    const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    const originalCwd = process.cwd()
+    const projectDir = path.join(tempDir, 'project')
+    fs.mkdirSync(projectDir, { recursive: true })
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => tempDir
+    if (files.user !== undefined) {
+      const userFile = path.join(
+        tempDir,
+        '.config',
+        'opencode',
+        'systematic.json',
+      )
+      fs.mkdirSync(path.dirname(userFile), { recursive: true })
+      fs.writeFileSync(userFile, JSON.stringify(files.user))
+    }
+    if (files.project !== undefined) {
+      const projectFile = path.join(projectDir, '.opencode', 'systematic.json')
+      fs.mkdirSync(path.dirname(projectFile), { recursive: true })
+      fs.writeFileSync(projectFile, JSON.stringify(files.project))
+    }
+    process.chdir(projectDir)
+
+    try {
+      const api = createFakeExtensionApi()
+      await piExtension(api, deps)
+      return api.registeredTools
+    } finally {
+      process.chdir(originalCwd)
+      os.homedir = originalHomedir
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  const toolContext = {
+    cwd: os.tmpdir(),
+    model: undefined,
+    modelRegistry: { find: () => undefined },
+  } as unknown as Parameters<ToolDefinition['execute']>[4]
+
+  /** The text of the `name` / `agent` parameter hint. */
+  function parameterHint(tool: ToolDefinition, parameter: string): string {
+    const schema = tool.parameters as unknown as {
+      properties: Record<string, { description: string }>
+    }
+    return schema.properties[parameter]?.description ?? ''
+  }
+
+  async function executeError(
+    tool: ToolDefinition,
+    params: Record<string, string>,
+  ): Promise<string> {
+    try {
+      await tool.execute(
+        'test-tool-call-id',
+        params,
+        undefined,
+        undefined,
+        toolContext,
+      )
+    } catch (error) {
+      return (error as Error).message
+    }
+    throw new Error('execute unexpectedly succeeded')
+  }
+
+  describe('skills', () => {
+    test('with no disable settings the skill is listed, hinted and loadable', async () => {
+      const tools = await loadPiTools()
+      const skillTool = findToolByName(tools, 'systematic_skill')
+
+      expect(skillTool.description).toContain(`- ${DISABLED_SKILL}:`)
+      expect(parameterHint(skillTool, 'name')).toContain(DISABLED_SKILL)
+    })
+
+    test.each([
+      ['user config', { user: { disabled_skills: [DISABLED_SKILL] } }],
+      ['project config', { project: { disabled_skills: [DISABLED_SKILL] } }],
+    ])(
+      'a disabled skill in %s leaves the Pi systematic_skill description, hint and loader',
+      async (_label, files) => {
+        const tools = await loadPiTools(files)
+        const skillTool = findToolByName(tools, 'systematic_skill')
+        const expectedOptions = {
+          bundledSkillsDir,
+          disabledSkills: [DISABLED_SKILL],
+        }
+
+        expect(skillTool.description).toBe(
+          buildSkillToolDescription(expectedOptions),
+        )
+        expect(skillTool.description).not.toContain(`- ${DISABLED_SKILL}:`)
+        expect(parameterHint(skillTool, 'name')).toBe(
+          buildSkillToolParameterHint(expectedOptions),
+        )
+        expect(parameterHint(skillTool, 'name')).not.toContain(DISABLED_SKILL)
+        expect(await executeError(skillTool, { name: DISABLED_SKILL })).toBe(
+          await executeError(skillTool, { name: 'nonexistent' }).then(
+            (message) =>
+              message.replace('"nonexistent"', `"${DISABLED_SKILL}"`),
+          ),
+        )
+      },
+    )
+
+    test('an enabled skill still loads when another skill is disabled', async () => {
+      const tools = await loadPiTools({
+        user: { disabled_skills: [DISABLED_SKILL] },
+      })
+      const skillTool = findToolByName(tools, 'systematic_skill')
+      const expected = buildSkillContentOutput(
+        resolveSkill(resolverOptions, ENABLED_SKILL),
+      )
+
+      const result = (await skillTool.execute(
+        'test-tool-call-id',
+        { name: ENABLED_SKILL },
+        undefined,
+        undefined,
+        toolContext,
+      )) as AgentToolResult<{ skillDir: string }>
+
+      expect(result.content).toEqual([{ type: 'text', text: expected.output }])
+    })
+
+    test('a known-removed skill name warns and changes nothing else', async () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const baseline = findToolByName(await loadPiTools(), 'systematic_skill')
+        const tools = await loadPiTools({
+          user: { disabled_skills: ['todo-create'] },
+        })
+        const skillTool = findToolByName(tools, 'systematic_skill')
+
+        const warnings = warnSpy.mock.calls
+          .map((call) => String(call[0]))
+          .filter((message) => message.includes('todo-create'))
+        expect(warnings).toHaveLength(1)
+        expect(skillTool.description).toBe(baseline.description)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('personas', () => {
+    const rows: [
+      string,
+      (entry: AgentCatalogEntry) => Record<string, unknown>,
+    ][] = [
+      ['a bare disabled_agents entry', (e) => ({ disabled_agents: [e.key] })],
+      [
+        'a qualified disabled_agents entry',
+        (e) => ({ disabled_agents: [e.id] }),
+      ],
+      [
+        'a bare agents overlay with disable: true',
+        (e) => ({ agents: { [e.key]: { disable: true } } }),
+      ],
+      [
+        'a qualified agents overlay with disable: true',
+        (e) => ({ agents: { [e.id]: { disable: true } } }),
+      ],
+    ]
+
+    function delegateTool(tools: ToolDefinition[]): ToolDefinition {
+      return findToolByName(tools, 'systematic_delegate')
+    }
+
+    test('with no disable settings every persona is listed, hinted and resolvable', async () => {
+      const tool = delegateTool(await loadPiTools())
+
+      expect(tool.description).toContain(`- ${disabledPersona.name}:`)
+      expect(parameterHint(tool, 'agent')).toContain(
+        `'${disabledPersona.name}'`,
+      )
+      expect(
+        await executeError(tool, { agent: disabledPersona.name, task: 'x' }),
+      ).not.toContain('Unknown persona')
+    })
+
+    test.each(rows)(
+      '%s removes the persona from the delegate description, hint and lookup',
+      async (_label, build) => {
+        const tool = delegateTool(
+          await loadPiTools({ user: build(disabledPersona) }),
+        )
+
+        expect(tool.description).not.toContain(`- ${disabledPersona.name}:`)
+        expect(tool.description).toContain(`- ${enabledPersona.name}:`)
+        expect(parameterHint(tool, 'agent')).not.toContain(
+          `'${disabledPersona.name}'`,
+        )
+        const error = await executeError(tool, {
+          agent: disabledPersona.name,
+          task: 'x',
+        })
+        expect(error).toContain(`Unknown persona "${disabledPersona.name}"`)
+        const available = error.split('Available personas: ')[1]?.split(', ')
+        expect(available).not.toContain(disabledPersona.name)
+        expect(available).toContain(enabledPersona.name)
+      },
+    )
+
+    test.each(rows)(
+      'with %s an enabled persona still resolves',
+      async (_label, build) => {
+        const tool = delegateTool(
+          await loadPiTools({ user: build(disabledPersona) }),
+        )
+
+        // Resolution succeeds and routing then stops at the missing parent model.
+        const error = await executeError(tool, {
+          agent: enabledPersona.name,
+          task: 'x',
+        })
+        expect(error).not.toContain('Unknown persona')
+        expect(error).toContain('no model is available')
+      },
+    )
+
+    test('a persona disabled in project config is removed too', async () => {
+      const tool = delegateTool(
+        await loadPiTools({
+          project: { disabled_agents: [disabledPersona.key] },
+        }),
+      )
+
+      expect(tool.description).not.toContain(`- ${disabledPersona.name}:`)
+    })
+
+    test('a bare and a qualified overlay for one persona disable it when only one sets disable', async () => {
+      const tool = delegateTool(
+        await loadPiTools({
+          user: {
+            agents: {
+              [disabledPersona.key]: { disable: false },
+              [disabledPersona.id]: { disable: true },
+            },
+          },
+        }),
+      )
+
+      expect(tool.description).not.toContain(`- ${disabledPersona.name}:`)
+    })
+
+    test('disabling every persona registers the delegate tool with an empty catalog', async () => {
+      const tools = await loadPiTools({
+        user: { disabled_agents: catalog.map((entry) => entry.key) },
+      })
+      const tool = delegateTool(tools)
+
+      expect(tool.description).toContain(
+        'No Systematic personas are currently available.',
+      )
+      const error = await executeError(tool, {
+        agent: enabledPersona.name,
+        task: 'x',
+      })
+      expect(error).toMatch(/Unknown persona .*Available personas: $/)
+    })
+
+    test('a known-removed agent name warns and changes nothing else', async () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const baseline = delegateTool(await loadPiTools())
+        const tool = delegateTool(
+          await loadPiTools({ user: { disabled_agents: ['lint'] } }),
+        )
+
+        const warnings = warnSpy.mock.calls
+          .map((call) => String(call[0]))
+          .filter((message) => message.includes('"lint"'))
+        expect(warnings).toHaveLength(1)
+        expect(tool.description).toBe(baseline.description)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('the filter also applies to a catalog built by an injected dependency', async () => {
+      const injected = [disabledPersona, enabledPersona]
+      const tool = delegateTool(
+        await loadPiTools(
+          { user: { disabled_agents: [disabledPersona.key] } },
+          { buildAgentCatalog: () => injected },
+        ),
+      )
+
+      expect(tool.description).not.toContain(`- ${disabledPersona.name}:`)
+      expect(tool.description).toContain(`- ${enabledPersona.name}:`)
+    })
+
+    test('the bundled catalog builder itself stays config-neutral', () => {
+      expect(catalog.some((entry) => entry.key === disabledPersona.key)).toBe(
+        true,
+      )
+    })
   })
 })

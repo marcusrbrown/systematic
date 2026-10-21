@@ -2391,3 +2391,260 @@ describe('cli pi-subagents', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// CLI: pi-subagents with disabled personas
+// ---------------------------------------------------------------------------
+
+describe('cli pi-subagents with disabled personas', () => {
+  const DISABLED_FILE = 'systematic-repo-research-analyst.md'
+  const STILL_ACTIVE_HEADING =
+    'Still active in pi-subagents (edited since export, left in place)'
+
+  interface Sandbox {
+    cwd: string
+    home: string
+    env: Record<string, string>
+    agentsDir: string
+  }
+
+  /** A project dir plus an isolated HOME and OPENCODE_CONFIG_DIR: no ambient user config reaches the CLI. */
+  function mkSandbox(): Sandbox {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-cli-disable-'),
+    )
+    const cwd = path.join(root, 'project')
+    const home = path.join(root, 'home')
+    fs.mkdirSync(cwd, { recursive: true })
+    fs.mkdirSync(home, { recursive: true })
+    return {
+      cwd,
+      home,
+      env: {
+        HOME: home,
+        OPENCODE_CONFIG_DIR: path.join(home, '.config', 'opencode'),
+      },
+      agentsDir: path.join(cwd, '.pi', 'agents'),
+    }
+  }
+
+  function writeUserConfig(box: Sandbox, config: Record<string, unknown>) {
+    const dir = path.join(box.home, '.config', 'opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'systematic.json'), JSON.stringify(config))
+  }
+
+  function cleanupSandbox(box: Sandbox): void {
+    fs.rmSync(path.dirname(box.cwd), { recursive: true, force: true })
+  }
+
+  /** Exports with no disable settings, edits the persona file, then disables the persona. */
+  function exportThenEditThenDisable(box: Sandbox): void {
+    const first = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+    expect(first.exitCode).toBe(0)
+    fs.writeFileSync(path.join(box.agentsDir, DISABLED_FILE), 'my edits\n')
+    writeUserConfig(box, { disabled_agents: ['repo-research-analyst'] })
+  }
+
+  it('export removes the file of a disabled persona and reports a removal', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+      writeUserConfig(box, { disabled_agents: ['repo-research-analyst'] })
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(`- ${DISABLED_FILE}  (remove stale)`)
+      expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
+      expect(fs.existsSync(path.join(box.agentsDir, DISABLED_FILE))).toBe(false)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('export prints a hand-edited file of a disabled persona under its own heading, leaves it, and exits 0', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(result.stdout).toContain(DISABLED_FILE)
+      expect(result.stdout).toMatch(/revert|delete/i)
+      expect(result.stdout).not.toContain('Refused (pre-existing')
+      expect(
+        fs.readFileSync(path.join(box.agentsDir, DISABLED_FILE), 'utf-8'),
+      ).toBe('my edits\n')
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('a repeat export keeps printing the still-active section and keeps the file', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      const again = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(again.exitCode).toBe(0)
+      expect(again.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(again.stdout).toContain(DISABLED_FILE)
+      expect(fs.existsSync(path.join(box.agentsDir, DISABLED_FILE))).toBe(true)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('preview shows the same still-active section and writes nothing', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+      const before = snapshotTree(box.agentsDir)
+
+      const result = runCli(['pi-subagents', 'preview'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(result.stdout).toContain(DISABLED_FILE)
+      expect(result.stdout).not.toContain(`${DISABLED_FILE}  (remove stale)`)
+      expect(snapshotTree(box.agentsDir)).toBe(before)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('refresh removes the file of a disabled persona and does not report "No changes"', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+      writeUserConfig(box, { disabled_agents: ['repo-research-analyst'] })
+
+      const result = runCli(['pi-subagents', 'refresh'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(DISABLED_FILE)
+      expect(result.stdout).toMatch(/Removed 1 /)
+      expect(result.stdout).not.toMatch(/No changes/)
+      expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
+      expect(fs.existsSync(path.join(box.agentsDir, DISABLED_FILE))).toBe(false)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('refresh prints a hand-edited file of a disabled persona under its own heading, leaves it, and exits 0', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'refresh'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(result.stdout).toContain(DISABLED_FILE)
+      expect(result.stdout).not.toMatch(/No changes/)
+      expect(
+        fs.readFileSync(path.join(box.agentsDir, DISABLED_FILE), 'utf-8'),
+      ).toBe('my edits\n')
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('refresh with nothing to update, remove or retain still says no changes', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      const result = runCli(['pi-subagents', 'refresh'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/No changes/)
+      expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('export whose only remaining entry is an edited file does not say "No changes" and counts it in the Summary', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).not.toMatch(/No changes/)
+      expect(result.stdout).toMatch(/Summary: .*, 1 still active/)
+      expect(result.stdout).toContain(STILL_ACTIVE_HEADING)
+      expect(result.stdout).toContain(DISABLED_FILE)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('export with nothing to write or report still says no changes, with a zero still-active count', () => {
+    const box = mkSandbox()
+    try {
+      runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/No changes/)
+      expect(result.stdout).toMatch(/Summary: .*, 0 still active/)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('preview counts edited files in the same Summary line as export', () => {
+    const box = mkSandbox()
+    try {
+      exportThenEditThenDisable(box)
+
+      const result = runCli(['pi-subagents', 'preview'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/Summary: .*, 1 still active/)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+
+  it('usage says refresh also removes unchanged owned files for personas that are no longer exported', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['pi-subagents'], cwd)
+
+      expect(result.stderr).toMatch(/no longer exported/i)
+      expect(result.stderr).toMatch(/edited .*still active/is)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('a refused unowned file is still listed under the refused heading, not under still active', () => {
+    const box = mkSandbox()
+    try {
+      fs.mkdirSync(box.agentsDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(box.agentsDir, 'systematic-adversarial-reviewer.md'),
+        'user content',
+      )
+
+      const result = runCli(['pi-subagents', 'export'], box.cwd, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Refused (pre-existing')
+      expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
+    } finally {
+      cleanupSandbox(box)
+    }
+  })
+})

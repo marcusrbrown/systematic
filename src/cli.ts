@@ -155,7 +155,9 @@ const PI_SUBAGENTS_USAGE = `Usage: systematic pi-subagents <subcommand> [--scope
 Subcommands:
   preview   Show what export would do (no writes)
   export    Write persona files to agents dir
-  refresh   Replace stale owned files from current source
+  refresh   Replace stale owned files from current source, and remove unchanged
+            owned files for personas that are no longer exported (edited files
+            stay and are listed as still active)
   cleanup   Remove all generated files and manifest
 
 Scope:
@@ -919,13 +921,76 @@ function parsePiSubagentsArgs(rest: string[]): {
 function printActionLine(
   a: ReturnType<typeof preview>['actions'][number],
 ): void {
-  if (a.action === 'create') console.log(`  + ${a.filename}  (create)`)
-  else if (a.action === 'update') console.log(`  ~ ${a.filename}  (update)`)
-  else if (a.action === 'refuse')
-    console.log(`  ! ${a.filename}  (refuse: ${a.reason})`)
-  else if (a.action === 'remove')
-    console.log(`  - ${a.filename}  (remove stale)`)
-  else console.log(`  = ${a.filename}  (up to date)`)
+  switch (a.action) {
+    case 'create':
+      console.log(`  + ${a.filename}  (create)`)
+      break
+    case 'update':
+      console.log(`  ~ ${a.filename}  (update)`)
+      break
+    case 'refuse':
+      console.log(`  ! ${a.filename}  (refuse: ${a.reason})`)
+      break
+    case 'remove':
+      console.log(`  - ${a.filename}  (remove stale)`)
+      break
+    case 'skip':
+      console.log(`  = ${a.filename}  (up to date)`)
+      break
+    case 'retain':
+      // Edited files are listed in the still-active block, not as action lines.
+      break
+    default: {
+      // A new PlanAction variant must be handled above or this stops compiling.
+      const unreachable: never = a
+      throw new Error(`Unhandled plan action: ${JSON.stringify(unreachable)}`)
+    }
+  }
+}
+
+/** Owned stale files the user edited: pi-subagents keeps loading them, so each run says so. */
+function printStillActive(
+  retained: ReadonlyArray<{ filename: string; reason: string }>,
+): void {
+  if (retained.length === 0) return
+  console.log(
+    '\nStill active in pi-subagents (edited since export, left in place):',
+  )
+  for (const r of retained) {
+    console.log(`  ! ${r.filename}: ${r.reason}`)
+  }
+  console.log(
+    '  Revert each file to its exported content or delete it, then run this command again to finish.',
+  )
+}
+
+function retainedFromPlan(
+  plan: ReturnType<typeof preview>,
+): Array<{ filename: string; reason: string }> {
+  return plan.actions.flatMap((a) =>
+    a.action === 'retain' ? [{ filename: a.filename, reason: a.reason }] : [],
+  )
+}
+
+function summarizePlan(plan: ReturnType<typeof preview>): void {
+  const counts = {
+    create: 0,
+    update: 0,
+    refuse: 0,
+    remove: 0,
+    skip: 0,
+    retain: 0,
+  }
+  for (const a of plan.actions) {
+    counts[a.action]++
+    printActionLine(a)
+  }
+  console.log('')
+  console.log(
+    `Summary: ${counts.create} create, ${counts.update} update, ` +
+      `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove, ` +
+      `${counts.retain} still active`,
+  )
 }
 
 function runPreview(agentsRoot: string, scope: 'project' | 'global'): void {
@@ -940,16 +1005,8 @@ function runPreview(agentsRoot: string, scope: 'project' | 'global'): void {
     console.log('No actions needed (nothing to export).')
     return
   }
-  const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
-  for (const a of plan.actions) {
-    counts[a.action]++
-    printActionLine(a)
-  }
-  console.log('')
-  console.log(
-    `Summary: ${counts.create} create, ${counts.update} update, ` +
-      `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
-  )
+  summarizePlan(plan)
+  printStillActive(retainedFromPlan(plan))
 }
 
 function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
@@ -971,19 +1028,15 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
   )
   if (plan.actions.length > 0) {
     console.log('')
-    const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
-    for (const a of plan.actions) {
-      counts[a.action]++
-      printActionLine(a)
-    }
-    console.log('')
-    console.log(
-      `Summary: ${counts.create} create, ${counts.update} update, ` +
-        `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
-    )
+    summarizePlan(plan)
   }
   if (!hasWork) {
-    console.log('All persona files are already up to date. No changes.')
+    const stillActive = retainedFromPlan(plan)
+    // Edited files still need reporting, so only a run with nothing to report says "No changes".
+    if (stillActive.length === 0) {
+      console.log('All persona files are already up to date. No changes.')
+    }
+    printStillActive(stillActive)
     return
   }
   const result = exportPersonas(agentsRoot, configOptions)
@@ -992,7 +1045,12 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     process.exit(1)
   }
   const hadRemovals = plan.actions.some((a) => a.action === 'remove')
-  if (result.written === 0 && result.refused.length === 0 && !hadRemovals) {
+  if (
+    result.written === 0 &&
+    result.refused.length === 0 &&
+    result.retained.length === 0 &&
+    !hadRemovals
+  ) {
     console.log('All persona files are already up to date. No changes.')
   } else {
     console.log(
@@ -1004,6 +1062,7 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     for (const r of result.refused)
       console.log(`  ! ${r.filename}: ${r.reason}`)
   }
+  printStillActive(result.retained)
 }
 
 function runRefresh(agentsRoot: string, scope: 'project' | 'global'): void {
@@ -1012,17 +1071,27 @@ function runRefresh(agentsRoot: string, scope: 'project' | 'global'): void {
     console.error(`Refresh failed: ${result.error ?? 'unknown error'}`)
     process.exit(1)
   }
-  if (result.updated === 0) {
+  const changed =
+    result.updated + result.removed.length + result.retained.length > 0
+  if (!changed) {
     console.log('All owned persona files are up to date. No changes.')
-  } else {
+  }
+  if (result.updated > 0) {
     console.log(
       `Refreshed: updated ${result.updated} file(s) in ${agentsRoot}/.`,
     )
+  }
+  if (result.removed.length > 0) {
+    console.log(
+      `Removed ${result.removed.length} file(s) from ${agentsRoot}/ (persona disabled or no longer exported):`,
+    )
+    for (const r of result.removed) console.log(`  - ${r.filename}`)
   }
   if (result.skippedUnowned > 0)
     console.log(
       `  Skipped ${result.skippedUnowned} unowned file(s) (not touched).`,
     )
+  printStillActive(result.retained)
 }
 
 function runCleanup(agentsRoot: string, scope: 'project' | 'global'): void {
