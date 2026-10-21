@@ -19,17 +19,14 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 
 ## Requirements Trace
 
-- R1. Installing Systematic as a Pi package makes the curated `systematic-<name>` personas available to pi-subagents' `Agent` tool, with no export. Pi must have the package in `settings.json` `packages[]`, and pi-subagents ≥0.20 must be installed.
+- R1. Installing Systematic as a Pi package makes the curated `systematic-<name>` personas available to pi-subagents' `Agent` tool, with no export. Pi must have the package in `settings.json` `packages[]`, and pi-subagents ≥0.20 must be installed. A global install exposes them right away. A project-scope install exposes them only after the project is trusted.
 - R2. The packaged personas are the default render of the curated set, byte-identical to what the export writes with no config overlays.
 - R3. Local persona files, whether exported or hand-written, keep outranking packaged ones. The export CLI does not change.
 - R4. The packaged files are produced by `bun run build` under `dist/`, so the release build artifact and its digest carry them.
-- R5. A real Pi host proves discovery and use from the packed tarball. A negative control shows the behavior depends on the package manifest.
-- R6. The docs, HARNESSES and the Pi profile describe the 0.22.0 / Pi 1.3.0 contract:
-  - packaged versus exported personas and their precedence;
-  - the background default;
-  - project trust;
-  - unsupported install paths;
-  - Pi's Node floor, which goes in the docs but not the profile.
+- R5. A real Pi host proves discovery and use from the packed tarball. A negative control shows the behavior depends on the `packageAgents` gate, and a tarball unit test pins the manifest key.
+- R6. The 0.22.0 / Pi 1.3.0 contract is described in two places:
+  - The Pi profile states it briefly: packaged versus exported personas and their precedence, the background default, and that project installs need trust.
+  - The docs and HARNESSES add the detail: unsupported install paths, the `packageAgents` off switch and its cost, the all-tools limit, upgrade steps, and Pi's Node floor.
 - R7. The package lists the `pi-package` keyword.
 
 ## Scope Boundaries
@@ -199,6 +196,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - The real-host test pins the fallback.
 - **Packaged personas never get overlays.** `systematic.json` overlays (model, thinking, `max_turns`, tools, skills) apply only to exported files. An exported file shadows the packaged one silently, as the loader does.
   - This supersedes the earlier "export is the only activation path" contract. Nothing is ever written to user-owned directories without a command, so that rule still holds.
+- **The packaged tree supersedes two decisions from the July 2026 Pi requirements.** One said there would be no generated flat agent tree (2026-07-06). The other made export the only way to activate personas (2026-07-28). Both requirements docs are gitignored, so the tracked record is this KTD plus the pointer that Unit 4 adds to the 2026-07-30 solution doc.
+- **Tool scope stays as rendered.** The render drops each source persona's `tools:`, so pi-subagents gives packaged and exported personas every built-in tool. OpenCode already ignores the same string-form `tools:` and runs every persona with all tools, so this matches the flagship harness. Only `systematic_delegate` enforces the line. The docs state this limit. Enforcing tool scope on both harnesses is separate work.
+- **All 29 personas ship.** This keeps parity with OpenCode, which registers every bundled agent. With pi-subagents' default `toolDescriptionMode: full`, the descriptions add about 6.7 KB to the `Agent` tool description. The install docs state that cost next to the `packageAgents` off switch.
 - **No `run_in_background` pin.** Personas stay identical across the fixtures, the export and the package. The docs explain the 0.18 background default and `run_in_background: false`.
 - **The Pi profile stays under its 4000-character cap.** The cap exists because the profile is inlined into every Pi session.
   - The export lock and manifest detail and the overlay-precedence detail, already in HARNESSES and the guide, shrink to a one-line pointer.
@@ -217,11 +217,11 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - `dist/` is gitignored, so a git install has no build output.
   - Documented as unsupported.
 - Does pi-subagents warn when a local file shadows a packaged one, or on a package-vs-package collision? No. In 0.22.0 the last load wins silently, despite its docs. Our docs describe the silent behavior.
-- Does `--approve` cover project-package trust in the RPC harness? Yes. It sets the settings manager's trust, and pi-subagents reads it at `session_start`. The existing combined tests already load project-scope packages under `--approve`.
+- Does `--approve` cover project-package trust in the RPC harness? Yes. It sets the settings manager's trust, and pi-subagents reads it at `session_start`. The existing combined tests already load project-scope packages under `--approve`. Unit 2 confirms this once.
+- Where does pi-subagents read `packageAgents`? From `subagents.json`. The global file sits in the agent dir, and a project `.pi/subagents.json` overrides it. Pi's `settings.json` is never consulted for this gate.
 
 ### Deferred to Implementation
 
-- Where pi-subagents reads `packageAgents` (`subagents.json` versus Pi settings), and so how the negative control sets it. Confirm from `dist/index.js` when writing the test.
 - Whether a project-scope first session advertises package types in the `Agent` tool description before trust is saved. Record whichever behavior is observed. The project-scope test asserts dispatch only.
 - The final Host Contract timings value for `pi.test.ts`. Take it from the measured run.
 
@@ -285,7 +285,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - Add the tests inside the combined-path describe so its setup and its `afterEach` process cleanup apply.
 - None of these tests calls `exportPersonas`. Each asserts that the project `.pi/agents`, `.agents/agents` and the global agents directories are absent or empty, except the precedence test.
 - Each `Agent` call passes `run_in_background: false`.
-- The global-scope variant lists both packages in `$PI_CODING_AGENT_DIR/settings.json` `packages[]` instead of the project settings.
+- The global-scope variant lists both packages in `$PI_CODING_AGENT_DIR/settings.json` `packages[]` instead of the project settings. It uses absolute package paths, because Pi resolves user-scope relative paths against the agent dir.
+- The negative control sets `packageAgents: false` in `$PI_CODING_AGENT_DIR/subagents.json`.
+- Background completion and the project-trust gate are pi-subagents mechanisms that do not depend on where an agent file came from, so these tests do not re-test them.
 - Fix the stale "v0.14.3" comments in this file.
 
 **Execution note:** Write the positive test first and watch it fail on a tarball built without Unit 1's manifest key. That proves the test exercises the key.
@@ -294,9 +296,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - The existing export-based combined-path test: assertions on the persona body in the child system prompt, and the bounded request count.
 
 **Test scenarios:**
-- Integration, project scope: an `Agent` call for `systematic-repo-research-analyst` completes without error. `details.subagentType` names that type. The nested request's system text contains the packaged persona body. The request count is bounded.
+- Integration, project scope: an `Agent` call for `systematic-repo-research-analyst` completes without error. `details.subagentType` names that type. At least one child request is observed, and its system text contains the packaged persona body. The request count is bounded.
 - Integration, global scope: the same dispatch succeeds with the packages declared only in global settings. The `Agent` tool description offered to the model lists `systematic-repo-research-analyst`.
-- Integration, negative control: with `packageAgents` off and everything else identical, no request's system text contains the persona body, and the call does not resolve to the packaged persona. Do not settle for asserting only an error result.
+- Integration, negative control: with `packageAgents` off and everything else identical, the call falls back to `general-purpose`, and the result carries pi-subagents' unknown-type note naming `systematic-repo-research-analyst`. At least one child request is observed, and none contains the persona body. A run with zero child requests fails this test.
 - Integration, precedence: a local `.pi/agents/systematic-repo-research-analyst.md` whose body differs wins. The nested system text has the local body and not the packaged one.
 
 **Verification:**
@@ -321,8 +323,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 **Approach:**
 - Replace the lock, manifest and symlink paragraph and the overlay-precedence paragraph with one pointer to HARNESSES and the guide.
 - Update the capability-table row and the tested-version line to pi-subagents 0.22.0 on Pi 1.3.0.
+- Measure with `wc -c` after the trim and before adding the new text. The finished profile keeps at least 100 characters of headroom.
 - Add three facts:
-  - installing the package exposes `systematic-<name>` types to pi-subagents ≥0.20 as plain defaults;
+  - installing the package exposes `systematic-<name>` types to pi-subagents ≥0.20 as plain defaults (project installs only after trust);
   - export is needed only for overlays, and local files win;
   - `Agent` runs in the background by default, and `run_in_background: false` waits for the result.
 
@@ -331,7 +334,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - Happy path: the Pi bootstrap still carries the `# Pi Capability Profile` marker (existing unit and integration checks), and its text no longer mentions 0.14.3.
 
 **Verification:**
-- The unit suite passes with the snapshot refreshed.
+- The unit suite passes. Refresh the bootstrap snapshot only if it changes.
 - `bun scripts/content-integrity.ts` is clean.
 
 - [ ] **Unit 4: Update the interop docs, HARNESSES and stale comments**
@@ -359,13 +362,15 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - Pi needs Node ≥22.19.
   - Project trust gates project-scope installs.
   - `pi -e` and git installs do not expose personas.
-  - After upgrading, run `refresh`, or run `cleanup` to fall back to packaged defaults.
+  - After upgrading, run `refresh`, or run `cleanup` to fall back to packaged defaults. `cleanup` refuses to remove a hand-edited export, so the user deletes that file by hand.
+  - Packaged and exported personas get every built-in tool, as on OpenCode.
   - A global export shadows in every project.
   - Collisions are silent.
   - The `/agents` source badges.
-  - The `packageAgents` off switch.
+  - The `packageAgents` off switch in `subagents.json`, with the description cost. Place it next to the install instructions.
   - The background default.
 - Retitle the installation export section so export reads as customization, not activation.
+- Every contract claim in HARNESSES PI-7 cites its 0.22.0 source line or the Unit 2 test that pins it. Claims that rest on upstream docs alone, such as the collision warning and the required `name:`, are left out.
 
 **Test scenarios:**
 - Test expectation: none. This unit changes documentation and comments only. `docs:build` and content-integrity are its checks.
@@ -400,6 +405,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 | The persona count or names change in `agents/` | Unit tests derive the expected set from `generateAll` and the fixtures, not a literal, and the fixture `--check` already gates agent edits. |
 | Profile text pressure pushes past the cap | Detail moves to HARNESSES and the guide, and the cap test enforces the limit. |
 | Users with old exports see stale personas | The guide and installation docs carry the refresh and cleanup guidance. |
+| Packaged and exported personas run with every built-in tool | This matches OpenCode, which ignores the same `tools:` line. The limit is documented, and enforcement is separate work. |
 | Packaged personas appear for users who never asked for them | They only appear when pi-subagents is installed. They rank below every local file, and `packageAgents` turns them off. Documented. |
 
 ## Documentation / Operational Notes
