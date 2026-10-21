@@ -1,7 +1,7 @@
 ---
 title: "fix(pi): honor disabled skills and agents on Pi"
 type: fix
-status: active
+status: completed
 date: 2026-10-20
 ---
 
@@ -254,7 +254,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 
 ## Implementation Units
 
-- [ ] **Unit 1: Shared disable predicate and Pi runtime wiring**
+- [x] **Unit 1: Shared disable predicate and Pi runtime wiring**
 
 **Goal:** `systematic_skill` and `systematic_delegate` on Pi exclude disabled skills and personas.
 
@@ -298,7 +298,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - The unit suite passes.
 - Each of these mutations fails a named test: reverting `disabledSkills` to an empty list, skipping the catalog filter, dropping the qualified-name branch, and dropping the overlay branch.
 
-- [ ] **Unit 2: Filter the export and align preview with export**
+- [x] **Unit 2: Filter the export and align preview with export**
 
 **Goal:** `preview` and `export` exclude disabled curated personas. A hand-edited stale file is reported and left in place, not fatal.
 
@@ -341,7 +341,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - The unit suite passes.
 - Each of these mutations fails a named test: removing the `generateEntries` filter, flipping `includeProject`, and dropping the preview hash check.
 
-- [ ] **Unit 3: Remove stale owned files on refresh**
+- [x] **Unit 3: Remove stale owned files on refresh**
 
 **Goal:** `refresh` removes manifest-owned stale files under the same rules as `export`, and the CLI reports the removals.
 
@@ -375,7 +375,7 @@ This plan is a prerequisite for `docs/plans/2026-10-20-003-feat-pi-subagents-pac
 - The unit suite passes.
 - Each of these mutations fails a named test: removing refresh's stale removal, and removing its hash guard (which would delete a hand-edited file).
 
-- [ ] **Unit 4: Document the new Pi behavior**
+- [x] **Unit 4: Document the new Pi behavior**
 
 **Goal:** Docs state that Pi honors the disable settings and where it doesn't.
 
