@@ -3,7 +3,6 @@ node_modules/
 
 # Build output
 dist/
-.opencode/plugin/
 
 # IDE
 .idea/
@@ -51,6 +50,12 @@ cep-guide.md
 
 # Systematic
 .context/
+
+# Opencode
+!.opencode/
+.opencode/*
+!.opencode/themes/
+!.opencode/tui.json
 
 # BEGIN oh-my-opencode-slim clonedeps
 .slim/clonedeps/repos/
