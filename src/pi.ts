@@ -13,9 +13,14 @@ import {
   computeBootstrapContentSafe,
   readHarnessProfile,
 } from './lib/bootstrap.js'
+import type { SourcedOverlayConfigMap, SystematicConfig } from './lib/config.js'
 import { isAgentDisabled, loadConfigWithSources } from './lib/config.js'
 import { createRealPiDelegateSession } from './lib/pi-delegate-session.js'
 import { createPiDelegateTool } from './lib/pi-delegate-tool.js'
+import {
+  CURATED_PERSONAS,
+  parseSourceCategoryAndKey,
+} from './lib/pi-subagents-personas.js'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
@@ -44,6 +49,70 @@ const reportPiDelegateCatalogFailure = (error: unknown): void => {
   )
 }
 
+const PACKAGED_OVERLAY_WARNING =
+  '[systematic] systematic.json configures agent or pi_subagents overlays (model, thinking, max_turns, tools or skills). ' +
+  "Personas packaged with Systematic ignore overlays; they load with pi-subagents' defaults. " +
+  'Run `systematic pi-subagents export` to write overlay-aware persona files, which outrank the packaged ones.\n'
+
+const reportPackagedOverlayIgnored = (): void => {
+  process.stderr.write(PACKAGED_OVERLAY_WARNING)
+}
+
+const reportPackagedPersonasStillLoad = (count: number): void => {
+  process.stderr.write(
+    `[systematic] ${count} persona(s) disabled in systematic.json still load in pi-subagents from the Systematic package, ` +
+      'which has no access to that setting. ' +
+      'Disable one with /agents → Disable, or set `packageAgents: false` in subagents.json to turn off every packaged persona.\n',
+  )
+}
+
+/**
+ * Routing fields the Pi export reads: `model` and the `pi` block. Overlay
+ * fields only OpenCode consumes (`temperature`, `hidden`, `color`, ...) change
+ * no exported file, so they are not worth a warning.
+ */
+const PI_CONSUMED_ROUTING_FIELDS = ['model', 'pi'] as const
+
+function hasPiConsumedRoutingField(
+  overlays: Record<string, { value: object }>,
+): boolean {
+  return Object.values(overlays).some(({ value }) =>
+    PI_CONSUMED_ROUTING_FIELDS.some((field) => Object.hasOwn(value, field)),
+  )
+}
+
+/** Whether any overlay would change an exported persona: routing overlays or any pi_subagents entry. */
+function hasOverlaysPackagedPersonasIgnore(
+  routing: SourcedOverlayConfigMap,
+  piSubagents: ReturnType<
+    typeof loadConfigWithSources
+  >['config']['pi_subagents'],
+): boolean {
+  return (
+    hasPiConsumedRoutingField(routing.agents) ||
+    hasPiConsumedRoutingField(routing.categories) ||
+    Object.keys(piSubagents?.agents ?? {}).length > 0 ||
+    Object.keys(piSubagents?.categories ?? {}).length > 0
+  )
+}
+
+/** How many curated personas the user's disable settings turn off for `systematic_delegate` and the export. */
+function countDisabledPackagedPersonas(
+  config: SystematicConfig,
+  routing: SourcedOverlayConfigMap,
+): number {
+  const disabledAgents = new Set(config.disabled_agents)
+  return CURATED_PERSONAS.filter((persona) => {
+    const { category, agentKey } = parseSourceCategoryAndKey(persona.relPath)
+    return isAgentDisabled(
+      disabledAgents,
+      routing.agents,
+      category ?? '',
+      agentKey,
+    )
+  }).length
+}
+
 type PiExtensionDependencies = {
   buildAgentCatalog?: typeof buildAgentCatalog
 }
@@ -70,6 +139,20 @@ export default async function systematicPiExtension(
     metadata: piConfigMetadata,
     overlays: piRoutingOverlays,
   } = loadConfigWithSources(process.cwd())
+
+  // Packaged personas load straight from the package and never see config, so
+  // say once at init when a setting could not reach them. The warnings name no
+  // config values; they neither detect pi-subagents nor touch the filesystem.
+  if (
+    hasOverlaysPackagedPersonasIgnore(piRoutingOverlays, piConfig.pi_subagents)
+  ) {
+    reportPackagedOverlayIgnored()
+  }
+  const disabledPackaged = countDisabledPackagedPersonas(
+    piConfig,
+    piRoutingOverlays,
+  )
+  if (disabledPackaged > 0) reportPackagedPersonasStillLoad(disabledPackaged)
 
   // Honors `disabled_skills` the same way OpenCode's `src/index.ts` does. Pi's
   // native `pi.skills` discovery is a separate path and is not filtered.

@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -29,6 +29,28 @@ import {
 import { createSkillTool } from '../../src/lib/skill-tool.ts'
 import { findSkillsInDir } from '../../src/lib/skills.ts'
 import piExtension from '../../src/pi.ts'
+
+// The extension reads the real user config at init, and it warns about overlays
+// and disables it finds there. Point the home directory at an empty one for the
+// whole file so a developer's own config cannot change what a test sees. Tests
+// that write their own config swap `os.homedir` and restore it to this one.
+const isolatedHome = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'systematic-pi-home-'),
+)
+const realHomedir = os.homedir
+const realConfigDir = process.env.OPENCODE_CONFIG_DIR
+
+beforeAll(() => {
+  os.homedir = () => isolatedHome
+  delete process.env.OPENCODE_CONFIG_DIR
+})
+
+afterAll(() => {
+  os.homedir = realHomedir
+  if (realConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+  else process.env.OPENCODE_CONFIG_DIR = realConfigDir
+  fs.rmSync(isolatedHome, { recursive: true, force: true })
+})
 
 const bundledSkillsDir = fileURLToPath(new URL('../../skills', import.meta.url))
 const resolverOptions = { bundledSkillsDir, disabledSkills: [] }
@@ -934,5 +956,229 @@ describe('src/pi.ts disabled skills and agents', () => {
         true,
       )
     })
+  })
+})
+
+describe('src/pi.ts warnings for settings packaged personas cannot receive', () => {
+  const EXPORT_COMMAND = 'systematic pi-subagents export'
+  const SECRET_MODEL = 'acme/secret-model-9000'
+  const CURATED_KEY = 'repo-research-analyst'
+  const CURATED_QUALIFIED = 'research/repo-research-analyst'
+  const NON_CURATED_KEY = 'systematic-implementer'
+
+  interface InitResult {
+    api: ReturnType<typeof createFakeExtensionApi>
+    stderr: string[]
+  }
+
+  /** Initializes the extension against isolated user config; captures stderr. */
+  async function initWithUserConfig(
+    user: Record<string, unknown> | undefined,
+  ): Promise<InitResult> {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pi-package-warn-'),
+    )
+    const originalHomedir = os.homedir
+    const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    const originalCwd = process.cwd()
+    const projectDir = path.join(tempDir, 'project')
+    fs.mkdirSync(projectDir, { recursive: true })
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => tempDir
+    if (user !== undefined) {
+      const userFile = path.join(
+        tempDir,
+        '.config',
+        'opencode',
+        'systematic.json',
+      )
+      fs.mkdirSync(path.dirname(userFile), { recursive: true })
+      fs.writeFileSync(userFile, JSON.stringify(user))
+    }
+    process.chdir(projectDir)
+    const stderr: string[] = []
+    const stderrSpy = spyOn(process.stderr, 'write').mockImplementation(
+      (chunk: string | Uint8Array) => {
+        stderr.push(String(chunk))
+        return true
+      },
+    )
+    try {
+      const api = createFakeExtensionApi()
+      await piExtension(api)
+      return { api, stderr }
+    } finally {
+      stderrSpy.mockRestore()
+      process.chdir(originalCwd)
+      os.homedir = originalHomedir
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  const overlayWarnings = (stderr: string[]) =>
+    stderr.filter((line) => line.includes(EXPORT_COMMAND))
+  const disableWarnings = (stderr: string[]) =>
+    stderr.filter((line) => line.includes('packageAgents'))
+
+  describe('overlay warning', () => {
+    test('a model overlay on one persona warns once and names the export command', async () => {
+      const { stderr } = await initWithUserConfig({
+        agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+      expect(overlayWarnings(stderr)[0]).toMatch(/outrank/i)
+      expect(disableWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('a category overlay with a Pi thinking level warns', async () => {
+      const { stderr } = await initWithUserConfig({
+        categories: { research: { pi: { thinking: 'high' } } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+    })
+
+    test('a pi_subagents-only overlay warns', async () => {
+      const { stderr } = await initWithUserConfig({
+        pi_subagents: { agents: { [CURATED_KEY]: { max_turns: 7 } } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+    })
+
+    test('a bare disable with no other overlay field does not trigger the overlay warning', async () => {
+      const { stderr } = await initWithUserConfig({
+        agents: { [NON_CURATED_KEY]: { disable: true } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('overlay fields only OpenCode reads do not trigger the overlay warning', async () => {
+      const { stderr } = await initWithUserConfig({
+        agents: {
+          [CURATED_KEY]: { temperature: 0.2, hidden: true, color: '#ff0000' },
+        },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('the warning never echoes an overlay value', async () => {
+      const { stderr } = await initWithUserConfig({
+        agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+        pi_subagents: { agents: { [CURATED_KEY]: { thinking: 'xhigh' } } },
+      })
+
+      const all = stderr.join('')
+      expect(all).not.toContain(SECRET_MODEL)
+      expect(all).not.toContain('xhigh')
+    })
+  })
+
+  describe('disable warning', () => {
+    test('disabled_agents naming a curated persona warns once with a count of 1', async () => {
+      const { stderr } = await initWithUserConfig({
+        disabled_agents: [CURATED_KEY],
+      })
+
+      const warnings = disableWarnings(stderr)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toMatch(/\b1\b/)
+      expect(warnings[0]).toContain('/agents')
+      expect(warnings[0]).toContain('subagents.json')
+      expect(warnings[0]).toMatch(/package/i)
+      expect(overlayWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('a qualified disabled_agents entry counts the same persona', async () => {
+      const { stderr } = await initWithUserConfig({
+        disabled_agents: [CURATED_QUALIFIED],
+      })
+
+      expect(disableWarnings(stderr)).toHaveLength(1)
+      expect(disableWarnings(stderr)[0]).toMatch(/\b1\b/)
+    })
+
+    test('agents.<curated>.disable: true warns', async () => {
+      const { stderr } = await initWithUserConfig({
+        agents: { [CURATED_KEY]: { disable: true } },
+      })
+
+      expect(disableWarnings(stderr)).toHaveLength(1)
+      expect(overlayWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('the count covers every curated persona that is disabled, once each', async () => {
+      const { stderr } = await initWithUserConfig({
+        disabled_agents: [
+          CURATED_KEY,
+          CURATED_QUALIFIED,
+          'adversarial-reviewer',
+        ],
+        agents: { 'api-contract-reviewer': { disable: true } },
+      })
+
+      const warnings = disableWarnings(stderr)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toMatch(/\b3\b/)
+    })
+
+    test('disabling only a persona the package does not ship does not warn', async () => {
+      const { stderr } = await initWithUserConfig({
+        disabled_agents: [NON_CURATED_KEY],
+        agents: { 'design-iterator': { disable: true } },
+      })
+
+      expect(stderr.join('')).not.toContain('packageAgents')
+      expect(disableWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('the warning never echoes a persona name from config', async () => {
+      const { stderr } = await initWithUserConfig({
+        disabled_agents: [CURATED_KEY],
+        agents: { 'adversarial-reviewer': { disable: true } },
+      })
+
+      const all = disableWarnings(stderr).join('')
+      expect(all).not.toContain(CURATED_KEY)
+      expect(all).not.toContain('adversarial-reviewer')
+    })
+  })
+
+  test('no overlays and no disables emit no warnings', async () => {
+    const { stderr } = await initWithUserConfig(undefined)
+
+    expect(stderr).toEqual([])
+  })
+
+  test('an overlay and a disable together produce both warnings, once each', async () => {
+    const { stderr } = await initWithUserConfig({
+      agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+      disabled_agents: ['adversarial-reviewer'],
+    })
+
+    expect(overlayWarnings(stderr)).toHaveLength(1)
+    expect(disableWarnings(stderr)).toHaveLength(1)
+  })
+
+  test('init still registers both tools and the bootstrap handler when warnings fire', async () => {
+    const { api, stderr } = await initWithUserConfig({
+      agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+      disabled_agents: ['adversarial-reviewer'],
+    })
+
+    expect(stderr.length).toBeGreaterThan(0)
+    expect(api.registeredTools.map((tool) => tool.name).sort()).toEqual([
+      'systematic_delegate',
+      'systematic_skill',
+    ])
+    expect(typeof api.handlers.before_agent_start).toBe('function')
   })
 })

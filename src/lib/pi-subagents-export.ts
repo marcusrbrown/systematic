@@ -23,7 +23,10 @@ import type {
 import { isAgentDisabled, loadConfigWithSources } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 import type { ManifestEntry } from './pi-subagents-personas.js'
-import { generateAll } from './pi-subagents-personas.js'
+import {
+  generateAll,
+  parseSourceCategoryAndKey,
+} from './pi-subagents-personas.js'
 import {
   resolveRouting,
   toSourcedPiSubagentsOverlays,
@@ -676,24 +679,6 @@ export interface ExportPlan {
 }
 
 // ── Config-aware frontmatter application ────────────────────────────────────────
-
-/** Extract `{ category, agentKey }` from a curated persona's `agents/<category>/<name>.md` source path. */
-function parseSourceCategoryAndKey(sourceRelPath: string): {
-  category: string | undefined
-  agentKey: string
-} {
-  const parts = sourceRelPath.split('/')
-  // agents/<category>/<name>.md
-  if (parts.length >= 3 && parts[0] === 'agents') {
-    const fileName = parts.at(-1) ?? ''
-    return {
-      category: parts[1],
-      agentKey: fileName.replace(/\.md$/, ''),
-    }
-  }
-  const fileName = parts.at(-1) ?? sourceRelPath
-  return { category: undefined, agentKey: fileName.replace(/\.md$/, '') }
-}
 
 /** Look up an overlay by bare key or `category/key` qualified id. */
 function lookupOverlay(
