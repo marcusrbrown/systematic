@@ -4,6 +4,30 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.25.0](https://github.com/marcusrbrown/systematic/compare/v3.24.2...v3.25.0) (2026-10-22)
+
+### Features
+
+* **pi:** ship Systematic personas as pi-subagents package agents ([#1199](https://github.com/marcusrbrown/systematic/issues/1199)) ([8805a97](https://github.com/marcusrbrown/systematic/commit/8805a97cc6e1dbf4a0e3a359ae3c659c90df91c0))
+
+### Bug Fixes
+
+* **pi:** honor disabled skills and agents on Pi ([#1196](https://github.com/marcusrbrown/systematic/issues/1196)) ([cb69d73](https://github.com/marcusrbrown/systematic/commit/cb69d73d669df17a648f977cc0dbf0cf2002f5ae))
+* **security:** bound Markdownlint parser denial of service ([#1190](https://github.com/marcusrbrown/systematic/issues/1190)) ([837134a](https://github.com/marcusrbrown/systematic/commit/837134a1c645f95eed0146a052727c3668d0d6d4))
+* **security:** patch Vite Windows editor command injection ([#1191](https://github.com/marcusrbrown/systematic/issues/1191)) ([8df5d81](https://github.com/marcusrbrown/systematic/commit/8df5d812cd9bcd4e7cba1ec0018263e3257c1806))
+
+### Documentation
+
+* **solutions:** record packaged Pi personas, once-per-process warnings and completed-step rollback ([#1200](https://github.com/marcusrbrown/systematic/issues/1200)) ([872bef0](https://github.com/marcusrbrown/systematic/commit/872bef0c5a31e306646a736be8d47f2fc0bfe30f))
+
+### Miscellaneous Chores
+
+* **deps:** update bfra-me/.github to v4.43.0 ([#1198](https://github.com/marcusrbrown/systematic/issues/1198)) ([d58f157](https://github.com/marcusrbrown/systematic/commit/d58f1571f8fbfb1dd5b39c6a176a7e7d5575d0c0))
+* **deps:** update dependency vite to ~8.3.0 ([#1194](https://github.com/marcusrbrown/systematic/issues/1194)) ([2772700](https://github.com/marcusrbrown/systematic/commit/27727001bee2c938b926288cabee54b036d690cd))
+* **deps:** update fro-bot/agent to v0.125.0 ([#1187](https://github.com/marcusrbrown/systematic/issues/1187)) ([9431f8a](https://github.com/marcusrbrown/systematic/commit/9431f8ad59b69eaccbae66d74e00bbe4e9cd504b))
+* **deps:** update github/codeql-action action to v4.39.1 ([#1192](https://github.com/marcusrbrown/systematic/issues/1192)) ([1b76cdd](https://github.com/marcusrbrown/systematic/commit/1b76cdd6bb81c02b454b614b80b008dbb9f6774c))
+* **opencode:** update .gitignore and remove package-lock.json ([#1195](https://github.com/marcusrbrown/systematic/issues/1195)) ([5bdd3f6](https://github.com/marcusrbrown/systematic/commit/5bdd3f64760860cfe4a9dc549f593c4c83b76a51))
+
 ## [3.24.2](https://github.com/marcusrbrown/systematic/compare/v3.24.1...v3.24.2) (2026-10-21)
 
 ### Build System
