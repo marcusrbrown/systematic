@@ -20,7 +20,9 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { CE_REVIEW_SCREEN_REJECTED_MESSAGE } from '../../src/ce-review-validator.js'
+import { screenReviewReturn } from '../../src/lib/review-pipeline.js'
 import { AGGREGATE_STDIN_BYTE_CAP } from '../../src/lib/review-pipeline-contract.js'
+import { buildScreenReturn, runPipeline } from './review-run-fixtures.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const VALIDATOR_ENTRY = path.join(ROOT_DIR, 'src/ce-review-validator.ts')
@@ -82,6 +84,7 @@ function runValidator(
     readonly cwd?: string
     readonly input?: string | Buffer
     readonly env?: Readonly<Record<string, string>>
+    readonly timeout?: number
   } = {},
 ): RunResult {
   const result = spawnSync('bun', [VALIDATOR_ENTRY, ...args], {
@@ -89,7 +92,8 @@ function runValidator(
     encoding: 'utf8',
     env: options.env ?? SAFE_ENV,
     input: options.input,
-    timeout: 30_000,
+    maxBuffer: 128 * 1024 * 1024,
+    timeout: options.timeout ?? 30_000,
   })
   return {
     exitCode: result.status ?? -1,
@@ -1201,4 +1205,137 @@ describe('process exception boundary: sink freshness across repeated calls', () 
       'SINK_B:["ce-review-validator: internal error in prepare"]',
     )
   })
+})
+
+describe('a run at full scale through the CLI stdin path', () => {
+  const REVIEWERS = 64
+  const FINDINGS_PER_REVIEWER = 32
+  // Sized so one admitted finding's JSON is about 1.2 KB, the figure a real
+  // persona return averages once evidence and a fix are filled in.
+  const WHY_IT_MATTERS = 'The example path fails under load. '.repeat(23)
+
+  function reviewerSpecs() {
+    return Array.from({ length: REVIEWERS }, (_, reviewerIndex) => ({
+      reviewer: `reviewer-${reviewerIndex}`,
+      findings: Array.from({ length: FINDINGS_PER_REVIEWER }, (_, index) => ({
+        file: `src/area-${reviewerIndex}/file-${index}.ts`,
+        whyItMatters: WHY_IT_MATTERS,
+      })),
+    }))
+  }
+
+  function timed<T>(run: () => T): { readonly value: T; readonly ms: number } {
+    const start = performance.now()
+    const value = run()
+    return { value, ms: Math.round(performance.now() - start) }
+  }
+
+  function cli(
+    phase: string,
+    envelope: unknown,
+  ): {
+    readonly stdin: number
+    readonly stdout: number
+    readonly ms: number
+    readonly output: unknown
+  } {
+    const input = JSON.stringify(envelope)
+    const { value: result, ms } = timed(() =>
+      runValidator([phase], { input, timeout: 120_000 }),
+    )
+    expect(result.stderr).toBe('')
+    expect(result.exitCode).toBe(0)
+    return {
+      stdin: Buffer.byteLength(input),
+      stdout: Buffer.byteLength(result.stdout),
+      ms,
+      output: JSON.parse(result.stdout) as unknown,
+    }
+  }
+
+  test('prepare, merge and finalize complete for 64 reviewers with 32 findings each, and the finalize envelope stays under half the byte cap', () => {
+    const specs = reviewerSpecs()
+    const dispatches = specs.map((spec) => ({
+      persona: spec.reviewer,
+      dispatch_outcome: 'findings',
+    }))
+    const screenResults = specs.map((spec) => ({
+      reviewer: spec.reviewer,
+      result: screenReviewReturn({
+        raw_return: JSON.stringify(buildScreenReturn(spec)),
+        expected_reviewer: spec.reviewer,
+        invoking_harness: 'opencode',
+      }),
+    }))
+
+    const prepare = cli('prepare', {
+      screen_results: screenResults,
+      selected_dispatches: dispatches,
+    })
+    const prepared = prepare.output as {
+      readonly surviving_findings: readonly unknown[]
+    }
+    expect(prepared.surviving_findings).toHaveLength(
+      REVIEWERS * FINDINGS_PER_REVIEWER,
+    )
+
+    const merge = cli('merge', {
+      prepared: prepare.output,
+      adjudication: { decisions: [] },
+    })
+    const merged = merge.output as {
+      readonly merged_findings: readonly unknown[]
+    }
+    expect(merged.merged_findings).toHaveLength(
+      REVIEWERS * FINDINGS_PER_REVIEWER,
+    )
+
+    const finalize = cli('finalize', {
+      merge: merge.output,
+      prepared: prepare.output,
+      screen_results: screenResults,
+      dispatch_records: dispatches,
+      validator_lifecycle_results: [],
+      plan_assessment: { verdict: 'All requirements met.', results: [] },
+      parent_run_metadata: {
+        run_id: 'run-scale',
+        mode: 'interactive',
+        harness: 'opencode',
+        branch: 'main',
+        head_sha: 'a'.repeat(40),
+        selected_dispatches: dispatches,
+        timestamps: {
+          started_at: '2026-01-01T00:00:00.000Z',
+          completed_at: '2026-01-01T00:05:00.000Z',
+        },
+        validation: { status: 'not_attempted', reason: 'no autofix applied' },
+        applied_fixes: [],
+      },
+    })
+    const finalized = finalize.output as { readonly kind: string }
+    expect(finalized.kind).toBe('writing')
+
+    const share = (bytes: number) =>
+      `${((bytes / AGGREGATE_STDIN_BYTE_CAP) * 100).toFixed(1)}%`
+    console.log(
+      [
+        `prepare  in ${prepare.stdin} (${share(prepare.stdin)} of cap) out ${prepare.stdout} in ${prepare.ms} ms`,
+        `merge    in ${merge.stdin} (${share(merge.stdin)} of cap) out ${merge.stdout} in ${merge.ms} ms`,
+        `finalize in ${finalize.stdin} (${share(finalize.stdin)} of cap) out ${finalize.stdout} in ${finalize.ms} ms`,
+      ].join('\n'),
+    )
+    expect(finalize.stdin).toBeLessThan(AGGREGATE_STDIN_BYTE_CAP / 2)
+  }, 60_000)
+
+  test('the same run completes in process', () => {
+    const { value: run, ms } = timed(() =>
+      runPipeline({ reviewers: reviewerSpecs() }),
+    )
+
+    console.log(`in-process pipeline: ${ms} ms`)
+    expect(run.prepare.ok).toBe(true)
+    expect(run.merge?.ok).toBe(true)
+    expect(run.finalize?.ok).toBe(true)
+    expect(run.parsed).toEqual({ artifactOk: true, outputOk: true })
+  }, 60_000)
 })

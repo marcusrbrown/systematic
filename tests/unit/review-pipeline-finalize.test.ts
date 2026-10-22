@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { ReviewArtifactSchema } from '../../src/lib/review-artifact-schema.js'
+import {
+  COVERAGE_BOUNDS,
+  ReviewArtifactSchema,
+} from '../../src/lib/review-artifact-schema.js'
 import type {
   ApplyReviewAdjudicationInput,
   BuildReviewCoverageInput,
@@ -3447,8 +3450,11 @@ describe('buildReviewCoverage', () => {
     expect(result.value.validators).toBe(1)
   })
 
-  test('a union exceeding the MAX_PERSONAS bound rejects with a fixed reason instead of truncating', () => {
-    const manyRisks = Array.from({ length: 65 }, (_, index) => `Risk ${index}.`)
+  test('a union exceeding the shared coverage bound rejects with a fixed reason instead of truncating', () => {
+    const manyRisks = Array.from(
+      { length: COVERAGE_BOUNDS.residual_risks + 1 },
+      (_, index) => `Risk ${index}.`,
+    )
     const result = buildReviewCoverage(
       coverageInput({
         screen_results: [
@@ -3463,6 +3469,28 @@ describe('buildReviewCoverage', () => {
       path: 'coverage.residual_risks',
       reason: 'coverage array exceeds bound',
     })
+  })
+})
+
+describe('buildReviewCoverage -- blank entries', () => {
+  test('blank and whitespace-only risks and gaps are dropped before deduping', () => {
+    const result = buildReviewCoverage({
+      dispatch_records: [dispatchRecord('r1')],
+      validator_lifecycle_results: [],
+      screen_results: [
+        financeScreenResult('r1', {
+          residual_risks: ['', '  ', 'Real risk.', '\n'],
+          testing_gaps: ['\t', 'Real gap.', ''],
+        }),
+      ],
+      reconciled: reconciledOutput(),
+      merge: mergeOutput([], []),
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.residual_risks).toEqual(['Real risk.'])
+    expect(result.value.testing_gaps).toEqual(['Real gap.'])
   })
 })
 

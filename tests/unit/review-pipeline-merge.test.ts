@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { MAX_RUN_FINDINGS } from '../../src/lib/review-artifact-schema.js'
 import type {
   ApplyReviewAdjudicationResult,
   DeriveMergedFindingResult,
@@ -13,6 +14,13 @@ import {
   validateAdjudication,
 } from '../../src/lib/review-pipeline.js'
 import { MergeOutputSchema } from '../../src/lib/review-pipeline-contract.js'
+import {
+  declineEveryGroupMember,
+  mergeEveryGroup,
+  type PipelineFindingSpec,
+  type PipelineRun,
+  runPipeline,
+} from './review-run-fixtures.js'
 
 type Decision = Parameters<typeof validateAdjudication>[1][number]
 type CandidateGroup = PrepareOutput['candidate_groups'][number]
@@ -1340,5 +1348,414 @@ describe('applyReviewAdjudication: duplicate/colliding assembled finding IDs', (
       result,
       'passthrough singleton input id collides with merged group decision id',
     )
+  })
+})
+
+describe('applyReviewAdjudication -- the prepared echo', () => {
+  function expectNamedRejection(
+    result: ApplyReviewAdjudicationResult,
+    reason: string,
+    path: string,
+  ): void {
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason as string).toBe(reason)
+    expect(result.rejection.path).toBe(path)
+    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+  }
+
+  const GROUP = group('src/a.ts', [
+    { input_id: 'correctness#0', line: 10 },
+    { input_id: 'security#0', line: 12 },
+  ])
+  const DECLINE_BOTH: Decision[] = [
+    declinedDecision('d0', 'correctness#0'),
+    declinedDecision('d1', 'security#0'),
+  ]
+
+  test('an echo that drops a candidate-group member from the survivors is a named rejection, not a throw', () => {
+    const echo = prepared([GROUP])
+    const dropped: PrepareOutput = {
+      ...echo,
+      surviving_findings: echo.surviving_findings.filter(
+        (finding) => finding.input_id !== 'security#0',
+      ),
+    }
+
+    let result: ApplyReviewAdjudicationResult | undefined
+    expect(() => {
+      result = applyReviewAdjudication({
+        prepared: dropped,
+        decisions: DECLINE_BOTH,
+      })
+    }).not.toThrow()
+
+    if (!result) throw new Error('expected a result')
+    expectNamedRejection(
+      result,
+      'prepared survivor missing for input id',
+      'candidate_groups.0.members.1.input_id',
+    )
+  })
+
+  test('an echo that drops a singleton from the survivors is a named rejection, not a throw', () => {
+    const echo = prepared([], { singletons: ['correctness#0', 'security#0'] })
+    const dropped: PrepareOutput = {
+      ...echo,
+      surviving_findings: echo.surviving_findings.filter(
+        (finding) => finding.input_id !== 'security#0',
+      ),
+    }
+
+    let result: ApplyReviewAdjudicationResult | undefined
+    expect(() => {
+      result = applyReviewAdjudication({ prepared: dropped, decisions: [] })
+    }).not.toThrow()
+
+    if (!result) throw new Error('expected a result')
+    expectNamedRejection(
+      result,
+      'prepared survivor missing for input id',
+      'singletons.1',
+    )
+  })
+
+  test('an echo whose singleton is also a candidate-group member is a named rejection', () => {
+    const echo = prepared([GROUP], { singletons: ['correctness#0'] })
+
+    const result = applyReviewAdjudication({
+      prepared: {
+        ...echo,
+        surviving_findings: echo.surviving_findings.filter(
+          (finding, index, all) =>
+            all.findIndex((other) => other.input_id === finding.input_id) ===
+            index,
+        ),
+      },
+      decisions: DECLINE_BOTH,
+    })
+
+    expectNamedRejection(
+      result,
+      'singleton input id is also a candidate group member',
+      'singletons.0',
+    )
+  })
+
+  test('an echo with a duplicate singleton is a named rejection at the repeated entry', () => {
+    const echo = prepared([], { singletons: ['dup#0', 'dup#0'] })
+
+    const result = applyReviewAdjudication({
+      prepared: {
+        ...echo,
+        surviving_findings: echo.surviving_findings.slice(0, 1),
+      },
+      decisions: [],
+    })
+
+    expectNamedRejection(
+      result,
+      'duplicate passthrough singleton input id',
+      'singletons.1',
+    )
+  })
+
+  test('a consistent echo is unaffected by the survivor and disjointness checks', () => {
+    const result = applyReviewAdjudication({
+      prepared: prepared([GROUP], { singletons: ['other#0'] }),
+      decisions: DECLINE_BOTH,
+    })
+
+    expect(result.ok).toBe(true)
+  })
+})
+
+describe('applyReviewAdjudication -- merge output schema', () => {
+  test('an output that fails its schema returns a bounded rejection and does not throw', () => {
+    const singletons = Array.from(
+      { length: MAX_RUN_FINDINGS + 1 },
+      (_, index) => `reviewer-x#${index}`,
+    )
+    const oversized = prepared([], { singletons })
+
+    let result: ApplyReviewAdjudicationResult | undefined
+    expect(() => {
+      result = applyReviewAdjudication({ prepared: oversized, decisions: [] })
+    }).not.toThrow()
+
+    if (!result) throw new Error('expected a result')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const { rejection } = result
+    expect(rejection.reason as string).toBe(
+      'merge output failed schema validation',
+    )
+    if (!('issues' in rejection)) throw new Error('expected a schema rejection')
+    expect(rejection.total).toBeGreaterThanOrEqual(1)
+    expect(rejection.issues.length).toBeLessThanOrEqual(8)
+    expect(rejection.issues[0]?.path).toBe(rejection.path)
+    for (const issue of rejection.issues) {
+      expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+    }
+  })
+
+  test.each([33, 51])(
+    '%d singletons merge into the same number of findings',
+    (count) => {
+      const singletons = Array.from(
+        { length: count },
+        (_, index) => `reviewer-x#${index}`,
+      )
+
+      const result = applyReviewAdjudication({
+        prepared: prepared([], { singletons }),
+        decisions: [],
+      })
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.merged_findings).toHaveLength(count)
+    },
+  )
+})
+
+describe('the real pipeline chain at run scale', () => {
+  function singletonsFor(
+    reviewer: string,
+    count: number,
+    extra: Partial<PipelineFindingSpec> = {},
+  ): PipelineFindingSpec[] {
+    return Array.from({ length: count }, (_, index) => ({
+      file: `src/${reviewer}/file-${index}.ts`,
+      ...extra,
+    }))
+  }
+
+  function expectCompleted(run: PipelineRun): void {
+    expect(run.prepare.ok).toBe(true)
+    expect(run.merge?.ok).toBe(true)
+    expect(run.finalize?.ok).toBe(true)
+    expect(run.parsed).toEqual({ artifactOk: true, outputOk: true })
+  }
+
+  test('34 survivors in one file from two reviewers pass prepare', () => {
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: Array.from({ length: 17 }, (_, index) => ({
+            file: 'src/shared.ts',
+            line: index + 1,
+          })),
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: Array.from({ length: 17 }, (_, index) => ({
+            file: 'src/shared.ts',
+            line: index + 100,
+          })),
+        },
+      ],
+    })
+
+    expect(run.prepare.ok).toBe(true)
+    if (!run.prepare.ok) return
+    expect(run.prepare.value.candidate_groups[0]?.members).toHaveLength(34)
+  })
+
+  test('more than 32 findings complete the whole chain', () => {
+    const run = runPipeline({
+      reviewers: [
+        { reviewer: 'reviewer-a', findings: singletonsFor('a', 32) },
+        { reviewer: 'reviewer-b', findings: singletonsFor('b', 32) },
+      ],
+    })
+
+    expectCompleted(run)
+    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
+      expect(run.finalize.value.artifact.findings).toHaveLength(64)
+    }
+  })
+
+  test('a group whose members are all declined completes the whole chain', () => {
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: Array.from({ length: 3 }, (_, index) => ({
+            file: 'src/shared.ts',
+            line: index + 1,
+          })),
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: Array.from({ length: 3 }, (_, index) => ({
+            file: 'src/shared.ts',
+            line: index + 50,
+          })),
+        },
+      ],
+      decide: declineEveryGroupMember,
+    })
+
+    expectCompleted(run)
+  })
+
+  test('a group merged into one finding completes the whole chain', () => {
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: [{ file: 'src/shared.ts', line: 1 }],
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: [{ file: 'src/shared.ts', line: 1 }],
+        },
+      ],
+      decide: mergeEveryGroup,
+    })
+
+    expectCompleted(run)
+  })
+
+  test('a report-only run with release-owned findings fills the report-only queue', () => {
+    const run = runPipeline({
+      mode: 'report-only',
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: singletonsFor('a', 32, { owner: 'release' }),
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: singletonsFor('b', 32, { owner: 'release' }),
+        },
+      ],
+    })
+
+    expect(run.prepare.ok).toBe(true)
+    expect(run.merge?.ok).toBe(true)
+    expect(run.finalize?.ok).toBe(true)
+    expect(run.parsed).toEqual({ artifactOk: true, outputOk: true })
+    if (!run.finalize?.ok) return
+    expect(run.finalize.value.kind).toBe('report_only')
+    if (run.finalize.value.kind !== 'report_only') return
+    expect(run.finalize.value.queues.report_only.length).toBeGreaterThan(32)
+  })
+
+  test('100 validator requests with more than 64 failed or unavailable complete the whole chain', () => {
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: singletonsFor('a', 32, { severity: 'P1' }),
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: singletonsFor('b', 32, { severity: 'P1' }),
+        },
+        {
+          reviewer: 'reviewer-c',
+          findings: singletonsFor('c', 32, { severity: 'P1' }),
+        },
+        {
+          reviewer: 'reviewer-d',
+          findings: singletonsFor('d', 4, { severity: 'P1' }),
+        },
+      ],
+      validatorOutcome: (index) =>
+        index < 70 ? (index % 2 === 0 ? 'failed' : 'unavailable') : 'true',
+    })
+
+    expectCompleted(run)
+    expect(run.merge?.ok && run.merge.value.validator_requests.length).toBe(100)
+    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
+      expect(
+        run.finalize.value.artifact.coverage.validator_failures.length,
+      ).toBeGreaterThan(64)
+    }
+  })
+
+  test('more than 64 distinct residual risks and testing gaps across two reviewers complete the whole chain', () => {
+    const labelled = (prefix: string, from: number, to: number) =>
+      Array.from(
+        { length: to - from },
+        (_, index) => `${prefix} ${from + index}.`,
+      )
+
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: singletonsFor('a', 1),
+          residualRisks: labelled('Risk', 0, 64),
+          testingGaps: labelled('Gap', 0, 64),
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: singletonsFor('b', 1),
+          residualRisks: labelled('Risk', 64, 128),
+          testingGaps: labelled('Gap', 64, 128),
+        },
+      ],
+    })
+
+    expectCompleted(run)
+    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
+      const { coverage } = run.finalize.value.artifact
+      expect(coverage.residual_risks).toHaveLength(128)
+      expect(coverage.testing_gaps).toHaveLength(128)
+    }
+  })
+
+  test('blank and whitespace-only risks and gaps are dropped from coverage', () => {
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: singletonsFor('a', 1),
+          residualRisks: ['', '   ', 'A real risk.'],
+          testingGaps: ['\t', 'A real gap.', ''],
+        },
+      ],
+    })
+
+    expectCompleted(run)
+    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
+      const { coverage } = run.finalize.value.artifact
+      expect(coverage.residual_risks).toEqual(['A real risk.'])
+      expect(coverage.testing_gaps).toEqual(['A real gap.'])
+    }
+  })
+
+  test('more than 64 distinct disagreement facts complete the whole chain', () => {
+    const run = runPipeline({
+      reviewers: [
+        {
+          reviewer: 'reviewer-a',
+          findings: Array.from({ length: 20 }, (_, index) => ({
+            file: 'src/shared.ts',
+            line: index + 1,
+          })),
+        },
+        {
+          reviewer: 'reviewer-b',
+          findings: Array.from({ length: 20 }, (_, index) => ({
+            file: 'src/shared.ts',
+            line: index + 100,
+          })),
+        },
+      ],
+      decide: declineEveryGroupMember,
+      factsPerDecision: 2,
+    })
+
+    expectCompleted(run)
+    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
+      expect(
+        run.finalize.value.artifact.coverage.intent_uncertainty.length,
+      ).toBeGreaterThan(64)
+    }
   })
 })

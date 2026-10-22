@@ -7,8 +7,8 @@ import {
 } from './review-artifact-path.js'
 import type { HarnessSchema } from './review-artifact-schema.js'
 import {
+  COVERAGE_BOUNDS,
   MAX_FINDINGS,
-  MAX_PERSONAS,
   MAX_REASON_LENGTH,
   ReviewArtifactSchema,
   RISK_CRITICAL_PERSONAS,
@@ -270,12 +270,16 @@ type PrepareRejectReason =
   | 'aggregate payload exceeds byte cap'
   | 'malformed JSON'
   | 'schema validation'
+  | 'prepare output failed schema validation'
   | 'duplicate persona outcome'
   | 'duplicate input id'
   | 'unselected persona screen result'
   | 'missing screen result for selected dispatch'
 
-type PrepareDomainReason = Exclude<PrepareRejectReason, 'schema validation'>
+type PrepareSchemaReason =
+  | 'schema validation'
+  | 'prepare output failed schema validation'
+type PrepareDomainReason = Exclude<PrepareRejectReason, PrepareSchemaReason>
 
 /** A payload-safe schema rejection: a fixed reason code, the first issue's
  * safe path, up to eight projected `{path, code}` issues and the full issue
@@ -297,7 +301,7 @@ interface DomainRejection<Reason extends string> {
  * never exception text. */
 export type PrepareRejection =
   | DomainRejection<PrepareDomainReason>
-  | SchemaRejection<'schema validation'>
+  | SchemaRejection<PrepareSchemaReason>
 
 export type PrepareReviewCandidatesResult =
   | { readonly ok: true; readonly value: PrepareOutput }
@@ -615,15 +619,27 @@ export function prepareReviewCandidates(
   const coverageUnion = computeCoverageUnion(selectedDispatches)
   const { candidateGroups, singletonIds } = groupCandidates(survivors)
 
-  const output = PrepareOutputSchema.parse({
+  // Defense in depth: every array in the output is bounded by the same
+  // constants that bounded the input, so no input that passed
+  // `PrepareInputSchema` can reach the failure branch.
+  const output = PrepareOutputSchema.safeParse({
     candidate_groups: candidateGroups,
     confidence_dispositions: confidenceDispositions,
     coverage_union: coverageUnion,
     singletons: singletonIds,
     surviving_findings: survivingFindings,
   })
+  if (!output.success) {
+    return {
+      ok: false,
+      rejection: schemaRejection(
+        'prepare output failed schema validation',
+        output.error.issues,
+      ),
+    }
+  }
 
-  return { ok: true, value: output }
+  return { ok: true, value: output.data }
 }
 
 // --- merge phase: adjudication validation -----------------------------------
@@ -689,6 +705,8 @@ type AdjudicationRejectReason =
   | 'declined decision id collides with merged group decision id'
   | 'declined decision id collides with passthrough singleton input id'
   | 'passthrough singleton input id collides with merged group decision id'
+  | 'prepared survivor missing for input id'
+  | 'singleton input id is also a candidate group member'
 
 /** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
  * safe JSON path only. Never payload content, never a finding title, never
@@ -952,6 +970,61 @@ function buildValidatedPartition(
 }
 
 /**
+ * The parent re-emits `prepared` between phases, so it is untrusted input.
+ * Resolves every candidate-group member and every singleton input ID against
+ * `prepared.surviving_findings` and rejects an echo that a later step could
+ * only trip over: a cited ID with no survivor, a singleton that is also a
+ * candidate-group member (it would be counted twice), and a duplicate
+ * singleton. `requireSurvivingFinding` stays behind this as the invariant.
+ */
+function validatePreparedEcho(
+  prepared: PrepareOutput,
+): AdjudicationRejection | undefined {
+  const survivors = new Set(
+    prepared.surviving_findings.map((finding) => finding.input_id),
+  )
+  const members = new Set<string>()
+  for (const [
+    groupIndex,
+    candidateGroup,
+  ] of prepared.candidate_groups.entries()) {
+    for (const [memberIndex, member] of candidateGroup.members.entries()) {
+      if (!survivors.has(member.input_id)) {
+        return {
+          path: formatReviewArtifactIssuePath([
+            'candidate_groups',
+            groupIndex,
+            'members',
+            memberIndex,
+            'input_id',
+          ]),
+          reason: 'prepared survivor missing for input id',
+        }
+      }
+      members.add(member.input_id)
+    }
+  }
+  const seen = new Set<string>()
+  for (const [index, inputId] of prepared.singletons.entries()) {
+    const path = formatReviewArtifactIssuePath(['singletons', index])
+    if (!survivors.has(inputId)) {
+      return { path, reason: 'prepared survivor missing for input id' }
+    }
+    if (members.has(inputId)) {
+      return {
+        path,
+        reason: 'singleton input id is also a candidate group member',
+      }
+    }
+    if (seen.has(inputId)) {
+      return { path, reason: 'duplicate passthrough singleton input id' }
+    }
+    seen.add(inputId)
+  }
+  return undefined
+}
+
+/**
  * Validates that the model's adjudication decisions form a valid partition
  * over `prepared`'s eligible candidate set: every eligible input ID (one
  * that appears in a candidate group) is cited by exactly one decision --
@@ -970,6 +1043,9 @@ export function validateAdjudication(
   prepared: PrepareOutput,
   decisions: AdjudicationDecisions,
 ): ValidateAdjudicationResult {
+  const echoViolation = validatePreparedEcho(prepared)
+  if (echoViolation) return { ok: false, rejection: echoViolation }
+
   if (prepared.candidate_groups.length === 0) {
     if (decisions.length > 0) {
       return rejectAdjudication(
@@ -1416,7 +1492,10 @@ export type ApplyReviewAdjudicationResult =
   | { readonly ok: true; readonly value: MergeOutput }
   | {
       readonly ok: false
-      readonly rejection: AdjudicationRejection | MergedFindingRejection
+      readonly rejection:
+        | AdjudicationRejection
+        | MergedFindingRejection
+        | SchemaRejection<'merge output failed schema validation'>
     }
 
 /** Parses the persona prefix out of a stable `<persona>#<index>` input ID --
@@ -1932,14 +2011,27 @@ export function applyReviewAdjudication(
       line: assembly.line,
     }))
 
-  return {
-    ok: true,
-    value: MergeOutputSchema.parse({
-      merged_findings: mergedFindings,
-      validator_requests: validatorRequests,
-      disagreement_facts: disagreementFacts,
-    }),
+  return parseMergeOutput({
+    merged_findings: mergedFindings,
+    validator_requests: validatorRequests,
+    disagreement_facts: disagreementFacts,
+  })
+}
+
+// Defense in depth behind the echo, survivor and disjointness checks: a run
+// larger than the run bounds rejects instead of throwing.
+function parseMergeOutput(candidate: unknown): ApplyReviewAdjudicationResult {
+  const output = MergeOutputSchema.safeParse(candidate)
+  if (!output.success) {
+    return {
+      ok: false,
+      rejection: schemaRejection(
+        'merge output failed schema validation',
+        output.error.issues,
+      ),
+    }
   }
+  return { ok: true, value: output.data }
 }
 
 // --- finalize phase: validator lifecycle reconciliation ---------------------
@@ -4299,9 +4391,10 @@ export function buildInputLedger(
 // Aggregates every screen result's residual risks and testing gaps, the
 // personas whose dispatch failed outright, the reasons a requested
 // validator never answered, and the merge phase's disagreement facts into
-// the artifact's `coverage` shape. Every array is bounded at `MAX_PERSONAS`;
-// a union that would exceed the bound rejects with a fixed reason rather
-// than silently truncating. Never reads `process.env`, the filesystem, or
+// the artifact's `coverage` shape. Every array is bounded by
+// `COVERAGE_BOUNDS`, the same table the artifact schema uses; a union that
+// would exceed its bound rejects with a fixed reason rather than silently
+// truncating. Never reads `process.env`, the filesystem, or
 // the clock.
 
 export interface BuildReviewCoverageInput {
@@ -4337,11 +4430,24 @@ function dedupeSortedStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort(compareStrings)
 }
 
+/** Blank and whitespace-only entries carry no information, and a reviewer can
+ * emit them unbounded, so they never reach the artifact. */
+function dedupeSortedNonBlankStrings(
+  values: readonly string[],
+): readonly string[] {
+  return dedupeSortedStrings(values.filter((value) => value.trim() !== ''))
+}
+
+type BoundedCoverageField = Exclude<
+  keyof typeof COVERAGE_BOUNDS,
+  'reviewers' | 'validators'
+>
+
 function checkCoverageArrayBound(
-  field: string,
+  field: BoundedCoverageField,
   values: readonly string[],
 ): BuildReviewCoverageRejection | undefined {
-  if (values.length <= MAX_PERSONAS) return undefined
+  if (values.length <= COVERAGE_BOUNDS[field]) return undefined
   return {
     path: formatReviewArtifactIssuePath(['coverage', field]),
     reason: 'coverage array exceeds bound',
@@ -4355,17 +4461,17 @@ function checkCoverageArrayBound(
  * `never_returned`, or `validation_unavailable`; the disproving reasons for
  * every requested validator that never answered; and the merge phase's
  * disagreement facts, carried through unchanged. Every array is checked
- * against `MAX_PERSONAS` before assembly -- an overflow rejects rather than
+ * against `COVERAGE_BOUNDS` before assembly -- an overflow rejects rather than
  * silently truncating. Never reads `process.env`, the filesystem, or the
  * clock.
  */
 export function buildReviewCoverage(
   input: BuildReviewCoverageInput,
 ): BuildReviewCoverageResult {
-  const residualRisks = dedupeSortedStrings(
+  const residualRisks = dedupeSortedNonBlankStrings(
     input.screen_results.flatMap((result) => result.result.residual_risks),
   )
-  const testingGaps = dedupeSortedStrings(
+  const testingGaps = dedupeSortedNonBlankStrings(
     input.screen_results.flatMap((result) => result.result.testing_gaps),
   )
   const failedReviewers = dedupeSortedStrings(
@@ -4380,7 +4486,10 @@ export function buildReviewCoverage(
   )
   const intentUncertainty = [...input.merge.disagreement_facts]
 
-  const bounded: readonly (readonly [string, readonly string[]])[] = [
+  const bounded: readonly (readonly [
+    BoundedCoverageField,
+    readonly string[],
+  ])[] = [
     ['residual_risks', residualRisks],
     ['testing_gaps', testingGaps],
     ['failed_reviewers', failedReviewers],
