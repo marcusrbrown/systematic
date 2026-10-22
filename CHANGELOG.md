@@ -4,6 +4,16 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.25.2](https://github.com/marcusrbrown/systematic/compare/v3.25.1...v3.25.2) (2026-10-22)
+
+### Bug Fixes
+
+* **review:** let ce:review runs with more than 32 findings finish ([#1205](https://github.com/marcusrbrown/systematic/issues/1205)) ([e2546a0](https://github.com/marcusrbrown/systematic/commit/e2546a04f0c683390c6214fb1c23223a135e4594))
+
+### Documentation
+
+* **solutions:** record why ce:review runs over 32 findings died at merge ([#1207](https://github.com/marcusrbrown/systematic/issues/1207)) ([3436a22](https://github.com/marcusrbrown/systematic/commit/3436a22ec48b091611b00b043566f1caca0d5d22))
+
 ## [3.25.1](https://github.com/marcusrbrown/systematic/compare/v3.25.0...v3.25.1) (2026-10-22)
 
 ### Bug Fixes
