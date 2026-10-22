@@ -27,6 +27,7 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 * **deps:** update fro-bot/agent to v0.125.0 ([#1187](https://github.com/marcusrbrown/systematic/issues/1187)) ([9431f8a](https://github.com/marcusrbrown/systematic/commit/9431f8ad59b69eaccbae66d74e00bbe4e9cd504b))
 * **deps:** update github/codeql-action action to v4.39.1 ([#1192](https://github.com/marcusrbrown/systematic/issues/1192)) ([1b76cdd](https://github.com/marcusrbrown/systematic/commit/1b76cdd6bb81c02b454b614b80b008dbb9f6774c))
 * **opencode:** update .gitignore and remove package-lock.json ([#1195](https://github.com/marcusrbrown/systematic/issues/1195)) ([5bdd3f6](https://github.com/marcusrbrown/systematic/commit/5bdd3f64760860cfe4a9dc549f593c4c83b76a51))
+* **release:** v3.25.0 ([793aa87](https://github.com/marcusrbrown/systematic/commit/793aa873c5b37fbcd7d0c2a6b242a494b2ba0e3e))
 
 ## [3.24.2](https://github.com/marcusrbrown/systematic/compare/v3.24.1...v3.24.2) (2026-10-21)
 
