@@ -985,6 +985,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     user: Record<string, unknown> | undefined,
     project?: Record<string, unknown>,
     initCount = 1,
+    laterInitFactory: typeof piExtension = piExtension,
   ): Promise<InitResult> {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-pi-package-warn-'),
@@ -1023,7 +1024,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
       const api = createFakeExtensionApi()
       await piExtension(api)
       for (let init = 1; init < initCount; init++) {
-        await piExtension(createFakeExtensionApi())
+        await laterInitFactory(createFakeExtensionApi())
       }
       return { api, stderr }
     } finally {
@@ -1163,6 +1164,29 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
 
       expect(overlayWarnings(first.stderr)).toHaveLength(0)
       expect(overlayWarnings(second.stderr)).toHaveLength(1)
+    })
+
+    test('a separately evaluated instance of the extension shares the flag', async () => {
+      // A pi-subagents child session can load the extension from a fresh module
+      // instance, so a module-local flag would let the second instance warn again.
+      const secondInstancePath = '../../src/pi.ts?instance=2'
+      const second = (await import(secondInstancePath)) as {
+        default: typeof piExtension
+      }
+      expect(second.default).not.toBe(piExtension)
+
+      const { stderr } = await initWithUserConfig(
+        {
+          agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+          disabled_agents: [CURATED_QUALIFIED],
+        },
+        undefined,
+        2,
+        second.default,
+      )
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+      expect(disableWarnings(stderr)).toHaveLength(1)
     })
 
     test('a warning suppressed by an earlier init is not replaced by another', async () => {
