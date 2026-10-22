@@ -2,6 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  COVERAGE_BOUNDS,
+  MAX_DECISION_FACTS,
+  MAX_FINDINGS,
+  MAX_PERSONAS,
+  MAX_RUN_DISAGREEMENT_FACTS,
+  MAX_RUN_FINDINGS,
   ParentFindingSchema,
   ParentRecordSchema,
   REVIEW_ARTIFACT_CUSTOM_MESSAGES,
@@ -10,6 +16,7 @@ import {
   SubAgentFindingSchema,
   SubAgentReturnSchema,
 } from '../../src/lib/review-artifact-schema.js'
+import { buildMinimalArtifact } from './review-run-fixtures.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -444,27 +451,31 @@ describe('review artifact schema', () => {
       reason: 'The findings describe separate validation paths.',
     }
 
-    const tooManyEntries = ReviewArtifactSchema.safeParse(
-      artifactWith({
-        declined_merges: Array.from({ length: 33 }, () => entry),
-      }),
-    )
-    expect(tooManyEntries.success).toBe(false)
+    const entriesAt = (count: number) =>
+      ReviewArtifactSchema.safeParse(
+        artifactWith({
+          declined_merges: Array.from({ length: count }, () => entry),
+        }),
+      )
+    expect(entriesAt(MAX_RUN_FINDINGS).success).toBe(true)
+    expect(entriesAt(MAX_RUN_FINDINGS + 1).success).toBe(false)
 
-    const tooManyInputIds = ReviewArtifactSchema.safeParse(
-      artifactWith({
-        declined_merges: [
-          {
-            ...entry,
-            input_finding_ids: Array.from(
-              { length: 33 },
-              (_, index) => `reviewer#${index + 1}`,
-            ),
-          },
-        ],
-      }),
-    )
-    expect(tooManyInputIds.success).toBe(false)
+    const inputIdsAt = (count: number) =>
+      ReviewArtifactSchema.safeParse(
+        artifactWith({
+          declined_merges: [
+            {
+              ...entry,
+              input_finding_ids: Array.from(
+                { length: count },
+                (_, index) => `reviewer#${index + 1}`,
+              ),
+            },
+          ],
+        }),
+      )
+    expect(inputIdsAt(MAX_RUN_FINDINGS).success).toBe(true)
+    expect(inputIdsAt(MAX_RUN_FINDINGS + 1).success).toBe(false)
 
     const oversizedReason = ReviewArtifactSchema.safeParse(
       artifactWith({
@@ -2579,5 +2590,160 @@ describe('referential integrity across the artifact ledger and synthesis', () =>
     )
 
     expect(result.success).toBe(true)
+  })
+})
+
+// --- Run-level bounds -------------------------------------------------------
+//
+// Persisted run-level arrays are bounded by `MAX_RUN_FINDINGS` (or by a
+// `COVERAGE_BOUNDS` entry). Each probe parses at its bound and rejects one
+// past it with `too_big` at the exact path. The bounds come from the exported
+// constants, never from literals.
+
+function tooBigPaths(value: unknown): string[] {
+  const result = ReviewArtifactSchema.safeParse(value)
+  if (result.success) return []
+  return result.error.issues
+    .filter((issue) => issue.code === 'too_big')
+    .map((issue) => JSON.stringify(issue.path))
+}
+
+function repeated<T>(count: number, make: (index: number) => T): T[] {
+  return Array.from({ length: count }, (_, index) => make(index))
+}
+
+describe('run-level artifact bounds', () => {
+  test('synthesized findings parse at the run capacity and reject one past it', () => {
+    expect(
+      ReviewArtifactSchema.safeParse(
+        buildMinimalArtifact({ findings: MAX_RUN_FINDINGS }),
+      ).success,
+    ).toBe(true)
+    expect(
+      tooBigPaths(buildMinimalArtifact({ findings: MAX_RUN_FINDINGS + 1 })),
+    ).toContain(JSON.stringify(['findings']))
+  })
+
+  test('one synthesized finding cites input IDs up to the run capacity', () => {
+    const withIds = (count: number): JsonObject => {
+      const artifact = buildMinimalArtifact({ findings: 1 })
+      const [finding] = artifact.findings as {
+        input_finding_ids: string[]
+      }[]
+      if (!finding) throw new Error('the fixture has no finding')
+      const [citedId] = finding.input_finding_ids
+      return {
+        ...artifact,
+        findings: [
+          {
+            ...finding,
+            input_finding_ids: repeated(count, () => citedId),
+          },
+        ],
+      }
+    }
+
+    expect(
+      ReviewArtifactSchema.safeParse(withIds(MAX_RUN_FINDINGS)).success,
+    ).toBe(true)
+    expect(tooBigPaths(withIds(MAX_RUN_FINDINGS + 1))).toContain(
+      JSON.stringify(['findings', 0, 'input_finding_ids']),
+    )
+  })
+
+  test.each([
+    'applied_fixes',
+    'residual_actionable_work',
+    'advisory_outputs',
+  ] as const)(
+    '%s parses at the run capacity and rejects one past it',
+    (field) => {
+      const withCount = (count: number) =>
+        artifactWith({ [field]: repeated(count, () => 'A bounded entry.') })
+
+      expect(
+        ReviewArtifactSchema.safeParse(withCount(MAX_RUN_FINDINGS)).success,
+      ).toBe(true)
+      expect(tooBigPaths(withCount(MAX_RUN_FINDINGS + 1))).toContain(
+        JSON.stringify([field]),
+      )
+    },
+  )
+
+  test.each([
+    'residual_risks',
+    'testing_gaps',
+    'failed_reviewers',
+    'validator_failures',
+    'intent_uncertainty',
+  ] as const)(
+    'coverage.%s parses at its COVERAGE_BOUNDS value and rejects one past it',
+    (field) => {
+      const withCount = (count: number) =>
+        artifactWith({
+          coverage: {
+            ...(baseArtifact.coverage as JsonObject),
+            [field]: repeated(count, (index) => `Entry ${index}.`),
+          },
+        })
+
+      expect(
+        ReviewArtifactSchema.safeParse(withCount(COVERAGE_BOUNDS[field]))
+          .success,
+      ).toBe(true)
+      expect(tooBigPaths(withCount(COVERAGE_BOUNDS[field] + 1))).toContain(
+        JSON.stringify(['coverage', field]),
+      )
+    },
+  )
+
+  test.each(['reviewers', 'validators'] as const)(
+    'coverage.%s is a numeric maximum at its COVERAGE_BOUNDS value',
+    (field) => {
+      const withValue = (value: number) =>
+        artifactWith({
+          coverage: {
+            ...(baseArtifact.coverage as JsonObject),
+            [field]: value,
+          },
+        })
+
+      expect(
+        ReviewArtifactSchema.safeParse(withValue(COVERAGE_BOUNDS[field]))
+          .success,
+      ).toBe(true)
+      expect(tooBigPaths(withValue(COVERAGE_BOUNDS[field] + 1))).toContain(
+        JSON.stringify(['coverage', field]),
+      )
+    },
+  )
+
+  test('the coverage bounds follow their producers', () => {
+    expect(COVERAGE_BOUNDS.validators).toBe(MAX_RUN_FINDINGS)
+    expect(COVERAGE_BOUNDS.validator_failures).toBe(MAX_RUN_FINDINGS)
+    expect(COVERAGE_BOUNDS.residual_risks).toBe(MAX_PERSONAS * MAX_PERSONAS)
+    expect(COVERAGE_BOUNDS.testing_gaps).toBe(MAX_PERSONAS * MAX_PERSONAS)
+    expect(COVERAGE_BOUNDS.intent_uncertainty).toBe(MAX_RUN_DISAGREEMENT_FACTS)
+    expect(COVERAGE_BOUNDS.reviewers).toBe(MAX_PERSONAS)
+    expect(COVERAGE_BOUNDS.failed_reviewers).toBe(MAX_PERSONAS)
+  })
+
+  test('the run-level constants derive from the per-reviewer ones', () => {
+    expect(MAX_RUN_FINDINGS).toBe(MAX_FINDINGS * MAX_PERSONAS)
+    expect(MAX_RUN_DISAGREEMENT_FACTS).toBe(
+      MAX_RUN_FINDINGS * (MAX_DECISION_FACTS + 1),
+    )
+  })
+
+  test('per-reviewer bounds keep their values', () => {
+    const overFailedReviewers = artifactWith({
+      coverage: {
+        ...(baseArtifact.coverage as JsonObject),
+        failed_reviewers: repeated(MAX_PERSONAS + 1, (index) => `r${index}`),
+      },
+    })
+    expect(tooBigPaths(overFailedReviewers)).toContain(
+      JSON.stringify(['coverage', 'failed_reviewers']),
+    )
   })
 })

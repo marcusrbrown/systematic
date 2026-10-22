@@ -2,11 +2,18 @@ import { describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { z } from 'zod'
 import {
   ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG,
+  formatProjectedIssueLines,
   formatReviewArtifactSuccessMessage,
+  formatReviewArtifactValidationFailure,
+  MAX_PROJECTED_ISSUE_LINES,
   parseValidateReviewArtifactArguments,
+  projectZodIssues,
+  REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
   resolveReviewArtifactPath,
+  schemaRejection,
 } from '../../src/lib/review-artifact-path.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -218,5 +225,203 @@ describe('resolveReviewArtifactPath invariants shared by both entries', () => {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(outsideDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('projectZodIssues', () => {
+  const issueAt = (index: number) => ({
+    path: ['items', index, 'name'] as PropertyKey[],
+    code: 'too_big',
+  })
+
+  it('bounds the projection at the default and reports the full total', () => {
+    const issues = Array.from({ length: 20 }, (_, index) => issueAt(index))
+
+    const projected = projectZodIssues(issues)
+
+    expect(MAX_PROJECTED_ISSUE_LINES).toBe(8)
+    expect(projected.issues).toHaveLength(MAX_PROJECTED_ISSUE_LINES)
+    expect(projected.total).toBe(20)
+    expect(projected.issues[0]).toEqual({
+      path: 'items.0.name',
+      code: 'too_big',
+    })
+  })
+
+  it('honors an explicit bound', () => {
+    const issues = Array.from({ length: 5 }, (_, index) => issueAt(index))
+
+    const projected = projectZodIssues(issues, 2)
+
+    expect(projected.issues).toHaveLength(2)
+    expect(projected.total).toBe(5)
+  })
+
+  it('keeps every issue when there are fewer than the bound', () => {
+    const projected = projectZodIssues([issueAt(0), issueAt(1)])
+
+    expect(projected.issues).toHaveLength(2)
+    expect(projected.total).toBe(2)
+  })
+
+  it('projects an empty list as an empty list with a zero total', () => {
+    expect(projectZodIssues([])).toEqual({ issues: [], total: 0 })
+  })
+
+  it('formats a root path as $', () => {
+    expect(
+      projectZodIssues([{ path: [], code: 'invalid_type' }]).issues,
+    ).toEqual([{ path: '$', code: 'invalid_type' }])
+  })
+
+  it('projects only the path and the code of a real Zod issue', () => {
+    const schema = z
+      .object({
+        name: z.string().max(4),
+        tags: z.array(z.string()).max(1),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.name === 'abc') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['name'],
+            message: 'MESSAGE_CANARY authored text',
+          })
+        }
+      })
+    const result = schema.safeParse({
+      name: 'VALUE_CANARY_too_long',
+      tags: ['a', 'b'],
+      KEY_CANARY: 'x',
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+
+    const projected = projectZodIssues(result.error.issues)
+    const serialized = JSON.stringify(projected)
+
+    expect(projected.total).toBe(result.error.issues.length)
+    for (const issue of projected.issues) {
+      expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+    }
+    expect(serialized).not.toContain('VALUE_CANARY')
+    expect(serialized).not.toContain('KEY_CANARY')
+  })
+
+  it('never copies an issue message into the projection', () => {
+    const projected = projectZodIssues([
+      { path: ['name'], code: 'custom', message: 'MESSAGE_CANARY' } as {
+        path: PropertyKey[]
+        code: string
+      },
+    ])
+
+    expect(JSON.stringify(projected)).not.toContain('MESSAGE_CANARY')
+  })
+})
+
+describe('formatProjectedIssueLines', () => {
+  it('prints one path-and-code line per issue and no overflow line when all fit', () => {
+    expect(
+      formatProjectedIssueLines({
+        issues: [
+          { path: 'a', code: 'too_big' },
+          { path: 'b.0', code: 'invalid_type' },
+        ],
+        total: 2,
+      }),
+    ).toEqual(['a too_big', 'b.0 invalid_type'])
+  })
+
+  it('adds an overflow line counting the issues that were not printed', () => {
+    const issues = Array.from({ length: 8 }, (_, index) => ({
+      path: `f${index}`,
+      code: 'too_big',
+    }))
+
+    const lines = formatProjectedIssueLines({ issues, total: 11 })
+
+    expect(lines).toHaveLength(9)
+    expect(lines[8]).toBe('… and 3 more')
+  })
+})
+
+describe('formatReviewArtifactValidationFailure', () => {
+  const issue = (index: number) => ({
+    path: ['items', index] as PropertyKey[],
+    code: 'too_big',
+    message: 'MESSAGE_CANARY',
+  })
+
+  it('prints the context line, the schema line, then the issue lines', () => {
+    expect(formatReviewArtifactValidationFailure([issue(0)])).toEqual([
+      'Review artifact failed schema validation: 1 issue(s)',
+      `Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`,
+      'items.0 too_big',
+    ])
+  })
+
+  it('prints at most eight issues and counts the rest', () => {
+    const issues = Array.from({ length: 12 }, (_, index) => issue(index))
+
+    const lines = formatReviewArtifactValidationFailure(issues)
+
+    expect(lines).toHaveLength(2 + MAX_PROJECTED_ISSUE_LINES + 1)
+    expect(lines.at(-1)).toBe('… and 4 more')
+  })
+
+  it('keeps an authored message only for a custom issue, and never prints another issue message', () => {
+    const lines = formatReviewArtifactValidationFailure([
+      { path: ['a'], code: 'custom', message: 'severity count must match' },
+      { path: ['b'], code: 'too_big', message: 'MESSAGE_CANARY' },
+    ])
+
+    expect(lines).toContain('a custom: severity count must match')
+    expect(lines).toContain('b too_big')
+    expect(lines.join('\n')).not.toContain('MESSAGE_CANARY')
+  })
+})
+
+describe('schemaRejection', () => {
+  const bad = (index: number) => ({
+    path: ['items', index] as PropertyKey[],
+    code: 'too_big',
+    message: 'MESSAGE_CANARY',
+  })
+
+  it('takes its path from the first issue and carries the bounded projection', () => {
+    const rejection = schemaRejection(
+      'schema validation',
+      Array.from({ length: 12 }, (_, index) => bad(index)),
+    )
+
+    expect(rejection.reason).toBe('schema validation')
+    expect(rejection.path).toBe('items.0')
+    expect(rejection.issues).toHaveLength(MAX_PROJECTED_ISSUE_LINES)
+    expect(rejection.total).toBe(12)
+    expect(Object.keys(rejection).sort()).toEqual([
+      'issues',
+      'kind',
+      'path',
+      'reason',
+      'total',
+    ])
+  })
+
+  it('falls back to the root path when there is no issue', () => {
+    expect(schemaRejection('schema validation', [])).toEqual({
+      issues: [],
+      kind: 'schema',
+      path: '$',
+      reason: 'schema validation',
+      total: 0,
+    })
+  })
+
+  it('never carries an issue message', () => {
+    expect(
+      JSON.stringify(schemaRejection('schema validation', [bad(0)])),
+    ).not.toContain('MESSAGE_CANARY')
   })
 })

@@ -497,7 +497,11 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
     expect(result.rejection.reason).toBe('duplicate persona outcome')
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
     expect(result.rejection.path).not.toContain('Example issue')
   })
 
@@ -519,7 +523,11 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
     expect(result.rejection.reason).toBe('duplicate input id')
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
     expect(result.rejection.path).not.toContain('Example issue')
   })
 
@@ -534,7 +542,11 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
     expect(result.rejection.reason).toBe('unselected persona screen result')
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
     expect(result.rejection.path).not.toContain('Example issue')
   })
 
@@ -548,7 +560,11 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.rejection.reason).toBe(
       'missing screen result for selected dispatch',
     )
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
     expect(result.rejection.path).not.toContain('Example issue')
   })
 
@@ -558,8 +574,14 @@ describe('prepareReviewCandidates -- rejections', () => {
 
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
-    expect(result.rejection.reason).toBe('aggregate payload exceeds byte cap')
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(result.rejection.reason).toBe(
+      `aggregate payload exceeds the byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`,
+    )
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
     expect(result.rejection.path).toBe('$')
   })
 
@@ -569,7 +591,11 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
     expect(result.rejection.reason).toBe('malformed JSON')
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
   })
 
   test('rejects a payload that fails schema validation', () => {
@@ -583,6 +609,71 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
     expect(result.rejection.reason).toBe('schema validation')
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'issues',
+      'kind',
+      'path',
+      'reason',
+      'total',
+    ])
+  })
+
+  test('a schema rejection projects only paths and codes, never values or key names', () => {
+    const result = prepareReviewCandidates(
+      buildInput(
+        [
+          {
+            reviewer: 'VALUE_CANARY'.padEnd(400, 'x'),
+            KEY_CANARY_unknown_key: 'VALUE_CANARY_in_unknown_key',
+          },
+        ],
+        [makeSelectedDispatch('correctness')],
+      ),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected rejection')
+    const { rejection } = result
+    expect(rejection.reason).toBe('schema validation')
+    if (rejection.kind !== 'schema')
+      throw new Error('expected a schema rejection')
+    expect(rejection.total).toBeGreaterThanOrEqual(1)
+    expect(rejection.issues.length).toBeGreaterThanOrEqual(1)
+    for (const issue of rejection.issues) {
+      expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+    }
+    expect(rejection.issues[0]?.path).toBe(rejection.path)
+    const serialized = JSON.stringify(rejection)
+    expect(serialized).not.toContain('CANARY')
+  })
+
+  test('a schema rejection lists at most eight issues and reports the full total', () => {
+    const result = prepareReviewCandidates(
+      buildInput(
+        [],
+        Array.from({ length: 12 }, () => ({ persona: 5 })),
+      ),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected rejection')
+    if (result.rejection.kind !== 'schema') {
+      throw new Error('expected a schema rejection')
+    }
+    expect(result.rejection.total).toBeGreaterThan(8)
+    expect(result.rejection.issues).toHaveLength(8)
+  })
+
+  test('a domain rejection keeps exactly a path and a reason', () => {
+    const result = prepareReviewCandidates({ raw_input: '{not json' })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected rejection')
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
+    expect(result.rejection.kind).toBe('domain')
   })
 })

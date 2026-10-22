@@ -101,7 +101,9 @@ describe('systematic validate-review-artifact', () => {
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toContain('run_id')
       expect(result.stderr).toContain('too_big')
-      expect(result.stderr).toContain('1 issue(s)')
+      expect(result.stderr).toContain(
+        'Review artifact failed schema validation: 1 issue(s)',
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
     }
@@ -580,12 +582,11 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(1)
-      expect(result.stderr.split('\n')[0]).toBe('run_id too_big')
       expect(result.stderr).toBe(
         [
-          'run_id too_big',
+          'Review artifact failed schema validation: 1 issue(s)',
           'Schema: skills/ce-review/references/review-summary-schema.json',
-          'Review artifact validation failed: 1 issue(s)',
+          'run_id too_big',
           '',
         ].join('\n'),
       )
@@ -742,6 +743,55 @@ describe('systematic validate-review-artifact: validation_unavailable amendment'
       expect(result.stderr).toContain(
         'findings.0.input_finding_ids.0 custom: every synthesized input finding ID must resolve to an admitted ledger row',
       )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('prints eight issue lines and the overflow count for an artifact with more than eight issues, and never prints values or key names', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      for (const key of [
+        'run_id',
+        'branch',
+        'head_sha',
+        'completed_at',
+        'mode',
+        'harness',
+        'verdict',
+        'run_status',
+        'dispatches',
+        'input_findings',
+      ]) {
+        artifact[key] = { VALUE_CANARY: 'VALUE_CANARY' }
+      }
+      artifact.KEY_CANARY_unknown = 'VALUE_CANARY'
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      const lines = result.stderr.trimEnd().split('\n')
+      const count = Number(
+        /^Review artifact failed schema validation: (\d+) issue\(s\)$/.exec(
+          lines[0] ?? '',
+        )?.[1],
+      )
+      const more = Number(/^… and (\d+) more$/.exec(lines[10] ?? '')?.[1])
+      expect(count).toBe(8 + more)
+      expect(lines[1]).toMatch(/^Schema: /)
+      expect(lines.slice(2, 10)).toHaveLength(8)
+      expect(lines[10]).toMatch(/^… and \d+ more$/)
+      expect(lines).toHaveLength(11)
+      expect(result.stderr).not.toContain('CANARY')
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
     }

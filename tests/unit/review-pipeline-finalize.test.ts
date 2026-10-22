@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { ReviewArtifactSchema } from '../../src/lib/review-artifact-schema.js'
+import {
+  COVERAGE_BOUNDS,
+  ReviewArtifactSchema,
+} from '../../src/lib/review-artifact-schema.js'
 import type {
   ApplyReviewAdjudicationInput,
   BuildReviewCoverageInput,
@@ -3447,8 +3450,11 @@ describe('buildReviewCoverage', () => {
     expect(result.value.validators).toBe(1)
   })
 
-  test('a union exceeding the MAX_PERSONAS bound rejects with a fixed reason instead of truncating', () => {
-    const manyRisks = Array.from({ length: 65 }, (_, index) => `Risk ${index}.`)
+  test('a union exceeding the shared coverage bound rejects with a fixed reason instead of truncating', () => {
+    const manyRisks = Array.from(
+      { length: COVERAGE_BOUNDS.residual_risks + 1 },
+      (_, index) => `Risk ${index}.`,
+    )
     const result = buildReviewCoverage(
       coverageInput({
         screen_results: [
@@ -3460,9 +3466,32 @@ describe('buildReviewCoverage', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.rejection).toEqual({
+      kind: 'domain',
       path: 'coverage.residual_risks',
       reason: 'coverage array exceeds bound',
     })
+  })
+})
+
+describe('buildReviewCoverage -- blank entries', () => {
+  test('blank and whitespace-only risks and gaps are dropped before deduping', () => {
+    const result = buildReviewCoverage({
+      dispatch_records: [dispatchRecord('r1')],
+      validator_lifecycle_results: [],
+      screen_results: [
+        financeScreenResult('r1', {
+          residual_risks: ['', '  ', 'Real risk.', '\n'],
+          testing_gaps: ['\t', 'Real gap.', ''],
+        }),
+      ],
+      reconciled: reconciledOutput(),
+      merge: mergeOutput([], []),
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.residual_risks).toEqual(['Real risk.'])
+    expect(result.value.testing_gaps).toEqual(['Real gap.'])
   })
 })
 
@@ -3697,6 +3726,7 @@ describe('checkRiskCoverageSemantics', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.rejection).toEqual({
+      kind: 'domain',
       path: 'risk_coverage.0.input_finding_id',
       reason:
         'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
@@ -3727,6 +3757,7 @@ describe('checkRiskCoverageSemantics', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.rejection).toEqual({
+      kind: 'domain',
       path: 'risk_coverage.0.input_finding_id',
       reason:
         'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
@@ -4210,6 +4241,39 @@ describe('finalizeReview', () => {
     expect(result.rejection.reason).toBe('artifact failed schema validation')
     expect('value' in result).toBe(false)
     expect(Object.keys(result).sort()).toEqual(['ok', 'rejection'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'issues',
+      'kind',
+      'path',
+      'reason',
+      'total',
+    ])
+  })
+
+  test('an artifact schema rejection carries bounded path and code issues and no value text', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      parent_run_metadata: {
+        ...base.parent_run_metadata,
+        branch: 'VALUE_CANARY'.padEnd(300, 'x'),
+      },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const { rejection } = result
+    if (rejection.kind !== 'schema')
+      throw new Error('expected a schema rejection')
+    expect(rejection.total).toBeGreaterThanOrEqual(1)
+    expect(rejection.issues.length).toBeLessThanOrEqual(8)
+    expect(rejection.issues[0]?.path).toBe(rejection.path)
+    for (const issue of rejection.issues) {
+      expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+    }
+    expect(JSON.stringify(rejection)).not.toContain('CANARY')
   })
 
   test('changing only run_id changes only run_id in the artifact', () => {
@@ -4302,6 +4366,56 @@ describe('finalizeReview', () => {
     expect(reportOnlyResult.rejection.reason).toBe(
       interactiveResult.rejection.reason,
     )
+  })
+
+  test('a screened finding dropped from the survivors, the singletons and the dispositions together rejects instead of vanishing from the artifact', () => {
+    const base = finalizeReviewScenario()
+    const reduced = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          requires_verification: false,
+          severity: 'P3',
+        }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      prepared: reduced,
+      merge: buildAdjudicatedMergeOutput(reduced),
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+            admittedScreenFinding('correctness#1', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+      ],
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'screened finding lacks exactly one confidence disposition',
+    )
+    expect(result.rejection.path).toBe(
+      'screen_results.0.result.admitted_findings.1.input_id',
+    )
+  })
+
+  test('a screened finding carrying exactly one disposition is unaffected by the disposition coverage check', () => {
+    expect(finalizeReview(finalizeReviewScenario()).ok).toBe(true)
   })
 
   test('a cited input whose reviewer is unavailable in both dispatch arrays rejects identically in report-only and interactive', () => {

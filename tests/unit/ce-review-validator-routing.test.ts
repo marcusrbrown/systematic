@@ -19,8 +19,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { CE_REVIEW_SCREEN_REJECTED_MESSAGE } from '../../src/ce-review-validator.js'
+import {
+  CE_REVIEW_SCREEN_REJECTED_MESSAGE,
+  formatAggregateRejection,
+} from '../../src/ce-review-validator.js'
+import { MAX_RUN_FINDINGS } from '../../src/lib/review-artifact-schema.js'
+import {
+  applyReviewAdjudication,
+  type PrepareOutput,
+  screenReviewReturn,
+} from '../../src/lib/review-pipeline.js'
 import { AGGREGATE_STDIN_BYTE_CAP } from '../../src/lib/review-pipeline-contract.js'
+import { buildScreenReturn, runPipeline } from './review-run-fixtures.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const VALIDATOR_ENTRY = path.join(ROOT_DIR, 'src/ce-review-validator.ts')
@@ -82,6 +92,7 @@ function runValidator(
     readonly cwd?: string
     readonly input?: string | Buffer
     readonly env?: Readonly<Record<string, string>>
+    readonly timeout?: number
   } = {},
 ): RunResult {
   const result = spawnSync('bun', [VALIDATOR_ENTRY, ...args], {
@@ -89,7 +100,8 @@ function runValidator(
     encoding: 'utf8',
     env: options.env ?? SAFE_ENV,
     input: options.input,
-    timeout: 30_000,
+    maxBuffer: 128 * 1024 * 1024,
+    timeout: options.timeout ?? 30_000,
   })
   return {
     exitCode: result.status ?? -1,
@@ -622,6 +634,13 @@ describe('prepare: rejection outcomes', () => {
     expect(result.stderr).toContain('rejected the aggregate envelope')
     expect(result.stdout).toBe('')
   })
+
+  test('malformed JSON prints the context line, the fixed reason and the root path', () => {
+    const result = runValidator([...PREPARE_ARGS], { input: '{ not json' })
+    expect(result.stderr.trim()).toBe(
+      'prepare rejected the aggregate envelope: malformed JSON at $',
+    )
+  })
 })
 
 describe('prepare: environment invariance', () => {
@@ -783,6 +802,13 @@ describe('merge: rejection outcomes', () => {
     expect(result.stdout).toBe('')
   })
 
+  test('malformed JSON prints the context line, the fixed reason and the root path, as prepare does', () => {
+    const result = runValidator([...MERGE_ARGS], { input: '{ not json' })
+    expect(result.stderr.trim()).toBe(
+      'merge rejected the aggregate envelope: malformed JSON at $',
+    )
+  })
+
   test('an adjudication rejection from applyReviewAdjudication exits 1 with the fixed reason and a path', () => {
     const result = runValidator([...MERGE_ARGS], {
       input: JSON.stringify(MERGE_REJECTED_INPUT),
@@ -798,7 +824,11 @@ describe('merge: rejection outcomes', () => {
     const result = runValidator([...MERGE_ARGS], { input: '{}' })
     expect(result.exitCode).toBe(1)
     expect(result.stderr.trim()).toBe(
-      'merge rejected the aggregate envelope: invalid_type at prepared',
+      [
+        'merge rejected the aggregate envelope: schema validation',
+        'prepared invalid_type',
+        'adjudication invalid_type',
+      ].join('\n'),
     )
     expect(result.stdout).toBe('')
   })
@@ -987,13 +1017,23 @@ describe('finalize: rejection outcomes', () => {
     expect(result.stdout).toBe('')
   })
 
+  test('malformed JSON prints the context line, the fixed reason and the root path, as prepare does', () => {
+    const result = runValidator([...FINALIZE_ARGS], { input: '{ not json' })
+    expect(result.stderr.trim()).toBe(
+      'finalize rejected the aggregate envelope: malformed JSON at $',
+    )
+  })
+
   test('a schema-invalid envelope exits 1 wrapped in the same rejection shape as every other phase, with a path and code but not the offending value', () => {
     const result = runValidator([...FINALIZE_ARGS], {
       input: JSON.stringify(FINALIZE_SCHEMA_INVALID_INPUT),
     })
     expect(result.exitCode).toBe(1)
     expect(result.stderr.trim()).toBe(
-      'finalize rejected the aggregate envelope: invalid_value at parent_run_metadata.mode',
+      [
+        'finalize rejected the aggregate envelope: schema validation',
+        'parent_run_metadata.mode invalid_value',
+      ].join('\n'),
     )
     expect(result.stderr).not.toContain('not-a-real-mode')
     expect(result.stdout).toBe('')
@@ -1201,4 +1241,360 @@ describe('process exception boundary: sink freshness across repeated calls', () 
       'SINK_B:["ce-review-validator: internal error in prepare"]',
     )
   })
+})
+
+describe('a run at full scale through the CLI stdin path', () => {
+  const REVIEWERS = 64
+  const FINDINGS_PER_REVIEWER = 32
+  // Sized so one admitted finding's JSON is about 1.2 KB, the figure a real
+  // persona return averages once evidence and a fix are filled in.
+  const WHY_IT_MATTERS = 'The example path fails under load. '.repeat(23)
+
+  function reviewerSpecs() {
+    return Array.from({ length: REVIEWERS }, (_, reviewerIndex) => ({
+      reviewer: `reviewer-${reviewerIndex}`,
+      findings: Array.from({ length: FINDINGS_PER_REVIEWER }, (_, index) => ({
+        file: `src/area-${reviewerIndex}/file-${index}.ts`,
+        whyItMatters: WHY_IT_MATTERS,
+      })),
+    }))
+  }
+
+  function timed<T>(run: () => T): { readonly value: T; readonly ms: number } {
+    const start = performance.now()
+    const value = run()
+    return { value, ms: Math.round(performance.now() - start) }
+  }
+
+  function cli(
+    phase: string,
+    envelope: unknown,
+  ): {
+    readonly stdin: number
+    readonly stdout: number
+    readonly ms: number
+    readonly output: unknown
+  } {
+    const input = JSON.stringify(envelope)
+    const { value: result, ms } = timed(() =>
+      runValidator([phase], { input, timeout: 120_000 }),
+    )
+    expect(result.stderr).toBe('')
+    expect(result.exitCode).toBe(0)
+    return {
+      stdin: Buffer.byteLength(input),
+      stdout: Buffer.byteLength(result.stdout),
+      ms,
+      output: JSON.parse(result.stdout) as unknown,
+    }
+  }
+
+  test('prepare, merge and finalize complete for 64 reviewers with 32 findings each, and the finalize envelope stays under half the byte cap', () => {
+    const specs = reviewerSpecs()
+    const dispatches = specs.map((spec) => ({
+      persona: spec.reviewer,
+      dispatch_outcome: 'findings',
+    }))
+    const screenResults = specs.map((spec) => ({
+      reviewer: spec.reviewer,
+      result: screenReviewReturn({
+        raw_return: JSON.stringify(buildScreenReturn(spec)),
+        expected_reviewer: spec.reviewer,
+        invoking_harness: 'opencode',
+      }),
+    }))
+
+    const prepare = cli('prepare', {
+      screen_results: screenResults,
+      selected_dispatches: dispatches,
+    })
+    const prepared = prepare.output as {
+      readonly surviving_findings: readonly unknown[]
+    }
+    expect(prepared.surviving_findings).toHaveLength(
+      REVIEWERS * FINDINGS_PER_REVIEWER,
+    )
+
+    const merge = cli('merge', {
+      prepared: prepare.output,
+      adjudication: { decisions: [] },
+    })
+    const merged = merge.output as {
+      readonly merged_findings: readonly unknown[]
+    }
+    expect(merged.merged_findings).toHaveLength(
+      REVIEWERS * FINDINGS_PER_REVIEWER,
+    )
+
+    const finalize = cli('finalize', {
+      merge: merge.output,
+      prepared: prepare.output,
+      screen_results: screenResults,
+      dispatch_records: dispatches,
+      validator_lifecycle_results: [],
+      plan_assessment: { verdict: 'All requirements met.', results: [] },
+      parent_run_metadata: {
+        run_id: 'run-scale',
+        mode: 'interactive',
+        harness: 'opencode',
+        branch: 'main',
+        head_sha: 'a'.repeat(40),
+        selected_dispatches: dispatches,
+        timestamps: {
+          started_at: '2026-01-01T00:00:00.000Z',
+          completed_at: '2026-01-01T00:05:00.000Z',
+        },
+        validation: { status: 'not_attempted', reason: 'no autofix applied' },
+        applied_fixes: [],
+      },
+    })
+    const finalized = finalize.output as { readonly kind: string }
+    expect(finalized.kind).toBe('writing')
+
+    const share = (bytes: number) =>
+      `${((bytes / AGGREGATE_STDIN_BYTE_CAP) * 100).toFixed(1)}%`
+    console.log(
+      [
+        `prepare  in ${prepare.stdin} (${share(prepare.stdin)} of cap) out ${prepare.stdout} in ${prepare.ms} ms`,
+        `merge    in ${merge.stdin} (${share(merge.stdin)} of cap) out ${merge.stdout} in ${merge.ms} ms`,
+        `finalize in ${finalize.stdin} (${share(finalize.stdin)} of cap) out ${finalize.stdout} in ${finalize.ms} ms`,
+      ].join('\n'),
+    )
+    expect(finalize.stdin).toBeLessThan(AGGREGATE_STDIN_BYTE_CAP / 2)
+  }, 60_000)
+
+  test('the same run completes in process', () => {
+    const { value: run, ms } = timed(() =>
+      runPipeline({ reviewers: reviewerSpecs() }),
+    )
+
+    console.log(`in-process pipeline: ${ms} ms`)
+    expect(run.prepare.ok).toBe(true)
+    expect(run.merge?.ok).toBe(true)
+    expect(run.finalize?.ok).toBe(true)
+    expect(run.parsed).toEqual({ artifactOk: true, outputOk: true })
+  }, 60_000)
+})
+
+describe('schema rejection rendering across the aggregate phases', () => {
+  const CAP_TEXT = `the aggregate byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`
+  const bad = (count: number) => Array.from({ length: count }, () => 5)
+
+  function expectIssueBlock(stderr: string, header: string): void {
+    const lines = stderr.trimEnd().split('\n')
+    expect(lines[0]).toBe(header)
+    expect(lines.slice(1, 9)).toHaveLength(8)
+    for (const line of lines.slice(1, 9)) {
+      expect(line).toMatch(/^\S+ [a-z_]+$/)
+    }
+    expect(lines[9]).toMatch(/^… and \d+ more$/)
+    expect(lines).toHaveLength(10)
+  }
+
+  test('prepare lists at most eight issues, then the count of the rest', () => {
+    const result = runValidator([...PREPARE_ARGS], {
+      input: JSON.stringify({
+        screen_results: [],
+        selected_dispatches: bad(12),
+      }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expectIssueBlock(
+      result.stderr,
+      'prepare rejected the aggregate envelope: schema validation',
+    )
+  })
+
+  test('merge lists at most eight input issues, then the count of the rest', () => {
+    const result = runValidator([...MERGE_ARGS], {
+      input: JSON.stringify({
+        prepared: { candidate_groups: bad(12) },
+        adjudication: { decisions: [] },
+      }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expectIssueBlock(
+      result.stderr,
+      'merge rejected the aggregate envelope: schema validation',
+    )
+  })
+
+  test('finalize lists at most eight input issues, then the count of the rest', () => {
+    const result = runValidator([...FINALIZE_ARGS], {
+      input: JSON.stringify({ dispatch_records: bad(12) }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expectIssueBlock(
+      result.stderr,
+      'finalize rejected the aggregate envelope: schema validation',
+    )
+  })
+
+  test.each([
+    ['prepare', PREPARE_ARGS],
+    ['merge', MERGE_ARGS],
+    ['finalize', FINALIZE_ARGS],
+  ] as const)(
+    '%s never prints a payload value or an unknown key name',
+    (_phase, args) => {
+      const result = runValidator([...args], {
+        input: JSON.stringify({
+          KEY_CANARY_unknown: 'VALUE_CANARY',
+          screen_results: 'VALUE_CANARY',
+          selected_dispatches: 'VALUE_CANARY',
+          prepared: 'VALUE_CANARY',
+          adjudication: 'VALUE_CANARY',
+          dispatch_records: 'VALUE_CANARY',
+        }),
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).not.toContain('CANARY')
+      expect(result.stderr).not.toContain('internal error')
+    },
+  )
+
+  test('a domain rejection keeps the reason-at-path form', () => {
+    const result = runValidator([...MERGE_ARGS], {
+      input: JSON.stringify(MERGE_REJECTED_INPUT),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(
+      /^merge rejected the aggregate envelope: omitted eligible input id at \S+\n?$/,
+    )
+  })
+
+  test('a merge output-schema rejection renders the context line and the first bad path, never an internal error', () => {
+    const singletons = Array.from(
+      { length: MAX_RUN_FINDINGS + 1 },
+      (_, index) => `reviewer-x#${index}`,
+    )
+    const survivors = singletons.map((inputId) => ({
+      ...survivingFindingFixture(inputId),
+    }))
+    const oversized = {
+      candidate_groups: [],
+      confidence_dispositions: [],
+      coverage_union: [],
+      singletons,
+      surviving_findings: survivors,
+    } as unknown as PrepareOutput
+
+    const result = applyReviewAdjudication({
+      prepared: oversized,
+      decisions: [],
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+
+    const rendered = formatAggregateRejection(
+      'merge rejected the aggregate envelope',
+      result.rejection,
+    )
+    const lines = rendered.split('\n')
+    expect(lines[0]).toBe(
+      'merge rejected the aggregate envelope: merge output failed schema validation',
+    )
+    expect(lines).toContain('merged_findings too_big')
+    expect(rendered).not.toContain('internal error')
+  })
+
+  test.each([
+    ['prepare', PREPARE_ARGS],
+    ['merge', MERGE_ARGS],
+    ['finalize', FINALIZE_ARGS],
+  ] as const)(
+    '%s states the cap in bytes when the input is over it',
+    (phase, args) => {
+      const oversized = Buffer.alloc(AGGREGATE_STDIN_BYTE_CAP + 1, 0x20)
+
+      const result = runValidator([...args], { input: oversized })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.trim()).toBe(`${phase} input exceeds ${CAP_TEXT}`)
+      expect(result.stderr).toContain('16842752')
+    },
+  )
+
+  test('a run of very large findings is stopped at finalize by the named byte-cap rejection', () => {
+    const reviewers = 64
+    const perReviewer = 32
+    const huge = {
+      whyItMatters: 'The example path fails under load. '
+        .repeat(58)
+        .slice(0, 2040),
+      evidence: Array.from(
+        { length: 5 },
+        (_, index) => `src/example.ts:${index + 1} ${'e'.repeat(470)}`,
+      ),
+    }
+    const specs = Array.from({ length: reviewers }, (_, reviewerIndex) => ({
+      reviewer: `reviewer-${reviewerIndex}`,
+      findings: Array.from({ length: perReviewer }, (_, index) => ({
+        file: `src/area-${reviewerIndex}/file-${index}.ts`,
+        title: 'T'.repeat(250),
+        ...huge,
+      })),
+    }))
+    const dispatches = specs.map((spec) => ({
+      persona: spec.reviewer,
+      dispatch_outcome: 'findings',
+    }))
+    const screenResults = specs.map((spec) => ({
+      reviewer: spec.reviewer,
+      result: screenReviewReturn({
+        raw_return: JSON.stringify(buildScreenReturn(spec)),
+        expected_reviewer: spec.reviewer,
+        invoking_harness: 'opencode',
+      }),
+    }))
+    const prepare = runValidator([...PREPARE_ARGS], {
+      input: JSON.stringify({
+        screen_results: screenResults,
+        selected_dispatches: dispatches,
+      }),
+      timeout: 120_000,
+    })
+    expect(prepare.exitCode).toBe(0)
+    const prepared = JSON.parse(prepare.stdout) as unknown
+    const merge = runValidator([...MERGE_ARGS], {
+      input: JSON.stringify({ prepared, adjudication: { decisions: [] } }),
+      timeout: 120_000,
+    })
+    expect(merge.exitCode).toBe(0)
+
+    const finalize = runValidator([...FINALIZE_ARGS], {
+      input: JSON.stringify({
+        merge: JSON.parse(merge.stdout) as unknown,
+        prepared,
+        screen_results: screenResults,
+        dispatch_records: dispatches,
+        validator_lifecycle_results: [],
+        plan_assessment: { verdict: 'All requirements met.', results: [] },
+        parent_run_metadata: {
+          run_id: 'run-big',
+          mode: 'interactive',
+          harness: 'opencode',
+          branch: 'main',
+          head_sha: 'a'.repeat(40),
+          selected_dispatches: dispatches,
+          timestamps: {
+            started_at: '2026-01-01T00:00:00.000Z',
+            completed_at: '2026-01-01T00:05:00.000Z',
+          },
+          validation: { status: 'not_attempted', reason: 'no autofix applied' },
+          applied_fixes: [],
+        },
+      }),
+      timeout: 120_000,
+    })
+
+    expect(finalize.exitCode).toBe(1)
+    expect(finalize.stderr.trim()).toBe(`finalize input exceeds ${CAP_TEXT}`)
+    expect(finalize.stdout).toBe('')
+  }, 300_000)
 })

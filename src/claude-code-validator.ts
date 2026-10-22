@@ -1,6 +1,6 @@
 import {
-  formatReviewArtifactIssuePath,
   formatReviewArtifactSuccessMessage,
+  formatReviewArtifactValidationFailure,
   isLegacyReviewArtifact,
   parseValidateReviewArtifactArguments,
   readReviewArtifact,
@@ -8,9 +8,6 @@ import {
   VALIDATE_REVIEW_ARTIFACT_USAGE,
 } from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
-
-const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
-  'skills/ce-review/references/review-summary-schema.json'
 
 interface ValidatorOptions {
   readonly argv: readonly string[]
@@ -53,18 +50,11 @@ export function runClaudeCodeValidator(options: ValidatorOptions): number {
 
   const result = ReviewArtifactSchema.safeParse(artifact.value)
   if (!result.success) {
-    for (const issue of result.error.issues) {
-      const issuePath = formatReviewArtifactIssuePath(issue.path)
-      // The custom-message exception depends on author-written constants;
-      // tests/unit/review-artifact-schema.test.ts enforces that contract.
-      const authoredMessage =
-        issue.code === 'custom' ? `: ${issue.message}` : ''
-      errorSink(`${issuePath} ${issue.code}${authoredMessage}`)
+    for (const line of formatReviewArtifactValidationFailure(
+      result.error.issues,
+    )) {
+      errorSink(line)
     }
-    errorSink(`Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`)
-    errorSink(
-      `Review artifact validation failed: ${result.error.issues.length} issue(s)`,
-    )
     return 1
   }
 

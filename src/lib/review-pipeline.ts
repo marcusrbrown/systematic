@@ -1,10 +1,14 @@
 import path from 'node:path'
 import type { z } from 'zod'
-import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
+import {
+  formatReviewArtifactIssuePath,
+  type SchemaRejection,
+  schemaRejection,
+} from './review-artifact-path.js'
 import type { HarnessSchema } from './review-artifact-schema.js'
 import {
+  COVERAGE_BOUNDS,
   MAX_FINDINGS,
-  MAX_PERSONAS,
   MAX_REASON_LENGTH,
   ReviewArtifactSchema,
   RISK_CRITICAL_PERSONAS,
@@ -263,20 +267,34 @@ export interface PrepareReviewCandidatesInput {
 }
 
 type PrepareRejectReason =
-  | 'aggregate payload exceeds byte cap'
+  | `aggregate payload exceeds the byte cap (${number} bytes)`
   | 'malformed JSON'
   | 'schema validation'
+  | 'prepare output failed schema validation'
   | 'duplicate persona outcome'
   | 'duplicate input id'
   | 'unselected persona screen result'
   | 'missing screen result for selected dispatch'
 
-/** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
- * safe JSON path only. Never payload content, never exception text. */
-export interface PrepareRejection {
+type PrepareSchemaReason =
+  | 'schema validation'
+  | 'prepare output failed schema validation'
+type PrepareDomainReason = Exclude<PrepareRejectReason, PrepareSchemaReason>
+
+export type { SchemaRejection }
+
+/** A domain rejection: a fixed reason code and a safe JSON path only. */
+interface DomainRejection<Reason extends string> {
+  readonly kind: 'domain'
   readonly path: string
-  readonly reason: PrepareRejectReason
+  readonly reason: Reason
 }
+
+/** One bounded, payload-safe rejection diagnostic. Never payload content,
+ * never exception text. */
+export type PrepareRejection =
+  | DomainRejection<PrepareDomainReason>
+  | SchemaRejection<PrepareSchemaReason>
 
 export type PrepareReviewCandidatesResult =
   | { readonly ok: true; readonly value: PrepareOutput }
@@ -290,9 +308,9 @@ const CONFIDENCE_GATE_SUPPRESSED_REASON = 'confidence below gate threshold'
 
 function rejectPrepare(
   path: string,
-  reason: PrepareRejectReason,
+  reason: PrepareDomainReason,
 ): { readonly ok: false; readonly rejection: PrepareRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 /**
@@ -343,7 +361,7 @@ function survivesConfidenceGate(finding: PrepareAdmittedFinding): boolean {
 function validatePrepareStructure(
   screenResults: readonly PrepareScreenResult[],
   selectedDispatches: readonly PrepareInputValue['selected_dispatches'][number][],
-): { readonly path: string; readonly reason: PrepareRejectReason } | undefined {
+): { readonly path: string; readonly reason: PrepareDomainReason } | undefined {
   const seenPersonas = new Set<string>()
   for (const [index, entry] of screenResults.entries()) {
     if (seenPersonas.has(entry.reviewer)) {
@@ -545,7 +563,10 @@ export function prepareReviewCandidates(
 ): PrepareReviewCandidatesResult {
   const byteLength = payloadByteLength(input.raw_input)
   if (byteLength !== undefined && byteLength > AGGREGATE_STDIN_BYTE_CAP) {
-    return rejectPrepare(JSON_ROOT_PATH, 'aggregate payload exceeds byte cap')
+    return rejectPrepare(
+      JSON_ROOT_PATH,
+      `aggregate payload exceeds the byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`,
+    )
   }
 
   const parsed = parseRawReturn(input.raw_input)
@@ -555,11 +576,10 @@ export function prepareReviewCandidates(
 
   const validation = PrepareInputSchema.safeParse(parsed.value)
   if (!validation.success) {
-    const issue = validation.error.issues[0]
-    const issuePath = issue
-      ? formatReviewArtifactIssuePath(issue.path)
-      : JSON_ROOT_PATH
-    return rejectPrepare(issuePath, 'schema validation')
+    return {
+      ok: false,
+      rejection: schemaRejection('schema validation', validation.error.issues),
+    }
   }
 
   const {
@@ -580,15 +600,27 @@ export function prepareReviewCandidates(
   const coverageUnion = computeCoverageUnion(selectedDispatches)
   const { candidateGroups, singletonIds } = groupCandidates(survivors)
 
-  const output = PrepareOutputSchema.parse({
+  // Defense in depth: every array in the output is bounded by the same
+  // constants that bounded the input, so no input that passed
+  // `PrepareInputSchema` can reach the failure branch.
+  const output = PrepareOutputSchema.safeParse({
     candidate_groups: candidateGroups,
     confidence_dispositions: confidenceDispositions,
     coverage_union: coverageUnion,
     singletons: singletonIds,
     surviving_findings: survivingFindings,
   })
+  if (!output.success) {
+    return {
+      ok: false,
+      rejection: schemaRejection(
+        'prepare output failed schema validation',
+        output.error.issues,
+      ),
+    }
+  }
 
-  return { ok: true, value: output }
+  return { ok: true, value: output.data }
 }
 
 // --- merge phase: adjudication validation -----------------------------------
@@ -654,11 +686,17 @@ type AdjudicationRejectReason =
   | 'declined decision id collides with merged group decision id'
   | 'declined decision id collides with passthrough singleton input id'
   | 'passthrough singleton input id collides with merged group decision id'
+  | 'prepared survivor missing for input id'
+  | 'prepared survivor missing from the partition'
+  | 'duplicate prepared survivor input id'
+  | 'duplicate candidate group member'
+  | 'singleton input id is also a candidate group member'
 
 /** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
  * safe JSON path only. Never payload content, never a finding title, never
  * exception text. */
 export interface AdjudicationRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: AdjudicationRejectReason
 }
@@ -671,7 +709,7 @@ function rejectAdjudication(
   path: string,
   reason: AdjudicationRejectReason,
 ): { readonly ok: false; readonly rejection: AdjudicationRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 function citedInputIds(decision: MergeDecision): readonly string[] {
@@ -743,13 +781,13 @@ function validateCitations(
     for (const [citedIndex, inputId] of citedInputIds(decision).entries()) {
       const path = citationPath(decision, decisionIndex, citedIndex)
       if (suppressed.has(inputId)) {
-        return { path, reason: 'suppressed input id' }
+        return { kind: 'domain', path, reason: 'suppressed input id' }
       }
       if (!index.groupIndexByInputId.has(inputId)) {
-        return { path, reason: 'unknown input id' }
+        return { kind: 'domain', path, reason: 'unknown input id' }
       }
       if (seen.has(inputId)) {
-        return { path, reason: 'duplicate input id citation' }
+        return { kind: 'domain', path, reason: 'duplicate input id citation' }
       }
       seen.add(inputId)
     }
@@ -772,6 +810,7 @@ function validateNoOmissions(
     for (const [memberIndex, member] of group.members.entries()) {
       if (!citedIds.has(member.input_id)) {
         return {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'candidate_groups',
             groupIndex,
@@ -821,6 +860,7 @@ function validateMergedDecisionConsistency(
     const groupIndex = index.groupIndexByInputId.get(inputId)
     if (groupIndex !== expectedGroupIndex) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'decisions',
           decisionIndex,
@@ -835,6 +875,7 @@ function validateMergedDecisionConsistency(
   const group = candidateGroups[expectedGroupIndex]
   if (group && !group.members.some((member) => member.line === decision.line)) {
     return {
+      kind: 'domain',
       path: formatReviewArtifactIssuePath(['decisions', decisionIndex, 'line']),
       reason: 'representative line mismatch',
     }
@@ -917,6 +958,138 @@ function buildValidatedPartition(
 }
 
 /**
+ * The parent re-emits `prepared` between phases, so it is untrusted input.
+ * Resolves every candidate-group member and every singleton input ID against
+ * `prepared.surviving_findings` and rejects an echo that a later step could
+ * only trip over: a cited ID with no survivor, a singleton that is also a
+ * candidate-group member (it would be counted twice), and a duplicate
+ * singleton. `requireSurvivingFinding` stays behind this as the invariant.
+ */
+function validatePreparedEcho(
+  prepared: PrepareOutput,
+): AdjudicationRejection | undefined {
+  const survivors = new Set(
+    prepared.surviving_findings.map((finding) => finding.input_id),
+  )
+  const members = new Set<string>()
+  const singletons = new Set<string>()
+  return (
+    checkEchoGroupMembers(prepared, survivors, members) ??
+    checkEchoSingletons(prepared, survivors, members, singletons) ??
+    checkEchoSurvivorsAccountedFor(prepared, members, singletons)
+  )
+}
+
+/** Every candidate-group member resolves to a survivor and is listed once,
+ * within its group and across groups. Fills `members`. */
+function checkEchoGroupMembers(
+  prepared: PrepareOutput,
+  survivors: ReadonlySet<string>,
+  members: Set<string>,
+): AdjudicationRejection | undefined {
+  for (const [
+    groupIndex,
+    candidateGroup,
+  ] of prepared.candidate_groups.entries()) {
+    for (const [memberIndex, member] of candidateGroup.members.entries()) {
+      const path = formatReviewArtifactIssuePath([
+        'candidate_groups',
+        groupIndex,
+        'members',
+        memberIndex,
+        'input_id',
+      ])
+      if (!survivors.has(member.input_id)) {
+        return {
+          kind: 'domain',
+          path,
+          reason: 'prepared survivor missing for input id',
+        }
+      }
+      if (members.has(member.input_id)) {
+        return {
+          kind: 'domain',
+          path,
+          reason: 'duplicate candidate group member',
+        }
+      }
+      members.add(member.input_id)
+    }
+  }
+  return undefined
+}
+
+/** Every passthrough singleton resolves to a survivor, is not also a group
+ * member, and is listed once. Fills `singletons`. */
+function checkEchoSingletons(
+  prepared: PrepareOutput,
+  survivors: ReadonlySet<string>,
+  members: ReadonlySet<string>,
+  singletons: Set<string>,
+): AdjudicationRejection | undefined {
+  for (const [index, inputId] of prepared.singletons.entries()) {
+    const path = formatReviewArtifactIssuePath(['singletons', index])
+    if (!survivors.has(inputId)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'prepared survivor missing for input id',
+      }
+    }
+    if (members.has(inputId)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'singleton input id is also a candidate group member',
+      }
+    }
+    if (singletons.has(inputId)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'duplicate passthrough singleton input id',
+      }
+    }
+    singletons.add(inputId)
+  }
+  return undefined
+}
+
+/** Every survivor is accounted for -- as a group member or a singleton --
+ * and listed once. A survivor in neither would be dropped from the run with
+ * no rejection and no report. */
+function checkEchoSurvivorsAccountedFor(
+  prepared: PrepareOutput,
+  members: ReadonlySet<string>,
+  singletons: ReadonlySet<string>,
+): AdjudicationRejection | undefined {
+  const seen = new Set<string>()
+  for (const [index, finding] of prepared.surviving_findings.entries()) {
+    const path = formatReviewArtifactIssuePath([
+      'surviving_findings',
+      index,
+      'input_id',
+    ])
+    if (!members.has(finding.input_id) && !singletons.has(finding.input_id)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'prepared survivor missing from the partition',
+      }
+    }
+    if (seen.has(finding.input_id)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'duplicate prepared survivor input id',
+      }
+    }
+    seen.add(finding.input_id)
+  }
+  return undefined
+}
+
+/**
  * Validates that the model's adjudication decisions form a valid partition
  * over `prepared`'s eligible candidate set: every eligible input ID (one
  * that appears in a candidate group) is cited by exactly one decision --
@@ -935,6 +1108,9 @@ export function validateAdjudication(
   prepared: PrepareOutput,
   decisions: AdjudicationDecisions,
 ): ValidateAdjudicationResult {
+  const echoViolation = validatePreparedEcho(prepared)
+  if (echoViolation) return { ok: false, rejection: echoViolation }
+
   if (prepared.candidate_groups.length === 0) {
     if (decisions.length > 0) {
       return rejectAdjudication(
@@ -1065,6 +1241,7 @@ type MergedFindingRejectReason =
  * safe JSON path only. Never payload content, never a finding title, never
  * exception text. */
 export interface MergedFindingRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: MergedFindingRejectReason
 }
@@ -1077,7 +1254,7 @@ function rejectMergedFinding(
   path: string,
   reason: MergedFindingRejectReason,
 ): { readonly ok: false; readonly rejection: MergedFindingRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 const SEVERITY_RANK: Record<SurvivingFinding['severity'], number> = {
@@ -1381,7 +1558,10 @@ export type ApplyReviewAdjudicationResult =
   | { readonly ok: true; readonly value: MergeOutput }
   | {
       readonly ok: false
-      readonly rejection: AdjudicationRejection | MergedFindingRejection
+      readonly rejection:
+        | AdjudicationRejection
+        | MergedFindingRejection
+        | SchemaRejection<'merge output failed schema validation'>
     }
 
 /** Parses the persona prefix out of a stable `<persona>#<index>` input ID --
@@ -1773,6 +1953,7 @@ function checkNoDuplicateAssembledFindingIds(
     const priorOrigin = seen.get(entry.finding_id)
     if (priorOrigin !== undefined) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge_assembly',
           index,
@@ -1897,14 +2078,27 @@ export function applyReviewAdjudication(
       line: assembly.line,
     }))
 
-  return {
-    ok: true,
-    value: MergeOutputSchema.parse({
-      merged_findings: mergedFindings,
-      validator_requests: validatorRequests,
-      disagreement_facts: disagreementFacts,
-    }),
+  return parseMergeOutput({
+    merged_findings: mergedFindings,
+    validator_requests: validatorRequests,
+    disagreement_facts: disagreementFacts,
+  })
+}
+
+// Defense in depth behind the echo, survivor and disjointness checks: a run
+// larger than the run bounds rejects instead of throwing.
+function parseMergeOutput(candidate: unknown): ApplyReviewAdjudicationResult {
+  const output = MergeOutputSchema.safeParse(candidate)
+  if (!output.success) {
+    return {
+      ok: false,
+      rejection: schemaRejection(
+        'merge output failed schema validation',
+        output.error.issues,
+      ),
+    }
   }
+  return { ok: true, value: output.data }
 }
 
 // --- finalize phase: validator lifecycle reconciliation ---------------------
@@ -1967,6 +2161,7 @@ type ReconcileValidatorResultsRejectReason =
 /** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
  * safe JSON path only. Never payload content, never a finding title. */
 export interface ReconcileValidatorResultsRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: ReconcileValidatorResultsRejectReason
 }
@@ -1990,7 +2185,7 @@ function rejectReconcile(
   readonly ok: false
   readonly rejection: ReconcileValidatorResultsRejection
 } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 /**
@@ -2039,6 +2234,7 @@ function validateNoMissingResults(
   for (const [index, request] of validatorRequests.entries()) {
     if (!resultsByFindingId.has(request.finding_id)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'validator_requests',
           index,
@@ -2220,9 +2416,11 @@ type FinalizeContextRejectReason =
   | 'surviving finding diverges from its screened finding'
   | 'surviving finding references unscreened input'
   | 'duplicate confidence disposition'
+  | 'screened finding lacks exactly one confidence disposition'
   | 'validation must be not_attempted at finalize'
 
 export interface FinalizeContextRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: FinalizeContextRejectReason
 }
@@ -2235,7 +2433,7 @@ function rejectFinalizeContext(
   path: string,
   reason: FinalizeContextRejectReason,
 ): { readonly ok: false; readonly rejection: FinalizeContextRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 type FinalizeContextCheckResult<Value> =
@@ -2430,6 +2628,7 @@ function checkValidatorRequestsResolve(
       validatorRequestMismatches(request, findingById, expectedFindingIds)
     ) {
       return {
+        kind: 'domain',
         path,
         reason: 'validator request references unknown merged finding',
       }
@@ -2439,6 +2638,7 @@ function checkValidatorRequestsResolve(
 
   if (seenFindingIds.size !== expectedFindingIds.size) {
     return {
+      kind: 'domain',
       path: formatReviewArtifactIssuePath(['merge', 'validator_requests']),
       reason: 'validator request references unknown merged finding',
     }
@@ -2734,6 +2934,7 @@ function checkMergedFindingsMatchDerivation(
       })
     ) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -2745,6 +2946,7 @@ function checkMergedFindingsMatchDerivation(
 
     if (mergedFindingRouteReasonMismatch(finding, meet)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -2772,6 +2974,7 @@ function checkNoDuplicateConfidenceDispositions(
   for (const [index, entry] of confidenceDispositions.entries()) {
     if (seen.has(entry.input_id)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'confidence_dispositions',
@@ -2844,6 +3047,7 @@ function checkConfidenceDispositionsResolveScreenedFindings(
   ] of prepared.confidence_dispositions.entries()) {
     if (screenedCounts.get(disposition.input_id) !== 1) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'confidence_dispositions',
@@ -2866,6 +3070,7 @@ function checkConfidenceDispositionsResolveScreenedFindings(
     const screened = screenedByInputId.get(survivor.input_id)
     if (screened === undefined) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'surviving_findings',
@@ -2884,6 +3089,7 @@ function checkConfidenceDispositionsResolveScreenedFindings(
       screened.severity !== survivor.severity
     ) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'surviving_findings',
@@ -2894,6 +3100,41 @@ function checkConfidenceDispositionsResolveScreenedFindings(
     }
   }
 
+  return checkScreenedFindingsHaveOneDisposition(prepared, screenResults)
+}
+
+/** The dispositions are the ledger of everything screened. A screened finding
+ * with no entry would otherwise disappear from the artifact with no trace, so
+ * each one must be mirrored exactly once. */
+function checkScreenedFindingsHaveOneDisposition(
+  prepared: Pick<PrepareOutput, 'confidence_dispositions'>,
+  screenResults: FinalizeScreenResults,
+): FinalizeContextRejection | undefined {
+  const dispositionCounts = new Map<string, number>()
+  for (const disposition of prepared.confidence_dispositions) {
+    dispositionCounts.set(
+      disposition.input_id,
+      (dispositionCounts.get(disposition.input_id) ?? 0) + 1,
+    )
+  }
+  for (const [resultIndex, result] of screenResults.entries()) {
+    for (const [index, finding] of result.result.admitted_findings.entries()) {
+      if (dispositionCounts.get(finding.input_id) !== 1) {
+        return {
+          kind: 'domain',
+          path: formatReviewArtifactIssuePath([
+            'screen_results',
+            resultIndex,
+            'result',
+            'admitted_findings',
+            index,
+            'input_id',
+          ]),
+          reason: 'screened finding lacks exactly one confidence disposition',
+        }
+      }
+    }
+  }
   return undefined
 }
 
@@ -2925,6 +3166,7 @@ function findUnavailableCitedReviewer(
       return {
         citedReviewers,
         rejection: {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'merge',
             'merged_findings',
@@ -2951,6 +3193,7 @@ function findUnsupportedSubmitter(
   for (const [submitterIndex, submitter] of finding.submitters.entries()) {
     if (!citedReviewers.has(submitter)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -2976,6 +3219,7 @@ function findOverlappingAgreementCredit(
   for (const [creditIndex, credit] of agreementCredit.entries()) {
     if (submitterSet.has(credit)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -3318,6 +3562,7 @@ type FinalizeReviewDispositionsRejectReason =
   'survivor missing from merged findings'
 
 export interface FinalizeReviewDispositionsRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: FinalizeReviewDispositionsRejectReason
 }
@@ -3389,6 +3634,7 @@ function deriveInputDispositions(
       return {
         ok: false,
         rejection: {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'prepared',
             'confidence_dispositions',
@@ -4264,9 +4510,10 @@ export function buildInputLedger(
 // Aggregates every screen result's residual risks and testing gaps, the
 // personas whose dispatch failed outright, the reasons a requested
 // validator never answered, and the merge phase's disagreement facts into
-// the artifact's `coverage` shape. Every array is bounded at `MAX_PERSONAS`;
-// a union that would exceed the bound rejects with a fixed reason rather
-// than silently truncating. Never reads `process.env`, the filesystem, or
+// the artifact's `coverage` shape. Every array is bounded by
+// `COVERAGE_BOUNDS`, the same table the artifact schema uses; a union that
+// would exceed its bound rejects with a fixed reason rather than silently
+// truncating. Never reads `process.env`, the filesystem, or
 // the clock.
 
 export interface BuildReviewCoverageInput {
@@ -4290,6 +4537,7 @@ export interface ReviewCoverageSummary {
 type BuildReviewCoverageRejectReason = 'coverage array exceeds bound'
 
 export interface BuildReviewCoverageRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: BuildReviewCoverageRejectReason
 }
@@ -4302,12 +4550,26 @@ function dedupeSortedStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort(compareStrings)
 }
 
+/** Blank and whitespace-only entries carry no information, and a reviewer can
+ * emit them unbounded, so they never reach the artifact. */
+function dedupeSortedNonBlankStrings(
+  values: readonly string[],
+): readonly string[] {
+  return dedupeSortedStrings(values.filter((value) => value.trim() !== ''))
+}
+
+type BoundedCoverageField = Exclude<
+  keyof typeof COVERAGE_BOUNDS,
+  'reviewers' | 'validators'
+>
+
 function checkCoverageArrayBound(
-  field: string,
+  field: BoundedCoverageField,
   values: readonly string[],
 ): BuildReviewCoverageRejection | undefined {
-  if (values.length <= MAX_PERSONAS) return undefined
+  if (values.length <= COVERAGE_BOUNDS[field]) return undefined
   return {
+    kind: 'domain',
     path: formatReviewArtifactIssuePath(['coverage', field]),
     reason: 'coverage array exceeds bound',
   }
@@ -4320,17 +4582,17 @@ function checkCoverageArrayBound(
  * `never_returned`, or `validation_unavailable`; the disproving reasons for
  * every requested validator that never answered; and the merge phase's
  * disagreement facts, carried through unchanged. Every array is checked
- * against `MAX_PERSONAS` before assembly -- an overflow rejects rather than
+ * against `COVERAGE_BOUNDS` before assembly -- an overflow rejects rather than
  * silently truncating. Never reads `process.env`, the filesystem, or the
  * clock.
  */
 export function buildReviewCoverage(
   input: BuildReviewCoverageInput,
 ): BuildReviewCoverageResult {
-  const residualRisks = dedupeSortedStrings(
+  const residualRisks = dedupeSortedNonBlankStrings(
     input.screen_results.flatMap((result) => result.result.residual_risks),
   )
-  const testingGaps = dedupeSortedStrings(
+  const testingGaps = dedupeSortedNonBlankStrings(
     input.screen_results.flatMap((result) => result.result.testing_gaps),
   )
   const failedReviewers = dedupeSortedStrings(
@@ -4345,7 +4607,10 @@ export function buildReviewCoverage(
   )
   const intentUncertainty = [...input.merge.disagreement_facts]
 
-  const bounded: readonly (readonly [string, readonly string[]])[] = [
+  const bounded: readonly (readonly [
+    BoundedCoverageField,
+    readonly string[],
+  ])[] = [
     ['residual_risks', residualRisks],
     ['testing_gaps', testingGaps],
     ['failed_reviewers', failedReviewers],
@@ -4491,14 +4756,8 @@ type FinalizeReviewRejection =
   | BuildReviewCoverageRejection
   | RiskCoverageSemanticsRejection
   | DispositionLedgerReconciliationRejection
-  | {
-      readonly path: string
-      readonly reason: 'artifact failed schema validation'
-    }
-  | {
-      readonly path: string
-      readonly reason: 'finalize output failed schema validation'
-    }
+  | SchemaRejection<'artifact failed schema validation'>
+  | SchemaRejection<'finalize output failed schema validation'>
 
 export type FinalizeReviewResult =
   | { readonly ok: true; readonly value: FinalizeOutputValue }
@@ -4609,6 +4868,7 @@ interface RiskCoverageSemanticsInput {
 }
 
 interface RiskCoverageSemanticsRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: 'satisfied risk coverage must cite a validated finding on the lost persona selection surface'
 }
@@ -4666,6 +4926,7 @@ export function checkRiskCoverageSemantics(
       return {
         ok: false,
         rejection: {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'risk_coverage',
             coverageIndex,
@@ -4682,6 +4943,7 @@ export function checkRiskCoverageSemantics(
 }
 
 interface DispositionLedgerReconciliationRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: 'disposition counts do not reconcile with the admitted input ledger'
 }
@@ -4725,6 +4987,7 @@ export function checkDispositionCountsReconcileLedger(
     return {
       ok: false,
       rejection: {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath(['disposition_counts']),
         reason:
           'disposition counts do not reconcile with the admitted input ledger',
@@ -4774,18 +5037,19 @@ function buildReportProjection(
   }
 }
 
+// Defense in depth, as with prepare: the artifact parse above runs first and
+// every report field of the output is bounded, so a value that passes the
+// artifact schema cannot fail this one. The branch exists so a future mismatch
+// between the two schemas rejects instead of throwing. It has no test.
 function parseFinalizeOutput(output: unknown): FinalizeReviewResult {
   const parsed = FinalizeOutputSchema.safeParse(output)
   if (!parsed.success) {
-    const issue = parsed.error.issues[0]
     return {
       ok: false,
-      rejection: {
-        path: issue
-          ? formatReviewArtifactIssuePath(issue.path)
-          : JSON_ROOT_PATH,
-        reason: 'finalize output failed schema validation',
-      },
+      rejection: schemaRejection(
+        'finalize output failed schema validation',
+        parsed.error.issues,
+      ),
     }
   }
   return { ok: true, value: parsed.data }
@@ -4925,15 +5189,12 @@ export function finalizeReview(
 
   const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
   if (!parsedArtifact.success) {
-    const issue = parsedArtifact.error.issues[0]
     return {
       ok: false,
-      rejection: {
-        path: issue
-          ? formatReviewArtifactIssuePath(issue.path)
-          : JSON_ROOT_PATH,
-        reason: 'artifact failed schema validation',
-      },
+      rejection: schemaRejection(
+        'artifact failed schema validation',
+        parsedArtifact.error.issues,
+      ),
     }
   }
 
