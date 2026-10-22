@@ -212,7 +212,7 @@
       }
     },
     "findings": {
-      "maxItems": 32,
+      "maxItems": 2048,
       "type": "array",
       "items": {
         "type": "object",
@@ -350,7 +350,7 @@
           },
           "input_finding_ids": {
             "minItems": 1,
-            "maxItems": 32,
+            "maxItems": 2048,
             "type": "array",
             "items": {
               "type": "string",
@@ -412,7 +412,7 @@
       }
     },
     "declined_merges": {
-      "maxItems": 32,
+      "maxItems": 2048,
       "type": "array",
       "items": {
         "type": "object",
@@ -434,7 +434,7 @@
           },
           "input_finding_ids": {
             "minItems": 2,
-            "maxItems": 32,
+            "maxItems": 2048,
             "type": "array",
             "items": {
               "type": "string",
@@ -517,7 +517,7 @@
       "additionalProperties": false
     },
     "applied_fixes": {
-      "maxItems": 32,
+      "maxItems": 2048,
       "type": "array",
       "items": {
         "type": "string",
@@ -527,7 +527,7 @@
       }
     },
     "residual_actionable_work": {
-      "maxItems": 32,
+      "maxItems": 2048,
       "type": "array",
       "items": {
         "type": "string",
@@ -537,7 +537,7 @@
       }
     },
     "advisory_outputs": {
-      "maxItems": 32,
+      "maxItems": 2048,
       "type": "array",
       "items": {
         "type": "string",
@@ -557,10 +557,10 @@
         "validators": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 64
+          "maximum": 2048
         },
         "residual_risks": {
-          "maxItems": 64,
+          "maxItems": 4096,
           "type": "array",
           "items": {
             "type": "string",
@@ -570,7 +570,7 @@
           }
         },
         "testing_gaps": {
-          "maxItems": 64,
+          "maxItems": 4096,
           "type": "array",
           "items": {
             "type": "string",
@@ -590,7 +590,7 @@
           }
         },
         "validator_failures": {
-          "maxItems": 64,
+          "maxItems": 2048,
           "type": "array",
           "items": {
             "type": "string",
@@ -600,7 +600,7 @@
           }
         },
         "intent_uncertainty": {
-          "maxItems": 64,
+          "maxItems": 67584,
           "type": "array",
           "items": {
             "type": "string",
