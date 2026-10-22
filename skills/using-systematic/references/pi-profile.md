@@ -15,18 +15,22 @@ Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
 
 ```typescript
 systematic_delegate({
-  agent: "systematic-implementer",
-  task: "Implement the auth module and return the changed files.",
+  agent: "repo-research-analyst",
+  task: "Map how the auth module is wired and list the files involved.",
 })
 ```
+
+`systematic_delegate` takes the bare name; the pi-subagents `Agent` tool takes `systematic-<name>`.
 
 `systematic_delegate` is sequential, capped at 20 turns, depth-1, and spawns its child with `noExtensions: true`. The `noExtensions` guarantee bounds `systematic_delegate`'s own recursion — it does not bound end-to-end delegation depth across a combined pi-subagents + Systematic path.
 
 ### Optional: pi-subagents delegation
 
-[pi-subagents](https://github.com/tintinweb/pi-subagents) (parallel/multi-model delegation) 0.22 or newer loads Systematic's curated personas from the installed package as `systematic-<name>` agent types with plain defaults, and a project-scope install only after the project is trusted. Export is needed only to apply `systematic.json` overlays; a local file outranks the packaged one. Nothing is written at extension load.
+[pi-subagents](https://github.com/tintinweb/pi-subagents) (parallel/multi-model delegation) 0.22 or newer loads 29 curated personas from the installed package as `systematic-<name>` agent types with plain defaults; a project-scope install only after the project is trusted, and its first session may omit them from the `Agent` description, though dispatch works. Any other type falls back to `general-purpose` with an "Unknown agent type" note: the persona did not run. Export is needed only to apply `systematic.json` overlays; a local file outranks the packaged one. Nothing is written at extension load.
 
-pi-subagents' `Agent` tool runs in the background by default. Pass `run_in_background: false` to wait for the result.
+`disabled_agents` and `agents.<name>.disable` do not reach packaged personas. Turn one off with `/agents → Disable`, or all with `packageAgents: false` in `subagents.json`.
+
+The `Agent` tool runs in the background by default. Pass `run_in_background: false` to wait for the result.
 
 Tested against pi-subagents 0.22.0 on Pi 1.3.0. Versions outside the tested range are unsupported but nonfatal.
 
