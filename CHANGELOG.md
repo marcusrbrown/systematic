@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.25.1](https://github.com/marcusrbrown/systematic/compare/v3.25.0...v3.25.1) (2026-10-22)
+
+### Bug Fixes
+
+* **release:** retry transient GitHub API errors in the release gate ([#1202](https://github.com/marcusrbrown/systematic/issues/1202)) ([2715a49](https://github.com/marcusrbrown/systematic/commit/2715a49cbdcb45d2878150c652da58a5d15ec27d))
+
 ## [3.25.0](https://github.com/marcusrbrown/systematic/compare/v3.24.2...v3.25.0) (2026-10-22)
 
 ### Features
