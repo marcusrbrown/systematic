@@ -32,10 +32,11 @@ import {
   resolveAgentsRoot,
 } from './lib/pi-subagents-export.js'
 import {
-  formatReviewArtifactIssuePath,
   formatReviewArtifactSuccessMessage,
+  formatReviewArtifactValidationFailure,
   isLegacyReviewArtifact,
   parseValidateReviewArtifactArguments,
+  REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
   readReviewArtifact,
   resolveReviewArtifactPath,
   VALIDATE_REVIEW_ARTIFACT_USAGE,
@@ -164,9 +165,6 @@ Scope:
   project   <cwd>/.pi/agents (default)
   global    $PI_CODING_AGENT_DIR/agents or ~/.pi/agent/agents
 `
-
-const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
-  'skills/ce-review/references/review-summary-schema.json'
 
 export interface CapabilityCliRoots {
   readonly agentsRoot: string
@@ -435,18 +433,12 @@ function runValidateReviewArtifact(
 
   const result = ReviewArtifactSchema.safeParse(artifact.value)
   if (!result.success) {
-    for (const issue of result.error.issues) {
-      const issuePath = formatReviewArtifactIssuePath(issue.path)
-      // The custom-message exception depends on author-written constants;
-      // tests/unit/review-artifact-schema.test.ts enforces that contract.
-      const authoredMessage =
-        issue.code === 'custom' ? `: ${issue.message}` : ''
-      errorSink(`${issuePath} ${issue.code}${authoredMessage}`)
+    for (const line of formatReviewArtifactValidationFailure(
+      result.error.issues,
+      REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
+    )) {
+      errorSink(line)
     }
-    errorSink(`Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`)
-    errorSink(
-      `Review artifact validation failed: ${result.error.issues.length} issue(s)`,
-    )
     return 1
   }
 

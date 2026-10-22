@@ -267,7 +267,7 @@ export interface PrepareReviewCandidatesInput {
 }
 
 type PrepareRejectReason =
-  | 'aggregate payload exceeds byte cap'
+  | `aggregate payload exceeds the byte cap (${number} bytes)`
   | 'malformed JSON'
   | 'schema validation'
   | 'prepare output failed schema validation'
@@ -585,7 +585,10 @@ export function prepareReviewCandidates(
 ): PrepareReviewCandidatesResult {
   const byteLength = payloadByteLength(input.raw_input)
   if (byteLength !== undefined && byteLength > AGGREGATE_STDIN_BYTE_CAP) {
-    return rejectPrepare(JSON_ROOT_PATH, 'aggregate payload exceeds byte cap')
+    return rejectPrepare(
+      JSON_ROOT_PATH,
+      `aggregate payload exceeds the byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`,
+    )
   }
 
   const parsed = parseRawReturn(input.raw_input)

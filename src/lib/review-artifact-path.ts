@@ -60,6 +60,58 @@ export function projectZodIssues(
   }
 }
 
+/** The repository-relative path of the published review-summary schema,
+ * named in every artifact validation failure. */
+export const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
+  'skills/ce-review/references/review-summary-schema.json'
+
+/** The `path code` lines of a projection, then `… and N more` when the
+ * projection was capped. Pure formatting: nothing but the two projected
+ * fields reaches a line. */
+export function formatProjectedIssueLines(
+  projected: ProjectedIssues,
+): string[] {
+  const lines = projected.issues.map((issue) => `${issue.path} ${issue.code}`)
+  const omitted = projected.total - projected.issues.length
+  if (omitted > 0) lines.push(`… and ${omitted} more`)
+  return lines
+}
+
+/** A validation issue as the artifact validators format it: the projected
+ * path and code, plus the message, which is read only for a `custom` code. */
+export interface ArtifactValidationIssue extends ProjectableIssue {
+  readonly message?: string
+}
+
+/**
+ * The lines both artifact validators print for a schema failure: a fixed
+ * context line, the schema path, up to {@link MAX_PROJECTED_ISSUE_LINES}
+ * `path code` lines, then `… and N more`.
+ *
+ * A `custom` issue keeps its message. Those messages are the closed,
+ * author-written set in `REVIEW_ARTIFACT_CUSTOM_MESSAGES`
+ * (`tests/unit/review-artifact-schema.test.ts` enforces it), never text
+ * derived from the payload. Every other issue's message is dropped.
+ */
+export function formatReviewArtifactValidationFailure(
+  issues: readonly ArtifactValidationIssue[],
+  schemaRelativePath: string,
+): string[] {
+  const projected = projectZodIssues(issues)
+  const issueLines = formatProjectedIssueLines(projected)
+  const shown = projected.issues.length
+  for (const [index, issue] of issues.slice(0, shown).entries()) {
+    if (issue.code === 'custom' && issue.message !== undefined) {
+      issueLines[index] = `${issueLines[index]}: ${issue.message}`
+    }
+  }
+  return [
+    'Review artifact failed schema validation',
+    `Schema: ${schemaRelativePath}`,
+    ...issueLines,
+  ]
+}
+
 export function readReviewArtifact(filePath: string): ReadArtifactResult {
   let content: string
   try {

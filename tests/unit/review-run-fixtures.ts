@@ -137,6 +137,8 @@ export interface PipelineFindingSpec {
   readonly title?: string
   /** Replaces the default impact text, to size a finding. */
   readonly whyItMatters?: string
+  /** Replaces the default evidence entries, to size a finding. */
+  readonly evidence?: readonly string[]
 }
 
 export interface PipelineReviewerSpec {
@@ -166,7 +168,9 @@ export function buildScreenReturn(spec: PipelineReviewerSpec): JsonObject {
       owner: finding.owner ?? 'downstream-resolver',
       requires_verification: finding.requiresVerification ?? false,
       confidence: 0.85,
-      evidence: [`${finding.file}:1 demonstrates the failure path.`],
+      evidence: finding.evidence ?? [
+        `${finding.file}:1 demonstrates the failure path.`,
+      ],
       pre_existing: false,
       suggested_fix: 'Handle the failure before continuing.',
     })),

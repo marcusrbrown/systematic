@@ -5,7 +5,9 @@ import path from 'node:path'
 import { z } from 'zod'
 import {
   ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG,
+  formatProjectedIssueLines,
   formatReviewArtifactSuccessMessage,
+  formatReviewArtifactValidationFailure,
   MAX_PROJECTED_ISSUE_LINES,
   parseValidateReviewArtifactArguments,
   projectZodIssues,
@@ -314,5 +316,71 @@ describe('projectZodIssues', () => {
     ])
 
     expect(JSON.stringify(projected)).not.toContain('MESSAGE_CANARY')
+  })
+})
+
+describe('formatProjectedIssueLines', () => {
+  it('prints one path-and-code line per issue and no overflow line when all fit', () => {
+    expect(
+      formatProjectedIssueLines({
+        issues: [
+          { path: 'a', code: 'too_big' },
+          { path: 'b.0', code: 'invalid_type' },
+        ],
+        total: 2,
+      }),
+    ).toEqual(['a too_big', 'b.0 invalid_type'])
+  })
+
+  it('adds an overflow line counting the issues that were not printed', () => {
+    const issues = Array.from({ length: 8 }, (_, index) => ({
+      path: `f${index}`,
+      code: 'too_big',
+    }))
+
+    const lines = formatProjectedIssueLines({ issues, total: 11 })
+
+    expect(lines).toHaveLength(9)
+    expect(lines[8]).toBe('… and 3 more')
+  })
+})
+
+describe('formatReviewArtifactValidationFailure', () => {
+  const SCHEMA = 'skills/ce-review/references/review-summary-schema.json'
+  const issue = (index: number) => ({
+    path: ['items', index] as PropertyKey[],
+    code: 'too_big',
+    message: 'MESSAGE_CANARY',
+  })
+
+  it('prints the context line, the schema line, then the issue lines', () => {
+    expect(formatReviewArtifactValidationFailure([issue(0)], SCHEMA)).toEqual([
+      'Review artifact failed schema validation',
+      `Schema: ${SCHEMA}`,
+      'items.0 too_big',
+    ])
+  })
+
+  it('prints at most eight issues and counts the rest', () => {
+    const issues = Array.from({ length: 12 }, (_, index) => issue(index))
+
+    const lines = formatReviewArtifactValidationFailure(issues, SCHEMA)
+
+    expect(lines).toHaveLength(2 + MAX_PROJECTED_ISSUE_LINES + 1)
+    expect(lines.at(-1)).toBe('… and 4 more')
+  })
+
+  it('keeps an authored message only for a custom issue, and never prints another issue message', () => {
+    const lines = formatReviewArtifactValidationFailure(
+      [
+        { path: ['a'], code: 'custom', message: 'severity count must match' },
+        { path: ['b'], code: 'too_big', message: 'MESSAGE_CANARY' },
+      ],
+      SCHEMA,
+    )
+
+    expect(lines).toContain('a custom: severity count must match')
+    expect(lines).toContain('b too_big')
+    expect(lines.join('\n')).not.toContain('MESSAGE_CANARY')
   })
 })

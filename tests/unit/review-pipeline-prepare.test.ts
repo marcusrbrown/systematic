@@ -558,7 +558,9 @@ describe('prepareReviewCandidates -- rejections', () => {
 
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('expected rejection')
-    expect(result.rejection.reason).toBe('aggregate payload exceeds byte cap')
+    expect(result.rejection.reason).toBe(
+      `aggregate payload exceeds the byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`,
+    )
     expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
     expect(result.rejection.path).toBe('$')
   })

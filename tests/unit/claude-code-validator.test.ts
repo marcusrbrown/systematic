@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { buildValidatorBundle } from '../../scripts/build-claude-code-plugin.js'
 import { runClaudeCodeValidator } from '../../src/claude-code-validator.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -70,9 +72,9 @@ describe('Claude Code bundled validator entry', () => {
       expect(result.exitCode).toBe(1)
       expect(result.stdout).toEqual([])
       expect(result.stderr).toEqual([
-        'run_id too_big',
+        'Review artifact failed schema validation',
         'Schema: skills/ce-review/references/review-summary-schema.json',
-        'Review artifact validation failed: 1 issue(s)',
+        'run_id too_big',
       ])
       expect(result.stderr.join('\n')).not.toContain(distinctive)
     } finally {
@@ -183,4 +185,65 @@ describe('Claude Code bundled validator entry', () => {
       fs.rmSync(outsideDir, { recursive: true, force: true })
     }
   })
+
+  it('prints eight issue lines and the overflow count for more than eight issues, with no values or key names', () => {
+    const cwd = makeCwd()
+    try {
+      const target = artifactPath(cwd)
+      const artifact = JSON.parse(
+        fs.readFileSync(CONFORMING_FIXTURE, 'utf8'),
+      ) as Record<string, unknown>
+      for (const key of Object.keys(artifact).slice(0, 10)) {
+        artifact[key] = { VALUE_CANARY: 'VALUE_CANARY' }
+      }
+      artifact.KEY_CANARY_unknown = 'VALUE_CANARY'
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runValidator(cwd)
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr[0]).toBe('Review artifact failed schema validation')
+      expect(result.stderr[1]).toMatch(/^Schema: /)
+      expect(result.stderr.slice(2, 10)).toHaveLength(8)
+      expect(result.stderr[10]).toMatch(/^… and \d+ more$/)
+      expect(result.stderr).toHaveLength(11)
+      expect(result.stderr.join('\n')).not.toContain('CANARY')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('the built bundle prints the same shape from a directory outside the repository', async () => {
+    const bundle = await buildValidatorBundle(ROOT_DIR)
+    const foreign = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'claude-code-foreign-')),
+    )
+    try {
+      const bin = path.join(foreign, 'validator.mjs')
+      fs.writeFileSync(bin, bundle)
+      const target = artifactPath(foreign)
+      const artifact = JSON.parse(
+        fs.readFileSync(CONFORMING_FIXTURE, 'utf8'),
+      ) as Record<string, unknown>
+      for (const key of Object.keys(artifact).slice(0, 10)) {
+        artifact[key] = { VALUE_CANARY: 'VALUE_CANARY' }
+      }
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = spawnSync(
+        'node',
+        [bin, '.context/systematic/ce-review/review-summary.json'],
+        { cwd: foreign, encoding: 'utf8', timeout: 30_000 },
+      )
+
+      expect(result.status).toBe(1)
+      const lines = (result.stderr ?? '').trimEnd().split('\n')
+      expect(lines[0]).toBe('Review artifact failed schema validation')
+      expect(lines.slice(2, 10)).toHaveLength(8)
+      expect(lines[10]).toMatch(/^… and \d+ more$/)
+      expect(result.stderr).not.toContain('CANARY')
+    } finally {
+      fs.rmSync(foreign, { recursive: true, force: true })
+    }
+  }, 60_000)
 })

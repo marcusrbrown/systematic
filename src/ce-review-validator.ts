@@ -3,12 +3,16 @@ import { fileURLToPath } from 'node:url'
 import type { z } from 'zod'
 
 import { runClaudeCodeValidator } from './claude-code-validator.js'
-import { formatReviewArtifactIssuePath } from './lib/review-artifact-path.js'
+import {
+  formatProjectedIssueLines,
+  projectZodIssues,
+} from './lib/review-artifact-path.js'
 import { HarnessSchema } from './lib/review-artifact-schema.js'
 import {
   applyReviewAdjudication,
   finalizeReview,
   prepareReviewCandidates,
+  type SchemaRejection,
   screenReviewReturn,
 } from './lib/review-pipeline.js'
 import {
@@ -84,8 +88,7 @@ export const CE_REVIEW_PREPARE_STDIN_TTY_MESSAGE =
 export const CE_REVIEW_PREPARE_STDIN_READ_FAILED_MESSAGE =
   'prepare could not read the aggregate envelope from stdin'
 
-export const CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE =
-  'prepare input exceeds the aggregate byte cap'
+export const CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE = `prepare input exceeds the aggregate byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`
 
 export const CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE =
   'prepare input is not valid UTF-8'
@@ -104,8 +107,7 @@ export const CE_REVIEW_MERGE_STDIN_TTY_MESSAGE =
 export const CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE =
   'merge could not read the aggregate envelope from stdin'
 
-export const CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE =
-  'merge input exceeds the aggregate byte cap'
+export const CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE = `merge input exceeds the aggregate byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`
 
 export const CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE =
   'merge input is not valid UTF-8'
@@ -124,8 +126,7 @@ export const CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE =
 export const CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE =
   'finalize could not read the aggregate envelope from stdin'
 
-export const CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE =
-  'finalize input exceeds the aggregate byte cap'
+export const CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE = `finalize input exceeds the aggregate byte cap (${AGGREGATE_STDIN_BYTE_CAP} bytes)`
 
 export const CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE =
   'finalize input is not valid UTF-8'
@@ -200,13 +201,28 @@ function parseScreenFlags(argv: readonly string[]): ScreenFlagParse {
   return { harness, ok: true, reviewer }
 }
 
-/** Bounded, payload-safe rejection message: `<phase> rejected the aggregate
- * envelope: <reason> at <path>`. `reason` is a fixed-vocabulary string from
- * the pipeline and `path` is a safe JSON pointer; never payload content. */
-function formatAggregateRejectionMessage(
+/**
+ * Bounded, payload-safe rejection message. A schema rejection is the fixed
+ * context line `<phase> rejected the aggregate envelope: <reason>`, then up
+ * to eight `path code` lines and `… and N more` when there are more. A domain
+ * rejection is one line, `<context>: <reason> at <path>`. `reason` is a
+ * fixed-vocabulary string from the pipeline, `path` is a safe JSON pointer,
+ * and `code` is a Zod issue code; never payload content or an issue message.
+ *
+ * @internal Exported for tests.
+ */
+export function formatAggregateRejection(
   rejectedMessage: string,
-  rejection: { readonly path: string; readonly reason: string },
+  rejection:
+    | { readonly path: string; readonly reason: string }
+    | SchemaRejection<string>,
 ): string {
+  if ('issues' in rejection) {
+    return [
+      `${rejectedMessage}: ${rejection.reason}`,
+      ...formatProjectedIssueLines(rejection),
+    ].join('\n')
+  }
   return `${rejectedMessage}: ${rejection.reason} at ${rejection.path}`
 }
 
@@ -315,7 +331,7 @@ function runPrepareSubcommand(
   const result = prepareReviewCandidates({ raw_input: text })
   if (!result.ok) {
     errorSink(
-      formatAggregateRejectionMessage(
+      formatAggregateRejection(
         CE_REVIEW_PREPARE_REJECTED_MESSAGE,
         result.rejection,
       ),
@@ -340,7 +356,9 @@ interface AggregateStdinSubcommandSpec<Input> {
     | { readonly ok: true; readonly value: unknown }
     | {
         readonly ok: false
-        readonly rejection: { readonly path: string; readonly reason: string }
+        readonly rejection:
+          | { readonly path: string; readonly reason: string }
+          | SchemaRejection<string>
       }
 }
 
@@ -407,12 +425,14 @@ function runAggregateStdinSubcommand<Input>(
 
   const parsed = spec.schema.safeParse(value)
   if (!parsed.success) {
-    const issue = parsed.error.issues[0]
+    const { issues, total } = projectZodIssues(parsed.error.issues)
     errorSink(
-      issue
-        ? formatAggregateRejectionMessage(spec.rejectedMessage, {
-            path: formatReviewArtifactIssuePath(issue.path),
-            reason: issue.code,
+      issues[0]
+        ? formatAggregateRejection(spec.rejectedMessage, {
+            issues,
+            path: issues[0].path,
+            reason: 'schema validation',
+            total,
           })
         : spec.rejectedMessage,
     )
@@ -421,9 +441,7 @@ function runAggregateStdinSubcommand<Input>(
 
   const result = spec.execute(parsed.data)
   if (!result.ok) {
-    errorSink(
-      formatAggregateRejectionMessage(spec.rejectedMessage, result.rejection),
-    )
+    errorSink(formatAggregateRejection(spec.rejectedMessage, result.rejection))
     return 1
   }
 
