@@ -84,15 +84,22 @@ function hasPiConsumedRoutingField(
 /** Whether any overlay would change an exported persona: routing overlays or any pi_subagents entry. */
 function hasOverlaysPackagedPersonasIgnore(
   routing: SourcedOverlayConfigMap,
-  piSubagents: ReturnType<
-    typeof loadConfigWithSources
-  >['config']['pi_subagents'],
+  piSubagents: SystematicConfig['pi_subagents'],
 ): boolean {
   return (
     hasPiConsumedRoutingField(routing.agents) ||
     hasPiConsumedRoutingField(routing.categories) ||
-    Object.keys(piSubagents?.agents ?? {}).length > 0 ||
-    Object.keys(piSubagents?.categories ?? {}).length > 0
+    hasNonEmptyEntry(piSubagents?.agents) ||
+    hasNonEmptyEntry(piSubagents?.categories)
+  )
+}
+
+/** Project config can leave an entry's key behind after trust strips every field; that entry changes nothing. */
+function hasNonEmptyEntry(
+  entries: Record<string, object> | undefined,
+): boolean {
+  return Object.values(entries ?? {}).some(
+    (entry) => Object.keys(entry).length > 0,
   )
 }
 

@@ -974,6 +974,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
   /** Initializes the extension against isolated user config; captures stderr. */
   async function initWithUserConfig(
     user: Record<string, unknown> | undefined,
+    project?: Record<string, unknown>,
   ): Promise<InitResult> {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-pi-package-warn-'),
@@ -994,6 +995,11 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
       )
       fs.mkdirSync(path.dirname(userFile), { recursive: true })
       fs.writeFileSync(userFile, JSON.stringify(user))
+    }
+    if (project !== undefined) {
+      const projectFile = path.join(projectDir, '.opencode', 'systematic.json')
+      fs.mkdirSync(path.dirname(projectFile), { recursive: true })
+      fs.writeFileSync(projectFile, JSON.stringify(project))
     }
     process.chdir(projectDir)
     const stderr: string[] = []
@@ -1047,6 +1053,40 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     test('a pi_subagents-only overlay warns', async () => {
       const { stderr } = await initWithUserConfig({
         pi_subagents: { agents: { [CURATED_KEY]: { max_turns: 7 } } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+    })
+
+    test('a pi_subagents category overlay warns', async () => {
+      const { stderr } = await initWithUserConfig({
+        pi_subagents: { categories: { research: { max_turns: 7 } } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+    })
+
+    test('a project-only pi_subagents agent entry that trust strips to nothing does not warn', async () => {
+      const { stderr } = await initWithUserConfig(undefined, {
+        pi_subagents: { agents: { [CURATED_KEY]: { tools: 'read,bash' } } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('a project-only pi_subagents category entry that trust strips to nothing does not warn', async () => {
+      const { stderr } = await initWithUserConfig(undefined, {
+        pi_subagents: { categories: { research: { thinking: 'high' } } },
+      })
+
+      expect(overlayWarnings(stderr)).toHaveLength(0)
+    })
+
+    test('a project pi_subagents entry that keeps a trusted field still warns', async () => {
+      const { stderr } = await initWithUserConfig(undefined, {
+        pi_subagents: {
+          agents: { [CURATED_KEY]: { tools: 'read,bash', max_turns: 7 } },
+        },
       })
 
       expect(overlayWarnings(stderr)).toHaveLength(1)

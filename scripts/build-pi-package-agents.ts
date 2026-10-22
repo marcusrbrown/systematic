@@ -24,7 +24,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ManifestEntry } from '../src/lib/pi-subagents-personas.js'
-import { generateAll } from '../src/lib/pi-subagents-personas.js'
+import {
+  generateAll,
+  isWrittenEntry,
+} from '../src/lib/pi-subagents-personas.js'
 
 const PROJECT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -52,16 +55,6 @@ export interface RunBuildPiPackageAgentsOptions
   onError?: (message: string) => void
 }
 
-/** The entries that reach disk: critical exclusions and empty entries never do. */
-function writtenEntries(
-  entries: ManifestEntry[],
-): Array<ManifestEntry & { content: string }> {
-  return entries.filter(
-    (entry): entry is ManifestEntry & { content: string } =>
-      entry.status !== 'excluded-critical' && Boolean(entry.content),
-  )
-}
-
 /**
  * Write the packaged personas to `outDir`, replacing whatever was there.
  *
@@ -75,7 +68,7 @@ export function buildPiPackageAgents(
 ): string[] {
   const { repoRoot, outDir } = options
   const generate = options.generate ?? generateAll
-  const entries = writtenEntries(generate(repoRoot))
+  const entries = generate(repoRoot).filter(isWrittenEntry)
 
   for (const entry of entries) {
     if (entry.filename.includes(':')) {

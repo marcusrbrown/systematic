@@ -420,6 +420,13 @@ export function generatePersonaManifest(
 
 // ── Generate all ──────────────────────────────────────────────────────────────
 
+/** Whether an entry reaches disk: critical exclusions and entries with no content never do. */
+export function isWrittenEntry(
+  entry: ManifestEntry,
+): entry is ManifestEntry & { content: string } {
+  return entry.status !== 'excluded-critical' && Boolean(entry.content)
+}
+
 /**
  * Generate all curated personas from repoRoot/agents/.
  * Throws on collision, new critical coupling, or read errors.

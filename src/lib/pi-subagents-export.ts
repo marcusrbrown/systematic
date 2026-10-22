@@ -25,6 +25,7 @@ import { parseFrontmatter } from './frontmatter.js'
 import type { ManifestEntry } from './pi-subagents-personas.js'
 import {
   generateAll,
+  isWrittenEntry,
   parseSourceCategoryAndKey,
 } from './pi-subagents-personas.js'
 import {
@@ -836,24 +837,17 @@ function applyConfigToEntries(
   })
 }
 
+/** The filenames the export wants on disk; any owned file outside this set is stale. */
+function wantedFilenames(entries: ManifestEntry[]): Set<string> {
+  return new Set(entries.filter(isWrittenEntry).map((e) => e.filename))
+}
+
 /**
  * Generate the curated persona set and, when `configOptions` is provided,
  * apply the scope-appropriate effective config to each entry's frontmatter.
  * Throws (schema/config errors) or generator errors propagate to the caller,
  * which must fail closed before any write.
  */
-/** Whether the export writes this entry: critical exclusions and entries with no content never reach disk. */
-function isWrittenEntry(
-  entry: ManifestEntry,
-): entry is ManifestEntry & { content: string } {
-  return entry.status !== 'excluded-critical' && Boolean(entry.content)
-}
-
-/** The filenames the export wants on disk; any owned file outside this set is stale. */
-function wantedFilenames(entries: ManifestEntry[]): Set<string> {
-  return new Set(entries.filter(isWrittenEntry).map((e) => e.filename))
-}
-
 function generateEntries(
   repoRoot: string,
   configOptions: ExportConfigOptions | undefined,
