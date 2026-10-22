@@ -20,7 +20,12 @@
     ],
     "skills": [
       "./skills"
-    ]
+    ],
+    "subagents": {
+      "agents": [
+        "./dist/pi-subagents/agents"
+      ]
+    }
   },
   "files": [
     "dist",
@@ -34,7 +39,7 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox --external jsonc-parser && tsc --emitDeclarationOnly",
+    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox --external jsonc-parser && tsc --emitDeclarationOnly && bun scripts/build-pi-package-agents.ts",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
@@ -69,7 +74,8 @@
     "plugin",
     "ai",
     "workflow",
-    "engineering"
+    "engineering",
+    "pi-package"
   ],
   "author": "Marcus R. Brown <human@fro.bot>",
   "license": "MIT",
