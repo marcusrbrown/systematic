@@ -23,6 +23,8 @@ tags: [pi-subagents, persona-export, config-overlay, manifest, filesystem-safety
 
 # Safe pi-subagents persona export lifecycle
 
+> Partly superseded: the installed package now also declares the curated personas to pi-subagents 0.22 or newer as plain defaults, so export is the path for config overlays and not the only way to activate a persona. See [the packaged personas plan](../../plans/2026-10-20-003-feat-pi-subagents-package-agents-plan.md).
+
 ## Problem
 
 Systematic needed an explicit, opt-in way to project selected bundled personas into

@@ -763,7 +763,7 @@ function resolvePiSubagentsFields(
  * Re-render a generated persona's frontmatter with config-resolved `model`
  * and `pi_subagents` fields, preserving stable field order: description,
  * model, thinking, max_turns, tools, skills. `variant`/`temperature`/`top_p`
- * are never emitted (pi-subagents v0.14.3 has no equivalent fields).
+ * are never emitted (pi-subagents 0.22.0 has no equivalent fields).
  */
 function applyConfigToContent(
   content: string,

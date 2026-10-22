@@ -3,8 +3,9 @@
  * Generate pi-subagents-compatible persona files from a curated subset of
  * Systematic's `agents/` source.
  *
- * Contract (v0.14.3 pi-subagents):
- *   - Flat .md filename is the agent identity.
+ * Contract (pi-subagents 0.22.0):
+ *   - A frontmatter `name:` is the agent type; without one, the flat .md
+ *     filename is the identity.
  *   - Frontmatter fields are optional.
  *   - Omit tools, skills, model for maximum compatibility/inheritance.
  *   - Emit `description` only (do NOT emit `name` frontmatter).
@@ -15,7 +16,10 @@
  *   bun scripts/generate-pi-subagents-personas.ts --check  # Compare against committed fixtures; exit 0 if up-to-date
  *
  * The output directory is tests/fixtures/pi-subagents-personas/ (committed
- * source-side fixtures, not a user directory). User-dir writes are Unit 2.
+ * source-side fixtures, not a user directory). The same render feeds
+ * `scripts/build-pi-package-agents.ts`, which writes the personas the npm
+ * package declares at build time, and the opt-in export in
+ * `src/lib/pi-subagents-export.ts`.
  *
  * All helpers are pure exports. The executable entrypoint is guarded with
  * `if (import.meta.main)`. No user-directory writes in this module.
