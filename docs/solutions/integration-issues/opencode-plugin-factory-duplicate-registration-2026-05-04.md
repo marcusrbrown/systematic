@@ -169,7 +169,7 @@ bootstrap block — identical to the pre-singleton behavior.
 ## Prevention
 
 - **Trust the system prompt array as a coordination point.** Don't reach for `globalThis` or
-  module-level singletons to enforce idempotency. The mutable state you're trying to coordinate is
+  module-level singletons to enforce bootstrap idempotency. The mutable state you're trying to coordinate is
   already in the array.
 
 - **Mark injected content with a unique sentinel string.** `<SYSTEMATIC_WORKFLOWS>` is unique to
@@ -230,6 +230,8 @@ node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"
 - `docs/brainstorms/2026-05-10-multi-load-plugin-registration-requirements.md` — design rationale
   (per-load registration; bootstrap idempotency via `<SYSTEMATIC_WORKFLOWS>` marker; system prompt array
   as coordination point; no global state)
+- `docs/solutions/best-practices/pi-extension-warnings-once-per-process-2026-10-22.md` — Pi counterpart;
+  process-wide once-only output uses a `globalThis` flag
 - PR #335 — introduced `plugInOnce` singleton (later removed by PR #352)
 - PR #352 (v2.13.0) — removed `plugInOnce`, introduced marker-based bootstrap idempotency
 - `src/index.ts` — per-invocation `initializePlugin(input)`

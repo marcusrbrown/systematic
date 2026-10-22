@@ -1,6 +1,7 @@
 ---
 title: Safe pi-subagents persona export lifecycle
 date: 2026-07-30
+last_updated: 2026-10-22
 category: integration-issues
 module: pi-subagents
 problem_type: integration_issue
@@ -23,12 +24,12 @@ tags: [pi-subagents, persona-export, config-overlay, manifest, filesystem-safety
 
 # Safe pi-subagents persona export lifecycle
 
-> Partly superseded: the installed package now also declares the curated personas to pi-subagents 0.22 or newer as plain defaults, so export is the path for config overlays and not the only way to activate a persona. See [the packaged personas plan](../../plans/2026-10-20-003-feat-pi-subagents-package-agents-plan.md).
+> Partly superseded: pi-subagents 0.22 and later also load the curated personas as package agents. Export remains the path for config overlays. See [Generate Pi package agents in the build, not in prepublishOnly](../best-practices/generate-pi-package-agents-in-build-not-prepublish-2026-10-22.md).
 
 ## Problem
 
 Systematic needed an explicit, opt-in way to project selected bundled personas into
-`@tintinweb/pi-subagents@0.14.3` without making generated Markdown the source of truth, allowing
+`@tintinweb/pi-subagents` without making generated Markdown the source of truth, allowing
 project config to grant protected capabilities, or risking damage to user-owned files during export,
 refresh, and cleanup.
 
@@ -53,7 +54,7 @@ pi-subagents nesting.
 - **Manual edits as configuration.** `refresh` intentionally regenerates manifest-owned files from
   Systematic source, so durable overrides must live in Systematic config.
 - **A simulated pi-subagents stand-in.** It could not prove discovery, nested extension loading, or
-  the real v0.14.3 `Agent` execution path.
+  the real pi-subagents `Agent` execution path.
 - **Manifest reads before the mutation lock.** Another process could change ownership state between
   planning and mutation.
 - **Manifest membership without hash verification.** A file could change after planning and then be
@@ -164,18 +165,42 @@ files its completed steps changed are restored and rollback failures are reporte
 failing step's file and the files of steps that never ran are left as they are on disk, so a file
 the user saved after the snapshot is not overwritten with older content.
 
-Deletion rechecks the manifest hash inside the unlink closure, immediately before mutation:
+Restoring every snapshotted path would revert a step that never ran and overwrite a save made after
+the snapshot, so each operation is paired with the one path it changes:
 
 ```ts
-assertHashMatchesOrThrow(filePath, entry.hash, entry.filename, 'delete')
-fs.unlinkSync(filePath)
+export interface TxStep {
+  path: string
+  run: () => void
+}
 ```
 
-This check applies both to `cleanup` and stale-file removal during `export`.
+`runWithRollback` snapshots every step's path, records a path only after its step returns, and on
+failure restores only the recorded paths. That rests on one contract: a step leaves its path unchanged
+when it throws. The atomic writers write a temporary file and rename it, and the hash-gated deletes
+check before they unlink. A new step that writes before it can throw breaks the contract, and no type
+enforces it.
+
+The proof is direct `runWithRollback` tests in `tests/unit/pi-subagents-export.test.ts`. The module has
+no filesystem seam for simulating a concurrent save during `refresh`. One test has a completed write
+followed by a step that saves new content and throws: the completed write is undone and the saved content
+survives. Another changes a file whose step never ran: rollback leaves it alone.
+
+`unlinkStaleOwned` rechecks the manifest hash immediately before it unlinks:
+
+```ts
+function unlinkStaleOwned({ path: p, filename, hash }: DeletionTarget): void {
+  if (!fs.existsSync(p)) return
+  assertHashMatchesOrThrow(p, hash, filename, 'remove stale file')
+  fs.unlinkSync(p)
+}
+```
+
+The same check guards `cleanup` and stale-file removal during `export` and `refresh`.
 
 ### Execute the exported artifact through the real runtime
 
-`tests/integration/pi.test.ts` uses the pinned real `@tintinweb/pi-subagents@0.14.3` package.
+`tests/integration/pi.test.ts` uses the pinned real `@tintinweb/pi-subagents` package.
 
 One test exports `systematic-repo-research-analyst` and verifies that the real pi-subagents `Agent`
 discovers and executes the exported persona. A separate combined-path test verifies that one
@@ -197,9 +222,6 @@ Transactional rollback keeps a failed batch from leaving files and manifest stat
 Field-aware trust rules preserve useful project customization without allowing repository-controlled
 config to grant provider routing or Pi capabilities.
 
-Finally, the real v0.14.3 integration test verifies the installed runtime contract rather than only
-the generator's internal representation.
-
 ## Prevention
 
 - Keep persona filenames deterministic, collision-checked, and limited to `systematic-*.md`.
@@ -208,7 +230,10 @@ the generator's internal representation.
 - Read the ownership manifest inside the exclusive mutation lock.
 - Validate lexical and canonical containment before mutation.
 - Snapshot every step's path before the first write or delete, and restore only the paths of steps
-  that completed.
+  that completed. Pair each operation with its one path, and make every step leave its path unchanged
+  when it throws.
+- Test rollback in both directions: a completed step is undone, and the failing step's path and the
+  paths of steps that never ran keep whatever is on disk.
 - Recheck content hashes in the unlink operation, not only during planning.
 - Keep absent-root cleanup idempotent without weakening checks for existing symlinked roots.
 - Test malformed manifests, hostile filenames, lock contention, rollback, remove-only plans, and
@@ -221,3 +246,4 @@ the generator's internal representation.
 - [Test packaged harness extensions against the real Pi runtime](../best-practices/pi-real-runtime-integration-harness-2026-07-16.md)
 - [Isolate harness subprocess and packaged-runtime fixtures](isolated-opencode-subprocess-fixtures-2026-05-14.md)
 - [Verify installed artifacts, not just build gates](../workflow-issues/verify-installed-artifacts-not-just-build-gates-2026-07-18.md)
+- [Generate Pi package agents in the build, not in prepublishOnly](../best-practices/generate-pi-package-agents-in-build-not-prepublish-2026-10-22.md)
