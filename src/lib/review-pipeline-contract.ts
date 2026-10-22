@@ -3,10 +3,13 @@ import {
   DispatchOutcomeSchema,
   DispositionSchema,
   HarnessSchema,
+  MAX_DECISION_FACTS,
   MAX_FINDINGS,
   MAX_INPUT_ID_LENGTH,
   MAX_PERSONAS,
   MAX_REASON_LENGTH,
+  MAX_RUN_DISAGREEMENT_FACTS,
+  MAX_RUN_FINDINGS,
   ParentFindingSchema,
   ProvenanceSchema,
   RepoRelativePathSchema,
@@ -151,7 +154,7 @@ const CandidateGroupMemberSchema = z
 const CandidateGroupSchema = z
   .object({
     file: RepoRelativePathSchema,
-    members: z.array(CandidateGroupMemberSchema).min(2).max(MAX_FINDINGS),
+    members: z.array(CandidateGroupMemberSchema).min(2).max(MAX_RUN_FINDINGS),
   })
   .strict()
 
@@ -176,15 +179,13 @@ export const PrepareOutputSchema = z
   .object({
     confidence_dispositions: z
       .array(ConfidenceDispositionSchema)
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    coverage_union: z
-      .array(RepoRelativePathSchema)
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    singletons: z.array(PipelineInputIdSchema).max(MAX_FINDINGS * MAX_PERSONAS),
-    candidate_groups: z.array(CandidateGroupSchema).max(MAX_FINDINGS),
+      .max(MAX_RUN_FINDINGS),
+    coverage_union: z.array(RepoRelativePathSchema).max(MAX_RUN_FINDINGS),
+    singletons: z.array(PipelineInputIdSchema).max(MAX_RUN_FINDINGS),
+    candidate_groups: z.array(CandidateGroupSchema).max(MAX_RUN_FINDINGS),
     surviving_findings: z
       .array(SurvivingAdmittedFindingSchema)
-      .max(MAX_FINDINGS * MAX_PERSONAS),
+      .max(MAX_RUN_FINDINGS),
   })
   .strict()
 
@@ -211,12 +212,13 @@ export const AGGREGATE_BYTE_CAP_HEADROOM = 65_536
 // AGGREGATE_BYTE_CAP_HEADROOM. `merge` and `finalize` restate the same
 // finding set across several independently max-bounded fields (e.g.
 // `prepared.surviving_findings` and `prepared.confidence_dispositions` each
-// up to MAX_FINDINGS * MAX_PERSONAS entries; `finalize` also repeats
-// `screen_results`), so their theoretical maxima exceed this cap: a
-// maximal-but-schema-legal `merge` envelope measures ~22.8 MiB, a maximal
-// `finalize` envelope ~45.3 MiB. That is intentional -- an envelope above
-// the cap is rejected as oversized by design, and a real review run's
-// envelopes stay orders of magnitude below it.
+// up to MAX_RUN_FINDINGS entries; `finalize` also repeats `screen_results`),
+// and the disagreement-facts aggregate alone admits MAX_RUN_DISAGREEMENT_FACTS
+// reasons of up to MAX_REASON_LENGTH characters each. So the theoretical
+// maxima of a schema-legal `merge` or `finalize` envelope exceed this cap by a
+// wide margin. That is intentional -- the byte cap, not the array bounds,
+// guards volume: an envelope above the cap is rejected as oversized by design,
+// and a real review run's envelopes stay well below it.
 export const AGGREGATE_STDIN_BYTE_CAP =
   MAX_PERSONAS * MAX_FINDINGS * PER_FINDING_BYTE_ASSUMPTION +
   AGGREGATE_BYTE_CAP_HEADROOM
@@ -319,7 +321,15 @@ export const isRouteTransitionAllowed = (
 
 const AgreementCreditSchema = SubAgentReturnSchema.shape.reviewer
 
-const DisagreementFactsSchema = z.array(PipelineReasonSchema).max(MAX_FINDINGS)
+// One decision's disagreement facts, and the run aggregate merge emits: at
+// most one declined reason plus `MAX_DECISION_FACTS` facts per decision, over
+// at most `MAX_RUN_FINDINGS` decisions.
+const DecisionFactsSchema = z
+  .array(PipelineReasonSchema)
+  .max(MAX_DECISION_FACTS)
+const AggregateFactsSchema = z
+  .array(PipelineReasonSchema)
+  .max(MAX_RUN_DISAGREEMENT_FACTS)
 
 // A model-proposed narrower route. Reuses the same canonical leaf schemas
 // `deriveRouteMeet`'s inputs are built from (`AutofixClassRouteSchema`,
@@ -341,13 +351,16 @@ const MergedDecisionSchema = z
   .object({
     decision_id: PipelineInputIdSchema,
     disposition: z.literal('merged'),
-    input_finding_ids: z.array(PipelineInputIdSchema).min(2).max(MAX_FINDINGS),
+    input_finding_ids: z
+      .array(PipelineInputIdSchema)
+      .min(2)
+      .max(MAX_RUN_FINDINGS),
     title: ParentFindingSchema.shape.title,
     why_it_matters: ParentFindingSchema.shape.why_it_matters,
     evidence: ParentFindingSchema.shape.evidence,
     suggested_fix: ParentFindingSchema.shape.suggested_fix,
     line: ParentFindingSchema.shape.line,
-    disagreement_facts: DisagreementFactsSchema.optional(),
+    disagreement_facts: DecisionFactsSchema.optional(),
     eligible_agreement_credit: z
       .array(AgreementCreditSchema)
       .max(MAX_PERSONAS)
@@ -363,7 +376,7 @@ const DeclinedDecisionSchema = z
     disposition: z.literal('declined'),
     input_finding_id: PipelineInputIdSchema,
     declined_reason: PipelineReasonSchema,
-    disagreement_facts: DisagreementFactsSchema.optional(),
+    disagreement_facts: DecisionFactsSchema.optional(),
     proposed_route: ProposedRouteSchema.optional(),
     route_narrowing_reason: PipelineReasonSchema.optional(),
   })
@@ -376,7 +389,7 @@ const MergeDecisionSchema = z.discriminatedUnion('disposition', [
 
 export const AdjudicationEnvelopeSchema = z
   .object({
-    decisions: z.array(MergeDecisionSchema).max(MAX_FINDINGS),
+    decisions: z.array(MergeDecisionSchema).max(MAX_RUN_FINDINGS),
   })
   .strict()
   .superRefine((envelope, ctx) => {
@@ -459,7 +472,10 @@ const MergedFindingSchema = z
     requires_verification: ParentFindingSchema.shape.requires_verification,
     evidence: ParentFindingSchema.shape.evidence,
     suggested_fix: ParentFindingSchema.shape.suggested_fix,
-    input_finding_ids: z.array(PipelineInputIdSchema).min(1).max(MAX_FINDINGS),
+    input_finding_ids: z
+      .array(PipelineInputIdSchema)
+      .min(1)
+      .max(MAX_RUN_FINDINGS),
     agreement_credit: z
       .array(AgreementCreditSchema)
       .max(MAX_PERSONAS)
@@ -482,9 +498,9 @@ const MergedFindingSchema = z
 
 export const MergeOutputSchema = z
   .object({
-    merged_findings: z.array(MergedFindingSchema).max(MAX_FINDINGS),
-    validator_requests: z.array(ValidatorRequestSchema).max(MAX_FINDINGS),
-    disagreement_facts: DisagreementFactsSchema,
+    merged_findings: z.array(MergedFindingSchema).max(MAX_RUN_FINDINGS),
+    validator_requests: z.array(ValidatorRequestSchema).max(MAX_RUN_FINDINGS),
+    disagreement_facts: AggregateFactsSchema,
   })
   .strict()
 
@@ -530,7 +546,7 @@ const ValidatorLifecycleRecordSchema = z
 
 export const ValidatorLifecycleResultsSchema = z
   .array(ValidatorLifecycleRecordSchema)
-  .max(MAX_FINDINGS)
+  .max(MAX_RUN_FINDINGS)
 
 // A model-proposed plan-assessment result: an unrouted classification plus
 // a description. Kept structurally distinct from `routePlanAssessment`'s
@@ -549,7 +565,7 @@ const PlanAssessmentResultSchema = z
 export const PlanAssessmentEnvelopeSchema = z
   .object({
     verdict: ReviewArtifactSchema.shape.verdict,
-    results: z.array(PlanAssessmentResultSchema).max(MAX_FINDINGS),
+    results: z.array(PlanAssessmentResultSchema).max(MAX_RUN_FINDINGS),
   })
   .strict()
 
@@ -625,9 +641,9 @@ const ReportQueueEntrySchema = z
 
 const ReportQueuesSchema = z
   .object({
-    fixer: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
-    residual: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
-    report_only: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+    fixer: z.array(ReportQueueEntrySchema).max(MAX_RUN_FINDINGS),
+    residual: z.array(ReportQueueEntrySchema).max(MAX_RUN_FINDINGS),
+    report_only: z.array(ReportQueueEntrySchema).max(MAX_RUN_FINDINGS),
   })
   .strict()
 
@@ -642,10 +658,12 @@ const ReportProjectionSchema = z
     coverage: ReviewArtifactSchema.shape.coverage,
     input_dispositions: z
       .array(FinalizedInputDispositionSchema)
-      .max(MAX_FINDINGS * MAX_PERSONAS),
+      .max(MAX_RUN_FINDINGS),
     disposition_counts: ReviewArtifactSchema.shape.disposition_counts,
     queues: ReportQueuesSchema,
-    pre_existing_findings: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+    pre_existing_findings: z
+      .array(ReportQueueEntrySchema)
+      .max(MAX_RUN_FINDINGS),
     risk_coverage: ReviewArtifactSchema.shape.risk_coverage,
   })
   .strict()

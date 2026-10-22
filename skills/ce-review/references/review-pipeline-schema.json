@@ -7,7 +7,7 @@
       "type": "object",
       "properties": {
         "decisions": {
-          "maxItems": 32,
+          "maxItems": 2048,
           "type": "array",
           "items": {
             "oneOf": [
@@ -26,7 +26,7 @@
                   },
                   "input_finding_ids": {
                     "minItems": 2,
-                    "maxItems": 32,
+                    "maxItems": 2048,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -363,7 +363,7 @@
           "pattern": "\\S"
         },
         "results": {
-          "maxItems": 32,
+          "maxItems": 2048,
           "type": "array",
           "items": {
             "type": "object",

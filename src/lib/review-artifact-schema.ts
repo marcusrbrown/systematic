@@ -9,8 +9,39 @@ const MAX_BRANCH_LENGTH = 256
 // to the pipeline contract instead of drifting behind a duplicated literal.
 export const MAX_INPUT_ID_LENGTH = 128
 export const MAX_REASON_LENGTH = 2048
+// Per-reviewer admission bound: one reviewer's findings, risks and gaps. The
+// legitimate remaining uses are screen findings and rejected severities, the
+// dispatch `input_finding_count` and `selection_surface`, raw and parent
+// findings, and the rejected-severity guard in `review-pipeline.ts`. Run-level
+// sets use the constants below, so a new reuse of this one stands out.
 export const MAX_FINDINGS = 32
 export const MAX_PERSONAS = 64
+
+// Run-level capacity: every persona's admitted findings, the same product
+// `prepare` already admits.
+export const MAX_RUN_FINDINGS = MAX_FINDINGS * MAX_PERSONAS
+
+// One merge decision's disagreement facts. A named alias of the per-reviewer
+// bound, not a separate policy.
+export const MAX_DECISION_FACTS = MAX_FINDINGS
+
+// Every decision can carry one declined reason plus `MAX_DECISION_FACTS`
+// facts, and there are at most `MAX_RUN_FINDINGS` decisions.
+export const MAX_RUN_DISAGREEMENT_FACTS =
+  MAX_RUN_FINDINGS * (MAX_DECISION_FACTS + 1)
+
+// Coverage bounds follow each producer. `validators` is a numeric maximum that
+// equals the lifecycle-results bound. `residual_risks` and `testing_gaps` are
+// the deduped union of every persona's entries.
+export const COVERAGE_BOUNDS = {
+  reviewers: MAX_PERSONAS,
+  validators: MAX_RUN_FINDINGS,
+  residual_risks: MAX_PERSONAS * MAX_PERSONAS,
+  testing_gaps: MAX_PERSONAS * MAX_PERSONAS,
+  failed_reviewers: MAX_PERSONAS,
+  validator_failures: MAX_RUN_FINDINGS,
+  intent_uncertainty: MAX_RUN_DISAGREEMENT_FACTS,
+} as const
 
 export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'severity count must match rejected finding count',
@@ -214,7 +245,7 @@ const SynthesizedFindingFieldsSchema = z
     input_finding_ids: z
       .array(boundedText(MAX_INPUT_ID_LENGTH))
       .min(1)
-      .max(MAX_FINDINGS),
+      .max(MAX_RUN_FINDINGS),
     provenance: ProvenanceSchema,
   })
   .strict()
@@ -281,43 +312,39 @@ const DispatchSchema = z
 
 const DispositionCountsSchema = z
   .object({
-    surviving: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    merged: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    suppressed: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    filtered: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    rejected: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(MAX_FINDINGS * MAX_PERSONAS),
+    surviving: z.number().int().nonnegative().max(MAX_RUN_FINDINGS),
+    merged: z.number().int().nonnegative().max(MAX_RUN_FINDINGS),
+    suppressed: z.number().int().nonnegative().max(MAX_RUN_FINDINGS),
+    filtered: z.number().int().nonnegative().max(MAX_RUN_FINDINGS),
+    rejected: z.number().int().nonnegative().max(MAX_RUN_FINDINGS),
   })
   .strict()
 
 const CoverageSchema = z
   .object({
-    reviewers: z.number().int().nonnegative().max(MAX_PERSONAS).optional(),
-    validators: z.number().int().nonnegative().max(MAX_PERSONAS).optional(),
-    residual_risks: z.array(ReasonSchema).max(MAX_PERSONAS),
-    testing_gaps: z.array(ReasonSchema).max(MAX_PERSONAS),
-    failed_reviewers: z.array(ReviewerSchema).max(MAX_PERSONAS),
-    validator_failures: z.array(ReasonSchema).max(MAX_PERSONAS),
-    intent_uncertainty: z.array(ReasonSchema).max(MAX_PERSONAS),
+    reviewers: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(COVERAGE_BOUNDS.reviewers)
+      .optional(),
+    validators: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(COVERAGE_BOUNDS.validators)
+      .optional(),
+    residual_risks: z.array(ReasonSchema).max(COVERAGE_BOUNDS.residual_risks),
+    testing_gaps: z.array(ReasonSchema).max(COVERAGE_BOUNDS.testing_gaps),
+    failed_reviewers: z
+      .array(ReviewerSchema)
+      .max(COVERAGE_BOUNDS.failed_reviewers),
+    validator_failures: z
+      .array(ReasonSchema)
+      .max(COVERAGE_BOUNDS.validator_failures),
+    intent_uncertainty: z
+      .array(ReasonSchema)
+      .max(COVERAGE_BOUNDS.intent_uncertainty),
   })
   .strict()
 
@@ -327,7 +354,7 @@ const DeclinedMergeSchema = z
     input_finding_ids: z
       .array(boundedText(MAX_INPUT_ID_LENGTH))
       .min(2)
-      .max(MAX_FINDINGS),
+      .max(MAX_RUN_FINDINGS),
     reason: ReasonSchema,
   })
   .strict()
@@ -403,16 +430,17 @@ export const ReviewArtifactSchema = z
     verdict: boundedText(256),
     completed_at: CompletedAtSchema,
     dispatches: z.array(DispatchSchema).max(MAX_PERSONAS),
-    input_findings: z
-      .array(InputFindingSchema)
-      .max(MAX_FINDINGS * MAX_PERSONAS),
-    findings: z.array(SynthesizedFindingSchema).max(MAX_FINDINGS),
-    declined_merges: z.array(DeclinedMergeSchema).max(MAX_FINDINGS).optional(),
+    input_findings: z.array(InputFindingSchema).max(MAX_RUN_FINDINGS),
+    findings: z.array(SynthesizedFindingSchema).max(MAX_RUN_FINDINGS),
+    declined_merges: z
+      .array(DeclinedMergeSchema)
+      .max(MAX_RUN_FINDINGS)
+      .optional(),
     risk_coverage: z.array(RiskCoverageSchema).max(MAX_PERSONAS).optional(),
     disposition_counts: DispositionCountsSchema,
-    applied_fixes: z.array(ReasonSchema).max(MAX_FINDINGS),
-    residual_actionable_work: z.array(ReasonSchema).max(MAX_FINDINGS),
-    advisory_outputs: z.array(ReasonSchema).max(MAX_FINDINGS),
+    applied_fixes: z.array(ReasonSchema).max(MAX_RUN_FINDINGS),
+    residual_actionable_work: z.array(ReasonSchema).max(MAX_RUN_FINDINGS),
+    advisory_outputs: z.array(ReasonSchema).max(MAX_RUN_FINDINGS),
     coverage: CoverageSchema,
     validation: ValidationSchema.optional(),
   })

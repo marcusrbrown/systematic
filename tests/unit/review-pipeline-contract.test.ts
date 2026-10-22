@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  MAX_DECISION_FACTS,
   MAX_FINDINGS,
   MAX_PERSONAS,
+  MAX_RUN_DISAGREEMENT_FACTS,
+  MAX_RUN_FINDINGS,
   ReviewArtifactSchema,
 } from '../../src/lib/review-artifact-schema.js'
 import {
@@ -22,6 +25,7 @@ import {
   ScreenInputSchema,
   ScreenOutputSchema,
   ValidatorLifecycleResultSchema,
+  ValidatorLifecycleResultsSchema,
 } from '../../src/lib/review-pipeline-contract.js'
 
 type JsonObject = Record<string, unknown>
@@ -493,11 +497,13 @@ const realisticPreparedOutput: JsonObject = {
   ),
 }
 
-// `AdjudicationEnvelopeSchema.decisions` is bounded at `MAX_FINDINGS`
-// (persona-independent), not `MAX_FINDINGS * MAX_PERSONAS`: only findings
-// entering merge adjudication get a decision, and most findings remain
-// singletons that never do. One declined decision per persona (well under
-// the bound) reflects that.
+// `AdjudicationEnvelopeSchema.decisions` is bounded at `MAX_RUN_FINDINGS`.
+// The authority is the schema caps themselves: the `decisions` maximum times
+// the per-decision facts maximum bounds the facts aggregate. Candidate-group
+// membership is not the authority, because `members` and `candidate_groups`
+// are capped independently. Most findings remain singletons that never get a
+// decision, and one declined decision per persona (well under the bound)
+// reflects that.
 const realisticDeclinedDecision = (personaIndex: number): JsonObject => ({
   decision_id: `decision-${realisticInputId(personaIndex, 0)}`,
   disposition: 'declined',
@@ -1368,5 +1374,309 @@ describe('FinalizeInputSchema / FinalizeOutputSchema', () => {
       ...withoutRiskCoverage,
     })
     expect(result.success).toBe(true)
+  })
+})
+
+// --- Run-level bounds -------------------------------------------------------
+//
+// Every run-level array is bounded by `MAX_RUN_FINDINGS` (or the facts
+// aggregate), derived from what the upstream phase can emit. Each probe parses
+// at its bound and rejects one past it with `too_big` at the exact path. The
+// bounds come from the exported constants, never from literals.
+
+type ProbePath = readonly (string | number)[]
+
+interface Parsable {
+  safeParse(value: unknown):
+    | { readonly success: true }
+    | {
+        readonly success: false
+        readonly error: {
+          readonly issues: readonly {
+            readonly code: string
+            readonly path: readonly PropertyKey[]
+          }[]
+        }
+      }
+}
+
+function tooBigPaths(schema: Parsable, value: unknown): string[] {
+  const result = schema.safeParse(value)
+  if (result.success) return []
+  return result.error.issues
+    .filter((issue) => issue.code === 'too_big')
+    .map((issue) => JSON.stringify(issue.path))
+}
+
+function items<T>(count: number, make: (index: number) => T): T[] {
+  return Array.from({ length: count }, (_, index) => make(index))
+}
+
+interface BoundProbe {
+  readonly name: string
+  readonly schema: Parsable
+  readonly bound: number
+  readonly path: ProbePath
+  readonly build: (count: number) => unknown
+}
+
+const declinedDecisionAt = (index: number): JsonObject => ({
+  ...declinedDecisionFixture,
+  decision_id: `decision-${index}`,
+  input_finding_id: `input-${index}`,
+})
+
+const mergedDecisionWith = (extra: JsonObject): JsonObject => ({
+  ...mergedDecisionFixture,
+  ...extra,
+})
+
+const group = (members: number): JsonObject => ({
+  file: 'src/example.ts',
+  members: items(members, (index) => ({ input_id: `input-${index}`, line: 1 })),
+})
+
+const queueEntry = (index: number): JsonObject => ({
+  finding_id: `finding-${index}`,
+  unconfirmed: false,
+})
+
+const projectionWith = (changes: JsonObject): JsonObject => ({
+  ...reportProjectionFixture,
+  kind: 'report_only',
+  queues: { fixer: [], residual: [], report_only: [] },
+  pre_existing_findings: [],
+  ...changes,
+})
+
+const RUN_LEVEL_PROBES: BoundProbe[] = [
+  {
+    name: 'prepare candidate group members',
+    schema: PrepareOutputSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['candidate_groups', 0, 'members'],
+    build: (count) => ({
+      ...prepareOutputFixture,
+      candidate_groups: [group(count)],
+    }),
+  },
+  {
+    name: 'prepare candidate groups',
+    schema: PrepareOutputSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['candidate_groups'],
+    build: (count) => ({
+      ...prepareOutputFixture,
+      candidate_groups: items(count, () => group(2)),
+    }),
+  },
+  {
+    name: 'adjudication decisions',
+    schema: AdjudicationEnvelopeSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['decisions'],
+    build: (count) => ({ decisions: items(count, declinedDecisionAt) }),
+  },
+  {
+    name: 'merged decision input finding IDs',
+    schema: AdjudicationEnvelopeSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['decisions', 0, 'input_finding_ids'],
+    build: (count) => ({
+      decisions: [
+        mergedDecisionWith({
+          input_finding_ids: items(count, (index) => `input-${index}`),
+        }),
+      ],
+    }),
+  },
+  {
+    name: 'merged findings',
+    schema: MergeOutputSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['merged_findings'],
+    build: (count) => ({
+      ...mergeOutputFixture,
+      merged_findings: items(count, (index) => ({
+        ...mergedFindingFixture,
+        finding_id: `decision-${index}`,
+      })),
+    }),
+  },
+  {
+    name: 'merged finding input finding IDs',
+    schema: MergeOutputSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['merged_findings', 0, 'input_finding_ids'],
+    build: (count) => ({
+      ...mergeOutputFixture,
+      merged_findings: [
+        {
+          ...mergedFindingFixture,
+          input_finding_ids: items(count, (index) => `input-${index}`),
+        },
+      ],
+    }),
+  },
+  {
+    name: 'validator requests',
+    schema: MergeOutputSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['validator_requests'],
+    build: (count) => ({
+      ...mergeOutputFixture,
+      validator_requests: items(count, (index) => ({
+        ...validatorRequestFixture,
+        finding_id: `decision-${index}`,
+      })),
+    }),
+  },
+  {
+    name: 'merge disagreement facts aggregate',
+    schema: MergeOutputSchema,
+    bound: MAX_RUN_DISAGREEMENT_FACTS,
+    path: ['disagreement_facts'],
+    build: (count) => ({
+      ...mergeOutputFixture,
+      disagreement_facts: items(count, () => 'The reviewers disagree.'),
+    }),
+  },
+  {
+    name: 'finalize input disagreement facts aggregate',
+    schema: FinalizeInputSchema,
+    bound: MAX_RUN_DISAGREEMENT_FACTS,
+    path: ['merge', 'disagreement_facts'],
+    build: (count) => ({
+      ...finalizeInputFixture,
+      merge: {
+        ...mergeOutputFixture,
+        disagreement_facts: items(count, () => 'The reviewers disagree.'),
+      },
+    }),
+  },
+  {
+    name: 'validator lifecycle results',
+    schema: ValidatorLifecycleResultsSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: [],
+    build: (count) =>
+      items(count, (index) => ({
+        finding_id: `decision-${index}`,
+        result: { outcome: 'true' },
+      })),
+  },
+  {
+    name: 'plan assessment results',
+    schema: PlanAssessmentEnvelopeSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['results'],
+    build: (count) => ({
+      ...planAssessmentFixture,
+      results: items(count, () => ({
+        kind: 'inferred_gap',
+        description: 'A gap the plan left open.',
+      })),
+    }),
+  },
+  {
+    name: 'parent run metadata applied fixes',
+    schema: ParentRunMetadataSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['applied_fixes'],
+    build: (count) => ({
+      ...parentRunMetadataFixture,
+      applied_fixes: items(count, () => 'Updated the example path.'),
+    }),
+  },
+  ...(['fixer', 'residual', 'report_only'] as const).map(
+    (queue): BoundProbe => ({
+      name: `report queue ${queue}`,
+      schema: FinalizeOutputSchema,
+      bound: MAX_RUN_FINDINGS,
+      path: ['queues', queue],
+      build: (count) =>
+        projectionWith({
+          queues: {
+            fixer: [],
+            residual: [],
+            report_only: [],
+            [queue]: items(count, queueEntry),
+          },
+        }),
+    }),
+  ),
+  {
+    name: 'pre-existing findings',
+    schema: FinalizeOutputSchema,
+    bound: MAX_RUN_FINDINGS,
+    path: ['pre_existing_findings'],
+    build: (count) =>
+      projectionWith({ pre_existing_findings: items(count, queueEntry) }),
+  },
+]
+
+describe('run-level contract bounds', () => {
+  test.each(RUN_LEVEL_PROBES)(
+    '$name parses at its bound',
+    ({ schema, bound, build }) => {
+      expect(schema.safeParse(build(bound)).success).toBe(true)
+    },
+  )
+
+  test.each(RUN_LEVEL_PROBES)(
+    '$name rejects one past its bound with too_big at its path',
+    ({ schema, bound, path, build }) => {
+      expect(tooBigPaths(schema, build(bound + 1))).toContain(
+        JSON.stringify(path),
+      )
+    },
+  )
+
+  test('one decision keeps its facts at the per-decision bound', () => {
+    const decision = (disposition: 'merged' | 'declined', count: number) => ({
+      decisions: [
+        {
+          ...(disposition === 'merged'
+            ? mergedDecisionFixture
+            : declinedDecisionFixture),
+          disagreement_facts: items(count, () => 'The reviewers disagree.'),
+        },
+      ],
+    })
+
+    for (const disposition of ['merged', 'declined'] as const) {
+      expect(
+        AdjudicationEnvelopeSchema.safeParse(
+          decision(disposition, MAX_DECISION_FACTS),
+        ).success,
+      ).toBe(true)
+      expect(
+        tooBigPaths(
+          AdjudicationEnvelopeSchema,
+          decision(disposition, MAX_DECISION_FACTS + 1),
+        ),
+      ).toContain(JSON.stringify(['decisions', 0, 'disagreement_facts']))
+    }
+  })
+
+  test('the facts aggregate covers one declined reason plus the per-decision facts for every decision', () => {
+    expect(MAX_DECISION_FACTS).toBe(MAX_FINDINGS)
+    expect(MAX_RUN_FINDINGS).toBe(MAX_FINDINGS * MAX_PERSONAS)
+    expect(MAX_RUN_DISAGREEMENT_FACTS).toBe(
+      MAX_RUN_FINDINGS * (MAX_DECISION_FACTS + 1),
+    )
+  })
+
+  test('the per-reviewer bounds keep their values', () => {
+    const overFindings = {
+      ...screenOutputFixture,
+      admitted_findings: items(MAX_FINDINGS + 1, (index) => ({
+        ...admittedFindingFixture,
+        input_id: `correctness-${index}`,
+      })),
+    }
+    expect(tooBigPaths(ScreenOutputSchema, overFindings)).toContain(
+      JSON.stringify(['admitted_findings']),
+    )
   })
 })
