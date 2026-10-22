@@ -1538,6 +1538,18 @@ describe('the real pipeline chain at run scale', () => {
     expect(run.parsed).toEqual({ artifactOk: true, outputOk: true })
   }
 
+  /** The artifact of a completed writing run. Throws, so an assertion on it
+   * cannot be skipped when the run did not produce one. */
+  function writtenArtifact(run: PipelineRun) {
+    const finalize = run.finalize
+    if (!finalize?.ok) throw new Error('expected finalize to succeed')
+    expect(finalize.value.kind).toBe('writing')
+    if (finalize.value.kind !== 'writing') {
+      throw new Error('expected a writing finalize')
+    }
+    return finalize.value.artifact
+  }
+
   test('34 survivors in one file from two reviewers pass prepare', () => {
     const run = runPipeline({
       reviewers: [
@@ -1572,9 +1584,8 @@ describe('the real pipeline chain at run scale', () => {
     })
 
     expectCompleted(run)
-    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
-      expect(run.finalize.value.artifact.findings).toHaveLength(64)
-    }
+    const artifact = writtenArtifact(run)
+    expect(artifact.findings).toHaveLength(64)
   })
 
   test('a group whose members are all declined completes the whole chain', () => {
@@ -1670,11 +1681,8 @@ describe('the real pipeline chain at run scale', () => {
 
     expectCompleted(run)
     expect(run.merge?.ok && run.merge.value.validator_requests.length).toBe(100)
-    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
-      expect(
-        run.finalize.value.artifact.coverage.validator_failures.length,
-      ).toBeGreaterThan(64)
-    }
+    const artifact = writtenArtifact(run)
+    expect(artifact.coverage.validator_failures.length).toBeGreaterThan(64)
   })
 
   test('more than 64 distinct residual risks and testing gaps across two reviewers complete the whole chain', () => {
@@ -1702,11 +1710,10 @@ describe('the real pipeline chain at run scale', () => {
     })
 
     expectCompleted(run)
-    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
-      const { coverage } = run.finalize.value.artifact
-      expect(coverage.residual_risks).toHaveLength(128)
-      expect(coverage.testing_gaps).toHaveLength(128)
-    }
+    const artifact = writtenArtifact(run)
+    const { coverage } = artifact
+    expect(coverage.residual_risks).toHaveLength(128)
+    expect(coverage.testing_gaps).toHaveLength(128)
   })
 
   test('blank and whitespace-only risks and gaps are dropped from coverage', () => {
@@ -1722,11 +1729,10 @@ describe('the real pipeline chain at run scale', () => {
     })
 
     expectCompleted(run)
-    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
-      const { coverage } = run.finalize.value.artifact
-      expect(coverage.residual_risks).toEqual(['A real risk.'])
-      expect(coverage.testing_gaps).toEqual(['A real gap.'])
-    }
+    const artifact = writtenArtifact(run)
+    const { coverage } = artifact
+    expect(coverage.residual_risks).toEqual(['A real risk.'])
+    expect(coverage.testing_gaps).toEqual(['A real gap.'])
   })
 
   test('more than 64 distinct disagreement facts complete the whole chain', () => {
@@ -1752,10 +1758,7 @@ describe('the real pipeline chain at run scale', () => {
     })
 
     expectCompleted(run)
-    if (run.finalize?.ok && run.finalize.value.kind === 'writing') {
-      expect(
-        run.finalize.value.artifact.coverage.intent_uncertainty.length,
-      ).toBeGreaterThan(64)
-    }
+    const artifact = writtenArtifact(run)
+    expect(artifact.coverage.intent_uncertainty.length).toBeGreaterThan(64)
   })
 })

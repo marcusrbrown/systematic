@@ -11,7 +11,9 @@ import {
   MAX_PROJECTED_ISSUE_LINES,
   parseValidateReviewArtifactArguments,
   projectZodIssues,
+  REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
   resolveReviewArtifactPath,
+  schemaRejection,
 } from '../../src/lib/review-artifact-path.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -346,7 +348,6 @@ describe('formatProjectedIssueLines', () => {
 })
 
 describe('formatReviewArtifactValidationFailure', () => {
-  const SCHEMA = 'skills/ce-review/references/review-summary-schema.json'
   const issue = (index: number) => ({
     path: ['items', index] as PropertyKey[],
     code: 'too_big',
@@ -354,9 +355,9 @@ describe('formatReviewArtifactValidationFailure', () => {
   })
 
   it('prints the context line, the schema line, then the issue lines', () => {
-    expect(formatReviewArtifactValidationFailure([issue(0)], SCHEMA)).toEqual([
+    expect(formatReviewArtifactValidationFailure([issue(0)])).toEqual([
       'Review artifact failed schema validation',
-      `Schema: ${SCHEMA}`,
+      `Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`,
       'items.0 too_big',
     ])
   })
@@ -364,23 +365,61 @@ describe('formatReviewArtifactValidationFailure', () => {
   it('prints at most eight issues and counts the rest', () => {
     const issues = Array.from({ length: 12 }, (_, index) => issue(index))
 
-    const lines = formatReviewArtifactValidationFailure(issues, SCHEMA)
+    const lines = formatReviewArtifactValidationFailure(issues)
 
     expect(lines).toHaveLength(2 + MAX_PROJECTED_ISSUE_LINES + 1)
     expect(lines.at(-1)).toBe('… and 4 more')
   })
 
   it('keeps an authored message only for a custom issue, and never prints another issue message', () => {
-    const lines = formatReviewArtifactValidationFailure(
-      [
-        { path: ['a'], code: 'custom', message: 'severity count must match' },
-        { path: ['b'], code: 'too_big', message: 'MESSAGE_CANARY' },
-      ],
-      SCHEMA,
-    )
+    const lines = formatReviewArtifactValidationFailure([
+      { path: ['a'], code: 'custom', message: 'severity count must match' },
+      { path: ['b'], code: 'too_big', message: 'MESSAGE_CANARY' },
+    ])
 
     expect(lines).toContain('a custom: severity count must match')
     expect(lines).toContain('b too_big')
     expect(lines.join('\n')).not.toContain('MESSAGE_CANARY')
+  })
+})
+
+describe('schemaRejection', () => {
+  const bad = (index: number) => ({
+    path: ['items', index] as PropertyKey[],
+    code: 'too_big',
+    message: 'MESSAGE_CANARY',
+  })
+
+  it('takes its path from the first issue and carries the bounded projection', () => {
+    const rejection = schemaRejection(
+      'schema validation',
+      Array.from({ length: 12 }, (_, index) => bad(index)),
+    )
+
+    expect(rejection.reason).toBe('schema validation')
+    expect(rejection.path).toBe('items.0')
+    expect(rejection.issues).toHaveLength(MAX_PROJECTED_ISSUE_LINES)
+    expect(rejection.total).toBe(12)
+    expect(Object.keys(rejection).sort()).toEqual([
+      'issues',
+      'path',
+      'reason',
+      'total',
+    ])
+  })
+
+  it('falls back to the root path when there is no issue', () => {
+    expect(schemaRejection('schema validation', [])).toEqual({
+      issues: [],
+      path: '$',
+      reason: 'schema validation',
+      total: 0,
+    })
+  })
+
+  it('never carries an issue message', () => {
+    expect(
+      JSON.stringify(schemaRejection('schema validation', [bad(0)])),
+    ).not.toContain('MESSAGE_CANARY')
   })
 })

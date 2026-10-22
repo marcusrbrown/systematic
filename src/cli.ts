@@ -36,7 +36,6 @@ import {
   formatReviewArtifactValidationFailure,
   isLegacyReviewArtifact,
   parseValidateReviewArtifactArguments,
-  REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
   readReviewArtifact,
   resolveReviewArtifactPath,
   VALIDATE_REVIEW_ARTIFACT_USAGE,
@@ -435,7 +434,6 @@ function runValidateReviewArtifact(
   if (!result.success) {
     for (const line of formatReviewArtifactValidationFailure(
       result.error.issues,
-      REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
     )) {
       errorSink(line)
     }

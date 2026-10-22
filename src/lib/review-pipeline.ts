@@ -2,8 +2,8 @@ import path from 'node:path'
 import type { z } from 'zod'
 import {
   formatReviewArtifactIssuePath,
-  type ProjectedIssue,
-  projectZodIssues,
+  type SchemaRejection,
+  schemaRejection,
 } from './review-artifact-path.js'
 import type { HarnessSchema } from './review-artifact-schema.js'
 import {
@@ -281,15 +281,7 @@ type PrepareSchemaReason =
   | 'prepare output failed schema validation'
 type PrepareDomainReason = Exclude<PrepareRejectReason, PrepareSchemaReason>
 
-/** A payload-safe schema rejection: a fixed reason code, the first issue's
- * safe path, up to eight projected `{path, code}` issues and the full issue
- * count. Never a message, a value or an unrecognized key name. */
-export interface SchemaRejection<Reason extends string> {
-  readonly path: string
-  readonly reason: Reason
-  readonly issues: readonly ProjectedIssue[]
-  readonly total: number
-}
+export type { SchemaRejection }
 
 /** A domain rejection: a fixed reason code and a safe JSON path only. */
 interface DomainRejection<Reason extends string> {
@@ -318,21 +310,6 @@ function rejectPrepare(
   reason: PrepareDomainReason,
 ): { readonly ok: false; readonly rejection: PrepareRejection } {
   return { ok: false, rejection: { path, reason } }
-}
-
-/** Builds a schema rejection from a failed parse's issues. The path is the
- * first issue's path, as it was before the issue list existed. */
-function schemaRejection<Reason extends string>(
-  reason: Reason,
-  zodIssues: readonly { path: readonly PropertyKey[]; code: string }[],
-): SchemaRejection<Reason> {
-  const { issues, total } = projectZodIssues(zodIssues)
-  return {
-    path: issues[0]?.path ?? JSON_ROOT_PATH,
-    reason,
-    issues,
-    total,
-  }
 }
 
 /**

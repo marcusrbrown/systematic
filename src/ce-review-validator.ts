@@ -5,7 +5,7 @@ import type { z } from 'zod'
 import { runClaudeCodeValidator } from './claude-code-validator.js'
 import {
   formatProjectedIssueLines,
-  projectZodIssues,
+  schemaRejection,
 } from './lib/review-artifact-path.js'
 import { HarnessSchema } from './lib/review-artifact-schema.js'
 import {
@@ -425,15 +425,12 @@ function runAggregateStdinSubcommand<Input>(
 
   const parsed = spec.schema.safeParse(value)
   if (!parsed.success) {
-    const { issues, total } = projectZodIssues(parsed.error.issues)
     errorSink(
-      issues[0]
-        ? formatAggregateRejection(spec.rejectedMessage, {
-            issues,
-            path: issues[0].path,
-            reason: 'schema validation',
-            total,
-          })
+      parsed.error.issues.length > 0
+        ? formatAggregateRejection(
+            spec.rejectedMessage,
+            schemaRejection('schema validation', parsed.error.issues),
+          )
         : spec.rejectedMessage,
     )
     return 1

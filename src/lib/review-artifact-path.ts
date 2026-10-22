@@ -60,6 +60,35 @@ export function projectZodIssues(
   }
 }
 
+/** A payload-safe schema rejection: a fixed reason code, the first issue's
+ * safe path, up to {@link MAX_PROJECTED_ISSUE_LINES} projected `{path, code}`
+ * issues and the full issue count. Never a message, a value or an
+ * unrecognized key name. */
+export interface SchemaRejection<Reason extends string> {
+  readonly path: string
+  readonly reason: Reason
+  readonly issues: readonly ProjectedIssue[]
+  readonly total: number
+}
+
+/**
+ * Builds a schema rejection from a failed parse's issues. The path is the
+ * first issue's path, or the root `$` when there is none. Every surface that
+ * reports a schema failure builds it here, so that rule has one owner.
+ */
+export function schemaRejection<Reason extends string>(
+  reason: Reason,
+  zodIssues: readonly ProjectableIssue[],
+): SchemaRejection<Reason> {
+  const { issues, total } = projectZodIssues(zodIssues)
+  return {
+    path: issues[0]?.path ?? '$',
+    reason,
+    issues,
+    total,
+  }
+}
+
 /** The repository-relative path of the published review-summary schema,
  * named in every artifact validation failure. */
 export const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
@@ -85,7 +114,7 @@ export interface ArtifactValidationIssue extends ProjectableIssue {
 
 /**
  * The lines both artifact validators print for a schema failure: a fixed
- * context line, the schema path, up to {@link MAX_PROJECTED_ISSUE_LINES}
+ * context line, the published schema's path, up to {@link MAX_PROJECTED_ISSUE_LINES}
  * `path code` lines, then `… and N more`.
  *
  * A `custom` issue keeps its message. Those messages are the closed,
@@ -95,7 +124,6 @@ export interface ArtifactValidationIssue extends ProjectableIssue {
  */
 export function formatReviewArtifactValidationFailure(
   issues: readonly ArtifactValidationIssue[],
-  schemaRelativePath: string,
 ): string[] {
   const projected = projectZodIssues(issues)
   const issueLines = formatProjectedIssueLines(projected)
@@ -107,7 +135,7 @@ export function formatReviewArtifactValidationFailure(
   }
   return [
     'Review artifact failed schema validation',
-    `Schema: ${schemaRelativePath}`,
+    `Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`,
     ...issueLines,
   ]
 }
