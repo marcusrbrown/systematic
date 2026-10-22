@@ -1,7 +1,7 @@
 ---
 title: "feat(pi): ship Systematic personas as pi-subagents package agents"
 type: feat
-status: active
+status: completed
 date: 2026-10-20
 deepened: 2026-10-20
 ---
@@ -10,17 +10,17 @@ deepened: 2026-10-20
 
 ## Overview
 
-When Systematic is installed as a Pi package, pi-subagents 0.20+ should discover Systematic's curated personas with no export step. The npm package will carry a build-generated directory of default persona files and declare it under `pi.subagents.agents`. It will also add the `pi-package` gallery keyword. The pi-subagents interop contract in the docs and the Pi capability profile moves from pi-subagents 0.14.3 to 0.22.0 on Pi 1.3.0.
+When Systematic is installed as a Pi package, pi-subagents 0.22+ should discover Systematic's curated personas with no export step. The npm package will carry a build-generated directory of default persona files and declare it under `pi.subagents.agents`. It will also add the `pi-package` gallery keyword. The pi-subagents interop contract in the docs and the Pi capability profile moves from pi-subagents 0.14.3 to 0.22.0 on Pi 1.3.0.
 
 ## Problem Frame
 
-Today, a Pi user who wants Systematic's personas in pi-subagents must run `systematic pi-subagents export`. That command writes `systematic-*.md` files into `.pi/agents/` or the global agents directory. pi-subagents 0.20.0 added package-shipped agents: a package declares `pi.subagents.agents` in its `package.json`, and pi-subagents loads those files from every installed Pi package at the lowest precedence. Systematic already ships as a Pi package (`pi.extensions`, `pi.skills`), so it can offer its personas the same way. User-owned directories get no writes, and a user's own or exported files still win.
+Today, a Pi user who wants Systematic's personas in pi-subagents must run `systematic pi-subagents export`. That command writes `systematic-*.md` files into `.pi/agents/` or the global agents directory. pi-subagents 0.22.0 added package-shipped agents: a package declares `pi.subagents.agents` in its `package.json`, and pi-subagents loads those files from every installed Pi package at the lowest precedence. Systematic already ships as a Pi package (`pi.extensions`, `pi.skills`), so it can offer its personas the same way. User-owned directories get no writes, and a user's own or exported files still win.
 
 The docs and the Pi profile, which is inlined into every Pi session, still state "tested against pi-subagents v0.14.3". Main now pins pi-subagents 0.22.0 and Pi 1.3.0 (#1184, #1166). Since 0.18.0, pi-subagents runs an `Agent` call in the background unless the call passes `run_in_background: false`.
 
 ## Requirements Trace
 
-- R1. Installing Systematic as a Pi package makes the curated `systematic-<name>` personas available to pi-subagents' `Agent` tool, with no export. Pi must have the package in `settings.json` `packages[]`, and pi-subagents ≥0.20 must be installed. A global install exposes them right away. A project-scope install exposes them only after the project is trusted.
+- R1. Installing Systematic as a Pi package makes the curated `systematic-<name>` personas available to pi-subagents' `Agent` tool, with no export. Pi must have the package in `settings.json` `packages[]`, and pi-subagents ≥0.22 must be installed. A global install exposes them right away. A project-scope install exposes them only after the project is trusted.
 - R2. The packaged personas are the default render of the curated set, byte-identical to what the export writes with no config overlays.
 - R3. Local persona files, whether exported or hand-written, keep outranking packaged ones. The export CLI does not change.
 - R4. The packaged files are produced by `bun run build` under `dist/`, so the release build artifact and its digest carry them.
@@ -97,7 +97,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 ### External References
 
 - pi-subagents `docs/packages.md` at v0.22.0: <https://github.com/tintinweb/pi-subagents/blob/v0.22.0/docs/packages.md>
-- pi-subagents CHANGELOG at v0.22.0, for 0.18.0 background-by-default and 0.20.0 package agents: <https://github.com/tintinweb/pi-subagents/blob/v0.22.0/CHANGELOG.md>
+- pi-subagents CHANGELOG at v0.22.0, for 0.18.0 background-by-default and 0.22.0 package agents: <https://github.com/tintinweb/pi-subagents/blob/v0.22.0/CHANGELOG.md>
 - Pi `docs/packages.md` at v1.3.0, for the manifest keys Pi reads and the `pi-package` gallery keyword: <https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/packages.md>
 
 ## Prior-Art Survey
@@ -258,7 +258,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 
 ## Implementation Units
 
-- [ ] **Unit 1: Generate packaged personas at build time and declare them in the package manifest**
+- [x] **Unit 1: Generate packaged personas at build time and declare them in the package manifest**
 
 **Goal:** `bun run build` writes the curated default personas to `dist/pi-subagents/agents/`. `package.json` declares the directory to pi-subagents and adds the gallery keyword.
 
@@ -300,7 +300,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - `bun scripts/generate-pi-subagents-personas.ts --check` stays clean.
 - `bun run registry:drift` stays clean.
 
-- [ ] **Unit 2: Warn at Pi startup when overlays or disables cannot reach packaged personas**
+- [x] **Unit 2: Warn at Pi startup when overlays or disables cannot reach packaged personas**
 
 **Goal:** A user whose `systematic.json` overlays or persona disables would silently not apply to packaged personas sees one warning per case, naming the remedy.
 
@@ -337,7 +337,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - The unit suite passes.
 - A mutation that removes the overlay check fails the happy-path tests, and a mutation that drops the curated-set filter fails the non-curated edge case.
 
-- [ ] **Unit 3: Prove packaged discovery on a real Pi host**
+- [x] **Unit 3: Prove packaged discovery on a real Pi host**
 
 **Goal:** Real Pi RPC sessions show that a packaged persona is discovered and used with no export, that turning the gate off removes it, and that a local file outranks it.
 
@@ -375,7 +375,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - The Host Contract guard still meets its floor.
 - Removing the `pi.subagents` key from `package.json` and rebuilding fails the positive tests.
 
-- [ ] **Unit 4: Update the Pi capability profile**
+- [x] **Unit 4: Update the Pi capability profile**
 
 **Goal:** The profile every Pi session receives describes packaged discovery, export for overlays, precedence and the background default, under its 4000-character cap.
 
@@ -393,7 +393,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - Update the capability-table row and the tested-version line to pi-subagents 0.22.0 on Pi 1.3.0.
 - Measure with `wc -c` after the trim and before adding the new text. The finished profile keeps at least 100 characters of headroom.
 - Add three facts:
-  - installing the package exposes `systematic-<name>` types to pi-subagents ≥0.20 as plain defaults (project installs only after trust);
+  - installing the package exposes `systematic-<name>` types to pi-subagents ≥0.22 as plain defaults (project installs only after trust);
   - export is needed only for overlays, and local files win;
   - `Agent` runs in the background by default, and `run_in_background: false` waits for the result.
 
@@ -405,7 +405,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - The unit suite passes. Refresh the bootstrap snapshot only if it changes.
 - `bun scripts/content-integrity.ts` is clean.
 
-- [ ] **Unit 5: Update the interop docs, HARNESSES and stale comments**
+- [x] **Unit 5: Update the interop docs, HARNESSES and stale comments**
 
 **Goal:** Every user-facing and contributor-facing statement of the pi-subagents contract matches 0.22.0 on Pi 1.3.0 and the packaged path.
 
