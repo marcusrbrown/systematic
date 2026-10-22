@@ -80,8 +80,8 @@ if (!fs.existsSync(PI_CLI)) {
   )
 }
 
-// `@tintinweb/pi-subagents` is a real, exact devDependency (v0.14.3 — see
-// package.json devDependencies). Resolve its installed package directory via
+// `@tintinweb/pi-subagents` is a real, exact devDependency (see
+// package.json devDependencies for the pinned version). Resolve its installed package directory via
 // `require.resolve` (bun's node_modules layout hoists it to a `.bun` store and
 // symlinks it into `node_modules/@tintinweb/pi-subagents`, so a plain
 // filesystem join isn't guaranteed to match bun's actual resolution target).
@@ -1042,7 +1042,7 @@ describe('Pi subprocess integration', () => {
  * Combined-path bounded execution: top-level pi-subagents delegation +
  * nested Systematic persona.
  *
- * `@tintinweb/pi-subagents` is a REAL, exact devDependency (v0.14.3 — see
+ * `@tintinweb/pi-subagents` is a REAL, exact devDependency (see
  * package.json devDependencies and PI_SUBAGENTS_PKG_DIR above, resolved via
  * `require.resolve`). This test loads the actual installed package as a
  * `.pi/settings.json` local package source, alongside Systematic's own
@@ -1118,6 +1118,7 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
   let fixture: IsolatedFixture
   let mockModel: MockModelServer
   let client: RpcClientHandle | undefined
+  let packageDir: string
 
   beforeAll(() => {
     packTarballOnce()
@@ -1130,7 +1131,9 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
   beforeEach(() => {
     fixture = createIsolatedFixture()
     mockModel = startMockModelServer()
-    const { relativePackagePath } = extractPackagedPluginAndConfigurePi(fixture)
+    const extracted = extractPackagedPluginAndConfigurePi(fixture)
+    const { relativePackagePath } = extracted
+    packageDir = extracted.packageDir
     const piDir = path.join(fixture.projectDir, '.pi')
     // PI_SUBAGENTS_PKG_DIR is the real installed package directory (resolved
     // via require.resolve at module load time, above) — passed as an
@@ -1304,7 +1307,7 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
    * for a real user (curated source: agents/research/repo-research-analyst.md
    * — see CURATED_PERSONAS in src/lib/pi-subagents-personas.ts).
    *
-   * This proves the REAL, installed `@tintinweb/pi-subagents` (v0.14.3):
+   * This proves the REAL, installed `@tintinweb/pi-subagents`:
    *   1. discovers the exported `systematic-repo-research-analyst` custom
    *      agent type via its own real `loadCustomAgents()`/`getAvailableTypes()`
    *      (not `general-purpose` — a `subagent_type` that only exists because
@@ -1434,6 +1437,219 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
     },
     TIMEOUT_MS,
   )
+
+  // ---------------------------------------------------------------------
+  // Packaged personas: Systematic's own package declares
+  // `pi.subagents.agents`, and pi-subagents loads those files from every
+  // package in Pi's settings.json `packages[]`. None of these tests writes an
+  // exported persona file; the only way the personas can reach pi-subagents
+  // is through the installed package.
+  // ---------------------------------------------------------------------
+
+  const PACKAGED_TYPE = 'systematic-repo-research-analyst'
+  // Lines from the packaged persona's body (agents/research/repo-research-analyst.md).
+  const PACKAGED_BODY_MARKERS = [
+    'You are an expert repository research analyst specializing in understanding codebases',
+    '**Scoped Invocation**',
+  ] as const
+
+  type ChatRequest = {
+    messages: { role: string; content: unknown }[]
+    tools?: { function?: { name?: string; description?: string } }[]
+  }
+
+  const systemTextOf = (request: unknown): string =>
+    (request as ChatRequest).messages
+      .filter((m) => m.role === 'system' || m.role === 'developer')
+      .map((m) =>
+        typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      )
+      .join('\n')
+
+  const toolDescriptionOf = (request: unknown, name: string): string =>
+    (request as ChatRequest).tools?.find((t) => t.function?.name === name)
+      ?.function?.description ?? ''
+
+  /** The persona directories pi-subagents reads; none may hold a persona in these tests. */
+  function expectNoLocalPersonaFiles(): void {
+    for (const dir of [
+      path.join(fixture.projectDir, '.pi', 'agents'),
+      path.join(fixture.projectDir, '.agents', 'agents'),
+      path.join(fixture.agentDir, 'agents'),
+    ]) {
+      const entries = fs.existsSync(dir) ? fs.readdirSync(dir) : []
+      expect(entries).toEqual([])
+    }
+  }
+
+  interface PackagedDispatch {
+    result: {
+      content?: { text?: string }[]
+      details?: { subagentType?: string }
+    }
+    requests: unknown[]
+  }
+
+  /**
+   * Drives one top-level `Agent` call for `subagentType` through a real Pi
+   * session: top-level turn, one child turn, top-level acknowledgement.
+   */
+  async function dispatchAgent(
+    subagentType: string,
+  ): Promise<PackagedDispatch> {
+    client = spawnPiRpc({ fixture })
+    await client.send({
+      type: 'set_model',
+      provider: MOCK_PROVIDER_ID,
+      modelId: MOCK_MODEL_ID,
+    })
+    mockModel.push({
+      toolCalls: [
+        {
+          id: 'call_agent_packaged_1',
+          name: 'Agent',
+          arguments: {
+            prompt: 'Give a one-sentence summary of this repository.',
+            description: 'Repo research via packaged persona',
+            subagent_type: subagentType,
+            // Inline result: newer pi-subagents background an Agent call by default.
+            run_in_background: false,
+          },
+        },
+      ],
+    })
+    mockModel.push({ text: 'This repo is a Pi/OpenCode plugin.' })
+    mockModel.push({ text: 'done' })
+
+    const promptResponse = await client.send({
+      type: 'prompt',
+      message: `Use the Agent tool with subagent_type ${subagentType} to summarize this repo.`,
+    })
+    expect(promptResponse.success).toBe(true)
+
+    const outerToolEnd = await client.waitFor(
+      (msg) =>
+        msg.type === 'tool_execution_end' &&
+        (msg as { toolName?: string }).toolName === 'Agent',
+      TIMEOUT_MS,
+    )
+    expect((outerToolEnd as { isError?: boolean }).isError).not.toBe(true)
+    await client.waitFor((msg) => msg.type === 'agent_settled')
+
+    return {
+      result:
+        (outerToolEnd as { result?: PackagedDispatch['result'] }).result ?? {},
+      requests: [...mockModel.requests],
+    }
+  }
+
+  /** Requests between the top-level session's first and last turn. */
+  const childRequestsOf = (requests: unknown[]): unknown[] =>
+    requests.slice(1, -1)
+
+  test(
+    'a packaged persona is discovered and used from the installed package alone, at project scope',
+    async () => {
+      const { result, requests } = await dispatchAgent(PACKAGED_TYPE)
+
+      expectNoLocalPersonaFiles()
+      // Resolved to itself, not the general-purpose fallback.
+      expect(result.details?.subagentType).toBe(PACKAGED_TYPE)
+      // Top-level turn 1, one child turn, top-level turn 2: bounded.
+      expect(requests.length).toBe(3)
+      const children = childRequestsOf(requests)
+      expect(children.length).toBeGreaterThanOrEqual(1)
+      const childSystem = systemTextOf(children[0])
+      for (const marker of PACKAGED_BODY_MARKERS) {
+        expect(childSystem).toContain(marker)
+      }
+    },
+    TIMEOUT_MS,
+  )
+
+  test(
+    'a packaged persona is discovered when both packages are configured only in the global settings',
+    async () => {
+      // Move both packages from the project settings to the user-scope settings.
+      // Absolute paths: Pi resolves user-scope relative paths against the agent dir.
+      fs.rmSync(path.join(fixture.projectDir, '.pi', 'settings.json'))
+      fs.writeFileSync(
+        path.join(fixture.agentDir, 'settings.json'),
+        JSON.stringify(
+          { packages: [packageDir, PI_SUBAGENTS_PKG_DIR] },
+          null,
+          2,
+        ),
+      )
+
+      const { result, requests } = await dispatchAgent(PACKAGED_TYPE)
+
+      expectNoLocalPersonaFiles()
+      expect(result.details?.subagentType).toBe(PACKAGED_TYPE)
+      expect(requests.length).toBe(3)
+      // The Agent tool description the model was offered lists the packaged type.
+      expect(toolDescriptionOf(requests[0], 'Agent')).toContain(PACKAGED_TYPE)
+      const children = childRequestsOf(requests)
+      expect(children.length).toBeGreaterThanOrEqual(1)
+      expect(systemTextOf(children[0])).toContain(PACKAGED_BODY_MARKERS[0])
+    },
+    TIMEOUT_MS,
+  )
+
+  test(
+    'with packageAgents off, the same call falls back to general-purpose and no request carries the persona body',
+    async () => {
+      fs.writeFileSync(
+        path.join(fixture.agentDir, 'subagents.json'),
+        JSON.stringify({ packageAgents: false }, null, 2),
+      )
+
+      const { result, requests } = await dispatchAgent(PACKAGED_TYPE)
+
+      // The control only means something if a child actually ran.
+      const children = childRequestsOf(requests)
+      expect(children.length).toBeGreaterThanOrEqual(1)
+      expectNoLocalPersonaFiles()
+      expect(result.details?.subagentType).toBe('general-purpose')
+      const resultText = (result.content ?? [])
+        .map((c) => c.text ?? '')
+        .join('')
+      expect(resultText).toContain(`Unknown agent type "${PACKAGED_TYPE}"`)
+      for (const request of requests) {
+        for (const marker of PACKAGED_BODY_MARKERS) {
+          expect(JSON.stringify(request)).not.toContain(marker)
+        }
+      }
+    },
+    TIMEOUT_MS,
+  )
+
+  test(
+    'a local persona file outranks the packaged one of the same name',
+    async () => {
+      const localBody =
+        'LOCAL-OVERRIDE persona body: answer in exactly one word.'
+      const agentsRoot = path.join(fixture.projectDir, '.pi', 'agents')
+      fs.mkdirSync(agentsRoot, { recursive: true })
+      fs.writeFileSync(
+        path.join(agentsRoot, `${PACKAGED_TYPE}.md`),
+        `---\ndescription: Local override\n---\n\n${localBody}\n`,
+      )
+
+      const { result, requests } = await dispatchAgent(PACKAGED_TYPE)
+
+      expect(result.details?.subagentType).toBe(PACKAGED_TYPE)
+      expect(requests.length).toBe(3)
+      const children = childRequestsOf(requests)
+      expect(children.length).toBeGreaterThanOrEqual(1)
+      const childSystem = systemTextOf(children[0])
+      expect(childSystem).toContain(localBody)
+      for (const marker of PACKAGED_BODY_MARKERS) {
+        expect(childSystem).not.toContain(marker)
+      }
+    },
+    TIMEOUT_MS,
+  )
 })
 
 describe('Combined-path characterization: scope statement', () => {
@@ -1457,7 +1673,7 @@ describe('Combined-path characterization: scope statement', () => {
      * Pre-assertion evidence captured: all 6 tests in pi-delegate-session.test.ts
      * pass (4 original + 2 boundary characterization) confirming the boundary holds
      * at the unit level. The combined end-to-end path is ALSO exercised at
-     * runtime against the real, installed @tintinweb/pi-subagents v0.14.3 —
+     * runtime against the real, installed @tintinweb/pi-subagents —
      * see the "Combined-path bounded execution" describe block above.
      */
 

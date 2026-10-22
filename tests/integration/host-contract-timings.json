@@ -6,9 +6,9 @@
     "tests/integration/skill-delivery.test.ts": 144029,
     "tests/integration/ce-review-return-validation.test.ts": 72046,
     "tests/integration/eval-artifact.test.ts": 29878,
+    "tests/integration/pi.test.ts": 27852,
     "tests/integration/skill-command-probe.test.ts": 25263,
     "tests/integration/release-notes-ci.test.ts": 21395,
-    "tests/integration/pi.test.ts": 15839,
     "tests/integration/validate-release-target.test.ts": 4947,
     "tests/integration/claude-code.test.ts": 587,
     "tests/integration/eval-fixture.test.ts": 92
