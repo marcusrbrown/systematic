@@ -4,7 +4,7 @@ Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
 
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
-| Subagent delegation | Bounded built-in delegate via `systematic_delegate({agent, task})`; optional mature delegation via [pi-subagents](https://github.com/tintinweb/pi-subagents) through opt-in persona export | built-in: degraded (sequential only); pi-subagents path: outside Systematic's bounded-delegate guarantees | Dispatch sequentially in dependency order or do the work inline |
+| Subagent delegation | Bounded built-in delegate via `systematic_delegate({agent, task})`; optional mature delegation via [pi-subagents](https://github.com/tintinweb/pi-subagents): installed package personas, opt-in export for overlays | built-in: degraded (sequential only); pi-subagents path: outside Systematic's bounded-delegate guarantees | Dispatch sequentially in dependency order or do the work inline |
 | Blocking user interaction | No native blocking tool | degraded | Present numbered options in chat and wait |
 | Task tracking | No native task-tracking mechanism | unavailable | Maintain a visible task list in responses |
 | Skill loading | `systematic_skill` tool or Pi-native skill activation | supported | Read the skill instructions listed by the active harness |
@@ -24,9 +24,11 @@ systematic_delegate({
 
 ### Optional: pi-subagents delegation
 
-Export Systematic personas for use with [pi-subagents](https://github.com/tintinweb/pi-subagents) (parallel/multi-model delegation). All writes are opt-in; nothing is exported at extension load.
+[pi-subagents](https://github.com/tintinweb/pi-subagents) (parallel/multi-model delegation) 0.22 or newer loads Systematic's curated personas from the installed package as `systematic-<name>` agent types with plain defaults, and a project-scope install only after the project is trusted. Export is needed only to apply `systematic.json` overlays; a local file outranks the packaged one. Nothing is written at extension load.
 
-Tested against pi-subagents v0.14.3 (verified contract as of July 29, 2026). Versions outside the tested range are unsupported but nonfatal.
+pi-subagents' `Agent` tool runs in the background by default. Pass `run_in_background: false` to wait for the result.
+
+Tested against pi-subagents 0.22.0 on Pi 1.3.0. Versions outside the tested range are unsupported but nonfatal.
 
 Exact CLI form: `systematic pi-subagents <preview|export|refresh|cleanup> --scope project|global`. `--scope` is optional and defaults to `project`.
 
@@ -42,9 +44,7 @@ systematic pi-subagents cleanup [--scope project|global]
 
 The pi-subagents delegation path is **outside Systematic's bounded-delegate guarantees** and governed by pi-subagents' own configuration. `systematic_delegate` remains the bounded default.
 
-`export`/`refresh`/`cleanup` hold an exclusive per-root mutation lock and fail closed if any path component between the selected scope's anchor and the agents directory is a symlink or not a directory. A manifest (`.systematic-personas.json`) tracks ownership by filename and content hash; cleanup and stale-file removal only delete a file whose on-disk content still matches its recorded hash, refusing otherwise. Manifest hashes are drift evidence, not a cryptographic authenticity guarantee.
-
-Systematic's own config (`systematic.json`/`.jsonc`) is the durable source of truth for exported personas; the generated files and their manifest are a disposable projection that `export`/`refresh`/`cleanup` regenerate or remove, and `refresh` intentionally overwrites manifest-owned generated files that diverge from current config — run `preview` first to see what would change. See the [pi-subagents pairing guide](https://fro.bot/systematic/guides/pi-subagents/) for the config precedence, trust boundaries, and a canonical example.
+Locking, ownership, config precedence and trust boundaries: see [`HARNESSES.md`](../../../HARNESSES.md) and the [pi-subagents pairing guide](https://fro.bot/systematic/guides/pi-subagents/).
 
 ### Blocking user interaction
 
