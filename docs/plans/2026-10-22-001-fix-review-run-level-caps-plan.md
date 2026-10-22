@@ -1,7 +1,7 @@
 ---
 title: "fix: Let a ce:review run that prepare accepts finish past 32 surviving findings"
 type: fix
-status: active
+status: completed
 date: 2026-10-22
 deepened: 2026-10-22
 ---
@@ -246,7 +246,7 @@ After the change, `MAX_FINDINGS` remains only for:
 
 Every unit that touches `src/**` runs `ce-review-validator:build`. Unit 1 is the only unit that needs `review-schema:generate`.
 
-- [ ] **Unit 1: Run-level bounds in the contracts and artifact schema**
+- [x] **Unit 1: Run-level bounds in the contracts and artifact schema**
 
 **Goal:** Every run-level array is bounded by a named run-level constant. Per-reviewer and persona bounds stay where they belong.
 
@@ -294,7 +294,7 @@ Every unit that touches `src/**` runs `ce-review-validator:build`. Unit 1 is the
 - `findings-schema.json` is byte-identical.
 - `review-summary-schema.json` changes at `coverage.intent_uncertainty` (to the aggregate bound) and at the run-level arrays. `review-pipeline-schema.json` changes only at `decisions`, `input_finding_ids` and plan `results`. Its per-decision `disagreement_facts` stay at 32.
 
-- [ ] **Unit 2: Projection primitive and typed schema rejections (library only)**
+- [x] **Unit 2: Projection primitive and typed schema rejections (library only)**
 
 **Goal:** One bounded projector exists, and every library schema rejection carries a payload-safe projected issue list.
 
@@ -338,7 +338,7 @@ Every unit that touches `src/**` runs `ce-review-validator:build`. Unit 1 is the
 - Every listed scenario passes.
 - `ce-review-validator:build` and `ce-review-validator:drift` pass.
 
-- [ ] **Unit 3: Pipeline behavior at run scale**
+- [x] **Unit 3: Pipeline behavior at run scale**
 
 **Goal:** `prepare` and `merge` complete at run scale and never throw on output schema or on a `prepared` echo that lacks a cited survivor or double-counts one. Coverage uses the shared bounds and drops blank strings.
 
@@ -392,7 +392,7 @@ Every unit that touches `src/**` runs `ce-review-validator:build`. Unit 1 is the
 - Removing the blank filter makes the blank-risk test fail.
 - `ce-review-validator:build` and `ce-review-validator:drift` pass.
 
-- [ ] **Unit 4: Rendering and byte-cap messages**
+- [x] **Unit 4: Rendering and byte-cap messages**
 
 **Goal:** `prepare`, `merge`, `finalize`, the return validator, and both artifact validators print schema rejections as a fixed context line plus up to 8 `path code` lines and an overflow count. The byte-cap rejections state the cap.
 
@@ -442,7 +442,7 @@ Every unit that touches `src/**` runs `ce-review-validator:build`. Unit 1 is the
 - The Claude Code bin builds, and the foreign-directory check exits as expected.
 - `ce-review-validator:build` and `ce-review-validator:drift` pass.
 
-- [ ] **Unit 5: Skill guidance and docs**
+- [x] **Unit 5: Skill guidance and docs**
 
 **Goal:** The orchestrator dispatches validators in bounded batches. The validator failure semantics agree. The docs describe the new error shape and the limits.
 

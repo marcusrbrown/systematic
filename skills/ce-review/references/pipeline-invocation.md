@@ -23,9 +23,33 @@ exit 2 is a launch failure, not a payload problem. On exit 1 (the input
 was structurally rejected), the parent may correct its own JSON envelope
 exactly once -- fixing a genuine encoding mistake, never reshaping the
 envelope to force acceptance -- and retry; a second exit 1 stops the run
-visibly with degraded or abnormal status. Never fall back to writing a
+visibly with degraded or abnormal status. An exit 1 whose message says the
+input exceeds the aggregate byte cap is not an encoding mistake: do not retry
+the same bytes, and do not shrink the payload to fit. Stop visibly and report
+the cap the message names. Never fall back to writing a
 finding, a merged finding, a queue, a disposition count, or a report section
 by hand because a phase call failed.
+
+## Rejection output
+
+An exit 1 from `prepare`, `merge` or `finalize` prints one of two shapes on
+stderr. A schema rejection starts with `<phase> rejected the aggregate
+envelope: <reason>`, then up to eight `path code` lines, then
+`… and N more` when more issues were found. A rejection of the content
+prints one line, `<phase> rejected the aggregate envelope: <reason> at <path>`.
+`path` points into the envelope and `code` is a schema issue code. No payload
+value, key name or issue message is printed, so the lines are safe to quote
+in Coverage and are enough to locate the field to correct.
+
+The artifact validators (`artifact` here, `validate-review-artifact` in the
+CLI) print `Review artifact failed schema validation`, a `Schema:` line, and
+the same bounded `path code` lines.
+
+Validators installed before the run-level limits were raised reject artifacts
+with more than 32 findings or other run-level entries. Schema version 1 is
+unchanged, so an older artifact still validates. If an older external
+validator rejects a large artifact on a count, that is a version mismatch to
+report, not a malformed artifact: update the validator.
 
 ## screen
 

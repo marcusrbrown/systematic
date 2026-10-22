@@ -17,16 +17,17 @@ Your sole job is to answer three questions about one specific finding and return
 Return ONLY valid JSON matching this schema. No prose, no markdown, no explanation outside the JSON object.
 
 {
-  "validated": <boolean>,
-  "reason": "<one sentence explaining why the finding is validated or not>"
+  "outcome": "true" | "false" | "failed" | "unavailable",
+  "reason": "<one sentence; omit when outcome is true>"
 }
 
 Rules:
 - You are a leaf validator inside an already-running review workflow. Do not invoke systematic skills or agents. Perform your analysis directly and return the JSON verdict only.
 - You are operationally read-only. You may use non-mutating inspection tools (file reads, glob, grep, git log, git diff, git show, git blame, gh pr view) to examine the code. Do not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
-- Answer the three validation questions below. Set `validated: true` only when all three answers are YES. Set `validated: false` when any answer is NO.
-- The `reason` field must be one sentence. State the specific code evidence that drove your verdict (file name, function name, or line reference when relevant). Do not repeat the finding title verbatim.
-- Be conservative: when evidence is ambiguous, prefer `validated: true` (keep the finding in the actioned set). A false negative that lets a real bug through is worse than a false positive that the human reviewer can dismiss.
+- Answer the three validation questions below. Set `outcome: "true"` only when all three answers are YES. Set `outcome: "false"` when any answer is NO.
+- A `false` verdict needs a `reason` of one sentence. State the specific code evidence that drove your verdict (file name, function name, or line reference when relevant). Do not repeat the finding title verbatim. A `true` verdict carries no reason.
+- Return `failed` with a reason when your analysis could not be completed, and `unavailable` with a reason when the code or tools you need could not be reached. Never guess a verdict to avoid either.
+- Be conservative: when evidence is ambiguous, prefer `outcome: "true"` (keep the finding in the actioned set). A false negative that lets a real bug through is worse than a false positive that the human reviewer can dismiss.
 - Do not validate based on general coding principles alone. Ground your verdict in the actual code as written in this diff and the surrounding context.
 </output-contract>
 
@@ -42,8 +43,8 @@ Answer each question YES or NO based on the code evidence you find.
 3. **Is the issue already handled elsewhere?**
    Check whether the problem is already mitigated by a guard, middleware, framework behavior, type constraint, or other mechanism not visible at the cited line. A finding is not valid if the issue is fully handled at a higher or lower layer that the reviewer missed.
 
-Set `validated: true` only when: the issue is real (Q1 YES), introduced by this diff or newly relevant (Q2 YES), and not already handled elsewhere (Q3 YES).
-Set `validated: false` when any question is NO, and state which question failed and why in `reason`.
+Set `outcome: "true"` only when: the issue is real (Q1 YES), introduced by this diff or newly relevant (Q2 YES), and not already handled elsewhere (Q3 YES).
+Set `outcome: "false"` when any question is NO, and state which question failed and why in `reason`.
 </validation-questions>
 
 <finding>
@@ -89,8 +90,8 @@ Diff:
 
 ## Dispatch Notes
 
-- Dispatch one validator subagent per gated finding **in parallel** to keep latency bounded.
+- Dispatch one validator subagent per gated finding. Run them in bounded batches, sized to what the harness handles reliably: the validators of a batch run in parallel, and a batch finishes before the next starts.
 - Pass the full diff and file list so the validator can inspect surrounding context, not just the cited line.
-- The validator returns `{validated, reason}`. Attach both fields to the finding before Stage 6.
-- **Never drop a finding based on the validator verdict.** A finding with `validated: false` moves to the "Filtered (not validated)" presentation group in Stage 6. It is never removed from the report.
-- If a validator subagent fails or times out, treat the finding as `validated: true` (conservative fallback — keep it in the actioned set) and note the validator failure in the Coverage section.
+- The validator returns `{outcome, reason?}`. Record it as that finding's lifecycle result, keyed by `finding_id`, and carry it into `finalize` as `validator_lifecycle_results`.
+- **Never drop a finding based on the validator verdict.** A finding with `outcome: "false"` moves to the "Filtered (not validated)" presentation group in Stage 6. It is never removed from the report.
+- If a validator subagent fails, times out, or returns nothing, record `failed` or `unavailable` with a reason. The finding stays actionable and unvalidated, and `finalize` records a lifecycle failure that marks the run degraded. Report that validator in the Coverage section. Do not treat the finding as validated.
