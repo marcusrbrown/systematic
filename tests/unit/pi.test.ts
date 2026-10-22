@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  spyOn,
+  test,
+} from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -965,6 +973,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
   const CURATED_KEY = 'repo-research-analyst'
   const CURATED_QUALIFIED = 'research/repo-research-analyst'
   const NON_CURATED_KEY = 'systematic-implementer'
+  const WARNINGS_EMITTED_KEY = 'systematic.pi.packagedWarningsEmitted'
 
   interface InitResult {
     api: ReturnType<typeof createFakeExtensionApi>
@@ -975,6 +984,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
   async function initWithUserConfig(
     user: Record<string, unknown> | undefined,
     project?: Record<string, unknown>,
+    initCount = 1,
   ): Promise<InitResult> {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-pi-package-warn-'),
@@ -1012,6 +1022,9 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     try {
       const api = createFakeExtensionApi()
       await piExtension(api)
+      for (let init = 1; init < initCount; init++) {
+        await piExtension(createFakeExtensionApi())
+      }
       return { api, stderr }
     } finally {
       stderrSpy.mockRestore()
@@ -1025,6 +1038,11 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   }
+
+  // The warnings print once per process, so every test starts from a fresh flag.
+  beforeEach(() => {
+    Reflect.deleteProperty(globalThis, Symbol.for(WARNINGS_EMITTED_KEY))
+  })
 
   const overlayWarnings = (stderr: string[]) =>
     stderr.filter((line) => line.includes(EXPORT_COMMAND))
@@ -1122,6 +1140,44 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     })
   })
 
+  describe('once per process', () => {
+    test('initializing the extension twice prints each warning once', async () => {
+      const { stderr } = await initWithUserConfig(
+        {
+          agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+          disabled_agents: [CURATED_QUALIFIED],
+        },
+        undefined,
+        2,
+      )
+
+      expect(overlayWarnings(stderr)).toHaveLength(1)
+      expect(disableWarnings(stderr)).toHaveLength(1)
+    })
+
+    test('an earlier init with nothing to warn about does not silence a later warning', async () => {
+      const first = await initWithUserConfig({})
+      const second = await initWithUserConfig({
+        agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+      })
+
+      expect(overlayWarnings(first.stderr)).toHaveLength(0)
+      expect(overlayWarnings(second.stderr)).toHaveLength(1)
+    })
+
+    test('a warning suppressed by an earlier init is not replaced by another', async () => {
+      const first = await initWithUserConfig({
+        disabled_agents: [CURATED_KEY],
+      })
+      const second = await initWithUserConfig({
+        agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
+      })
+
+      expect(disableWarnings(first.stderr)).toHaveLength(1)
+      expect(overlayWarnings(second.stderr)).toHaveLength(0)
+    })
+  })
+
   describe('disable warning', () => {
     test('disabled_agents naming a curated persona warns once with a count of 1', async () => {
       const { stderr } = await initWithUserConfig({
@@ -1134,6 +1190,10 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
       expect(warnings[0]).toContain('/agents')
       expect(warnings[0]).toContain('subagents.json')
       expect(warnings[0]).toMatch(/package/i)
+      // Systematic cannot read pi-subagents' own settings, so the notice stays.
+      expect(warnings[0]).toMatch(/repeats/i)
+      expect(warnings[0]).toMatch(/stop(s|ping)? (those|them|loading)/i)
+      expect(warnings[0]).not.toContain(CURATED_KEY)
       expect(overlayWarnings(stderr)).toHaveLength(0)
     })
 

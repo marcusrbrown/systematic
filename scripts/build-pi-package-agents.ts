@@ -14,8 +14,10 @@
  * and no timestamp are written, so the output is deterministic.
  *
  * Usage:
- *   bun scripts/build-pi-package-agents.ts              # write dist/pi-subagents/agents
- *   bun scripts/build-pi-package-agents.ts --out <dir>  # write somewhere else
+ *   bun scripts/build-pi-package-agents.ts   # write dist/pi-subagents/agents
+ *
+ * The command takes no arguments and always writes `dist/pi-subagents/agents`.
+ * The exported functions take an `outDir` so tests can write elsewhere.
  *
  * The executable entrypoint is guarded with `if (import.meta.main)`.
  */
@@ -58,10 +60,12 @@ export interface RunBuildPiPackageAgentsOptions
 /**
  * Write the packaged personas to `outDir`, replacing whatever was there.
  *
- * The files are written to a temporary sibling and renamed into place, so a
- * failure part-way never leaves a directory that looks complete: the target is
- * either the previous complete directory or the new one. Returns the file
- * names written. Throws on any failure.
+ * The files are fully staged in a temporary sibling before the target is
+ * touched, so a failure while staging leaves the previous directory unchanged.
+ * The swap itself is not atomic: the target is removed and then the staging
+ * directory is renamed into place. A failure between those two steps leaves no
+ * directory, which fails the build instead of shipping a partial one. Returns
+ * the file names written. Throws on any failure.
  */
 export function buildPiPackageAgents(
   options: BuildPiPackageAgentsOptions,
@@ -114,15 +118,9 @@ export function runBuildPiPackageAgents(
   }
 }
 
-function parseOutDir(argv: string[]): string {
-  const flag = argv.indexOf('--out')
-  const value = flag === -1 ? undefined : argv[flag + 1]
-  return value ? path.resolve(value) : PI_PACKAGE_AGENTS_DIR
-}
-
 if (import.meta.main) {
   process.exitCode = runBuildPiPackageAgents({
     repoRoot: PROJECT_ROOT,
-    outDir: parseOutDir(process.argv.slice(2)),
+    outDir: PI_PACKAGE_AGENTS_DIR,
   })
 }

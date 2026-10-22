@@ -124,7 +124,7 @@ alongside `usageTemplate`; `getBootstrapContent` appends it inside the
   `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:117-134`).
 - Per-harness population at the entry points: OpenCode passes
   `readHarnessProfile(..., 'opencode')` (`src/index.ts:65`); Pi passes the
-  `'pi'` profile through `computeBootstrapContentSafe` (`computeBootstrapContentSafe`, `src/pi.ts:165-173`).
+  `'pi'` profile through `computeBootstrapContentSafe` (`computeBootstrapContentSafe`, `src/pi.ts:188-196`).
 - The seam is nullable and fail-soft: any read failure emits one stderr
   diagnostic and returns `null`, so the bootstrap composes without the profile
   rather than crashing plugin load — the diagnostic requirement from this

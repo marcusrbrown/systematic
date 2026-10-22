@@ -251,16 +251,4 @@ describe('build-pi-package-agents', () => {
 
     expect(written.sort()).toEqual([...expectedFiles().keys()].sort())
   })
-
-  test('running the script as a command writes the directory it was asked for', () => {
-    const outDir = path.join(mkTmp(), 'agents')
-
-    const result = Bun.spawnSync(
-      ['bun', 'scripts/build-pi-package-agents.ts', '--out', outDir],
-      { cwd: ROOT_DIR, timeout: 60_000 },
-    )
-
-    expect(result.exitCode).toBe(0)
-    expect(listDir(outDir)).toEqual([...expectedFiles().keys()].sort())
-  })
 })

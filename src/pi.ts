@@ -62,8 +62,22 @@ const reportPackagedPersonasStillLoad = (count: number): void => {
   process.stderr.write(
     `[systematic] ${count} persona(s) disabled in systematic.json still load in pi-subagents from the Systematic package, ` +
       'which has no access to that setting. ' +
-      'Disable one with /agents → Disable, or set `packageAgents: false` in subagents.json to turn off every packaged persona.\n',
+      'To stop them loading, disable one with /agents → Disable, or set `packageAgents: false` in subagents.json to turn off every packaged persona. ' +
+      "This notice repeats on each start while the setting is present, because Systematic cannot read pi-subagents' own settings.\n",
   )
+}
+
+/**
+ * The warnings print once per process. A pi-subagents child session loads the
+ * extension again, possibly from a fresh module instance, so the flag lives on
+ * `globalThis` under a registered symbol.
+ */
+const WARNINGS_EMITTED_KEY = Symbol.for('systematic.pi.packagedWarningsEmitted')
+
+function claimPackagedWarnings(): boolean {
+  if (Reflect.get(globalThis, WARNINGS_EMITTED_KEY) === true) return false
+  Reflect.set(globalThis, WARNINGS_EMITTED_KEY, true)
+  return true
 }
 
 /**
@@ -150,16 +164,18 @@ export default async function systematicPiExtension(
   // Packaged personas load straight from the package and never see config, so
   // say once at init when a setting could not reach them. The warnings name no
   // config values; they neither detect pi-subagents nor touch the filesystem.
-  if (
-    hasOverlaysPackagedPersonasIgnore(piRoutingOverlays, piConfig.pi_subagents)
-  ) {
-    reportPackagedOverlayIgnored()
-  }
+  const overlaysIgnored = hasOverlaysPackagedPersonasIgnore(
+    piRoutingOverlays,
+    piConfig.pi_subagents,
+  )
   const disabledPackaged = countDisabledPackagedPersonas(
     piConfig,
     piRoutingOverlays,
   )
-  if (disabledPackaged > 0) reportPackagedPersonasStillLoad(disabledPackaged)
+  if ((overlaysIgnored || disabledPackaged > 0) && claimPackagedWarnings()) {
+    if (overlaysIgnored) reportPackagedOverlayIgnored()
+    if (disabledPackaged > 0) reportPackagedPersonasStillLoad(disabledPackaged)
+  }
 
   // Honors `disabled_skills` the same way OpenCode's `src/index.ts` does. Pi's
   // native `pi.skills` discovery is a separate path and is not filtered.
