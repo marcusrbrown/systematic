@@ -602,7 +602,7 @@ describe('job timeouts', () => {
   test.each([
     ['publish', 20],
     ['refresh', 10],
-    ['verify', 10],
+    ['verify', 15],
   ])('%s declares timeout-minutes %d', (id, minutes) => {
     expect(getJob(id)['timeout-minutes']).toBe(minutes)
   })
