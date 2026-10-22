@@ -28,7 +28,7 @@ systematic/
 │   └── integration/  # Integration tests
 ├── .opencode/        # Project-specific OpenCode config (theme, TUI)
 ├── .claude-plugin/   # marketplace.json — Claude Code marketplace catalog entry
-└── dist/             # Compiled output (generated, not committed)
+└── dist/             # Compiled output (generated, not committed); includes pi-subagents/agents/, the curated Pi personas the package declares under pi.subagents.agents
 ```
 
 ## Directory Purposes

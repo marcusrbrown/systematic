@@ -420,6 +420,13 @@ export function generatePersonaManifest(
 
 // ── Generate all ──────────────────────────────────────────────────────────────
 
+/** Whether an entry reaches disk: critical exclusions and entries with no content never do. */
+export function isWrittenEntry(
+  entry: ManifestEntry,
+): entry is ManifestEntry & { content: string } {
+  return entry.status !== 'excluded-critical' && Boolean(entry.content)
+}
+
 /**
  * Generate all curated personas from repoRoot/agents/.
  * Throws on collision, new critical coupling, or read errors.
@@ -476,4 +483,22 @@ export function generateAll(repoRoot: string): ManifestEntry[] {
   }
 
   return entries
+}
+
+/** Extract `{ category, agentKey }` from a curated persona's `agents/<category>/<name>.md` source path. */
+export function parseSourceCategoryAndKey(sourceRelPath: string): {
+  category: string | undefined
+  agentKey: string
+} {
+  const parts = sourceRelPath.split('/')
+  // agents/<category>/<name>.md
+  if (parts.length >= 3 && parts[0] === 'agents') {
+    const fileName = parts.at(-1) ?? ''
+    return {
+      category: parts[1],
+      agentKey: fileName.replace(/\.md$/, ''),
+    }
+  }
+  const fileName = parts.at(-1) ?? sourceRelPath
+  return { category: undefined, agentKey: fileName.replace(/\.md$/, '') }
 }

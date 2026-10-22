@@ -11,7 +11,7 @@ This page gets you from zero to your first Systematic workflow in under five min
 
 ## Prerequisites
 
-You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime. No API keys, no accounts, no extra tooling.
+You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime, and Pi itself needs **Node.js 22.19+**. No API keys, no accounts, no extra tooling.
 
 ## Install the OpenCode plugin
 
@@ -129,18 +129,24 @@ npx @fro.bot/systematic setup --harness pi
 
 This atomically writes the plugin entry into `.pi/settings.json`. It is idempotent — running it again is safe and will not duplicate the entry. Pi trust-gates the extension at first use, so expect a trust prompt the first time it loads.
 
-### Optional: export personas for pi-subagents
+### Optional: use the personas with pi-subagents
 
-If you use [pi-subagents](https://github.com/tintinweb/pi-subagents) for parallel or multi-model delegation, Systematic can export a curated subset of its personas as flat agent files that pi-subagents reads. This is an opt-in complement — `systematic_delegate` (sequential, bounded, depth-1) stays the default.
+[pi-subagents](https://github.com/tintinweb/pi-subagents) is a separate Pi extension for parallel or multi-model delegation. Install it yourself (version 0.22 or newer); it is not part of Systematic. Once both are installed, pi-subagents offers Systematic's 29 curated personas as `systematic-<name>` agent types straight from the installed Systematic package, with no export step. A project-scope install such as the one above is read only after Pi trusts the project, and `pi -e` runs and git installs expose none of them. This is an opt-in complement — `systematic_delegate` (sequential, bounded, depth-1) stays the default.
+
+The packaged personas are plain defaults. To apply your `systematic.json` overlays (`model`, `thinking`, `max_turns`, `tools`, `skills`), or to keep your settings in one file, export them instead.
+
+### Optional: export personas to customize them
+
+Export writes the same curated personas as flat agent files that carry your config overlays. A file in `<cwd>/.pi/agents/` outranks the packaged one of the same name.
 
 ```bash
 npx @fro.bot/systematic pi-subagents preview   # see what would be exported
 npx @fro.bot/systematic pi-subagents export    # write to <cwd>/.pi/agents/
 ```
 
-Exact CLI form: `systematic pi-subagents <preview|export|refresh|cleanup> --scope project|global`. Default scope is `project` (writes to `<cwd>/.pi/agents/`). Pass `--scope global` to target `$PI_CODING_AGENT_DIR/agents/` instead, falling back to `~/.pi/agent/agents/` if that variable is unset. Existing files not owned by Systematic (i.e. not tracked in its manifest) are never overwritten; manifest-owned generated files are replaced when you explicitly run `refresh`, as documented in the pi-subagents pairing guide below.
+Exact CLI form: `systematic pi-subagents <preview|export|refresh|cleanup> --scope project|global`. Default scope is `project` (writes to `<cwd>/.pi/agents/`). Pass `--scope global` to target `$PI_CODING_AGENT_DIR/agents/` instead, falling back to `~/.pi/agent/agents/` if that variable is unset. Existing files not owned by Systematic (i.e. not tracked in its manifest) are never overwritten; manifest-owned generated files are replaced when you explicitly run `refresh`, as documented in the pi-subagents pairing guide below. Run `cleanup` to remove the exported files and fall back to the packaged defaults.
 
-Your Systematic config is the durable source of truth for exported personas — the generated files and manifest are a disposable projection that `refresh` intentionally overwrites when it drifts from current config; run `preview` first to see what would change. See the [pi-subagents pairing guide](/systematic/guides/pi-subagents/) for the full ownership model, config precedence, refresh/cleanup commands, and delegation boundary notes.
+Your Systematic config is the durable source of truth for exported personas — the generated files and manifest are a disposable projection that `refresh` intentionally overwrites when it drifts from current config; run `preview` first to see what would change. See the [pi-subagents pairing guide](/systematic/guides/pi-subagents/) for the packaged defaults, the `packageAgents` off switch and its cost, the full ownership model, config precedence, refresh/cleanup commands, and delegation boundary notes.
 
 See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for an honest list of where Pi parity with OpenCode currently ends (config support, permission gating).
 

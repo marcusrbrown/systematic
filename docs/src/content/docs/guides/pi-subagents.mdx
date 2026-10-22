@@ -1,21 +1,62 @@
 ---
 title: Pi + pi-subagents Pairing Guide
-description: Export Systematic personas for use with pi-subagents — parallel and multi-model delegation as an optional complement to systematic_delegate.
+description: Use Systematic personas with pi-subagents — packaged defaults from the installed package, and an optional export for config overlays — as a parallel and multi-model complement to systematic_delegate.
 sidebar:
   order: 7
 ---
 
-[pi-subagents](https://github.com/tintinweb/pi-subagents) is a third-party Pi extension that adds parallel dispatch, per-subagent model selection, and worktree isolation. Systematic can export a curated subset of its bundled personas as flat agent files that pi-subagents reads directly.
+[pi-subagents](https://github.com/tintinweb/pi-subagents) is a third-party Pi extension that adds parallel dispatch, per-subagent model selection, and worktree isolation. Systematic's curated personas reach it two ways: the installed package declares them as defaults, and an optional export writes files that carry your `systematic.json` overlays.
 
 This is an **opt-in complement** to `systematic_delegate`. The bounded built-in delegate stays the default — sequential, capped at 20 turns, depth-1, re-entry guarded. pi-subagents is the power-user path for users who need parallel or multi-model delegation and have already installed and configured pi-subagents separately.
 
-Tested interop contract: **pi-subagents v0.14.3** (verified as of July 29, 2026). Versions outside the tested range are unsupported but nonfatal — the export will still produce valid files; only the guidance contract is unverified.
+Tested interop contract: **pi-subagents 0.22.0 on Pi 1.3.0**. Versions outside the tested range are unsupported but nonfatal — the packaged and exported files are still valid; only the guidance contract is unverified.
 
 ## Prerequisites
 
 - Systematic installed as a Pi extension (`npx @fro.bot/systematic setup --harness pi`)
-- pi-subagents installed and configured separately (see its own docs)
-- Node.js 18+ or Bun in your path
+- pi-subagents 0.22 or newer, installed and configured separately (see its own docs). It is the first release that reads agents a package declares, and it requires Pi 1.1 or newer.
+- Node.js 22.19 or newer for Pi itself, and Node.js 18+ or Bun for the `systematic` CLI
+
+## Two ways to get the personas
+
+| | Packaged defaults | Export for customization |
+|---|---|---|
+| Setup | Install Systematic as a Pi package; nothing else | `systematic pi-subagents export` |
+| Where the files live | Inside the installed package | `<cwd>/.pi/agents/` or `$PI_CODING_AGENT_DIR/agents/` |
+| Carries `systematic.json` overlays | No — plain defaults | Yes — `model`, `thinking`, `max_turns`, `tools`, `skills` |
+| Picks up Systematic updates | When the package updates | When you run `refresh` |
+
+When more than one source defines the same type, the highest wins: your project `.pi/agents/`, then the shared `.agents/agents/`, then your global agent directory, then a package. A local file replaces a packaged one silently, so an exported file shadows the packaged default of the same name.
+
+### Packaged defaults
+
+Installing Systematic as a Pi package is enough. The package declares a directory of persona files, and pi-subagents reads it as soon as the package is in a Pi `settings.json` `packages[]` list. Each persona is available to the `Agent` tool as `systematic-<name>` — for example `systematic-repo-research-analyst`.
+
+- **Project installs need trust.** A package named in a project's `.pi/settings.json` is read only after Pi has trusted that project. pi-subagents builds the `Agent` tool description once at startup, from the trust decision Pi has already saved. In a project's first session there is none, so the description does not list the packaged types, although dispatching one by name works. Later sessions list them.
+- **Only package installs.** `pi -e` runs and git installs expose no personas. pi-subagents reads only the packages in `settings.json`, and a git install has no built `dist/` directory.
+- **Collisions are silent.** A package's persona never replaces a file you wrote, and nothing tells you when your file wins.
+- **`/agents` shows where each type came from.** Packaged types appear read-only with Eject and Disable, with a source badge.
+- **They are plain defaults.** Packaged personas never receive `systematic.json` overlays, and `disabled_agents` and `agents.<name>.disable` do not reach them. At startup Systematic warns once when either is configured, and says what to do instead (see [Settings that cannot reach packaged personas](#settings-that-cannot-reach-packaged-personas)).
+
+### Settings that cannot reach packaged personas
+
+- **Overlays need an export.** To apply `model`, `thinking`, `max_turns`, `tools` or `skills` from `systematic.json`, run `systematic pi-subagents export`. The exported file outranks the packaged one.
+- **Turn off one persona** with `/agents → Disable` inside Pi. A `disabled_agents` entry does not do this.
+- **Turn off every packaged persona** by setting `"packageAgents": false` in `subagents.json`. The global file is `$PI_CODING_AGENT_DIR/subagents.json` (`~/.pi/agent/subagents.json` by default); a project's `.pi/subagents.json` overrides it. Do this when the extra weight below is not worth it.
+- **Description cost.** With pi-subagents' default `toolDescriptionMode: "full"`, the 29 personas add about 6 KB of descriptions to the `Agent` tool description that every session sends. Setting `"toolDescriptionMode": "compact"` in `subagents.json` shortens it.
+
+### After upgrading
+
+A file you exported earlier keeps shadowing the packaged default and does not update on its own. Run `refresh` to bring it up to date, or `cleanup` to remove the exported files and fall back to the packaged defaults. `cleanup` refuses to remove a file you edited, so delete that file by hand.
+
+### Limits to know
+
+- **Tools.** A packaged or exported persona gets every built-in tool, because the render leaves `tools:` out. OpenCode runs these personas with all tools too. Only `systematic_delegate` enforces a persona's declared tools.
+- **No `temperature` or `mode`.** pi-subagents frontmatter has no equivalent, so an authored `temperature: 0.1` runs at Pi's default. OpenCode still honors it.
+- **Two names for one persona.** `systematic_delegate` takes the bare name (`repo-research-analyst`); pi-subagents takes `systematic-repo-research-analyst`.
+- **29 of 37 personas.** Eight are left out because they depend on OpenCode-only machinery: `systematic-implementer`, `design-iterator`, `agent-native-reviewer`, `project-standards-reviewer`, `slack-researcher`, `learnings-researcher`, `kieran-typescript-reviewer` and `pr-comment-resolver`.
+- **A global export shadows everywhere.** An export with `--scope global` replaces the packaged persona in every project, not only the current one.
+- **Background by default.** pi-subagents runs a top-level `Agent` call in the background unless the call passes `run_in_background: false`, so the result does not come back inline. Waiting for it needs the flag, or `"backgroundByDefault": false` in `subagents.json`.
 
 ## Commands
 
@@ -131,7 +172,7 @@ Here, every exported persona in the `research` category picks up `model: github-
 
 ### What's not configurable
 
-pi-subagents v0.14.3 has no equivalent frontmatter fields for `temperature`, `top_p`, or `variant`. Systematic never emits them into exported persona files — they are intentionally omitted, not silently discarded. `variant` (OpenCode's reasoning-effort concept) is also never mapped onto `thinking` (pi-subagents' own reasoning-effort field); they are distinct contracts and must be configured independently through `pi_subagents.thinking` if you want equivalent behavior.
+pi-subagents 0.22.0 has no equivalent frontmatter fields for `temperature`, `top_p`, or `variant`. Systematic never emits them into exported persona files — they are intentionally omitted, not silently discarded. `variant` (OpenCode's reasoning-effort concept) is also never mapped onto `thinking` (pi-subagents' own reasoning-effort field); they are distinct contracts and must be configured independently through `pi_subagents.thinking` if you want equivalent behavior.
 
 ### Manual edits are not durable
 
@@ -182,7 +223,7 @@ Every operation walks the path from the scope anchor (the project cwd, or the re
 
 ### Tested runtime contract
 
-Systematic's tested interop contract targets `@tintinweb/pi-subagents@0.14.3`. Exported `systematic-*` personas — including `systematic-repo-research-analyst` — are accepted and executed by that pi-subagents version through its Agent tool, with the exported file's own content driving the child request rather than a hardcoded prompt. The combined path — a top-level pi-subagents call invoking a nested `systematic_delegate` — is supported end-to-end on this pinned version, consistent with the documented nested delegation boundary above.
+Systematic's tested interop contract targets `@tintinweb/pi-subagents@0.22.0` on Pi 1.3.0. Both the packaged and the exported `systematic-*` personas — including `systematic-repo-research-analyst` — are accepted and executed by that pi-subagents version through its Agent tool, with the persona file's own content driving the child request rather than a hardcoded prompt. A packaged persona dispatches from a project-scope or a global install, falls back to `general-purpose` when `packageAgents` is `false`, and loses to a local file of the same name. The combined path — a top-level pi-subagents call invoking a nested `systematic_delegate` — is supported end-to-end on this pinned version, consistent with the documented nested delegation boundary above.
 
 ## Delegation boundaries
 
@@ -193,8 +234,8 @@ Systematic's tested interop contract targets `@tintinweb/pi-subagents@0.14.3`. E
 
 **The `noExtensions` / depth-1 guarantee applies only to `systematic_delegate`'s own child.** It does not bound end-to-end depth across a combined pi-subagents + Systematic path. That combined path is outside Systematic's bounded-delegate guarantees and governed by pi-subagents' own configuration.
 
-If you need the safety guarantees — predictable cost, bounded recursion, no extension side-effects — use `systematic_delegate`. If you need parallel dispatch or per-subagent model control and understand pi-subagents' own limits, use the exported personas via pi-subagents.
+If you need the safety guarantees — predictable cost, bounded recursion, no extension side-effects — use `systematic_delegate`. If you need parallel dispatch or per-subagent model control and understand pi-subagents' own limits, use the personas via pi-subagents.
 
 ## No automatic writes
 
-Nothing is exported, detected, or written at extension load time. Systematic does not auto-detect whether pi-subagents is installed or active. All writes require an explicit `systematic pi-subagents export` command.
+Nothing is exported, detected, or written at extension load time. Systematic does not auto-detect whether pi-subagents is installed or active, and it never writes to your agents directories without a command: the packaged personas live inside the installed package, and every file in `.pi/agents/` comes from an explicit `systematic pi-subagents export`. The only startup output is the one-time warnings described above.

@@ -46,7 +46,12 @@ harness:
 
 - **OpenCode** — the npm package itself is the OpenCode plugin, loaded directly via its default export.
 - **Pi** — the same npm package, loaded as a Pi extension via `setup --harness pi`, which writes an
-  entry into `.pi/settings.json`.
+  entry into `.pi/settings.json`. The package also declares `pi.subagents.agents`, pointing at
+  `dist/pi-subagents/agents/`. `scripts/build-pi-package-agents.ts` generates that directory at build
+  time from the same render as the persona export, so pi-subagents 0.22 or newer loads the curated
+  personas from an installed package as plain defaults. Overlays reach a persona only through the
+  opt-in export, whose local files outrank the packaged ones; `src/pi.ts` warns once at startup when
+  an overlay or a disable cannot reach the packaged files.
 - **Claude Code** — a separate, self-contained plugin bundle built in CI from `skills/` and `agents/`
   by `scripts/build-claude-code-plugin.ts`. The build flattens agent personas, composes an output
   style from the using-systematic skill body, emits a declarative `SessionStart` hook, and translates

@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { generateAll } from '../../src/lib/pi-subagents-personas.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const SRC_DIR = path.join(ROOT_DIR, 'src')
@@ -12,6 +13,21 @@ const DIST_DIR = path.join(ROOT_DIR, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.js')
 const DIST_PI = path.join(DIST_DIR, 'pi.js')
 const DIST_CLI = path.join(DIST_DIR, 'cli.js')
+const PACKAGED_AGENTS_PATH = 'dist/pi-subagents/agents'
+const PERSONA_FIXTURE_DIR = path.join(
+  ROOT_DIR,
+  'tests',
+  'fixtures',
+  'pi-subagents-personas',
+)
+
+/** The persona files the default render writes: what the package must ship. */
+function expectedPackagedPersonas(): string[] {
+  return generateAll(ROOT_DIR)
+    .filter((entry) => entry.status !== 'excluded-critical' && entry.content)
+    .map((entry) => entry.filename)
+    .sort()
+}
 const OPTIONAL_PEERS = [
   '@opencode-ai/plugin',
   '@earendil-works/pi-coding-agent',
@@ -30,9 +46,11 @@ interface PackageJson {
   main?: string
   exports?: Record<string, unknown>
   files?: string[]
+  keywords?: string[]
   pi?: {
     extensions?: string[]
     skills?: string[]
+    subagents?: { agents?: string[] }
   }
   peerDependencies?: Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
@@ -53,6 +71,16 @@ describe('package.json Pi manifest', () => {
   test('declares pi.skills pointing at ./skills', () => {
     const pkg = readPackageJson()
     expect(pkg.pi?.skills).toEqual(['./skills'])
+  })
+
+  test('declares pi.subagents.agents pointing at the generated personas directory', () => {
+    const pkg = readPackageJson()
+    expect(pkg.pi?.subagents).toEqual({ agents: [`./${PACKAGED_AGENTS_PATH}`] })
+  })
+
+  test('lists the pi-package gallery keyword', () => {
+    const pkg = readPackageJson()
+    expect(pkg.keywords).toContain('pi-package')
   })
 
   test('main and root export stay pointed at dist/index.js (no ./pi export)', () => {
@@ -256,6 +284,63 @@ describe('build output and packaging', () => {
     expect(entries.some((e) => e === 'package/dist/pi.js')).toBe(true)
     expect(entries.some((e) => e.startsWith('package/skills/'))).toBe(true)
     expect(entries.some((e) => e.startsWith('package/agents/'))).toBe(true)
+  })
+
+  test('tarball ships exactly the default persona files under dist/pi-subagents/agents, byte-equal to the fixtures', () => {
+    const extractDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pack-personas-'),
+    )
+    try {
+      const extract = Bun.spawnSync(
+        ['tar', 'xzf', packedTarballPath, '-C', extractDir],
+        { timeout: 30_000 },
+      )
+      if (extract.exitCode !== 0) {
+        throw new Error(`tar extraction failed: ${extract.stderr.toString()}`)
+      }
+      const packagedDir = path.join(extractDir, 'package', PACKAGED_AGENTS_PATH)
+      const expected = expectedPackagedPersonas()
+
+      expect(expected.length).toBeGreaterThan(0)
+      expect(fs.readdirSync(packagedDir).sort()).toEqual(expected)
+      for (const name of expected) {
+        const packaged = fs.readFileSync(path.join(packagedDir, name))
+        const fixture = fs.readFileSync(path.join(PERSONA_FIXTURE_DIR, name))
+        expect(packaged.equals(fixture)).toBe(true)
+      }
+    } finally {
+      fs.rmSync(extractDir, { recursive: true, force: true })
+    }
+  })
+
+  test('every pi.subagents.agents path resolves inside the tarball', () => {
+    const extractDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pack-agents-path-'),
+    )
+    try {
+      const extract = Bun.spawnSync(
+        ['tar', 'xzf', packedTarballPath, '-C', extractDir],
+        { timeout: 30_000 },
+      )
+      if (extract.exitCode !== 0) {
+        throw new Error(`tar extraction failed: ${extract.stderr.toString()}`)
+      }
+      const extractedPkg = JSON.parse(
+        fs.readFileSync(path.join(extractDir, 'package/package.json'), 'utf8'),
+      ) as PackageJson
+      const declared = extractedPkg.pi?.subagents?.agents ?? []
+
+      expect(declared.length).toBeGreaterThan(0)
+      for (const agentsDir of declared) {
+        const resolved = path.join(extractDir, 'package', agentsDir)
+        expect(fs.statSync(resolved).isDirectory()).toBe(true)
+        expect(fs.readdirSync(resolved).some((f) => f.endsWith('.md'))).toBe(
+          true,
+        )
+      }
+    } finally {
+      fs.rmSync(extractDir, { recursive: true, force: true })
+    }
   })
 
   test('pi.extensions/pi.skills manifest paths resolve inside the tarball', () => {

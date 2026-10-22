@@ -60,7 +60,7 @@ bun run registry:validate  # Validate registry without building
 
   A flat `agents.<name>.model` overlay applies to both OpenCode agents and in-process Pi delegates, not just OpenCode.
 
-  **Generated surfaces:** Editing an `agents/` frontmatter `description` updates `registry/registry.jsonc`; if the persona is in `CURATED_PERSONAS`, it also updates `tests/fixtures/pi-subagents-personas/`. Editing any agent body updates the Pi fixture too. Adding, removing, or renaming a file under a skill's `references/` updates the registry's per-component file list. Regenerate and check both surfaces:
+  **Generated surfaces:** Editing an `agents/` frontmatter `description` updates `registry/registry.jsonc`; if the persona is in `CURATED_PERSONAS`, it also updates `tests/fixtures/pi-subagents-personas/`. Editing any agent body updates the Pi fixture too. The same render is also the second consumer behind `dist/pi-subagents/agents/`, which `bun run build` generates for the package's `pi.subagents.agents` manifest key. It is not committed, so no regeneration step is needed for it. Adding, removing, or renaming a file under a skill's `references/` updates the registry's per-component file list. Regenerate and check both surfaces:
 
   ```bash
   bun scripts/generate-registry.ts
