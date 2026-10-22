@@ -3,6 +3,7 @@ title: "fix: Let a ce:review run that prepare accepts finish past 32 surviving f
 type: fix
 status: active
 date: 2026-10-22
+deepened: 2026-10-22
 ---
 
 # fix: Let a ce:review run that prepare accepts finish past 32 surviving findings
@@ -53,6 +54,7 @@ Flow analysis found three more boundaries that break accepted runs:
 ### Deferred to Separate Tasks
 
 - **`declined_merges` has no producer.** `finalizeReview` never sets it, yet `skills/ce-review/references/synthesis-artifact-contract.md` tells the parent to write it, which never-bypass forbids. This predates #1197. This plan raises the cap at the schema level only.
+- **Finalize validates findings about 3 times** (`review-pipeline.ts:4926`, and `:4778` again through the report and the artifact). Deduping would change which named rejection fires, so it stays as is.
 - **File-based envelope assembly for very large runs.** The skill passes envelopes through a heredoc, so the model's output size limits practical run size well before 2048.
 
 ## Context & Research
@@ -161,9 +163,11 @@ Flow analysis found three more boundaries that break accepted runs:
 - **Separate run-level bounds from per-reviewer ones.** `MAX_RUN_FINDINGS = MAX_FINDINGS × MAX_PERSONAS` (2048). This is what `prepare` already admits, so no new product policy is introduced. A smaller cutoff with early rejection was rejected: no measured basis supports it, and it would force legitimate reviews to restart.
 - **Disagreement facts are bounded by construction, with no budget check.**
   - One decision keeps `MAX_DECISION_FACTS`, a named alias equal to `MAX_FINDINGS` (32).
-  - The run aggregate is `MAX_RUN_DISAGREEMENT_FACTS = MAX_RUN_FINDINGS × (MAX_DECISION_FACTS + 1)` (67,584). Merge emits at most one declined reason plus 32 facts per decision, and there are at most `MAX_RUN_FINDINGS` decisions.
+  - The run aggregate is `MAX_RUN_DISAGREEMENT_FACTS = MAX_RUN_FINDINGS × (MAX_DECISION_FACTS + 1)` (67,584). Merge emits at most one declined reason plus 32 facts per decision, and there are at most `MAX_RUN_FINDINGS` decisions. The all-declined shape reaches 2048 × 33, so the bound is tight.
+  - The authority is the schema caps: the `AdjudicationEnvelopeSchema.decisions` maximum times the per-decision facts maximum. Candidate-group membership is not the authority, because `members` and `candidate_groups` are capped independently. Library callers can bypass the schema through the typed `ApplyReviewAdjudicationInput`, and the `safeParse` on merge output covers them.
   - Merge output `disagreement_facts`, finalize input and `coverage.intent_uncertainty` all use the aggregate constant.
-  - The byte cap guards volume, since each fact is up to 2048 characters. A policy budget would reject the all-declined shape from #1197, and capping per-decision facts would drop disclosure the contract allows today. The cost is a large `maxItems` in the published schemas.
+  - The byte cap guards volume, since each fact is up to 2048 characters. A policy budget would reject the all-declined shape from #1197, and capping per-decision facts would drop disclosure the contract allows today.
+  - The 67,584 bound reaches one published file, `review-summary-schema.json`, through `coverage.intent_uncertainty`. `review-pipeline-schema.json` publishes only `adjudicationEnvelope`, `validatorLifecycleResult` and `planAssessmentEnvelope` (`scripts/generate-review-artifact-schema.ts:175-196`), so its per-decision `disagreement_facts` stay at 32 and only its run-level arrays (`decisions`, `input_finding_ids`, plan `results`) widen to 2048.
 - **Coverage bounds come from each producer.**
   - `validators` and `validator_failures` are `MAX_RUN_FINDINGS`. The pipeline records exactly one lifecycle result per request.
   - `residual_risks` and `testing_gaps` are 4096, the deduped union of 64 reviewers × 64 entries.
@@ -178,16 +182,21 @@ Flow analysis found three more boundaries that break accepted runs:
   - Both artifact validators use the same shape. They keep the authored custom message for `custom` codes on that issue's line.
   - A domain rejection keeps `<reason> at <path>`.
   - Rejection types carry a projected `{path, code}` list plus a total, never raw `ZodIssue`, so no-echo holds at the type level. The `reason` literal and `path` stay, so current `.reason` assertions hold.
-  - One `projectZodIssues` lives in `src/lib/review-artifact-path.ts`, an existing module, so no new registration is needed.
-- **Prepare and merge switch to `safeParse`.** The new reasons are `prepare output failed schema validation` and `merge output failed schema validation`. After this change those branches should be unreachable, so any hit is a named contract defect.
+  - One `projectZodIssues` lives in `src/lib/review-artifact-path.ts`, an existing module, so no new registration is needed. That file has no zod import, so the projector types its input structurally as `{ path: readonly PropertyKey[]; code: string }`.
+  - The rejection type is a discriminated union. A schema rejection carries `reason`, `path`, `issues` and `total`, all required. A domain rejection stays `{ path, reason }`. No optional `issues` field exists.
+- **Prepare and merge switch to `safeParse`.** The new reasons are `prepare output failed schema validation` and `merge output failed schema validation`.
+  - The merge branch stays as defense in depth behind the survivor and disjointness checks. Its test calls `applyReviewAdjudication` directly with an unparsed `prepared`, so it is exercised.
+  - The prepare branch cannot fail on any input that passes `PrepareInputSchema`: survivors are at most 64 × 32 = 2048, which equals the bound. The public API accepts only raw input, so the branch is untestable defense in depth.
 - **Authored custom messages satisfy no-echo.** `REVIEW_ARTIFACT_CUSTOM_MESSAGES` is a closed set of author constants, not text derived from the payload.
 - **Merge resolves every cited input ID before assembly.**
   - `validateAdjudication` resolves every candidate-group member and singleton input ID against `prepared.surviving_findings`.
   - A miss returns a named `AdjudicationRejection` with a path and the reason `prepared survivor missing for input id`, added to the `AdjudicationRejectReason` union. This mirrors finalize's `checkSurvivorPartition`.
-  - `requireSurvivingFinding` stays as an invariant behind the check.
+  - `validateAdjudication` passes `prepared.singletons` through unchecked (`review-pipeline.ts:945-951`, `984-990`). An echo whose singleton is also a candidate-group member yields more than `MAX_RUN_FINDINGS` `merged_findings`, or a duplicate, and finalize's `checkSurvivorPartition` (`:2349-2360`) is the only catch today. The check rejects a singleton that is also a group member, and a duplicate singleton, with a named domain rejection at a path.
+  - `requireSurvivingFinding` stays as an invariant behind the checks.
 - **The byte cap stays and states its limit.**
   - The three CLI messages become `<phase> input exceeds the aggregate byte cap (16842752 bytes)`, and the library rejection in `prepareReviewCandidates` states the cap too.
-  - Finalize carries about three copies of each finding, so a run with very large findings trips the cap first. That is the documented resource guard working as intended.
+  - Finalize carries about three copies of each finding. At 2048 findings the average finding must stay under about 2.7 KB, and a typical finding is about 1.2 KB, which puts finalize at about 44% of the cap. A run with very large findings trips the cap first. That is the documented resource guard working as intended.
+  - Only the CLI stdin path and `prepareReviewCandidates` check bytes. `finalizeReview` and `applyReviewAdjudication` do not, so the in-process chain never reaches the finalize cap.
   - A projected-size check at prepare was rejected: it would be speculative arithmetic. The scale test records real envelope sizes instead.
 - **The schema version stays 1.** Widening cardinalities keeps old artifacts valid. Older external validators will reject larger new artifacts, and a doc note covers that.
 
@@ -203,7 +212,6 @@ Flow analysis found three more boundaries that break accepted runs:
 
 ### Deferred to Implementation
 
-- The exact field names of the projected issue list and total on the rejection types, and whether the list is typed as `readonly`.
 - The batch size for the scale test, which depends on the measured runtime.
 
 ## High-Level Technical Design
@@ -236,6 +244,8 @@ After the change, `MAX_FINDINGS` remains only for:
 
 ## Implementation Units
 
+Every unit that touches `src/**` runs `ce-review-validator:build`. Unit 1 is the only unit that needs `review-schema:generate`.
+
 - [ ] **Unit 1: Run-level bounds in the contracts and artifact schema**
 
 **Goal:** Every run-level array is bounded by a named run-level constant. Per-reviewer and persona bounds stay where they belong.
@@ -246,10 +256,10 @@ After the change, `MAX_FINDINGS` remains only for:
 
 **Files:**
 - Modify: `src/lib/review-artifact-schema.ts`
-- Modify: `src/lib/review-pipeline-contract.ts`
+- Modify: `src/lib/review-pipeline-contract.ts` (bounds, and the envelope-size comment at `:208-219`)
 - Modify: `src/lib/AGENTS.md` (new exported constants in the `review-artifact-schema.ts` row)
 - Regenerate: `skills/ce-review/references/review-summary-schema.json`, `skills/ce-review/references/review-pipeline-schema.json`, `skills/ce-review/scripts/validate-review.mjs`
-- Create: `tests/unit/review-run-fixtures.ts`, a shared non-test fixture module. Its exports are `buildScreenReturn`, `runPipeline` (screen, prepare, adjudicate, finalize) and `buildMinimalArtifact({ findings })`. Unit 2 uses them.
+- Create: `tests/unit/review-run-fixtures.ts`, a shared non-test fixture module. It exports only `buildMinimalArtifact({ findings })` in this unit.
 - Test: `tests/unit/review-artifact-schema.test.ts`, `tests/unit/review-pipeline-contract.test.ts`
 
 **Approach:**
@@ -257,8 +267,9 @@ After the change, `MAX_FINDINGS` remains only for:
 - Apply the bounds from the table above to the contract schemas and the artifact schema.
 - Split `DisagreementFactsSchema` into a per-decision schema and an aggregate schema.
 - Add the comment listing the legitimate remaining uses of `MAX_FINDINGS`, and the alias note on `MAX_DECISION_FACTS`.
-- Unit 1 changes only the schema. `checkCoverageArrayBound` keeps its `MAX_PERSONAS` value until Unit 2, so the pinned finalize test stays green in Unit 1.
-- Rewrite the comment in the contract test that justifies the 32-decision cap. Decisions are bounded by candidate-group members, because every member must be cited.
+- Update the envelope-size comment at `src/lib/review-pipeline-contract.ts:208-219`. Its maximal-envelope figures (about 22.8 MiB for merge and 45.3 MiB for finalize) are stale once the limits rise.
+- Unit 1 changes only the schema. `checkCoverageArrayBound` keeps its `MAX_PERSONAS` value until Unit 3, so the pinned finalize test stays green. Between Unit 1 and Unit 3 the coverage schema admits 4096 risks while the runtime check still rejects at 65. That rejection is typed, not a throw, so every gate stays green.
+- Rewrite the comment in the contract test that justifies the 32-decision cap. The authority is the schema caps: the `decisions` maximum times the per-decision facts maximum. Candidate-group membership is not the authority.
 
 **Execution note:** Write the boundary probes first. They must fail against the current caps.
 
@@ -270,33 +281,83 @@ After the change, `MAX_FINDINGS` remains only for:
 - Happy path: each changed contract array parses at its new bound. The arrays are `members`, `candidate_groups`, `decisions`, decision and merged-finding `input_finding_ids`, `merged_findings`, `validator_requests`, lifecycle results, the three report queues, `pre_existing_findings`, `parent_run_metadata.applied_fixes` and plan results, all at `MAX_RUN_FINDINGS`.
 - Edge case: each changed contract array rejects at bound+1 with `too_big` at its exact path.
 - Happy path / edge case: each changed artifact array (`findings`, `declined_merges`, `declined_merges[].input_finding_ids`, `applied_fixes`, `residual_actionable_work`, `advisory_outputs`, and the finding `input_finding_ids`) parses at its bound and rejects at bound+1 with the exact path. Artifact `findings` probes use the fixture module so that ledger referential integrity holds.
+- Rewrite the two run-level 33 pins at `tests/unit/review-artifact-schema.test.ts:447-467` (33 `declined_merges` entries and 33 `declined_merges[].input_finding_ids`). They start passing once the cap rises, so they become bound and bound+1 probes.
 - Edge case: each coverage field parses at its `COVERAGE_BOUNDS` value and rejects at value+1. `validators` is a numeric maximum. `failed_reviewers` still rejects at 65.
 - Edge case: `COVERAGE_BOUNDS.validators` equals `MAX_RUN_FINDINGS`.
 - Edge case: one decision's facts parse at `MAX_DECISION_FACTS` and reject at one more. The aggregate parses at `MAX_RUN_DISAGREEMENT_FACTS` and rejects at one more with `too_big` at its exact path in merge output, finalize input and `coverage.intent_uncertainty`. `MAX_RUN_DISAGREEMENT_FACTS` equals `MAX_RUN_FINDINGS × (MAX_DECISION_FACTS + 1)`.
-- Regression: the per-reviewer probes still reject at 33, and the raw-return `residual_risks` probe still rejects at 65. The `selection_surface` and `risk_coverage` pins keep their values.
+- Regression: the per-reviewer pins stay unchanged and still reject: `tests/unit/review-artifact-schema.test.ts:320` (`selection_surface`), `:346` (`risk_coverage`), `:1542`, `:1576`, and `tests/unit/ce-review-findings-schema.test.ts`. The raw-return `residual_risks` probe still rejects at 65. The `selection_surface` and `risk_coverage` pins keep their values.
 - Probes import the constants. They contain no literal 32, 2048, 4096 or 67584.
 
 **Verification:**
 - The probes fail before the change and pass after it.
 - `review-schema:drift` and `ce-review-validator:drift` pass after `review-schema:generate` and `ce-review-validator:build`.
 - `findings-schema.json` is byte-identical.
+- `review-summary-schema.json` changes at `coverage.intent_uncertainty` (to the aggregate bound) and at the run-level arrays. `review-pipeline-schema.json` changes only at `decisions`, `input_finding_ids` and plan `results`. Its per-decision `disagreement_facts` stay at 32.
 
-- [ ] **Unit 2: Pipeline behavior at run scale**
+- [ ] **Unit 2: Projection primitive and typed schema rejections (library only)**
 
-**Goal:** `prepare` and `merge` complete at run scale and never throw on output schema or on a `prepared` echo that lacks a cited survivor. Coverage uses the shared bounds and drops blank strings.
+**Goal:** One bounded projector exists, and every library schema rejection carries a payload-safe projected issue list.
 
-**Requirements:** R1, R3, R5, R6
+**Requirements:** R6
 
 **Dependencies:** Unit 1
 
 **Files:**
+- Modify: `src/lib/review-artifact-path.ts` (`projectZodIssues`, the projected-issue type, and `MAX_PROJECTED_ISSUE_LINES`)
+- Modify: `src/lib/review-return-validator.ts` (use the shared projector; re-export `MAX_PROJECTED_ISSUE_LINES`)
 - Modify: `src/lib/review-pipeline.ts`
+- Modify: `src/lib/AGENTS.md` (export lists for the `review-artifact-path.ts`, `review-pipeline.ts` and `review-return-validator.ts` rows)
 - Regenerate: `skills/ce-review/scripts/validate-review.mjs`
-- Test: `tests/unit/review-pipeline-prepare.test.ts`, `tests/unit/review-pipeline-merge.test.ts`, `tests/unit/review-pipeline-finalize.test.ts`, using the helpers in `tests/unit/review-run-fixtures.ts`
+- Test: `tests/unit/review-pipeline-prepare.test.ts`, `tests/unit/review-pipeline-finalize.test.ts`, `tests/unit/review-return-validator.test.ts`, `tests/unit/review-artifact-path.test.ts` (the projector)
 
 **Approach:**
-- Replace the two throwing output parses with `safeParse`. Return typed rejections named `prepare output failed schema validation` and `merge output failed schema validation`, and include the issue list.
+- Add `projectZodIssues` and the projected-issue type to `review-artifact-path.ts`. Type the input structurally as `{ path: readonly PropertyKey[]; code: string }`, because that file has no zod import. The projector returns at most `max` `{ path, code }` pairs plus `total`.
+- Move `MAX_PROJECTED_ISSUE_LINES` from `review-return-validator.ts:22` into `review-artifact-path.ts`, and re-export it from the old location, because `tests/unit/review-return-validator.test.ts` imports it. The projector lives beside the other path helpers so every surface imports it from one place. `review-pipeline.ts` keeps its existing import of `validateReviewReturnValue`.
+- Refactor `review-return-validator.ts` onto the shared projector. Its current projection is at `:37-50`.
+- Make the rejection type a discriminated union. A schema rejection carries `reason`, `path`, `issues` and `total`, all required. A domain rejection stays `{ path, reason }`. Add no optional `issues` field.
+- Convert these to the schema-rejection variant:
+  - prepare input `'schema validation'` (`review-pipeline.ts:556-563`, which keeps only `issues[0]` today);
+  - finalize `finalize output failed schema validation` (`:4777-4790`);
+  - finalize `artifact failed schema validation` (`:4926-4938`);
+  - the inline finalize rejection types (`:4494-4501`).
+- The CLI is not touched. `ce-review-validator.ts:206-211` and `:339-344` accept the extra fields structurally.
+
+**Execution note:** Add the canary test first. It must fail if a value or key name reaches a serialized rejection.
+
+**Patterns to follow:**
+- The existing bounded projection in `review-return-validator.ts`.
+- Finalize's existing `safeParse` and typed-rejection shape.
+
+**Test scenarios:**
+- Happy path: the projector returns at most 8 `{path, code}` pairs plus the total, and the total counts every issue.
+- Error path (no-echo): a canary string in a field value and in an unknown key name is absent from the serialized rejection.
+- Regression: `tests/unit/review-return-validator.test.ts` behavior is unchanged, including its `MAX_PROJECTED_ISSUE_LINES` import.
+- Regression: the pin at `tests/unit/review-pipeline-prepare.test.ts:586` (`Object.keys(rejection)` equals `['path','reason']`) becomes the schema-rejection key set. The domain pins at `:500-572` and `tests/unit/review-pipeline-merge.test.ts:123,363` stay.
+
+**Verification:**
+- Every listed scenario passes.
+- `ce-review-validator:build` and `ce-review-validator:drift` pass.
+
+- [ ] **Unit 3: Pipeline behavior at run scale**
+
+**Goal:** `prepare` and `merge` complete at run scale and never throw on output schema or on a `prepared` echo that lacks a cited survivor or double-counts one. Coverage uses the shared bounds and drops blank strings.
+
+**Requirements:** R1, R3, R5, R6
+
+**Dependencies:** Unit 2
+
+**Files:**
+- Modify: `src/lib/review-pipeline.ts`
+- Regenerate: `skills/ce-review/scripts/validate-review.mjs`
+- Test: `tests/unit/review-pipeline-prepare.test.ts`, `tests/unit/review-pipeline-merge.test.ts`, `tests/unit/review-pipeline-finalize.test.ts`, `tests/unit/ce-review-validator-routing.test.ts` (scale run through the CLI stdin path)
+- Extend: `tests/unit/review-run-fixtures.ts` with `buildScreenReturn` and `runPipeline` (screen, prepare, adjudicate, finalize)
+
+**Approach:**
+- Replace the two throwing output parses with `safeParse`. Return the schema-rejection variant from Unit 2, named `prepare output failed schema validation` and `merge output failed schema validation`.
+  - The merge branch is defense in depth behind the survivor and disjointness checks, and its test calls `applyReviewAdjudication` directly with an unparsed `prepared`.
+  - The prepare branch is untestable defense in depth. It cannot fail on any input that passes `PrepareInputSchema`, so it has no "removing X fails a test" expectation.
 - In `validateAdjudication`, resolve every candidate-group member and singleton input ID against `prepared.surviving_findings` before assembly. A miss returns a named `AdjudicationRejection` at the offending path with the reason `prepared survivor missing for input id`, added to the `AdjudicationRejectReason` union. `requireSurvivingFinding` stays as an invariant behind the check.
+- In the same step, reject a singleton that is also a candidate-group member, and a duplicate singleton. Both get a named domain rejection at a path.
 - `checkCoverageArrayBound` reads `COVERAGE_BOUNDS`, so the schema and the runtime check share one object, and keeps its existing reason literal. `validators` stays out of the runtime table, because the lifecycle-results bound already enforces it, and Unit 1's equality test pins it. Update the pinned finalize test (`tests/unit/review-pipeline-finalize.test.ts`, the `coverage array exceeds bound` case) to the exported bound + 1.
 - `buildReviewCoverage` drops blank and whitespace-only risks and gaps before deduping.
 
@@ -306,6 +367,7 @@ After the change, `MAX_FINDINGS` remains only for:
 - Finalize's existing `safeParse` and typed-rejection shape.
 - The existing `AdjudicationRejectReason` vocabulary and its path conventions.
 - The existing end-to-end finalize test that drives real adjudication output through `finalizeReview` and `ReviewArtifactSchema.parse`.
+- `runValidator` in `tests/unit/ce-review-validator-routing.test.ts:79-99` for the CLI stdin path.
 
 **Test scenarios:**
 - Happy path: a run with 34 survivors in one file, from two reviewers, passes `prepare`.
@@ -319,41 +381,40 @@ After the change, `MAX_FINDINGS` remains only for:
   - more than 64 distinct facts.
 - Error path: a forced output-schema failure returns a rejection with projected issues and does not throw. Use an unparsed `prepared` with more survivors than `MAX_RUN_FINDINGS`, passed to `applyReviewAdjudication`.
 - Error path: a merge input with a valid adjudication, where the parent's `prepared` echo drops one `surviving_findings` entry, returns the named `prepared survivor missing for input id` rejection and not an internal error. It mirrors finalize's `checkSurvivorPartition`.
+- Error path: an echo whose singleton is also a candidate-group member returns a named rejection. An echo with a duplicate singleton returns a named rejection.
 - Edge case: blank and whitespace-only risks and gaps are absent from the artifact coverage, and the run completes.
 - Edge case: the coverage runtime bound rejects at `COVERAGE_BOUNDS.residual_risks + 1` with `coverage array exceeds bound`. This replaces the pin on the literal 65.
-- Integration (scale): a run of 64 reviewers × 32 findings with typical-size payloads completes. The test asserts completion and records the prepare, merge and finalize envelope byte sizes and the runtime. It sets an explicit `60_000` test timeout. A fixture's payload size never decides pass or fail.
+- Integration (scale): a run of 64 reviewers × 32 findings, with about 1.2 KB per finding, goes through the CLI stdin path as well as in process. The test asserts completion and that the finalize envelope stays under 50% of `AGGREGATE_STDIN_BYTE_CAP`. It records the prepare, merge and finalize envelope byte sizes and the per-phase times, sets an explicit `60_000` test timeout, and makes no timing assertion. The byte-cap boundary case lives in Unit 4, because it needs the new message.
 
 **Verification:**
 - Every listed scenario passes.
-- Removing the survivor check makes the merge-echo test fail.
+- Removing the survivor check makes the merge-echo test fail. Removing the disjointness check makes its test fail.
 - Removing the blank filter makes the blank-risk test fail.
-- `ce-review-validator:drift` passes.
+- `ce-review-validator:build` and `ce-review-validator:drift` pass.
 
-- [ ] **Unit 3: Bounded `path code` error projection**
+- [ ] **Unit 4: Rendering and byte-cap messages**
 
-**Goal:** `prepare`, `merge`, `finalize`, the return validator, and both artifact validators report schema rejections as a fixed context line plus up to 8 `path code` lines and an overflow count. The byte-cap rejections state the cap.
+**Goal:** `prepare`, `merge`, `finalize`, the return validator, and both artifact validators print schema rejections as a fixed context line plus up to 8 `path code` lines and an overflow count. The byte-cap rejections state the cap.
 
 **Requirements:** R6, R7, R9
 
-**Dependencies:** Unit 2
+**Dependencies:** Unit 3
 
 **Files:**
-- Modify: `src/lib/review-artifact-path.ts` (shared `projectZodIssues`)
-- Modify: `src/lib/review-return-validator.ts` (use the shared projector)
-- Modify: `src/lib/review-pipeline.ts` (schema rejections carry projected issues: prepare input, finalize output and artifact; the byte-cap rejection states the cap)
 - Modify: `src/ce-review-validator.ts`
 - Modify: `src/claude-code-validator.ts`
 - Modify: `src/cli.ts`
+- Modify: `src/lib/review-pipeline.ts` (the byte-cap rejection states the cap)
 - Regenerate: `skills/ce-review/scripts/validate-review.mjs`
-- Test: `tests/unit/ce-review-validator-routing.test.ts`, `tests/unit/ce-review-validator-packaging.test.ts`, `tests/unit/validate-review-artifact.test.ts`, `tests/unit/claude-code-validator.test.ts`, `tests/unit/review-return-validator.test.ts` (or wherever the return projection is tested)
+- Test: `tests/unit/ce-review-validator-routing.test.ts`, `tests/unit/ce-review-validator-packaging.test.ts`, `tests/unit/validate-review-artifact.test.ts`, `tests/unit/claude-code-validator.test.ts`
 
 **Approach:**
-- `projectZodIssues(issues, max)` returns at most `max` `{path, code}` pairs plus the total. Its callers format the lines. Rejection types carry that projected list and total, never raw `ZodIssue`.
 - Rejection rendering depends on the kind:
   - schema rejections print the fixed context line, up to 8 `path code` lines and `… and N more` when there are more;
   - domain rejections keep `<reason> at <path>`.
 - Merge and finalize input rejections print up to 8 projected issues, not only the first.
-- Both artifact validators use the same shape, replacing `Review artifact validation failed: N issue(s)` and the per-issue loop. They keep the authored custom message for `custom` codes on that issue's line.
+- Both artifact validators call one shared formatter instead of their duplicated print loops (`cli.ts:438-448`, `claude-code-validator.ts:56-66`). They keep the authored custom message for `custom` codes on that issue's line.
+- The `Schema:` line survives as the context line's second line. `Review artifact validation failed: N issue(s)` is replaced by the context line plus `… and N more`. Update the exact pins at `tests/unit/validate-review-artifact.test.ts:104` (`'1 issue(s)'`) and `:583-591`, and at `tests/unit/claude-code-validator.test.ts:72-76`.
 - The three CLI byte-cap messages and the library duplicate in `review-pipeline.ts` (`aggregate payload exceeds byte cap`) state `AGGREGATE_STDIN_BYTE_CAP` in bytes.
 - Screen is not touched. Its stderr and `rejected_summary.reason` stay as they are.
 - `internal error in <phase>` stays only for non-schema faults.
@@ -370,24 +431,24 @@ After the change, `MAX_FINDINGS` remains only for:
 - Error path (no-echo): a canary string in a field value and in an unknown key name never appears in stderr. Check prepare, merge, finalize and both artifact validators.
 - Happy path: a domain rejection still prints `<reason> at <path>`.
 - Regression: the exact-format input pins in the routing test are updated to the new multi-line form. Substring and packaging checks still pass.
-- Regression: the rejection-shape pins that assert `Object.keys(rejection)` equals `['path','reason']` are updated for schema rejections, starting with `tests/unit/review-pipeline-prepare.test.ts:586`. Grep `Object.keys(` on rejections in the prepare, merge and finalize tests. Domain rejections keep `['path','reason']`.
 - Regression: the forced sink fault still prints `internal error in <phase>`.
 - Happy path: the byte-cap overflow prints the cap in bytes (16842752) and exits 1, for `prepare`, `merge` and `finalize`. The library rejection in `prepareReviewCandidates` also states it.
+- Boundary: through the CLI, a run whose findings average about 2.7 KB or more produces the named finalize byte-cap rejection with exit 1.
 - Integration: an artifact with 9 or more issues, validated through `systematic validate-review-artifact` and through the built Claude Code bin from a foreign directory, prints the context line, 8 `path code` lines and `… and N more`. Each exits 1.
 
 **Verification:**
 - Every listed scenario passes.
 - Dropping the line bound makes the 9-or-more-issues test fail.
 - The Claude Code bin builds, and the foreign-directory check exits as expected.
-- `ce-review-validator:drift` passes.
+- `ce-review-validator:build` and `ce-review-validator:drift` pass.
 
-- [ ] **Unit 4: Skill guidance and docs**
+- [ ] **Unit 5: Skill guidance and docs**
 
 **Goal:** The orchestrator dispatches validators in bounded batches. The validator failure semantics agree. The docs describe the new error shape and the limits.
 
 **Requirements:** R8
 
-**Dependencies:** Unit 3
+**Dependencies:** Unit 4
 
 **Files:**
 - Modify: `skills/ce-review/SKILL.md` (Stage 5b validator dispatch)
@@ -432,7 +493,8 @@ After the change, `MAX_FINDINGS` remains only for:
 |------|------------|
 | A cap is raised in a schema but a runtime check or a downstream schema still holds the old value | The cross-phase table in this plan, one shared constant per bound, and end-to-end tests through artifact validation |
 | Larger artifacts are rejected by older external validators | A doc note. Schema version stays 1, so old artifacts remain valid. |
-| Very large runs hit the byte cap at finalize, or the model's output size binds before the contract capacity | Documented as the resource guard. The message states the limit. The scale test records real sizes. |
+| Very large runs hit the byte cap at finalize, or the model's output size binds before the contract capacity | Documented as the resource guard. The message states the limit. At 2048 findings the average finding must stay under about 2.7 KB, and a typical finding is about 1.2 KB, which puts finalize at about 44% of the cap. The scale test asserts that headroom and records real sizes. |
+| Runtime scales linearly, roughly 64× the 32-finding run | No change in this plan. The costs are a group-member scan of about 2M callbacks at `review-pipeline.ts:836`, the facts sort at `:1889` (about 0.1-0.3 s), and Zod revalidation of about 4e5 leaf checks at finalize. The scale test records per-phase times and asserts none. |
 | Up to 2048 reviewer finding texts can now re-enter the parent context, where the effective limit was about 32 | The skill's handling of reviewer output as untrusted content and the never-bypass rule are unchanged. Large runs carry more untrusted text, and the rule applies at every size. |
 | Generated surfaces drift | Each unit regenerates the artifacts it affects. The drift gates run in the final verification. |
 | Projection leaks payload text | The canary test, run against every surface |
