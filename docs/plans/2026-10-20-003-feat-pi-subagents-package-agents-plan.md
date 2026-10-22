@@ -29,7 +29,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - The Pi profile states it briefly: packaged versus exported personas and their precedence, the background default, and that project installs need trust.
   - The docs and HARNESSES add the detail: unsupported install paths, the `packageAgents` off switch and its cost, the all-tools limit, upgrade steps, and Pi's Node floor.
 - R7. The package lists the `pi-package` keyword.
-- R8. When `systematic.json` configures an overlay that packaged personas cannot receive, Pi warns once at extension start and names the export command.
+- R8. Pi warns once at extension start when `systematic.json` configures something packaged personas cannot receive:
+  - an overlay, naming the export command;
+  - a `disabled_agents` entry or `agents.<name>.disable` that targets a packaged persona, naming `/agents → Disable` and the `packageAgents` switch.
 
 ## Scope Boundaries
 
@@ -42,7 +44,6 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 
 ### Deferred to Separate Tasks
 
-- Pi honoring `disabled_skills`, `disabled_agents` and `agents.<name>.disable` in `systematic_skill`, the `systematic_delegate` catalog and the export. `src/pi.ts` hardcodes `disabledSkills = []` and builds the delegate catalog unfiltered. This is a separate `fix(pi)` PR that lands before this one (see Dependencies).
 - Adapting the 8 excluded personas for Pi.
 - Runtime contribution of config-aware personas from `src/pi.ts`. Trigger: pi-subagents documents an agent-type registration API.
 
@@ -57,7 +58,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - `generateAll(repoRoot)` is the pure default render of `CURATED_PERSONAS`. It has 29 entries: 28 exported and 1 exported-with-warning.
   - It throws on a filename collision or on critical coupling.
   - Each entry is `{fileName: systematic-<sanitized>.md, content, hash}`, and its frontmatter is only `description:`.
-- `src/lib/pi-subagents-export.ts`: `generateEntries(root)` with no options returns `generateAll(root)` unchanged. That shared default is what makes R2's byte-equality hold.
+- `src/lib/pi-subagents-export.ts`: `generateEntries(root)` with no options returns `{ entries: generateAll(root), disabledFilenames: ∅ }`. That shared default is what makes R2's byte-equality hold. With config options it drops personas `isAgentDisabled` disables (#1196).
 - `scripts/generate-pi-subagents-personas.ts`: it writes the committed fixtures `tests/fixtures/pi-subagents-personas/`, which are 29 `.md` files plus a timestamped manifest. It has a `--check` mode that `tests/unit/generate-pi-subagents-personas.test.ts` exercises.
 - `package.json`:
   - The `build` chain is `rimraf dist`, then `bun build` for index/cli, then `bun build` for `src/pi.ts`, then `tsc --emitDeclarationOnly`.
@@ -107,7 +108,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   "verdict": "extend",
   "scope": "package.json, scripts/, src/lib/pi-subagents-{personas,export}.ts, tests/fixtures/pi-subagents-personas, tests/{unit/package-exports,integration/pi}.test.ts, pi-subagents 0.22.0 loader",
   "freshness": {
-    "vcs_reference": "b291bf56"
+    "vcs_reference": "cb69d73d"
   },
   "budget": {
     "max_search_passes": 10,
@@ -218,8 +219,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - **The packaged path is config-blind.** pi-subagents 0.22.0 has no supported API for another extension to register or filter agent types. Its only registry setter, `registerAgents` in `dist/agent-types.js`, is internal and replaces the whole map. So `disabled_agents`, `agents.<name>.disable` and overlays cannot reach a packaged file.
   - The Pi equivalents are pi-subagents' own levers. `/agents → Disable` writes a local `enabled: false` stub that shadows one persona. Export applies overlays through local files, which outrank packaged ones.
   - Runtime contribution from `src/pi.ts` is rejected until pi-subagents documents a registration API. If it does, the packaged directory and manifest key can go, and `generateAll`, the fixtures and the byte-equality test stay.
-- **Overlay users get a startup warning.** When `systematic.json` configures an agent, category or `pi_subagents` overlay, `src/pi.ts` warns once at extension init. The warning says packaged personas ignore overlays until the user runs `systematic pi-subagents export`. It does not try to detect pi-subagents or existing exports.
-  - Users who rely on overlays only through `systematic_delegate` will see it too. Marcus accepted that cost so the silent bypass becomes visible.
+- **Overlay and disable users get a startup warning.** `src/pi.ts` warns once at extension init in two cases. It does not try to detect pi-subagents or existing exports.
+  - When `systematic.json` configures an agent, category or `pi_subagents` overlay, the warning says packaged personas ignore overlays until the user runs `systematic pi-subagents export`. Users who rely on overlays only through `systematic_delegate` will see it too. Marcus accepted that cost so the silent bypass becomes visible.
+  - When `disabled_agents` or `agents.<name>.disable` disables one or more of the curated personas, the warning gives the count and says those personas still load in pi-subagents from the package. It names `/agents → Disable` per persona and `packageAgents: false` for all. Since #1196 the same settings remove them from `systematic_delegate` and the export, so without the warning the package is the only place they silently survive. The match uses `isAgentDisabled` over `CURATED_PERSONAS`, so a disable of a non-curated persona does not warn.
 - **Authored `temperature` and `mode` are dropped on Pi.** pi-subagents frontmatter has no temperature field. The export already drops these, and reviewers authored at `temperature: 0.1` on OpenCode run at the Pi default. Documented.
 - **One persona, two dispatch names on Pi.** `systematic_delegate` uses bare names such as `repo-research-analyst`. pi-subagents uses `systematic-repo-research-analyst`, the filename stem. Renaming would break byte-equality and existing exports, so this is accepted and documented.
 - **No `run_in_background` pin.** Personas stay identical across the fixtures, the export and the package. The docs explain the 0.18 background default and `run_in_background: false`.
@@ -250,9 +252,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 
 ## Dependencies / Prerequisites
 
-- The `fix(pi)` disable-parity PR merges first. This plan then documents one consistent Pi story:
+- The `fix(pi)` disable-parity PR merged as #1196. This plan documents one consistent Pi story:
   - `disabled_agents` applies to `systematic_delegate` and the export.
-  - `/agents → Disable` covers packaged personas.
+  - `/agents → Disable` covers packaged personas, and the startup warning says so.
 
 ## Implementation Units
 
@@ -298,9 +300,9 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - `bun scripts/generate-pi-subagents-personas.ts --check` stays clean.
 - `bun run registry:drift` stays clean.
 
-- [ ] **Unit 2: Warn at Pi startup when overlays cannot reach packaged personas**
+- [ ] **Unit 2: Warn at Pi startup when overlays or disables cannot reach packaged personas**
 
-**Goal:** A user whose `systematic.json` overlays would silently not apply to packaged personas sees one warning naming the export command.
+**Goal:** A user whose `systematic.json` overlays or persona disables would silently not apply to packaged personas sees one warning per case, naming the remedy.
 
 **Requirements:** R8
 
@@ -312,7 +314,8 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 
 **Approach:**
 - After `loadConfigWithSources`, check whether any agent or category routing overlay or any `pi_subagents` overlay is configured. If so, emit one warning through the extension's existing failure-reporting style.
-- The warning names `systematic pi-subagents export` and says exported files outrank packaged ones. It never echoes overlay values.
+- The overlay warning names `systematic pi-subagents export` and says exported files outrank packaged ones. It never echoes overlay values.
+- Separately, count the `CURATED_PERSONAS` entries that `isAgentDisabled` disables. If the count is above zero, emit one warning with the count, `/agents → Disable` and `packageAgents: false` in `subagents.json`. It never echoes persona names from config.
 - No pi-subagents detection and no filesystem checks for existing exports.
 
 **Execution note:** Implement test-first.
@@ -325,11 +328,14 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 - Happy path: a config with only a `pi_subagents` overlay produces the warning.
 - Edge case: a config with no overlays produces no warning.
 - Edge case: the warning text contains no overlay value, such as a model ID.
+- Happy path: `disabled_agents: ["repo-research-analyst"]` produces exactly one disable warning with count 1. `agents.<curated>.disable: true` does too.
+- Edge case: disabling only a non-curated persona, such as `systematic-implementer`, produces no disable warning.
+- Edge case: a config with both an overlay and a disable produces both warnings, once each.
 - Integration: extension init still registers both tools and the bootstrap handler when the warning fires.
 
 **Verification:**
 - The unit suite passes.
-- A mutation that removes the overlay check fails the happy-path tests.
+- A mutation that removes the overlay check fails the happy-path tests, and a mutation that drops the curated-set filter fails the non-curated edge case.
 
 - [ ] **Unit 3: Prove packaged discovery on a real Pi host**
 
@@ -430,7 +436,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - Collisions are silent.
   - The `/agents` source badges.
   - The `packageAgents` off switch in `subagents.json`, with the description cost and the `compact` description mode. Place it next to the install instructions.
-  - `/agents → Disable` turns off one packaged persona. `disabled_agents` does not reach packaged personas.
+  - `/agents → Disable` turns off one packaged persona. `disabled_agents` does not reach packaged personas, and the startup warning says so.
   - Overlays need an export, and the startup warning says so.
   - Authored `temperature` and `mode` do not carry over to Pi.
   - One persona has two names on Pi: bare for `systematic_delegate`, `systematic-<name>` for pi-subagents.
@@ -463,8 +469,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
   - On OpenCode, every per-user control reaches every agent. On Pi:
     - packaged personas get none of those controls;
     - exported personas get overlays;
-    - `systematic_delegate` gets overlays, plus disable once the prerequisite fix lands.
-  - No test covers `disabled_agents` on Pi before that fix.
+    - `systematic_delegate` and the export get overlays and disables (#1196).
 - **Integration coverage:** only the real-host tests prove the manifest key, the stem-name fallback and precedence. Unit tests prove the build and pack contents.
 - **Unchanged invariants:**
   - Nothing writes to user-owned directories without an explicit command.
@@ -480,7 +485,7 @@ The docs and the Pi profile, which is inlined into every Pi session, still state
 | Profile text pressure pushes past the cap | Detail moves to HARNESSES and the guide, and the cap test enforces the limit. |
 | Users with old exports see stale personas | The guide and installation docs carry the refresh and cleanup guidance. |
 | Overlay users silently get un-overlaid packaged personas | The startup warning names the export command, and the docs repeat it. |
-| A persona disabled on OpenCode still appears in pi-subagents | The docs name `/agents → Disable`, and the prerequisite `fix(pi)` PR covers `systematic_delegate` and the export. |
+| A persona disabled in `systematic.json` still appears in pi-subagents | The startup warning and the docs name `/agents → Disable` and `packageAgents`. #1196 covers `systematic_delegate` and the export. |
 | Reviewers run at Pi's default temperature, not the authored `0.1` | Documented. pi-subagents has no temperature field. |
 | Two dispatch names for one persona on Pi | Documented. |
 | Packaged and exported personas run with every built-in tool | This matches OpenCode, which ignores the same `tools:` line. The limit is documented, and enforcement is separate work. |
