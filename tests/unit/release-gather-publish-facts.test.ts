@@ -5,6 +5,7 @@ import {
 } from '../../scripts/release/changelog.ts'
 import { decidePublish } from '../../scripts/release/decide-publish.ts'
 import {
+  API_RETRY_DELAYS_MS,
   type Api,
   gatherPublishFacts,
   githubApi,
@@ -595,6 +596,8 @@ describe('gatherPublishFacts', () => {
 })
 
 describe('githubApi', () => {
+  const instantSleep = async (): Promise<void> => {}
+
   function stubFetch(response: Response) {
     const seen: { url: string; init: RequestInit | undefined }[] = []
     const impl = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -628,8 +631,206 @@ describe('githubApi', () => {
 
   test('throws an error carrying status on a 500', async () => {
     const { impl } = stubFetch(new Response('bad', { status: 500 }))
-    await expect(githubApi('tok', impl)('repos/x/y')).rejects.toMatchObject({
+    await expect(
+      githubApi('tok', impl, instantSleep)('repos/x/y'),
+    ).rejects.toMatchObject({
       status: 500,
+    })
+  })
+
+  describe('retries', () => {
+    /** Answers each call with the next scripted outcome; a thrown outcome rejects. */
+    function scriptedFetch(outcomes: Array<Response | Error>) {
+      const signals: Array<AbortSignal | null | undefined> = []
+      const impl = (async (
+        _url: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        signals.push(init?.signal)
+        const outcome = outcomes[Math.min(signals.length, outcomes.length) - 1]
+        if (outcome instanceof Error) throw outcome
+        if (outcome === undefined) throw new Error('no scripted outcome')
+        return outcome.clone()
+      }) as unknown as typeof fetch
+      return { impl, signals }
+    }
+
+    const ok = () => new Response(JSON.stringify({ ok: true }), { status: 200 })
+    const status = (code: number, text: string) =>
+      new Response('x', { status: code, statusText: text })
+
+    test('a 500 followed by a 200 returns the JSON after two calls', async () => {
+      const { impl, signals } = scriptedFetch([
+        status(500, 'Internal Server Error'),
+        ok(),
+      ])
+
+      const result = await githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      expect(result).toEqual({ ok: true })
+      expect(signals).toHaveLength(2)
+    })
+
+    test('503, 502, then 500 on every attempt throw after seven calls with the last status and the usual message', async () => {
+      const { impl, signals } = scriptedFetch([
+        status(503, 'Service Unavailable'),
+        status(502, 'Bad Gateway'),
+        status(500, 'Internal Server Error'),
+      ])
+
+      const failure = githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      await expect(failure).rejects.toThrow(
+        'GET repos/x/y failed: 500 Internal Server Error',
+      )
+      await expect(failure).rejects.toMatchObject({ status: 500 })
+      expect(signals).toHaveLength(API_RETRY_DELAYS_MS.length + 1)
+      expect(signals).toHaveLength(7)
+    })
+
+    test('an outage that lasts six failed attempts still succeeds on the seventh', async () => {
+      const { impl, signals } = scriptedFetch([
+        ...Array.from({ length: 6 }, () =>
+          status(500, 'Internal Server Error'),
+        ),
+        ok(),
+      ])
+
+      const result = await githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      expect(result).toEqual({ ok: true })
+      expect(signals).toHaveLength(7)
+    })
+
+    test('a 404 throws after one call', async () => {
+      const { impl, signals } = scriptedFetch([status(404, 'Not Found')])
+
+      await expect(
+        githubApi('tok', impl, instantSleep)('repos/x/y'),
+      ).rejects.toMatchObject({ status: 404 })
+      expect(signals).toHaveLength(1)
+    })
+
+    test.each([400, 401, 403, 422])('a %i is not retried', async (code) => {
+      const { impl, signals } = scriptedFetch([status(code, 'No')])
+
+      await expect(
+        githubApi('tok', impl, instantSleep)('repos/x/y'),
+      ).rejects.toMatchObject({ status: code })
+      expect(signals).toHaveLength(1)
+    })
+
+    test('a 429 followed by a 200 succeeds', async () => {
+      const { impl, signals } = scriptedFetch([
+        status(429, 'Too Many Requests'),
+        ok(),
+      ])
+
+      const result = await githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      expect(result).toEqual({ ok: true })
+      expect(signals).toHaveLength(2)
+    })
+
+    test('a thrown network error followed by a 200 succeeds', async () => {
+      const { impl, signals } = scriptedFetch([
+        new TypeError('fetch failed'),
+        ok(),
+      ])
+
+      const result = await githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      expect(result).toEqual({ ok: true })
+      expect(signals).toHaveLength(2)
+    })
+
+    test('a timeout followed by a 200 succeeds', async () => {
+      const timeout = new DOMException('timed out', 'TimeoutError')
+      const { impl, signals } = scriptedFetch([timeout, ok()])
+
+      const result = await githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      expect(result).toEqual({ ok: true })
+      expect(signals).toHaveLength(2)
+    })
+
+    test('a network error on every attempt rethrows the last one after seven calls', async () => {
+      const failure = new TypeError('fetch failed')
+      const { impl, signals } = scriptedFetch([failure])
+
+      await expect(
+        githubApi('tok', impl, instantSleep)('repos/x/y'),
+      ).rejects.toBe(failure)
+      expect(signals).toHaveLength(7)
+    })
+
+    test('an error that is neither a network failure nor a timeout is not retried', async () => {
+      const failure = new RangeError('bug')
+      const { impl, signals } = scriptedFetch([failure, ok()])
+
+      await expect(
+        githubApi('tok', impl, instantSleep)('repos/x/y'),
+      ).rejects.toBe(failure)
+      expect(signals).toHaveLength(1)
+    })
+
+    test('each attempt gets its own signal', async () => {
+      const { impl, signals } = scriptedFetch([
+        status(500, 'Internal Server Error'),
+        status(500, 'Internal Server Error'),
+        ok(),
+      ])
+
+      await githubApi('tok', impl, instantSleep)('repos/x/y')
+
+      expect(signals).toHaveLength(3)
+      expect(new Set(signals).size).toBe(3)
+      for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal)
+    })
+
+    test('the retry schedule is five, fifteen, thirty, then three sixty-second waits', () => {
+      expect(API_RETRY_DELAYS_MS).toEqual([
+        5_000, 15_000, 30_000, 60_000, 60_000, 60_000,
+      ])
+    })
+
+    test('sleeps for exactly the scheduled delays, in order, while every attempt fails', async () => {
+      const delays: number[] = []
+      const { impl } = scriptedFetch([status(500, 'Internal Server Error')])
+
+      await expect(
+        githubApi('tok', impl, async (ms) => {
+          delays.push(ms)
+        })('repos/x/y'),
+      ).rejects.toMatchObject({ status: 500 })
+
+      expect(delays).toEqual([...API_RETRY_DELAYS_MS])
+    })
+
+    test('sleeps only for the delays it needed before a success', async () => {
+      const delays: number[] = []
+      const { impl } = scriptedFetch([
+        status(500, 'Internal Server Error'),
+        status(500, 'Internal Server Error'),
+        ok(),
+      ])
+
+      await githubApi('tok', impl, async (ms) => {
+        delays.push(ms)
+      })('repos/x/y')
+
+      expect(delays).toEqual([5_000, 15_000])
+    })
+
+    test('waits no time before a first-attempt success', async () => {
+      const delays: number[] = []
+      const { impl } = scriptedFetch([ok()])
+
+      await githubApi('tok', impl, async (ms) => {
+        delays.push(ms)
+      })('repos/x/y')
+
+      expect(delays).toEqual([])
     })
   })
 })

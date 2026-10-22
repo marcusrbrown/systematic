@@ -34,24 +34,87 @@ function isReviewState(value: string): value is Review['state'] {
   return REVIEW_STATES.some((state) => state === value)
 }
 
-export function githubApi(token: string, fetchImpl: typeof fetch = fetch): Api {
-  return async (path) => {
-    const response = await fetchImpl(`${API_ORIGIN}/${path}`, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
-    if (!response.ok) {
-      throw Object.assign(
+/** Resolves after `ms` milliseconds; injected so tests do not wait. */
+export type Sleep = (ms: number) => Promise<void>
+
+/**
+ * Waits between attempts, in milliseconds: one entry per retry, so a request
+ * makes `API_RETRY_DELAYS_MS.length + 1` attempts in all. An outage of a single
+ * endpoint can outlast a few seconds, so the schedule waits about four
+ * minutes in total before it gives up.
+ */
+export const API_RETRY_DELAYS_MS: readonly number[] = [
+  5_000, 15_000, 30_000, 60_000, 60_000, 60_000,
+]
+
+const defaultSleep: Sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+
+type AttemptResult =
+  | { kind: 'ok'; value: unknown }
+  | { kind: 'failed'; error: unknown; transient: boolean }
+
+/** A response worth another attempt: GitHub's 5xx errors and rate limiting. */
+function isTransientStatus(status: number): boolean {
+  return status >= 500 || status === 429
+}
+
+/** A request that never produced a response: `fetch`'s network `TypeError` or the attempt's timeout. */
+function isTransientFailure(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (error instanceof Error && error.name === 'TimeoutError')
+  )
+}
+
+/**
+ * A GET against the GitHub API that retries on the `API_RETRY_DELAYS_MS`
+ * schedule. It retries 5xx and 429 responses and network or timeout failures;
+ * any other status fails at once. Each attempt has its own timeout, and the
+ * final failure has the error shape of a single attempt:
+ * `GET <path> failed: <status> <text>` with a `status` property.
+ */
+export function githubApi(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+  sleep: Sleep = defaultSleep,
+): Api {
+  const attemptOnce = async (path: string): Promise<AttemptResult> => {
+    try {
+      const response = await fetchImpl(`${API_ORIGIN}/${path}`, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+      if (response.ok) return { kind: 'ok', value: await response.json() }
+      const error = Object.assign(
         new Error(
           `GET ${path} failed: ${response.status} ${response.statusText}`,
         ),
         { status: response.status },
       )
+      return {
+        kind: 'failed',
+        error,
+        transient: isTransientStatus(response.status),
+      }
+    } catch (error) {
+      return { kind: 'failed', error, transient: isTransientFailure(error) }
     }
-    return response.json()
+  }
+
+  return async (path) => {
+    for (let attempt = 1; ; attempt++) {
+      const result = await attemptOnce(path)
+      if (result.kind === 'ok') return result.value
+      const delay = API_RETRY_DELAYS_MS[attempt - 1]
+      if (!result.transient || delay === undefined) throw result.error
+      await sleep(delay)
+    }
   }
 }
 
