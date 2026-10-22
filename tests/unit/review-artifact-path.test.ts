@@ -2,10 +2,13 @@ import { describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { z } from 'zod'
 import {
   ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG,
   formatReviewArtifactSuccessMessage,
+  MAX_PROJECTED_ISSUE_LINES,
   parseValidateReviewArtifactArguments,
+  projectZodIssues,
   resolveReviewArtifactPath,
 } from '../../src/lib/review-artifact-path.js'
 
@@ -218,5 +221,98 @@ describe('resolveReviewArtifactPath invariants shared by both entries', () => {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(outsideDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('projectZodIssues', () => {
+  const issueAt = (index: number) => ({
+    path: ['items', index, 'name'] as PropertyKey[],
+    code: 'too_big',
+  })
+
+  it('bounds the projection at the default and reports the full total', () => {
+    const issues = Array.from({ length: 20 }, (_, index) => issueAt(index))
+
+    const projected = projectZodIssues(issues)
+
+    expect(MAX_PROJECTED_ISSUE_LINES).toBe(8)
+    expect(projected.issues).toHaveLength(MAX_PROJECTED_ISSUE_LINES)
+    expect(projected.total).toBe(20)
+    expect(projected.issues[0]).toEqual({
+      path: 'items.0.name',
+      code: 'too_big',
+    })
+  })
+
+  it('honors an explicit bound', () => {
+    const issues = Array.from({ length: 5 }, (_, index) => issueAt(index))
+
+    const projected = projectZodIssues(issues, 2)
+
+    expect(projected.issues).toHaveLength(2)
+    expect(projected.total).toBe(5)
+  })
+
+  it('keeps every issue when there are fewer than the bound', () => {
+    const projected = projectZodIssues([issueAt(0), issueAt(1)])
+
+    expect(projected.issues).toHaveLength(2)
+    expect(projected.total).toBe(2)
+  })
+
+  it('projects an empty list as an empty list with a zero total', () => {
+    expect(projectZodIssues([])).toEqual({ issues: [], total: 0 })
+  })
+
+  it('formats a root path as $', () => {
+    expect(
+      projectZodIssues([{ path: [], code: 'invalid_type' }]).issues,
+    ).toEqual([{ path: '$', code: 'invalid_type' }])
+  })
+
+  it('projects only the path and the code of a real Zod issue', () => {
+    const schema = z
+      .object({
+        name: z.string().max(4),
+        tags: z.array(z.string()).max(1),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.name === 'abc') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['name'],
+            message: 'MESSAGE_CANARY authored text',
+          })
+        }
+      })
+    const result = schema.safeParse({
+      name: 'VALUE_CANARY_too_long',
+      tags: ['a', 'b'],
+      KEY_CANARY: 'x',
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+
+    const projected = projectZodIssues(result.error.issues)
+    const serialized = JSON.stringify(projected)
+
+    expect(projected.total).toBe(result.error.issues.length)
+    for (const issue of projected.issues) {
+      expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+    }
+    expect(serialized).not.toContain('VALUE_CANARY')
+    expect(serialized).not.toContain('KEY_CANARY')
+  })
+
+  it('never copies an issue message into the projection', () => {
+    const projected = projectZodIssues([
+      { path: ['name'], code: 'custom', message: 'MESSAGE_CANARY' } as {
+        path: PropertyKey[]
+        code: string
+      },
+    ])
+
+    expect(JSON.stringify(projected)).not.toContain('MESSAGE_CANARY')
   })
 })

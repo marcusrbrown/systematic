@@ -1,6 +1,10 @@
 import path from 'node:path'
 import type { z } from 'zod'
-import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
+import {
+  formatReviewArtifactIssuePath,
+  type ProjectedIssue,
+  projectZodIssues,
+} from './review-artifact-path.js'
 import type { HarnessSchema } from './review-artifact-schema.js'
 import {
   MAX_FINDINGS,
@@ -271,12 +275,29 @@ type PrepareRejectReason =
   | 'unselected persona screen result'
   | 'missing screen result for selected dispatch'
 
-/** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
- * safe JSON path only. Never payload content, never exception text. */
-export interface PrepareRejection {
+type PrepareDomainReason = Exclude<PrepareRejectReason, 'schema validation'>
+
+/** A payload-safe schema rejection: a fixed reason code, the first issue's
+ * safe path, up to eight projected `{path, code}` issues and the full issue
+ * count. Never a message, a value or an unrecognized key name. */
+export interface SchemaRejection<Reason extends string> {
   readonly path: string
-  readonly reason: PrepareRejectReason
+  readonly reason: Reason
+  readonly issues: readonly ProjectedIssue[]
+  readonly total: number
 }
+
+/** A domain rejection: a fixed reason code and a safe JSON path only. */
+interface DomainRejection<Reason extends string> {
+  readonly path: string
+  readonly reason: Reason
+}
+
+/** One bounded, payload-safe rejection diagnostic. Never payload content,
+ * never exception text. */
+export type PrepareRejection =
+  | DomainRejection<PrepareDomainReason>
+  | SchemaRejection<'schema validation'>
 
 export type PrepareReviewCandidatesResult =
   | { readonly ok: true; readonly value: PrepareOutput }
@@ -290,9 +311,24 @@ const CONFIDENCE_GATE_SUPPRESSED_REASON = 'confidence below gate threshold'
 
 function rejectPrepare(
   path: string,
-  reason: PrepareRejectReason,
+  reason: PrepareDomainReason,
 ): { readonly ok: false; readonly rejection: PrepareRejection } {
   return { ok: false, rejection: { path, reason } }
+}
+
+/** Builds a schema rejection from a failed parse's issues. The path is the
+ * first issue's path, as it was before the issue list existed. */
+function schemaRejection<Reason extends string>(
+  reason: Reason,
+  zodIssues: readonly { path: readonly PropertyKey[]; code: string }[],
+): SchemaRejection<Reason> {
+  const { issues, total } = projectZodIssues(zodIssues)
+  return {
+    path: issues[0]?.path ?? JSON_ROOT_PATH,
+    reason,
+    issues,
+    total,
+  }
 }
 
 /**
@@ -343,7 +379,7 @@ function survivesConfidenceGate(finding: PrepareAdmittedFinding): boolean {
 function validatePrepareStructure(
   screenResults: readonly PrepareScreenResult[],
   selectedDispatches: readonly PrepareInputValue['selected_dispatches'][number][],
-): { readonly path: string; readonly reason: PrepareRejectReason } | undefined {
+): { readonly path: string; readonly reason: PrepareDomainReason } | undefined {
   const seenPersonas = new Set<string>()
   for (const [index, entry] of screenResults.entries()) {
     if (seenPersonas.has(entry.reviewer)) {
@@ -555,11 +591,10 @@ export function prepareReviewCandidates(
 
   const validation = PrepareInputSchema.safeParse(parsed.value)
   if (!validation.success) {
-    const issue = validation.error.issues[0]
-    const issuePath = issue
-      ? formatReviewArtifactIssuePath(issue.path)
-      : JSON_ROOT_PATH
-    return rejectPrepare(issuePath, 'schema validation')
+    return {
+      ok: false,
+      rejection: schemaRejection('schema validation', validation.error.issues),
+    }
   }
 
   const {
@@ -4491,14 +4526,8 @@ type FinalizeReviewRejection =
   | BuildReviewCoverageRejection
   | RiskCoverageSemanticsRejection
   | DispositionLedgerReconciliationRejection
-  | {
-      readonly path: string
-      readonly reason: 'artifact failed schema validation'
-    }
-  | {
-      readonly path: string
-      readonly reason: 'finalize output failed schema validation'
-    }
+  | SchemaRejection<'artifact failed schema validation'>
+  | SchemaRejection<'finalize output failed schema validation'>
 
 export type FinalizeReviewResult =
   | { readonly ok: true; readonly value: FinalizeOutputValue }
@@ -4777,15 +4806,12 @@ function buildReportProjection(
 function parseFinalizeOutput(output: unknown): FinalizeReviewResult {
   const parsed = FinalizeOutputSchema.safeParse(output)
   if (!parsed.success) {
-    const issue = parsed.error.issues[0]
     return {
       ok: false,
-      rejection: {
-        path: issue
-          ? formatReviewArtifactIssuePath(issue.path)
-          : JSON_ROOT_PATH,
-        reason: 'finalize output failed schema validation',
-      },
+      rejection: schemaRejection(
+        'finalize output failed schema validation',
+        parsed.error.issues,
+      ),
     }
   }
   return { ok: true, value: parsed.data }
@@ -4925,15 +4951,12 @@ export function finalizeReview(
 
   const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
   if (!parsedArtifact.success) {
-    const issue = parsedArtifact.error.issues[0]
     return {
       ok: false,
-      rejection: {
-        path: issue
-          ? formatReviewArtifactIssuePath(issue.path)
-          : JSON_ROOT_PATH,
-        reason: 'artifact failed schema validation',
-      },
+      rejection: schemaRejection(
+        'artifact failed schema validation',
+        parsedArtifact.error.issues,
+      ),
     }
   }
 

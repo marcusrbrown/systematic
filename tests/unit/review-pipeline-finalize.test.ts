@@ -4210,6 +4210,37 @@ describe('finalizeReview', () => {
     expect(result.rejection.reason).toBe('artifact failed schema validation')
     expect('value' in result).toBe(false)
     expect(Object.keys(result).sort()).toEqual(['ok', 'rejection'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'issues',
+      'path',
+      'reason',
+      'total',
+    ])
+  })
+
+  test('an artifact schema rejection carries bounded path and code issues and no value text', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      parent_run_metadata: {
+        ...base.parent_run_metadata,
+        branch: 'VALUE_CANARY'.padEnd(300, 'x'),
+      },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const { rejection } = result
+    if (!('issues' in rejection)) throw new Error('expected a schema rejection')
+    expect(rejection.total).toBeGreaterThanOrEqual(1)
+    expect(rejection.issues.length).toBeLessThanOrEqual(8)
+    expect(rejection.issues[0]?.path).toBe(rejection.path)
+    for (const issue of rejection.issues) {
+      expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+    }
+    expect(JSON.stringify(rejection)).not.toContain('CANARY')
   })
 
   test('changing only run_id changes only run_id in the artifact', () => {

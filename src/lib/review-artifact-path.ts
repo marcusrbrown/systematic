@@ -18,6 +18,48 @@ export function formatReviewArtifactIssuePath(
     .join('.')
 }
 
+/** Maximum number of projected issues emitted before the total. */
+export const MAX_PROJECTED_ISSUE_LINES = 8
+
+/** One bounded, payload-safe projected validation issue: a safe path and an
+ * issue code, never a message, a value, or an unrecognized key name. */
+export interface ProjectedIssue {
+  readonly path: string
+  readonly code: string
+}
+
+/** The structural shape of a validation issue the projector reads. A Zod
+ * issue satisfies it; this module does not import Zod, so the input is typed
+ * by the two fields that are projected. */
+export interface ProjectableIssue {
+  readonly path: readonly PropertyKey[]
+  readonly code: string
+}
+
+export interface ProjectedIssues {
+  readonly issues: readonly ProjectedIssue[]
+  /** The full issue count, even when {@link ProjectedIssues.issues} is capped. */
+  readonly total: number
+}
+
+/**
+ * Projects at most `max` issues to `{path, code}` pairs plus the full count.
+ * Only the path and the code are read, so no issue message, payload value or
+ * unrecognized key name can reach the projection.
+ */
+export function projectZodIssues(
+  issues: readonly ProjectableIssue[],
+  max: number = MAX_PROJECTED_ISSUE_LINES,
+): ProjectedIssues {
+  return {
+    issues: issues.slice(0, max).map((issue) => ({
+      path: formatReviewArtifactIssuePath(issue.path),
+      code: issue.code,
+    })),
+    total: issues.length,
+  }
+}
+
 export function readReviewArtifact(filePath: string): ReadArtifactResult {
   let content: string
   try {

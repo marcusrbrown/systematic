@@ -1,5 +1,9 @@
 import fs from 'node:fs'
-import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
+import {
+  MAX_PROJECTED_ISSUE_LINES,
+  type ProjectedIssue,
+  projectZodIssues,
+} from './review-artifact-path.js'
 import { SubAgentReturnSchema } from './review-artifact-schema.js'
 
 /**
@@ -18,8 +22,9 @@ export const VALIDATE_REVIEW_RETURN_USAGE =
 /** Input cap in bytes. Reads stop at {@link MAX_REVIEW_RETURN_BYTES} plus one. */
 export const MAX_REVIEW_RETURN_BYTES = 1024 * 1024
 
-/** Maximum number of projected issue lines emitted before the summary. */
-export const MAX_PROJECTED_ISSUE_LINES = 8
+// The projection bound lives with the shared projector; re-exported so the
+// return validator's consumers keep their import.
+export { MAX_PROJECTED_ISSUE_LINES }
 
 export const REVIEW_RETURN_VALID_MESSAGE = 'Review return is valid'
 export const REVIEW_RETURN_EMPTY_MESSAGE = 'Review return is empty'
@@ -35,10 +40,7 @@ export const REVIEW_RETURN_TTY_MESSAGE =
   'validate-review-return reads one JSON document from stdin; interactive input is not supported'
 
 /** One bounded, payload-safe projected validation issue. */
-export interface ReviewReturnIssue {
-  readonly path: string
-  readonly code: string
-}
+export type ReviewReturnIssue = ProjectedIssue
 
 export type ReviewReturnValidation =
   | { readonly ok: true }
@@ -59,14 +61,7 @@ export function validateReviewReturnValue(
   const result = SubAgentReturnSchema.safeParse(value)
   if (result.success) return { ok: true }
 
-  const total = result.error.issues.length
-  const issues = result.error.issues
-    .slice(0, MAX_PROJECTED_ISSUE_LINES)
-    .map((issue) => ({
-      path: formatReviewArtifactIssuePath(issue.path),
-      code: issue.code,
-    }))
-
+  const { issues, total } = projectZodIssues(result.error.issues)
   return { issues, ok: false, total }
 }
 
