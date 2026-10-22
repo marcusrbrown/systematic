@@ -634,6 +634,13 @@ describe('prepare: rejection outcomes', () => {
     expect(result.stderr).toContain('rejected the aggregate envelope')
     expect(result.stdout).toBe('')
   })
+
+  test('malformed JSON prints the context line, the fixed reason and the root path', () => {
+    const result = runValidator([...PREPARE_ARGS], { input: '{ not json' })
+    expect(result.stderr.trim()).toBe(
+      'prepare rejected the aggregate envelope: malformed JSON at $',
+    )
+  })
 })
 
 describe('prepare: environment invariance', () => {
@@ -793,6 +800,13 @@ describe('merge: rejection outcomes', () => {
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('rejected the aggregate envelope')
     expect(result.stdout).toBe('')
+  })
+
+  test('malformed JSON prints the context line, the fixed reason and the root path, as prepare does', () => {
+    const result = runValidator([...MERGE_ARGS], { input: '{ not json' })
+    expect(result.stderr.trim()).toBe(
+      'merge rejected the aggregate envelope: malformed JSON at $',
+    )
   })
 
   test('an adjudication rejection from applyReviewAdjudication exits 1 with the fixed reason and a path', () => {
@@ -1001,6 +1015,13 @@ describe('finalize: rejection outcomes', () => {
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('finalize rejected the aggregate envelope')
     expect(result.stdout).toBe('')
+  })
+
+  test('malformed JSON prints the context line, the fixed reason and the root path, as prepare does', () => {
+    const result = runValidator([...FINALIZE_ARGS], { input: '{ not json' })
+    expect(result.stderr.trim()).toBe(
+      'finalize rejected the aggregate envelope: malformed JSON at $',
+    )
   })
 
   test('a schema-invalid envelope exits 1 wrapped in the same rejection shape as every other phase, with a path and code but not the offending value', () => {

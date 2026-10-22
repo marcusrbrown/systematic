@@ -101,7 +101,9 @@ describe('systematic validate-review-artifact', () => {
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toContain('run_id')
       expect(result.stderr).toContain('too_big')
-      expect(result.stderr).not.toContain('issue(s)')
+      expect(result.stderr).toContain(
+        'Review artifact failed schema validation: 1 issue(s)',
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
     }
@@ -582,7 +584,7 @@ describe('systematic validate-review-artifact', () => {
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toBe(
         [
-          'Review artifact failed schema validation',
+          'Review artifact failed schema validation: 1 issue(s)',
           'Schema: skills/ce-review/references/review-summary-schema.json',
           'run_id too_big',
           '',
@@ -778,7 +780,13 @@ describe('systematic validate-review-artifact: validation_unavailable amendment'
 
       expect(result.exitCode).toBe(1)
       const lines = result.stderr.trimEnd().split('\n')
-      expect(lines[0]).toBe('Review artifact failed schema validation')
+      const count = Number(
+        /^Review artifact failed schema validation: (\d+) issue\(s\)$/.exec(
+          lines[0] ?? '',
+        )?.[1],
+      )
+      const more = Number(/^… and (\d+) more$/.exec(lines[10] ?? '')?.[1])
+      expect(count).toBe(8 + more)
       expect(lines[1]).toMatch(/^Schema: /)
       expect(lines.slice(2, 10)).toHaveLength(8)
       expect(lines[10]).toMatch(/^… and \d+ more$/)

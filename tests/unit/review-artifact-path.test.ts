@@ -356,7 +356,7 @@ describe('formatReviewArtifactValidationFailure', () => {
 
   it('prints the context line, the schema line, then the issue lines', () => {
     expect(formatReviewArtifactValidationFailure([issue(0)])).toEqual([
-      'Review artifact failed schema validation',
+      'Review artifact failed schema validation: 1 issue(s)',
       `Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`,
       'items.0 too_big',
     ])
@@ -402,6 +402,7 @@ describe('schemaRejection', () => {
     expect(rejection.total).toBe(12)
     expect(Object.keys(rejection).sort()).toEqual([
       'issues',
+      'kind',
       'path',
       'reason',
       'total',
@@ -411,6 +412,7 @@ describe('schemaRejection', () => {
   it('falls back to the root path when there is no issue', () => {
     expect(schemaRejection('schema validation', [])).toEqual({
       issues: [],
+      kind: 'schema',
       path: '$',
       reason: 'schema validation',
       total: 0,

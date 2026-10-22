@@ -3466,6 +3466,7 @@ describe('buildReviewCoverage', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.rejection).toEqual({
+      kind: 'domain',
       path: 'coverage.residual_risks',
       reason: 'coverage array exceeds bound',
     })
@@ -3725,6 +3726,7 @@ describe('checkRiskCoverageSemantics', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.rejection).toEqual({
+      kind: 'domain',
       path: 'risk_coverage.0.input_finding_id',
       reason:
         'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
@@ -3755,6 +3757,7 @@ describe('checkRiskCoverageSemantics', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.rejection).toEqual({
+      kind: 'domain',
       path: 'risk_coverage.0.input_finding_id',
       reason:
         'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
@@ -4240,6 +4243,7 @@ describe('finalizeReview', () => {
     expect(Object.keys(result).sort()).toEqual(['ok', 'rejection'])
     expect(Object.keys(result.rejection).sort()).toEqual([
       'issues',
+      'kind',
       'path',
       'reason',
       'total',
@@ -4261,7 +4265,8 @@ describe('finalizeReview', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     const { rejection } = result
-    if (!('issues' in rejection)) throw new Error('expected a schema rejection')
+    if (rejection.kind !== 'schema')
+      throw new Error('expected a schema rejection')
     expect(rejection.total).toBeGreaterThanOrEqual(1)
     expect(rejection.issues.length).toBeLessThanOrEqual(8)
     expect(rejection.issues[0]?.path).toBe(rejection.path)
@@ -4361,6 +4366,56 @@ describe('finalizeReview', () => {
     expect(reportOnlyResult.rejection.reason).toBe(
       interactiveResult.rejection.reason,
     )
+  })
+
+  test('a screened finding dropped from the survivors, the singletons and the dispositions together rejects instead of vanishing from the artifact', () => {
+    const base = finalizeReviewScenario()
+    const reduced = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          requires_verification: false,
+          severity: 'P3',
+        }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      prepared: reduced,
+      merge: buildAdjudicatedMergeOutput(reduced),
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+            admittedScreenFinding('correctness#1', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+      ],
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'screened finding lacks exactly one confidence disposition',
+    )
+    expect(result.rejection.path).toBe(
+      'screen_results.0.result.admitted_findings.1.input_id',
+    )
+  })
+
+  test('a screened finding carrying exactly one disposition is unaffected by the disposition coverage check', () => {
+    expect(finalizeReview(finalizeReviewScenario()).ok).toBe(true)
   })
 
   test('a cited input whose reviewer is unavailable in both dispatch arrays rejects identically in report-only and interactive', () => {

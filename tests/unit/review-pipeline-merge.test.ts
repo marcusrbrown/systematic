@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { MAX_RUN_FINDINGS } from '../../src/lib/review-artifact-schema.js'
+import {
+  MAX_RUN_DISAGREEMENT_FACTS,
+  MAX_RUN_FINDINGS,
+} from '../../src/lib/review-artifact-schema.js'
 import type {
   ApplyReviewAdjudicationResult,
   DeriveMergedFindingResult,
@@ -128,7 +131,11 @@ function expectRejection(
   expect(result.rejection.path).toBe(path)
   // No partial output escapes, and the diagnostic carries no payload content:
   // only the fixed reason code and a structural JSON path.
-  expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+  expect(Object.keys(result.rejection).sort()).toEqual([
+    'kind',
+    'path',
+    'reason',
+  ])
   expect(result.rejection.path).not.toMatch(/[A-Z][a-z]+ [a-z]+/) // no prose/title text
   expect('value' in result).toBe(false)
 }
@@ -368,7 +375,11 @@ function expectMergedFindingRejection(
   if (result.ok) return
   expect(result.rejection.reason as string).toBe(reason)
   expect(result.rejection.path).toBe(path)
-  expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+  expect(Object.keys(result.rejection).sort()).toEqual([
+    'kind',
+    'path',
+    'reason',
+  ])
   expect('value' in result).toBe(false)
 }
 
@@ -1361,7 +1372,11 @@ describe('applyReviewAdjudication -- the prepared echo', () => {
     if (result.ok) return
     expect(result.rejection.reason as string).toBe(reason)
     expect(result.rejection.path).toBe(path)
-    expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+    expect(Object.keys(result.rejection).sort()).toEqual([
+      'kind',
+      'path',
+      'reason',
+    ])
   }
 
   const GROUP = group('src/a.ts', [
@@ -1460,6 +1475,111 @@ describe('applyReviewAdjudication -- the prepared echo', () => {
     )
   })
 
+  const uniqueSurvivors = (echo: PrepareOutput) =>
+    echo.surviving_findings.filter(
+      (finding, index, all) =>
+        all.findIndex((other) => other.input_id === finding.input_id) === index,
+    )
+
+  test('an echo that leaves a survivor out of every group and singleton is a named rejection at that survivor', () => {
+    const echo = prepared([], { singletons: ['correctness#0', 'security#0'] })
+
+    const result = applyReviewAdjudication({
+      prepared: { ...echo, singletons: ['correctness#0'] },
+      decisions: [],
+    })
+
+    expectNamedRejection(
+      result,
+      'prepared survivor missing from the partition',
+      'surviving_findings.1.input_id',
+    )
+  })
+
+  test('an echo that drops a group member from its group but keeps it as a survivor is a named rejection', () => {
+    const echo = prepared([GROUP])
+
+    const result = applyReviewAdjudication({
+      prepared: {
+        ...echo,
+        candidate_groups: [{ ...GROUP, members: GROUP.members.slice(0, 1) }],
+      },
+      decisions: [declinedDecision('d0', 'correctness#0')],
+    })
+
+    expectNamedRejection(
+      result,
+      'prepared survivor missing from the partition',
+      'surviving_findings.1.input_id',
+    )
+  })
+
+  test('an echo that repeats a surviving finding input id is a named rejection at the repeated entry', () => {
+    const echo = prepared([], { singletons: ['correctness#0'] })
+
+    const result = applyReviewAdjudication({
+      prepared: {
+        ...echo,
+        surviving_findings: [
+          ...echo.surviving_findings,
+          ...echo.surviving_findings,
+        ],
+      },
+      decisions: [],
+    })
+
+    expectNamedRejection(
+      result,
+      'duplicate prepared survivor input id',
+      'surviving_findings.1.input_id',
+    )
+  })
+
+  test('an echo that lists a member twice in one group is a named rejection at the repeated entry', () => {
+    const echo = prepared([GROUP])
+
+    const result = applyReviewAdjudication({
+      prepared: {
+        ...echo,
+        candidate_groups: [
+          {
+            ...GROUP,
+            members: [GROUP.members[0], GROUP.members[0]].filter(
+              (member) => member !== undefined,
+            ),
+          },
+        ],
+        surviving_findings: uniqueSurvivors(echo),
+      },
+      decisions: DECLINE_BOTH,
+    })
+
+    expectNamedRejection(
+      result,
+      'duplicate candidate group member',
+      'candidate_groups.0.members.1.input_id',
+    )
+  })
+
+  test('an echo that lists the same member in two groups is a named rejection at the second group', () => {
+    const second = group('src/b.ts', [
+      { input_id: 'correctness#0', line: 3 },
+      { input_id: 'quality#0', line: 4 },
+    ])
+    const echo = prepared([GROUP, second])
+
+    const result = applyReviewAdjudication({
+      prepared: { ...echo, surviving_findings: uniqueSurvivors(echo) },
+      decisions: DECLINE_BOTH,
+    })
+
+    expectNamedRejection(
+      result,
+      'duplicate candidate group member',
+      'candidate_groups.1.members.0.input_id',
+    )
+  })
+
   test('a consistent echo is unaffected by the survivor and disjointness checks', () => {
     const result = applyReviewAdjudication({
       prepared: prepared([GROUP], { singletons: ['other#0'] }),
@@ -1490,7 +1610,8 @@ describe('applyReviewAdjudication -- merge output schema', () => {
     expect(rejection.reason as string).toBe(
       'merge output failed schema validation',
     )
-    if (!('issues' in rejection)) throw new Error('expected a schema rejection')
+    if (rejection.kind !== 'schema')
+      throw new Error('expected a schema rejection')
     expect(rejection.total).toBeGreaterThanOrEqual(1)
     expect(rejection.issues.length).toBeLessThanOrEqual(8)
     expect(rejection.issues[0]?.path).toBe(rejection.path)
@@ -1519,7 +1640,13 @@ describe('applyReviewAdjudication -- merge output schema', () => {
   )
 })
 
+type CapacityDecisions = ReturnType<
+  NonNullable<Parameters<typeof runPipeline>[0]['decide']>
+>
+
 describe('the real pipeline chain at run scale', () => {
+  const MAX_FINDINGS_PER_REVIEWER = 32
+
   function singletonsFor(
     reviewer: string,
     count: number,
@@ -1761,4 +1888,94 @@ describe('the real pipeline chain at run scale', () => {
     const artifact = writtenArtifact(run)
     expect(artifact.coverage.intent_uncertainty.length).toBeGreaterThan(64)
   })
+
+  test('a run at the run capacity with groups, merged and declined decisions, facts and validator requests completes as a writing run', () => {
+    const PAIRS = 32
+    const REVIEWERS = PAIRS * 2
+    const SHARED_PER_REVIEWER = 8
+    const GATED_PER_REVIEWER = 2
+    const MERGED_FACTS = 2
+    const DECLINED_FACTS = 3
+
+    const reviewers = Array.from({ length: REVIEWERS }, (_, index) => {
+      const reviewer = `reviewer-${index}`
+      const pair = Math.floor(index / 2)
+      const lineBase = index % 2 === 0 ? 1 : 101
+      return {
+        reviewer,
+        findings: Array.from({ length: MAX_FINDINGS_PER_REVIEWER }, (_, n) =>
+          n < SHARED_PER_REVIEWER
+            ? { file: `src/shared-${pair}.ts`, line: lineBase + n }
+            : {
+                file: `src/${reviewer}/only-${n}.ts`,
+                requiresVerification:
+                  n < SHARED_PER_REVIEWER + GATED_PER_REVIEWER,
+              },
+        ),
+      }
+    })
+    expect(REVIEWERS * MAX_FINDINGS_PER_REVIEWER).toBe(MAX_RUN_FINDINGS)
+
+    // Even groups merge into one finding that carries facts; odd groups
+    // decline every member.
+    const decide = (prepared: PrepareOutput): CapacityDecisions =>
+      prepared.candidate_groups.flatMap(
+        (group, index): CapacityDecisions =>
+          index % 2 === 0
+            ? [
+                {
+                  decision_id: `merged-${index}`,
+                  disposition: 'merged' as const,
+                  input_finding_ids: group.members.map((m) => m.input_id),
+                  title: `Merged issue ${index}`,
+                  why_it_matters: 'Two reviewers described the same failure.',
+                  evidence: [`${group.file}:1 demonstrates the failure path.`],
+                  line: group.members[0]?.line ?? 1,
+                  disagreement_facts: Array.from(
+                    { length: MERGED_FACTS },
+                    (_, n) => `Merged fact ${index} ${n}.`,
+                  ),
+                },
+              ]
+            : group.members.map((member) => ({
+                decision_id: `declined-${member.input_id}`,
+                disposition: 'declined' as const,
+                input_finding_id: member.input_id,
+                declined_reason: 'The reviewers described different problems.',
+              })),
+      )
+
+    const start = performance.now()
+    const run = runPipeline({
+      reviewers,
+      decide,
+      factsPerDecision: DECLINED_FACTS,
+    })
+    console.log(
+      `capacity run: ${Math.round(performance.now() - start)} ms, ` +
+        `${run.merge?.ok ? run.merge.value.validator_requests.length : 0} validator requests`,
+    )
+
+    expectCompleted(run)
+    const artifact = writtenArtifact(run)
+
+    const mergedGroups = PAIRS / 2
+    const declinedMembers = (PAIRS / 2) * SHARED_PER_REVIEWER * 2
+    const groupMembers = PAIRS * SHARED_PER_REVIEWER * 2
+    const singletons = MAX_RUN_FINDINGS - groupMembers
+    const expectedFacts =
+      mergedGroups * MERGED_FACTS + declinedMembers * (1 + DECLINED_FACTS)
+    const expectedRequests = REVIEWERS * GATED_PER_REVIEWER
+
+    expect(run.prepare.ok && run.prepare.value.candidate_groups).toHaveLength(
+      PAIRS,
+    )
+    expect(artifact.findings).toHaveLength(
+      mergedGroups + declinedMembers + singletons,
+    )
+    expect(artifact.coverage.intent_uncertainty).toHaveLength(expectedFacts)
+    expect(expectedFacts).toBeGreaterThan(64)
+    expect(expectedFacts).toBeLessThanOrEqual(MAX_RUN_DISAGREEMENT_FACTS)
+    expect(artifact.coverage.validators).toBe(expectedRequests)
+  }, 60_000)
 })

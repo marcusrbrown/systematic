@@ -32,18 +32,29 @@ by hand because a phase call failed.
 
 ## Rejection output
 
-An exit 1 from `prepare`, `merge` or `finalize` prints one of two shapes on
-stderr. A schema rejection starts with `<phase> rejected the aggregate
-envelope: <reason>`, then up to eight `path code` lines, then
-`… and N more` when more issues were found. A rejection of the content
-prints one line, `<phase> rejected the aggregate envelope: <reason> at <path>`.
+An exit 1 from `prepare`, `merge` or `finalize` prints one of four shapes on
+stderr:
+
+- **Schema rejection.** `<phase> rejected the aggregate envelope: <reason>`,
+  then up to eight `path code` lines, then `… and N more` when more issues
+  were found.
+- **Rejection of the content.** One line,
+  `<phase> rejected the aggregate envelope: <reason> at <path>`. Malformed JSON
+  is this shape too, with the reason `malformed JSON` and the path `$`.
+- **Byte cap.** One bare line, `<phase> input exceeds the aggregate byte cap
+  (16842752 bytes)`. It names the cap and carries no reason or path.
+- **Invalid UTF-8.** One bare line, `<phase> input is not valid UTF-8`.
+
 `path` points into the envelope and `code` is a schema issue code. No payload
 value, key name or issue message is printed, so the lines are safe to quote
 in Coverage and are enough to locate the field to correct.
 
 The artifact validators (`artifact` here, `validate-review-artifact` in the
-CLI) print `Review artifact failed schema validation`, a `Schema:` line, and
-the same bounded `path code` lines.
+CLI) print `Review artifact failed schema validation: N issue(s)` with the full
+issue count, a `Schema:` line, and the same bounded `path code` lines, then
+`… and N more` when more were found. An issue the schema authors wrote a
+message for (a `custom` issue) carries that one authored message after its
+code, as `path custom: <message>`; no other issue prints a message.
 
 Validators installed before the run-level limits were raised reject artifacts
 with more than 32 findings or other run-level entries. Schema version 1 is

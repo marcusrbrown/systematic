@@ -285,6 +285,7 @@ export type { SchemaRejection }
 
 /** A domain rejection: a fixed reason code and a safe JSON path only. */
 interface DomainRejection<Reason extends string> {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: Reason
 }
@@ -309,7 +310,7 @@ function rejectPrepare(
   path: string,
   reason: PrepareDomainReason,
 ): { readonly ok: false; readonly rejection: PrepareRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 /**
@@ -686,12 +687,16 @@ type AdjudicationRejectReason =
   | 'declined decision id collides with passthrough singleton input id'
   | 'passthrough singleton input id collides with merged group decision id'
   | 'prepared survivor missing for input id'
+  | 'prepared survivor missing from the partition'
+  | 'duplicate prepared survivor input id'
+  | 'duplicate candidate group member'
   | 'singleton input id is also a candidate group member'
 
 /** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
  * safe JSON path only. Never payload content, never a finding title, never
  * exception text. */
 export interface AdjudicationRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: AdjudicationRejectReason
 }
@@ -704,7 +709,7 @@ function rejectAdjudication(
   path: string,
   reason: AdjudicationRejectReason,
 ): { readonly ok: false; readonly rejection: AdjudicationRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 function citedInputIds(decision: MergeDecision): readonly string[] {
@@ -776,13 +781,13 @@ function validateCitations(
     for (const [citedIndex, inputId] of citedInputIds(decision).entries()) {
       const path = citationPath(decision, decisionIndex, citedIndex)
       if (suppressed.has(inputId)) {
-        return { path, reason: 'suppressed input id' }
+        return { kind: 'domain', path, reason: 'suppressed input id' }
       }
       if (!index.groupIndexByInputId.has(inputId)) {
-        return { path, reason: 'unknown input id' }
+        return { kind: 'domain', path, reason: 'unknown input id' }
       }
       if (seen.has(inputId)) {
-        return { path, reason: 'duplicate input id citation' }
+        return { kind: 'domain', path, reason: 'duplicate input id citation' }
       }
       seen.add(inputId)
     }
@@ -805,6 +810,7 @@ function validateNoOmissions(
     for (const [memberIndex, member] of group.members.entries()) {
       if (!citedIds.has(member.input_id)) {
         return {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'candidate_groups',
             groupIndex,
@@ -854,6 +860,7 @@ function validateMergedDecisionConsistency(
     const groupIndex = index.groupIndexByInputId.get(inputId)
     if (groupIndex !== expectedGroupIndex) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'decisions',
           decisionIndex,
@@ -868,6 +875,7 @@ function validateMergedDecisionConsistency(
   const group = candidateGroups[expectedGroupIndex]
   if (group && !group.members.some((member) => member.line === decision.line)) {
     return {
+      kind: 'domain',
       path: formatReviewArtifactIssuePath(['decisions', decisionIndex, 'line']),
       reason: 'representative line mismatch',
     }
@@ -964,42 +972,119 @@ function validatePreparedEcho(
     prepared.surviving_findings.map((finding) => finding.input_id),
   )
   const members = new Set<string>()
+  const singletons = new Set<string>()
+  return (
+    checkEchoGroupMembers(prepared, survivors, members) ??
+    checkEchoSingletons(prepared, survivors, members, singletons) ??
+    checkEchoSurvivorsAccountedFor(prepared, members, singletons)
+  )
+}
+
+/** Every candidate-group member resolves to a survivor and is listed once,
+ * within its group and across groups. Fills `members`. */
+function checkEchoGroupMembers(
+  prepared: PrepareOutput,
+  survivors: ReadonlySet<string>,
+  members: Set<string>,
+): AdjudicationRejection | undefined {
   for (const [
     groupIndex,
     candidateGroup,
   ] of prepared.candidate_groups.entries()) {
     for (const [memberIndex, member] of candidateGroup.members.entries()) {
+      const path = formatReviewArtifactIssuePath([
+        'candidate_groups',
+        groupIndex,
+        'members',
+        memberIndex,
+        'input_id',
+      ])
       if (!survivors.has(member.input_id)) {
         return {
-          path: formatReviewArtifactIssuePath([
-            'candidate_groups',
-            groupIndex,
-            'members',
-            memberIndex,
-            'input_id',
-          ]),
+          kind: 'domain',
+          path,
           reason: 'prepared survivor missing for input id',
+        }
+      }
+      if (members.has(member.input_id)) {
+        return {
+          kind: 'domain',
+          path,
+          reason: 'duplicate candidate group member',
         }
       }
       members.add(member.input_id)
     }
   }
-  const seen = new Set<string>()
+  return undefined
+}
+
+/** Every passthrough singleton resolves to a survivor, is not also a group
+ * member, and is listed once. Fills `singletons`. */
+function checkEchoSingletons(
+  prepared: PrepareOutput,
+  survivors: ReadonlySet<string>,
+  members: ReadonlySet<string>,
+  singletons: Set<string>,
+): AdjudicationRejection | undefined {
   for (const [index, inputId] of prepared.singletons.entries()) {
     const path = formatReviewArtifactIssuePath(['singletons', index])
     if (!survivors.has(inputId)) {
-      return { path, reason: 'prepared survivor missing for input id' }
+      return {
+        kind: 'domain',
+        path,
+        reason: 'prepared survivor missing for input id',
+      }
     }
     if (members.has(inputId)) {
       return {
+        kind: 'domain',
         path,
         reason: 'singleton input id is also a candidate group member',
       }
     }
-    if (seen.has(inputId)) {
-      return { path, reason: 'duplicate passthrough singleton input id' }
+    if (singletons.has(inputId)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'duplicate passthrough singleton input id',
+      }
     }
-    seen.add(inputId)
+    singletons.add(inputId)
+  }
+  return undefined
+}
+
+/** Every survivor is accounted for -- as a group member or a singleton --
+ * and listed once. A survivor in neither would be dropped from the run with
+ * no rejection and no report. */
+function checkEchoSurvivorsAccountedFor(
+  prepared: PrepareOutput,
+  members: ReadonlySet<string>,
+  singletons: ReadonlySet<string>,
+): AdjudicationRejection | undefined {
+  const seen = new Set<string>()
+  for (const [index, finding] of prepared.surviving_findings.entries()) {
+    const path = formatReviewArtifactIssuePath([
+      'surviving_findings',
+      index,
+      'input_id',
+    ])
+    if (!members.has(finding.input_id) && !singletons.has(finding.input_id)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'prepared survivor missing from the partition',
+      }
+    }
+    if (seen.has(finding.input_id)) {
+      return {
+        kind: 'domain',
+        path,
+        reason: 'duplicate prepared survivor input id',
+      }
+    }
+    seen.add(finding.input_id)
   }
   return undefined
 }
@@ -1156,6 +1241,7 @@ type MergedFindingRejectReason =
  * safe JSON path only. Never payload content, never a finding title, never
  * exception text. */
 export interface MergedFindingRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: MergedFindingRejectReason
 }
@@ -1168,7 +1254,7 @@ function rejectMergedFinding(
   path: string,
   reason: MergedFindingRejectReason,
 ): { readonly ok: false; readonly rejection: MergedFindingRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 const SEVERITY_RANK: Record<SurvivingFinding['severity'], number> = {
@@ -1867,6 +1953,7 @@ function checkNoDuplicateAssembledFindingIds(
     const priorOrigin = seen.get(entry.finding_id)
     if (priorOrigin !== undefined) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge_assembly',
           index,
@@ -2074,6 +2161,7 @@ type ReconcileValidatorResultsRejectReason =
 /** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
  * safe JSON path only. Never payload content, never a finding title. */
 export interface ReconcileValidatorResultsRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: ReconcileValidatorResultsRejectReason
 }
@@ -2097,7 +2185,7 @@ function rejectReconcile(
   readonly ok: false
   readonly rejection: ReconcileValidatorResultsRejection
 } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 /**
@@ -2146,6 +2234,7 @@ function validateNoMissingResults(
   for (const [index, request] of validatorRequests.entries()) {
     if (!resultsByFindingId.has(request.finding_id)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'validator_requests',
           index,
@@ -2327,9 +2416,11 @@ type FinalizeContextRejectReason =
   | 'surviving finding diverges from its screened finding'
   | 'surviving finding references unscreened input'
   | 'duplicate confidence disposition'
+  | 'screened finding lacks exactly one confidence disposition'
   | 'validation must be not_attempted at finalize'
 
 export interface FinalizeContextRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: FinalizeContextRejectReason
 }
@@ -2342,7 +2433,7 @@ function rejectFinalizeContext(
   path: string,
   reason: FinalizeContextRejectReason,
 ): { readonly ok: false; readonly rejection: FinalizeContextRejection } {
-  return { ok: false, rejection: { path, reason } }
+  return { ok: false, rejection: { kind: 'domain', path, reason } }
 }
 
 type FinalizeContextCheckResult<Value> =
@@ -2537,6 +2628,7 @@ function checkValidatorRequestsResolve(
       validatorRequestMismatches(request, findingById, expectedFindingIds)
     ) {
       return {
+        kind: 'domain',
         path,
         reason: 'validator request references unknown merged finding',
       }
@@ -2546,6 +2638,7 @@ function checkValidatorRequestsResolve(
 
   if (seenFindingIds.size !== expectedFindingIds.size) {
     return {
+      kind: 'domain',
       path: formatReviewArtifactIssuePath(['merge', 'validator_requests']),
       reason: 'validator request references unknown merged finding',
     }
@@ -2841,6 +2934,7 @@ function checkMergedFindingsMatchDerivation(
       })
     ) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -2852,6 +2946,7 @@ function checkMergedFindingsMatchDerivation(
 
     if (mergedFindingRouteReasonMismatch(finding, meet)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -2879,6 +2974,7 @@ function checkNoDuplicateConfidenceDispositions(
   for (const [index, entry] of confidenceDispositions.entries()) {
     if (seen.has(entry.input_id)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'confidence_dispositions',
@@ -2951,6 +3047,7 @@ function checkConfidenceDispositionsResolveScreenedFindings(
   ] of prepared.confidence_dispositions.entries()) {
     if (screenedCounts.get(disposition.input_id) !== 1) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'confidence_dispositions',
@@ -2973,6 +3070,7 @@ function checkConfidenceDispositionsResolveScreenedFindings(
     const screened = screenedByInputId.get(survivor.input_id)
     if (screened === undefined) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'surviving_findings',
@@ -2991,6 +3089,7 @@ function checkConfidenceDispositionsResolveScreenedFindings(
       screened.severity !== survivor.severity
     ) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'prepared',
           'surviving_findings',
@@ -3001,6 +3100,41 @@ function checkConfidenceDispositionsResolveScreenedFindings(
     }
   }
 
+  return checkScreenedFindingsHaveOneDisposition(prepared, screenResults)
+}
+
+/** The dispositions are the ledger of everything screened. A screened finding
+ * with no entry would otherwise disappear from the artifact with no trace, so
+ * each one must be mirrored exactly once. */
+function checkScreenedFindingsHaveOneDisposition(
+  prepared: Pick<PrepareOutput, 'confidence_dispositions'>,
+  screenResults: FinalizeScreenResults,
+): FinalizeContextRejection | undefined {
+  const dispositionCounts = new Map<string, number>()
+  for (const disposition of prepared.confidence_dispositions) {
+    dispositionCounts.set(
+      disposition.input_id,
+      (dispositionCounts.get(disposition.input_id) ?? 0) + 1,
+    )
+  }
+  for (const [resultIndex, result] of screenResults.entries()) {
+    for (const [index, finding] of result.result.admitted_findings.entries()) {
+      if (dispositionCounts.get(finding.input_id) !== 1) {
+        return {
+          kind: 'domain',
+          path: formatReviewArtifactIssuePath([
+            'screen_results',
+            resultIndex,
+            'result',
+            'admitted_findings',
+            index,
+            'input_id',
+          ]),
+          reason: 'screened finding lacks exactly one confidence disposition',
+        }
+      }
+    }
+  }
   return undefined
 }
 
@@ -3032,6 +3166,7 @@ function findUnavailableCitedReviewer(
       return {
         citedReviewers,
         rejection: {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'merge',
             'merged_findings',
@@ -3058,6 +3193,7 @@ function findUnsupportedSubmitter(
   for (const [submitterIndex, submitter] of finding.submitters.entries()) {
     if (!citedReviewers.has(submitter)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -3083,6 +3219,7 @@ function findOverlappingAgreementCredit(
   for (const [creditIndex, credit] of agreementCredit.entries()) {
     if (submitterSet.has(credit)) {
       return {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath([
           'merge',
           'merged_findings',
@@ -3425,6 +3562,7 @@ type FinalizeReviewDispositionsRejectReason =
   'survivor missing from merged findings'
 
 export interface FinalizeReviewDispositionsRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: FinalizeReviewDispositionsRejectReason
 }
@@ -3496,6 +3634,7 @@ function deriveInputDispositions(
       return {
         ok: false,
         rejection: {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'prepared',
             'confidence_dispositions',
@@ -4398,6 +4537,7 @@ export interface ReviewCoverageSummary {
 type BuildReviewCoverageRejectReason = 'coverage array exceeds bound'
 
 export interface BuildReviewCoverageRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: BuildReviewCoverageRejectReason
 }
@@ -4429,6 +4569,7 @@ function checkCoverageArrayBound(
 ): BuildReviewCoverageRejection | undefined {
   if (values.length <= COVERAGE_BOUNDS[field]) return undefined
   return {
+    kind: 'domain',
     path: formatReviewArtifactIssuePath(['coverage', field]),
     reason: 'coverage array exceeds bound',
   }
@@ -4727,6 +4868,7 @@ interface RiskCoverageSemanticsInput {
 }
 
 interface RiskCoverageSemanticsRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: 'satisfied risk coverage must cite a validated finding on the lost persona selection surface'
 }
@@ -4784,6 +4926,7 @@ export function checkRiskCoverageSemantics(
       return {
         ok: false,
         rejection: {
+          kind: 'domain',
           path: formatReviewArtifactIssuePath([
             'risk_coverage',
             coverageIndex,
@@ -4800,6 +4943,7 @@ export function checkRiskCoverageSemantics(
 }
 
 interface DispositionLedgerReconciliationRejection {
+  readonly kind: 'domain'
   readonly path: string
   readonly reason: 'disposition counts do not reconcile with the admitted input ledger'
 }
@@ -4843,6 +4987,7 @@ export function checkDispositionCountsReconcileLedger(
     return {
       ok: false,
       rejection: {
+        kind: 'domain',
         path: formatReviewArtifactIssuePath(['disposition_counts']),
         reason:
           'disposition counts do not reconcile with the admitted input ledger',
@@ -4892,6 +5037,10 @@ function buildReportProjection(
   }
 }
 
+// Defense in depth, as with prepare: the artifact parse above runs first and
+// every report field of the output is bounded, so a value that passes the
+// artifact schema cannot fail this one. The branch exists so a future mismatch
+// between the two schemas rejects instead of throwing. It has no test.
 function parseFinalizeOutput(output: unknown): FinalizeReviewResult {
   const parsed = FinalizeOutputSchema.safeParse(output)
   if (!parsed.success) {

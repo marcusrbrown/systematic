@@ -65,6 +65,7 @@ export function projectZodIssues(
  * issues and the full issue count. Never a message, a value or an
  * unrecognized key name. */
 export interface SchemaRejection<Reason extends string> {
+  readonly kind: 'schema'
   readonly path: string
   readonly reason: Reason
   readonly issues: readonly ProjectedIssue[]
@@ -82,6 +83,7 @@ export function schemaRejection<Reason extends string>(
 ): SchemaRejection<Reason> {
   const { issues, total } = projectZodIssues(zodIssues)
   return {
+    kind: 'schema',
     path: issues[0]?.path ?? '$',
     reason,
     issues,
@@ -113,9 +115,9 @@ export interface ArtifactValidationIssue extends ProjectableIssue {
 }
 
 /**
- * The lines both artifact validators print for a schema failure: a fixed
- * context line, the published schema's path, up to {@link MAX_PROJECTED_ISSUE_LINES}
- * `path code` lines, then `… and N more`.
+ * The lines both artifact validators print for a schema failure: a context
+ * line that carries the full issue count, the published schema's path, up to
+ * {@link MAX_PROJECTED_ISSUE_LINES} `path code` lines, then `… and N more`.
  *
  * A `custom` issue keeps its message. Those messages are the closed,
  * author-written set in `REVIEW_ARTIFACT_CUSTOM_MESSAGES`
@@ -134,7 +136,7 @@ export function formatReviewArtifactValidationFailure(
     }
   }
   return [
-    'Review artifact failed schema validation',
+    `Review artifact failed schema validation: ${projected.total} issue(s)`,
     `Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`,
     ...issueLines,
   ]

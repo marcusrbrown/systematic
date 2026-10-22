@@ -213,18 +213,32 @@ function parseScreenFlags(argv: readonly string[]): ScreenFlagParse {
  */
 export function formatAggregateRejection(
   rejectedMessage: string,
-  rejection:
-    | { readonly path: string; readonly reason: string }
-    | SchemaRejection<string>,
+  rejection: AggregateRejection,
 ): string {
-  if ('issues' in rejection) {
-    return [
-      `${rejectedMessage}: ${rejection.reason}`,
-      ...formatProjectedIssueLines(rejection),
-    ].join('\n')
+  switch (rejection.kind) {
+    case 'schema':
+      return [
+        `${rejectedMessage}: ${rejection.reason}`,
+        ...formatProjectedIssueLines(rejection),
+      ].join('\n')
+    case 'domain':
+      return `${rejectedMessage}: ${rejection.reason} at ${rejection.path}`
+    default: {
+      const unhandled: never = rejection
+      throw new Error(`Unhandled rejection kind: ${String(unhandled)}`)
+    }
   }
-  return `${rejectedMessage}: ${rejection.reason} at ${rejection.path}`
 }
+
+/** A rejection the aggregate subcommands can print: a schema failure with its
+ * projected issues, or a domain failure with a fixed reason and a safe path. */
+export type AggregateRejection =
+  | SchemaRejection<string>
+  | {
+      readonly kind: 'domain'
+      readonly path: string
+      readonly reason: string
+    }
 
 function runScreenSubcommand(
   options: CeReviewValidatorOptions,
@@ -356,9 +370,7 @@ interface AggregateStdinSubcommandSpec<Input> {
     | { readonly ok: true; readonly value: unknown }
     | {
         readonly ok: false
-        readonly rejection:
-          | { readonly path: string; readonly reason: string }
-          | SchemaRejection<string>
+        readonly rejection: AggregateRejection
       }
 }
 
@@ -419,7 +431,13 @@ function runAggregateStdinSubcommand<Input>(
   try {
     value = JSON.parse(text)
   } catch {
-    errorSink(spec.rejectedMessage)
+    errorSink(
+      formatAggregateRejection(spec.rejectedMessage, {
+        kind: 'domain',
+        path: '$',
+        reason: 'malformed JSON',
+      }),
+    )
     return 1
   }
 

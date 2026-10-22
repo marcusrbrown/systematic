@@ -72,7 +72,7 @@ describe('Claude Code bundled validator entry', () => {
       expect(result.exitCode).toBe(1)
       expect(result.stdout).toEqual([])
       expect(result.stderr).toEqual([
-        'Review artifact failed schema validation',
+        'Review artifact failed schema validation: 1 issue(s)',
         'Schema: skills/ce-review/references/review-summary-schema.json',
         'run_id too_big',
       ])
@@ -202,7 +202,15 @@ describe('Claude Code bundled validator entry', () => {
       const result = runValidator(cwd)
 
       expect(result.exitCode).toBe(1)
-      expect(result.stderr[0]).toBe('Review artifact failed schema validation')
+      const count = Number(
+        /^Review artifact failed schema validation: (\d+) issue\(s\)$/.exec(
+          result.stderr[0] ?? '',
+        )?.[1],
+      )
+      const more = Number(
+        /^… and (\d+) more$/.exec(result.stderr[10] ?? '')?.[1],
+      )
+      expect(count).toBe(8 + more)
       expect(result.stderr[1]).toMatch(/^Schema: /)
       expect(result.stderr.slice(2, 10)).toHaveLength(8)
       expect(result.stderr[10]).toMatch(/^… and \d+ more$/)
@@ -238,7 +246,13 @@ describe('Claude Code bundled validator entry', () => {
 
       expect(result.status).toBe(1)
       const lines = (result.stderr ?? '').trimEnd().split('\n')
-      expect(lines[0]).toBe('Review artifact failed schema validation')
+      const count = Number(
+        /^Review artifact failed schema validation: (\d+) issue\(s\)$/.exec(
+          lines[0] ?? '',
+        )?.[1],
+      )
+      const more = Number(/^… and (\d+) more$/.exec(lines[10] ?? '')?.[1])
+      expect(count).toBe(8 + more)
       expect(lines.slice(2, 10)).toHaveLength(8)
       expect(lines[10]).toMatch(/^… and \d+ more$/)
       expect(result.stderr).not.toContain('CANARY')
