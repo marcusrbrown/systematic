@@ -521,6 +521,61 @@ describe('verify: retry schedule', () => {
     expect(result.status).toBe('timeout')
     expect(clock.now()).toBeLessThanOrEqual(90_000)
   })
+
+  it('cuts a request short at the time left in the call', async () => {
+    // Attempt 1 hangs for 10 s, the wait takes 2 s, so 3 s of the 15 s remain
+    // for attempt 2. It must give up then, not after its own 10 s.
+    const { result, clock, calls } = await verifyOne(() => HANG, {
+      maxWaitMs: 15_000,
+      requestTimeoutMs: 10_000,
+      scheduleMs: [2000],
+    })
+
+    expect(calls).toHaveLength(2)
+    expect(result.attempts).toBe(2)
+    expect(result.status).toBe('timeout')
+    expect(clock.now()).toBe(15_000)
+  })
+
+  it('starts no attempt once the call budget is spent', async () => {
+    // The wait ends exactly at the 12 s limit, so there is no time left to ask.
+    const { result, clock, calls } = await verifyOne(() => HANG, {
+      maxWaitMs: 12_000,
+      requestTimeoutMs: 10_000,
+      scheduleMs: [2000],
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(result.attempts).toBe(1)
+    expect(result.status).toBe('timeout')
+    expect(result.retryable).toBe(true)
+    expect(clock.now()).toBe(12_000)
+  })
+
+  it('still makes its one attempt when earlier calls spent the whole budget', async () => {
+    const { result, calls } = await verifyOne(() => reply(404, {}, null), {
+      waitedMs: 300_000,
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(result.attempts).toBe(1)
+    expect(result.status).toBe('not-found')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('cuts a request in a redirect chain short at the time left in the call', async () => {
+    const next = embedUrl('moved.png', 'media.githubusercontent.com')
+    const { result, clock } = await verifyOne(
+      (url) => (url === A_PNG ? redirectTo(next) : HANG),
+      { maxWaitMs: 4000, requestTimeoutMs: 10_000, scheduleMs: [1000] },
+    )
+
+    // Attempt 1 follows the redirect and hangs 4 s (the whole call limit).
+    // Nothing may start after that.
+    expect(result.status).toBe('timeout')
+    expect(result.attempts).toBe(1)
+    expect(clock.now()).toBe(4000)
+  })
 })
 
 // ── Fail at once ───────────────────────────────────────────────────────────
@@ -894,6 +949,44 @@ describe('verify: report and exit codes', () => {
     )
 
     expect(exitCode).toBe(1)
+    expect(body.retryable).toBe(false)
+  })
+
+  it('reports waited_s as the waited_s it was given plus this call', async () => {
+    // Resuming at 20 s, the next wait is 15 s. A 40 s call limit fits one wait
+    // of 15 s and stops before the next one of 30 s.
+    const { body } = await runVerify(
+      { urls: [A_PNG], max_wait_s: 40, waited_s: 20 },
+      () => reply(404, {}, null),
+    )
+
+    expect(body.waited_s).toBe(35)
+  })
+
+  it('lets the caller pass the latest waited_s on unchanged', async () => {
+    const first = await runVerify(
+      { urls: [A_PNG], max_wait_s: 40, waited_s: 0 },
+      () => reply(404, {}, null),
+    )
+    const second = await runVerify(
+      { urls: [A_PNG], max_wait_s: 40, waited_s: first.body.waited_s },
+      () => reply(404, {}, null),
+    )
+
+    expect(first.body.retryable).toBe(true)
+    expect(second.body.waited_s).toBeGreaterThan(first.body.waited_s)
+    // The second report already counts the first, so nothing is summed by hand.
+    expect(second.body.waited_s).toBeGreaterThanOrEqual(
+      first.body.waited_s + 14,
+    )
+  })
+
+  it('ends retries once the reported waited_s reaches the 300 s total', async () => {
+    const { body } = await runVerify({ urls: [A_PNG], waited_s: 295 }, () =>
+      reply(404, {}, null),
+    )
+
+    expect(body.waited_s).toBe(295)
     expect(body.retryable).toBe(false)
   })
 

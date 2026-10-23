@@ -91,6 +91,7 @@ const fallback = normalize(
 const carryBlock = normalize(
   between(stepSeven, '**Carry the Demo section.**', '**Apply'),
 )
+const carryRules = normalize(section(skill, '## Carrying the Demo section'))
 
 function optionLabels(text: string): string[] {
   return [...text.matchAll(/^- \*\*([^*]+)\*\*/gm)].map((match) =>
@@ -113,23 +114,23 @@ describe('git-commit-push-pr evidence contract -- the publish option', () => {
     expect(loadInstruction).toContain('`mode:embed')
   })
 
-  test('the load instruction states mode:embed and the paths in its own text, and passes them as arguments too', () => {
+  test('the load instruction states mode:embed and the paths in its own text only', () => {
     expect(loadInstruction).toContain(
       '`mode:embed shots/a.png "shots/b c.png"`',
     )
-    expect(loadInstruction).toMatch(
-      /instruction text[^.]*skill arguments|skill arguments[^.]*instruction text/i,
-    )
+    expect(loadInstruction).toMatch(/instruction text/i)
     expect(loadInstruction).toMatch(/pass no (?:skill )?arguments/i)
     expect(loadInstruction).toMatch(/spaces[^.]*double quotes/i)
+    expect(loadInstruction).not.toMatch(/pass them as skill arguments/i)
+    expect(loadInstruction).not.toMatch(/where the host supports them/i)
   })
 
-  test('parses both status lines and handles each outcome', () => {
+  test('parses all three status lines and handles each outcome', () => {
     expect(evidenceDecision).toContain(
       'pr-attachments: status=ok evidence_sha=<40-hex> demo_file=<path> images=<count>',
     )
     expect(evidenceDecision).toContain(
-      'pr-attachments: status=failed evidence=<pushed|none> reason=<reason>',
+      'pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>',
     )
     const text = normalize(evidenceDecision)
     expect(text).toMatch(
@@ -137,6 +138,14 @@ describe('git-commit-push-pr evidence contract -- the publish option', () => {
     )
     expect(text).toMatch(/`evidence=none`[^.]*nothing was published/i)
     expect(text).toMatch(/continue without evidence/i)
+  })
+
+  test('evidence=local tells the user the evidence commit is local and unpushed', () => {
+    const text = normalize(evidenceDecision)
+    expect(text).toMatch(
+      /`evidence=local`[^.]*evidence commit[^.]*local and (?:is )?unpushed/i,
+    )
+    expect(text).toMatch(/`evidence=local`[\s\S]*continue without evidence/i)
   })
 
   test('a request to publish never stages the images in the feature commit', () => {
@@ -235,14 +244,16 @@ function optionLabelsInline(text: string): string[] {
 }
 
 describe('git-commit-push-pr evidence contract -- rewrites', () => {
-  test('Step 7 carries the Demo section through mode:carry, with the tokens in the instruction text', () => {
+  test('Step 7 carries the Demo section through mode:carry, with the tokens in the instruction text only', () => {
     expect(stepSeven).toContain('**Carry the Demo section.**')
-    expect(carryBlock).toContain('`systematic:pr-attachments`')
-    expect(carryBlock).toContain(
+    expect(carryRules).toContain('`systematic:pr-attachments`')
+    expect(carryRules).toContain(
       '`mode:carry old=<old body file> new=<new body file>`',
     )
-    expect(carryBlock).toMatch(/instruction text/i)
-    expect(carryBlock).toMatch(/spaces[^.]*double quotes/i)
+    expect(carryRules).toMatch(/instruction text/i)
+    expect(carryRules).toMatch(/spaces[^.]*double quotes/i)
+    expect(carryRules).not.toMatch(/pass them as skill arguments/i)
+    expect(carryRules).not.toMatch(/where the host supports them/i)
   })
 
   test('Step 7 writes both bodies to mktemp files', () => {
@@ -253,14 +264,15 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
     expect(carryBlock).toMatch(/new body file/i)
   })
 
-  test('Step 7 makes its temp file with a portable bare mktemp, never an X template with a suffix', () => {
+  test('both rewrite paths make their temp file with a portable bare mktemp, never an X template with a suffix', () => {
     // macOS mktemp creates a literal file when the template has a suffix after
     // the X run, and GNU mktemp rejects it. Both break the carry silently.
-    const mktemps = fencedBlocks(stepSeven)
+    const mktemps = [...fencedBlocks(stepSeven), ...fencedBlocks(duThree)]
       .join('\n')
       .split('\n')
       .filter((line) => line.includes('mktemp'))
-    expect(mktemps.length).toBeGreaterThan(0)
+      .filter((line) => !line.includes('BODY_FILE=$(mktemp /tmp/pr-body-'))
+    expect(mktemps.length).toBeGreaterThan(1)
     for (const line of mktemps) {
       expect(line).not.toMatch(/mktemp\s[^)\n]*X{3,}[^X)\s]/)
     }
@@ -276,10 +288,44 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
     expect(carryBlock).toMatch(/stop the carry[^.]*do not apply the new body/i)
   })
 
-  test('Step 7 applies the new file on ok or absent, and falls back to prose-only preservation on failed', () => {
-    expect(carryBlock).toMatch(/`status=ok`[^.]*`status=absent`[^.]*apply/i)
-    expect(carryBlock).toMatch(/`status=failed`[^.]*prose-only preservation/i)
-    expect(carryBlock).toMatch(/fails to load[^.]*prose-only preservation/i)
+  test('the carry always runs: there is no Demo-heading gate, and absent is a success', () => {
+    expect(skill).not.toMatch(/grep -q '\^## Demo'/)
+    expect(skill).not.toContain('has-demo')
+    expect(carryBlock).toMatch(/always/i)
+    expect(carryRules).toMatch(/`status=absent`[^.]*(?:success|apply)/i)
+  })
+
+  test('carry applies the new file on ok or absent only', () => {
+    expect(carryRules).toMatch(/`status=ok`[^.]*`status=absent`[^.]*apply/i)
+  })
+
+  test('a failed carry never applies the body and never writes a Demo section by hand', () => {
+    expect(carryRules).not.toMatch(/prose-only preservation/i)
+    expect(carryRules).not.toMatch(
+      /keep the old `## Demo` section in it by hand/i,
+    )
+    expect(carryRules).toMatch(/do not write a `## Demo` section by hand/i)
+    expect(carryRules).toMatch(/do not apply the (?:rewritten|new) body/i)
+    expect(carryRules).toMatch(/description stays as it is/i)
+  })
+
+  test.each([
+    ['status=failed', /`status=failed`/],
+    ['no status line', /prints no status line/i],
+    ['a setup that stops', /setup stops/i],
+  ])('a carry that ends in %s takes the same stop', (_name, trigger) => {
+    expect(carryRules).toMatch(trigger)
+  })
+
+  test('a failed carry reports the reason and offers exactly three options', () => {
+    expect(carryRules).toMatch(/report the reason/i)
+    expect(carryRules).toMatch(/ask the user how to proceed/i)
+    const offered = carryRules.match(/offer only[\s\S]*?(?:\.|$)/i)?.[0] ?? ''
+    expect(offered).toMatch(/retry/i)
+    expect(offered).toMatch(
+      /apply the (?:rewritten |new )?body without a Demo section after an explicit yes/i,
+    )
+    expect(offered).toMatch(/keep the current description/i)
   })
 
   test('Step 7 skips the carry when this run already spliced new evidence', () => {
@@ -292,6 +338,18 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
     expect(duThree).not.toContain('Publish local images')
     expect(duThree).not.toContain('mode:embed')
     expect(normalize(duThree)).toMatch(/do not offer to publish/i)
+  })
+
+  test('DU-3 makes the old body file itself and does not point at a Step 7 procedure it never reaches', () => {
+    const blocks = fencedBlocks(duThree).join('\n')
+    expect(blocks).toMatch(/OLD_BODY_FILE=\$\(mktemp\)/)
+    expect(blocks).toContain('> "$OLD_BODY_FILE"')
+    expect(blocks).toContain('echo saved')
+    expect(blocks).toContain('rm -f "$OLD_BODY_FILE"')
+    expect(normalize(duThree)).not.toMatch(/carry procedure in Step 7/i)
+    expect(normalize(duThree)).not.toMatch(/\bStep 7\b/)
+    expect(normalize(duThree)).toMatch(/does not print `saved`/i)
+    expect(normalize(duThree)).toContain('Carrying the Demo section')
   })
 
   test('DU-3 skips the carry when the user asks to refresh or remove evidence', () => {
@@ -314,18 +372,36 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
 })
 
 describe('git-commit-push-pr evidence contract -- after the PR is created', () => {
-  test('prints the zero-path re-run command, marked recommended before merge', () => {
+  test('prints the zero-path re-run command, marked recommended before merge, after a successful publish', () => {
     const text = normalize(stepEight)
     expect(text).toMatch(/recommended before merge/i)
     expect(text).toContain('`systematic:pr-attachments`')
     expect(text).toMatch(/with no tokens/i)
     expect(text).toContain('`pr:<N>`')
+    expect(text).toMatch(/only after a successful publish|`status=ok`/i)
   })
 
-  test('prints it only when this run published evidence', () => {
+  test('prints the zero-path command only when this run published evidence successfully', () => {
     const text = normalize(stepEight)
     expect(text).toMatch(/published evidence images/i)
-    expect(text).toContain('`evidence=pushed`')
+    expect(text).toMatch(/`status=ok`[^.]*zero-path|zero-path[^.]*`status=ok`/i)
+    expect(text).not.toMatch(
+      /`status=ok`, or `status=failed` with `evidence=pushed`/,
+    )
+  })
+
+  test('after a pushed but unwritten publish it prints a re-run with the same image paths and pr:<N>', () => {
+    const text = normalize(stepEight)
+    expect(text).toMatch(/`evidence=pushed`/)
+    expect(text).toMatch(/`reason=verify-failed`|`verify-failed`/)
+    expect(text).toMatch(/same image paths[^.]*`pr:<N>`/i)
+    expect(text).toMatch(/reuses the pushed commit/i)
+    expect(text).toMatch(/not (?:print|before)[^.]*zero-path|no zero-path/i)
+  })
+
+  test('after a local, unpushed evidence commit it says to push first and prints no re-pin command', () => {
+    const text = normalize(stepEight)
+    expect(text).toMatch(/`evidence=local`[^.]*push/i)
   })
 })
 

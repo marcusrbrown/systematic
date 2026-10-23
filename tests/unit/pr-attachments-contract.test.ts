@@ -215,6 +215,34 @@ describe('pr-attachments skill contract -- arguments and dispatch', () => {
     expect(flat).toMatch(/`mode:carry` selects carry mode/)
   })
 
+  test('the same mode: token twice counts once; different mode: values still stop', () => {
+    const step = normalize(section(skill, '## Step 1: Read the arguments'))
+    expect(step).toMatch(
+      /same `mode:` token[^.]*twice[^.]*(?:counts once|one token)/i,
+    )
+    expect(step).toMatch(/different `mode:` (?:values|tokens)[^.]*stop/i)
+  })
+
+  test('old= and new= outside carry mode stop the run and name the token; they are never image paths', () => {
+    const step = normalize(section(skill, '## Step 1: Read the arguments'))
+    expect(step).toMatch(
+      /`old=`[^.]*`new=`[^.]*outside carry mode[^.]*stops? the run[^.]*names the token/i,
+    )
+    expect(step).toMatch(/never[^.]*(?:read|treated)[^.]*image path/i)
+  })
+
+  test('tokens come from one channel: no text relies on both the arguments and the instruction', () => {
+    expect(flat).not.toMatch(/pass(?:ed)? them as skill arguments/i)
+    expect(flat).not.toMatch(/where the host supports them/i)
+  })
+
+  test('classify existing map: only destinations whose line printed a 40-hex SHA, never the absent ones', () => {
+    const step = normalize(section(skill, '## Step 2: Classify the images'))
+    expect(step).toMatch(
+      /only destinations whose line printed a 40-hex SHA[^.]*omit the `absent` ones/i,
+    )
+  })
+
   test('the dispatch rule fires when no mode token is seen', () => {
     const step = normalize(
       section(skill, '## Step 3: Resolve the target and pick the mode'),
@@ -482,7 +510,7 @@ describe('pr-attachments skill contract -- embed mode', () => {
       /pr-attachments: status=ok evidence_sha=\S+ demo_file=\S+ images=\S+/,
     )
     expect(skill).toMatch(
-      /pr-attachments: status=failed evidence=<pushed\|none> reason=\S+/,
+      /pr-attachments: status=failed evidence=<pushed\|local\|none> reason=\S+/,
     )
   })
 
@@ -775,10 +803,10 @@ describe('pr-attachments skill contract -- private repositories: the explicit-an
     expect(flat).not.toMatch(/skip only|public repositories only/i)
   })
 
-  test('says in one sentence why private repositories use the blob form', () => {
-    expect(step).toContain(
-      'Private repositories use the blob form because raw links do not render for signed-in members.',
-    )
+  test('says why private repositories use the blob form', () => {
+    // The wording is free; the terms are not.
+    expect(step).toMatch(/private[^.]*blob form[^.]*signed-in members/i)
+    expect(step).toMatch(/raw links? (?:do|does) not render/i)
   })
 
   test('proceeding emits the blob form for every embed and only the blob form', () => {
@@ -978,5 +1006,264 @@ describe('pr-attachments skill contract -- private repositories: the blob form',
   test('uses no internal planning vocabulary and no dates', () => {
     expect(skill).not.toMatch(/\bprobe\b|\bO[1-4]\b|\bUnit \d|\bthe plan\b/i)
     expect(skill).not.toMatch(/\b20\d\d-\d\d-\d\d\b/)
+  })
+})
+
+describe('pr-attachments skill contract -- source, commit and push safety', () => {
+  const scrub = normalize(
+    section(skill, '## Step 5: List the set and confirm the scrub'),
+  )
+  const copy = section(skill, '### Copy into place')
+  const commit = section(skill, '### Commit by pathspec')
+  const push = section(skill, '### Push with an explicit refspec')
+  const pushText = normalize(push)
+
+  test('the scrub list shows each file blob_sha', () => {
+    expect(scrub).toMatch(/blob_sha/)
+  })
+
+  test('each copy first recomputes the raw-bytes blob SHA of the source and stops when it differs', () => {
+    const block = fencedBlocks(copy)
+      .map((entry) => entry.body)
+      .find((body) => body.includes('cp -- "$SRC" "$DEST"'))
+    expect(block).toContain('git hash-object --no-filters -- "$SRC"')
+    expect(block?.indexOf('git hash-object')).toBeLessThan(
+      block?.indexOf('cp -- "$SRC"') ?? -1,
+    )
+    const text = normalize(copy)
+    expect(text).toMatch(/`blob_sha` that classify reported/i)
+    expect(text).toMatch(/differs[^.]*stop/i)
+    expect(text).toMatch(/raw bytes/i)
+    expect(text).toContain('`source-changed`')
+  })
+
+  test('a failed evidence commit is unstaged again, and the unstaging is checked', () => {
+    const blocksText = fencedBlocks(commit)
+      .map((entry) => entry.body)
+      .join('\n')
+    expect(blocksText).toContain('git restore --staged -- "$@"')
+    expect(blocksText).toContain('git diff --cached --name-only -- "$@"')
+    expect(normalize(commit)).toMatch(
+      /commit fails[^.]*git restore --staged[^.]*(?:same paths|these paths)/i,
+    )
+    expect(normalize(commit)).toMatch(/stop with the state reached/i)
+  })
+
+  test('a failed cleanup commit uses the same recovery', () => {
+    const cleanup = normalize(section(skill, '## Cleanup'))
+    expect(cleanup).toMatch(
+      /commit fails[^.]*git restore --staged[^.]*(?:same|these) paths/i,
+    )
+  })
+
+  test('the push turns prompts off', () => {
+    const pushBlock = fencedBlocks(push)
+      .map((entry) => entry.body)
+      .find((body) => body.includes('git push "$REMOTE"'))
+    expect(pushBlock).toContain(
+      'GIT_TERMINAL_PROMPT=0 git push "$REMOTE" "HEAD:refs/heads/$BRANCH"',
+    )
+  })
+
+  test('a non-zero push is checked against the remote branch before anything is reported', () => {
+    const blocksText = fencedBlocks(push)
+      .map((entry) => entry.body)
+      .join('\n')
+    expect(blocksText).toContain('git ls-remote "$REMOTE" "refs/heads/$BRANCH"')
+    expect(pushText).toMatch(
+      /exits? non-zero[^.]*ls-remote|ls-remote[^.]*non-zero/i,
+    )
+    expect(pushText).toMatch(/remote SHA equals `HEAD`[^.]*landed[^.]*pushed/i)
+    expect(pushText).toMatch(/only locally|local and unpushed/i)
+    expect(pushText).toContain('`evidence=local`')
+  })
+
+  test('the push adds no timeout wrapper, because no pattern in the skill uses one', () => {
+    const commands = blocks.map((block) => block.body).join('\n')
+    expect(commands).not.toMatch(/(?:^|\s)timeout\s+\d/m)
+    expect(commands).not.toMatch(/\bgtimeout\b/)
+  })
+})
+
+describe('pr-attachments skill contract -- the default branch is never a push target', () => {
+  const visibility = normalize(section(skill, '## Step 4: Check visibility'))
+
+  test('the visibility call also reads the default branch', () => {
+    expect(visibility).toContain('defaultBranchRef')
+  })
+
+  test('embed mode and PR mode refuse a push target equal to the default branch, and say how to fix it', () => {
+    expect(visibility).toMatch(
+      /push target[^.]*default branch[^.]*(?:refuse|stop)/i,
+    )
+    expect(visibility).toMatch(/embed mode/i)
+    expect(visibility).toMatch(/PR mode/)
+    expect(visibility).toMatch(/create a feature branch[^.]*set its upstream/i)
+    expect(visibility).toContain('`default-branch`')
+  })
+
+  test('cleanup applies the same refusal before its push', () => {
+    const cleanup = normalize(section(skill, '## Cleanup'))
+    expect(cleanup).toMatch(/default branch/i)
+  })
+})
+
+describe('pr-attachments skill contract -- the body write guard compares like with like', () => {
+  const step = section(
+    skill,
+    '## Step 8: Write the description or return the Demo file',
+  )
+  const text = normalize(step)
+  const guard = fencedBlocks(step)
+    .map((entry) => entry.body)
+    .find((body) => body.includes('RECHECK='))
+
+  test('the recheck compares only the body field on both sides', () => {
+    expect(guard).toBeDefined()
+    expect(guard).not.toMatch(/cmp -s "\$BACKUP" "\$RECHECK"/)
+    expect(guard).toContain('.body')
+    expect(guard).toContain('"$BACKUP"')
+    expect(guard).toContain('"$RECHECK"')
+    expect(guard).toMatch(/gh pr edit "\$PR" --body-file "\$NEW_BODY"/)
+    expect(text).toMatch(/compare only the `body`/i)
+    expect(text).toMatch(/every mode that writes/i)
+  })
+
+  test('the recheck does not rebuild a demo_file-shaped template', () => {
+    expect(guard).not.toContain('demo_file')
+    expect(guard).not.toContain('out_file')
+  })
+})
+
+describe('pr-attachments skill contract -- verify and the private check', () => {
+  const verify = normalize(section(skill, '## Step 7: Verify the embeds'))
+  const privatePath = section(skill, '### Private repositories: the blob form')
+  const privateText = normalize(privatePath)
+  const privateCommands = fencedBlocks(privatePath)
+    .map((entry) => entry.body)
+    .join('\n')
+
+  test('the caller passes the latest waited_s on unchanged and sums nothing', () => {
+    expect(verify).toMatch(
+      /`waited_s` (?:of|from) the latest report[^.]*unchanged/i,
+    )
+    expect(verify).not.toMatch(/sum of|add(?:ed)? up|sum the/i)
+  })
+
+  test('gh stderr goes to a temp file, and an API failure is not reported as a mismatch', () => {
+    expect(privateCommands).toMatch(/2>"\$ERR_FILE"/)
+    expect(privateCommands).toMatch(/ERR_FILE="\$\(mktemp\)"/)
+    expect(privateCommands).toContain('api-error')
+    expect(privateCommands).toContain('mismatch')
+    expect(privateCommands).toMatch(/head -n 1 "\$ERR_FILE"/)
+    expect(privateCommands).toContain('rm -f "$ERR_FILE"')
+    expect(privateText).toMatch(/`api-error`[^.]*first line of stderr/i)
+    expect(privateText).toMatch(/`mismatch`/)
+    expect(privateCommands).toMatch(/for ATTEMPT in 1 2 3 4/)
+  })
+})
+
+describe('pr-attachments skill contract -- re-pin partial', () => {
+  const text = normalize(section(skill, '## Re-pin mode'))
+
+  test('after reporting partial it offers the next actions', () => {
+    expect(text).toMatch(/`partial`[\s\S]*offer/i)
+    expect(text).toMatch(
+      /re-pin the resolved paths[^.]*only the resolved ones[^.]*(?:write guard|guard)/i,
+    )
+    expect(text).toMatch(/re-add the missing images in PR mode/i)
+  })
+})
+
+describe('pr-attachments skill contract -- embed-mode stop reasons', () => {
+  const step8 = section(
+    skill,
+    '## Step 8: Write the description or return the Demo file',
+  )
+  const tableRows = step8
+    .split('\n')
+    .filter((line) => line.startsWith('|'))
+    .map((line) => line.split('|').map((cell) => cell.trim()))
+    .filter((cells) => cells.length >= 4 && /^`[a-z-]+`$/.test(cells[2] ?? ''))
+    .map((cells) => ({
+      stop: cells[1] ?? '',
+      reason: (cells[2] ?? '').slice(1, -1),
+    }))
+  const tableReasons = new Set(tableRows.map((row) => row.reason))
+
+  // The prose outside the table, outside carry mode (which has its own
+  // vocabulary), is where stops name their reason.
+  const withoutCarry = skill.replace(section(skill, '## Carry mode'), '')
+  const embedProse = withoutCarry
+    .split('\n')
+    .filter((line) => !line.startsWith('|'))
+    .join('\n')
+  const named = new Set([
+    ...[
+      ...embedProse.matchAll(/\breason (?:is |of )?`([a-z]+(?:-[a-z]+)*)`/gi),
+    ].map((match) => match[1] as string),
+    ...[...embedProse.matchAll(/\breason=([a-z]+(?:-[a-z]+)*)/g)].map(
+      (match) => match[1] as string,
+    ),
+  ])
+
+  test('one table maps stops to reasons', () => {
+    expect(tableRows.length).toBeGreaterThanOrEqual(14)
+    for (const row of tableRows) {
+      expect(row.stop, row.reason).not.toBe('')
+    }
+  })
+
+  test('every reason named in the prose is in the table', () => {
+    expect([...named].filter((reason) => !tableReasons.has(reason))).toEqual([])
+  })
+
+  test('every table reason is named by a stop in the prose', () => {
+    expect([...tableReasons].filter((reason) => !named.has(reason))).toEqual([])
+  })
+
+  test.each([
+    ['rejected', /classify[^|]*`rejected`/i, 'rejected-images'],
+    ['needs-input', /classify[^|]*`needs-input`/i, 'needs-input'],
+    ['usage-error', /`usage-error`/, 'helper-failed'],
+    ['internal-error', /`internal-error`/, 'helper-failed'],
+    ['gitignored', /gitignored/i, 'destination-blocked'],
+    ['LFS', /LFS|filter/, 'destination-blocked'],
+    ['dirty destination', /uncommitted/i, 'destination-blocked'],
+    ['hook or commit', /hook[^|]*commit|commit[^|]*hook/i, 'commit-failed'],
+    [
+      'file-set mismatch',
+      /file set[^|]*(?:mismatch|differ|outside)/i,
+      'file-set-mismatch',
+    ],
+    ['default branch', /default branch/i, 'default-branch'],
+    ['source changed', /source[^|]*(?:changed|differs)/i, 'source-changed'],
+  ] as const)('the table covers %s', (_name, stop, reason) => {
+    const row = tableRows.find((entry) => stop.test(entry.stop))
+    expect(row, `a row for ${_name}`).toBeDefined()
+    expect(row?.reason).toBe(reason)
+  })
+
+  test('the existing reasons stay', () => {
+    for (const reason of [
+      'node-unavailable',
+      'helper-failed',
+      'rejected-images',
+      'declined',
+      'no-target',
+      'git-failed',
+      'push-rejected',
+      'verify-failed',
+    ]) {
+      expect(tableReasons.has(reason), reason).toBe(true)
+    }
+  })
+
+  test('evidence local means the evidence commit exists only on this machine', () => {
+    const text = normalize(step8)
+    expect(text).toMatch(
+      /`evidence` is `pushed` once the push landed[^.]*`local`[^.]*evidence commit[^.]*(?:only on this machine|not pushed)[^.]*`none`/i,
+    )
+    expect(text).toContain('evidence=<pushed|local|none>')
   })
 })

@@ -33,12 +33,13 @@ The images are committed under `docs/evidence/<topic>/` on the PR head branch an
 
 The helper does the work that must be exact: classification, byte-exact splicing, pin selection, the cleanup set and verification. A helper failure (exit 1 or exit 2) is never permission to hand-write its output.
 
-- If node is missing, cannot launch, or the helper exits 2, stop and report the state reached: what is committed, what is pushed, and that the description is untouched.
+- If node is missing, cannot launch, or the helper exits 2, stop and report the state reached: what is committed, what is pushed, and that the description is untouched. In embed mode the reason is `node-unavailable` when node is missing or cannot launch.
 - Never write Demo text, a pin, a cleanup set or a verification verdict by hand.
 - Never run `git rm` by hand.
-- A `usage-error` or `internal-error` is a stop in every mode.
+- A `usage-error` or `internal-error` is a stop in every mode. Report its `error`, and its `field` when it has one: `field` names the input field that failed. In embed mode the reason is `helper-failed`.
+- Any other `git` or `gh` command that fails is a stop too. In embed mode the reason is `git-failed`.
 
-In embed mode every stop ends with the failed status line (Step 8). In carry mode every stop ends with the failed status line (Carry mode).
+In embed mode every stop ends with the failed status line (Step 8), and its reason comes from the table there. In carry mode every stop ends with the failed status line (Carry mode).
 
 ## Step 1: Read the arguments
 
@@ -48,12 +49,12 @@ Split on whitespace. A path with spaces must be wrapped in double quotes; strip 
 
 - `mode:embed` selects embed mode.
 - `mode:carry` selects carry mode and skips Steps 2 to 8; go straight to Carry mode.
-- Any other `mode:` token stops the run with an error that names the token. Two `mode:` tokens stop the run too.
+- Any other `mode:` token stops the run with an error that names the token. Two different `mode:` values stop the run too. The same `mode:` token twice counts as one token.
 - `pr:<number or branch>` selects the PR. Without it, use the PR for the current branch.
-- `old=<file>` and `new=<file>` are for carry mode only.
+- `old=<file>` and `new=<file>` are for carry mode only. An `old=` or `new=` token outside carry mode stops the run with a message that names the token. It is never read as an image path. In embed mode the reason is `bad-arguments`.
 - Every other token is an image path, relative to the repository root.
 
-`mode:embed` with no paths stops: embed mode needs image paths. Use the reason `no-target` in the failed status line.
+`mode:embed` with no paths stops: embed mode needs image paths. In embed mode the reason is `no-target`.
 
 ## Step 2: Classify the images
 
@@ -84,18 +85,18 @@ set -- "<destination 1>" "<destination 2>";
 for DEST in "$@"; do printf '%s ' "$DEST"; git rev-parse --verify --quiet "HEAD:$DEST" || echo absent; done
 ```
 
-If any destination exists, run classify again with `"existing"` set to a map of destination to the blob SHA printed here. Copy the SHAs from the output. The second result wins.
+If any destination exists, run classify again with `"existing"` set to a map of destination to the blob SHA printed here. Include only destinations whose line printed a 40-hex SHA, and omit the `absent` ones. Copy the SHAs from the output. The second result wins.
 
 Route the result:
 
 - `accepted` (exit 0): `entries` hold `source`, `destination`, `type`, `bytes`, `blob_sha` and `status`, which is `new` or `reused`. Surface every warning: `trailing-data` means bytes after the image end are published as is.
-- `rejected` (exit 1): the whole batch is rejected and nothing is copied. Relay each rejection `message` as is, for example "SVG is not supported by this skill". A file over 10 MiB is rejected before anything is published, because GitHub does not serve larger files as images; its reason is `too-large`. Stop.
-- `needs-input` (exit 1): read `asks` and settle each with the user, then classify again.
+- `rejected` (exit 1): the whole batch is rejected and nothing is copied. Relay each rejection `message` as is, for example "SVG is not supported by this skill". A file over 10 MiB is rejected before anything is published, because GitHub does not serve larger files as images; its code is `too-large`. Stop. In embed mode the reason is `rejected-images`.
+- `needs-input` (exit 1): read `asks` and settle each with the user, then classify again. If the user cannot or will not settle one, stop. In embed mode the reason is `needs-input`.
   - `empty-topic`: ask for a topic and send it as `"topic"`.
   - `empty-name`: the source name slugs to nothing. Ask for a copy under a better name. Never move the original.
   - `duplicate-destination`: two inputs map to one name. Ask which one to rename.
   - `destination-conflict`: different bytes already sit at the destination. Ask for another topic or a rename.
-- `usage-error` (exit 2) or `internal-error`: stop.
+- `usage-error` (exit 2) or `internal-error`: stop. In embed mode the reason is `helper-failed`.
 
 ## Step 3: Resolve the target and pick the mode
 
@@ -120,7 +121,7 @@ git rev-parse --abbrev-ref "@{u}"
 git remote -v
 ```
 
-The upstream prints `<remote>/<branch>`. With no upstream, stop. The remote is the text before the first `/` and must be listed by `git remote -v`. The head branch is the rest. Read owner and repo from that remote's URL. The URL host must be `github.com`; any other host is refused. Step 4 then runs `gh repo view` on that repository.
+The upstream prints `<remote>/<branch>`. With no upstream, stop. The remote is the text before the first `/` and must be listed by `git remote -v`. The head branch is the rest. Read owner and repo from that remote's URL. The URL host must be `github.com`; any other host is refused. Step 4 then runs `gh repo view` on that repository. In embed mode the reason for a missing upstream, an unlisted remote or a refused host is `no-target`.
 
 ### PR mode and Re-pin mode
 
@@ -151,20 +152,21 @@ The current branch must equal `headRefName` and `HEAD` must equal `headRefOid`. 
 Applies to embed mode, PR mode and Re-pin mode.
 
 ```bash
-gh repo view "<owner>/<repo>" --json visibility,isPrivate,viewerPermission,url
+gh repo view "<owner>/<repo>" --json visibility,isPrivate,viewerPermission,url,defaultBranchRef
 ```
 
-Every repository must pass both of these checks:
+Every repository must pass these checks:
 
 - `url` starts with `https://github.com/`.
-- `viewerPermission` is `ADMIN`, `MAINTAIN` or `WRITE`. Otherwise stop: the user cannot push to the head repository. A rejected push stops the run too.
+- `viewerPermission` is `ADMIN`, `MAINTAIN` or `WRITE`. Otherwise stop: the user cannot push to the head repository. A rejected push stops the run too. In embed mode the reason is `no-push-access`.
+- In embed mode and PR mode, a push target equal to the default branch is refused: stop. The push target is the upstream branch in embed mode and `headRefName` in PR mode, and the default branch is `defaultBranchRef`. Pushing there would send the evidence commit, and any local commits that are not on the remote yet, straight to the default branch. Tell the user to create a feature branch and set its upstream, then run again. In embed mode the reason is `default-branch`. Re-pin mode does not push, so it skips this check. Cleanup applies it before its own push.
 
 Then pick the link form from the visibility:
 
 - `visibility` is `PUBLIC` and `isPrivate` is false: the repository is public, so use the raw form and go on.
 - Anything else is a private, internal or unknown-visibility repository. Use the blob form, after the explicit answer below.
 
-Remember the form for Steps 5 to 8. Re-pin mode takes it from the embeds that already exist.
+If `gh repo view` fails, stop. Remember the form for Steps 5 to 8. Re-pin mode takes it from the embeds that already exist.
 
 ### Private, internal and unknown-visibility repositories
 
@@ -189,7 +191,7 @@ PR mode and embed mode only.
 List for the user:
 
 - the topic slug, for confirmation;
-- each source, its destination, type and size, and whether it is `new` or `reused`;
+- each source, its destination, type, size and `blob_sha`, and whether it is `new` or `reused`;
 - every warning from Step 2.
 
 In embed mode the push also publishes local commits that are not on the remote yet. List them:
@@ -221,19 +223,19 @@ set -- "<destination 1>" "<destination 2>";
 for DEST in "$@"; do git check-ignore -- "$DEST"; git check-attr filter -- "$DEST" | grep -v ': unspecified$'; git status --porcelain --untracked-files=all -- "$DEST"; done
 ```
 
-Any output stops the run:
+Any output stops the run. In embed mode the reason is `destination-blocked`:
 
 - `git check-ignore` printed the path: the destination is gitignored, so stop and never force-add.
 - `git check-attr` printed a filter: an LFS or other filter applies. Stop.
 - `git status` printed a line: the destination holds uncommitted content. Stop.
 
-Copy each new entry. The copy leaves the original in place:
+Copy each new entry. The copy leaves the original in place. Before each copy, recompute the git blob SHA of the source from its raw bytes and compare it with the `blob_sha` that classify reported, as shown in the Step 5 list. When the SHA differs, the file changed after the list was shown and confirmed, so stop and copy nothing. In embed mode the reason is `source-changed`. `--no-filters` makes git hash the raw bytes, which is how the helper computes `blob_sha`, so a text or LFS filter cannot change the result.
 
 ```bash
 SRC="<source path>";
 DEST="<destination path>";
-mkdir -p "$(dirname "$DEST")"
-cp -- "$SRC" "$DEST"
+BLOB_SHA="<blob_sha from the Step 5 list>";
+if [ "$(git hash-object --no-filters -- "$SRC")" = "$BLOB_SHA" ]; then mkdir -p "$(dirname "$DEST")" && cp -- "$SRC" "$DEST"; else echo "source-changed $SRC"; false; fi
 ```
 
 ### Commit by pathspec
@@ -247,6 +249,16 @@ git add -- "$@"
 git commit -m "chore(evidence): add screenshots for $TOPIC" -- "$@"
 ```
 
+If the commit fails (a hook rejects it, or git reports an error), run `git restore --staged` with the same paths and check that none of them is still staged. Then stop with the state reached. The copied files stay in the working tree, untracked. In embed mode the reason is `commit-failed`.
+
+```bash
+set -- "<destination 1>" "<destination 2>";
+git restore --staged -- "$@"
+test -z "$(git diff --cached --name-only -- "$@")"
+```
+
+Exit 0 means that none of the paths is staged. A failed cleanup commit uses the same recovery.
+
 ### Assert the committed file set
 
 The commit must hold exactly the new destinations:
@@ -258,7 +270,7 @@ ACTUAL="$(git diff-tree --no-commit-id --name-only -r --no-renames HEAD | LC_ALL
 test "$ACTUAL" = "$EXPECTED"
 ```
 
-Exit 0 passes. On a mismatch, stop. Do not push. Tell the user the commit holds files outside the list, and leave it as it is until they decide.
+Exit 0 passes. On a mismatch, stop. Do not push. Tell the user the commit holds files outside the list, and leave it as it is until they decide. In embed mode the reason is `file-set-mismatch`, and the evidence commit is local.
 
 ### Push with an explicit refspec
 
@@ -267,10 +279,28 @@ Exit 0 passes. On a mismatch, stop. Do not push. Tell the user the commit holds 
 ```bash
 REMOTE="<remote>";
 BRANCH="<head branch>";
-git push "$REMOTE" "HEAD:refs/heads/$BRANCH"
+GIT_TERMINAL_PROMPT=0 git push "$REMOTE" "HEAD:refs/heads/$BRANCH"
 ```
 
-If the push is rejected, stop and report. Never force-push and never retry with another refspec. A non-fast-forward rejection means the branch moved. Tell the user to fetch and rebase or merge, then re-run. The remote is unchanged. A re-run reuses evidence that is already committed, because reuse is keyed on the destination and the blob SHA. In embed mode the reason is `push-rejected`.
+`GIT_TERMINAL_PROMPT=0` turns credential prompts off, so a push that needs input fails instead of hanging. The push has no timeout wrapper, because `timeout` is not on every platform's default PATH and nothing else in this skill depends on it.
+
+If the push is rejected, stop and report. Never force-push and never retry with another refspec. A non-fast-forward rejection means the branch moved. Tell the user to fetch and rebase or merge, then re-run. A re-run reuses evidence that is already committed, because reuse is keyed on the destination and the blob SHA. In embed mode the reason is `push-rejected`.
+
+If the push exits non-zero, check what the remote holds with `git ls-remote` before reporting anything, because the remote may have accepted the push even though the command failed (for example, when the connection dropped afterwards):
+
+```bash
+REMOTE="<remote>";
+BRANCH="<head branch>";
+if REMOTE_LINE="$(GIT_TERMINAL_PROMPT=0 git ls-remote "$REMOTE" "refs/heads/$BRANCH")"; then
+  if [ "${REMOTE_LINE%%[[:space:]]*}" = "$(git rev-parse HEAD)" ]; then echo landed; else echo local; fi
+else
+  echo unchecked
+fi
+```
+
+- `landed`: the remote SHA equals `HEAD`, so the push landed and counts as pushed. Go on as if the push had succeeded.
+- `local`: the remote SHA differs from `HEAD`, or the branch is not on the remote. The evidence commit exists only locally. In embed mode the status line carries `evidence=local`.
+- `unchecked`: `git ls-remote` failed too, so the push is not confirmed. Treat it as `local` and say that the remote could not be checked.
 
 ## Step 7: Verify the embeds
 
@@ -316,9 +346,11 @@ JSON
 Route the result:
 
 - `verified` (exit 0): every embed serves an image. Continue.
-- `failed` (exit 1): read `failed`. Report each failing URL with its `status` and `http_status`. If the top-level `retryable` is true, call again with the same URLs and `waited_s` set to the sum of the `waited_s` values of the earlier reports. Stop once `retryable` is false.
+- `failed` (exit 1): read `failed`. Report each failing URL with its `status` and `http_status`. If the top-level `retryable` is true, call again with the same URLs and `waited_s` set to the `waited_s` of the latest report, unchanged. That value is already the running total of all calls. Stop once `retryable` is false.
 - `usage-error` (exit 2) with `blob-url`: a blob-form URL never goes to this call, so stop.
 - Any other `usage-error`: stop.
+
+In embed mode a `usage-error` here ends with the reason `helper-failed`, and `evidence` is `pushed`.
 
 Never print or paste a response body, and never fetch one yourself.
 
@@ -352,24 +384,35 @@ The expected SHA is the `blob_sha` that classify reported for that file. Pair ea
 ```bash
 OWNER_REPO="<owner/repo of the head repository>";
 set -- "<blob URL 1> <blob_sha 1, or local>" "<blob URL 2> <blob_sha 2, or local>";
+ERR_FILE="$(mktemp)"
 FAILED=0
 for ITEM in "$@"; do
   URL="${ITEM%% *}"; EXPECTED="${ITEM#* }"
   REST="${URL#https://github.com/$OWNER_REPO/blob/}"; PIN="${REST%%/*}"; DEST="${REST#*/}"; DEST="${DEST%%\?*}"
   [ "$EXPECTED" = local ] && EXPECTED="$(git rev-parse "$PIN:$DEST")"
   printf '%s\n' "$EXPECTED" | grep -Eqx '[0-9a-f]{40}' || { echo "no expected blob SHA for $DEST"; FAILED=1; continue; }
-  ACTUAL=""
+  ACTUAL=""; API_FAILED=0
   for ATTEMPT in 1 2 3 4; do
-    ACTUAL="$(gh api "repos/$OWNER_REPO/contents/$DEST?ref=$PIN" --jq .sha 2>/dev/null)"
-    [ "$ACTUAL" = "$EXPECTED" ] && break
+    API_FAILED=0
+    ACTUAL="$(gh api "repos/$OWNER_REPO/contents/$DEST?ref=$PIN" --jq .sha 2>"$ERR_FILE")" || API_FAILED=1
+    [ "$API_FAILED" = 0 ] && [ "$ACTUAL" = "$EXPECTED" ] && break
     [ "$ATTEMPT" -lt 4 ] && sleep 5
   done
-  if [ "$ACTUAL" = "$EXPECTED" ]; then echo "ok $DEST"; else echo "mismatch $DEST ${ACTUAL:-none}"; FAILED=1; fi
+  if [ "$API_FAILED" = 1 ]; then echo "api-error $DEST $(head -n 1 "$ERR_FILE" | cut -c1-200)"; FAILED=1
+  elif [ "$ACTUAL" = "$EXPECTED" ]; then echo "ok $DEST"
+  else echo "mismatch $DEST ${ACTUAL:-none}"; FAILED=1; fi
 done
+rm -f "$ERR_FILE"
 test "$FAILED" = 0
 ```
 
-Exit 0 passes: every file exists at its pinned commit with the expected blob SHA. Each file gets four attempts, five seconds apart, so GitHub has time to serve a new commit. A file that still fails after that, or a line that says `no expected blob SHA`, stops the run. Stop with the state reached: what is committed, what is pushed, which files failed, and that the description is untouched.
+Exit 0 passes: every file exists at its pinned commit with the expected blob SHA. Each file gets four attempts, five seconds apart, so GitHub has time to serve a new commit. Every file prints one line:
+
+- `ok`: the file is at its pinned commit with the expected blob SHA.
+- `mismatch`: GitHub answered, and the blob SHA differs from the expected one.
+- `api-error`: the `gh api` call itself failed (access denied, a rate limit, a missing file or a network failure), and the line carries the first line of stderr, which the block keeps in a temp file instead of discarding it. An `api-error` is not a content problem, so report it as an access or API problem.
+
+A file that still fails after the attempts, or a line that says `no expected blob SHA`, stops the run. Stop with the state reached: what is committed, what is pushed, which files failed and how, and that the description is untouched.
 
 Never write the description, and never return the Demo file, when this check fails. The evidence commit is pushed and unreferenced. In PR mode say: the evidence commit is pushed, the description is not written, and a re-run retries and reuses the pushed commit. In embed mode the reason is `verify-failed`.
 
@@ -400,15 +443,15 @@ Route the result:
 
 If `screenshots_present` is true, warn the user: the description has a `## Screenshots` section, which is left alone. Nothing is merged into it.
 
-Re-read the description immediately before writing, and write only if it is unchanged since the backup. A changed description stops the run with nothing written; re-run to start from the new text. Write with a body file, never an inline body:
+Re-read the description immediately before writing, and write only if it is unchanged since the backup. Compare only the `body` field of the backup and of the re-read. The two files are JSON objects whose other fields differ by mode (PR mode and Re-pin mode build their backups with different fields), so a whole-file comparison would never match. This guard applies to every mode that writes. A changed description stops the run with nothing written; re-run to start from the new text. Write with a body file, never an inline body:
 
 ```bash
 PR="<PR number>";
 BACKUP="<backup file>";
 NEW_BODY="<new body file>";
 RECHECK="$(mktemp)"
-gh pr view "$PR" --json body --jq '{body: .body, demo_file: "<demo file>", out_file: "<new body file>"}' > "$RECHECK"
-cmp -s "$BACKUP" "$RECHECK" && gh pr edit "$PR" --body-file "$NEW_BODY"
+gh pr view "$PR" --json body > "$RECHECK"
+node -e 'const body = (file) => JSON.parse(require("fs").readFileSync(file, "utf8")).body; process.exit(body(process.argv[1]) === body(process.argv[2]) ? 0 : 1)' "$BACKUP" "$RECHECK" && gh pr edit "$PR" --body-file "$NEW_BODY"
 ```
 
 Re-read it afterwards and compare it with the body file. This holds the regions outside Demo to the same bytes too:
@@ -431,12 +474,34 @@ Embed mode returns the Demo file from Step 7, made with mktemp (mode 0600), and 
 
 ```text
 pr-attachments: status=ok evidence_sha=<40-hex> demo_file=<path> images=<count>
-pr-attachments: status=failed evidence=<pushed|none> reason=<reason>
+pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>
 ```
 
 - `evidence_sha` is the SHA the Step 7 Demo block printed. Copy it.
-- `evidence` is `pushed` once the push succeeded, otherwise `none`. A failed line never comes with a Demo file.
-- `reason` is one of `node-unavailable`, `helper-failed`, `rejected-images`, `declined`, `no-target`, `git-failed`, `push-rejected` or `verify-failed`.
+- `evidence` is `pushed` once the push landed, `local` when the evidence commit exists only on this machine (it was committed, but the push did not land), and `none` otherwise. A failed line never comes with a Demo file.
+- `reason` comes from this table. Every embed-mode stop has exactly one row:
+
+| Stop | Reason |
+|---|---|
+| Node is missing or cannot launch | `node-unavailable` |
+| A helper call exits 2 with a `usage-error` | `helper-failed` |
+| A helper call returns `internal-error` | `helper-failed` |
+| Classify returns `rejected` | `rejected-images` |
+| Classify returns `needs-input` and the user does not settle it | `needs-input` |
+| No image paths, no upstream, an unlisted remote or a host other than github.com | `no-target` |
+| A stray `old=` or `new=` token | `bad-arguments` |
+| The user cannot push to the head repository | `no-push-access` |
+| Any other git or gh command fails | `git-failed` |
+| The user declines the private-repository question or the scrub | `declined` |
+| The push target is the default branch | `default-branch` |
+| A destination is gitignored | `destination-blocked` |
+| A destination has an LFS or other filter | `destination-blocked` |
+| A destination holds uncommitted content | `destination-blocked` |
+| A source file changed since classify | `source-changed` |
+| A hook rejects the evidence commit, or the commit fails | `commit-failed` |
+| The committed file set differs from the destinations | `file-set-mismatch` |
+| The push is rejected, or exits non-zero and the remote does not hold `HEAD` | `push-rejected` |
+| An embed does not serve the image, or its blob check fails | `verify-failed` |
 
 ## Carry mode
 
@@ -539,7 +604,7 @@ JSON
 
 - `already-valid` (exit 0): report already valid. Write nothing. Go to Cleanup.
 - `repin-needed` (exit 0): continue with the `pins` map.
-- `partial` (exit 1): report partial and name `unresolved_paths`. Write nothing. Stop.
+- `partial` (exit 1): report partial and name `unresolved_paths`. Write nothing yet. Then offer the next actions: re-pin the resolved paths, which still writes only the resolved ones through the normal write guard, or re-add the missing images in PR mode. If the user chooses to re-pin the resolved paths, continue with the `pins` map.
 - `unresolved` (exit 1): no managed path ever existed on the head. Stop and point to PR mode: re-run with image paths.
 - `head-not-found` (exit 1): the head commit is not in this repository. Stop and say fetch or push first.
 - `git-failed` or `git-timeout` (exit 1): report `reached`. Stop.
@@ -557,7 +622,7 @@ gh pr view "$PR" --json body --jq '{body: .body, head_repo: "<owner/repo>", pins
 node "$SKILL_DIR/scripts/pr-attachments.mjs" repin-rewrite < "$BACKUP"
 ```
 
-- `repinned` (exit 0): report `rewritten`, `ignored` and `unmapped_paths`. A non-empty `unmapped_paths` means the description changed since the first read: stop and re-run.
+- `repinned` (exit 0): report `rewritten`, `ignored` and `unmapped_paths`. A non-empty `unmapped_paths` means the description changed since the first read: stop and re-run. After a `partial` result, `unmapped_paths` holds exactly the `unresolved_paths`, and anything else stops the run.
 - `write-failed` (exit 1): stop.
 - `usage-error` (exit 2): stop.
 
@@ -565,7 +630,7 @@ node "$SKILL_DIR/scripts/pr-attachments.mjs" repin-rewrite < "$BACKUP"
 
 Verify the URLs of the rewritten file with Step 7. Take the list from the new body file. A public repository uses the raw form subsection. Any other repository uses "Private repositories: the blob form", with `local` as the expected SHA of every URL.
 
-Then do the write step of Step 8 with the new body file and this backup. Tell the user the backup path first. Then go to Cleanup.
+Then do the write step of Step 8 with the new body file and this backup. Tell the user the backup path first. The guard compares only `body`, so this backup works although it also holds `head_repo` and `pins`. Then go to Cleanup.
 
 ## Cleanup
 
@@ -633,7 +698,9 @@ set -- "<path 1>" "<path 2>";
 git commit -m "chore(evidence): remove screenshots for $TOPIC" -- "$@"
 ```
 
-Then run the file-set assertion from Assert the committed file set, with these paths as the expected set. Then run the push from Push with an explicit refspec. A rejection stops the run as it does there.
+If the commit fails, run `git restore --staged` with the same paths, as in Commit by pathspec, and stop. The removed files then show as deleted but unstaged.
+
+Then run the file-set assertion from Assert the committed file set, with these paths as the expected set. Before the push, apply the refusal from Step 4 for a push target that is the default branch. Then run the push from Push with an explicit refspec. A rejection stops the run as it does there.
 
 ## Disclosures
 

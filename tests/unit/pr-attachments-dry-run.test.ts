@@ -294,14 +294,27 @@ function runBlock(
 
 const DEST = 'docs/evidence/feat-x/shot.png'
 
+/** The blob SHA classify reports for a source: the raw bytes, no filters. */
+function classifiedBlob(pr: Pr, source = 'shot.png'): string {
+  const classified = runHelper(pr, 'classify', {
+    paths: [source],
+    branch: 'feat/x',
+  })
+  expect(classified.report.result).toBe('accepted')
+  return (classified.report as unknown as { entries: [{ blob_sha: string }] })
+    .entries[0].blob_sha
+}
+
+function copyEvidence(pr: Pr, blobSha = classifiedBlob(pr)): ShellResult {
+  return runBlock(pr, 'cp -- "$SRC" "$DEST"', {
+    vars: { SRC: 'shot.png', DEST, BLOB_SHA: blobSha },
+  })
+}
+
 /** The pushed evidence flow, up to and including the refspec push. */
 function publishEvidence(pr: Pr): void {
   expect(runBlock(pr, 'git check-attr filter', { set: [DEST] }).stdout).toBe('')
-  expect(
-    runBlock(pr, 'cp -- "$SRC" "$DEST"', {
-      vars: { SRC: 'shot.png', DEST },
-    }).status,
-  ).toBe(0)
+  expect(copyEvidence(pr).status).toBe(0)
   const commit = runBlock(pr, 'add screenshots for', {
     vars: { TOPIC: 'feat-x' },
     set: [DEST],
@@ -417,10 +430,7 @@ describe('pr-attachments dry run -- the skill commands against a local bare remo
     )
 
     // Our evidence commit is now on a diverged branch.
-    expect(
-      runBlock(pr, 'cp -- "$SRC" "$DEST"', { vars: { SRC: 'shot.png', DEST } })
-        .status,
-    ).toBe(0)
+    expect(copyEvidence(pr).status).toBe(0)
     expect(
       runBlock(pr, 'add screenshots for', {
         vars: { TOPIC: 'feat-x' },
@@ -718,7 +728,7 @@ function installFakeGh(pr: Pr, failFirst = 0): string {
       '[ "$1" = api ] || exit 2',
       '[ "$3" = --jq ] && [ "$4" = .sha ] || exit 2',
       `COUNT="$(( $(cat "${counter}") + 1 ))"; echo "$COUNT" > "${counter}"`,
-      `[ "$COUNT" -le ${failFirst} ] && exit 1`,
+      `[ "$COUNT" -le ${failFirst} ] && { echo "gh: simulated outage (HTTP 503)" >&2; echo "second stderr line" >&2; exit 1; }`,
       `REST="\${2#repos/*/*/contents/}"`,
       `git rev-parse "\${REST##*\\?ref=}:\${REST%%\\?ref=*}"`,
       '',
@@ -824,7 +834,10 @@ describe('pr-attachments dry run -- private repositories over the real helper', 
     const absent = `https://github.com/${OWNER_REPO}/blob/${head}/docs/evidence/feat-x/gone.png?raw=true`
     const result = checkBlobs(pr, installFakeGh(pr), [`${absent} ${blob}`])
     expect(result.status).not.toBe(0)
-    expect(result.stdout).toContain('mismatch docs/evidence/feat-x/gone.png')
+    // GitHub answers 404 for a missing file, which is an API error and not a
+    // content mismatch.
+    expect(result.stdout).toContain('api-error docs/evidence/feat-x/gone.png')
+    expect(result.stdout).not.toContain('mismatch')
   })
 
   test('the gh check rejects an expected value that is not a git blob SHA', () => {
@@ -845,6 +858,53 @@ describe('pr-attachments dry run -- private repositories over the real helper', 
     expect(fs.readFileSync(path.join(pr.home, 'gh-calls'), 'utf8').trim()).toBe(
       '4',
     )
+  })
+
+  test('an API failure is reported as an api-error with the first stderr line, not as a mismatch', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const result = checkBlobs(pr, installFakeGh(pr, 99), [
+      `${blobUrl(head)} ${blob}`,
+    ])
+
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain(
+      `api-error ${DEST} gh: simulated outage (HTTP 503)`,
+    )
+    expect(result.stdout).not.toContain('second stderr line')
+    expect(result.stdout).not.toContain('mismatch')
+  })
+
+  test('a SHA that differs after a successful call is still a mismatch, not an api-error', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const result = checkBlobs(pr, installFakeGh(pr), [
+      `${blobUrl(head)} ${'0'.repeat(40)}`,
+    ])
+
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain(`mismatch ${DEST}`)
+    expect(result.stdout).not.toContain('api-error')
+  })
+
+  test('the temp file that holds stderr is removed', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const tmp = makeDir()
+    const result = runWithGh(
+      pr,
+      installFakeGh(pr, 99),
+      `export TMPDIR="${tmp}"\n${fill(blockWith(BLOB_CHECK_MARKER), {
+        vars: { OWNER_REPO },
+        set: [`${blobUrl(head)} ${blob}`],
+        tokens: NO_WAIT,
+      })}`,
+    )
+
+    expect(result.status).not.toBe(0)
+    expect(fs.readdirSync(tmp)).toEqual([])
   })
 
   test('the gh check is bounded at four attempts per file', () => {
@@ -889,5 +949,378 @@ describe('pr-attachments dry run -- private repositories over the real helper', 
     expect(fs.readFileSync(outFile, 'utf8')).toBe(
       `Intro\n\n## Demo\n\n![shot](${blobUrl(head)})\n`,
     )
+  })
+})
+
+// ── The source file between classify and the copy ──────────────────────────
+
+describe('pr-attachments dry run -- the source must still be the file classify saw', () => {
+  test('a source that changed after classify stops the copy and copies nothing', () => {
+    const pr = createPr()
+    const classified = classifiedBlob(pr)
+    fs.writeFileSync(path.join(pr.work, 'shot.png'), pngWith('swapped'))
+
+    const copied = copyEvidence(pr, classified)
+
+    expect(copied.status).not.toBe(0)
+    expect(copied.stdout + copied.stderr).toContain('source-changed')
+    expect(fs.existsSync(path.join(pr.work, DEST))).toBe(false)
+  })
+
+  test('an unchanged source is copied byte for byte', () => {
+    const pr = createPr()
+    const copied = copyEvidence(pr)
+
+    expect(copied.status, copied.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(pr.work, DEST))).toEqual(
+      fs.readFileSync(path.join(pr.work, 'shot.png')),
+    )
+  })
+
+  test('the comparison reads raw bytes, as the helper does, even where a text filter applies', () => {
+    const pr = createPr()
+    fs.writeFileSync(
+      path.join(pr.work, '.gitattributes'),
+      '*.png text eol=crlf\n',
+    )
+    const classified = classifiedBlob(pr)
+    const withFilters = isolatedGit(pr.work, ['hash-object', '--', 'shot.png'])
+    // The fixture really is one the filters would change.
+    expect(withFilters).not.toBe(classified)
+
+    const copied = copyEvidence(pr, classified)
+
+    expect(copied.status, copied.stdout + copied.stderr).toBe(0)
+  })
+})
+
+// ── A failed commit leaves nothing staged ──────────────────────────────────
+
+function failingHook(pr: Pr): void {
+  const hooks = path.join(pr.work, '.git/hooks')
+  fs.mkdirSync(hooks, { recursive: true })
+  fs.writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', {
+    mode: 0o755,
+  })
+}
+
+describe('pr-attachments dry run -- a failed commit is unstaged again', () => {
+  test('a hook that rejects the evidence commit leaves the paths staged, and the recovery block clears them', () => {
+    const pr = createPr()
+    expect(copyEvidence(pr).status).toBe(0)
+    failingHook(pr)
+
+    const commit = runBlock(pr, 'add screenshots for', {
+      vars: { TOPIC: 'feat-x' },
+      set: [DEST],
+    })
+    expect(commit.status).not.toBe(0)
+    expect(
+      isolatedGit(pr.work, ['diff', '--cached', '--name-only']).split('\n'),
+    ).toContain(DEST)
+
+    const recovery = runBlock(pr, 'git restore --staged', { set: [DEST] })
+
+    expect(recovery.status, recovery.stderr).toBe(0)
+    expect(
+      isolatedGit(pr.work, ['diff', '--cached', '--name-only', '--', DEST]),
+    ).toBe('')
+    // Other staged work is untouched, and the copied file stays on disk.
+    expect(isolatedGit(pr.work, ['diff', '--cached', '--name-only'])).toBe(
+      'notes.txt',
+    )
+    expect(fs.existsSync(path.join(pr.work, DEST))).toBe(true)
+  })
+
+  test('a hook that rejects the cleanup commit leaves the removals staged, and the same block clears them', () => {
+    const pr = createPr()
+    publishEvidence(pr)
+    isolatedGit(pr.work, ['rm', '-q', '--', DEST])
+    failingHook(pr)
+
+    const commit = runBlock(pr, 'remove screenshots for', {
+      vars: { TOPIC: 'feat-x' },
+      set: [DEST],
+    })
+    expect(commit.status).not.toBe(0)
+    expect(
+      isolatedGit(pr.work, ['diff', '--cached', '--name-only']).split('\n'),
+    ).toContain(DEST)
+
+    const recovery = runBlock(pr, 'git restore --staged', { set: [DEST] })
+
+    expect(recovery.status, recovery.stderr).toBe(0)
+    expect(
+      isolatedGit(pr.work, ['diff', '--cached', '--name-only', '--', DEST]),
+    ).toBe('')
+    expect(isolatedGit(pr.work, ['diff', '--cached', '--name-only'])).toBe(
+      'notes.txt',
+    )
+  })
+})
+
+// ── What the remote holds after a push ─────────────────────────────────────
+
+describe('pr-attachments dry run -- the push, and what the remote holds afterwards', () => {
+  const PUSH_MARKER = 'git push'
+  const CHECK_MARKER = 'git ls-remote'
+
+  test('the push runs with prompts off and still lands on the remote', () => {
+    // A credential helper that asked for input would hang the run.
+    expect(blockWith(PUSH_MARKER)).toContain('GIT_TERMINAL_PROMPT=0')
+    const pr = createPr()
+    publishEvidence(pr)
+    const check = runBlock(pr, CHECK_MARKER, {
+      vars: { REMOTE: 'origin', BRANCH: 'feat/x' },
+    })
+
+    expect(check.status, check.stderr).toBe(0)
+    expect(check.stdout.trim()).toBe('landed')
+  })
+
+  test('a rejected push leaves the evidence commit local, and the check says so', () => {
+    const pr = createPr()
+    const other = path.join(pr.root, 'other')
+    isolatedGit(pr.root, ['clone', '-q', pr.origin, other])
+    isolatedGit(other, ['checkout', '-q', 'feat/x'])
+    commitFile(other, 'theirs.txt', 'someone else\n')
+    isolatedGit(other, ['push', '-q', 'origin', 'feat/x'])
+    expect(copyEvidence(pr).status).toBe(0)
+    expect(
+      runBlock(pr, 'add screenshots for', {
+        vars: { TOPIC: 'feat-x' },
+        set: [DEST],
+      }).status,
+    ).toBe(0)
+    const push = runBlock(pr, PUSH_MARKER, {
+      vars: { REMOTE: 'origin', BRANCH: 'feat/x' },
+    })
+    expect(push.status).not.toBe(0)
+
+    const check = runBlock(pr, CHECK_MARKER, {
+      vars: { REMOTE: 'origin', BRANCH: 'feat/x' },
+    })
+
+    expect(check.stdout.trim()).toBe('local')
+  })
+
+  test('a branch the remote does not have counts as local', () => {
+    const pr = createPr()
+    const check = runBlock(pr, CHECK_MARKER, {
+      vars: { REMOTE: 'origin', BRANCH: 'feat/never-pushed' },
+    })
+
+    expect(check.stdout.trim()).toBe('local')
+  })
+
+  test('a remote that cannot be reached is reported as unchecked, not as landed', () => {
+    const pr = createPr()
+    const check = runBlock(pr, CHECK_MARKER, {
+      vars: {
+        REMOTE: path.join(pr.root, 'no-such-remote.git'),
+        BRANCH: 'feat/x',
+      },
+    })
+
+    expect(check.stdout.trim()).toBe('unchecked')
+  })
+})
+
+// ── The write guard, end to end, with a stand-in gh ────────────────────────
+//
+// The stand-in keeps one PR body in a file. It answers `gh pr view N --json
+// body [--jq EXPR]` and `gh pr edit N --body-file F`, and logs every edit.
+// EXPR is the object or `.body` selector the skill sends; the stand-in
+// evaluates it with `.body` bound to the stored text.
+
+interface FakePr {
+  readonly bin: string
+  readonly store: string
+  readonly log: string
+}
+
+function installFakePr(pr: Pr, body: string): FakePr {
+  const bin = path.join(makeDir(), 'bin')
+  fs.mkdirSync(bin)
+  const store = path.join(pr.home, 'pr-body.txt')
+  const log = path.join(pr.home, 'gh-edits.log')
+  fs.writeFileSync(store, body)
+  fs.writeFileSync(log, '')
+  const script = `#!/usr/bin/env node
+const fs = require('node:fs')
+const args = process.argv.slice(2)
+const store = ${JSON.stringify(store)}
+const log = ${JSON.stringify(log)}
+if (args[0] === 'pr' && args[1] === 'view') {
+  const body = fs.readFileSync(store, 'utf8')
+  const at = args.indexOf('--jq')
+  if (at === -1) {
+    process.stdout.write(JSON.stringify({ body }))
+  } else {
+    const expr = args[at + 1].replaceAll('.body', '__body')
+    const value = new Function('__body', 'return (' + expr + ')')(body)
+    process.stdout.write(typeof value === 'string' ? value + '\\n' : JSON.stringify(value))
+  }
+} else if (args[0] === 'pr' && args[1] === 'edit') {
+  const file = args[args.indexOf('--body-file') + 1]
+  fs.appendFileSync(log, 'edit ' + args[2] + ' ' + file + '\\n')
+  fs.copyFileSync(file, store)
+} else {
+  process.exit(2)
+}
+`
+  fs.writeFileSync(path.join(bin, 'gh'), script, { mode: 0o755 })
+  return { bin, store, log }
+}
+
+function edits(fake: FakePr): string[] {
+  return fs.readFileSync(fake.log, 'utf8').split('\n').filter(Boolean)
+}
+
+const STALE = 'a'.repeat(40)
+const staleEmbed = `![shot](https://raw.githubusercontent.com/octo/widgets/${STALE}/${DEST})`
+
+describe('pr-attachments dry run -- the write guard writes when nothing changed (stand-in gh)', () => {
+  function jsonList(items: unknown): string {
+    return JSON.stringify(items).slice(1, -1)
+  }
+
+  test('re-pin mode reads, rewrites, passes the guard and writes the new body', () => {
+    const pr = createPr()
+    publishEvidence(pr)
+    const head = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
+    const original = `Intro\n\n## Demo\n\n${staleEmbed}\n`
+    const fake = installFakePr(pr, original)
+    const backup = path.join(pr.home, 'backup.json')
+    const newBody = path.join(pr.home, 'new-body.md')
+    const run = (marker: string, values: Fill, without?: string) =>
+      runWithGh(pr, fake.bin, fill(blockWith(marker, without), values))
+
+    const listed = run('" urls <', {
+      vars: { SKILL_DIR, PR: '7', BACKUP: backup },
+      tokens: { '<owner/repo>': 'octo/widgets' },
+    })
+    expect(listed.status, listed.stderr).toBe(0)
+    const urls = JSON.parse(listed.stdout).urls
+
+    const picked = run('scripts/pr-attachments.mjs" pins', {
+      vars: { SKILL_DIR },
+      tokens: {
+        '<headRefOid>': head,
+        '<the urls array from the previous report>': jsonList(urls),
+      },
+    })
+    const pins = JSON.parse(picked.stdout).pins
+    expect(pins).toEqual({ [DEST]: head })
+
+    const rewritten = run('repin-rewrite', {
+      vars: { SKILL_DIR, PR: '7', BACKUP: backup },
+      tokens: {
+        '<owner/repo>': 'octo/widgets',
+        '<the pins map from the previous report>': `"${DEST}": "${head}"`,
+        '<new body file>': newBody,
+      },
+    })
+    expect(rewritten.status, rewritten.stdout + rewritten.stderr).toBe(0)
+    expect(JSON.parse(rewritten.stdout).result).toBe('repinned')
+
+    const guarded = run('RECHECK=', {
+      vars: { PR: '7', BACKUP: backup, NEW_BODY: newBody },
+    })
+
+    expect(guarded.status, guarded.stdout + guarded.stderr).toBe(0)
+    expect(edits(fake)).toEqual([`edit 7 ${newBody}`])
+    expect(fs.readFileSync(fake.store, 'utf8')).toBe(
+      fs.readFileSync(newBody, 'utf8'),
+    )
+    expect(fs.readFileSync(fake.store, 'utf8')).toContain(
+      `/octo/widgets/${head}/${DEST}`,
+    )
+  })
+
+  test('PR mode splices, passes the guard and writes the new body', () => {
+    const pr = createPr()
+    const fake = installFakePr(pr, 'Intro\n')
+    const backup = path.join(pr.home, 'backup.json')
+    const newBody = path.join(pr.home, 'new-body.md')
+    const demoFile = path.join(pr.home, 'demo.md')
+    fs.writeFileSync(demoFile, `## Demo\n\n${staleEmbed}\n`)
+
+    const spliced = runWithGh(
+      pr,
+      fake.bin,
+      fill(blockWith('splice < "$BACKUP"'), {
+        vars: { SKILL_DIR, PR: '7', BACKUP: backup },
+        tokens: { '<demo file>': demoFile, '<new body file>': newBody },
+      }),
+    )
+    expect(spliced.status, spliced.stdout + spliced.stderr).toBe(0)
+
+    const guarded = runWithGh(
+      pr,
+      fake.bin,
+      fill(blockWith('RECHECK='), {
+        vars: { PR: '7', BACKUP: backup, NEW_BODY: newBody },
+        // Filled when the block asks for them, as a model would in PR mode.
+        tokens: { '<demo file>': demoFile, '<new body file>': newBody },
+      }),
+    )
+
+    expect(guarded.status, guarded.stdout + guarded.stderr).toBe(0)
+    expect(edits(fake)).toEqual([`edit 7 ${newBody}`])
+    expect(fs.readFileSync(fake.store, 'utf8')).toBe(
+      `Intro\n\n## Demo\n\n${staleEmbed}\n`,
+    )
+  })
+
+  test('a description edited since the backup is not overwritten', () => {
+    const pr = createPr()
+    const fake = installFakePr(pr, 'Intro\n')
+    const backup = path.join(pr.home, 'backup.json')
+    const newBody = path.join(pr.home, 'new-body.md')
+    const demoFile = path.join(pr.home, 'demo.md')
+    fs.writeFileSync(demoFile, `## Demo\n\n${staleEmbed}\n`)
+    const spliced = runWithGh(
+      pr,
+      fake.bin,
+      fill(blockWith('splice < "$BACKUP"'), {
+        vars: { SKILL_DIR, PR: '7', BACKUP: backup },
+        tokens: { '<demo file>': demoFile, '<new body file>': newBody },
+      }),
+    )
+    expect(spliced.status, spliced.stdout + spliced.stderr).toBe(0)
+    fs.writeFileSync(fake.store, 'Intro, edited by someone else\n')
+
+    const guarded = runWithGh(
+      pr,
+      fake.bin,
+      fill(blockWith('RECHECK='), {
+        vars: { PR: '7', BACKUP: backup, NEW_BODY: newBody },
+        // Filled when the block asks for them, as a model would in PR mode.
+        tokens: { '<demo file>': demoFile, '<new body file>': newBody },
+      }),
+    )
+
+    expect(guarded.status).not.toBe(0)
+    expect(edits(fake)).toEqual([])
+    expect(fs.readFileSync(fake.store, 'utf8')).toBe(
+      'Intro, edited by someone else\n',
+    )
+  })
+
+  test('the read-back block passes once the body on the PR equals the body file', () => {
+    const pr = createPr()
+    const fake = installFakePr(pr, 'Intro\n')
+    const newBody = path.join(pr.home, 'new-body.md')
+    fs.writeFileSync(newBody, 'Intro\n\nMore')
+    fs.writeFileSync(fake.store, 'Intro\n\nMore')
+
+    const reread = runWithGh(
+      pr,
+      fake.bin,
+      fill(blockWith('POST='), { vars: { PR: '7', NEW_BODY: newBody } }),
+    )
+
+    expect(reread.status, reread.stdout + reread.stderr).toBe(0)
   })
 })

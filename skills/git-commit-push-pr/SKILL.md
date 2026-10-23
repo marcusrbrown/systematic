@@ -63,11 +63,13 @@ Use the current branch and existing PR check from context. If the current branch
 
 ### DU-3: Write and apply the updated description
 
-Read the current PR description to drive the compare-and-confirm step later:
+Read the current PR description. It drives the compare-and-confirm step later, and it is saved to an old body file for the carry:
 
 ```bash
-gh pr view --json body --jq '.body'
+OLD_BODY_FILE=$(mktemp) && gh pr view "<PR URL>" --json body --jq '.body' > "$OLD_BODY_FILE" && cat "$OLD_BODY_FILE" && echo saved
 ```
+
+When the command does not print `saved`, the temp file could not be created or the `gh` read failed. Stop and apply nothing, because the current description was never saved. Tell the user why, remove the old file, and ask how to proceed.
 
 **Generate the updated title and body** — using the PR URL from DU-2 and the commit range it covers, write an updated PR title and body. The URL preserves repo/PR identity even when invoked from a worktree or subdirectory. If the user provided a focus (e.g., "include the benchmarking results"), incorporate it into the generated content. Write the body to an OS temp file:
 
@@ -80,7 +82,11 @@ EOF
 
 If the PR is not open or the commit range cannot be resolved, report the issue and stop.
 
-**Evidence decision:** Preserve any existing `## Demo` or `## Screenshots` block from the current body by default. Carry the `## Demo` section with the carry procedure in Step 7: save the current description to an old body file, then load `systematic:pr-attachments` with `mode:carry old=<old body file> new=<new body file>`, where the new body file is the one written above. Do this before the compare-and-confirm step. If the user's focus asks to refresh or remove evidence, honor that intent and skip the carry.
+**Evidence decision:** Preserve any existing `## Demo` or `## Screenshots` block from the current body by default. Carry the `## Demo` section with `mode:carry`, by following Carrying the Demo section: `old=` is the old body file saved above, and `new=` is the body file written above. The carry always runs, and it runs before the compare-and-confirm step. If the user's focus asks to refresh or remove evidence, honor that intent and skip the carry. When the carry ends, remove the old file:
+
+```bash
+rm -f "$OLD_BODY_FILE"
+```
 
 Do not offer to publish images here. If the user asks to attach local images, route that request to `systematic:pr-attachments` in PR mode, with the image paths as its only tokens. PR mode writes the Demo section itself, and a later rewrite carries it through.
 
@@ -202,18 +208,19 @@ Use this branch diff (not the working-tree diff) for the evidence decision. If t
 **Evidence decision (before delegation).** If the branch diff changes observable behavior (UI, CLI output, API behavior with runnable code, generated artifacts, workflow output) and evidence is not otherwise blocked (unavailable credentials, paid services, deploy-only infrastructure, hardware), ask: "This PR has observable behavior. Capture evidence for the PR description?"
 
 - **Use existing evidence** -- ask for the URL or markdown embed, then splice it into the PR body as a `## Demo` section before applying.
-- **Publish local images** -- publish image files from this machine as commit-pinned embeds. Ask for the image paths, or offer the untracked images found in Step 4. Then load the `systematic:pr-attachments` skill in embed mode. State the tokens in the instruction text itself, and pass them as skill arguments where the host supports them, because some hosts pass no skill arguments. For example: `mode:embed shots/a.png "shots/b c.png"`. Wrap a path that has spaces in double quotes.
+- **Publish local images** -- publish image files from this machine as commit-pinned embeds. Ask for the image paths, or offer the untracked images found in Step 4. Then load the `systematic:pr-attachments` skill in embed mode. State the tokens in the instruction text only, because some hosts pass no skill arguments and the same tokens in two places would be read twice. For example: `mode:embed shots/a.png "shots/b c.png"`. Wrap a path that has spaces in double quotes.
 - **Skip** -- proceed with no evidence section.
 
 The skill ends with one status line:
 
 ```text
 pr-attachments: status=ok evidence_sha=<40-hex> demo_file=<path> images=<count>
-pr-attachments: status=failed evidence=<pushed|none> reason=<reason>
+pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>
 ```
 
 - `status=ok`: take `demo_file` from the line. The file holds the Demo section. Keep it for the splice below. The narrative range below does not use `evidence_sha`.
-- `status=failed` with `evidence=pushed`: the evidence files are pushed but unreferenced. Tell the user the reason. Cleanup is offered by the re-run command printed after the PR opens. Then continue without evidence.
+- `status=failed` with `evidence=pushed`: the evidence files are pushed but unreferenced. Tell the user the reason, and keep the image paths for the retry command in Step 8. Then continue without evidence.
+- `status=failed` with `evidence=local`: the evidence commit is local and unpushed. It exists only on this machine, and the remote does not hold it. Tell the user the reason and that the branch needs a push (after a fetch and a rebase or merge, when the push was rejected) before the images can be published. Then continue without evidence.
 - `status=failed` with `evidence=none`: nothing was published. Tell the user the reason, then continue without evidence.
 
 **Fallback.** If loading `systematic:pr-attachments` fails, or it loads but sees no `mode:` token and stops without a status line, offer only the two existing options: **Use existing evidence** and **Skip**.
@@ -264,24 +271,19 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
 
 - If **yes**, run Step 6 now to generate the title and body file (passing the existing PR URL for context), then carry the Demo section and apply.
 
-  **Carry the Demo section.** The rewrite replaces the whole description, so a `## Demo` section in the current one has to be carried into the new one. Skip this when the new body already holds a `## Demo` section from Step 6. Save the current description to a file, and check it for a Demo heading:
+  **Carry the Demo section.** The rewrite replaces the whole description, so a `## Demo` section in the current one has to be carried into the new one. The carry always runs; do not gate it on a heading check, because the helper decides whether a Demo section exists. Skip it only when the new body already holds a `## Demo` section from Step 6. Save the current description to a file:
 
   ```bash
   OLD_BODY_FILE=$(mktemp) && gh pr view "<PR URL>" --json body --jq '.body' > "$OLD_BODY_FILE" && echo saved
-  grep -q '^## Demo' "$OLD_BODY_FILE" && echo has-demo
   ```
 
-  When the first command does not print `saved`, the temp file could not be created or the `gh` read failed. Stop the carry and do not apply the new body file, because the current description was never checked for a Demo section. Tell the user why, remove the old file, and ask how to proceed.
-
-  When the second command prints `has-demo`, load the `systematic:pr-attachments` skill in carry mode. State the tokens in the instruction text itself, and pass them as skill arguments where the host supports them, because some hosts pass no skill arguments: `mode:carry old=<old body file> new=<new body file>`, with the real paths from this run. Wrap a path that has spaces in double quotes. Carry mode edits the new body file in place. It never touches the PR.
-
-  The skill ends with one status line, `pr-attachments: status=<ok|absent|failed> [reason=<reason>]`. On `status=ok` or `status=absent`, apply the new body file. On `status=failed`, fall back to prose-only preservation: write the body file again, keep the old `## Demo` section in it by hand, and tell the user that carry failed and why. If the skill fails to load, or prints no status line, fall back to prose-only preservation too. Then remove the old file:
+  When the command does not print `saved`, the temp file could not be created or the `gh` read failed. Stop the carry and do not apply the new body file, because the current description was never saved. Tell the user why, remove the old file, and ask how to proceed, with the options listed in Carrying the Demo section. Otherwise follow Carrying the Demo section, with `old=` set to the old body file and `new=` set to the new body file. Then remove the old file:
 
   ```bash
   rm -f "$OLD_BODY_FILE"
   ```
 
-  **Apply.** The carry step edits the body file in place, so the apply step is the same:
+  **Apply.** Only after `status=ok` or `status=absent`. The carry step edits the body file in place, so the apply step is the same:
 
   ```bash
   gh pr edit --title "<title>" --body "$(cat "<body_file>")"
@@ -293,6 +295,24 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
 
 Output the PR URL.
 
-When this run published evidence images (`status=ok`, or `status=failed` with `evidence=pushed`), also print the re-run command, marked as recommended before merge. Take `<N>` from the PR URL:
+When this run published evidence images, print the command that fits the outcome. Take `<N>` from the PR URL:
 
-> Recommended before merge: load `systematic:pr-attachments` with no tokens (or with `pr:<N>`). It re-checks the embed pins and offers to remove the evidence images from the branch.
+- `status=ok`: print the zero-path command, marked as recommended before merge:
+
+  > Recommended before merge: load `systematic:pr-attachments` with no tokens (or with `pr:<N>`). It re-checks the embed pins and offers to remove the evidence images from the branch.
+
+- `status=failed` with `evidence=pushed` and `reason=verify-failed`, or any other pushed state in which the Demo section was not written: print a retry command instead. The zero-path command re-pins and cleans up, and there is nothing to re-pin yet. The retry is to load `systematic:pr-attachments` with the same image paths and `pr:<N>`. It reuses the pushed commit, verifies the embeds and writes the description. Do not print the zero-path command until a publish succeeds.
+- `status=failed` with `evidence=local`: say that the evidence commit is local and unpushed, so the branch needs a push first, and print no re-run command.
+
+---
+
+## Carrying the Demo section
+
+A description rewrite replaces the whole body, so a `## Demo` section in the current description has to be carried into the new one. Both rewrite paths, the Description Update workflow and the existing-PR path of Step 7, first save the current description to an old body file, and then follow this section. The carry always runs, whatever the old description holds: `status=absent` is a success and leaves the new file untouched.
+
+Load the `systematic:pr-attachments` skill in carry mode. State the tokens in the instruction text only, because some hosts pass no skill arguments and the same tokens in two places would be read twice: `mode:carry old=<old body file> new=<new body file>`, with the real paths from this run. Wrap a path that has spaces in double quotes. Carry mode edits the new body file in place. It never touches the PR.
+
+The skill ends with one status line, `pr-attachments: status=<ok|absent|failed> [reason=<reason>]`.
+
+- `status=ok` or `status=absent`: apply the new body file.
+- `status=failed`, a skill that fails to load, a skill that prints no status line, or the setup stops: the carry failed. Do not apply the rewritten body, and do not write a `## Demo` section by hand. The PR description stays as it is. Report the reason (the `reason` on the status line, or what stopped the setup) and ask the user how to proceed. Offer only these options: retry the carry, apply the rewritten body without a Demo section after an explicit yes, or keep the current description.

@@ -110,15 +110,17 @@
 //   head_repo          optional "owner/repo"; every URL must belong to it
 //   max_wait_s         optional, default 90, at most 300: the most this call
 //                      spends waiting between attempts
-//   waited_s           optional, default 0: seconds earlier calls for the same
-//                      URLs already waited (`waited_s` of their reports, added
-//                      up). The schedule resumes there, and the 300 s total
-//                      counts it.
+//   waited_s           optional, default 0: the `waited_s` of the latest report
+//                      for the same URLs, passed on unchanged. The schedule
+//                      resumes there, and the 300 s total counts it.
 //   request_timeout_s  optional, default 10, at most 300: per request
 //   Retried (404, 429, 5xx, network error, timeout): wait 2, 4, 8, 15, then 30 s
 //   again and again, each with +-20% jitter, and never less than a 429's
 //   Retry-After. A call stops when the next wait would pass `max_wait_s` or
-//   the 300 s total. Final at once: a 200 that is not image/*, 401/403, any
+//   the 300 s total. Each request is cut short at the time the call has left,
+//   and no attempt starts once that time is gone, so a call ends at its
+//   `max_wait_s` and not one request later. (A call always makes its first
+//   request, even when earlier calls used up the whole total.) Final at once: a 200 that is not image/*, 401/403, any
 //   other status, a redirect off the allowed hosts, a missing Location, or a
 //   6th redirect. Every URL is checked at the same time.
 //   result  verified (0), failed (1)
@@ -128,7 +130,9 @@
 //   redirect-off-host or too-many-redirects. `retryable` is true when waiting
 //   longer could help and the 300 s total has room for the next wait. The
 //   report has `failed` (the failing entries), top-level `retryable` (any
-//   failure is retryable) and `waited_s` (the longest wait, rounded up).
+//   failure is retryable) and `waited_s`: the longest wait of this call plus
+//   the `waited_s` it was given, rounded up. It is the running total, so the
+//   caller never adds reports up.
 //
 // Section rules (no markers; the heading is the only boundary):
 //   - The heading matches ^ {0,3}##[ \t]+Demo([ \t]+#+)?[ \t]*$.
@@ -143,6 +147,9 @@
 // Exit codes: 0 success, 1 domain failure (rejected batch, or a question
 // the user must answer, or an output file that cannot be written, or an embed
 // that does not serve an image), 2 usage error.
+// A usage error carries `error` (a fixed code) and `field` (the input field
+// that failed, by its schema name; `input` for the whole object and
+// `operation` for the command line). Neither ever echoes caller text.
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -1669,16 +1676,17 @@ function judgeResponse(response) {
  */
 
 /**
- * One request, bounded by the per-request timeout. The body is cancelled
- * whatever the status was, and a stalled request is aborted.
+ * One request, bounded by `timeoutMs`. The body is cancelled whatever the
+ * status was, and a stalled request is aborted.
  * @param {string} url
  * @param {VerifyContext} ctx
+ * @param {number} timeoutMs
  */
-async function probe(url, ctx) {
+async function probe(url, ctx, timeoutMs) {
   const controller = new AbortController()
   let cancelTimer = () => {}
   const timedOut = new Promise((resolve) => {
-    cancelTimer = ctx.startTimer(ctx.requestTimeoutMs, () => resolve(TIMED_OUT))
+    cancelTimer = ctx.startTimer(timeoutMs, () => resolve(TIMED_OUT))
   })
   const pending = Promise.resolve().then(() =>
     ctx.fetch(url, {
@@ -1709,16 +1717,33 @@ async function probe(url, ctx) {
   }
 }
 
+/** The time this call may still spend, in ms. @param {VerifyContext} ctx */
+function timeLeft(ctx) {
+  return ctx.callLimitMs - (ctx.now() - ctx.start)
+}
+
 /**
  * One attempt: the request plus the redirects it leads to, each hop checked
- * against the host rule before anything is sent to it.
+ * against the host rule before anything is sent to it. Each request is cut
+ * short at the time the call has left, so a call never runs past its limit by
+ * more than the clock's own slack. The first request of a call's first
+ * attempt is always made, with the full request timeout when no time is left.
  * @param {string} startUrl
  * @param {VerifyContext} ctx
+ * @param {boolean} first Whether this is the first attempt of the call.
  */
-async function attempt(startUrl, ctx) {
+async function attempt(startUrl, ctx, first) {
   let current = startUrl
   for (let hops = 0; ; hops += 1) {
-    const seen = await probe(current, ctx)
+    const left = timeLeft(ctx)
+    if (left <= 0 && !(first && hops === 0)) {
+      return { status: 'timeout', httpStatus: null }
+    }
+    const seen = await probe(
+      current,
+      ctx,
+      left > 0 ? Math.min(ctx.requestTimeoutMs, left) : ctx.requestTimeoutMs,
+    )
     if (seen.status !== 'redirect') {
       return seen
     }
@@ -1793,7 +1818,7 @@ async function verifyOne(url, ctx) {
   let step = ctx.firstStep
   for (;;) {
     attempts += 1
-    const seen = await attempt(url, ctx)
+    const seen = await attempt(url, ctx, attempts === 1)
     if (seen.status === 'ok' || !RETRYABLE_STATUSES.has(seen.status)) {
       return verdict(url, seen, attempts, false)
     }
@@ -1809,6 +1834,13 @@ async function verifyOne(url, ctx) {
     }
     await ctx.sleep(delay)
     step += 1
+    if (timeLeft(ctx) <= 0) {
+      // The wait used the last of the call's time: end here, with no attempt.
+      const spent = ctx.waitedMs + (ctx.now() - ctx.start)
+      const budgetLeft =
+        spent + delayAt(ctx.scheduleMs, step) <= ctx.totalBudgetMs
+      return verdict(url, seen, attempts, budgetLeft)
+    }
   }
 }
 
@@ -1858,11 +1890,15 @@ export async function verifyUrls(urls, options = {}) {
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 /**
- * Fixed error codes only: the caller's text is never echoed back.
+ * Fixed error codes only: the caller's text is never echoed back. `field`
+ * names the input field that failed, always one of the schema's own names
+ * (or `input` for the whole object and `operation` for the command line), so
+ * the caller can fix that one field and retry.
  * @param {string} operation
  * @param {string} error
+ * @param {string} field
  */
-function usageError(operation, error) {
+function usageError(operation, error, field) {
   return {
     exitCode: 2,
     body: {
@@ -1870,9 +1906,19 @@ function usageError(operation, error) {
       operation,
       result: 'usage-error',
       error,
+      field,
       usage: USAGE,
     },
   }
+}
+
+/**
+ * A parse failure: the fixed error code and the schema field behind it.
+ * @param {string} error
+ * @param {string} field
+ */
+function invalid(error, field) {
+  return { ok: false, error, field }
 }
 
 /** @param {unknown} value */
@@ -1887,15 +1933,15 @@ function isPositiveInteger(value) {
 
 /**
  * @param {unknown} raw
- * @returns {{ ok: true, input: Parameters<typeof classify>[0] } | { ok: false, error: string }}
+ * @returns {{ ok: true, input: Parameters<typeof classify>[0] } | { ok: false, error: string, field: string }}
  */
 function parseInput(raw) {
   if (!isPlainObject(raw)) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'input')
   }
   const { paths, branch, topic, existing, max_bytes } = raw
   if (!Array.isArray(paths) || paths.length === 0) {
-    return { ok: false, error: 'empty-paths' }
+    return invalid('empty-paths', 'paths')
   }
   if (
     !paths.every(
@@ -1903,15 +1949,18 @@ function parseInput(raw) {
         typeof item === 'string' && item.length > 0 && !item.includes('\0'),
     )
   ) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'paths')
   }
   const optionalString = (value) =>
     value === undefined || typeof value === 'string'
-  if (!optionalString(branch) || !optionalString(topic)) {
-    return { ok: false, error: 'invalid-input' }
+  if (!optionalString(branch)) {
+    return invalid('invalid-input', 'branch')
+  }
+  if (!optionalString(topic)) {
+    return invalid('invalid-input', 'topic')
   }
   if (branch === undefined && (topic === undefined || topic.length === 0)) {
-    return { ok: false, error: 'missing-topic-source' }
+    return invalid('missing-topic-source', 'branch')
   }
   if (
     existing !== undefined &&
@@ -1920,10 +1969,10 @@ function parseInput(raw) {
       Object.values(existing).every((sha) => typeof sha === 'string')
     )
   ) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'existing')
   }
   if (max_bytes !== undefined && !isPositiveInteger(max_bytes)) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'max_bytes')
   }
   return {
     ok: true,
@@ -1982,6 +2031,29 @@ function isPins(value) {
   )
 }
 
+/** @param {unknown} value */
+function isHeadRepo(value) {
+  return typeof value === 'string' && HEAD_REPO.test(value)
+}
+
+/**
+ * The first required field that is missing or malformed, by schema name, or
+ * null. The whole input failing is reported as the field `input`.
+ * @param {unknown} raw
+ * @param {ReadonlyArray<readonly [string, (value: unknown) => boolean]>} checks
+ */
+function firstInvalid(raw, checks) {
+  if (!isPlainObject(raw)) {
+    return invalid('invalid-input', 'input')
+  }
+  for (const [field, isValid] of checks) {
+    if (!isValid(raw[field])) {
+      return invalid('invalid-input', field)
+    }
+  }
+  return null
+}
+
 /**
  * The output file is the only thing the helper ever writes. A file that
  * exists keeps its mode; a new one is created 0600.
@@ -2005,40 +2077,40 @@ function runClassify(raw) {
   const parsed = parseInput(raw)
   return parsed.ok
     ? classify(parsed.input)
-    : usageError('classify', parsed.error)
+    : usageError('classify', parsed.error, parsed.field)
 }
 
 /**
  * @param {string} file
- * @returns {{ ok: true, text: string } | { ok: false, error: string }}
+ * @returns {{ ok: true, text: string } | { ok: false, error: string, field: string }}
  */
 function readDemoFile(file) {
   const candidate = readCandidate(file, MAX_DEMO_BYTES)
   if (!candidate.ok) {
-    return { ok: false, error: 'demo-file-unreadable' }
+    return invalid('demo-file-unreadable', 'demo_file')
   }
   try {
     // ignoreBOM keeps a BOM in the text instead of silently dropping it.
     const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
     return { ok: true, text: decoder.decode(candidate.bytes) }
   } catch {
-    return { ok: false, error: 'demo-file-not-utf8' }
+    return invalid('demo-file-not-utf8', 'demo_file')
   }
 }
 
 /** @param {unknown} raw */
 function runSplice(raw) {
-  if (
-    !isPlainObject(raw) ||
-    !isBody(raw.body) ||
-    !isPathString(raw.demo_file) ||
-    !isPathString(raw.out_file)
-  ) {
-    return usageError('splice', 'invalid-input')
+  const failed = firstInvalid(raw, [
+    ['body', isBody],
+    ['demo_file', isPathString],
+    ['out_file', isPathString],
+  ])
+  if (failed !== null) {
+    return usageError('splice', failed.error, failed.field)
   }
   const demoFile = readDemoFile(raw.demo_file)
   if (!demoFile.ok) {
-    return usageError('splice', demoFile.error)
+    return usageError('splice', demoFile.error, demoFile.field)
   }
   const result = spliceDemo(raw.body, demoFile.text)
   const report = {
@@ -2047,7 +2119,7 @@ function runSplice(raw) {
   }
   switch (result.kind) {
     case 'invalid-demo':
-      return usageError('splice', 'invalid-demo')
+      return usageError('splice', 'invalid-demo', 'demo_file')
     case 'multiple-demo-sections':
       return outcome('splice', 1, 'needs-input', {
         ...report,
@@ -2077,8 +2149,12 @@ function runSplice(raw) {
 
 /** @param {unknown} raw */
 function runExtract(raw) {
-  if (!isPlainObject(raw) || !isBody(raw.body) || !isPathString(raw.out_file)) {
-    return usageError('extract', 'invalid-input')
+  const failed = firstInvalid(raw, [
+    ['body', isBody],
+    ['out_file', isPathString],
+  ])
+  if (failed !== null) {
+    return usageError('extract', failed.error, failed.field)
   }
   const result = extractDemo(raw.body)
   const report = { demo_count: result.demoCount }
@@ -2101,28 +2177,26 @@ function runExtract(raw) {
 
 /** @param {unknown} raw */
 function runUrls(raw) {
-  if (
-    !isPlainObject(raw) ||
-    !isBody(raw.body) ||
-    typeof raw.head_repo !== 'string' ||
-    !HEAD_REPO.test(raw.head_repo)
-  ) {
-    return usageError('urls', 'invalid-input')
+  const failed = firstInvalid(raw, [
+    ['body', isBody],
+    ['head_repo', isHeadRepo],
+  ])
+  if (failed !== null) {
+    return usageError('urls', failed.error, failed.field)
   }
   return outcome('urls', 0, 'urls', findManagedUrls(raw.body, raw.head_repo))
 }
 
 /** @param {unknown} raw */
 function runRepin(raw) {
-  if (
-    !isPlainObject(raw) ||
-    !isBody(raw.body) ||
-    typeof raw.head_repo !== 'string' ||
-    !HEAD_REPO.test(raw.head_repo) ||
-    !isPins(raw.pins) ||
-    !isPathString(raw.out_file)
-  ) {
-    return usageError('repin-rewrite', 'invalid-input')
+  const failed = firstInvalid(raw, [
+    ['body', isBody],
+    ['head_repo', isHeadRepo],
+    ['pins', isPins],
+    ['out_file', isPathString],
+  ])
+  if (failed !== null) {
+    return usageError('repin-rewrite', failed.error, failed.field)
   }
   const result = repinBody(raw.body, raw.head_repo, raw.pins)
   const written = writeBody('repin-rewrite', raw.out_file, result.output, {
@@ -2172,17 +2246,23 @@ function isGitTimeout(value) {
  * @param {unknown} raw
  */
 function parsePinsInput(raw) {
+  if (!isPlainObject(raw)) {
+    return invalid('invalid-input', 'input')
+  }
   if (
-    !isPlainObject(raw) ||
     typeof raw.head_ref_oid !== 'string' ||
-    !COMMIT_SHA.test(raw.head_ref_oid) ||
-    !Array.isArray(raw.urls) ||
-    !isGitTimeout(raw.git_timeout_ms)
+    !COMMIT_SHA.test(raw.head_ref_oid)
   ) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'head_ref_oid')
+  }
+  if (!Array.isArray(raw.urls)) {
+    return invalid('invalid-input', 'urls')
+  }
+  if (!isGitTimeout(raw.git_timeout_ms)) {
+    return invalid('invalid-input', 'git_timeout_ms')
   }
   if (raw.urls.length === 0) {
-    return { ok: false, error: 'empty-paths' }
+    return invalid('empty-paths', 'urls')
   }
   const paths = new Map()
   for (const item of raw.urls) {
@@ -2193,7 +2273,7 @@ function parsePinsInput(raw) {
       typeof item.sha !== 'string' ||
       !/^[0-9a-fA-F]{40}$/.test(item.sha)
     ) {
-      return { ok: false, error: 'invalid-input' }
+      return invalid('invalid-input', 'urls')
     }
     const sha = item.sha.toLowerCase()
     const shas = paths.get(item.path) ?? []
@@ -2218,27 +2298,32 @@ function parsePinsInput(raw) {
  * @param {unknown} raw
  */
 function parseCleanupInput(raw) {
+  if (!isPlainObject(raw)) {
+    return invalid('invalid-input', 'input')
+  }
   if (
-    !isPlainObject(raw) ||
     typeof raw.head_ref_oid !== 'string' ||
-    !COMMIT_SHA.test(raw.head_ref_oid) ||
-    !isGitTimeout(raw.git_timeout_ms) ||
-    (raw.remove_digest !== undefined &&
-      !(
-        typeof raw.remove_digest === 'string' && DIGEST.test(raw.remove_digest)
-      ))
+    !COMMIT_SHA.test(raw.head_ref_oid)
   ) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'head_ref_oid')
+  }
+  if (!isGitTimeout(raw.git_timeout_ms)) {
+    return invalid('invalid-input', 'git_timeout_ms')
+  }
+  if (
+    raw.remove_digest !== undefined &&
+    !(typeof raw.remove_digest === 'string' && DIGEST.test(raw.remove_digest))
+  ) {
+    return invalid('invalid-input', 'remove_digest')
   }
   const named = raw.base_ref_name !== undefined || raw.remote !== undefined
   let baseRef
   if (named && raw.base_ref === undefined) {
-    if (
-      !isRefName(raw.base_ref_name) ||
-      typeof raw.remote !== 'string' ||
-      !REMOTE_NAME.test(raw.remote)
-    ) {
-      return { ok: false, error: 'invalid-input' }
+    if (!isRefName(raw.base_ref_name)) {
+      return invalid('invalid-input', 'base_ref_name')
+    }
+    if (typeof raw.remote !== 'string' || !REMOTE_NAME.test(raw.remote)) {
+      return invalid('invalid-input', 'remote')
     }
     baseRef = `refs/remotes/${raw.remote}/${raw.base_ref_name}`
   } else if (
@@ -2248,7 +2333,8 @@ function parseCleanupInput(raw) {
   ) {
     baseRef = raw.base_ref
   } else {
-    return { ok: false, error: 'invalid-input' }
+    // Naming both forms, or neither, or a base_ref that is not fully qualified.
+    return invalid('invalid-input', 'base_ref')
   }
   return {
     ok: true,
@@ -2265,7 +2351,7 @@ function parseCleanupInput(raw) {
 function runPins(raw) {
   const parsed = parsePinsInput(raw)
   if (!parsed.ok) {
-    return usageError('pins', parsed.error)
+    return usageError('pins', parsed.error, parsed.field)
   }
   const { input } = parsed
   return withGit(
@@ -2280,7 +2366,7 @@ function runPins(raw) {
 function runCleanup(raw) {
   const parsed = parseCleanupInput(raw)
   if (!parsed.ok) {
-    return usageError('cleanup-set', parsed.error)
+    return usageError('cleanup-set', parsed.error, parsed.field)
   }
   const { input } = parsed
   return withGit(
@@ -2313,36 +2399,49 @@ function isSeconds(value, max) {
  * @param {unknown} raw
  */
 function parseVerifyInput(raw) {
+  if (!isPlainObject(raw)) {
+    return invalid('invalid-input', 'input')
+  }
+  if (!Array.isArray(raw.urls)) {
+    return invalid('invalid-input', 'urls')
+  }
   if (
-    !isPlainObject(raw) ||
-    !Array.isArray(raw.urls) ||
-    (raw.max_wait_s !== undefined &&
-      !isSeconds(raw.max_wait_s, MAX_CALL_WAIT_S)) ||
-    (raw.request_timeout_s !== undefined &&
-      !isSeconds(raw.request_timeout_s, MAX_CALL_WAIT_S)) ||
-    (raw.waited_s !== undefined &&
-      !(
-        typeof raw.waited_s === 'number' &&
-        Number.isFinite(raw.waited_s) &&
-        raw.waited_s >= 0
-      )) ||
-    (raw.head_repo !== undefined &&
-      !(typeof raw.head_repo === 'string' && HEAD_REPO.test(raw.head_repo)))
+    raw.max_wait_s !== undefined &&
+    !isSeconds(raw.max_wait_s, MAX_CALL_WAIT_S)
   ) {
-    return { ok: false, error: 'invalid-input' }
+    return invalid('invalid-input', 'max_wait_s')
+  }
+  if (
+    raw.request_timeout_s !== undefined &&
+    !isSeconds(raw.request_timeout_s, MAX_CALL_WAIT_S)
+  ) {
+    return invalid('invalid-input', 'request_timeout_s')
+  }
+  if (
+    raw.waited_s !== undefined &&
+    !(
+      typeof raw.waited_s === 'number' &&
+      Number.isFinite(raw.waited_s) &&
+      raw.waited_s >= 0
+    )
+  ) {
+    return invalid('invalid-input', 'waited_s')
+  }
+  if (raw.head_repo !== undefined && !isHeadRepo(raw.head_repo)) {
+    return invalid('invalid-input', 'head_repo')
   }
   if (raw.urls.length === 0) {
-    return { ok: false, error: 'empty-urls' }
+    return invalid('empty-urls', 'urls')
   }
   if (raw.urls.length > MAX_VERIFY_URLS) {
-    return { ok: false, error: 'too-many-urls' }
+    return invalid('too-many-urls', 'urls')
   }
   for (const url of raw.urls) {
     if (typeof url !== 'string') {
-      return { ok: false, error: 'invalid-url' }
+      return invalid('invalid-url', 'urls')
     }
     if (BLOB_URL.test(url)) {
-      return { ok: false, error: 'blob-url' }
+      return invalid('blob-url', 'urls')
     }
     const managed = RAW_URL.test(url)
     if (
@@ -2350,7 +2449,7 @@ function parseVerifyInput(raw) {
       (raw.head_repo !== undefined &&
         parseManagedUrl(url, raw.head_repo) === null)
     ) {
-      return { ok: false, error: 'invalid-url' }
+      return invalid('invalid-url', 'urls')
     }
   }
   return {
@@ -2376,7 +2475,7 @@ function parseVerifyInput(raw) {
 export async function runVerify(raw, options = {}) {
   const parsed = parseVerifyInput(raw)
   if (!parsed.ok) {
-    return usageError('verify', parsed.error)
+    return usageError('verify', parsed.error, parsed.field)
   }
   const { input } = parsed
   const { results, waitedMs } = await verifyUrls(input.urls, {
@@ -2397,7 +2496,9 @@ export async function runVerify(raw, options = {}) {
     {
       checked: results.length,
       passed: results.length - failed.length,
-      waited_s: Math.ceil(waitedMs / 1000),
+      // Cumulative: the waited_s that came in, plus this call's own time. A
+      // caller passes the latest report's value on unchanged.
+      waited_s: Math.ceil(((input.waitedS ?? 0) * 1000 + waitedMs) / 1000),
       retryable: failed.some((entry) => entry.retryable),
       results,
       failed,
@@ -2420,13 +2521,13 @@ const OPERATIONS = {
 async function run(argv) {
   const operation = argv.length === 1 ? argv[0] : undefined
   if (operation === undefined || !Object.hasOwn(OPERATIONS, operation)) {
-    return usageError('unknown', 'unknown-operation')
+    return usageError('unknown', 'unknown-operation', 'operation')
   }
   let raw
   try {
     raw = JSON.parse(readFileSync(0, 'utf8'))
   } catch {
-    return usageError(operation, 'invalid-json')
+    return usageError(operation, 'invalid-json', 'input')
   }
   return OPERATIONS[operation](raw)
 }
