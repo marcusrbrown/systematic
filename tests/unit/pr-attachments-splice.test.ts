@@ -932,8 +932,15 @@ describe('splice: what it writes and prints', () => {
     )
 
     expect(raw.status).toBe(0)
-    expect(fs.statSync(outFile).mode & 0o777).toBe(0o600)
-    expect(fs.readFileSync(outFile, 'utf8')).toBe(`x\n\n${DEMO}`)
+    // One descriptor for both reads, so the mode and the bytes describe the
+    // same file even if the path is replaced in between.
+    const fd = fs.openSync(outFile, 'r')
+    try {
+      expect(fs.fstatSync(fd).mode & 0o777).toBe(0o600)
+      expect(fs.readFileSync(fd, 'utf8')).toBe(`x\n\n${DEMO}`)
+    } finally {
+      fs.closeSync(fd)
+    }
   })
 
   it('exits 1 with a fixed code when the output path cannot be written', () => {

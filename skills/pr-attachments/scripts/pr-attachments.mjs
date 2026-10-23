@@ -192,10 +192,92 @@ const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ])
 
-// An optional BOM and prolog (XML declaration, comments, doctype with an
-// optional internal subset) may precede the root element.
-const SVG_PATTERN =
-  /^\uFEFF?\s*(?:<\?xml[\s\S]*?\?>\s*|<!--[\s\S]*?-->\s*|<!DOCTYPE[^[>]*(?:\[[\s\S]*?\])?\s*>\s*)*<svg[\s>/]/i
+// Only this many leading bytes are decoded and scanned for SVG markup.
+const SVG_SNIFF_BYTES = 4096
+
+function hasPrefixIgnoreCase(text, index, prefix) {
+  return text.slice(index, index + prefix.length).toLowerCase() === prefix
+}
+
+function skipWhitespace(text, index) {
+  let cursor = index
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
+    cursor += 1
+  }
+  return cursor
+}
+
+/**
+ * The index just past a doctype that starts its body at `from`, or -1 when it
+ * is unterminated. An optional `[ ... ]` internal subset may precede the `>`.
+ * @param {string} text
+ * @param {number} from
+ */
+function endOfDoctype(text, from) {
+  let cursor = from
+  while (
+    cursor < text.length &&
+    text.charAt(cursor) !== '[' &&
+    text.charAt(cursor) !== '>'
+  ) {
+    cursor += 1
+  }
+  if (cursor >= text.length) {
+    return -1
+  }
+  if (text.charAt(cursor) === '>') {
+    return cursor + 1
+  }
+  let close = text.indexOf(']', cursor + 1)
+  while (close !== -1) {
+    const next = skipWhitespace(text, close + 1)
+    if (text.charAt(next) === '>') {
+      return next + 1
+    }
+    close = text.indexOf(']', close + 1)
+  }
+  return -1
+}
+
+/**
+ * The index just past the prolog item that starts at `start` (an XML
+ * declaration, a comment or a doctype), or -1 when none starts there or the
+ * item is unterminated.
+ * @param {string} text
+ * @param {number} start
+ */
+function endOfPrologItem(text, start) {
+  if (hasPrefixIgnoreCase(text, start, '<?xml')) {
+    const close = text.indexOf('?>', start + 5)
+    return close === -1 ? -1 : close + 2
+  }
+  if (text.startsWith('<!--', start)) {
+    const close = text.indexOf('-->', start + 4)
+    return close === -1 ? -1 : close + 3
+  }
+  if (hasPrefixIgnoreCase(text, start, '<!doctype')) {
+    return endOfDoctype(text, start + 9)
+  }
+  return -1
+}
+
+/**
+ * Whether the text is an SVG document: an optional BOM and any number of
+ * prolog items (each followed by optional whitespace) before an `<svg` root.
+ * A single forward scan built on `indexOf`, so the cost is linear in the text.
+ * @param {string} text
+ */
+function looksLikeSvg(text) {
+  let cursor = skipWhitespace(text, text.startsWith('\uFEFF') ? 1 : 0)
+  for (;;) {
+    const end = endOfPrologItem(text, cursor)
+    if (end === -1) {
+      break
+    }
+    cursor = skipWhitespace(text, end)
+  }
+  return /^<svg[\s>/]/i.test(text.slice(cursor, cursor + 5))
+}
 
 /**
  * Detects the format from magic bytes only, never from the file name.
@@ -225,7 +307,7 @@ function detectType(bytes) {
   ) {
     return 'webp'
   }
-  if (SVG_PATTERN.test(bytes.toString('utf8', 0, 4096))) {
+  if (looksLikeSvg(bytes.toString('utf8', 0, SVG_SNIFF_BYTES))) {
     return 'svg'
   }
   return 'unknown'

@@ -517,6 +517,99 @@ describe('classify: whole-batch rejection', () => {
     expect(run.response.rejections[0]?.reason).toBe('svg-not-supported')
   })
 
+  it('recognises an SVG behind a doctype with an internal subset', () => {
+    const dir = makeDir()
+    const svg = writeFile(
+      dir,
+      'logo.gif',
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(
+          '<?xml version="1.0" encoding="UTF-8"?>\n<!-- exported -->\n' +
+            '<!doctype svg [ <!ENTITY a "b"> ]>\n' +
+            '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        ),
+      ]),
+    )
+
+    const run = classify({ paths: [svg], branch: 'x' })
+
+    expect(run.response.rejections[0]?.reason).toBe('svg-not-supported')
+  })
+
+  it.each([['<SVG/>'], ['<Svg>'], ['<svg\n  width="1"/>']])(
+    'recognises the root element %p in any letter case',
+    (markup) => {
+      const dir = makeDir()
+      const svg = writeFile(dir, 'logo.png', markup)
+
+      const run = classify({ paths: [svg], branch: 'x' })
+
+      expect(run.response.rejections[0]?.reason).toBe('svg-not-supported')
+    },
+  )
+
+  it.each([
+    ['an unterminated XML declaration', '<?xml version="1.0"<svg/>'],
+    ['an unterminated comment', '<!-- never closed <svg/>'],
+    ['an unterminated doctype', '<!DOCTYPE svg <svg/>'],
+    ['an unterminated internal subset', '<!DOCTYPE svg [ <svg/>'],
+    ['a root element name that only starts with svg', '<svgx/>'],
+    ['a root element other than svg', '<html><svg/></html>'],
+  ])('does not treat %s as an SVG', (_label, markup) => {
+    const dir = makeDir()
+    const file = writeFile(dir, 'notes.png', markup)
+
+    const run = classify({ paths: [file], branch: 'x' })
+
+    expect(run.response.rejections[0]?.reason).toBe('unsupported-type')
+  })
+
+  describe('hostile prolog repetition', () => {
+    const REPETITIONS = 50_000
+    const TIME_LIMIT_MS = 2000
+
+    // Each shape opens a prolog item once, then repeats a fragment that closes
+    // it and opens the next. A backtracking matcher takes exponential time on
+    // these; a linear scanner finishes at once. The child process is killed
+    // after a hard timeout so a regression fails instead of hanging the suite.
+    const SHAPES: readonly (readonly [string, string, string])[] = [
+      ['an XML declaration', '<?xml', '?><?xml'],
+      ['a comment', '<!--', '--><!--'],
+      ['a doctype', '<!doctype', ' ><!doctype'],
+      ['a doctype with an internal subset', '<!doctype[', ']><!doctype['],
+    ]
+
+    it.each(SHAPES)(
+      'classifies repeated %s items as not-SVG in linear time',
+      (_label, opener, fragment) => {
+        const dir = makeDir()
+        const file = writeFile(
+          dir,
+          'hostile.png',
+          opener + fragment.repeat(REPETITIONS),
+        )
+        const started = performance.now()
+        const result = spawnSync('node', [SCRIPT_PATH, 'classify'], {
+          input: JSON.stringify({ paths: [file], branch: 'x' }),
+          encoding: 'utf8',
+          timeout: 5000,
+          killSignal: 'SIGKILL',
+        })
+        const elapsed = performance.now() - started
+
+        expect(result.error).toBeUndefined()
+        expect(result.signal).toBeNull()
+        expect(result.status).toBe(1)
+        expect(parseClassify(result.stdout).rejections[0]?.reason).toBe(
+          'unsupported-type',
+        )
+        expect(elapsed).toBeLessThan(TIME_LIMIT_MS)
+      },
+      15_000,
+    )
+  })
+
   it('rejects the whole batch when one file fails, naming a reason for every failure', () => {
     const dir = makeDir()
     const good = writeFile(dir, 'good.png', makePng())
