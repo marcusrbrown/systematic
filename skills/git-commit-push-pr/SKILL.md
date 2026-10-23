@@ -267,12 +267,13 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
   **Carry the Demo section.** The rewrite replaces the whole description, so a `## Demo` section in the current one has to be carried into the new one. Skip this when the new body already holds a `## Demo` section from Step 6. Save the current description to a file, and check it for a Demo heading:
 
   ```bash
-  OLD_BODY_FILE=$(mktemp /tmp/pr-old-body-XXXXXX.md)
-  gh pr view "<PR URL>" --json body --jq '.body' > "$OLD_BODY_FILE"
+  OLD_BODY_FILE=$(mktemp) && gh pr view "<PR URL>" --json body --jq '.body' > "$OLD_BODY_FILE" && echo saved
   grep -q '^## Demo' "$OLD_BODY_FILE" && echo has-demo
   ```
 
-  When it prints `has-demo`, load the `systematic:pr-attachments` skill in carry mode. State the tokens in the instruction text itself, and pass them as skill arguments where the host supports them, because some hosts pass no skill arguments: `mode:carry old=<old body file> new=<new body file>`, with the real paths from this run. Wrap a path that has spaces in double quotes. Carry mode edits the new body file in place. It never touches the PR.
+  When the first command does not print `saved`, the temp file could not be created or the `gh` read failed. Stop the carry and do not apply the new body file, because the current description was never checked for a Demo section. Tell the user why, remove the old file, and ask how to proceed.
+
+  When the second command prints `has-demo`, load the `systematic:pr-attachments` skill in carry mode. State the tokens in the instruction text itself, and pass them as skill arguments where the host supports them, because some hosts pass no skill arguments: `mode:carry old=<old body file> new=<new body file>`, with the real paths from this run. Wrap a path that has spaces in double quotes. Carry mode edits the new body file in place. It never touches the PR.
 
   The skill ends with one status line, `pr-attachments: status=<ok|absent|failed> [reason=<reason>]`. On `status=ok` or `status=absent`, apply the new body file. On `status=failed`, fall back to prose-only preservation: write the body file again, keep the old `## Demo` section in it by hand, and tell the user that carry failed and why. If the skill fails to load, or prints no status line, fall back to prose-only preservation too. Then remove the old file:
 

@@ -153,10 +153,11 @@ import {
   openSync,
   readFileSync,
   readSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const SCHEMA_VERSION = 1
 // The largest file raw.githubusercontent.com serves with an image type.
@@ -1647,10 +1648,31 @@ function judgeResponse(response) {
 }
 
 /**
+ * What `verifyUrls` builds once per call and hands to `verifyOne`, `attempt`
+ * and `probe`. The function fields are the injectable seams; the rest are the
+ * resolved limits and the start reading.
+ * @typedef {object} VerifyContext
+ * @property {(input: string, init: RequestInit) => Promise<Response>} fetch
+ * @property {(ms: number) => Promise<void>} sleep
+ * @property {(ms: number, fire: () => void) => () => void} startTimer Returns the function that cancels the timer.
+ * @property {() => number} random A value in [0, 1).
+ * @property {(target: URL) => boolean} isAllowedTarget
+ * @property {number} requestTimeoutMs
+ * @property {number} maxAttempts
+ * @property {number} callLimitMs The most this call may spend waiting.
+ * @property {readonly number[]} scheduleMs
+ * @property {number} waitedMs Time earlier calls already waited.
+ * @property {number} totalBudgetMs
+ * @property {number} firstStep Where in `scheduleMs` the first wait falls.
+ * @property {() => number} now
+ * @property {number} start The `now()` reading when the call began.
+ */
+
+/**
  * One request, bounded by the per-request timeout. The body is cancelled
  * whatever the status was, and a stalled request is aborted.
  * @param {string} url
- * @param {Record<string, any>} ctx
+ * @param {VerifyContext} ctx
  */
 async function probe(url, ctx) {
   const controller = new AbortController()
@@ -1691,7 +1713,7 @@ async function probe(url, ctx) {
  * One attempt: the request plus the redirects it leads to, each hop checked
  * against the host rule before anything is sent to it.
  * @param {string} startUrl
- * @param {Record<string, any>} ctx
+ * @param {VerifyContext} ctx
  */
 async function attempt(startUrl, ctx) {
   let current = startUrl
@@ -1764,7 +1786,7 @@ function verdict(url, seen, attempts, budgetLeft) {
  * `retryable` on a failure means that waiting longer could still help and the
  * 300 s total has room for the next wait.
  * @param {string} url
- * @param {Record<string, any>} ctx
+ * @param {VerifyContext} ctx
  */
 async function verifyOne(url, ctx) {
   let attempts = 0
@@ -2430,9 +2452,12 @@ async function main() {
   process.exitCode = outcome.exitCode
 }
 
+// Node reports import.meta.url as a real path, but argv[1] is the path as
+// typed. Compare real paths so a symlinked skill directory or helper file
+// still counts as a direct run.
 const isDirectInvocation =
   process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 
 if (isDirectInvocation) {
   await main()

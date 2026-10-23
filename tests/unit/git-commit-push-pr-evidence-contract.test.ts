@@ -247,10 +247,33 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
 
   test('Step 7 writes both bodies to mktemp files', () => {
     const blocks = fencedBlocks(stepSeven).join('\n')
-    expect(blocks).toMatch(/OLD_BODY_FILE=\$\(mktemp /)
+    expect(blocks).toMatch(/OLD_BODY_FILE=\$\(mktemp\)/)
     expect(blocks).toContain('> "$OLD_BODY_FILE"')
     expect(blocks).toContain('rm -f "$OLD_BODY_FILE"')
     expect(carryBlock).toMatch(/new body file/i)
+  })
+
+  test('Step 7 makes its temp file with a portable bare mktemp, never an X template with a suffix', () => {
+    // macOS mktemp creates a literal file when the template has a suffix after
+    // the X run, and GNU mktemp rejects it. Both break the carry silently.
+    const mktemps = fencedBlocks(stepSeven)
+      .join('\n')
+      .split('\n')
+      .filter((line) => line.includes('mktemp'))
+    expect(mktemps.length).toBeGreaterThan(0)
+    for (const line of mktemps) {
+      expect(line).not.toMatch(/mktemp\s[^)\n]*X{3,}[^X)\s]/)
+    }
+  })
+
+  test('Step 7 stops the carry and never applies the new body when the temp file or the gh read fails', () => {
+    const blocks = fencedBlocks(stepSeven).join('\n')
+    expect(blocks).toContain('> "$OLD_BODY_FILE" && echo saved')
+    expect(carryBlock).toMatch(/does not print `saved`/i)
+    expect(carryBlock).toMatch(
+      /temp file could not be created or the `gh` read failed/i,
+    )
+    expect(carryBlock).toMatch(/stop the carry[^.]*do not apply the new body/i)
   })
 
   test('Step 7 applies the new file on ok or absent, and falls back to prose-only preservation on failed', () => {
