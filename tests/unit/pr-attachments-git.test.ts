@@ -1063,9 +1063,12 @@ describe('git failure and timeout', () => {
     return { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}` }
   }
 
+  // The hang tests' git_timeout_ms must clear real git latency under load, or an
+  // earlier un-hung git call times out and the step assertion lands on the wrong step.
+  const HANG_TIMEOUT_MS = 3000
   const hangOn = (word: string) =>
     fakeGit(
-      `for arg in "$@"; do if [ "$arg" = ${word} ]; then exec sleep 5; fi; done\nexec "${realGit()}" "$@"`,
+      `for arg in "$@"; do if [ "$arg" = ${word} ]; then exec sleep 30; fi; done\nexec "${realGit()}" "$@"`,
     )
 
   it('exits 1 with git-timeout and the step reached, for cleanup-set', () => {
@@ -1076,7 +1079,7 @@ describe('git failure and timeout', () => {
     const run = runCleanup(
       repo,
       headOid,
-      { git_timeout_ms: 400 },
+      { git_timeout_ms: HANG_TIMEOUT_MS },
       { cwd: repo.work, env: hangOn('merge-base') },
     )
 
@@ -1095,7 +1098,7 @@ describe('git failure and timeout', () => {
       repo,
       addA,
       [{ path: A_PNG, sha: addA }],
-      { git_timeout_ms: 400 },
+      { git_timeout_ms: HANG_TIMEOUT_MS },
       { cwd: repo.work, env: hangOn('log') },
     )
 
