@@ -129,9 +129,9 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
 {
   "schema_version": 2,
   "verdict": "build-new-within-scope",
-  "scope": "Whole worktree at 0d5b1697: skills/, agents/, scripts/, src/, docs/, .github/, tests/, plus git history for the removed feature-video skill",
+  "scope": "Whole worktree at 01c4b00b (re-baselined from 0d5b1697; the only change was a fro-bot/agent pin bump in .github/workflows/fro-bot.yaml): skills/, agents/, scripts/, src/, docs/, .github/, tests/, plus git history for the removed feature-video skill",
   "freshness": {
-    "vcs_reference": "0d5b1697"
+    "vcs_reference": "01c4b00b"
   },
   "budget": {
     "max_search_passes": 5,
