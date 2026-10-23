@@ -327,6 +327,18 @@ const CASES: Record<string, readonly Case[]> = {
       'waited_s',
     ],
     [
+      'a resume_at that is not an integer',
+      { urls: [RAW_URL], resume_at: 1.5 },
+      'invalid-input',
+      'resume_at',
+    ],
+    [
+      'a resume_at that is a string',
+      { urls: [RAW_URL], resume_at: '1800000000000' },
+      'invalid-input',
+      'resume_at',
+    ],
+    [
       'a malformed head_repo',
       { urls: [RAW_URL], head_repo: 'octo' },
       'invalid-input',

@@ -40,6 +40,7 @@ interface VerifyReport {
   readonly passed: number
   readonly waited_s: number
   readonly retryable: boolean
+  readonly resume_at?: number
   readonly results: readonly UrlResult[]
   readonly failed: readonly UrlResult[]
   readonly error?: string
@@ -61,6 +62,7 @@ interface VerifyOptions {
   readonly totalBudgetMs?: number
   readonly requestTimeoutMs?: number
   readonly isAllowedTarget?: (target: URL) => boolean
+  readonly epochNow?: () => number
 }
 
 interface Helper {
@@ -1465,5 +1467,188 @@ describe('verify: real HTTP server under node', () => {
 
     expect(run.results[0]?.status).toBe('ok')
     expect(written).toBeLessThan(64 * 1024 * 1024)
+  })
+})
+
+// ── Retry-After carried across calls ───────────────────────────────────────────────
+
+describe('verify: a Retry-After longer than the call carries over to the next call', () => {
+  // One virtual clock serves every call of a test, so time runs on between
+  // them as it does when a model reads a report and then calls again. The
+  // epoch clock the helper reads for `resume_at` is that clock plus a fixed
+  // offset.
+  const EPOCH0 = 1_800_000_000_000
+
+  async function session(handler: (url: string, nth: number) => Step) {
+    const helper = await loadHelper()
+    const clock = makeClock()
+    const requests: number[] = []
+    const { fetchFn } = makeFetch((url, nth) => {
+      requests.push(EPOCH0 + clock.now())
+      return handler(url, nth)
+    })
+    const options = optionsFor(clock, fetchFn, {
+      epochNow: () => EPOCH0 + clock.now(),
+    })
+    return {
+      clock,
+      requests,
+      call: (raw: Record<string, unknown>) =>
+        clock.run(helper.runVerify({ urls: [A_PNG], ...raw }, options)),
+      idle: (ms: number) => clock.run(clock.sleep(ms)),
+    }
+  }
+
+  it('reports the epoch deadline instead of saying nothing', async () => {
+    const { call, requests } = await session(() =>
+      reply(429, { 'retry-after': '100' }, null),
+    )
+
+    const first = await call({ max_wait_s: 90 })
+
+    expect(first.exitCode).toBe(1)
+    expect(first.body.retryable).toBe(true)
+    expect(first.body.waited_s).toBe(0)
+    expect(first.body.resume_at).toBe((requests[0] ?? 0) + 100_000)
+  })
+
+  it('sleeps until the deadline in the next call before its first request, and counts the sleep', async () => {
+    const { call, idle, requests } = await session((_url, nth) =>
+      nth === 0 ? reply(429, { 'retry-after': '100' }, null) : ok(),
+    )
+    const first = await call({ max_wait_s: 90 })
+    const deadline = first.body.resume_at as number
+    await idle(15_000)
+
+    const second = await call({
+      max_wait_s: 90,
+      waited_s: first.body.waited_s,
+      resume_at: deadline,
+    })
+
+    expect(second.exitCode).toBe(0)
+    expect(requests).toHaveLength(2)
+    // The second request went out at the deadline, not before it.
+    expect(requests[1]).toBeGreaterThanOrEqual(deadline)
+    expect(requests[1]).toBeLessThan(deadline + 1000)
+    // 15 s passed between the calls; the rest of the 100 s was this call's sleep.
+    expect(second.body.waited_s).toBe(first.body.waited_s + 85)
+  })
+
+  it('splits a long cooldown over calls without a request before the deadline, and the budget adds up', async () => {
+    const { call, idle, requests } = await session((_url, nth) =>
+      nth === 0 ? reply(429, { 'retry-after': '120' }, null) : ok(),
+    )
+    const first = await call({ max_wait_s: 90 })
+    const deadline = first.body.resume_at as number
+    await idle(5000)
+
+    // 115 s left; the call limit is 90 s. It sleeps the whole limit, sends
+    // nothing and hands the same deadline back.
+    const second = await call({
+      max_wait_s: 90,
+      waited_s: first.body.waited_s,
+      resume_at: deadline,
+    })
+    expect(requests).toHaveLength(1)
+    expect(second.exitCode).toBe(1)
+    expect(second.body.retryable).toBe(true)
+    expect(second.body.resume_at).toBe(deadline)
+    expect(second.body.waited_s).toBe(90)
+    expect(second.body.failed.map((entry) => entry.attempts)).toEqual([0])
+
+    const third = await call({
+      max_wait_s: 90,
+      waited_s: second.body.waited_s,
+      resume_at: second.body.resume_at,
+    })
+    expect(third.exitCode).toBe(0)
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toBeGreaterThanOrEqual(deadline)
+    // The 120 s cooldown ran from the first report. Of it, 5 s passed between
+    // calls 1 and 2, the second call slept 90 s and the third slept 25 s.
+    // The running total counts the two sleeps and not the idle time.
+    expect(third.body.waited_s).toBe(90 + 25)
+  })
+
+  it('sends no request when the deadline lies past the 300 s total, and is not retryable', async () => {
+    const { call, requests, clock } = await session(() => ok())
+    const farOff = EPOCH0 + clock.now() + 100_000
+
+    const run = await call({ max_wait_s: 90, waited_s: 250, resume_at: farOff })
+
+    expect(requests).toHaveLength(0)
+    expect(run.exitCode).toBe(1)
+    expect(run.body.retryable).toBe(false)
+    expect(run.body.resume_at).toBeUndefined()
+    expect(run.body.waited_s).toBe(250)
+    expect(run.body.failed.map((entry) => entry.status)).toEqual([
+      'rate-limited',
+    ])
+  })
+
+  it('does not wait for a deadline that has already passed', async () => {
+    const { call, requests, clock } = await session(() => ok())
+    const past = EPOCH0 + clock.now() - 1000
+
+    const run = await call({ resume_at: past })
+
+    expect(run.exitCode).toBe(0)
+    expect(requests).toHaveLength(1)
+    expect(run.body.waited_s).toBe(0)
+  })
+
+  it('leaves a Retry-After that fits the call to the call itself, with no deadline reported', async () => {
+    const { call } = await session((_url, nth) =>
+      nth === 0 ? reply(429, { 'retry-after': '7' }, null) : ok(),
+    )
+
+    const run = await call({ max_wait_s: 90 })
+
+    expect(run.exitCode).toBe(0)
+    expect(run.body.resume_at).toBeUndefined()
+  })
+
+  it('reports no deadline for a failure that is not retryable', async () => {
+    const { call } = await session(() =>
+      reply(429, { 'retry-after': '500' }, null),
+    )
+
+    const run = await call({ max_wait_s: 90 })
+
+    expect(run.body.retryable).toBe(false)
+    expect(run.body.resume_at).toBeUndefined()
+  })
+
+  it('reports no deadline when no Retry-After was sent', async () => {
+    const { call } = await session(() => reply(404, {}, null))
+
+    const run = await call({ max_wait_s: 10 })
+
+    expect(run.body.retryable).toBe(true)
+    expect(run.body.resume_at).toBeUndefined()
+  })
+
+  it.each([
+    ['a string', '1800000000000'],
+    ['zero', 0],
+    ['a negative number', -5],
+    ['a fraction', 1.5],
+    ['null', null],
+    ['NaN written as a string', 'NaN'],
+  ])('exits 2 naming resume_at for %s', async (_name, resume_at) => {
+    const helper = await loadHelper()
+    const { fetchFn, calls } = makeFetch(() => ok())
+
+    const { exitCode, body } = await helper.runVerify(
+      { urls: [A_PNG], resume_at },
+      { fetch: fetchFn },
+    )
+
+    expect(exitCode).toBe(2)
+    expect(body.result).toBe('usage-error')
+    expect(body.error).toBe('invalid-input')
+    expect((body as { field?: string }).field).toBe('resume_at')
+    expect(calls).toHaveLength(0)
   })
 })

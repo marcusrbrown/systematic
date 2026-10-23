@@ -114,7 +114,10 @@ Recorded execution evidence for this surface:
   inline bodies and hand-run `git rm` [PA-2].
 - **Offline dry run** — the fenced blocks of `SKILL.md` run against a temporary repository with a
   local bare remote and the real helper: the pathspec commit, the file-set assertion, the explicit
-  refspec push, the rejected non-fast-forward push, carry mode and cleanup [PA-3]. The
+  refspec push, the rejected non-fast-forward push, carry mode and cleanup [PA-3]. Git attributes are
+  covered the same way: `docs/evidence/** text eol=lf` stops at the guard, `core.autocrlf` and a
+  rewriting commit hook are caught by the staged and committed blob checks, and none of them reaches
+  the remote. A merge that resolved an image selects the merge as the pin, not its parent. The
   private-repository blob check runs against a stand-in `gh` that answers from the local repository:
   match, mismatch, absent file, bounded retries and the `local` expectation used by re-pin mode.
 

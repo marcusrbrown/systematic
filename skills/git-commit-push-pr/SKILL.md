@@ -221,6 +221,7 @@ pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>
 - `status=ok`: take `demo_file` from the line. The file holds the Demo section. Keep it for the splice below. The narrative range below does not use `evidence_sha`.
 - `status=failed` with `evidence=pushed`: the evidence files are pushed but unreferenced. Tell the user the reason, and keep the image paths for the retry command in Step 8. Then continue without evidence.
 - `status=failed` with `evidence=local`: the evidence commit is local and unpushed. It exists only on this machine, and the remote does not hold it. Tell the user the reason and that the branch needs a push (after a fetch and a rebase or merge, when the push was rejected) before the images can be published. Then continue without evidence.
+- `status=failed` with `reason=blob-mismatch`: the exception to the push advice above. The local evidence commit holds an image that git changed on its way in, for example through a `.gitattributes` setting or a hook. Tell the user it must not be pushed as it is, and continue without evidence.
 - `status=failed` with `evidence=none`: nothing was published. Tell the user the reason, then continue without evidence.
 
 **Fallback.** If loading `systematic:pr-attachments` fails, or it loads but sees no `mode:` token and stops without a status line, offer only the two existing options: **Use existing evidence** and **Skip**.
@@ -302,7 +303,7 @@ When this run published evidence images, print the command that fits the outcome
   > Recommended before merge: load `systematic:pr-attachments` with no tokens (or with `pr:<N>`). It re-checks the embed pins and offers to remove the evidence images from the branch.
 
 - `status=failed` with `evidence=pushed` and `reason=verify-failed`, or any other pushed state in which the Demo section was not written: print a retry command instead. The zero-path command re-pins and cleans up, and there is nothing to re-pin yet. The retry is to load `systematic:pr-attachments` with the same image paths and `pr:<N>`. It reuses the pushed commit, verifies the embeds and writes the description. Do not print the zero-path command until a publish succeeds.
-- `status=failed` with `evidence=local`: say that the evidence commit is local and unpushed, so the branch needs a push first, and print no re-run command.
+- `status=failed` with `evidence=local`: say that the evidence commit is local and unpushed, so the branch needs a push first, and print no re-run command. For `reason=blob-mismatch` say instead that the local evidence commit holds an altered image and must not be pushed as it is.
 
 ---
 

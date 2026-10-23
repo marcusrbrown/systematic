@@ -41,6 +41,8 @@ const ROUTED_RESULT_CODES = [
   'urls',
   'already-valid',
   'repin-needed',
+  'selected',
+  'pin-mismatch',
   'partial',
   'unresolved',
   'head-not-found',
@@ -412,9 +414,18 @@ describe('pr-attachments skill contract -- publishing order', () => {
   test('stops on a gitignored destination, an LFS filter and a dirty destination, without forcing', () => {
     const copy = section(skill, '### Copy into place')
     expect(copy).toContain('git check-ignore')
-    expect(copy).toContain('git check-attr filter')
+    expect(copy).toContain('git check-attr text eol filter')
     expect(copy).toContain('git status --porcelain')
     expect(normalize(copy)).toMatch(/gitignored[^.]*stop/i)
+  })
+
+  test('refuses a text, eol or filter attribute up front and says why, and lets auto and an unset text pass', () => {
+    const copy = normalize(section(skill, '### Copy into place'))
+    expect(copy).toMatch(/`text` that is set/i)
+    expect(copy).toMatch(/`eol`/)
+    expect(copy).toMatch(/text eol=lf/)
+    expect(copy).toMatch(/`text=auto` pass/i)
+    expect(copy).toMatch(/checks? of the staged and the committed blob/i)
   })
 })
 
@@ -529,10 +540,58 @@ describe('pr-attachments skill contract -- embed mode', () => {
     expect(text).toMatch(/embed mode[^.]*(no cleanup offer|ends here)/i)
   })
 
-  test('builds the Demo text from git pins, so no SHA is retyped', () => {
-    expect(skill).toContain('git log -n 1 --no-renames --diff-filter=AM')
-    expect(skill).toContain('raw.githubusercontent.com')
+  test('builds the Demo text from the helper pin selection, so no SHA is retyped', () => {
+    expect(skill).toContain('"select"')
     expect(flat).toMatch(/never (re-?type|transcribe)[^.]*SHA/i)
+    expect(flat).toMatch(
+      /checks that the blob at that pin is the `blob_sha` that classify reported/i,
+    )
+  })
+
+  test('every pin the skill embeds comes through the helper: no fenced block chooses a commit with git log', () => {
+    const commands = blocks.map((block) => block.body).join('\n')
+    expect(commands).not.toMatch(/git log\b[^\n]*(?:\s-n\s*1\b|--format)/)
+    expect(commands).not.toMatch(/--format=%H/)
+    expect(commands).not.toMatch(/\bPIN="\$\(git\b/)
+    // No block assembles an embed URL by hand either.
+    expect(commands).not.toMatch(
+      /printf[^\n]*(?:raw\.githubusercontent\.com|blob\/%s)/,
+    )
+    // The only block that writes embed URLs is the helper's pins call.
+    const writers = blocks.filter((block) =>
+      /!\[%s\]|\bDEMO_FILE\b[^\n]*>>/.test(block.body),
+    )
+    expect(writers).toEqual([])
+    expect(skill).toMatch(
+      /`pins` <<'JSON'\n\{"select"|pins <<'JSON'\n\{"select"/,
+    )
+  })
+
+  test('a pin that does not hold the classified blob stops the run with pin-mismatch', () => {
+    const select = normalize(
+      section(skill, '### Select the pins and write the Demo text'),
+    )
+    expect(select).toMatch(/`pin-mismatch`[^.]*differs from its `blob_sha`/i)
+    expect(select).toMatch(/reason is `pin-mismatch`/)
+    expect(select).toMatch(/never write the description/i)
+  })
+
+  test('the blob checks sit between the staging, the commit and the push, and name blob-mismatch', () => {
+    const commit = section(skill, '### Commit by pathspec')
+    const text = normalize(commit)
+    const staged = commit.indexOf('git rev-parse ":$DEST"')
+    const commitAt = commit.indexOf('git commit -m')
+    const committed = commit.indexOf('git rev-parse "HEAD:$DEST"')
+    expect(staged).toBeGreaterThan(commit.indexOf('git add -- "$@"'))
+    expect(commitAt).toBeGreaterThan(staged)
+    expect(committed).toBeGreaterThan(commitAt)
+    expect(text).toMatch(/unstage the paths[^.]*commit nothing[^.]*stop/i)
+    expect(text).toMatch(/\.gitattributes[^.]*text, eol or filter/i)
+    expect(text).toMatch(/do not push/i)
+    expect(text).toMatch(/reason is `blob-mismatch`/)
+    expect(skill.indexOf('git rev-parse "HEAD:$DEST"')).toBeLessThan(
+      skill.indexOf('### Push with an explicit refspec'),
+    )
   })
 })
 
@@ -650,7 +709,7 @@ describe('pr-attachments skill contract -- re-pin mode', () => {
 
   test('runs urls, then pins, then repin-rewrite, then verify, then the write', () => {
     const urls = skill.indexOf(`${INVOKE} urls`)
-    const pins = skill.indexOf(`${INVOKE} pins`)
+    const pins = skill.indexOf(`${INVOKE} pins`, urls)
     const rewrite = skill.indexOf(`${INVOKE} repin-rewrite`)
     expect(urls).toBeGreaterThan(-1)
     expect(pins).toBeGreaterThan(urls)
@@ -677,6 +736,32 @@ describe('pr-attachments skill contract -- re-pin mode', () => {
     expect(text).toMatch(/already valid/i)
     expect(text).toMatch(/point(s)? to PR mode/i)
     expect(text).toMatch(/ignored/i)
+  })
+
+  test('already-valid verifies the embeds the description holds before it offers cleanup', () => {
+    const repin = section(skill, '## Re-pin mode')
+    const line = normalize(
+      repin.split('\n').find((entry) => entry.includes('`already-valid`')) ??
+        '',
+    )
+    expect(line).toMatch(
+      /verify the (?:existing )?embed URLs[^.]*before[^.]*Cleanup/i,
+    )
+    expect(line).toMatch(
+      /raw form[^.]*private[^.]*blob form|public[^.]*raw form/i,
+    )
+    expect(line).toMatch(/`local`/)
+    expect(line).toMatch(
+      /fails?[^.]*report[^.]*do not offer Cleanup|do not offer Cleanup[^.]*fail/i,
+    )
+    expect(line).toMatch(/only against git|only checked against git|local git/i)
+  })
+
+  test('the URL listing block can read the backup file, so the verify call has URLs to send', () => {
+    const listing = normalize(
+      section(skill, '### Public repositories: the raw form'),
+    )
+    expect(listing).toMatch(/backup file/i)
   })
 
   test('ignores every URL that is not managed, and reports how many', () => {
@@ -904,21 +989,20 @@ describe('pr-attachments skill contract -- private repositories: the blob form',
   })
 
   test('public repositories are unchanged: the raw form and the anonymous verify call', () => {
-    expect(publicPath).toContain('https://raw.githubusercontent.com/%s/%s/%s')
+    expect(publicPath).toContain('raw\\.githubusercontent\\.com')
     expect(publicPath).toContain(`${INVOKE} verify`)
     expect(publicPath).not.toContain('blob/')
     expect(publicPath).not.toContain('gh api')
     expect(normalize(publicPath)).toMatch(/`blob-url`[^.]*stop/i)
   })
 
-  test('the Demo text for a private repository is built from git pins in the blob form', () => {
-    expect(privateCommands).toContain(
-      'https://github.com/%s/blob/%s/%s?raw=true',
-    )
-    expect(privateCommands).toContain(
-      'git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD',
-    )
+  test('the Demo text for a private repository is written in the blob form by the helper pin selection', () => {
+    expect(privateText).toMatch(/blob form[^.]*pin selection above/i)
+    expect(privateCommands).not.toMatch(/git log\b/)
     expect(privateCommands).not.toContain('raw.githubusercontent.com')
+    expect(
+      normalize(section(skill, '### Select the pins and write the Demo text')),
+    ).toMatch(/`blob` for every other repository/)
   })
 
   test('verification goes through gh api contents with --jq .sha, at the pinned commit', () => {
@@ -973,7 +1057,10 @@ describe('pr-attachments skill contract -- private repositories: the blob form',
       repin.indexOf(`${INVOKE} urls`),
       repin.indexOf(`${INVOKE} pins`),
       repin.indexOf(`${INVOKE} repin-rewrite`),
-      repin.indexOf('Private repositories: the blob form'),
+      repin.indexOf(
+        'Private repositories: the blob form',
+        repin.indexOf(`${INVOKE} repin-rewrite`),
+      ),
       repin.indexOf('write step of Step 8'),
     ]
     for (const position of positions) {
@@ -1150,6 +1237,17 @@ describe('pr-attachments skill contract -- verify and the private check', () => 
     expect(verify).not.toMatch(/sum of|add(?:ed)? up|sum the/i)
   })
 
+  test('the caller passes resume_at back unchanged, and no call is made before it', () => {
+    expect(verify).toMatch(/set it to that value, unchanged/i)
+    expect(verify).toMatch(/sleeps until `resume_at` before its first request/i)
+    expect(verify).toMatch(/no request goes out before the deadline/i)
+    expect(verify).toMatch(/`resume_at` is an epoch-millisecond deadline/i)
+    expect(verify).toMatch(/Retry-After/)
+    expect(verify).toMatch(/omit `resume_at` on the first call/i)
+    expect(verify).toMatch(/never compute, edit or drop it/i)
+    expect(verify).toMatch(/past the 300 s total[^.]*`retryable` is false/i)
+  })
+
   test('gh stderr goes to a temp file, and an API failure is not reported as a mismatch', () => {
     expect(privateCommands).toMatch(/2>"\$ERR_FILE"/)
     expect(privateCommands).toMatch(/ERR_FILE="\$\(mktemp\)"/)
@@ -1237,6 +1335,8 @@ describe('pr-attachments skill contract -- embed-mode stop reasons', () => {
       'file-set-mismatch',
     ],
     ['default branch', /default branch/i, 'default-branch'],
+    ['staged or committed blob', /staged or committed blob/i, 'blob-mismatch'],
+    ['pin chosen', /pin chosen/i, 'pin-mismatch'],
     ['source changed', /source[^|]*(?:changed|differs)/i, 'source-changed'],
   ] as const)('the table covers %s', (_name, stop, reason) => {
     const row = tableRows.find((entry) => stop.test(entry.stop))
@@ -1254,6 +1354,8 @@ describe('pr-attachments skill contract -- embed-mode stop reasons', () => {
       'git-failed',
       'push-rejected',
       'verify-failed',
+      'pin-mismatch',
+      'blob-mismatch',
     ]) {
       expect(tableReasons.has(reason), reason).toBe(true)
     }

@@ -289,17 +289,25 @@ creating its directory; report-only mode never invokes the helper.
 embeds in a managed `## Demo` section of a pull request description. It has four modes: PR mode
 writes the description; embed mode returns a Demo file and a status line for `git-commit-push-pr`
 to splice; carry mode copies the Demo section from an old description file into a regenerated one;
-re-pin mode re-points the embeds after a rebase or force-push. A run with no image paths ends with
-an offer to remove the evidence files from the branch. The skill commits images by pathspec under
-`docs/evidence/<topic>/`, pushes with an explicit refspec, and writes the description only after
-every embed URL serves an image. A public repository gets the raw link form, checked anonymously by
+re-pin mode re-points the embeds after a rebase or force-push. A run with no image paths verifies the
+embeds the description already holds, then ends with an offer to remove the evidence files from the
+branch; a failed check withholds the offer. The skill commits images by pathspec under
+`docs/evidence/<topic>/`, refuses a `text`, `eol` or `filter` git attribute on the destination, checks
+the staged and the committed blob against the `blob_sha` that classify reported, pushes with an
+explicit refspec, and writes the description only after every embed URL serves an image. A public repository gets the raw link form, checked anonymously by
 the helper. A private, internal or unknown-visibility repository gets the blob link form, but only
 after an explicit answer that the images stay in git history and become public if the repository is
 later made public or forked. Its embeds are checked through `gh api` against the blob SHA that
 classify reported, never through the helper's anonymous `verify`. A bundled Node helper holds the steps that must be
 exact: image classification (a file over 10 MiB is rejected before anything is published, because
 GitHub does not serve larger files as images), byte-exact splicing, pin selection, the cleanup set and bounded
-verification. It takes JSON on stdin, writes JSON on stdout, and keeps no state. The `gh` calls and
+verification. Splicing treats only a `## Demo` heading at column 0 as the managed section: a fence
+(also one opened inside a list item or a quote) or a raw HTML block hides a literal heading, and a
+block that never closes inside the section stops the run with `unterminated-region`. Every pin the
+skill embeds comes from `pins` with `select`, which picks the newest add-or-modify commit (merges
+included), requires its blob to equal the classified `blob_sha`, and writes the Demo text.
+Verification hands a Retry-After longer than one call to the next call as a `resume_at` deadline.
+It takes JSON on stdin, writes JSON on stdout, and keeps no state. The `gh` calls and
 the push stay in the skill's prose. The helper needs `node` 18+ on PATH, and the skill stops with
 its state reported when `node` is missing or the helper fails; it never writes a helper result by
 hand. `git-commit-push-pr` loads the skill in embed mode to publish images and in carry mode to keep

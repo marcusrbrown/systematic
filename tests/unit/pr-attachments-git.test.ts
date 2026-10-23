@@ -561,6 +561,256 @@ describe('pins: input', () => {
   }
 })
 
+// ── pins: selecting the pin to embed ───────────────────────────────────────
+
+const HEAD_REPO = 'octo/widgets'
+
+interface SelectEntry {
+  readonly path: string
+  readonly blob_sha: string
+}
+
+function runSelect(
+  repo: Repo,
+  select: readonly SelectEntry[],
+  extra: Record<string, unknown> = {},
+): Run & { readonly outFile: string } {
+  const outFile = path.join(makeDir(), 'demo.md')
+  const run = runHelper(
+    'pins',
+    { select, head_repo: HEAD_REPO, form: 'raw', out_file: outFile, ...extra },
+    { cwd: repo.work },
+  )
+  return { ...run, outFile }
+}
+
+function rawUrl(sha: string, file: string): string {
+  return `https://raw.githubusercontent.com/${HEAD_REPO}/${sha}/${file}`
+}
+
+/**
+ * A PR branch whose last commit is a merge that resolved the image to bytes
+ * neither parent had. The commit before it on the first parent holds an older
+ * image, which is what a plain `git log -n 1` picks.
+ */
+function mergeResolvedRepo(): {
+  repo: Repo
+  merge: string
+  parentPick: string
+  resolvedBlob: string
+} {
+  const repo = createRepo()
+  startPr(repo)
+  commitFiles(repo.work, { [A_PNG]: png('A') }, 'add A')
+  isolatedGit(repo.work, ['checkout', '-q', '-b', 'side'])
+  commitFiles(repo.work, { [A_PNG]: png('side') }, 'side edit')
+  isolatedGit(repo.work, ['checkout', '-q', 'feat/x'])
+  const featEdit = commitFiles(repo.work, { [A_PNG]: png('feat') }, 'feat edit')
+  isolatedGit(repo.work, [
+    'merge',
+    '-q',
+    '-s',
+    'ours',
+    '--no-commit',
+    '--no-ff',
+    'side',
+  ])
+  fs.writeFileSync(path.join(repo.work, A_PNG), png('resolved'))
+  isolatedGit(repo.work, ['add', A_PNG])
+  isolatedGit(repo.work, ['commit', '-q', '-m', 'merge side', '--no-verify'])
+  const merge = head(repo)
+  return {
+    repo,
+    merge,
+    parentPick: featEdit,
+    resolvedBlob: blobAt(repo, merge, A_PNG),
+  }
+}
+
+describe('pins: selecting the pin to embed', () => {
+  it('picks the merge that resolved the image, not the parent a plain git log finds', () => {
+    const { repo, merge, parentPick, resolvedBlob } = mergeResolvedRepo()
+    // The plain command the skill used to run lands on the parent, whose blob
+    // is an older image.
+    const plain = isolatedGit(repo.work, [
+      'log',
+      '-n',
+      '1',
+      '--no-renames',
+      '--diff-filter=AM',
+      '--format=%H',
+      'HEAD',
+      '--',
+      A_PNG,
+    ])
+    expect(plain).toBe(parentPick)
+    expect(blobAt(repo, plain, A_PNG)).not.toBe(resolvedBlob)
+
+    const run = runSelect(repo, [{ path: A_PNG, blob_sha: resolvedBlob }])
+
+    expect(run.status).toBe(0)
+    expect(run.report.result).toBe('selected')
+    expect(mapOf(run.report, 'pins')).toEqual({ [A_PNG]: merge })
+    expect(blobAt(repo, merge, A_PNG)).toBe(resolvedBlob)
+    expect(run.report.evidence_sha).toBe(merge)
+  })
+
+  it('writes the Demo file from the pins it selected, in the raw form', () => {
+    const { repo, merge, resolvedBlob } = mergeResolvedRepo()
+
+    const run = runSelect(repo, [{ path: A_PNG, blob_sha: resolvedBlob }])
+
+    expect(fs.readFileSync(run.outFile, 'utf8')).toBe(
+      `## Demo\n\n![a](${rawUrl(merge, A_PNG)})\n`,
+    )
+    expect(run.report.out_file).toBe(run.outFile)
+  })
+
+  it('writes the blob form for a private repository', () => {
+    const { repo, merge, resolvedBlob } = mergeResolvedRepo()
+
+    const run = runSelect(repo, [{ path: A_PNG, blob_sha: resolvedBlob }], {
+      form: 'blob',
+    })
+
+    expect(fs.readFileSync(run.outFile, 'utf8')).toBe(
+      `## Demo\n\n![a](https://github.com/${HEAD_REPO}/blob/${merge}/${A_PNG}?raw=true)\n`,
+    )
+  })
+
+  it('stops with pin-mismatch when the pin blob is not the classified one', () => {
+    const { repo, merge } = mergeResolvedRepo()
+    const classified = blobAt(repo, merge, A_PNG)
+    const stale = '0'.repeat(40)
+
+    const run = runSelect(repo, [{ path: A_PNG, blob_sha: stale }])
+
+    expect(run.status).toBe(1)
+    expect(run.report.result).toBe('pin-mismatch')
+    expect(records(run.report, 'mismatched')).toEqual([
+      {
+        path: A_PNG,
+        pin: merge,
+        blob_sha: classified,
+        expected_blob_sha: stale,
+      },
+    ])
+    expect(fs.existsSync(run.outFile)).toBe(false)
+  })
+
+  it('selects each path on its own and reports the newest commit of the set', () => {
+    const repo = createRepo()
+    startPr(repo)
+    const addA = commitFiles(repo.work, { [A_PNG]: png('A') }, 'add A')
+    const addB = commitFiles(repo.work, { [B_PNG]: png('B') }, 'add B')
+
+    const run = runSelect(repo, [
+      { path: A_PNG, blob_sha: blobAt(repo, addA, A_PNG) },
+      { path: B_PNG, blob_sha: blobAt(repo, addB, B_PNG) },
+    ])
+
+    expect(run.report.result).toBe('selected')
+    expect(mapOf(run.report, 'pins')).toEqual({ [A_PNG]: addA, [B_PNG]: addB })
+    expect(run.report.evidence_sha).toBe(addB)
+    expect(fs.readFileSync(run.outFile, 'utf8')).toBe(
+      `## Demo\n\n![a](${rawUrl(addA, A_PNG)})\n\n![b](${rawUrl(addB, B_PNG)})\n`,
+    )
+  })
+
+  it('reports a path that was never committed on the head as unresolved', () => {
+    const repo = createRepo()
+    startPr(repo)
+    const addA = commitFiles(repo.work, { [A_PNG]: png('A') }, 'add A')
+
+    const run = runSelect(repo, [
+      { path: A_PNG, blob_sha: blobAt(repo, addA, A_PNG) },
+      { path: B_PNG, blob_sha: '1'.repeat(40) },
+    ])
+
+    expect(run.status).toBe(1)
+    expect(run.report.result).toBe('unresolved')
+    expect(listOf(run.report, 'unresolved_paths')).toEqual([B_PNG])
+    expect(fs.existsSync(run.outFile)).toBe(false)
+  })
+
+  it('uses the checked-out HEAD when no head_ref_oid is given, and honours one when it is', () => {
+    const repo = createRepo()
+    startPr(repo)
+    const addA = commitFiles(repo.work, { [A_PNG]: png('A') }, 'add A')
+    const blobA = blobAt(repo, addA, A_PNG)
+    commitFiles(repo.work, { [A_PNG]: png('B') }, 'swap B')
+
+    const atEarlier = runSelect(repo, [{ path: A_PNG, blob_sha: blobA }], {
+      head_ref_oid: addA,
+    })
+    const atHead = runSelect(repo, [{ path: A_PNG, blob_sha: blobA }])
+
+    expect(atEarlier.report.result).toBe('selected')
+    expect(atHead.report.result).toBe('pin-mismatch')
+  })
+
+  it('reports head-not-found for a head the repository does not have', () => {
+    const repo = createRepo()
+
+    const run = runSelect(repo, [{ path: A_PNG, blob_sha: '1'.repeat(40) }], {
+      head_ref_oid: NO_SUCH_COMMIT,
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.report.result).toBe('head-not-found')
+  })
+
+  for (const [name, extra, field] of [
+    ['a form that is neither raw nor blob', { form: 'html' }, 'form'],
+    ['no form', { form: undefined }, 'form'],
+    ['a head_repo that is not owner/repo', { head_repo: 'nope' }, 'head_repo'],
+    ['no out_file', { out_file: undefined }, 'out_file'],
+    ['an empty select list', { select: [] }, 'select'],
+    [
+      'a select entry outside docs/evidence',
+      { select: [{ path: 'src/a.png', blob_sha: '1'.repeat(40) }] },
+      'select',
+    ],
+    [
+      'a blob_sha that is not 40 hex',
+      { select: [{ path: A_PNG, blob_sha: 'abc' }] },
+      'select',
+    ],
+    [
+      'a path listed twice',
+      {
+        select: [
+          { path: A_PNG, blob_sha: '1'.repeat(40) },
+          { path: A_PNG, blob_sha: '1'.repeat(40) },
+        ],
+      },
+      'select',
+    ],
+    [
+      'both urls and select',
+      { urls: [{ path: A_PNG, sha: NO_SUCH_COMMIT }] },
+      'select',
+    ],
+    [
+      'a head_ref_oid that is not 40 hex',
+      { head_ref_oid: 'main' },
+      'head_ref_oid',
+    ],
+  ] as const) {
+    it(`exits 2 naming the field for ${name}`, () => {
+      const run = runSelect(
+        createRepo(),
+        [{ path: A_PNG, blob_sha: '1'.repeat(40) }],
+        extra,
+      )
+
+      expect(run.status).toBe(2)
+      expect(run.report.result).toBe('usage-error')
+      expect(run.report.field).toBe(field)
+    })
+  }
+})
+
 // ── cleanup-set: the set ───────────────────────────────────────────────────
 
 describe('cleanup-set: what the PR added under docs/evidence', () => {

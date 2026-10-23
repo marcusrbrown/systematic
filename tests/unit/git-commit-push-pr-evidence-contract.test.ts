@@ -148,6 +148,25 @@ describe('git-commit-push-pr evidence contract -- the publish option', () => {
     expect(text).toMatch(/`evidence=local`[\s\S]*continue without evidence/i)
   })
 
+  test('a blob-mismatch failure is never answered with a push, in the evidence decision or the report', () => {
+    const decision = normalize(evidenceDecision)
+    expect(decision).toMatch(
+      /`reason=blob-mismatch`[^.]*exception[^.]*push advice/i,
+    )
+    expect(decision).toMatch(/must not be pushed as it is/i)
+    expect(normalize(stepEight)).toMatch(
+      /`reason=blob-mismatch`[^.]*altered image[^.]*must not be pushed/i,
+    )
+  })
+
+  test('git-commit-push-pr chooses no pin itself: the pins come from pr-attachments', () => {
+    const commands = fencedBlocks(skill).join('\n')
+    expect(commands).not.toMatch(/git log\b[^\n]*(?:\s-n\s*1\b|--format=%H)/)
+    expect(skill).not.toMatch(
+      /raw\.githubusercontent\.com|\/blob\/[^\s]*\?raw=true/,
+    )
+  })
+
   test('a request to publish never stages the images in the feature commit', () => {
     expect(normalize(stepFour)).toMatch(/evidence, not part of the change/i)
   })

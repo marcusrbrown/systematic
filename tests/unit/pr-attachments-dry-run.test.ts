@@ -311,15 +311,81 @@ function copyEvidence(pr: Pr, blobSha = classifiedBlob(pr)): ShellResult {
   })
 }
 
-/** The pushed evidence flow, up to and including the refspec push. */
-function publishEvidence(pr: Pr): void {
-  expect(runBlock(pr, 'git check-attr filter', { set: [DEST] }).stdout).toBe('')
-  expect(copyEvidence(pr).status).toBe(0)
-  const commit = runBlock(pr, 'add screenshots for', {
+const GUARD_MARKER = 'git check-attr text eol filter'
+const STAGE_MARKER = 'git add -- "$@"'
+const STAGED_CHECK_MARKER = 'blob-mismatch staged'
+const COMMIT_MARKER = 'add screenshots for'
+const COMMITTED_CHECK_MARKER = 'blob-mismatch committed'
+
+/** What the staged and committed blob checks read: a destination and its classified blob. */
+function blobItems(blob: string): readonly string[] {
+  return [`${DEST} ${blob}`]
+}
+
+function stageEvidence(pr: Pr): ShellResult {
+  return runBlock(pr, STAGE_MARKER, { set: [DEST] })
+}
+
+function checkStaged(pr: Pr, blob = classifiedBlob(pr)): ShellResult {
+  return runBlock(pr, STAGED_CHECK_MARKER, { set: blobItems(blob) })
+}
+
+function commitStaged(pr: Pr): ShellResult {
+  return runBlock(pr, COMMIT_MARKER, {
     vars: { TOPIC: 'feat-x' },
     set: [DEST],
   })
+}
+
+function checkCommitted(pr: Pr, blob = classifiedBlob(pr)): ShellResult {
+  return runBlock(pr, COMMITTED_CHECK_MARKER, { set: blobItems(blob) })
+}
+
+/** Stage, then commit by pathspec, as Step 6 does when nothing goes wrong. */
+function stageAndCommit(pr: Pr): ShellResult {
+  const staged = stageEvidence(pr)
+  expect(staged.status, staged.stderr).toBe(0)
+  return commitStaged(pr)
+}
+
+const SELECT_MARKER = '"select"'
+
+/**
+ * Runs the pin selection block for one destination, with the blob classify
+ * reports for the fixture screenshot unless another is given.
+ */
+function selectPins(
+  pr: Pr,
+  demoFile: string,
+  form: 'raw' | 'blob',
+  ownerRepo: string,
+  blob = classifiedBlob(pr),
+): ShellResult {
+  return runBlock(pr, SELECT_MARKER, {
+    vars: { SKILL_DIR },
+    tokens: {
+      ', {"path": "<destination 2>", "blob_sha": "<blob_sha 2>"}': '',
+      '<destination 1>': DEST,
+      '<blob_sha 1>': blob,
+      '<owner/repo of the head repository>': ownerRepo,
+      '<raw or blob>': form,
+      '<demo file>': demoFile,
+    },
+  })
+}
+
+/** The pushed evidence flow, up to and including the refspec push. */
+function publishEvidence(pr: Pr): void {
+  expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toBe('')
+  expect(copyEvidence(pr).status).toBe(0)
+  const staged = stageEvidence(pr)
+  expect(staged.status, staged.stderr).toBe(0)
+  const stagedCheck = checkStaged(pr)
+  expect(stagedCheck.status, stagedCheck.stdout + stagedCheck.stderr).toBe(0)
+  const commit = commitStaged(pr)
   expect(commit.status, commit.stderr).toBe(0)
+  const committedCheck = checkCommitted(pr)
+  expect(committedCheck.status, committedCheck.stdout).toBe(0)
   expect(runBlock(pr, 'git diff-tree', { set: [DEST] }).status).toBe(0)
   const push = runBlock(pr, 'git push', {
     vars: { REMOTE: 'origin', BRANCH: 'feat/x' },
@@ -389,32 +455,24 @@ describe('pr-attachments dry run -- the skill commands against a local bare remo
 
   test('the destination guards print nothing for a clean path and speak up for a bad one', () => {
     const pr = createPr()
-    expect(runBlock(pr, 'git check-attr filter', { set: [DEST] }).stdout).toBe(
-      '',
-    )
+    expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toBe('')
 
     fs.writeFileSync(path.join(pr.work, '.gitignore'), 'docs/evidence/\n')
-    expect(
-      runBlock(pr, 'git check-attr filter', { set: [DEST] }).stdout,
-    ).toContain(DEST)
+    expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toContain(DEST)
 
     fs.writeFileSync(path.join(pr.work, '.gitignore'), '')
     fs.writeFileSync(
       path.join(pr.work, '.gitattributes'),
       'docs/evidence/** filter=lfs\n',
     )
-    expect(
-      runBlock(pr, 'git check-attr filter', { set: [DEST] }).stdout,
-    ).toContain('lfs')
+    expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toContain('lfs')
 
     fs.writeFileSync(path.join(pr.work, '.gitattributes'), '')
     fs.mkdirSync(path.join(pr.work, 'docs/evidence/feat-x'), {
       recursive: true,
     })
     fs.writeFileSync(path.join(pr.work, DEST), 'a file already here')
-    expect(
-      runBlock(pr, 'git check-attr filter', { set: [DEST] }).stdout,
-    ).toContain(DEST)
+    expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toContain(DEST)
   })
 
   test('a forced non-fast-forward rejection stops the run and leaves the remote unchanged', () => {
@@ -431,12 +489,7 @@ describe('pr-attachments dry run -- the skill commands against a local bare remo
 
     // Our evidence commit is now on a diverged branch.
     expect(copyEvidence(pr).status).toBe(0)
-    expect(
-      runBlock(pr, 'add screenshots for', {
-        vars: { TOPIC: 'feat-x' },
-        set: [DEST],
-      }).status,
-    ).toBe(0)
+    expect(stageAndCommit(pr).status).toBe(0)
     const push = runBlock(pr, 'git push', {
       vars: { REMOTE: 'origin', BRANCH: 'feat/x' },
     })
@@ -453,12 +506,12 @@ describe('pr-attachments dry run -- the skill commands against a local bare remo
     const head = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
     const demoFile = path.join(pr.home, 'demo.md')
     fs.writeFileSync(demoFile, '')
-    const demo = runBlock(pr, 'raw.githubusercontent.com', {
-      vars: { DEMO_FILE: demoFile, OWNER_REPO: 'octo/widgets' },
-      set: [DEST],
-    })
+    const demo = selectPins(pr, demoFile, 'raw', 'octo/widgets')
     expect(demo.status, demo.stderr).toBe(0)
-    expect(demo.stdout.trim()).toBe(head)
+    expect(JSON.parse(demo.stdout)).toMatchObject({
+      result: 'selected',
+      evidence_sha: head,
+    })
     const url = `https://raw.githubusercontent.com/octo/widgets/${head}/${DEST}`
     expect(fs.readFileSync(demoFile, 'utf8')).toBe(
       `## Demo\n\n![shot](${url})\n`,
@@ -710,7 +763,6 @@ describe('pr-attachments dry run -- carry mode over the real helper', () => {
 // one call the block makes from the local repository, so the block's own
 // shell (parsing, retries, exit code) is what runs.
 
-const BLOB_NAME_MARKER = 'blob/%s/%s?raw=true'
 const BLOB_LIST_MARKER = 'grep -o -E'
 const BLOB_CHECK_MARKER = 'contents/$DEST?ref=$PIN'
 const NO_WAIT = { 'sleep 5': 'sleep 0' }
@@ -754,12 +806,9 @@ function privateDemo(pr: Pr): { head: string; demoFile: string } {
   const head = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
   const demoFile = path.join(pr.home, 'demo.md')
   fs.writeFileSync(demoFile, '')
-  const built = runBlock(pr, BLOB_NAME_MARKER, {
-    vars: { DEMO_FILE: demoFile, OWNER_REPO },
-    set: [DEST],
-  })
+  const built = selectPins(pr, demoFile, 'blob', OWNER_REPO)
   expect(built.status, built.stderr).toBe(0)
-  expect(built.stdout.trim()).toBe(head)
+  expect(JSON.parse(built.stdout).evidence_sha).toBe(head)
   return { head, demoFile }
 }
 
@@ -1010,10 +1059,7 @@ describe('pr-attachments dry run -- a failed commit is unstaged again', () => {
     expect(copyEvidence(pr).status).toBe(0)
     failingHook(pr)
 
-    const commit = runBlock(pr, 'add screenshots for', {
-      vars: { TOPIC: 'feat-x' },
-      set: [DEST],
-    })
+    const commit = stageAndCommit(pr)
     expect(commit.status).not.toBe(0)
     expect(
       isolatedGit(pr.work, ['diff', '--cached', '--name-only']).split('\n'),
@@ -1086,12 +1132,7 @@ describe('pr-attachments dry run -- the push, and what the remote holds afterwar
     commitFile(other, 'theirs.txt', 'someone else\n')
     isolatedGit(other, ['push', '-q', 'origin', 'feat/x'])
     expect(copyEvidence(pr).status).toBe(0)
-    expect(
-      runBlock(pr, 'add screenshots for', {
-        vars: { TOPIC: 'feat-x' },
-        set: [DEST],
-      }).status,
-    ).toBe(0)
+    expect(stageAndCommit(pr).status).toBe(0)
     const push = runBlock(pr, PUSH_MARKER, {
       vars: { REMOTE: 'origin', BRANCH: 'feat/x' },
     })
@@ -1203,13 +1244,17 @@ describe('pr-attachments dry run -- the write guard writes when nothing changed 
     expect(listed.status, listed.stderr).toBe(0)
     const urls = JSON.parse(listed.stdout).urls
 
-    const picked = run('scripts/pr-attachments.mjs" pins', {
-      vars: { SKILL_DIR },
-      tokens: {
-        '<headRefOid>': head,
-        '<the urls array from the previous report>': jsonList(urls),
+    const picked = run(
+      'scripts/pr-attachments.mjs" pins',
+      {
+        vars: { SKILL_DIR },
+        tokens: {
+          '<headRefOid>': head,
+          '<the urls array from the previous report>': jsonList(urls),
+        },
       },
-    })
+      SELECT_MARKER,
+    )
     const pins = JSON.parse(picked.stdout).pins
     expect(pins).toEqual({ [DEST]: head })
 
@@ -1322,5 +1367,263 @@ describe('pr-attachments dry run -- the write guard writes when nothing changed 
     )
 
     expect(reread.status, reread.stdout + reread.stderr).toBe(0)
+  })
+})
+
+// ── Pins after a merge resolution ──────────────────────────────────────────
+
+describe('pr-attachments dry run -- the pin comes from the helper, whatever the history looks like', () => {
+  /** A PR head whose evidence image was resolved by a merge to bytes neither parent held. */
+  function mergeResolved(pr: Pr): { merge: string; parent: string } {
+    commitFile(pr.work, DEST, 'first')
+    isolatedGit(pr.work, ['checkout', '-q', '-b', 'side'])
+    commitFile(pr.work, DEST, 'side')
+    isolatedGit(pr.work, ['checkout', '-q', 'feat/x'])
+    const parent = commitFile(pr.work, DEST, 'feat')
+    isolatedGit(pr.work, [
+      'merge',
+      '-q',
+      '-s',
+      'ours',
+      '--no-commit',
+      '--no-ff',
+      'side',
+    ])
+    fs.writeFileSync(path.join(pr.work, DEST), pngWith('resolved'))
+    isolatedGit(pr.work, ['add', '--', DEST])
+    isolatedGit(pr.work, ['commit', '-q', '-m', 'merge side', '--no-verify'])
+    return { merge: isolatedGit(pr.work, ['rev-parse', 'HEAD']), parent }
+  }
+
+  test('a merge that resolved the image is the pin, not the parent a plain git log finds', () => {
+    const pr = createPr()
+    const { merge, parent } = mergeResolved(pr)
+    const resolved = isolatedGit(pr.work, ['rev-parse', `HEAD:${DEST}`])
+    const plain = isolatedGit(pr.work, [
+      'log',
+      '-n',
+      '1',
+      '--no-renames',
+      '--diff-filter=AM',
+      '--format=%H',
+      'HEAD',
+      '--',
+      DEST,
+    ])
+    expect(plain).toBe(parent)
+    const demoFile = path.join(pr.home, 'demo.md')
+    fs.writeFileSync(demoFile, '')
+
+    const built = selectPins(pr, demoFile, 'raw', OWNER_REPO, resolved)
+
+    expect(built.status, built.stdout + built.stderr).toBe(0)
+    expect(JSON.parse(built.stdout).evidence_sha).toBe(merge)
+    const text = fs.readFileSync(demoFile, 'utf8')
+    expect(text).toContain(`/${merge}/${DEST}`)
+    expect(text).not.toContain(parent)
+  })
+
+  test('a pin whose blob is not the classified one stops the run and writes no Demo file', () => {
+    const pr = createPr()
+    mergeResolved(pr)
+    const demoFile = path.join(pr.home, 'demo.md')
+
+    const built = selectPins(pr, demoFile, 'raw', OWNER_REPO, '0'.repeat(40))
+
+    expect(built.status).toBe(1)
+    expect(JSON.parse(built.stdout).result).toBe('pin-mismatch')
+    expect(fs.existsSync(demoFile)).toBe(false)
+  })
+})
+
+// ── Git attributes between the copy and the push ───────────────────────────
+
+describe('pr-attachments dry run -- git cannot change an approved image on its way to the remote', () => {
+  /** The png signature holds a CRLF, which a text conversion rewrites. */
+  const CRLF_SIGNATURE = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ])
+  /**
+   * A png by its signature only. It has no NUL byte and enough printable
+   * text, so git reads it as text where a real image would read as binary.
+   */
+  const TEXTUAL_PNG = Buffer.concat([
+    CRLF_SIGNATURE,
+    Buffer.from('line of text\r\n'.repeat(20)),
+  ])
+
+  function remoteHead(pr: Pr): string {
+    return isolatedGit(pr.origin, ['rev-parse', 'refs/heads/feat/x'])
+  }
+
+  function useAttributes(pr: Pr, attributes: string): void {
+    fs.writeFileSync(path.join(pr.work, '.gitattributes'), attributes)
+    isolatedGit(pr.work, ['add', '--', '.gitattributes'])
+    isolatedGit(pr.work, ['commit', '-q', '-m', 'attrs', '--no-verify'])
+    isolatedGit(pr.work, ['push', '-q', 'origin', 'feat/x'])
+  }
+
+  test('text and eol on docs/evidence stop the run at the guard, before anything is staged or pushed', () => {
+    const pr = createPr()
+    useAttributes(pr, 'docs/evidence/** text eol=lf\n')
+    const pushed = remoteHead(pr)
+    const before = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
+
+    const guard = runBlock(pr, GUARD_MARKER, { set: [DEST] })
+
+    // Output stops the run: Step 6 sends no later block.
+    expect(guard.stdout).toContain(`${DEST}: text: set`)
+    expect(guard.stdout).toContain(`${DEST}: eol: lf`)
+    expect(isolatedGit(pr.work, ['rev-parse', 'HEAD'])).toBe(before)
+    expect(remoteHead(pr)).toBe(pushed)
+    expect(fs.existsSync(path.join(pr.work, DEST))).toBe(false)
+  })
+
+  test('without the guard, the staged check still stops a text conversion, and nothing is pushed', () => {
+    const pr = createPr()
+    useAttributes(pr, 'docs/evidence/** text eol=lf\n')
+    const pushed = remoteHead(pr)
+    const before = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
+    expect(copyEvidence(pr).status).toBe(0)
+    expect(stageEvidence(pr).status).toBe(0)
+    // git rewrote the signature's CRLF while staging.
+    expect(isolatedGit(pr.work, ['rev-parse', `:${DEST}`])).not.toBe(
+      classifiedBlob(pr),
+    )
+
+    const staged = checkStaged(pr)
+
+    expect(staged.status).not.toBe(0)
+    expect(staged.stdout).toContain(`blob-mismatch staged ${DEST}`)
+    const recovery = runBlock(pr, 'git restore --staged', { set: [DEST] })
+    expect(recovery.status, recovery.stderr).toBe(0)
+    expect(isolatedGit(pr.work, ['diff', '--cached', '--name-only'])).toBe('')
+    expect(isolatedGit(pr.work, ['rev-parse', 'HEAD'])).toBe(before)
+    expect(remoteHead(pr)).toBe(pushed)
+  })
+
+  test('core.autocrlf passes the guard and is caught by the staged check, which unstages', () => {
+    const pr = createPr()
+    fs.writeFileSync(path.join(pr.work, 'shot.png'), TEXTUAL_PNG)
+    isolatedGit(pr.work, ['config', 'core.autocrlf', 'true'])
+    const pushed = remoteHead(pr)
+    expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toBe('')
+    expect(copyEvidence(pr).status).toBe(0)
+    expect(stageEvidence(pr).status).toBe(0)
+
+    const staged = checkStaged(pr)
+
+    expect(staged.status).not.toBe(0)
+    expect(staged.stdout).toContain(`blob-mismatch staged ${DEST}`)
+    expect(runBlock(pr, 'git restore --staged', { set: [DEST] }).status).toBe(0)
+    expect(isolatedGit(pr.work, ['diff', '--cached', '--name-only'])).toBe(
+      'notes.txt',
+    )
+    expect(remoteHead(pr)).toBe(pushed)
+  })
+
+  test('text=auto and an unset text pass the guard, and the image is staged and committed byte for byte', () => {
+    for (const attributes of [
+      '* text=auto\n',
+      'docs/evidence/** -text\n',
+      'docs/evidence/** binary\n',
+    ]) {
+      const pr = createPr()
+      useAttributes(pr, attributes)
+      fs.writeFileSync(path.join(pr.work, 'shot.png'), pngWith('crlf\r\n'))
+      const blob = classifiedBlob(pr)
+
+      expect(runBlock(pr, GUARD_MARKER, { set: [DEST] }).stdout).toBe('')
+      expect(copyEvidence(pr, blob).status).toBe(0)
+      expect(stageEvidence(pr).status).toBe(0)
+      expect(checkStaged(pr, blob).status).toBe(0)
+      expect(commitStaged(pr).status).toBe(0)
+      expect(checkCommitted(pr, blob).status).toBe(0)
+      expect(isolatedGit(pr.work, ['rev-parse', `HEAD:${DEST}`])).toBe(blob)
+    }
+  })
+
+  test('a hook that rewrites the image during the commit is caught by the committed check, and the push never runs', () => {
+    const pr = createPr()
+    const pushed = remoteHead(pr)
+    const hooks = path.join(pr.work, '.git/hooks')
+    fs.mkdirSync(hooks, { recursive: true })
+    fs.writeFileSync(
+      path.join(hooks, 'pre-commit'),
+      `#!/bin/sh\nprintf 'x' >> "${DEST}"\ngit add -- "${DEST}"\n`,
+      { mode: 0o755 },
+    )
+    expect(copyEvidence(pr).status).toBe(0)
+    expect(stageEvidence(pr).status).toBe(0)
+    expect(checkStaged(pr).status).toBe(0)
+    expect(commitStaged(pr).status).toBe(0)
+
+    const committed = checkCommitted(pr)
+
+    expect(committed.status).not.toBe(0)
+    expect(committed.stdout).toContain(`blob-mismatch committed ${DEST}`)
+    // The flow stops here with a local commit; no push block is sent.
+    expect(remoteHead(pr)).toBe(pushed)
+  })
+})
+
+// ── Re-pin mode: already-valid is verified before cleanup ──────────────────
+
+describe('pr-attachments dry run -- an already-valid re-run checks what the remote serves', () => {
+  /** Publishes, then backs up a description that holds the current embed, as the skill's block does. */
+  function validBackup(pr: Pr): { head: string; backup: string; fake: FakePr } {
+    publishEvidence(pr)
+    const head = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
+    const embed = `![shot](${blobUrl(head)})`
+    const fake = installFakePr(pr, `Intro\n\n## Demo\n\n${embed}\n`)
+    const backup = path.join(pr.home, 'backup.json')
+    const read = runWithGh(
+      pr,
+      fake.bin,
+      fill(blockWith('" urls <'), {
+        vars: { SKILL_DIR, PR: '7', BACKUP: backup },
+        tokens: { '<owner/repo>': OWNER_REPO },
+      }),
+    )
+    expect(read.status, read.stderr).toBe(0)
+    return { head, backup, fake }
+  }
+
+  test('the URL listing reads the managed embeds out of the backup file', () => {
+    const pr = createPr()
+    const { head, backup } = validBackup(pr)
+
+    const listed = runBlock(pr, BLOB_LIST_MARKER, {
+      vars: { FILE: backup, OWNER_REPO },
+    })
+
+    expect(listed.status, listed.stderr).toBe(0)
+    expect(listed.stdout.trim()).toBe(blobUrl(head))
+  })
+
+  test('the pins call says already-valid on local git alone, so the remote check is what can still fail', () => {
+    const pr = createPr()
+    const { head, backup } = validBackup(pr)
+    const urls = runHelper(pr, 'urls', {
+      body: JSON.parse(fs.readFileSync(backup, 'utf8')).body,
+      head_repo: OWNER_REPO,
+    })
+    const pins = runHelper(pr, 'pins', {
+      head_ref_oid: head,
+      urls: urls.report.urls,
+    })
+    expect(pins.report.result).toBe('already-valid')
+
+    // GitHub serving other bytes than git holds for the pin: the blob check
+    // the skill sends next fails, and no cleanup is offered.
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const served = checkBlobs(pr, installFakeGh(pr), [`${blobUrl(head)} local`])
+    expect(served.status, served.stdout + served.stderr).toBe(0)
+    const refused = checkBlobs(pr, installFakeGh(pr), [
+      `${blobUrl(head)} ${'0'.repeat(40)}`,
+    ])
+    expect(refused.status).not.toBe(0)
+    expect(refused.stdout).toContain(`mismatch ${DEST}`)
+    expect(blob).toMatch(/^[0-9a-f]{40}$/)
   })
 })

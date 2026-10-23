@@ -74,6 +74,24 @@
 //   result  already-valid (0), repin-needed (0), partial (1: some paths never
 //           existed on the head), unresolved (1: none did), head-not-found (1)
 //
+// pins also takes `select` in place of `urls`, to choose the pin of an embed
+// that does not exist yet. It picks the same newest commit for each path, and
+// that pin must hold the blob the caller expects (the `blob_sha` classify
+// reported), so a pin that would serve other bytes stops the run. It then
+// writes the Demo text for the pins to `out_file`.
+//   select        non-empty array of { path, blob_sha }, in the order of the
+//                 embeds; a path may appear once
+//   head_repo     "owner/repo", for the URLs
+//   form          raw (https://raw.githubusercontent.com/...) or blob
+//                 (https://github.com/.../blob/...?raw=true)
+//   out_file      where the Demo text is written
+//   head_ref_oid  optional; the checked-out HEAD when absent
+//   result  selected (0: `pins`, `evidence_sha` -- the newest commit of any
+//           selected path -- and the file written), pin-mismatch (1:
+//           `mismatched` lists path, pin, blob_sha and expected_blob_sha),
+//           unresolved (1: a path has no commit on the head),
+//           head-not-found (1)
+//
 // cleanup-set lists the files the PR added under docs/evidence, and removes
 // them in a second step.
 //   head_ref_oid  the PR head commit
@@ -113,6 +131,16 @@
 //   waited_s           optional, default 0: the `waited_s` of the latest report
 //                      for the same URLs, passed on unchanged. The schedule
 //                      resumes there, and the 300 s total counts it.
+//   resume_at          optional, epoch milliseconds (a positive integer): the
+//                      `resume_at` of the latest report, passed on unchanged.
+//                      No request goes out before it. The call sleeps until
+//                      then first, within its own `max_wait_s`, and the sleep
+//                      counts toward `waited_s`. If the deadline lies past the
+//                      300 s total, nothing is sent and the report is not
+//                      retryable; if it lies past this call, the call sleeps
+//                      its whole limit, sends nothing and returns the same
+//                      deadline. Such URLs report `rate-limited`, no HTTP
+//                      status and 0 attempts.
 //   request_timeout_s  optional, default 10, at most 300: per request
 //   Retried (404, 429, 5xx, network error, timeout): wait 2, 4, 8, 15, then 30 s
 //   again and again, each with +-20% jitter, and never less than a 429's
@@ -132,13 +160,28 @@
 //   report has `failed` (the failing entries), top-level `retryable` (any
 //   failure is retryable) and `waited_s`: the longest wait of this call plus
 //   the `waited_s` it was given, rounded up. It is the running total, so the
-//   caller never adds reports up.
+//   caller never adds reports up. When a 429 carries a Retry-After that the
+//   call cannot serve, the report also has `resume_at` (epoch milliseconds,
+//   the latest over the failures that can still be retried), and so does each
+//   such URL. The helper keeps no state: the caller hands `resume_at` back.
 //
 // Section rules (no markers; the heading is the only boundary):
-//   - The heading matches ^ {0,3}##[ \t]+Demo([ \t]+#+)?[ \t]*$.
+//   - The heading matches ^##[ \t]+Demo([ \t]+#+)?[ \t]*$: column 0, no
+//     leading spaces. An indented one is never the managed heading.
 //   - A section runs to the next H1 or H2 (ATX or setext) or to the end.
-//   - Fenced code (an unclosed fence runs to the end), multi-line HTML
-//     comments and block quotes hide headings; so does indented code.
+//   - Fenced code hides headings. A fence opens on a run of three or more
+//     backticks or tildes after any leading whitespace, quote markers and
+//     list markers, so a fence inside a list item or a quote counts. It
+//     closes on a run of the same character, at least as long, with no info
+//     string. An unclosed fence runs to the end.
+//   - Raw HTML blocks hide headings: `<pre>`, `<script>`, `<style>` and
+//     `<textarea>` (until the matching closing tag), and comments (until
+//     `-->`). Block quotes and indented code hide them too.
+//   - Fail closed: when a block that never closes began inside the Demo
+//     section, splice and extract stop with `unterminated-region` (kind
+//     `fence`, `comment` or `html`) and write nothing, because where the
+//     section ends is unknown. Splice also stops, rather than append, when a
+//     block is still open at the end of a body that has no Demo section.
 //   - Trailing blank lines belong to the gap after a section, not to it.
 //   - Lines split on CRLF, LF or CR and keep their terminators. Lines the
 //     helper inserts use the body's dominant terminator; Demo text is
@@ -742,22 +785,38 @@ function response(result, parts) {
 // ── Markdown structure ─────────────────────────────────────────────────────
 //
 // Just enough of CommonMark to find H1/H2 boundaries and to know which lines
-// are hidden from headings: fenced code, HTML comment blocks and block quotes.
-// Indented code needs no tracking, because a heading has at most 3 leading
-// spaces. Anything that is not a heading is left exactly as it is.
+// are hidden from headings: fenced code, raw HTML blocks (`<pre>`, `<script>`,
+// `<style>`, `<textarea>` and comments) and block quotes. A fence counts
+// wherever it opens, also inside a list item or a quote, because a literal
+// `## Demo` shown inside a fence must never be taken for the section to
+// replace. When in doubt a line is hidden, never shown: the worst outcome is
+// a refusal, not a deleted line. Anything that is not a heading is left
+// exactly as it is.
 
-const DEMO_HEADING = /^ {0,3}##[ \t]+Demo(?:[ \t]+#+)?[ \t]*$/
+// The managed heading starts at column 0. An indented one is a heading or a
+// quote of one, but never the section this helper replaces.
+const DEMO_HEADING = /^##[ \t]+Demo(?:[ \t]+#+)?[ \t]*$/
 const SCREENSHOTS_HEADING = /^ {0,3}##[ \t]+Screenshots(?:[ \t]+#+)?[ \t]*$/
 const ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]|$)/
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/
 const THEMATIC_BREAK =
   /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/
 const LIST_ITEM = /^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/
+// Everything a fence line may start with before its run: whitespace, quote
+// markers, bullets and list numbers, repeated.
+const CONTAINER_LEAD =
+  '(?:[ \\t]*(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t])))*[ \\t]*'
+const CONTAINER_PREFIX = new RegExp(`^${CONTAINER_LEAD}`)
+const PLAIN_PREFIX = /^ {0,3}$/
+const FENCE_RUN = /^(`{3,}|~{3,})(.*)$/
 const COMMENT_OPEN = /^ {0,3}<!--/
+const COMMENT_CLOSE = /-->/
+const HTML_BLOCK_OPEN = /^ {0,3}<(pre|script|style|textarea)(?=[ \t>]|$)/i
 const BLOCK_QUOTE = /^ {0,3}>/
 const NOT_INDENTED = /^ {0,3}[^ \t]/
 const BLANK = /^[ \t]*$/
+// Lines of these kinds are not rendered as Markdown, so a URL in one is not an embed.
+const HIDDEN_KINDS = new Set(['fence', 'comment', 'html'])
 const LINE_BREAK = /\r\n|\n|\r/g
 const ENDS_WITH_BREAK = /(?:\r\n|\n|\r)$/
 
@@ -814,7 +873,9 @@ function dominantEol(lines) {
 /**
  * Walks the lines once, tracking which block they are in.
  * `headings` holds H1 and H2 only: `line` is the first line of the heading
- * (the first line of the paragraph, for a setext heading).
+ * (the first line of the paragraph, for a setext heading). `endState` is the
+ * block still open at the end of the text, and `openLine` the line it began
+ * on (-1 when none is open).
  * @param {string} text
  */
 function scanMarkdown(text) {
@@ -822,27 +883,46 @@ function scanMarkdown(text) {
   const kinds = []
   const headings = []
   let mode = 'normal'
-  let fence = null
+  let openLine = -1
+  let closer = null
   let paragraph = -1
+
+  /**
+   * @param {'fence' | 'comment' | 'html'} next
+   * @param {number} index
+   * @param {RegExp | null} end
+   */
+  const open = (next, index, end) => {
+    mode = next
+    openLine = index
+    closer = end
+    paragraph = -1
+  }
+  const close = () => {
+    mode = 'normal'
+    openLine = -1
+    closer = null
+  }
 
   lines.forEach((line, index) => {
     const content = line.text
-    if (mode === 'fence') {
-      kinds.push('fence')
-      const closer = new RegExp(
-        `^ {0,3}${fence.char}{${fence.length},}[ \\t]*$`,
-      ).test(content)
-      mode = closer ? 'normal' : 'fence'
-      return
-    }
-    if (mode === 'comment') {
-      kinds.push('comment')
-      mode = content.includes('-->') ? 'normal' : 'comment'
+    if (mode !== 'normal') {
+      // Inside a block every line is hidden; one that ends it is hidden too.
+      kinds.push(mode)
+      if (closer.test(content)) {
+        close()
+      }
       return
     }
     if (BLANK.test(content)) {
       kinds.push('text')
       paragraph = -1
+      return
+    }
+    const fence = fenceStart(content)
+    if (fence !== null) {
+      kinds.push('fence')
+      open('fence', index, fence.closer)
       return
     }
     if (BLOCK_QUOTE.test(content)) {
@@ -855,20 +935,21 @@ function scanMarkdown(text) {
       kinds.push('text')
       return
     }
-    const fenceStart = FENCE_OPEN.exec(content)
-    if (
-      fenceStart !== null &&
-      !(fenceStart[1][0] === '`' && fenceStart[2].includes('`'))
-    ) {
-      kinds.push('fence')
-      mode = 'fence'
-      fence = { char: fenceStart[1][0], length: fenceStart[1].length }
+    if (COMMENT_OPEN.test(content)) {
+      kinds.push('comment')
+      if (!content.includes('-->')) {
+        open('comment', index, COMMENT_CLOSE)
+      }
       paragraph = -1
       return
     }
-    if (COMMENT_OPEN.test(content)) {
-      kinds.push('comment')
-      mode = content.includes('-->') ? 'normal' : 'comment'
+    const html = HTML_BLOCK_OPEN.exec(content)
+    if (html !== null) {
+      kinds.push('html')
+      const end = new RegExp(`</${html[1]}>`, 'i')
+      if (!end.test(content.slice(html[0].length))) {
+        open('html', index, end)
+      }
       paragraph = -1
       return
     }
@@ -899,12 +980,35 @@ function scanMarkdown(text) {
     }
   })
 
-  return { text, lines, kinds, headings, endState: mode }
+  return { text, lines, kinds, headings, endState: mode, openLine }
 }
 
 /**
- * Every Demo section in the scanned text. `contentEnd` is the first line of
- * the trailing blank run, so the gap before the next section stays outside.
+ * A line that opens a fence, or null. The run may follow whitespace, quote
+ * markers and list markers, so a fence inside a list item or a quote counts.
+ * `closer` matches the line that ends it: the same character, at least as
+ * long, nothing after it. A fence that opened at the top level is closed
+ * only by a run indented at most 3 spaces, so an indented line inside it
+ * cannot end it early; one that opened inside a container may be closed with
+ * any indent and markers.
+ * @param {string} content
+ */
+function fenceStart(content) {
+  const prefix = CONTAINER_PREFIX.exec(content)[0]
+  const run = FENCE_RUN.exec(content.slice(prefix.length))
+  if (run === null || (run[1][0] === '`' && run[2].includes('`'))) {
+    return null
+  }
+  const lead = PLAIN_PREFIX.test(prefix) ? ' {0,3}' : CONTAINER_LEAD
+  return {
+    closer: new RegExp(`^${lead}${run[1][0]}{${run[1].length},}[ \\t]*$`),
+  }
+}
+
+/**
+ * Every Demo section in the scanned text. `endLine` is where the next H1 or
+ * H2 begins, or the end of the text. `contentEnd` is the first line of the
+ * trailing blank run, so the gap before the next section stays outside.
  * @param {ReturnType<typeof scanMarkdown>} scan
  */
 function findDemoSections(scan) {
@@ -921,8 +1025,24 @@ function findDemoSections(scan) {
       ) {
         contentEnd -= 1
       }
-      return { headingLine: heading.line, contentEnd }
+      return { headingLine: heading.line, contentEnd, endLine }
     })
+}
+
+/**
+ * Whether a block that never closes began inside the section. Everything
+ * after its opening line is hidden from the scan, so where the section really
+ * ends is unknown, and replacing or copying it could take in lines that are
+ * not its own.
+ * @param {ReturnType<typeof scanMarkdown>} scan
+ * @param {{ headingLine: number, endLine: number }} section
+ */
+function endsInOpenBlock(scan, section) {
+  return (
+    scan.endState !== 'normal' &&
+    scan.openLine > section.headingLine &&
+    scan.openLine < section.endLine
+  )
 }
 
 /**
@@ -992,6 +1112,9 @@ export function spliceDemo(body, demoText) {
 
   if (sections.length === 1) {
     const [section] = sections
+    if (endsInOpenBlock(scan, section)) {
+      return { kind: 'unterminated-region', region: scan.endState, ...base }
+    }
     const heading = scan.lines[section.headingLine]
     const content = demo.section.slice(demo.scan.lines[0].next)
     const suffix = body.slice(offsetOfLine(scan, section.contentEnd))
@@ -1080,6 +1203,9 @@ export function extractDemo(body) {
     return { kind: 'absent', ...base }
   }
   const [section] = sections
+  if (endsInOpenBlock(scan, section)) {
+    return { kind: 'unterminated-region', region: scan.endState, ...base }
+  }
   return {
     kind: 'extracted',
     section: body.slice(
@@ -1143,7 +1269,7 @@ function parseManagedUrl(url, headRepo) {
 /**
  * Every http(s) URL in lines that render, in order: managed ones with the
  * absolute offset of their ref, and a count of all the others. URLs in fenced
- * code and HTML comments are not embeds, so they count as neither.
+ * code and raw HTML blocks are not embeds, so they count as neither.
  * @param {string} body
  * @param {string} headRepo
  */
@@ -1152,7 +1278,7 @@ function scanUrls(body, headRepo) {
   const managed = []
   let ignored = 0
   scan.lines.forEach((line, index) => {
-    if (scan.kinds[index] === 'fence' || scan.kinds[index] === 'comment') {
+    if (HIDDEN_KINDS.has(scan.kinds[index])) {
       return
     }
     for (const match of line.text.matchAll(URL_CANDIDATE)) {
@@ -1380,6 +1506,17 @@ function parseNulList(output) {
  * @param {string} file
  */
 function newestCommitFor(ctx, headOid, file) {
+  return newestCommitForPaths(ctx, headOid, [file])
+}
+
+/**
+ * The newest commit reachable from the head that added or modified any of the
+ * paths, chosen the way `newestCommitFor` chooses for one.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} headOid
+ * @param {string[]} files
+ */
+function newestCommitForPaths(ctx, headOid, files) {
   const result = runGit(ctx, 'newest-commit', [
     'log',
     '--topo-order',
@@ -1390,7 +1527,7 @@ function newestCommitFor(ctx, headOid, file) {
     '--format=%H',
     headOid,
     '--',
-    file,
+    ...files,
   ])
   const first = firstLine(result.stdout)
   return COMMIT_SHA.test(first) ? first : null
@@ -1505,6 +1642,95 @@ function pinsReport(ctx, input) {
   }
   const stale = entries.some((entry) => entry.state === 'stale')
   return outcome('pins', 0, stale ? 'repin-needed' : 'already-valid', parts)
+}
+
+// ── pins: select ─────────────────────────────────────────────────────────
+
+/**
+ * The Demo text for the selected pins: the heading, then one embed per path
+ * in the order the caller listed them. The caption is the file stem.
+ * @param {'raw' | 'blob'} form
+ * @param {string} headRepo
+ * @param {Array<[string, string]>} chosen path and pin pairs, in order
+ */
+function demoText(form, headRepo, chosen) {
+  let text = '## Demo\n'
+  for (const [file, pin] of chosen) {
+    const url =
+      form === 'raw'
+        ? `https://raw.githubusercontent.com/${headRepo}/${pin}/${file}`
+        : `https://github.com/${headRepo}/blob/${pin}/${file}?raw=true`
+    text += `\n![${path.basename(file, path.extname(file))}](${url})\n`
+  }
+  return text
+}
+
+/**
+ * Picks, for each path, the commit to embed: the newest add-or-modify commit
+ * on the head, chosen as `pins` chooses it. The blob at that commit must be
+ * the blob the caller expects (the `blob_sha` that classify reported), or the
+ * run stops: a pin that serves other bytes would pass a check that looks only
+ * at the content type. On success the Demo text is written to `out_file`.
+ * @param {Parameters<typeof runGit>[0] & { reached: { step: string, paths_done: number, paths_total: number } }} ctx
+ * @param {{ headOid?: string, expected: Map<string, string>, headRepo: string, form: 'raw' | 'blob', outFile: string }} input
+ */
+function selectReport(ctx, input) {
+  locateRepo(ctx)
+  const headOid = resolveCommit(ctx, 'resolve-head', input.headOid ?? 'HEAD')
+  if (headOid === null) {
+    return outcome('pins', 1, 'head-not-found')
+  }
+  const chosen = []
+  const unresolved = []
+  const mismatched = []
+  for (const [file, expectedBlob] of input.expected) {
+    const pin = newestCommitFor(ctx, headOid, file)
+    ctx.reached.paths_done += 1
+    if (pin === null) {
+      unresolved.push(file)
+      continue
+    }
+    const blob = resolveObject(ctx, 'pin-blob', `${pin}:${file}`)
+    if (blob === null) {
+      throw gitFailure('git-failed', 1)
+    }
+    chosen.push([file, pin])
+    if (blob !== expectedBlob) {
+      mismatched.push({
+        path: file,
+        pin,
+        blob_sha: blob,
+        expected_blob_sha: expectedBlob,
+      })
+    }
+  }
+  const parts = {
+    head: headOid,
+    pins: Object.fromEntries(chosen),
+    unresolved_paths: unresolved,
+    mismatched,
+  }
+  if (unresolved.length > 0) {
+    return outcome('pins', 1, 'unresolved', parts)
+  }
+  if (mismatched.length > 0) {
+    return outcome('pins', 1, 'pin-mismatch', parts)
+  }
+  const evidence = newestCommitForPaths(ctx, headOid, [
+    ...input.expected.keys(),
+  ])
+  if (evidence === null) {
+    throw gitFailure('git-failed', 1)
+  }
+  const written = writeBody(
+    'pins',
+    input.outFile,
+    demoText(input.form, input.headRepo, chosen),
+    { ...parts, evidence_sha: evidence },
+  )
+  return 'exitCode' in written
+    ? written
+    : outcome('pins', 0, 'selected', written)
 }
 
 // ── cleanup-set ────────────────────────────────────────────────────────────
@@ -1754,6 +1980,7 @@ function judgeResponse(response) {
  * @property {number} totalBudgetMs
  * @property {number} firstStep Where in `scheduleMs` the first wait falls.
  * @property {() => number} now
+ * @property {() => number} epochNow Milliseconds since the epoch, for the deadlines that pass between calls.
  * @property {number} start The `now()` reading when the call began.
  */
 
@@ -1872,19 +2099,27 @@ function delayAt(schedule, index) {
 }
 
 /**
+ * `resumeAt` is the epoch deadline before which no request may be sent for
+ * this URL, set when a Retry-After outlasts the call. It is reported only on a
+ * failure that can still be retried.
  * @param {string} url
  * @param {{ status: string, httpStatus: number | null, retryAfterMs?: number }} seen
  * @param {number} attempts
  * @param {boolean} budgetLeft
+ * @param {number} [resumeAt]
  */
-function verdict(url, seen, attempts, budgetLeft) {
-  return {
+function verdict(url, seen, attempts, budgetLeft, resumeAt) {
+  const retryable = RETRYABLE_STATUSES.has(seen.status) && budgetLeft
+  const report = {
     url,
     status: seen.status,
     http_status: seen.httpStatus,
     attempts,
-    retryable: RETRYABLE_STATUSES.has(seen.status) && budgetLeft,
+    retryable,
   }
+  return retryable && resumeAt !== undefined
+    ? { ...report, resume_at: resumeAt }
+    : report
 }
 
 /**
@@ -1912,7 +2147,13 @@ async function verifyOne(url, ctx) {
     const elapsed = ctx.now() - ctx.start
     if (attempts >= ctx.maxAttempts || elapsed + delay > ctx.callLimitMs) {
       const budgetLeft = ctx.waitedMs + elapsed + delay <= ctx.totalBudgetMs
-      return verdict(url, seen, attempts, budgetLeft)
+      // The call ends here, so a cooldown the server asked for would not be
+      // served by it. The deadline goes to the next call, which sleeps first.
+      const resumeAt =
+        (seen.retryAfterMs ?? 0) > 0
+          ? ctx.epochNow() + seen.retryAfterMs
+          : undefined
+      return verdict(url, seen, attempts, budgetLeft, resumeAt)
     }
     await ctx.sleep(delay)
     step += 1
@@ -1924,6 +2165,42 @@ async function verifyOne(url, ctx) {
       return verdict(url, seen, attempts, budgetLeft)
     }
   }
+}
+
+/**
+ * Serves the cooldown a previous call was handed: sleeps until `resumeAtMs`
+ * before the first request, within this call's own limit. Returns null when
+ * the first request may go out. Otherwise no request is sent, and the verdicts
+ * say so (`rate-limited`, no attempt): when the deadline lies past the total
+ * budget they cannot be retried, and when it lies past this call the same
+ * deadline is handed on.
+ * @param {readonly string[]} urls
+ * @param {VerifyContext} ctx
+ * @param {number} resumeAtMs
+ */
+async function serveCooldown(urls, ctx, resumeAtMs) {
+  const wait = Math.max(0, resumeAtMs - ctx.epochNow())
+  const unsent = (budgetLeft, resumeAt) =>
+    urls.map((url) =>
+      verdict(
+        url,
+        { status: 'rate-limited', httpStatus: null },
+        0,
+        budgetLeft,
+        resumeAt,
+      ),
+    )
+  if (ctx.waitedMs + wait > ctx.totalBudgetMs) {
+    return unsent(false)
+  }
+  if (wait > ctx.callLimitMs) {
+    await ctx.sleep(ctx.callLimitMs)
+    return unsent(true, resumeAtMs)
+  }
+  if (wait > 0) {
+    await ctx.sleep(wait)
+  }
+  return null
 }
 
 /**
@@ -1961,11 +2238,16 @@ export async function verifyUrls(urls, options = {}) {
     totalBudgetMs,
     firstStep: scheduleStart(scheduleMs, waitedMs),
     now,
+    epochNow: options.epochNow ?? (() => Date.now()),
     start: now(),
   }
-  const results = await Promise.all(
-    [...new Set(urls)].map((url) => verifyOne(url, ctx)),
-  )
+  const unique = [...new Set(urls)]
+  const deferred =
+    options.resumeAtMs === undefined
+      ? null
+      : await serveCooldown(unique, ctx, options.resumeAtMs)
+  const results =
+    deferred ?? (await Promise.all(unique.map((url) => verifyOne(url, ctx))))
   return { results, waitedMs: now() - ctx.start }
 }
 
@@ -2075,7 +2357,8 @@ function parseInput(raw) {
  * removed, digest-mismatch, head-not-found, base-not-found, no-merge-base,
  * head-not-checked-out, git-failed, git-timeout, verified or failed, and
  * `asks` carries the
- * question when it is needs-input.
+ * question when it is needs-input. `pins` with `select` adds selected and
+ * pin-mismatch.
  * @param {string} operation
  * @param {number} exitCode
  * @param {string} result
@@ -2246,6 +2529,11 @@ function runExtract(raw) {
         ...report,
         asks: [{ code: 'multiple-demo-sections', count: result.demoCount }],
       })
+    case 'unterminated-region':
+      return outcome('extract', 1, 'needs-input', {
+        ...report,
+        asks: [{ code: 'unterminated-region', kind: result.region }],
+      })
     case 'absent':
       return outcome('extract', 0, 'absent', report)
     default: {
@@ -2331,6 +2619,9 @@ function parsePinsInput(raw) {
   if (!isPlainObject(raw)) {
     return invalid('invalid-input', 'input')
   }
+  if (raw.select !== undefined) {
+    return parseSelectInput(raw)
+  }
   if (
     typeof raw.head_ref_oid !== 'string' ||
     !COMMIT_SHA.test(raw.head_ref_oid)
@@ -2369,6 +2660,64 @@ function parsePinsInput(raw) {
     input: {
       headOid: raw.head_ref_oid,
       paths,
+      timeoutMs: raw.git_timeout_ms ?? DEFAULT_GIT_TIMEOUT_MS,
+    },
+  }
+}
+
+/**
+ * The `select` form of `pins`: `urls` and `select` are alternatives, and
+ * `head_ref_oid` is optional (the checked-out HEAD is used without it).
+ * @param {Record<string, unknown>} raw
+ */
+function parseSelectInput(raw) {
+  if (raw.urls !== undefined) {
+    return invalid('invalid-input', 'select')
+  }
+  if (
+    raw.head_ref_oid !== undefined &&
+    !(typeof raw.head_ref_oid === 'string' && COMMIT_SHA.test(raw.head_ref_oid))
+  ) {
+    return invalid('invalid-input', 'head_ref_oid')
+  }
+  if (!isGitTimeout(raw.git_timeout_ms)) {
+    return invalid('invalid-input', 'git_timeout_ms')
+  }
+  if (!isHeadRepo(raw.head_repo)) {
+    return invalid('invalid-input', 'head_repo')
+  }
+  if (raw.form !== 'raw' && raw.form !== 'blob') {
+    return invalid('invalid-input', 'form')
+  }
+  if (!isPathString(raw.out_file)) {
+    return invalid('invalid-input', 'out_file')
+  }
+  if (!Array.isArray(raw.select) || raw.select.length === 0) {
+    return invalid('invalid-input', 'select')
+  }
+  const expected = new Map()
+  for (const item of raw.select) {
+    if (
+      !isPlainObject(item) ||
+      typeof item.path !== 'string' ||
+      !MANAGED_PATH.test(item.path) ||
+      typeof item.blob_sha !== 'string' ||
+      !COMMIT_SHA.test(item.blob_sha) ||
+      expected.has(item.path)
+    ) {
+      return invalid('invalid-input', 'select')
+    }
+    expected.set(item.path, item.blob_sha)
+  }
+  return {
+    ok: true,
+    input: {
+      select: true,
+      headOid: raw.head_ref_oid,
+      expected,
+      headRepo: raw.head_repo,
+      form: raw.form,
+      outFile: raw.out_file,
       timeoutMs: raw.git_timeout_ms ?? DEFAULT_GIT_TIMEOUT_MS,
     },
   }
@@ -2436,11 +2785,12 @@ function runPins(raw) {
     return usageError('pins', parsed.error, parsed.field)
   }
   const { input } = parsed
+  const total = input.select ? input.expected.size : input.paths.size
   return withGit(
     'pins',
     input.timeoutMs,
-    { paths_done: 0, paths_total: input.paths.size },
-    (ctx) => pinsReport(ctx, input),
+    { paths_done: 0, paths_total: total },
+    (ctx) => (input.select ? selectReport(ctx, input) : pinsReport(ctx, input)),
   )
 }
 
@@ -2509,6 +2859,12 @@ function parseVerifyInput(raw) {
   ) {
     return invalid('invalid-input', 'waited_s')
   }
+  if (
+    raw.resume_at !== undefined &&
+    !(Number.isSafeInteger(raw.resume_at) && raw.resume_at > 0)
+  ) {
+    return invalid('invalid-input', 'resume_at')
+  }
   if (raw.head_repo !== undefined && !isHeadRepo(raw.head_repo)) {
     return invalid('invalid-input', 'head_repo')
   }
@@ -2541,6 +2897,7 @@ function parseVerifyInput(raw) {
       maxWaitS: raw.max_wait_s,
       requestTimeoutS: raw.request_timeout_s,
       waitedS: raw.waited_s,
+      resumeAt: raw.resume_at,
     },
   }
 }
@@ -2569,6 +2926,7 @@ export async function runVerify(raw, options = {}) {
       ? {}
       : { requestTimeoutMs: input.requestTimeoutS * 1000 }),
     ...(input.waitedS === undefined ? {} : { waitedMs: input.waitedS * 1000 }),
+    ...(input.resumeAt === undefined ? {} : { resumeAtMs: input.resumeAt }),
   })
   const failed = results.filter((entry) => entry.status !== 'ok')
   return outcome(
@@ -2582,10 +2940,21 @@ export async function runVerify(raw, options = {}) {
       // caller passes the latest report's value on unchanged.
       waited_s: Math.ceil(((input.waitedS ?? 0) * 1000 + waitedMs) / 1000),
       retryable: failed.some((entry) => entry.retryable),
+      // The latest deadline of any failure that can still be retried: no
+      // request may go out before it. The next call passes it back as is.
+      ...resumeField(failed),
       results,
       failed,
     },
   )
+}
+
+/** @param {Array<{ retryable: boolean, resume_at?: number }>} failed */
+function resumeField(failed) {
+  const deadlines = failed
+    .filter((entry) => entry.retryable && entry.resume_at !== undefined)
+    .map((entry) => entry.resume_at)
+  return deadlines.length === 0 ? {} : { resume_at: Math.max(...deadlines) }
 }
 
 const OPERATIONS = {

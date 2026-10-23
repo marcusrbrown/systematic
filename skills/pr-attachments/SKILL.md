@@ -12,6 +12,8 @@ Publish local images as commit-pinned embeds in a managed `## Demo` section of a
 
 The images are committed under `docs/evidence/<topic>/` on the PR head branch and linked by commit SHA. Cleanup removes them from the branch once the PR is done. This skill does not capture screenshots.
 
+The managed section starts at a `## Demo` heading at column 0. A `## Demo` line that is indented, or that sits inside a code fence, a quote, a comment or a `<pre>`, `<script>`, `<style>` or `<textarea>` block, is text and not the section. The helper never replaces or copies it, and it never removes a line outside the section.
+
 | Mode | Trigger | Writes the description |
 |---|---|---|
 | PR mode | An open PR and image paths | Yes |
@@ -220,13 +222,13 @@ Check every destination, new and reused:
 
 ```bash
 set -- "<destination 1>" "<destination 2>";
-for DEST in "$@"; do git check-ignore -- "$DEST"; git check-attr filter -- "$DEST" | grep -v ': unspecified$'; git status --porcelain --untracked-files=all -- "$DEST"; done
+for DEST in "$@"; do git check-ignore -- "$DEST"; git check-attr text eol filter -- "$DEST" | grep -Ev ': (text: (unspecified|unset|auto)|eol: unspecified|filter: unspecified)$'; git status --porcelain --untracked-files=all -- "$DEST"; done
 ```
 
 Any output stops the run. In embed mode the reason is `destination-blocked`:
 
 - `git check-ignore` printed the path: the destination is gitignored, so stop and never force-add.
-- `git check-attr` printed a filter: an LFS or other filter applies. Stop.
+- `git check-attr` printed a line: a git attribute would rewrite the bytes when they are staged. A `filter` (LFS or another) does, and so does an `eol` setting or a `text` that is set, such as `docs/evidence/** text eol=lf`, because git then normalizes the line endings and the committed file is no longer the approved image. Stop, and name the attribute. An unset `text` (`-text`, `binary`) and `text=auto` pass. With `auto`, git treats a real image as binary, because image files hold NUL bytes, and leaves it alone. The checks of the staged and the committed blob below catch what this rule cannot see, such as `core.autocrlf`.
 - `git status` printed a line: the destination holds uncommitted content. Stop.
 
 Copy each new entry. The copy leaves the original in place. Before each copy, recompute the git blob SHA of the source from its raw bytes and compare it with the `blob_sha` that classify reported, as shown in the Step 5 list. When the SHA differs, the file changed after the list was shown and confirmed, so stop and copy nothing. In embed mode the reason is `source-changed`. `--no-filters` makes git hash the raw bytes, which is how the helper computes `blob_sha`, so a text or LFS filter cannot change the result.
@@ -242,10 +244,33 @@ if [ "$(git hash-object --no-filters -- "$SRC")" = "$BLOB_SHA" ]; then mkdir -p 
 
 Stage and commit only the new destinations. A pathspec commit leaves other staged work out of the commit. Never pass `--no-verify`; a failing hook stops the run.
 
+Stage the destinations:
+
+```bash
+set -- "<destination 1>" "<destination 2>";
+git add -- "$@"
+```
+
+Staging can change bytes: a `.gitattributes` text, eol or filter setting, or `core.autocrlf`, normalizes the file as it goes in. The copy check passed on the source, so check what is staged. Each item is a destination and the `blob_sha` that classify reported for it, as shown in the Step 5 list:
+
+```bash
+set -- "<destination 1> <blob_sha 1>" "<destination 2> <blob_sha 2>";
+FAILED=0
+for ITEM in "$@"; do
+  DEST="${ITEM% *}"; EXPECTED="${ITEM##* }"
+  ACTUAL="$(git rev-parse ":$DEST")"
+  [ "$ACTUAL" = "$EXPECTED" ] || { echo "blob-mismatch staged $DEST ${ACTUAL:-none}"; FAILED=1; }
+done
+test "$FAILED" = 0
+```
+
+Exit 0 passes. A `blob-mismatch` line means that git changed the bytes while staging. Unstage the paths with the recovery below, commit nothing and stop. Say that the likely cause is a `.gitattributes` text, eol or filter setting, or `core.autocrlf`. In embed mode the reason is `blob-mismatch`.
+
+Commit the staged destinations:
+
 ```bash
 TOPIC="<topic slug>";
 set -- "<destination 1>" "<destination 2>";
-git add -- "$@"
 git commit -m "chore(evidence): add screenshots for $TOPIC" -- "$@"
 ```
 
@@ -258,6 +283,21 @@ test -z "$(git diff --cached --name-only -- "$@")"
 ```
 
 Exit 0 means that none of the paths is staged. A failed cleanup commit uses the same recovery.
+
+A hook can also change the content during the commit, so check the committed blobs against the same list:
+
+```bash
+set -- "<destination 1> <blob_sha 1>" "<destination 2> <blob_sha 2>";
+FAILED=0
+for ITEM in "$@"; do
+  DEST="${ITEM% *}"; EXPECTED="${ITEM##* }"
+  ACTUAL="$(git rev-parse "HEAD:$DEST")"
+  [ "$ACTUAL" = "$EXPECTED" ] || { echo "blob-mismatch committed $DEST ${ACTUAL:-none}"; FAILED=1; }
+done
+test "$FAILED" = 0
+```
+
+On a `blob-mismatch` line, do not push. The altered image is in a local commit. Leave the commit as it is and report the state: the evidence commit is local, and it holds a blob that differs from the approved one. In embed mode the reason is `blob-mismatch`, and the evidence commit is local.
 
 ### Assert the committed file set
 
@@ -312,23 +352,34 @@ Make the temp files. Each is created with mode 0600. Note the three paths:
 for NAME in demo backup new-body; do printf '%s %s\n' "$NAME" "$(mktemp)"; done
 ```
 
-### Public repositories: the raw form
+### Select the pins and write the Demo text
 
-Build the Demo text from the pins git reports. Never retype or transcribe a SHA by hand. The block prints the evidence commit SHA, which is the newest commit that added or changed any of these files:
+PR mode and embed mode only. Every pin the skill embeds comes from the helper. Never choose a pin with `git log` and never retype or transcribe a SHA by hand. For each destination the helper picks the newest commit on `HEAD` that added or changed the file, counting a merge that resolved it. It then checks that the blob at that pin is the `blob_sha` that classify reported for the destination, and writes the Demo text to the Demo file. The form is `raw` for a public repository and `blob` for every other repository.
+
+Send one `select` item for every destination, new and reused, in the order the images should appear:
 
 ```bash
-DEMO_FILE="<demo file>";
-OWNER_REPO="<owner/repo of the head repository>";
-set -- "<destination 1>" "<destination 2>";
-printf '## Demo\n' > "$DEMO_FILE"
-for DEST in "$@"; do PIN="$(git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD -- "$DEST")"; printf '\n![%s](https://raw.githubusercontent.com/%s/%s/%s)\n' "$(basename "${DEST%.*}")" "$OWNER_REPO" "$PIN" "$DEST" >> "$DEMO_FILE"; done
-git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD -- "$@"
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/pr-attachments.mjs" pins <<'JSON'
+{"select": [{"path": "<destination 1>", "blob_sha": "<blob_sha 1>"}, {"path": "<destination 2>", "blob_sha": "<blob_sha 2>"}], "head_repo": "<owner/repo of the head repository>", "form": "<raw or blob>", "out_file": "<demo file>"}
+JSON
 ```
 
-List the URLs to verify, from the file that is about to be written:
+- `selected` (exit 0): the Demo file is written. `evidence_sha` is the newest commit that added or changed any of these files. Copy it for the status line.
+- `pin-mismatch` (exit 1): at a chosen pin, the blob of a destination differs from its `blob_sha`. Read `mismatched`. The Demo file is not written. Stop: the pushed image is not the approved one. In embed mode the reason is `pin-mismatch`.
+- `unresolved` (exit 1): no commit on `HEAD` added a destination, so there is no pin to embed. Treat it as a `pin-mismatch`, and name `unresolved_paths`.
+- `head-not-found`, `git-failed` or `git-timeout` (exit 1): stop and report `reached`. In embed mode the reason is `git-failed`.
+- `usage-error` (exit 2): stop. In embed mode the reason is `helper-failed`.
+
+Never write the description, and never return the Demo file, after a stop here. The evidence commit is pushed and unreferenced. In PR mode say: the evidence commit is pushed, the description is not written, and a re-run retries and reuses the pushed commit.
+
+### Public repositories: the raw form
+
+List the URLs to verify, from the Demo file that the helper wrote:
 
 ```bash
-FILE="<Demo file, or the new body file in Re-pin mode>";
+FILE="<Demo file, the new body file in Re-pin mode, or the backup file after an already-valid result>";
 OWNER_REPO="<owner/repo of the head repository>";
 grep -Eo "https://raw\.githubusercontent\.com/$OWNER_REPO/[0-9a-f]{40}/docs/evidence/[a-z0-9._/-]+" "$FILE" | sort -u
 ```
@@ -346,7 +397,9 @@ JSON
 Route the result:
 
 - `verified` (exit 0): every embed serves an image. Continue.
-- `failed` (exit 1): read `failed`. Report each failing URL with its `status` and `http_status`. If the top-level `retryable` is true, call again with the same URLs and `waited_s` set to the `waited_s` of the latest report, unchanged. That value is already the running total of all calls. Stop once `retryable` is false.
+- `failed` (exit 1): read `failed`. Report each failing URL with its `status` and `http_status`. If the top-level `retryable` is true, call again with the same URLs and `waited_s` set to the `waited_s` of the latest report, unchanged. That value is already the running total of all calls. When the latest report has a `resume_at`, add `"resume_at"` to the JSON and set it to that value, unchanged. Stop once `retryable` is false.
+
+  `resume_at` is an epoch-millisecond deadline. A 429 with a Retry-After longer than one call sets it, because the helper keeps no state and a new call would otherwise send a request at once. The call that gets it sleeps until `resume_at` before its first request, within its own `max_wait_s`, and counts the sleep in `waited_s`, so no request goes out before the deadline. Omit `resume_at` on the first call and when the latest report has none. Never compute, edit or drop it. A `resume_at` past the 300 s total ends the run: `retryable` is false.
 - `usage-error` (exit 2) with `blob-url`: a blob-form URL never goes to this call, so stop.
 - Any other `usage-error`: stop.
 
@@ -358,21 +411,10 @@ Never write the description, and never return the Demo file, when verification f
 
 ### Private repositories: the blob form
 
-Build the Demo text from the pins git reports, in the blob form. Never retype or transcribe a SHA by hand. The block prints the evidence commit SHA, which is the newest commit that added or changed any of these files:
+The Demo text is written in the blob form by the pin selection above. List the URLs to check, from the Demo file that the helper wrote:
 
 ```bash
-DEMO_FILE="<demo file>";
-OWNER_REPO="<owner/repo of the head repository>";
-set -- "<destination 1>" "<destination 2>";
-printf '## Demo\n' > "$DEMO_FILE"
-for DEST in "$@"; do PIN="$(git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD -- "$DEST")"; printf '\n![%s](https://github.com/%s/blob/%s/%s?raw=true)\n' "$(basename "${DEST%.*}")" "$OWNER_REPO" "$PIN" "$DEST" >> "$DEMO_FILE"; done
-git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD -- "$@"
-```
-
-List the URLs to check, from the file that is about to be written:
-
-```bash
-FILE="<Demo file, or the new body file in Re-pin mode>";
+FILE="<Demo file, the new body file in Re-pin mode, or the backup file after an already-valid result>";
 OWNER_REPO="<owner/repo of the head repository>";
 grep -o -E "https://github\.com/$OWNER_REPO/blob/[0-9a-f]{40}/docs/evidence/[a-z0-9._/-]+\?raw=true" "$FILE" | sort -u
 ```
@@ -436,7 +478,7 @@ Route the result:
 - `spliced` (exit 0): read `action`. `appended` and `replaced` continue. On `replaced`, tell the user the old Demo section is replaced and the backup holds it. On `unchanged`, the description already holds this Demo text: write nothing and go to Cleanup.
 - `needs-input` (exit 1): read `asks` and stop. Write nothing.
   - `multiple-demo-sections`: the description has more than one `## Demo` section. Ask the user which to keep.
-  - `unterminated-region`: an unclosed code fence or comment would swallow the section. Ask the user to close it.
+  - `unterminated-region`: a code fence (also one inside a list item or a quote), a comment, or a `<pre>`, `<script>`, `<style>` or `<textarea>` block is never closed. It would swallow the section, or it sits inside the existing Demo section so that the end of that section is unknown. Nothing is replaced. Ask the user to close it.
   - `line-ending-conflict`: the Demo text and the description use different line endings at the join. Ask the user.
 - `write-failed` (exit 1): the output file could not be written. Stop.
 - `usage-error` (exit 2): stop.
@@ -477,7 +519,7 @@ pr-attachments: status=ok evidence_sha=<40-hex> demo_file=<path> images=<count>
 pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>
 ```
 
-- `evidence_sha` is the SHA the Step 7 Demo block printed. Copy it.
+- `evidence_sha` is the SHA that the pin selection in Step 7 reported. Copy it.
 - `evidence` is `pushed` once the push landed, `local` when the evidence commit exists only on this machine (it was committed, but the push did not land), and `none` otherwise. A failed line never comes with a Demo file.
 - `reason` comes from this table. Every embed-mode stop has exactly one row:
 
@@ -495,12 +537,14 @@ pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>
 | The user declines the private-repository question or the scrub | `declined` |
 | The push target is the default branch | `default-branch` |
 | A destination is gitignored | `destination-blocked` |
-| A destination has an LFS or other filter | `destination-blocked` |
+| A destination has an LFS filter, or an `eol` or `text` attribute that rewrites bytes | `destination-blocked` |
 | A destination holds uncommitted content | `destination-blocked` |
 | A source file changed since classify | `source-changed` |
 | A hook rejects the evidence commit, or the commit fails | `commit-failed` |
+| A staged or committed blob differs from the one classify reported | `blob-mismatch` |
 | The committed file set differs from the destinations | `file-set-mismatch` |
 | The push is rejected, or exits non-zero and the remote does not hold `HEAD` | `push-rejected` |
+| The pin chosen for a destination is missing, or its blob differs from the one classify reported | `pin-mismatch` |
 | An embed does not serve the image, or its blob check fails | `verify-failed` |
 
 ## Carry mode
@@ -531,7 +575,7 @@ Route the result:
 
 - `extracted` (exit 0): continue.
 - `absent` (exit 0): the old description has no Demo section, so there is nothing to carry; leave the new file untouched, remove the demo file and finish with `status=absent`, which is not a failure.
-- `needs-input` (exit 1) with `multiple-demo-sections`: the old description has more than one `## Demo` section. Finish with `status=failed`.
+- `needs-input` (exit 1): the old file is untouched and nothing is copied. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the old description has more than one `## Demo` section) or `unterminated-region` (an unclosed block sits inside its Demo section, so where that section ends is unknown).
 - `write-failed` (exit 1): finish with `status=failed`.
 - `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
 
@@ -548,7 +592,7 @@ node -e 'process.stdout.write(JSON.stringify({body: require("fs").readFileSync(p
 Route the result:
 
 - `spliced` (exit 0): `appended`, `replaced` and `unchanged` all finish with `status=ok`.
-- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence or comment would swallow the section) or `line-ending-conflict` (the two texts use different line endings at the join).
+- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence, comment or HTML block would swallow the section) or `line-ending-conflict` (the two texts use different line endings at the join).
 - `write-failed` (exit 1): finish with `status=failed`. The new file may be partly written, so the caller discards it.
 - `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
 
@@ -602,7 +646,7 @@ node "$SKILL_DIR/scripts/pr-attachments.mjs" pins <<'JSON'
 JSON
 ```
 
-- `already-valid` (exit 0): report already valid. Write nothing. Go to Cleanup.
+- `already-valid` (exit 0): write nothing. The pins were checked only against local git, so verify the embed URLs that the description holds before Cleanup. Read them from the backup file made above, and use the same checks as in Step 7: a public repository uses "Public repositories: the raw form", and any other repository uses "Private repositories: the blob form" with `local` as the expected SHA of every URL. If a check fails, report each failure, write nothing and do not offer Cleanup. If every check passes, report already valid and go to Cleanup.
 - `repin-needed` (exit 0): continue with the `pins` map.
 - `partial` (exit 1): report partial and name `unresolved_paths`. Write nothing yet. Then offer the next actions: re-pin the resolved paths, which still writes only the resolved ones through the normal write guard, or re-add the missing images in PR mode. If the user chooses to re-pin the resolved paths, continue with the `pins` map.
 - `unresolved` (exit 1): no managed path ever existed on the head. Stop and point to PR mode: re-run with image paths.
