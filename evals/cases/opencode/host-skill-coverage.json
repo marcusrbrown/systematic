@@ -22,6 +22,7 @@
     "git-worktree",
     "onboarding",
     "orchestrating-subagents",
+    "pr-attachments",
     "reproduce-bug",
     "resolve-pr-feedback",
     "test-browser",

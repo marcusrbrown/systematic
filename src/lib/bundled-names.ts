@@ -109,6 +109,7 @@ export const BUNDLED_SKILL_NAMES = [
   'lfg',
   'onboarding',
   'orchestrating-subagents',
+  'pr-attachments',
   'report-bug-ce',
   'reproduce-bug',
   'resolve-pr-feedback',

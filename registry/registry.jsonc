@@ -465,6 +465,15 @@
       "files": ["skills/orchestrating-subagents/SKILL.md"]
     },
     {
+      "name": "pr-attachments",
+      "type": "skill",
+      "description": "Use when attaching local screenshots or other images to a pull request, publishing evidence images as commit-pinned embeds in a managed Demo section of the PR description, re-pinning those embeds after a rebase or force-push, or cleaning up evidence images once the PR is done.",
+      "files": [
+        "skills/pr-attachments/SKILL.md",
+        "skills/pr-attachments/scripts/pr-attachments.mjs"
+      ]
+    },
+    {
       "name": "report-bug-ce",
       "type": "skill",
       "description": "Use this skill when a user needs to report a bug in the Systematic plugin with complete reproduction details and environment data, then open a GitHub issue directly from the CLI.",
@@ -569,6 +578,7 @@
         "lfg",
         "onboarding",
         "orchestrating-subagents",
+        "pr-attachments",
         "report-bug-ce",
         "reproduce-bug",
         "resolve-pr-feedback",

@@ -1937,6 +1937,7 @@
           "lfg",
           "onboarding",
           "orchestrating-subagents",
+          "pr-attachments",
           "report-bug-ce",
           "reproduce-bug",
           "resolve-pr-feedback",
