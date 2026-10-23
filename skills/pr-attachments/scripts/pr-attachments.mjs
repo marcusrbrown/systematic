@@ -27,8 +27,10 @@
 //   topic        optional user-supplied topic; wins over `branch`
 //   existing     optional map of destination path -> git blob SHA already
 //                present at that path on the head commit
-//   max_bytes    optional size limit, default 100 MiB (injectable for tests)
-//   warn_bytes   optional soft size, default 10 MiB (injectable for tests)
+//   max_bytes    optional size limit, default 10 MiB (injectable for tests).
+//                GitHub serves a PNG as image/png up to exactly 10 MiB and as
+//                application/octet-stream from one byte more, so a larger file
+//                is rejected as `too-large` before anything is published.
 //
 // splice puts a `## Demo` section into a PR body, replacing the one that is
 // there or appending one, and leaves every byte outside it identical.
@@ -157,8 +159,8 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const SCHEMA_VERSION = 1
-const DEFAULT_MAX_BYTES = 100 * 1024 * 1024
-const DEFAULT_WARN_BYTES = 10 * 1024 * 1024
+// The largest file raw.githubusercontent.com serves with an image type.
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 const MAX_SLUG_LENGTH = 60
 const EVIDENCE_ROOT = 'docs/evidence'
 const SVG_MESSAGE = 'SVG is not supported by this skill'
@@ -318,10 +320,10 @@ function readCandidate(source, maxBytes) {
 
 /**
  * @param {string} source
- * @param {{ maxBytes: number, warnBytes: number }} limits
+ * @param {number} maxBytes
  */
-function inspectFile(source, limits) {
-  const candidate = readCandidate(source, limits.maxBytes)
+function inspectFile(source, maxBytes) {
+  const candidate = readCandidate(source, maxBytes)
   if (!candidate.ok) {
     return { source, rejection: candidate.reason }
   }
@@ -337,7 +339,7 @@ function inspectFile(source, limits) {
     type,
     bytes: candidate.bytes.length,
     blobSha: blobSha(candidate.bytes),
-    warnings: fileWarnings(source, type, candidate.bytes, limits),
+    warnings: fileWarnings(source, type, candidate.bytes),
   }
 }
 
@@ -345,16 +347,12 @@ function inspectFile(source, limits) {
  * @param {string} source
  * @param {string} type
  * @param {Buffer} bytes
- * @param {{ warnBytes: number }} limits
  */
-function fileWarnings(source, type, bytes, limits) {
+function fileWarnings(source, type, bytes) {
   const warnings = []
   const trailing = trailingBytes(type, bytes)
   if (trailing > 0) {
     warnings.push({ source, code: 'trailing-data', bytes: trailing })
-  }
-  if (bytes.length > limits.warnBytes) {
-    warnings.push({ source, code: 'large-file', bytes: bytes.length })
   }
   return warnings
 }
@@ -527,12 +525,12 @@ function webpTrailing(bytes) {
  *   topic?: string,
  *   existing: Record<string, string>,
  *   maxBytes: number,
- *   warnBytes: number,
  * }} input
  */
 export function classify(input) {
-  const limits = { maxBytes: input.maxBytes, warnBytes: input.warnBytes }
-  const inspected = input.paths.map((source) => inspectFile(source, limits))
+  const inspected = input.paths.map((source) =>
+    inspectFile(source, input.maxBytes),
+  )
   const warnings = inspected.flatMap((file) => file.warnings ?? [])
 
   const topicSource =
@@ -1873,7 +1871,7 @@ function parseInput(raw) {
   if (!isPlainObject(raw)) {
     return { ok: false, error: 'invalid-input' }
   }
-  const { paths, branch, topic, existing, max_bytes, warn_bytes } = raw
+  const { paths, branch, topic, existing, max_bytes } = raw
   if (!Array.isArray(paths) || paths.length === 0) {
     return { ok: false, error: 'empty-paths' }
   }
@@ -1902,10 +1900,8 @@ function parseInput(raw) {
   ) {
     return { ok: false, error: 'invalid-input' }
   }
-  for (const limit of [max_bytes, warn_bytes]) {
-    if (limit !== undefined && !isPositiveInteger(limit)) {
-      return { ok: false, error: 'invalid-input' }
-    }
+  if (max_bytes !== undefined && !isPositiveInteger(max_bytes)) {
+    return { ok: false, error: 'invalid-input' }
   }
   return {
     ok: true,
@@ -1915,7 +1911,6 @@ function parseInput(raw) {
       topic,
       existing: existing ?? {},
       maxBytes: max_bytes ?? DEFAULT_MAX_BYTES,
-      warnBytes: warn_bytes ?? DEFAULT_WARN_BYTES,
     },
   }
 }

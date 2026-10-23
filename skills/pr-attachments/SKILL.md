@@ -88,8 +88,8 @@ If any destination exists, run classify again with `"existing"` set to a map of 
 
 Route the result:
 
-- `accepted` (exit 0): `entries` hold `source`, `destination`, `type`, `bytes`, `blob_sha` and `status`, which is `new` or `reused`. Surface every warning: `trailing-data` means bytes after the image end are published as is; `large-file` means the file is over 10 MB and may not render.
-- `rejected` (exit 1): the whole batch is rejected and nothing is copied. Relay each rejection `message` as is, for example "SVG is not supported by this skill". Stop.
+- `accepted` (exit 0): `entries` hold `source`, `destination`, `type`, `bytes`, `blob_sha` and `status`, which is `new` or `reused`. Surface every warning: `trailing-data` means bytes after the image end are published as is.
+- `rejected` (exit 1): the whole batch is rejected and nothing is copied. Relay each rejection `message` as is, for example "SVG is not supported by this skill". A file over 10 MiB is rejected before anything is published, because GitHub does not serve larger files as images; its reason is `too-large`. Stop.
 - `needs-input` (exit 1): read `asks` and settle each with the user, then classify again.
   - `empty-topic`: ask for a topic and send it as `"topic"`.
   - `empty-name`: the source name slugs to nothing. Ask for a copy under a better name. Never move the original.
@@ -639,7 +639,7 @@ Then run the file-set assertion from Assert the committed file set, with these p
 
 - Evidence binaries appear in the Files tab of the PR until cleanup.
 - Published images stay in git history, forks and caches. Cleanup removes files from the branch. It does not revoke access.
-- For a public repository, verification confirms the raw URL serves an image. For a private repository, it confirms that the file at the pinned commit is the image that was classified. Neither confirms GitHub renders it. Files over about 10 MB may not render.
+- For a public repository, verification confirms the raw URL serves an image. For a private repository, it confirms that the file at the pinned commit is the image that was classified. Neither confirms GitHub renders it. Files over 10 MiB never reach this point, because they are rejected before anything is published.
 - A private repository's images stay in its history. If it is later made public or forked, they become public. Cleanup does not remove them from history.
 - Blob links in a private repository render only for signed-in viewers who have access to it. Anyone else sees no image.
 - A commit-pinned link survived cleanup, squash merge and branch deletion on one observed PR. That is observed, not guaranteed. A re-run re-verifies.

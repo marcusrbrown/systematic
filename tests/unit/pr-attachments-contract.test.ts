@@ -815,6 +815,18 @@ describe('pr-attachments skill contract -- private repositories and messages', (
     expect(step).toMatch(/whole batch/i)
   })
 
+  test('the size rule is the live 10 MiB cutoff, stated once and never softened', () => {
+    const step = normalize(section(skill, '## Step 2: Classify the images'))
+    expect(step).toMatch(
+      /over 10 MiB[^.]*rejected[^.]*before anything is published/i,
+    )
+    expect(step).toMatch(/does not serve larger files as images/i)
+    expect(flat).not.toContain('large-file')
+    expect(flat).not.toMatch(/100\s*(MiB|MB)/i)
+    expect(flat).not.toMatch(/\b10 MB\b/)
+    expect(flat).not.toMatch(/may not render/i)
+  })
+
   test('verify results are routed', () => {
     const step = normalize(section(skill, '## Step 7: Verify the embeds'))
     for (const code of ['verified', 'failed', 'blob-url', 'usage-error']) {

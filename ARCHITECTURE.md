@@ -297,7 +297,8 @@ the helper. A private, internal or unknown-visibility repository gets the blob l
 after an explicit answer that the images stay in git history and become public if the repository is
 later made public or forked. Its embeds are checked through `gh api` against the blob SHA that
 classify reported, never through the helper's anonymous `verify`. A bundled Node helper holds the steps that must be
-exact: image classification, byte-exact splicing, pin selection, the cleanup set and bounded
+exact: image classification (a file over 10 MiB is rejected before anything is published, because
+GitHub does not serve larger files as images), byte-exact splicing, pin selection, the cleanup set and bounded
 verification. It takes JSON on stdin, writes JSON on stdout, and keeps no state. The `gh` calls and
 the push stay in the skill's prose. The helper needs `node` 18+ on PATH, and the skill stops with
 its state reported when `node` is missing or the helper fails; it never writes a helper result by

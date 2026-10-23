@@ -649,7 +649,7 @@ describe('classify: size limits', () => {
     expect(overLimit.response.rejections[0]?.reason).toBe('too-large')
   })
 
-  it('defaults the limit to 100 MiB', () => {
+  it('accepts a small file under the default limit and rejects it under a lowered one', () => {
     const dir = makeDir()
     const filePath = writeFile(dir, 'a.png', makePng())
     const lowered = classify({
@@ -662,28 +662,75 @@ describe('classify: size limits', () => {
     expect(lowered.response.rejections[0]?.reason).toBe('too-large')
     expect(defaulted.status).toBe(0)
   })
+})
 
-  it('warns above the soft size and not at it', () => {
-    const dir = makeDir()
-    const png = makePng()
-    const filePath = writeFile(dir, 'a.png', png)
+// raw.githubusercontent.com serves a PNG as image/png up to exactly 10 MiB
+// and as application/octet-stream from one byte more. These tests use the
+// helper's real default, never an injected max_bytes.
+describe('classify: the default limit is the 10 MiB GitHub serves as an image', () => {
+  const TEN_MIB = 10 * 1024 * 1024
 
-    const atSoft = classify({
-      paths: [filePath],
-      branch: 'x',
-      warn_bytes: png.length,
-    })
-    const aboveSoft = classify({
-      paths: [filePath],
-      branch: 'x',
-      warn_bytes: png.length - 1,
-    })
-
-    expect(atSoft.response.warnings).toEqual([])
-    expect(aboveSoft.status).toBe(0)
-    expect(aboveSoft.response.warnings).toEqual([
-      { source: filePath, code: 'large-file', bytes: png.length },
+  /** A valid PNG of exactly `size` bytes: padded with one ancillary chunk. */
+  function makePngOfSize(size: number): Buffer {
+    const chunkOverhead = 12
+    const base = makePng().length
+    const png = makePng([
+      pngChunk('prVt', Buffer.alloc(size - base - chunkOverhead)),
     ])
+    expect(png.length).toBe(size)
+    return png
+  }
+
+  it('accepts a file of exactly 10,485,760 bytes, with no size warning', () => {
+    const dir = makeDir()
+    const filePath = writeFile(dir, 'edge.png', makePngOfSize(TEN_MIB))
+
+    const run = classify({ paths: [filePath], branch: 'x' })
+
+    expect(run.status).toBe(0)
+    expect(run.response.result).toBe('accepted')
+    expect(run.response.entries.map((entry) => entry.bytes)).toEqual([TEN_MIB])
+    expect(run.response.warnings).toEqual([])
+  })
+
+  it('rejects a file of 10,485,761 bytes as too-large', () => {
+    const dir = makeDir()
+    const filePath = writeFile(dir, 'edge.png', makePngOfSize(TEN_MIB + 1))
+
+    const run = classify({ paths: [filePath], branch: 'x' })
+
+    expect(run.status).toBe(1)
+    expect(run.response.result).toBe('rejected')
+    expect(run.response.rejections).toEqual([
+      {
+        source: filePath,
+        reason: 'too-large',
+        message: expect.any(String),
+      },
+    ])
+  })
+
+  it('rejects the whole batch when one file is over the limit', () => {
+    const dir = makeDir()
+    const small = writeFile(dir, 'small.png', makePng())
+    const big = writeFile(dir, 'big.png', makePngOfSize(TEN_MIB + 1))
+
+    const run = classify({ paths: [small, big], branch: 'x' })
+
+    expect(run.status).toBe(1)
+    expect(run.response.result).toBe('rejected')
+    expect(run.response.entries).toEqual([])
+    expect(run.response.rejections.map((item) => item.source)).toEqual([big])
+  })
+
+  it('no longer warns about a large file or reads warn_bytes', () => {
+    const dir = makeDir()
+    const filePath = writeFile(dir, 'a.png', makePng())
+
+    const run = classify({ paths: [filePath], branch: 'x', warn_bytes: 1 })
+
+    expect(run.status).toBe(0)
+    expect(run.response.warnings).toEqual([])
   })
 })
 
