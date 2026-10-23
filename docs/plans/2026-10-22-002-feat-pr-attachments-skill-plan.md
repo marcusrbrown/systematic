@@ -849,7 +849,7 @@ flowchart TD
   5. **Raw 404 timing: done.** The URL went from 404 to 200 in 46 to 62 s after the push.
   6. **Large images: done, with Camo unobserved.** Camo is not observable through the API or anonymous HTML. The probe instead found that the raw URL serves files over 10 MiB as `application/octet-stream`; the cutoff is exact to the byte. That set the hard size limit.
   7. **Private-repo probe: done and passed.** Signed-in members see the blob form render and the raw form fail. This landed Unit 5c.
-  8. **One transcript per host showing the scrub confirmation before the commit: pending.** The OpenCode transcript is in progress. No transcript from another host is recorded here, so `SKILL_DIR` resolution on Pi and Claude Code stays evidenced from the package tree only.
+  8. **One transcript per host showing the scrub confirmation before the commit: done for OpenCode.** A real OpenCode session ran this branch's build through the `file://` plugin form, with isolated config and no user-global plugins. It loaded `systematic:pr-attachments` through `systematic_skill`, ran `classify` against a public scratch PR, and asked the Step 5 scrub confirmation verbatim before any commit or push. It exited 0, and the remote branch and PR body were unchanged afterwards. The Pi and Claude Code transcripts are not captured, so `SKILL_DIR` resolution on those hosts stays evidenced from the package tree only.
 - The local requirements doc (`docs/brainstorms/...`, gitignored, primary checkout only) is updated to match the planning decisions.
 - The PR title is `feat(skills): add a skill for attaching screenshots to pull requests`, which is a minor release, and the PR closes #1073.
 

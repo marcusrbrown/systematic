@@ -118,14 +118,19 @@ Recorded execution evidence for this surface:
   private-repository blob check runs against a stand-in `gh` that answers from the local repository:
   match, mismatch, absent file, bounded retries and the `local` expectation used by re-pin mode.
 
-No live OpenCode, Pi, OCX or Claude Code host was executed for this check. The dry run uses no real
-`gh` and no network, so GitHub's raw-content serving and image rendering are not exercised. A
-separate live check on one private repository showed the blob link form rendering for a signed-in
-member, the raw form not rendering, and both returning 404 anonymously. That check is not
-reproduced by the test suite. The helper's
-`verify` subcommand is tested against a local HTTP server (`tests/unit/pr-attachments-verify.test.ts`). `SKILL_DIR` resolution on Pi and Claude
-Code is evidenced from the package tree only. These layouts are proven by package-tree execution
-under real Node and by a scripted run of the skill's own commands, not cross-harness runtime parity.
+One live OpenCode session ran a build of this branch, loaded as a `file://` plugin with isolated
+config and no user-global plugins. It loaded `systematic:pr-attachments` through `systematic_skill`,
+ran `classify` against a public pull request, and asked the scrub confirmation before any commit or
+push. It stopped there. The remote branch and the pull request body were unchanged afterwards. The
+PR flow, re-pin, the `--body-file` round trip and the private-repository blob form were also run by
+hand against real GitHub repositories, which exercised GitHub's raw-content serving. None of that
+live evidence is reproduced by the test suite.
+
+The offline dry run uses no real `gh` and no network. The helper's `verify` subcommand is tested
+against a local HTTP server (`tests/unit/pr-attachments-verify.test.ts`). No live Pi, OCX or Claude
+Code host was executed. `SKILL_DIR` resolution on Pi and Claude Code is evidenced from the package
+tree only. These layouts are proven by package-tree execution under real Node and by a scripted run
+of the skill's own commands, plus one live OpenCode run, not cross-harness runtime parity.
 
 ## Codex CLI — Tier 2 documented portability target
 
