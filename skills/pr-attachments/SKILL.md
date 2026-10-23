@@ -1,7 +1,7 @@
 ---
 name: pr-attachments
 description: "Use when attaching local screenshots or other images to a pull request, publishing evidence images as commit-pinned embeds in a managed Demo section of the PR description, re-pinning those embeds after a rebase or force-push, or cleaning up evidence images once the PR is done."
-argument-hint: "[mode:embed] [image paths...] [pr:<number or branch>]"
+argument-hint: "[mode:embed] [image paths...] [pr:<number or branch>] | mode:carry old=<old body file> new=<new body file>"
 metadata:
   harness-portability: neutral-v1
 ---
@@ -16,6 +16,7 @@ The images are committed under `docs/evidence/<topic>/` on the PR head branch an
 |---|---|---|
 | PR mode | An open PR and image paths | Yes |
 | Embed mode | `mode:embed` and image paths | No. Returns a Demo file and a status line |
+| Carry mode | `mode:carry`, `old=` and `new=` | No. Edits the new body file in place and returns a status line |
 | Re-pin mode | An open PR and no paths | Only when a pin is stale |
 | Cleanup | Offered at the end of PR mode and Re-pin mode | No. Removes the evidence files from the branch |
 
@@ -23,7 +24,8 @@ The images are committed under `docs/evidence/<topic>/` on the PR head branch an
 
 - `git`, and `gh` signed in with push access to the head repository.
 - The helper needs node 18+ on PATH. Check `node --version` once. Without it, stop.
-- Run from the repository root. `git rev-parse --show-prefix` prints nothing there.
+- Carry mode needs only node. The other modes also need the repository root: `git rev-parse --show-prefix` prints nothing there.
+- Run from the repository root.
 - Shell state does not persist between tool calls. Fill every placeholder in angle brackets with a real value in every block.
 - Every block that calls the helper starts with the same anchor lines. Reuse them verbatim. Set `SKILL_DIR` to the skill directory stated when this skill loads.
 
@@ -36,16 +38,19 @@ The helper does the work that must be exact: classification, byte-exact splicing
 - Never run `git rm` by hand.
 - A `usage-error` or `internal-error` is a stop in every mode.
 
-In embed mode every stop ends with the failed status line (Step 8).
+In embed mode every stop ends with the failed status line (Step 8). In carry mode every stop ends with the failed status line (Carry mode).
 
 ## Step 1: Read the arguments
 
 Read tokens from the skill arguments, or from the invoking instruction when none are shown. Some hosts pass no arguments, so the instruction text then carries the tokens. Use no positional placeholders.
 
-Split on whitespace. A path with spaces must be wrapped in double quotes; strip the quotes after splitting. A path that starts with `mode:` or `pr:` must be written with a leading `./`.
+Split on whitespace. A path with spaces must be wrapped in double quotes; strip the quotes after splitting. A path that starts with `mode:`, `pr:`, `old=` or `new=` must be written with a leading `./`.
 
-- `mode:embed` selects embed mode. Any other `mode:` token stops the run with an error that names the token.
+- `mode:embed` selects embed mode.
+- `mode:carry` selects carry mode and skips Steps 2 to 8; go straight to Carry mode.
+- Any other `mode:` token stops the run with an error that names the token. Two `mode:` tokens stop the run too.
 - `pr:<number or branch>` selects the PR. Without it, use the PR for the current branch.
+- `old=<file>` and `new=<file>` are for carry mode only.
 - Every other token is an image path, relative to the repository root.
 
 `mode:embed` with no paths stops: embed mode needs image paths. Use the reason `no-target` in the failed status line.
@@ -98,12 +103,13 @@ Pick the mode from the tokens and whether an open PR exists:
 
 | Tokens | Open PR | Mode |
 |---|---|---|
+| `mode:carry`, `old=` and `new=` | Not needed | Carry mode |
 | `mode:embed` and paths | Not needed | Embed mode |
 | Paths, no `mode:embed` | Yes | PR mode |
 | No paths, no `mode:embed` | Yes | Re-pin mode |
-| No `mode:embed` | No | Stop |
+| No `mode:` token | No | Stop |
 
-A load that sees no `mode:embed` token and finds no open PR stops with this message and never guesses a mode: open the PR first, or run through git-commit-push-pr. Never infer paths or a mode from the working directory.
+A load that sees no `mode:` token and finds no open PR stops with this message and never guesses a mode: open the PR first, or run through git-commit-push-pr. Never infer paths or a mode from the working directory.
 
 ### Embed mode
 
@@ -358,6 +364,70 @@ pr-attachments: status=failed evidence=<pushed|none> reason=<reason>
 - `evidence_sha` is the SHA the Step 7 Demo block printed. Copy it.
 - `evidence` is `pushed` once the push succeeded, otherwise `none`. A failed line never comes with a Demo file.
 - `reason` is one of `node-unavailable`, `helper-failed`, `rejected-images`, `declined`, `not-public`, `no-target`, `git-failed`, `push-rejected` or `verify-failed`.
+
+## Carry mode
+
+`mode:carry old=<old body file> new=<new body file>` copies the `## Demo` section of an old description into a regenerated one. A caller that rewrites a description uses it, because the caller cannot reach this skill's helper from its own directory.
+
+Carry mode reads and writes the two named files and nothing else. It never commits, never pushes, never calls `gh` and never touches the network. The caller owns both files and writes the description itself. Carry mode ends at the status line, with no cleanup offer.
+
+Take both `old=` and `new=` from Step 1. Wrap a value that has spaces in double quotes, for example `old="/tmp/a b/old.md"`, and strip the quotes after splitting. If either is missing, or any image path or `pr:` token is present, stop. There are no image paths and no `pr:` token in carry mode. The reason is `bad-arguments`.
+
+Make the file that holds the extracted section. Note its path:
+
+```bash
+printf 'demo %s\n' "$(mktemp)"
+```
+
+Extract the section from the old body. The `node -e` part only reads the old file into the helper's JSON input, so the text is never retyped:
+
+```bash
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+OLD_BODY="<old body file>";
+DEMO_FILE="<demo file>";
+node -e 'process.stdout.write(JSON.stringify({body: require("fs").readFileSync(process.argv[1], "utf8"), out_file: process.argv[2]}))' "$OLD_BODY" "$DEMO_FILE" | node "$SKILL_DIR/scripts/pr-attachments.mjs" extract
+```
+
+Route the result:
+
+- `extracted` (exit 0): continue.
+- `absent` (exit 0): the old description has no Demo section, so there is nothing to carry; leave the new file untouched, remove the demo file and finish with `status=absent`, which is not a failure.
+- `needs-input` (exit 1) with `multiple-demo-sections`: the old description has more than one `## Demo` section. Finish with `status=failed`.
+- `write-failed` (exit 1): finish with `status=failed`.
+- `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
+
+Splice the section into the new body. The new file is read first and then written in place:
+
+```bash
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+NEW_BODY="<new body file>";
+DEMO_FILE="<demo file>";
+node -e 'process.stdout.write(JSON.stringify({body: require("fs").readFileSync(process.argv[1], "utf8"), demo_file: process.argv[2], out_file: process.argv[1]}))' "$NEW_BODY" "$DEMO_FILE" | node "$SKILL_DIR/scripts/pr-attachments.mjs" splice
+```
+
+Route the result:
+
+- `spliced` (exit 0): `appended`, `replaced` and `unchanged` all finish with `status=ok`.
+- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence or comment would swallow the section) or `line-ending-conflict` (the two texts use different line endings at the join).
+- `write-failed` (exit 1): finish with `status=failed`. The new file may be partly written, so the caller discards it.
+- `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
+
+On every path, remove the demo file:
+
+```bash
+DEMO_FILE="<demo file>";
+rm -f "$DEMO_FILE"
+```
+
+Then print exactly one status line:
+
+```text
+pr-attachments: status=<ok|absent|failed> [reason=<reason>]
+```
+
+`reason` appears only with `failed`. It is one of `node-unavailable`, `bad-arguments`, `helper-failed`, `multiple-demo-sections`, `unterminated-region`, `line-ending-conflict` or `write-failed`. A missing node is `node-unavailable`, and a `usage-error` or `internal-error` is `helper-failed`. Never write a Demo section by hand when carry mode fails.
 
 ## Re-pin mode
 

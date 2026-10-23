@@ -534,3 +534,162 @@ describe('pr-attachments dry run -- the skill commands against a local bare remo
     )
   })
 })
+
+// ── Carry mode ─────────────────────────────────────────────────────────────
+
+const SHA = 'a'.repeat(40)
+const EMBED = `![shot](https://raw.githubusercontent.com/octo/widgets/${SHA}/${DEST})`
+const OLD_DEMO = `## Demo\n\n${EMBED}\n`
+
+interface CarryRun {
+  readonly dir: string
+  readonly oldFile: string
+  readonly newFile: string
+  readonly demoFile: string
+  readonly home: string
+}
+
+/** The two body files and an empty demo file, in a directory with a space. */
+function carryFiles(oldBody: string, newBody: string): CarryRun {
+  const dir = path.join(makeDir(), 'my bodies')
+  fs.mkdirSync(dir)
+  const run = {
+    dir,
+    oldFile: path.join(dir, 'old body.md'),
+    newFile: path.join(dir, 'new body.md'),
+    demoFile: path.join(dir, 'demo.md'),
+    home: makeDir(),
+  }
+  fs.writeFileSync(run.oldFile, oldBody)
+  fs.writeFileSync(run.newFile, newBody)
+  fs.writeFileSync(run.demoFile, '')
+  return run
+}
+
+function runCarryBlock(
+  run: CarryRun,
+  marker: string,
+  vars: Record<string, string>,
+): ShellResult {
+  return runShell(fill(blockWith(marker), { vars }), run.dir, run.home)
+}
+
+function carryExtract(run: CarryRun): ShellResult {
+  return runCarryBlock(run, 'pr-attachments.mjs" extract', {
+    SKILL_DIR,
+    OLD_BODY: run.oldFile,
+    DEMO_FILE: run.demoFile,
+  })
+}
+
+function carrySplice(run: CarryRun): ShellResult {
+  return runCarryBlock(run, 'demo_file: process.argv[2]', {
+    SKILL_DIR,
+    NEW_BODY: run.newFile,
+    DEMO_FILE: run.demoFile,
+  })
+}
+
+/** The body with its `## Demo` section cut out: the heading through the next H2. */
+function outsideDemo(body: string): string {
+  return body.replace(/^## Demo\n[\s\S]*?(?=^## |(?![\s\S]))/m, '')
+}
+
+describe('pr-attachments dry run -- carry mode over the real helper', () => {
+  test('the temp-file block makes an empty 0600 file and prints its path', () => {
+    const run = carryFiles('', '')
+    const made = runShell(blockWith("printf 'demo %s"), run.dir, run.home)
+    expect(made.status, made.stderr).toBe(0)
+    const printed = made.stdout.trim().replace(/^demo /, '')
+    expect(fs.statSync(printed).size).toBe(0)
+    expect(fs.statSync(printed).mode & 0o777).toBe(0o600)
+    fs.rmSync(printed)
+  })
+
+  test('copies the old Demo into a regenerated body and keeps every other byte of the new body', () => {
+    const oldBody = `# T\n\nOld story.\n\n${OLD_DEMO}\n## Notes\n\nold notes\n`
+    const newBody =
+      '# T\n\nNew story with  odd   spacing.\r\n\n## Notes\n\nnew notes\n'
+    const run = carryFiles(oldBody, newBody)
+
+    const extracted = carryExtract(run)
+    expect(extracted.status, extracted.stderr).toBe(0)
+    expect(JSON.parse(extracted.stdout).result).toBe('extracted')
+    expect(fs.readFileSync(run.demoFile, 'utf8')).toBe(OLD_DEMO)
+
+    const spliced = carrySplice(run)
+    expect(spliced.status, spliced.stderr).toBe(0)
+    const report = JSON.parse(spliced.stdout)
+    expect(report.result).toBe('spliced')
+    expect(report.action).toBe('appended')
+
+    const result = fs.readFileSync(run.newFile, 'utf8')
+    expect(result.startsWith(newBody)).toBe(true)
+    expect(result.slice(newBody.length)).toBe(`\n${OLD_DEMO}`)
+  })
+
+  test('replaces a stale Demo in the new body and leaves the bytes outside it identical', () => {
+    const newBody =
+      '# T\n\nNew story.\n\n## Demo\n\nstale text\n\n## Notes\n\nnew notes\n'
+    const run = carryFiles(`# T\n\n${OLD_DEMO}`, newBody)
+    expect(carryExtract(run).status).toBe(0)
+    const spliced = carrySplice(run)
+    expect(spliced.status, spliced.stderr).toBe(0)
+    expect(JSON.parse(spliced.stdout).action).toBe('replaced')
+
+    const result = fs.readFileSync(run.newFile, 'utf8')
+    expect(result).toContain(EMBED)
+    expect(result).not.toContain('stale text')
+    expect(outsideDemo(result)).toBe(outsideDemo(newBody))
+  })
+
+  test('an old body with no Demo reports absent and the new file keeps its exact bytes', () => {
+    const newBody = '# T\n\nNew story.\n\n## Notes\n\nnew notes\n'
+    const run = carryFiles('# T\n\nOld story, no evidence.\n', newBody)
+    const extracted = carryExtract(run)
+    expect(extracted.status, extracted.stderr).toBe(0)
+    expect(JSON.parse(extracted.stdout).result).toBe('absent')
+    expect(fs.readFileSync(run.newFile, 'utf8')).toBe(newBody)
+    expect(fs.readFileSync(run.demoFile, 'utf8')).toBe('')
+  })
+
+  test('two Demo sections in the old body stop at extract and write nothing', () => {
+    const run = carryFiles(`${OLD_DEMO}\n## Demo\n\nsecond\n`, 'new\n')
+    const extracted = carryExtract(run)
+    expect(extracted.status).toBe(1)
+    const report = JSON.parse(extracted.stdout)
+    expect(report.result).toBe('needs-input')
+    expect(report.asks[0].code).toBe('multiple-demo-sections')
+    expect(fs.readFileSync(run.demoFile, 'utf8')).toBe('')
+    expect(fs.readFileSync(run.newFile, 'utf8')).toBe('new\n')
+  })
+
+  test('an unterminated fence in the new body stops the splice and leaves the file as it was', () => {
+    const newBody = '# T\n\n```\nopen fence\n'
+    const run = carryFiles(`${OLD_DEMO}`, newBody)
+    expect(carryExtract(run).status).toBe(0)
+    const spliced = carrySplice(run)
+    expect(spliced.status).toBe(1)
+    const report = JSON.parse(spliced.stdout)
+    expect(report.result).toBe('needs-input')
+    expect(report.asks[0].code).toBe('unterminated-region')
+    expect(fs.readFileSync(run.newFile, 'utf8')).toBe(newBody)
+  })
+
+  test('an unreadable old body is a usage error from the helper, not a hand-written result', () => {
+    const run = carryFiles('', 'new\n')
+    fs.rmSync(run.oldFile)
+    const extracted = carryExtract(run)
+    expect(extracted.status).toBe(2)
+    expect(JSON.parse(extracted.stdout).result).toBe('usage-error')
+  })
+
+  test('the removal block deletes the demo file', () => {
+    const run = carryFiles('', '')
+    const removed = runCarryBlock(run, 'rm -f "$DEMO_FILE"', {
+      DEMO_FILE: run.demoFile,
+    })
+    expect(removed.status, removed.stderr).toBe(0)
+    expect(fs.existsSync(run.demoFile)).toBe(false)
+  })
+})

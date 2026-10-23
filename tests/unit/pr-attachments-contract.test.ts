@@ -20,6 +20,7 @@ const FROZEN_DESCRIPTION =
 const SUBCOMMANDS = [
   'classify',
   'splice',
+  'extract',
   'urls',
   'pins',
   'repin-rewrite',
@@ -28,12 +29,14 @@ const SUBCOMMANDS = [
 ] as const
 
 // Every result code the helper returns that the skill acts on. `extracted` and
-// `absent` belong to `extract`, which this skill never calls.
+// `absent` belong to `extract`, which carry mode calls.
 const ROUTED_RESULT_CODES = [
   'accepted',
   'rejected',
   'needs-input',
   'spliced',
+  'extracted',
+  'absent',
   'repinned',
   'urls',
   'already-valid',
@@ -165,14 +168,22 @@ describe('pr-attachments skill contract -- identity and modes', () => {
     expect(fields.name).toBe('pr-attachments')
     expect(fields.description).toBe(FROZEN_DESCRIPTION)
     expect(fields['argument-hint']).toContain('mode:embed')
+    expect(fields['argument-hint']).toContain('mode:carry')
     expect(fields['argument-hint']).toMatch(/image/i)
     expect(fields['argument-hint']).toMatch(/pr:/)
   })
 
-  test('names all four modes', () => {
-    for (const mode of ['PR mode', 'Embed mode', 'Re-pin mode', 'Cleanup']) {
+  test('names all five modes', () => {
+    for (const mode of [
+      'PR mode',
+      'Embed mode',
+      'Carry mode',
+      'Re-pin mode',
+      'Cleanup',
+    ]) {
       expect(skill, mode).toContain(mode)
     }
+    expect(skill).toContain('\n## Carry mode\n')
     expect(skill).toContain('## Re-pin mode')
     expect(skill).toContain('\n## Cleanup\n')
   })
@@ -198,8 +209,10 @@ describe('pr-attachments skill contract -- arguments and dispatch', () => {
     expect(flat).toMatch(/path[^.]*spaces[^.]*double quotes/i)
   })
 
-  test('mode:embed is the only mode token; any other mode: token stops', () => {
+  test('mode:embed and mode:carry are the only mode tokens; any other mode: token stops', () => {
     expect(flat).toMatch(/any other `mode:` token[^.]*stop/i)
+    expect(flat).toMatch(/`mode:embed` selects embed mode/)
+    expect(flat).toMatch(/`mode:carry` selects carry mode/)
   })
 
   test('the dispatch rule fires when no mode token is seen', () => {
@@ -210,7 +223,7 @@ describe('pr-attachments skill contract -- arguments and dispatch', () => {
       'open the PR first, or run through git-commit-push-pr',
     )
     expect(step).toMatch(
-      /no `mode:embed` token and finds no open PR[^.]*stops[^.]*never guesses/i,
+      /no `mode:` token and finds no open PR[^.]*stops[^.]*never guesses/i,
     )
     expect(step).toMatch(/`mode:embed`[^.]*no paths[^.]*stop/i)
   })
@@ -493,6 +506,115 @@ describe('pr-attachments skill contract -- embed mode', () => {
     expect(skill).toContain('git log -n 1 --no-renames --diff-filter=AM')
     expect(skill).toContain('raw.githubusercontent.com')
     expect(flat).toMatch(/never (re-?type|transcribe)[^.]*SHA/i)
+  })
+})
+
+describe('pr-attachments skill contract -- carry mode', () => {
+  const step = section(skill, '## Carry mode')
+  const text = normalize(step)
+  const carryBlocks = fencedBlocks(step).map((block) => block.body)
+
+  test('takes old= and new= files, with no image paths and no pr: token', () => {
+    expect(text).toContain(
+      '`mode:carry old=<old body file> new=<new body file>`',
+    )
+    expect(text).toMatch(/both `old=` and `new=`/i)
+    expect(text).toMatch(/no image paths[^.]*no `pr:` token/i)
+    expect(text).toMatch(/`bad-arguments`/)
+  })
+
+  test('states the quoting rule for values with spaces', () => {
+    expect(flat).toMatch(/`old="[^"]* [^"]*"`/)
+    expect(flat).toMatch(/value[^.]*spaces[^.]*double quotes/i)
+  })
+
+  test('never commits, pushes, calls gh or touches the network', () => {
+    expect(text).toMatch(
+      /never commits[^.]*never pushes[^.]*never calls `gh`[^.]*never touches the network/i,
+    )
+    for (const block of carryBlocks) {
+      expect(block).not.toMatch(/\b(?:git|gh|curl|wget|ssh)\b/)
+    }
+  })
+
+  test('extracts from the old body, then splices into the new body, both through the pinned helper', () => {
+    const extractAt = step.indexOf(`${INVOKE} extract`)
+    const spliceAt = step.indexOf(`${INVOKE} splice`)
+    expect(extractAt).toBeGreaterThan(-1)
+    expect(spliceAt).toBeGreaterThan(extractAt)
+    for (const block of carryBlocks.filter((entry) =>
+      entry.includes('pr-attachments.mjs'),
+    )) {
+      expect(block).toContain(ANCHOR)
+    }
+  })
+
+  test('absent is a success: it leaves the new file untouched and is not a failure', () => {
+    expect(text).toMatch(/`absent`[^.]*leave the new file untouched/i)
+    expect(text).toContain('`status=absent`')
+    expect(text).toMatch(/`absent`[^.]*not a failure/i)
+  })
+
+  test('routes every extract and splice result', () => {
+    for (const code of [
+      'extracted',
+      'absent',
+      'spliced',
+      'needs-input',
+      'multiple-demo-sections',
+      'unterminated-region',
+      'line-ending-conflict',
+      'write-failed',
+      'usage-error',
+      'internal-error',
+    ]) {
+      expect(text, code).toContain(`\`${code}\``)
+    }
+  })
+
+  test('returns exactly one status line with a fixed reason vocabulary', () => {
+    expect(step).toContain(
+      'pr-attachments: status=<ok|absent|failed> [reason=<reason>]',
+    )
+    expect(text).toMatch(/exactly one status line/i)
+    expect(text).toMatch(/`reason` appears only with `failed`/i)
+    for (const reason of [
+      'node-unavailable',
+      'bad-arguments',
+      'helper-failed',
+      'multiple-demo-sections',
+      'unterminated-region',
+      'line-ending-conflict',
+      'write-failed',
+    ]) {
+      expect(text, reason).toContain(`\`${reason}\``)
+    }
+  })
+
+  test('removes the extracted-section file and offers no cleanup', () => {
+    expect(carryBlocks.join('\n')).toContain('rm -f "$DEMO_FILE"')
+    expect(text).toMatch(/carry mode[^.]*(no cleanup offer|ends here)/i)
+  })
+
+  test('is listed in the mode table and the dispatch table, and skips the publishing steps', () => {
+    const head = skill.slice(0, skill.indexOf('## Preconditions'))
+    expect(head).toMatch(/\| Carry mode \| `mode:carry`[^|]*\| No\./)
+    const dispatch = normalize(
+      section(skill, '## Step 3: Resolve the target and pick the mode'),
+    )
+    expect(dispatch).toContain('`mode:carry`')
+    expect(dispatch).toMatch(/Carry mode/)
+    const read = normalize(section(skill, '## Step 1: Read the arguments'))
+    expect(read).toMatch(/`mode:carry` selects carry mode[^.]*skip/i)
+  })
+
+  test('node is the only precondition, and a helper failure still never permits a hand-written result', () => {
+    expect(normalize(section(skill, '## Preconditions'))).toMatch(
+      /carry mode needs only node/i,
+    )
+    expect(normalize(section(skill, '## Never bypass the helper'))).toMatch(
+      /carry mode[^.]*failed status line/i,
+    )
   })
 })
 

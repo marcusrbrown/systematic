@@ -80,7 +80,9 @@ EOF
 
 If the PR is not open or the commit range cannot be resolved, report the issue and stop.
 
-**Evidence decision:** Preserve any existing `## Demo` or `## Screenshots` block from the current body by default. If the user's focus asks to refresh or remove evidence, honor that intent.
+**Evidence decision:** Preserve any existing `## Demo` or `## Screenshots` block from the current body by default. Carry the `## Demo` section with the carry procedure in Step 7: save the current description to an old body file, then load `systematic:pr-attachments` with `mode:carry old=<old body file> new=<new body file>`, where the new body file is the one written above. Do this before the compare-and-confirm step. If the user's focus asks to refresh or remove evidence, honor that intent and skip the carry.
+
+Do not offer to publish images here. If the user asks to attach local images, route that request to `systematic:pr-attachments` in PR mode, with the image paths as its only tokens. PR mode writes the Demo section itself, and a later rewrite carries it through.
 
 **Compare and confirm** — briefly explain what the new description covers differently from the old one. This helps the user decide whether to apply; the description itself does not narrate these differences. Summarize from the body already in context (from the bash call that wrote `body_file`); do not `cat` the temp file, which would re-emit the body.
 
@@ -147,7 +149,8 @@ If the PR check returned `state: OPEN`, note the URL -- this is the existing-PR 
 
 1. If on the default branch, create a feature branch first with `git checkout -b <branch-name>`.
 2. Scan changed files for naturally distinct concerns. If files clearly group into separate logical changes, create separate commits (2-3 max). Group at the file level only (no `git add -p`). When ambiguous, one commit is fine.
-3. Stage and commit each group in a single call. Avoid `git add -A` or `git add .`. Follow conventions from Step 2:
+3. Never stage an untracked image file without asking. Image files are PNG, JPEG, GIF and WebP, such as `.png` or `.jpg`. A screenshot meant for the PR description is evidence, not part of the change, so it stays out of the feature commit. When untracked images exist, ask the evidence-source question from Step 6 first, and do not ask again in Step 6. Stage an image only when the user says it is part of the change.
+4. Stage and commit each group in a single call. Avoid `git add -A` or `git add .`. Follow conventions from Step 2:
    ```bash
    git add file1 file2 file3 && git commit -m "$(cat <<'EOF'
    commit message here
@@ -199,7 +202,21 @@ Use this branch diff (not the working-tree diff) for the evidence decision. If t
 **Evidence decision (before delegation).** If the branch diff changes observable behavior (UI, CLI output, API behavior with runnable code, generated artifacts, workflow output) and evidence is not otherwise blocked (unavailable credentials, paid services, deploy-only infrastructure, hardware), ask: "This PR has observable behavior. Capture evidence for the PR description?"
 
 - **Use existing evidence** -- ask for the URL or markdown embed, then splice it into the PR body as a `## Demo` section before applying.
+- **Publish local images** -- publish image files from this machine as commit-pinned embeds. Ask for the image paths, or offer the untracked images found in Step 4. Then load the `systematic:pr-attachments` skill in embed mode. State the tokens in the instruction text itself, and pass them as skill arguments where the host supports them, because some hosts pass no skill arguments. For example: `mode:embed shots/a.png "shots/b c.png"`. Wrap a path that has spaces in double quotes.
 - **Skip** -- proceed with no evidence section.
+
+The skill ends with one status line:
+
+```text
+pr-attachments: status=ok evidence_sha=<40-hex> demo_file=<path> images=<count>
+pr-attachments: status=failed evidence=<pushed|none> reason=<reason>
+```
+
+- `status=ok`: take `demo_file` from the line. The file holds the Demo section. Keep it for the splice below. The narrative range below does not use `evidence_sha`.
+- `status=failed` with `evidence=pushed`: the evidence files are pushed but unreferenced. Tell the user the reason. Cleanup is offered by the re-run command printed after the PR opens. Then continue without evidence.
+- `status=failed` with `evidence=none`: nothing was published. Tell the user the reason, then continue without evidence.
+
+**Fallback.** If loading `systematic:pr-attachments` fails, or it loads but sees no `mode:` token and stops without a status line, offer only the two existing options: **Use existing evidence** and **Skip**.
 
 When evidence is not possible (docs-only, markdown-only, changelog-only, release metadata, CI/config-only, test-only, or pure internal refactors), skip without asking.
 
@@ -213,7 +230,19 @@ When evidence is not possible (docs-only, markdown-only, changelog-only, release
   <generated body>
   EOF
   ```
-- Splice any captured evidence as a `## Demo` section into the body file before applying.
+- Splice any captured evidence as a `## Demo` section into the body file before applying. For the file that **Publish local images** returned, append it with the shell and delete it once it is appended, so no SHA is retyped:
+  ```bash
+  printf '\n' >> "<body_file>" && cat "<demo_file>" >> "<body_file>" && rm -f "<demo_file>"
+  ```
+
+**Narrative range after publishing.** An evidence commit on the branch is housekeeping, not part of the change. Use the same two commands on every path: `status=ok`, `status=failed` with `evidence=pushed`, and no publish at all. Both leave `docs/evidence/**` out by path, so a commit that touches only evidence files drops out of the log on its own, and later feature commits stay in:
+
+```bash
+git log --oneline <base-remote>/<base-branch>..HEAD -- . ':(exclude)docs/evidence/**'
+git diff <base-remote>/<base-branch>...HEAD -- . ':(exclude)docs/evidence/**'
+```
+
+Fill in the real values each time. No shell variable carries values from one call to the next.
 
 If the branch diff is empty or the base ref is unresolved, report the issue and stop — do not create or edit the PR.
 
@@ -233,7 +262,25 @@ Keep the title under 72 characters.
 
 The new commits are already on the PR from Step 5. Report the PR URL, then ask whether to rewrite the description.
 
-- If **yes**, run Step 6 now to generate the title and body file (passing the existing PR URL for context), then apply:
+- If **yes**, run Step 6 now to generate the title and body file (passing the existing PR URL for context), then carry the Demo section and apply.
+
+  **Carry the Demo section.** The rewrite replaces the whole description, so a `## Demo` section in the current one has to be carried into the new one. Skip this when the new body already holds a `## Demo` section from Step 6. Save the current description to a file, and check it for a Demo heading:
+
+  ```bash
+  OLD_BODY_FILE=$(mktemp /tmp/pr-old-body-XXXXXX.md)
+  gh pr view "<PR URL>" --json body --jq '.body' > "$OLD_BODY_FILE"
+  grep -q '^## Demo' "$OLD_BODY_FILE" && echo has-demo
+  ```
+
+  When it prints `has-demo`, load the `systematic:pr-attachments` skill in carry mode. State the tokens in the instruction text itself, and pass them as skill arguments where the host supports them, because some hosts pass no skill arguments: `mode:carry old=<old body file> new=<new body file>`, with the real paths from this run. Wrap a path that has spaces in double quotes. Carry mode edits the new body file in place. It never touches the PR.
+
+  The skill ends with one status line, `pr-attachments: status=<ok|absent|failed> [reason=<reason>]`. On `status=ok` or `status=absent`, apply the new body file. On `status=failed`, fall back to prose-only preservation: write the body file again, keep the old `## Demo` section in it by hand, and tell the user that carry failed and why. If the skill fails to load, or prints no status line, fall back to prose-only preservation too. Then remove the old file:
+
+  ```bash
+  rm -f "$OLD_BODY_FILE"
+  ```
+
+  **Apply.** The carry step edits the body file in place, so the apply step is the same:
 
   ```bash
   gh pr edit --title "<title>" --body "$(cat "<body_file>")"
@@ -244,3 +291,7 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
 ### Step 8: Report
 
 Output the PR URL.
+
+When this run published evidence images (`status=ok`, or `status=failed` with `evidence=pushed`), also print the re-run command, marked as recommended before merge. Take `<N>` from the PR URL:
+
+> Recommended before merge: load `systematic:pr-attachments` with no tokens (or with `pr:<N>`). It re-checks the embed pins and offers to remove the evidence images from the branch.
