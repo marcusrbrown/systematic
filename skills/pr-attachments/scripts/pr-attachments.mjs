@@ -3,10 +3,12 @@
 // Helper for the pr-attachments skill: the gates that must be exact.
 //
 // Every subcommand reads one JSON object on stdin and writes one JSON object
-// on stdout. None prints file or body contents, and each only reports paths
-// the caller gave it. A PR body is decoded once, from the JSON string. A body
-// the helper produces goes to the file named by `out_file`, never to stdout,
-// and nothing else is written.
+// on stdout. None prints file or body contents. Each reports only the paths
+// the caller gave it, except `cleanup-set`, which reports the paths git
+// found under docs/evidence. A PR body is decoded once, from the JSON string.
+// A body the helper produces goes to the file named by `out_file`, never to
+// stdout. The one other thing the helper changes is the index, through
+// `git rm` in the `cleanup-set` removal step.
 //
 // Usage:
 //   node pr-attachments.mjs classify       < input.json
@@ -14,6 +16,8 @@
 //   node pr-attachments.mjs extract        < input.json
 //   node pr-attachments.mjs urls           < input.json
 //   node pr-attachments.mjs repin-rewrite  < input.json
+//   node pr-attachments.mjs pins           < input.json
+//   node pr-attachments.mjs cleanup-set    < input.json
 //
 // classify sorts explicit image paths into accepted entries with destination
 // names, or rejects the whole batch.
@@ -46,6 +50,49 @@
 //   body, head_repo, out_file
 //   pins         map of managed path -> new 40-hex lower-case SHA
 //
+// pins and cleanup-set run git themselves, from the top of the repository
+// that holds the working directory (the skill fetches first). They never take
+// git output as input. Every git call is an argv array with a timeout, no
+// stdin, literal pathspecs and a sanitized environment (every GIT_* variable
+// dropped but GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM). Both take an
+// optional `git_timeout_ms` per call (default 10000, at most 120000).
+//
+// pins reports, for each managed path, whether the pins in the body still
+// serve the image that is on the PR head.
+//   head_ref_oid  the PR head commit (40 hex, lower case)
+//   urls          non-empty array of { path, sha }; the `urls` array of the
+//                 `urls` subcommand fits as it is, and other fields are ignored
+//   For each path it finds the newest commit reachable from `head_ref_oid`
+//   that added or modified it. A pin is valid when its commit exists, is
+//   reachable from the head, and holds the same blob at the path as that
+//   newest commit; reachability alone is not enough. `pins` in the report is
+//   the map `repin-rewrite` takes: the newest commit for a stale path, and the
+//   pin already in the body for a path whose pins are valid.
+//   result  already-valid (0), repin-needed (0), partial (1: some paths never
+//           existed on the head), unresolved (1: none did), head-not-found (1)
+//
+// cleanup-set lists the files the PR added under docs/evidence, and removes
+// them in a second step.
+//   head_ref_oid  the PR head commit
+//   base_ref_name + remote   the base branch and the remote it was fetched
+//                 from, read as refs/remotes/<remote>/<name>; or
+//   base_ref      one fully qualified ref, such as refs/remotes/origin/main
+//   remove_digest optional; turns the call into the removal step
+//   The set is the files the PR added (rename detection off, so a rename in
+//   counts as an add), less every path present at the base tip, not the
+//   merge-base. It is sorted, with a digest of the set.
+//   Removal recomputes the set, refuses with digest-mismatch unless its digest
+//   equals `remove_digest`, refuses with head-not-checked-out unless HEAD is
+//   `head_ref_oid`, and only then runs `git rm` on the set. It stages the
+//   removals and commits nothing.
+//   result  set (0), empty (0), removed (0), digest-mismatch (1),
+//           head-not-checked-out (1), head-not-found (1), base-not-found (1),
+//           no-merge-base (1)
+//
+// A git failure or timeout exits 1 with result git-failed or git-timeout and
+// `reached`: the step it stopped at, and the progress made (paths done for
+// pins, whether removal had started for cleanup-set).
+//
 // Section rules (no markers; the heading is the only boundary):
 //   - The heading matches ^ {0,3}##[ \t]+Demo([ \t]+#+)?[ \t]*$.
 //   - A section runs to the next H1 or H2 (ATX or setext) or to the end.
@@ -60,6 +107,7 @@
 // the user must answer, or an output file that cannot be written), 2 usage
 // error.
 
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   closeSync,
@@ -80,7 +128,7 @@ const MAX_SLUG_LENGTH = 60
 const EVIDENCE_ROOT = 'docs/evidence'
 const SVG_MESSAGE = 'SVG is not supported by this skill'
 const USAGE =
-  'node pr-attachments.mjs <classify|splice|extract|urls|repin-rewrite> < input.json'
+  'node pr-attachments.mjs <classify|splice|extract|urls|repin-rewrite|pins|cleanup-set> < input.json'
 
 const EXTENSIONS = { png: 'png', jpeg: 'jpg', gif: 'gif', webp: 'webp' }
 
@@ -1042,6 +1090,438 @@ export function repinBody(body, headRepo, pins) {
   }
 }
 
+// ── Git ────────────────────────────────────────────────────────────────────
+//
+// `pins` and `cleanup-set` run git themselves, from the top of the repository
+// that holds the working directory. Their input is the caller's own data (the
+// head commit, the base branch, the managed paths); git output is never an
+// input, so no SHA is ever transcribed. Every call is an argv array, never a
+// shell, with a timeout, no stdin and a sanitized environment. Git output is
+// parsed and never echoed: the report carries fixed codes, paths and SHAs.
+
+const DEFAULT_GIT_TIMEOUT_MS = 10_000
+const MAX_GIT_TIMEOUT_MS = 120_000
+const GIT_MAX_BUFFER = 64 * 1024 * 1024
+const DIGEST_DOMAIN = 'pr-attachments/cleanup-set/v1'
+// The only GIT_* variables that reach git: they isolate config, and cannot
+// redirect the repository, the index or the object store.
+const GIT_ENV_PASSTHROUGH = new Set([
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_NOSYSTEM',
+])
+const COMMIT_SHA = /^[0-9a-f]{40}$/
+
+/**
+ * Every other GIT_* variable is dropped, so the caller's environment cannot
+ * point git at another repository, index or object store.
+ */
+function gitEnv() {
+  const env = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (
+      value !== undefined &&
+      (!key.startsWith('GIT_') || GIT_ENV_PASSTHROUGH.has(key))
+    ) {
+      env[key] = value
+    }
+  }
+  env.LC_ALL = 'C'
+  env.LANG = 'C'
+  env.GIT_TERMINAL_PROMPT = '0'
+  env.GIT_OPTIONAL_LOCKS = '0'
+  return env
+}
+
+/**
+ * @param {'git-timeout' | 'git-failed'} kind
+ * @param {number | null} status
+ */
+function gitFailure(kind, status) {
+  return Object.assign(new Error(kind), { gitFailure: { kind, status } })
+}
+
+/** @param {unknown} error */
+function failureOf(error) {
+  return error instanceof Error && 'gitFailure' in error
+    ? error.gitFailure
+    : null
+}
+
+/**
+ * Runs git and returns its stdout. Only the listed exit statuses are
+ * answers; any other status, a timeout or a launch failure throws. The step
+ * name is recorded first, so a failure reports where it stopped.
+ * @param {{ cwd: string, timeoutMs: number, reached: { step: string } }} ctx
+ * @param {string} step
+ * @param {string[]} args
+ * @param {number[]} okStatuses
+ */
+function runGit(ctx, step, args, okStatuses = [0]) {
+  ctx.reached.step = step
+  const result = spawnSync('git', ['--literal-pathspecs', ...args], {
+    cwd: ctx.cwd,
+    env: gitEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: ctx.timeoutMs,
+    maxBuffer: GIT_MAX_BUFFER,
+    windowsHide: true,
+  })
+  if (result.error) {
+    throw gitFailure(
+      result.error.code === 'ETIMEDOUT' ? 'git-timeout' : 'git-failed',
+      null,
+    )
+  }
+  if (result.status === null || !okStatuses.includes(result.status)) {
+    throw gitFailure('git-failed', result.status)
+  }
+  return { status: result.status, stdout: result.stdout }
+}
+
+/** @param {Buffer} output */
+function firstLine(output) {
+  return output.toString('utf8').split('\n')[0].trim()
+}
+
+/**
+ * Runs from the top of the repository, so every path is root-relative no
+ * matter which subdirectory the helper started in.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ */
+function locateRepo(ctx) {
+  const top = firstLine(
+    runGit(ctx, 'locate-repo', ['rev-parse', '--show-toplevel']).stdout,
+  )
+  if (top.length === 0) {
+    throw gitFailure('git-failed', 0)
+  }
+  ctx.cwd = top
+}
+
+/**
+ * The commit a revision names, or null when the repository does not have it.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} step
+ * @param {string} rev
+ */
+function resolveCommit(ctx, step, rev) {
+  const result = runGit(
+    ctx,
+    step,
+    ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`],
+    [0, 1],
+  )
+  return result.status === 0 ? firstLine(result.stdout) : null
+}
+
+/**
+ * The object id at `<commit>:<path>`, or null when the path is not there.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} step
+ * @param {string} spec
+ */
+function resolveObject(ctx, step, spec) {
+  const result = runGit(
+    ctx,
+    step,
+    ['rev-parse', '--verify', '--quiet', spec],
+    [0, 1],
+  )
+  return result.status === 0 ? firstLine(result.stdout) : null
+}
+
+/**
+ * Splits NUL-terminated output. Names that are not valid UTF-8 cannot make
+ * the round trip through JSON and back to git, so they fail the run.
+ * @param {Buffer} output
+ */
+function parseNulList(output) {
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(output)
+  } catch {
+    throw gitFailure('git-failed', 0)
+  }
+  return text.split('\0').filter((entry) => entry.length > 0)
+}
+
+// ── pins ───────────────────────────────────────────────────────────────────
+
+/**
+ * The newest commit reachable from the head that added or modified the path.
+ * Renames count as an add, so the commit that moved a file in is the answer.
+ * `-m` lets a merge that resolved the file to bytes neither parent had count
+ * as a modification; topological order puts a child before its parents.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} headOid
+ * @param {string} file
+ */
+function newestCommitFor(ctx, headOid, file) {
+  const result = runGit(ctx, 'newest-commit', [
+    'log',
+    '--topo-order',
+    '-m',
+    '--no-renames',
+    '--diff-filter=AM',
+    '--no-show-signature',
+    '--format=%H',
+    headOid,
+    '--',
+    file,
+  ])
+  const first = firstLine(result.stdout)
+  return COMMIT_SHA.test(first) ? first : null
+}
+
+/**
+ * A pin is valid when the commit exists, is reachable from the head, and holds
+ * the same blob at the path as the newest add-or-modify commit. Reachability
+ * alone would let a replaced image come back.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} headOid
+ * @param {string} file
+ * @param {string} newestBlob
+ * @param {string} sha
+ */
+function judgePin(ctx, headOid, file, newestBlob, sha) {
+  if (resolveCommit(ctx, 'pin-commit', sha) === null) {
+    return { sha, valid: false, reason: 'commit-unknown' }
+  }
+  const reachable = runGit(
+    ctx,
+    'pin-reachable',
+    ['merge-base', '--is-ancestor', sha, headOid],
+    [0, 1],
+  )
+  if (reachable.status !== 0) {
+    return { sha, valid: false, reason: 'not-reachable' }
+  }
+  const blob = resolveObject(ctx, 'pin-blob', `${sha}:${file}`)
+  if (blob === null) {
+    return { sha, valid: false, reason: 'path-missing' }
+  }
+  if (blob !== newestBlob) {
+    return { sha, valid: false, reason: 'blob-differs' }
+  }
+  return { sha, valid: true, reason: null }
+}
+
+/**
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} headOid
+ * @param {string} file
+ * @param {string[]} shas
+ */
+function assessPath(ctx, headOid, file, shas) {
+  const newest = newestCommitFor(ctx, headOid, file)
+  if (newest === null) {
+    return {
+      path: file,
+      state: 'unresolved',
+      newest_commit: null,
+      current: shas.map((sha) => ({
+        sha,
+        valid: false,
+        reason: 'no-newest-commit',
+      })),
+    }
+  }
+  const newestBlob = resolveObject(ctx, 'newest-blob', `${newest}:${file}`)
+  if (newestBlob === null) {
+    throw gitFailure('git-failed', 1)
+  }
+  const current = shas.map((sha) =>
+    judgePin(ctx, headOid, file, newestBlob, sha),
+  )
+  return {
+    path: file,
+    state: current.every((pin) => pin.valid) ? 'valid' : 'stale',
+    newest_commit: newest,
+    current,
+  }
+}
+
+/**
+ * @param {Parameters<typeof runGit>[0] & { reached: { step: string, paths_done: number, paths_total: number } }} ctx
+ * @param {{ headOid: string, paths: Map<string, string[]> }} input
+ */
+function pinsReport(ctx, input) {
+  locateRepo(ctx)
+  if (resolveCommit(ctx, 'resolve-head', input.headOid) === null) {
+    return outcome('pins', 1, 'head-not-found')
+  }
+  const entries = []
+  for (const file of [...input.paths.keys()].sort()) {
+    entries.push(assessPath(ctx, input.headOid, file, input.paths.get(file)))
+    ctx.reached.paths_done += 1
+  }
+  // The map repin-rewrite takes: a stale path goes to its newest commit, and a
+  // path whose pins are all valid keeps the pin it has.
+  const pins = {}
+  for (const entry of entries) {
+    if (entry.state === 'stale') {
+      pins[entry.path] = entry.newest_commit
+    } else if (entry.state === 'valid') {
+      pins[entry.path] = entry.current[0].sha
+    }
+  }
+  const unresolved = entries
+    .filter((entry) => entry.state === 'unresolved')
+    .map((entry) => entry.path)
+  const parts = {
+    head: input.headOid,
+    paths: entries,
+    pins,
+    unresolved_paths: unresolved,
+  }
+  if (unresolved.length === entries.length) {
+    return outcome('pins', 1, 'unresolved', parts)
+  }
+  if (unresolved.length > 0) {
+    return outcome('pins', 1, 'partial', parts)
+  }
+  const stale = entries.some((entry) => entry.state === 'stale')
+  return outcome('pins', 0, stale ? 'repin-needed' : 'already-valid', parts)
+}
+
+// ── cleanup-set ────────────────────────────────────────────────────────────
+
+/**
+ * A digest of the set that does not depend on the order the paths arrive in.
+ * @param {string[]} paths
+ */
+export function cleanupDigest(paths) {
+  const hash = createHash('sha256').update(DIGEST_DOMAIN).update('\0')
+  for (const file of [...paths].sort()) {
+    hash.update(file).update('\0')
+  }
+  return hash.digest('hex')
+}
+
+/**
+ * The set: files the PR added under docs/evidence (rename detection off, so a
+ * rename in counts as an add; `git diff` is the porcelain that would detect
+ * renames by default, where plumbing would not), less every path the base tip
+ * already has. The
+ * base tip is the right subtrahend, not the merge-base: the base may have
+ * gained a path since the branch point.
+ * @param {Parameters<typeof runGit>[0]} ctx
+ * @param {string} mergeBase
+ * @param {string} baseTip
+ * @param {string} headOid
+ */
+function computeCleanupSet(ctx, mergeBase, baseTip, headOid) {
+  const added = parseNulList(
+    runGit(ctx, 'diff-added', [
+      'diff',
+      '--no-renames',
+      '--no-ext-diff',
+      '--diff-filter=A',
+      '--name-only',
+      '-z',
+      mergeBase,
+      headOid,
+      '--',
+      `${EVIDENCE_ROOT}/`,
+    ]).stdout,
+  )
+  const atBase = new Set(
+    parseNulList(
+      runGit(ctx, 'list-base', [
+        'ls-tree',
+        '-r',
+        '-z',
+        '--name-only',
+        baseTip,
+        '--',
+        `${EVIDENCE_ROOT}/`,
+      ]).stdout,
+    ),
+  )
+  return [...new Set(added)]
+    .filter((file) => file.startsWith(`${EVIDENCE_ROOT}/`) && !atBase.has(file))
+    .sort()
+}
+
+/**
+ * @param {Parameters<typeof runGit>[0] & { reached: { step: string, removal_attempted: boolean } }} ctx
+ * @param {{ headOid: string, baseRef: string, removeDigest?: string }} input
+ */
+function cleanupReport(ctx, input) {
+  locateRepo(ctx)
+  if (resolveCommit(ctx, 'resolve-head', input.headOid) === null) {
+    return outcome('cleanup-set', 1, 'head-not-found')
+  }
+  const baseTip = resolveCommit(ctx, 'resolve-base', input.baseRef)
+  if (baseTip === null) {
+    return outcome('cleanup-set', 1, 'base-not-found')
+  }
+  const mergeBaseRun = runGit(
+    ctx,
+    'merge-base',
+    ['merge-base', baseTip, input.headOid],
+    [0, 1],
+  )
+  if (mergeBaseRun.status !== 0) {
+    return outcome('cleanup-set', 1, 'no-merge-base', { base_tip: baseTip })
+  }
+  const mergeBase = firstLine(mergeBaseRun.stdout)
+  const paths = computeCleanupSet(ctx, mergeBase, baseTip, input.headOid)
+  const parts = {
+    head: input.headOid,
+    base_tip: baseTip,
+    merge_base: mergeBase,
+    paths,
+    count: paths.length,
+    digest: cleanupDigest(paths),
+  }
+  if (input.removeDigest === undefined) {
+    return outcome('cleanup-set', 0, paths.length > 0 ? 'set' : 'empty', parts)
+  }
+  // Removal: the set just computed must be the set that was approved.
+  if (parts.digest !== input.removeDigest) {
+    return outcome('cleanup-set', 1, 'digest-mismatch', parts)
+  }
+  if (paths.length === 0) {
+    return outcome('cleanup-set', 0, 'empty', parts)
+  }
+  const checkedOut = resolveCommit(ctx, 'check-head', 'HEAD')
+  if (checkedOut !== input.headOid) {
+    return outcome('cleanup-set', 1, 'head-not-checked-out', parts)
+  }
+  ctx.reached.removal_attempted = true
+  runGit(ctx, 'remove', ['rm', '-q', '--', ...paths])
+  return outcome('cleanup-set', 0, 'removed', parts)
+}
+
+/**
+ * Runs a git-backed operation. A git failure or timeout becomes exit 1 with
+ * the step it reached; anything else is a bug and propagates.
+ * @param {string} operation
+ * @param {number} timeoutMs
+ * @param {Record<string, unknown>} reached
+ * @param {(ctx: any) => { exitCode: number, body: Record<string, unknown> }} work
+ */
+function withGit(operation, timeoutMs, reached, work) {
+  const ctx = {
+    cwd: process.cwd(),
+    timeoutMs,
+    reached: { step: 'start', ...reached },
+  }
+  try {
+    return work(ctx)
+  } catch (error) {
+    const failure = failureOf(error)
+    if (failure === null) {
+      throw error
+    }
+    return outcome(operation, 1, failure.kind, {
+      reached: { ...ctx.reached },
+      git_status: failure.status,
+    })
+  }
+}
+
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 /**
@@ -1129,8 +1609,11 @@ function parseInput(raw) {
 
 /**
  * Fixed vocabulary for every subcommand but classify: `result` is one of
- * spliced, extracted, absent, urls, repinned, needs-input, write-failed or
- * usage-error, and `asks` carries the question when it is needs-input.
+ * spliced, extracted, absent, urls, repinned, needs-input, write-failed,
+ * usage-error, already-valid, repin-needed, partial, unresolved, set, empty,
+ * removed, digest-mismatch, head-not-found, base-not-found, no-merge-base,
+ * head-not-checked-out, git-failed or git-timeout, and `asks` carries the
+ * question when it is needs-input.
  * @param {string} operation
  * @param {number} exitCode
  * @param {string} result
@@ -1322,12 +1805,169 @@ function runRepin(raw) {
     : outcome('repin-rewrite', 0, 'repinned', written)
 }
 
+const REF_NAME_START = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/
+const REMOTE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/
+const DIGEST = /^[0-9a-f]{64}$/
+
+/**
+ * A conservative subset of git's ref-name rules. It cannot start with a dash,
+ * so a name can never be read as an option.
+ * @param {unknown} value
+ */
+function isRefName(value) {
+  return (
+    typeof value === 'string' &&
+    REF_NAME_START.test(value) &&
+    !value.includes('..') &&
+    !value.includes('//') &&
+    !value.includes('/.') &&
+    !value.endsWith('/') &&
+    !value.endsWith('.') &&
+    !value.endsWith('.lock')
+  )
+}
+
+/** @param {unknown} value */
+function isGitTimeout(value) {
+  return (
+    value === undefined ||
+    (Number.isSafeInteger(value) && value > 0 && value <= MAX_GIT_TIMEOUT_MS)
+  )
+}
+
+/**
+ * `urls` is the array the `urls` subcommand reports; extra fields are
+ * ignored. Embeds of one path are grouped, with each pin lower-cased.
+ * @param {unknown} raw
+ */
+function parsePinsInput(raw) {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw.head_ref_oid !== 'string' ||
+    !COMMIT_SHA.test(raw.head_ref_oid) ||
+    !Array.isArray(raw.urls) ||
+    !isGitTimeout(raw.git_timeout_ms)
+  ) {
+    return { ok: false, error: 'invalid-input' }
+  }
+  if (raw.urls.length === 0) {
+    return { ok: false, error: 'empty-paths' }
+  }
+  const paths = new Map()
+  for (const item of raw.urls) {
+    if (
+      !isPlainObject(item) ||
+      typeof item.path !== 'string' ||
+      !MANAGED_PATH.test(item.path) ||
+      typeof item.sha !== 'string' ||
+      !/^[0-9a-fA-F]{40}$/.test(item.sha)
+    ) {
+      return { ok: false, error: 'invalid-input' }
+    }
+    const sha = item.sha.toLowerCase()
+    const shas = paths.get(item.path) ?? []
+    if (!shas.includes(sha)) {
+      shas.push(sha)
+    }
+    paths.set(item.path, shas)
+  }
+  return {
+    ok: true,
+    input: {
+      headOid: raw.head_ref_oid,
+      paths,
+      timeoutMs: raw.git_timeout_ms ?? DEFAULT_GIT_TIMEOUT_MS,
+    },
+  }
+}
+
+/**
+ * The base is either `base_ref_name` with the `remote` it was fetched from
+ * (read as refs/remotes/<remote>/<name>), or one fully qualified `base_ref`.
+ * @param {unknown} raw
+ */
+function parseCleanupInput(raw) {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw.head_ref_oid !== 'string' ||
+    !COMMIT_SHA.test(raw.head_ref_oid) ||
+    !isGitTimeout(raw.git_timeout_ms) ||
+    (raw.remove_digest !== undefined &&
+      !(
+        typeof raw.remove_digest === 'string' && DIGEST.test(raw.remove_digest)
+      ))
+  ) {
+    return { ok: false, error: 'invalid-input' }
+  }
+  const named = raw.base_ref_name !== undefined || raw.remote !== undefined
+  let baseRef
+  if (named && raw.base_ref === undefined) {
+    if (
+      !isRefName(raw.base_ref_name) ||
+      typeof raw.remote !== 'string' ||
+      !REMOTE_NAME.test(raw.remote)
+    ) {
+      return { ok: false, error: 'invalid-input' }
+    }
+    baseRef = `refs/remotes/${raw.remote}/${raw.base_ref_name}`
+  } else if (
+    !named &&
+    isRefName(raw.base_ref) &&
+    raw.base_ref.startsWith('refs/')
+  ) {
+    baseRef = raw.base_ref
+  } else {
+    return { ok: false, error: 'invalid-input' }
+  }
+  return {
+    ok: true,
+    input: {
+      headOid: raw.head_ref_oid,
+      baseRef,
+      removeDigest: raw.remove_digest,
+      timeoutMs: raw.git_timeout_ms ?? DEFAULT_GIT_TIMEOUT_MS,
+    },
+  }
+}
+
+/** @param {unknown} raw */
+function runPins(raw) {
+  const parsed = parsePinsInput(raw)
+  if (!parsed.ok) {
+    return usageError('pins', parsed.error)
+  }
+  const { input } = parsed
+  return withGit(
+    'pins',
+    input.timeoutMs,
+    { paths_done: 0, paths_total: input.paths.size },
+    (ctx) => pinsReport(ctx, input),
+  )
+}
+
+/** @param {unknown} raw */
+function runCleanup(raw) {
+  const parsed = parseCleanupInput(raw)
+  if (!parsed.ok) {
+    return usageError('cleanup-set', parsed.error)
+  }
+  const { input } = parsed
+  return withGit(
+    'cleanup-set',
+    input.timeoutMs,
+    { removal_attempted: false },
+    (ctx) => cleanupReport(ctx, input),
+  )
+}
+
 const OPERATIONS = {
   classify: runClassify,
   splice: runSplice,
   extract: runExtract,
   urls: runUrls,
   'repin-rewrite': runRepin,
+  pins: runPins,
+  'cleanup-set': runCleanup,
 }
 
 /** @param {string[]} argv */
