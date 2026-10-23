@@ -490,7 +490,6 @@ describe('pr-attachments skill contract -- embed mode', () => {
     for (const reason of [
       'node-unavailable',
       'declined',
-      'not-public',
       'push-rejected',
       'verify-failed',
     ]) {
@@ -724,15 +723,86 @@ describe('pr-attachments skill contract -- cleanup', () => {
   })
 })
 
-describe('pr-attachments skill contract -- private repositories and messages', () => {
-  test('private and unknown visibility are skip-only', () => {
-    const step = normalize(section(skill, '## Step 4: Check visibility'))
-    expect(step).toMatch(/private|unknown/i)
-    expect(step).toMatch(/skip only/i)
+describe('pr-attachments skill contract -- private repositories: the explicit-answer gate', () => {
+  const step = normalize(section(skill, '## Step 4: Check visibility'))
+
+  test('a public repository proceeds on the raw form, and the check still reads PUBLIC', () => {
     expect(step).toContain('`PUBLIC`')
-    expect(step).not.toMatch(/blob\/|\?raw=true|gh api/)
+    expect(step).toMatch(/public[^.]*raw form/i)
   })
 
+  test('private, internal and unknown visibility ask for an explicit answer before anything is published', () => {
+    expect(step).toMatch(/private/i)
+    expect(step).toMatch(/internal/i)
+    expect(step).toMatch(/unknown/i)
+    expect(step).toMatch(/explicit answer/i)
+    expect(step).toMatch(/before anything is published/i)
+    expect(step).toMatch(/never infer[^.]*(consent|answer)/i)
+    expect(step).toMatch(/no default/i)
+  })
+
+  test('the prompt says the images stay in the repository history', () => {
+    expect(step).toMatch(/stay in the repository's (git )?history/i)
+  })
+
+  test('the prompt says the images become public if the repository is later made public or forked', () => {
+    expect(step).toMatch(/later made public, or is forked[^.]*become public/i)
+  })
+
+  test('the prompt says cleanup removes the images from the branch but not from history', () => {
+    expect(step).toMatch(
+      /cleanup removes them from the branch[^.]*not from (the repository's )?(git )?history/i,
+    )
+  })
+
+  test('the gate runs before the copy, the commit and the push', () => {
+    expect(skill.indexOf('explicit answer')).toBeGreaterThan(-1)
+    expect(skill.indexOf('explicit answer')).toBeLessThan(
+      skill.indexOf('### Copy into place'),
+    )
+  })
+
+  test('a decline publishes nothing and ends embed mode with the fixed failed line', () => {
+    expect(step).toMatch(/declines?[^.]*nothing is published/i)
+    expect(step).toContain(
+      'pr-attachments: status=failed evidence=none reason=declined',
+    )
+  })
+
+  test('a decline reuses the declined reason, and the retired not-public reason and skip-only text are gone', () => {
+    expect(flat).toContain('`declined`')
+    expect(flat).not.toContain('not-public')
+    expect(flat).not.toMatch(/skip only|public repositories only/i)
+  })
+
+  test('says in one sentence why private repositories use the blob form', () => {
+    expect(step).toContain(
+      'Private repositories use the blob form because raw links do not render for signed-in members.',
+    )
+  })
+
+  test('proceeding emits the blob form for every embed and only the blob form', () => {
+    expect(step).toMatch(/blob form[^.]*every embed[^.]*only the blob form/i)
+  })
+
+  test('the viewer permission and github.com checks still apply to every repository', () => {
+    expect(step).toMatch(/`ADMIN`, `MAINTAIN` or `WRITE`/)
+    expect(step).toContain('https://github.com/')
+  })
+
+  test('re-pin mode asks nothing, because it publishes nothing', () => {
+    expect(step).toMatch(/re-pin mode[^.]*(asks nothing|no question)/i)
+  })
+
+  test('the scrub prompt does not call a private repository public', () => {
+    const scrub = normalize(
+      section(skill, '## Step 5: List the set and confirm the scrub'),
+    )
+    expect(scrub).toMatch(/private[^.]*instead of[^.]*public/i)
+  })
+})
+
+describe('pr-attachments skill contract -- private repositories and messages', () => {
   test('relays the SVG message as is', () => {
     expect(flat).toContain('SVG is not supported by this skill')
   })
@@ -773,5 +843,128 @@ describe('pr-attachments skill contract -- helper result codes', () => {
   test('internal and usage errors are stops in every mode', () => {
     expect(flat).toMatch(/`usage-error`[^.]*stop/i)
     expect(flat).toMatch(/`internal-error`[^.]*stop/i)
+  })
+})
+
+describe('pr-attachments skill contract -- private repositories: the blob form', () => {
+  const step7 = section(skill, '## Step 7: Verify the embeds')
+  const publicPath = section(skill, '### Public repositories: the raw form')
+  const privatePath = section(skill, '### Private repositories: the blob form')
+  const privateText = normalize(privatePath)
+  const privateCommands = fencedBlocks(privatePath)
+    .map((block) => block.body)
+    .join('\n')
+
+  test('Step 7 has one subsection per link form', () => {
+    expect(publicPath).not.toBe('')
+    expect(privatePath).not.toBe('')
+    expect(step7.indexOf('### Public repositories')).toBeLessThan(
+      step7.indexOf('### Private repositories'),
+    )
+  })
+
+  test('public repositories are unchanged: the raw form and the anonymous verify call', () => {
+    expect(publicPath).toContain('https://raw.githubusercontent.com/%s/%s/%s')
+    expect(publicPath).toContain(`${INVOKE} verify`)
+    expect(publicPath).not.toContain('blob/')
+    expect(publicPath).not.toContain('gh api')
+    expect(normalize(publicPath)).toMatch(/`blob-url`[^.]*stop/i)
+  })
+
+  test('the Demo text for a private repository is built from git pins in the blob form', () => {
+    expect(privateCommands).toContain(
+      'https://github.com/%s/blob/%s/%s?raw=true',
+    )
+    expect(privateCommands).toContain(
+      'git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD',
+    )
+    expect(privateCommands).not.toContain('raw.githubusercontent.com')
+  })
+
+  test('verification goes through gh api contents with --jq .sha, at the pinned commit', () => {
+    expect(privateCommands).toContain(
+      'gh api "repos/$OWNER_REPO/contents/$DEST?ref=$PIN" --jq .sha',
+    )
+  })
+
+  test('the git blob SHA from gh is compared to the blob_sha that classify reported', () => {
+    expect(privateText).toMatch(/`blob_sha`[^.]*classify/i)
+    expect(privateCommands).toMatch(/\[ "\$ACTUAL" = "\$EXPECTED" \]/)
+    expect(privateText).toMatch(/byte-identical/i)
+  })
+
+  test('the private path never calls the helper verify subcommand and never downloads bytes', () => {
+    expect(privatePath).not.toContain(`${INVOKE} verify`)
+    expect(privatePath).not.toContain('pr-attachments.mjs')
+    expect(privateCommands).not.toMatch(/\b(?:curl|wget)\b/)
+    expect(privateText).toMatch(/never through the helper's `verify`/i)
+  })
+
+  test('the check is bounded: a few retries for propagation, then it stops with state', () => {
+    expect(privateCommands).toMatch(/for ATTEMPT in 1 2 3 4/)
+    expect(privateCommands).toMatch(/sleep \d+/)
+    expect(privateText).toMatch(/stop with the state reached/i)
+  })
+
+  test('a failed check never writes the description and never returns the Demo file', () => {
+    expect(privateText).toMatch(
+      /never write the description, and never return the Demo file/i,
+    )
+    expect(privateText).toContain('`verify-failed`')
+    expect(privateText).toMatch(/pushed and unreferenced/i)
+  })
+
+  test('the gh check runs before the description is written', () => {
+    expect(skill.indexOf('gh api "repos/')).toBeGreaterThan(-1)
+    expect(skill.indexOf('gh api "repos/')).toBeLessThan(
+      skill.indexOf('gh pr edit'),
+    )
+  })
+
+  test('re-pin mode handles the blob form: urls, pins, repin-rewrite, the gh check, then the write', () => {
+    const repin = section(skill, '## Re-pin mode')
+    const text = normalize(repin)
+    expect(text).not.toMatch(/which this skill does not handle/i)
+    expect(text).toMatch(/`form`/)
+    expect(text).toMatch(/`blob`/)
+    expect(text).toMatch(/`raw`/)
+    expect(text).toMatch(/form must match the repository[^.]*or the run stops/i)
+    const positions = [
+      repin.indexOf(`${INVOKE} urls`),
+      repin.indexOf(`${INVOKE} pins`),
+      repin.indexOf(`${INVOKE} repin-rewrite`),
+      repin.indexOf('Private repositories: the blob form'),
+      repin.indexOf('write step of Step 8'),
+    ]
+    for (const position of positions) {
+      expect(position).toBeGreaterThan(-1)
+    }
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+  })
+
+  test('re-pin mode takes the expected blob from git, because it has no classify result', () => {
+    expect(privateText).toMatch(/re-pin mode has no classify result/i)
+    expect(privateCommands).toContain('git rev-parse "$PIN:$DEST"')
+  })
+
+  test('cleanup is the same for private repositories and repeats the history disclosure', () => {
+    const cleanup = normalize(section(skill, '## Cleanup'))
+    expect(cleanup).toMatch(
+      /private[^.]*stay in the repository's history[^.]*public/i,
+    )
+    expect(cleanup).toContain(
+      'Cleanup does not revoke access, so any published secret must be rotated.',
+    )
+  })
+
+  test('the disclosures say blob links need access to the repository', () => {
+    const disclosures = normalize(section(skill, '## Disclosures'))
+    expect(disclosures).toMatch(/private[^.]*(signed-in|access)/i)
+    expect(disclosures).toMatch(/forked/i)
+  })
+
+  test('uses no internal planning vocabulary and no dates', () => {
+    expect(skill).not.toMatch(/\bprobe\b|\bO[1-4]\b|\bUnit \d|\bthe plan\b/i)
+    expect(skill).not.toMatch(/\b20\d\d-\d\d-\d\d\b/)
   })
 })

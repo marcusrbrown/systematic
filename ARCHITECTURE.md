@@ -292,8 +292,11 @@ to splice; carry mode copies the Demo section from an old description file into 
 re-pin mode re-points the embeds after a rebase or force-push. A run with no image paths ends with
 an offer to remove the evidence files from the branch. The skill commits images by pathspec under
 `docs/evidence/<topic>/`, pushes with an explicit refspec, and writes the description only after
-every embed URL serves an image. It publishes to public repositories only; private, internal and
-unknown-visibility repositories are skip-only. A bundled Node helper holds the steps that must be
+every embed URL serves an image. A public repository gets the raw link form, checked anonymously by
+the helper. A private, internal or unknown-visibility repository gets the blob link form, but only
+after an explicit answer that the images stay in git history and become public if the repository is
+later made public or forked. Its embeds are checked through `gh api` against the blob SHA that
+classify reported, never through the helper's anonymous `verify`. A bundled Node helper holds the steps that must be
 exact: image classification, byte-exact splicing, pin selection, the cleanup set and bounded
 verification. It takes JSON on stdin, writes JSON on stdout, and keeps no state. The `gh` calls and
 the push stay in the skill's prose. The helper needs `node` 18+ on PATH, and the skill stops with

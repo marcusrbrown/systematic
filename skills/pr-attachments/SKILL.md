@@ -154,13 +154,33 @@ Applies to embed mode, PR mode and Re-pin mode.
 gh repo view "<owner>/<repo>" --json visibility,isPrivate,viewerPermission,url
 ```
 
-Proceed only when all of these hold:
+Every repository must pass both of these checks:
 
-- `visibility` is `PUBLIC` and `isPrivate` is false.
 - `url` starts with `https://github.com/`.
 - `viewerPermission` is `ADMIN`, `MAINTAIN` or `WRITE`. Otherwise stop: the user cannot push to the head repository. A rejected push stops the run too.
 
-A private, internal or unknown-visibility repository stops the run. Offer skip only: nothing is published and the images stay local. This version publishes to public repositories only. Name the repository in the message. In embed mode the reason is `not-public`.
+Then pick the link form from the visibility:
+
+- `visibility` is `PUBLIC` and `isPrivate` is false: the repository is public, so use the raw form and go on.
+- Anything else is a private, internal or unknown-visibility repository. Use the blob form, after the explicit answer below.
+
+Remember the form for Steps 5 to 8. Re-pin mode takes it from the embeds that already exist.
+
+### Private, internal and unknown-visibility repositories
+
+PR mode and embed mode only. Re-pin mode publishes nothing, so it asks nothing and goes straight on.
+
+Private repositories use the blob form because raw links do not render for signed-in members. Proceeding emits the blob form for every embed, and only the blob form.
+
+Before anything is published, ask the user and wait for the answer. Name the repository:
+
+> `<owner>/<repo>` is not public. The images stay in the repository's history. If the repository is later made public, or is forked, the images become public. Cleanup removes them from the branch but not from history. Publish them here?
+
+Require an explicit answer. There is no default answer. Never infer consent from the original request. Only an explicit yes proceeds. On anything else the user declines: nothing is published and the images stay local. In embed mode finish with this line, and no Demo file:
+
+```text
+pr-attachments: status=failed evidence=none reason=declined
+```
 
 ## Step 5: List the set and confirm the scrub
 
@@ -181,6 +201,8 @@ git log --oneline "@{u}..HEAD"
 Then run the scrub confirmation. Ask the user, and wait for the answer:
 
 > These images will be published to a public GitHub repository. Open each one. Confirm that its visible content shows no secrets, tokens, credentials, personal data or private URLs.
+
+For a private, internal or unknown-visibility repository, say "a private GitHub repository" instead of "a public GitHub repository".
 
 The scrub confirmation covers visible content only. Metadata inside an image (EXIF, text chunks, trailing bytes) is not stripped and is published as is.
 
@@ -252,13 +274,15 @@ If the push is rejected, stop and report. Never force-push and never retry with 
 
 ## Step 7: Verify the embeds
 
-Verification runs in every mode, before the description is written or the Demo file is returned.
+Verification runs in every mode, before the description is written or the Demo file is returned. The link form from Step 4 picks the subsection: public repositories use the raw form, and every other repository uses the blob form.
 
 Make the temp files. Each is created with mode 0600. Note the three paths:
 
 ```bash
 for NAME in demo backup new-body; do printf '%s %s\n' "$NAME" "$(mktemp)"; done
 ```
+
+### Public repositories: the raw form
 
 Build the Demo text from the pins git reports. Never retype or transcribe a SHA by hand. The block prints the evidence commit SHA, which is the newest commit that added or changed any of these files:
 
@@ -293,12 +317,61 @@ Route the result:
 
 - `verified` (exit 0): every embed serves an image. Continue.
 - `failed` (exit 1): read `failed`. Report each failing URL with its `status` and `http_status`. If the top-level `retryable` is true, call again with the same URLs and `waited_s` set to the sum of the `waited_s` values of the earlier reports. Stop once `retryable` is false.
-- `usage-error` (exit 2) with `blob-url`: a blob-form URL is not verified here. Stop.
+- `usage-error` (exit 2) with `blob-url`: a blob-form URL never goes to this call, so stop.
 - Any other `usage-error`: stop.
 
 Never print or paste a response body, and never fetch one yourself.
 
 Never write the description, and never return the Demo file, when verification fails. The evidence commit is pushed and unreferenced. In PR mode say: the evidence commit is pushed, the description is not written, and a re-run retries and reuses the pushed commit. In embed mode the reason is `verify-failed`.
+
+### Private repositories: the blob form
+
+Build the Demo text from the pins git reports, in the blob form. Never retype or transcribe a SHA by hand. The block prints the evidence commit SHA, which is the newest commit that added or changed any of these files:
+
+```bash
+DEMO_FILE="<demo file>";
+OWNER_REPO="<owner/repo of the head repository>";
+set -- "<destination 1>" "<destination 2>";
+printf '## Demo\n' > "$DEMO_FILE"
+for DEST in "$@"; do PIN="$(git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD -- "$DEST")"; printf '\n![%s](https://github.com/%s/blob/%s/%s?raw=true)\n' "$(basename "${DEST%.*}")" "$OWNER_REPO" "$PIN" "$DEST" >> "$DEMO_FILE"; done
+git log -n 1 --no-renames --diff-filter=AM --format=%H HEAD -- "$@"
+```
+
+List the URLs to check, from the file that is about to be written:
+
+```bash
+FILE="<Demo file, or the new body file in Re-pin mode>";
+OWNER_REPO="<owner/repo of the head repository>";
+grep -o -E "https://github\.com/$OWNER_REPO/blob/[0-9a-f]{40}/docs/evidence/[a-z0-9._/-]+\?raw=true" "$FILE" | sort -u
+```
+
+Check each URL through `gh`, never through the helper's `verify`, which fetches anonymously and cannot see a private repository. The check asks GitHub for the file at the pinned commit and compares its git blob SHA with the expected one. Equal blob SHAs mean the file is byte-identical to the one that classify already accepted as an image, so nothing is downloaded.
+
+The expected SHA is the `blob_sha` that classify reported for that file. Pair each URL with the entry whose `destination` ends the URL path. Re-pin mode has no classify result, so write `local` in place of the SHA: the block then reads the blob SHA from git at the pinned commit.
+
+```bash
+OWNER_REPO="<owner/repo of the head repository>";
+set -- "<blob URL 1> <blob_sha 1, or local>" "<blob URL 2> <blob_sha 2, or local>";
+FAILED=0
+for ITEM in "$@"; do
+  URL="${ITEM%% *}"; EXPECTED="${ITEM#* }"
+  REST="${URL#https://github.com/$OWNER_REPO/blob/}"; PIN="${REST%%/*}"; DEST="${REST#*/}"; DEST="${DEST%%\?*}"
+  [ "$EXPECTED" = local ] && EXPECTED="$(git rev-parse "$PIN:$DEST")"
+  printf '%s\n' "$EXPECTED" | grep -Eqx '[0-9a-f]{40}' || { echo "no expected blob SHA for $DEST"; FAILED=1; continue; }
+  ACTUAL=""
+  for ATTEMPT in 1 2 3 4; do
+    ACTUAL="$(gh api "repos/$OWNER_REPO/contents/$DEST?ref=$PIN" --jq .sha 2>/dev/null)"
+    [ "$ACTUAL" = "$EXPECTED" ] && break
+    [ "$ATTEMPT" -lt 4 ] && sleep 5
+  done
+  if [ "$ACTUAL" = "$EXPECTED" ]; then echo "ok $DEST"; else echo "mismatch $DEST ${ACTUAL:-none}"; FAILED=1; fi
+done
+test "$FAILED" = 0
+```
+
+Exit 0 passes: every file exists at its pinned commit with the expected blob SHA. Each file gets four attempts, five seconds apart, so GitHub has time to serve a new commit. A file that still fails after that, or a line that says `no expected blob SHA`, stops the run. Stop with the state reached: what is committed, what is pushed, which files failed, and that the description is untouched.
+
+Never write the description, and never return the Demo file, when this check fails. The evidence commit is pushed and unreferenced. In PR mode say: the evidence commit is pushed, the description is not written, and a re-run retries and reuses the pushed commit. In embed mode the reason is `verify-failed`.
 
 ## Step 8: Write the description or return the Demo file
 
@@ -363,7 +436,7 @@ pr-attachments: status=failed evidence=<pushed|none> reason=<reason>
 
 - `evidence_sha` is the SHA the Step 7 Demo block printed. Copy it.
 - `evidence` is `pushed` once the push succeeded, otherwise `none`. A failed line never comes with a Demo file.
-- `reason` is one of `node-unavailable`, `helper-failed`, `rejected-images`, `declined`, `not-public`, `no-target`, `git-failed`, `push-rejected` or `verify-failed`.
+- `reason` is one of `node-unavailable`, `helper-failed`, `rejected-images`, `declined`, `no-target`, `git-failed`, `push-rejected` or `verify-failed`.
 
 ## Carry mode
 
@@ -448,7 +521,9 @@ gh pr view "$PR" --json body --jq '{body: .body, head_repo: "<owner/repo>"}' > "
 node "$SKILL_DIR/scripts/pr-attachments.mjs" urls < "$BACKUP"
 ```
 
-With no managed URL, report that there is nothing to re-pin and go to Cleanup. A `blob` form means a private-repository embed, which this skill does not handle: stop.
+With no managed URL, report that there is nothing to re-pin and go to Cleanup.
+
+Each URL reports its `form`. The form must match the repository (`raw` for a public repository, `blob` for any other) or the run stops. Say which embeds use the wrong form and why: a raw link does not render in a private repository, and a blob link cannot be verified anonymously in a public one. To fix it, re-run in PR mode with the image paths, which replaces the Demo section.
 
 ### Pick the pins
 
@@ -488,7 +563,7 @@ node "$SKILL_DIR/scripts/pr-attachments.mjs" repin-rewrite < "$BACKUP"
 
 ### Verify and write
 
-Verify the URLs of the rewritten file with Step 7. Take the list from the new body file.
+Verify the URLs of the rewritten file with Step 7. Take the list from the new body file. A public repository uses the raw form subsection. Any other repository uses "Private repositories: the blob form", with `local` as the expected SHA of every URL.
 
 Then do the write step of Step 8 with the new body file and this backup. Tell the user the backup path first. Then go to Cleanup.
 
@@ -527,6 +602,8 @@ gh repo view "<owner>/<repo>" --json squashMergeAllowed,mergeCommitAllowed,rebas
 
   If `mergeCommitAllowed` or `rebaseMergeAllowed` is true, add one line: the images stay in default-branch history unless the PR is squash-merged. Always add this disclosure verbatim: Cleanup does not revoke access, so any published secret must be rotated.
 
+  For a private, internal or unknown-visibility repository, cleanup works the same way, and you also say that the images stay in the repository's history and become public if it is later made public or forked.
+
   Then ask whether to remove the files, and wait for an explicit yes. On anything else, stop and leave the files.
 - `base-not-found`, `no-merge-base`, `head-not-found` (exit 1): stop. Report the state. Fetch the base or push first.
 - `git-failed` or `git-timeout` (exit 1): stop. Report `reached`.
@@ -562,6 +639,8 @@ Then run the file-set assertion from Assert the committed file set, with these p
 
 - Evidence binaries appear in the Files tab of the PR until cleanup.
 - Published images stay in git history, forks and caches. Cleanup removes files from the branch. It does not revoke access.
-- Verification confirms the raw URL serves an image. It does not confirm GitHub renders it. Files over about 10 MB may not render.
+- For a public repository, verification confirms the raw URL serves an image. For a private repository, it confirms that the file at the pinned commit is the image that was classified. Neither confirms GitHub renders it. Files over about 10 MB may not render.
+- A private repository's images stay in its history. If it is later made public or forked, they become public. Cleanup does not remove them from history.
+- Blob links in a private repository render only for signed-in viewers who have access to it. Anyone else sees no image.
 - A commit-pinned link survived cleanup, squash merge and branch deletion on one observed PR. That is observed, not guaranteed. A re-run re-verifies.
 - A rebase or force-push needs a re-run with no paths.

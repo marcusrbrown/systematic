@@ -693,3 +693,201 @@ describe('pr-attachments dry run -- carry mode over the real helper', () => {
     expect(fs.existsSync(run.demoFile)).toBe(false)
   })
 })
+
+// ── Private repositories: the blob form ────────────────────────────────────
+//
+// The `gh api` check cannot reach GitHub offline. A stand-in `gh` answers the
+// one call the block makes from the local repository, so the block's own
+// shell (parsing, retries, exit code) is what runs.
+
+const BLOB_NAME_MARKER = 'blob/%s/%s?raw=true'
+const BLOB_LIST_MARKER = 'grep -o -E'
+const BLOB_CHECK_MARKER = 'contents/$DEST?ref=$PIN'
+const NO_WAIT = { 'sleep 5': 'sleep 0' }
+
+/** A `gh` that answers `gh api repos/<o>/<r>/contents/<path>?ref=<sha> --jq .sha` from git. */
+function installFakeGh(pr: Pr, failFirst = 0): string {
+  const bin = path.join(makeDir(), 'bin')
+  fs.mkdirSync(bin)
+  const counter = path.join(pr.home, 'gh-calls')
+  fs.writeFileSync(counter, '0')
+  fs.writeFileSync(
+    path.join(bin, 'gh'),
+    [
+      '#!/bin/sh',
+      '[ "$1" = api ] || exit 2',
+      '[ "$3" = --jq ] && [ "$4" = .sha ] || exit 2',
+      `COUNT="$(( $(cat "${counter}") + 1 ))"; echo "$COUNT" > "${counter}"`,
+      `[ "$COUNT" -le ${failFirst} ] && exit 1`,
+      `REST="\${2#repos/*/*/contents/}"`,
+      `git rev-parse "\${REST##*\\?ref=}:\${REST%%\\?ref=*}"`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  return bin
+}
+
+function runWithGh(pr: Pr, bin: string, script: string): ShellResult {
+  return runShell(`PATH="${bin}:$PATH"\n${script}`, pr.work, pr.home)
+}
+
+const OWNER_REPO = 'octo/widgets'
+
+function blobUrl(sha: string): string {
+  return `https://github.com/${OWNER_REPO}/blob/${sha}/${DEST}?raw=true`
+}
+
+/** Publishes the evidence, then builds the blob-form Demo file with the skill's block. */
+function privateDemo(pr: Pr): { head: string; demoFile: string } {
+  publishEvidence(pr)
+  const head = isolatedGit(pr.work, ['rev-parse', 'HEAD'])
+  const demoFile = path.join(pr.home, 'demo.md')
+  fs.writeFileSync(demoFile, '')
+  const built = runBlock(pr, BLOB_NAME_MARKER, {
+    vars: { DEMO_FILE: demoFile, OWNER_REPO },
+    set: [DEST],
+  })
+  expect(built.status, built.stderr).toBe(0)
+  expect(built.stdout.trim()).toBe(head)
+  return { head, demoFile }
+}
+
+function checkBlobs(
+  pr: Pr,
+  bin: string,
+  items: readonly string[],
+): ShellResult {
+  const script = fill(blockWith(BLOB_CHECK_MARKER), {
+    vars: { OWNER_REPO },
+    set: items,
+    tokens: NO_WAIT,
+  })
+  return runWithGh(pr, bin, script)
+}
+
+describe('pr-attachments dry run -- private repositories over the real helper', () => {
+  test('the Demo text carries the pin git reports in the blob form, and the helper reads it back as blob', () => {
+    const pr = createPr()
+    const { head, demoFile } = privateDemo(pr)
+    expect(fs.readFileSync(demoFile, 'utf8')).toBe(
+      `## Demo\n\n![shot](${blobUrl(head)})\n`,
+    )
+
+    const listed = runBlock(pr, BLOB_LIST_MARKER, {
+      vars: { FILE: demoFile, OWNER_REPO },
+    })
+    expect(listed.stdout.trim()).toBe(blobUrl(head))
+
+    const urls = runHelper(pr, 'urls', {
+      body: fs.readFileSync(demoFile, 'utf8'),
+      head_repo: OWNER_REPO,
+    })
+    expect(urls.report.urls?.[0]).toMatchObject({
+      sha: head,
+      path: DEST,
+      form: 'blob',
+    })
+  })
+
+  test('the gh check passes when GitHub reports the blob SHA that classify reported', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const result = checkBlobs(pr, installFakeGh(pr), [
+      `${blobUrl(head)} ${blob}`,
+    ])
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+  })
+
+  test('the gh check reads the expected blob from git when re-pin mode passes local', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const result = checkBlobs(pr, installFakeGh(pr), [`${blobUrl(head)} local`])
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+  })
+
+  test('the gh check fails when the blob SHA differs from the classified one', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const result = checkBlobs(pr, installFakeGh(pr), [
+      `${blobUrl(head)} ${'0'.repeat(40)}`,
+    ])
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain(`mismatch ${DEST}`)
+  })
+
+  test('the gh check fails when the file is absent at the pinned commit', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const absent = `https://github.com/${OWNER_REPO}/blob/${head}/docs/evidence/feat-x/gone.png?raw=true`
+    const result = checkBlobs(pr, installFakeGh(pr), [`${absent} ${blob}`])
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('mismatch docs/evidence/feat-x/gone.png')
+  })
+
+  test('the gh check rejects an expected value that is not a git blob SHA', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const result = checkBlobs(pr, installFakeGh(pr), [`${blobUrl(head)} nope`])
+    expect(result.status).not.toBe(0)
+  })
+
+  test('the gh check retries for propagation and passes once GitHub catches up', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const result = checkBlobs(pr, installFakeGh(pr, 3), [
+      `${blobUrl(head)} ${blob}`,
+    ])
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(pr.home, 'gh-calls'), 'utf8').trim()).toBe(
+      '4',
+    )
+  })
+
+  test('the gh check is bounded at four attempts per file', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const blob = isolatedGit(pr.work, ['rev-parse', `${head}:${DEST}`])
+    const result = checkBlobs(pr, installFakeGh(pr, 99), [
+      `${blobUrl(head)} ${blob}`,
+    ])
+    expect(result.status).not.toBe(0)
+    expect(fs.readFileSync(path.join(pr.home, 'gh-calls'), 'utf8').trim()).toBe(
+      '4',
+    )
+  })
+
+  test('re-pin mode rewrites a stale blob-form pin through the helper: urls, pins, repin-rewrite', () => {
+    const pr = createPr()
+    const { head } = privateDemo(pr)
+    const stale = 'a'.repeat(40)
+    const body = `Intro\n\n## Demo\n\n![shot](${blobUrl(stale)})\n`
+
+    const urls = runHelper(pr, 'urls', { body, head_repo: OWNER_REPO })
+    expect(urls.report.urls?.[0]).toMatchObject({ form: 'blob', sha: stale })
+
+    const pins = runHelper(pr, 'pins', {
+      head_ref_oid: head,
+      urls: urls.report.urls,
+    })
+    expect(pins.report).toMatchObject({
+      result: 'repin-needed',
+      pins: { [DEST]: head },
+    })
+
+    const outFile = path.join(pr.home, 'repinned.md')
+    const rewritten = runHelper(pr, 'repin-rewrite', {
+      body,
+      head_repo: OWNER_REPO,
+      pins: { [DEST]: head },
+      out_file: outFile,
+    })
+    expect(rewritten.report.result).toBe('repinned')
+    expect(fs.readFileSync(outFile, 'utf8')).toBe(
+      `Intro\n\n## Demo\n\n![shot](${blobUrl(head)})\n`,
+    )
+  })
+})

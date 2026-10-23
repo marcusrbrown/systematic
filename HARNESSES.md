@@ -114,10 +114,15 @@ Recorded execution evidence for this surface:
   inline bodies and hand-run `git rm` [PA-2].
 - **Offline dry run** — the fenced blocks of `SKILL.md` run against a temporary repository with a
   local bare remote and the real helper: the pathspec commit, the file-set assertion, the explicit
-  refspec push, the rejected non-fast-forward push, carry mode and cleanup [PA-3].
+  refspec push, the rejected non-fast-forward push, carry mode and cleanup [PA-3]. The
+  private-repository blob check runs against a stand-in `gh` that answers from the local repository:
+  match, mismatch, absent file, bounded retries and the `local` expectation used by re-pin mode.
 
-No live OpenCode, Pi, OCX or Claude Code host was executed for this check. The dry run uses no `gh`
-and no network, so GitHub's raw-content serving and image rendering are not exercised. The helper's
+No live OpenCode, Pi, OCX or Claude Code host was executed for this check. The dry run uses no real
+`gh` and no network, so GitHub's raw-content serving and image rendering are not exercised. A
+separate live check on one private repository showed the blob link form rendering for a signed-in
+member, the raw form not rendering, and both returning 404 anonymously. That check is not
+reproduced by the test suite. The helper's
 `verify` subcommand is tested against a local HTTP server (`tests/unit/pr-attachments-verify.test.ts`). `SKILL_DIR` resolution on Pi and Claude
 Code is evidenced from the package tree only. These layouts are proven by package-tree execution
 under real Node and by a scripted run of the skill's own commands, not cross-harness runtime parity.
