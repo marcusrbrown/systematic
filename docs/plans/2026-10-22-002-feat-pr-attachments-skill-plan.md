@@ -18,7 +18,7 @@ The skill has three modes:
 - **Embed mode** returns the section text for `git-commit-push-pr` to insert.
 - **Re-pin mode** re-points the embeds after a rebase.
 
-A small built-in-only helper script handles the work that must be exact. The `git` and `gh` steps stay as prose in the skill. `git-commit-push-pr` gains a publish option in its evidence step.
+A small built-in-only helper script handles the work that must be exact, including the git-local gates. The `gh` steps and the push stay as prose in the skill. `git-commit-push-pr` gains a publish option in its evidence step.
 
 ## Problem Frame
 
@@ -215,7 +215,12 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
   - The probe runs before the PR opens. If it fails, v1 ships skip-only.
   - The proceed prompt adds one sentence: the images stay in history, and if the repo is later made public or forked they become public. Cleanup will not remove them.
 - **SVG stays excluded, with a corrected reason.** Raw SVG is served as `image/svg+xml` and renders through Camo. The exclusion stands because SVG is markup that can carry invisible content (metadata, comments, editor paths, hidden layers, embedded data, scripts), and a visual scrub cannot cover it. The message reads "SVG is not supported by this skill".
-- **One built-in-only helper, with git and gh in prose.** Byte-exact splicing, content classification and bounded retry are gates that an LLM re-emitting text cannot hold. The helper keeps no state, takes JSON in and gives JSON out, and exits 0 (success), 1 (domain failure) or 2 (usage).
+- **Git-local gates in the helper; gh and network in prose.**
+  - Byte-exact splicing, content classification, bounded retry, re-pin pin selection and the cleanup set are gates that an LLM re-emitting text cannot hold.
+  - The helper keeps no state, takes JSON in and gives JSON out, and exits 0 (success), 1 (domain failure) or 2 (usage).
+  - Two subcommands run git themselves: `pins` and `cleanup-set`. They use `spawnSync` with an argv array, a timeout and a sanitized env, following `skills/ce-review/scripts/ensure-ignore.mjs`.
+  - They never take git output as input, because that would bring back transcription.
+  - The `gh` calls and the push stay as skill prose. `verify` is the one network call in the helper, because retry timing must be exact.
 - **No markers; managed URLs are recognised by pattern.**
   - The section boundary is the heading rule only, so no invisible text goes into the PR body.
   - A URL is managed only when all of these hold:
@@ -245,13 +250,31 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
   - `git-commit-push-pr` splices from that file and deletes it once it is consumed.
   - The model never re-types 40-hex SHAs.
 - **The cleanup set comes from git, not from the PR body.**
-  - The set is every file under `docs/evidence/` that the PR added, minus anything already on the base.
+  - The helper's `cleanup-set` computes it: every file under `docs/evidence/` that the PR added, found with `--no-renames`, minus any path present at the base tip.
+  - It subtracts the base tip, not the merge-base, because the base may have gained a file since the branch point. This needs `baseRefName` from `gh pr view`.
+  - `--no-renames` makes a rename into `docs/evidence/` count as an add.
   - Cleanup therefore works with no Demo block, and it can never touch files outside `docs/evidence/` or files the PR did not add.
-  - The skill lists the set and waits for an explicit yes before `git rm`.
+  - The helper emits a digest of the set. The skill lists the set and waits for an explicit yes. The removal step recomputes the digest and refuses on a mismatch, as `cleanup.mjs` does with its preview token. Only then does it run `git rm`.
+  - The digest is right here although the scrub digest was declined. Scrub has a post-commit file-set assertion, and cleanup has no equivalent check.
 - **Re-pin pins to the newest add-or-modify commit.**
-  - Each managed path pins to the newest commit reachable from `headRefOid` that added or modified it.
+  - The helper's `pins` finds, for each managed path, the newest commit reachable from `headRefOid` that added or modified it, with `--no-renames`.
   - A pin is valid when the blob at the pinned SHA equals the blob at that commit, not merely when it is reachable.
   - This keeps a replaced image from coming back.
+- **The handoff works across hosts.**
+  - Pi's `systematic_skill` takes no arguments (`src/pi.ts:215-222`).
+  - The `git-commit-push-pr` handoff therefore states `mode:embed` and the paths in the load instruction itself, as well as in skill arguments where the host supports them.
+  - The skill parses tokens from "the skill arguments, or the invoking instruction when none are shown", following `skills/document-review/SKILL.md:13`.
+  - It uses no positional `$N` placeholders, and it gives an explicit quoting rule for paths with spaces.
+  - A load that succeeds but sees no mode token stops at the dispatch rule and never guesses.
+- **The helper needs `node` 18+ on PATH.**
+  - The installation docs allow Bun alone for OpenCode (`docs/src/content/docs/getting-started/installation.mdx:14`), so `node` is not guaranteed.
+  - A missing `node`, a launch failure or exit 2 is a stop-with-state in every mode.
+  - Embed mode returns `failed` with nothing published.
+  - Cleanup never falls back to running `git rm` by hand.
+  - The skill carries a never-bypass paragraph, following `skills/ce-review/references/pipeline-invocation.md:17-31`.
+- **Every helper call is anchored on `SKILL_DIR`.**
+  - The wording `SKILL_DIR="<skill directory stated when this skill loads>";` is reused verbatim in every fenced block.
+  - Pi and Claude Code resolution is evidenced from the package tree only. No live transcript on those hosts covers it. The limitation is stated, not hidden.
 - **Declined: a confirmation digest for the scrub gate.** It proves set equality, not that the user answered. The post-commit file-set assertion already guarantees that what was listed is what was committed.
 - **Declined: rejecting trailing data after the image end marker.** It stays a warning, consistent with not stripping metadata.
 
@@ -261,9 +284,9 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
 
 - Does a private repo render raw links for members? Camo fetches anonymously, so no (inferred). The blob form is the candidate, gated on the probe (O4).
 - How is the topic derived and how are collisions handled? See Topic naming above.
-- How does `git-commit-push-pr` hand off? Through a `mode:embed` token and a temp file, at the evidence decision.
+- How does `git-commit-push-pr` hand off? Through a `mode:embed` token stated in the load instruction, and a temp file, at the evidence decision.
 - What is the retry policy right after a push? See Retry above.
-- Which `gh` queries apply? `gh pr view --json headRepository,headRepositoryOwner,headRefName,headRefOid,isCrossRepository` and `gh repo view <head> --json visibility,isPrivate,viewerPermission,url`. Only `PUBLIC` proceeds without a stop. A null `headRepository` is refused. `viewerPermission` is a preflight signal; the push is authoritative.
+- Which `gh` queries apply? `gh pr view --json headRepository,headRepositoryOwner,headRefName,headRefOid,baseRefName,isCrossRepository` and `gh repo view <head> --json visibility,isPrivate,viewerPermission,url`. Only `PUBLIC` proceeds without a stop. A null `headRepository` is refused. `viewerPermission` is a preflight signal; the push is authoritative.
 
 ### Deferred to Implementation
 
@@ -281,9 +304,12 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
     tests/unit/
     ├── pr-attachments-classify.test.ts
     ├── pr-attachments-splice.test.ts
+    ├── pr-attachments-git.test.ts
     ├── pr-attachments-verify.test.ts
     ├── pr-attachments-contract.test.ts
-    └── pr-attachments-packaging.test.ts
+    ├── pr-attachments-dry-run.test.ts
+    ├── pr-attachments-packaging.test.ts
+    └── git-commit-push-pr-evidence-contract.test.ts
 
 ## High-Level Technical Design
 
@@ -304,7 +330,7 @@ flowchart TD
   E0 -- no --> N[Stop: open the PR first, or run through git-commit-push-pr]
   E0 -- yes --> C
   D -- yes --> B{Paths given?}
-  B -- no --> R[Re-pin: newest add-or-modify commit per managed path, blob match]
+  B -- no --> R[Re-pin: pins subcommand, newest add-or-modify commit per managed path, blob match]
   R --> RV[Rewrite stale pins, verify] --> W
   B -- yes --> C[classify: content, size, SVG, names]
   C --> V[Visibility: PUBLIC continues, else stop and ask]
@@ -323,6 +349,8 @@ flowchart TD
 ```
 
 ## Implementation Units
+
+**Unit order:** 1 → 2 → 3 → 4 → 5a → {5b, 6} → 5c (after the probe) → 7.
 
 - [ ] **Unit 1: Helper classification and naming**
 
@@ -433,13 +461,63 @@ flowchart TD
 
 **Verification:** For every fixture, the bytes outside the replaced region are identical between input and output.
 
-- [ ] **Unit 3: Helper verification with bounded retry**
+- [ ] **Unit 3: Helper git gates: pins and cleanup set**
+
+**Goal:** `pins` and `cleanup-set` subcommands that run git themselves, so pin selection and the cleanup set are computed and not transcribed.
+
+**Requirements:** R15, R17.
+
+**Dependencies:** Unit 2, because they share the helper file and `pins` takes the managed paths from `urls`.
+
+**Files:**
+- Modify: `skills/pr-attachments/scripts/pr-attachments.mjs`
+- Test: `tests/unit/pr-attachments-git.test.ts`
+
+**Approach:**
+- Both subcommands run git through `spawnSync` with an argv array, a timeout and a sanitized env.
+- Neither takes git output as input. Inputs come from the body and from `gh pr view`: `headRefOid`, `baseRefName`, the managed paths and the SHA each embed pins today.
+- `pins` reports, per path:
+  - the newest commit reachable from `headRefOid` that added or modified the path, found with `--no-renames`;
+  - whether the current pin is valid, meaning the blob at the current SHA equals the blob at that commit;
+  - an unresolved state when no such commit exists.
+- `cleanup-set` takes `headRefOid` and `baseRefName`. The skill fetches the base first.
+  - The set is the files under `docs/evidence/` that the PR added, found with `--no-renames`.
+  - Any path present at the base tip, not the merge-base, is subtracted.
+  - It emits the set and a digest of the set.
+- Removal is a second step of `cleanup-set`. It takes the digest, recomputes the set, and refuses on a mismatch. On a match it runs `git rm` for the set. Commit and push stay in the skill.
+- A git timeout or failure exits 1 and reports the state it reached.
+
+**Execution note:** Test-first. Each named mutation below must fail its fixture before the implementation lands.
+
+**Patterns to follow:**
+- `skills/ce-review/scripts/ensure-ignore.mjs` for the git calls.
+- `skills/ce-review-cleanup/scripts/cleanup.mjs` (`:1039-1041`) for the digest check.
+- `tests/unit/ce-review-ensure-ignore.test.ts` for real temp repos.
+
+**Test scenarios:**
+- Fixtures use real temp repos with a local bare remote.
+- Re-pin: add A, overwrite with B, re-pin. The newest commit is B's, and the pin to A is invalid.
+- Rename: a file renamed into `docs/evidence/` is in the set.
+- Base gained a path: a path the base gained after the merge-base is excluded.
+- A file the PR did not add is excluded.
+- A file outside `docs/evidence/` is never listed.
+- The digest is stable for the same set and changes when the set changes.
+- Removal refuses on a digest mismatch and removes nothing.
+- A git timeout or failure exits 1 with the reached state reported.
+- Mutation killers:
+  - Dropping `--no-renames` fails the rename fixture.
+  - Using the merge-base instead of the base tip fails the base-gained fixture.
+  - Dropping the blob-equality check fails the add-A-overwrite-B fixture.
+
+**Verification:** Every fixture runs against real temp repos. No test needs the network or `gh`. The helper still imports only `node:` modules.
+
+- [ ] **Unit 4: Helper verification with bounded retry**
 
 **Goal:** A `verify` subcommand that confirms each embed serves an image, with bounded retry. It never echoes content.
 
 **Requirements:** R16, plus the private-repo path from decision O4.
 
-**Dependencies:** Unit 2.
+**Dependencies:** Unit 3, because they share the helper file.
 
 **Files:**
 - Modify: `skills/pr-attachments/scripts/pr-attachments.mjs`
@@ -474,35 +552,34 @@ flowchart TD
 
 **Verification:** No test waits on real time. `verify` never prints response bodies.
 
-- [ ] **Unit 4: The skill, its registration and its contract**
+- [ ] **Unit 5a: The skill text and its contract**
 
-**Goal:** Write `SKILL.md` for the three modes, register the skill on every surface, and pin its behaviour with contract and packaging tests.
+**Goal:** Write `SKILL.md` for the three modes and pin its text and ordering with contract tests. Freeze the frontmatter description here.
 
-**Requirements:** R1–R17.
+**Requirements:** R1–R17. The private path is written as skip-only text.
 
-**Dependencies:** Units 1–3.
+**Dependencies:** Units 1–4.
 
 **Files:**
 - Create: `skills/pr-attachments/SKILL.md`
-- Modify:
-  - `src/lib/bundled-names.ts` (generated)
-  - `docs/public/schemas/v3/systematic-config.schema.json` (generated)
-  - `registry/registry.jsonc` (generated)
-  - `evals/cases/opencode/host-skill-coverage.json`
-- Test: `tests/unit/pr-attachments-contract.test.ts`, `tests/unit/pr-attachments-packaging.test.ts`
+- Test: `tests/unit/pr-attachments-contract.test.ts`, `tests/unit/pr-attachments-dry-run.test.ts`
 
 **Approach:**
 - **Frontmatter.** Set `name: pr-attachments`, a description that triggers on attaching screenshots to a PR, and `argument-hint` covering `mode:embed`, paths and the PR number or branch.
+  - Freeze the description here, so the registry is regenerated once in 5b.
   - Do not opt in to the portability marker unless the text passes its scan.
   - Avoid banned literals.
   - Avoid `!` lines.
+- **Precondition.** State that the helper needs `node` 18+ on PATH. Include the never-bypass paragraph.
 - **Target resolution.**
+  - Read tokens from the skill arguments, or from the invoking instruction when none are shown. Use no positional `$N` placeholders, and state the quoting rule for paths with spaces.
   - Parse the `mode:*` tokens. Conflicting tokens stop with an error, and the remaining tokens are paths.
   - Dispatch:
     - With no open PR and no `mode:embed`, stop.
     - With no paths and no PR, stop.
-    - Both stops say "open the PR first, or run through git-commit-push-pr".
-  - PR and re-pin modes: resolve the PR and its head with `gh pr view --json …`.
+    - A load that sees no mode token stops here and never guesses.
+    - Every stop says "open the PR first, or run through git-commit-push-pr".
+  - PR and re-pin modes: resolve the PR and its head with `gh pr view --json …`, including `baseRefName`.
   - Embed mode: resolve the head from the upstream of the current branch.
     - Run `git rev-parse --abbrev-ref @{u}`.
     - Match that remote's URL against `git remote -v` to get owner/repo, then run `gh repo view`.
@@ -511,6 +588,7 @@ flowchart TD
   - PR mode checks that the PR head is checked out and level.
 - **Ordering.** classify, visibility, list the accepted set, scrub confirmation, copy into place, pathspec commit, file-set assertion, push with an explicit refspec, verify, write the body or return the file, then the cleanup offer.
   - `classify` runs first. It is local and cheap, and it catches a bad batch before any network work.
+- **Private repos.** On a private or unknown-visibility repo, the skill stops and offers skip only. The blob branch is added in 5c, after the probe.
 - **Body write.**
   - Read the body with `gh pr view --json body`.
   - Back it up to a `mktemp` file (mode 0600) and tell the user the path.
@@ -521,25 +599,18 @@ flowchart TD
   - Keep the backup until the re-read passes.
 - **Re-pin.**
   - Use `headRefOid` from `gh`. If local `HEAD` differs, say "push first".
-  - Take managed paths from the body by pattern: the host is raw or blob, owner/repo equals the head repo, and the path matches `^docs/evidence/<slug>/<name>$`. Ignore every other URL and report how many were ignored.
-  - Pin each managed path to the newest commit reachable from `headRefOid` that added or modified it: `git log --diff-filter=AM -1 <headRefOid> -- <path>`.
-  - A pin is valid when the blob at the pinned SHA equals the blob at that commit, compared with `git rev-parse <sha>:<path>`. Reachability alone is not enough.
+  - Take managed paths from the body with the helper's `urls`. Ignore every other URL and report how many were ignored.
+  - Run the helper's `pins` for the managed paths.
   - If every pin is valid, report "already valid" and write nothing.
   - When only some paths resolve, report "partial" and name the unresolved paths.
   - If no path ever existed on the head, stop and point to PR mode.
 - **Cleanup.**
-  - The set is every file under `docs/evidence/` that the PR added, minus anything already on the base: `git diff --name-only --diff-filter=A <base>...<headRefOid> -- docs/evidence/`.
-  - Offer cleanup only once a PR exists, only if at least one such file exists at `headRefOid`, and recommend it before merge. Otherwise report "cleanup already done".
-  - List the set and wait for an explicit yes before `git rm`. Then commit and push without force.
+  - Run the helper's `cleanup-set` to get the set and its digest.
+  - Offer cleanup only once a PR exists, only if the set is not empty, and recommend it before merge. Otherwise report "cleanup already done".
+  - List the set and wait for an explicit yes. Then run the helper's removal step with the digest, commit, and push without force.
+  - Never run `git rm` by hand, including when the helper cannot run.
   - Read `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`. If non-squash merges are allowed, add one line: the images stay in default-branch history unless the PR is squash-merged.
   - Include the verbatim disclosure: cleanup does not revoke access, so any published secret must be rotated.
-- **Private proceed.**
-  - Until the live probe passes, private and unknown-visibility repos are skip-only, and this branch is unreachable.
-  - The probe runs before the PR opens. If it fails, v1 ships skip-only.
-  - Once the probe passes, proceeding emits the blob form after an explicit answer.
-  - The proceed prompt says the images stay in history, and if the repo is later made public or forked they become public. Cleanup will not remove them.
-  - Verify through `gh api repos/<o>/<r>/contents/<path>?ref=<sha>`, checking that the file exists and its decoded bytes are an image.
-  - State that rendering for members is pending the live probe.
 - **Disclosures.**
   - Evidence binaries appear in the Files tab until cleanup.
   - A rebase or force-push needs a zero-path re-run.
@@ -547,6 +618,7 @@ flowchart TD
 **Patterns to follow:**
 - `skills/ce-review-cleanup/SKILL.md` and its contract test for ordering assertions and the `SKILL_DIR` anchor.
 - `skills/document-review/SKILL.md` for mode-token parsing.
+- `skills/ce-review/references/pipeline-invocation.md:17-31` for the never-bypass paragraph.
 - `commit 449934b3` as the end-to-end precedent for adding a skill.
 
 **Test scenarios:**
@@ -557,7 +629,9 @@ flowchart TD
   - `git add -A` and `git add .`
   - `--body "$(`
   - `git add -f`
-- Contract: every helper invocation is anchored on `SKILL_DIR`.
+  - a hand-run `git rm` fallback in cleanup
+- Contract: every helper invocation is anchored on `SKILL_DIR`, and `node "$SKILL_DIR/scripts/pr-attachments.mjs"` is pinned.
+- Contract: the dispatch rule fires when no mode token is seen.
 - Contract text:
   - the `## Screenshots` warning;
   - the cleanup-does-not-revoke disclosure;
@@ -565,8 +639,37 @@ flowchart TD
   - "push first" for a local and remote mismatch;
   - "open the PR first, or run through git-commit-push-pr";
   - "cleanup already done";
-  - the explicit yes before `git rm`;
-  - the mismatch warning that prints the backup path and never auto-restores.
+  - the explicit yes before removal;
+  - the mismatch warning that prints the backup path and never auto-restores;
+  - the never-bypass paragraph and the "needs node 18+ on PATH" precondition;
+  - the skip-only text for private and unknown-visibility repos.
+- Offline prose dry run, with no `gh`:
+  - A temp repo with a local bare remote runs the pathspec commit, then the file-set assertion, then the refspec push.
+  - A forced non-fast-forward rejection stops the run and leaves the remote unchanged.
+
+**Verification:**
+- `bun scripts/content-integrity.ts` is clean.
+- The contract and dry-run tests pass.
+
+- [ ] **Unit 5b: Registration surfaces and packaging**
+
+**Goal:** Register the skill on every surface and pin the packaged helper.
+
+**Requirements:** Delivery of R1–R17.
+
+**Dependencies:** Unit 5a, because the description is frozen there.
+
+**Files:**
+- Modify:
+  - `src/lib/bundled-names.ts` (generated)
+  - `docs/public/schemas/v3/systematic-config.schema.json` (generated)
+  - `registry/registry.jsonc` (generated)
+  - `evals/cases/opencode/host-skill-coverage.json`
+- Test: `tests/unit/pr-attachments-packaging.test.ts`
+
+**Approach:** Regenerate the generated surfaces and hand-edit the eval case after `orchestrating-subagents`, as the registration table says.
+
+**Test scenarios:**
 - Packaging:
   - The OCX registry component lists `scripts/pr-attachments.mjs`.
   - `npm pack` includes it.
@@ -578,28 +681,55 @@ flowchart TD
 **Verification:**
 - `bun run schema:generate`, `bun scripts/generate-registry.ts`, `bun run registry:drift`, `bun run schema:drift`, `bun scripts/content-integrity.ts` and `bun run claude-code:build` are clean.
 - The generated `claude-code/` bundle contains the skill and resolves `systematic:pr-attachments`.
-- Until the private blob probe passes, the skill text keeps private and unknown-visibility repos skip-only.
 
-- [ ] **Unit 5: git-commit-push-pr integration**
+- [ ] **Unit 5c: The private blob branch**
+
+**Goal:** Let a private or unknown-visibility repo proceed with the blob form. This unit lands only after the live probe passes. If the probe fails, 5c is dropped and v1 ships skip-only.
+
+**Requirements:** R5, decision O4.
+
+**Dependencies:** Units 5a and 5b, and a passing live probe (Live verification, step 7).
+
+**Files:**
+- Modify: `skills/pr-attachments/SKILL.md`
+- Test: `tests/unit/pr-attachments-contract.test.ts`
+
+**Approach:**
+- Replace the skip-only text with the blob branch.
+- Proceeding emits the blob form after an explicit answer.
+- The proceed prompt says the images stay in history, and if the repo is later made public or forked they become public. Cleanup will not remove them.
+- Verify through `gh api repos/<o>/<r>/contents/<path>?ref=<sha>`, checking that the file exists and its decoded bytes are an image.
+- State that rendering for members was confirmed by the probe.
+
+**Test scenarios:**
+- Contract: the blob form, the explicit-answer gate and the history disclosure are present, and the skip-only text is gone.
+- Contract: private-repo verification goes through `gh api`, not the helper's `verify`.
+
+**Verification:**
+- The contract test and `bun scripts/content-integrity.ts` pass.
+- The probe result is recorded in the PR.
+
+- [ ] **Unit 6: git-commit-push-pr integration**
 
 **Goal:** Add the publish option to the evidence step. Keep the screenshots out of the feature commit and the PR narrative. Carry the Demo section through body rewrites.
 
 **Requirements:** R14, R17, R18 (decisions O2, O3).
 
-**Dependencies:** Unit 4.
+**Dependencies:** Unit 5a. It can run in parallel with 5b.
 
 **Files:**
 - Modify: `skills/git-commit-push-pr/SKILL.md`
-- Test: `tests/unit/pr-attachments-contract.test.ts` (assertions on `git-commit-push-pr`)
+- Test: `tests/unit/git-commit-push-pr-evidence-contract.test.ts`
 
 **Approach:**
 - **Step 4.** Never stage untracked image files without asking. When untracked images exist, ask the evidence-source question first.
 - **Step 6 evidence decision.**
   - Add a third option, "Publish local images". It loads `systematic:pr-attachments` with `mode:embed` and explicit paths. That covers both new PRs and the Step 7 rewrite.
+  - The load instruction states `mode:embed` and the paths in its own text, as well as in skill arguments where the host supports them.
   - The skill's status line reports the evidence commit SHA. The body generator uses `<base>..<evidence-sha>^` and excludes `docs/evidence/**`. No shell variable carries a value across calls.
   - Splice the returned file at the existing splice point, then delete it.
   - On status `failed`, report that the evidence files are pushed but unreferenced, then continue without evidence.
-- **Fallback.** If loading `systematic:pr-attachments` fails, offer only the existing two options.
+- **Fallback.** If loading `systematic:pr-attachments` fails, or it loads but sees no mode token, offer only the existing two options.
 - **Rewrites (Step 7 and DU-3).**
   - When a Demo section exists, run the helper's `extract` on the old body and `splice` the result into the regenerated body. Prose-only preservation stays as the fallback.
   - DU-3 makes no publish offer. A request to attach images routes to PR mode.
@@ -612,26 +742,34 @@ flowchart TD
 - Contract: the post-create instruction prints the zero-path re-run command.
 - Contract: DU-3 has no publish offer and routes to PR mode.
 - Contract: the Step 7 rewrite uses `extract` and `splice`.
-- Contract: the fallback text for a skill that fails to load offers only the two existing options.
+- Contract: the load instruction states `mode:embed` and the paths in its text.
+- Contract: the fallback text covers a skill that fails to load and a skill that loads but sees no mode token, and it offers only the two existing options.
 
 **Verification:**
 - `bun run claude-code:build` resolves `systematic:pr-attachments` from `git-commit-push-pr`.
 - If the frontmatter `description` changed, the registry is regenerated and `registry:drift` is clean.
 
-- [ ] **Unit 6: Docs and requirements alignment**
+- [ ] **Unit 7: Docs and README count**
 
-**Goal:** Record the skill in architecture docs and fix the README count.
+**Goal:** Record the skill in the architecture and harness docs, state the Node requirement, and fix the README count.
 
 **Requirements:** Documentation for all of the above.
 
-**Dependencies:** Units 4–5.
+**Dependencies:** Units 5a, 5b and 6, and 5c if it ships.
 
 **Files:**
-- Modify: `ARCHITECTURE.md` (a paragraph next to the review-artifact cleanup one), `README.md` (bundled skill count, set to 33)
+- Modify:
+  - `ARCHITECTURE.md`: a paragraph next to the review-artifact cleanup one.
+  - `README.md`: the bundled skill count, computed at implementation time.
+  - `HARNESSES.md`: a sibling section for the attachments helper, after the review-validator packaged-paths section (roughly `:65-91`).
+    - Add registry-style entries for the packaging and contract tests.
+    - Copy the "not cross-harness runtime parity" honesty paragraph.
+    - Record the Pi no-arguments boundary next to the other honesty boundaries (roughly `:46`).
+  - `docs/src/content/docs/getting-started/installation.mdx`: the `node` requirement for this skill.
 
 **Test expectation:** none. These are docs. `content-integrity` and markdownlint cover them.
 
-**Verification:** `bun scripts/content-integrity.ts` and markdownlint are clean. The README count is 33 and matches the number of `skills/` directories.
+**Verification:** `bun scripts/content-integrity.ts` and markdownlint are clean. The README count matches the number of `skills/` directories at implementation time.
 
 ## System-Wide Impact
 
@@ -643,11 +781,15 @@ flowchart TD
 - **State lifecycle risks:**
   - An evidence commit pushed without a body write leaves unreferenced files. These are reported, and cleanup applies.
   - The body is backed up before every write.
-- **API surface parity:** `git-commit-push-pr` changes for all three hosts.
+- **API surface parity:**
+  - `git-commit-push-pr` changes for all three hosts.
+  - Skill-argument delivery differs: OpenCode has an `arguments` param, Claude Code substitutes `$ARGUMENTS` or appends, and Pi has none.
+  - `node` availability differs by install.
+  - `SKILL_DIR` resolution is evidenced from the package tree only on Pi and Claude Code.
 - **Unchanged invariants:**
   - The existing "use existing evidence" and "skip" options behave as before.
   - DU-1..3 makes no commit or push unless the user asks to attach images, which routes to PR mode.
-  - No new runtime dependency.
+  - No new package dependency. The helper needs `node` 18+ on PATH, which the runtime precondition states.
 
 ## Risks & Dependencies
 
@@ -658,6 +800,9 @@ flowchart TD
 | A first-fetch 404 is cached for up to 300 s | Retry for up to about 300 s, split across bounded calls. |
 | Camo refuses large images even when the raw URL returns 200 | A soft warning above about 10 MB, plus a live size check. The `body_html` render check is deferred. |
 | The agent skips a prose gate such as the scrub confirmation | Contract tests pin the ordering. Live transcripts on each host are the behavioural evidence. |
+| No `node` on PATH | The skill stops with state, and the precondition is documented. Embed mode returns `failed`, and cleanup never falls back to `git rm` by hand. |
+| Pi passes no arguments to the skill | The tokens are stated in the instruction text, and the dispatch stop prevents guessing. |
+| Cleanup deletes a file the base gained | The base-tip subtraction, plus a temp-repo test. |
 
 ## Documentation / Operational Notes
 
