@@ -18,6 +18,7 @@
 //   node pr-attachments.mjs repin-rewrite  < input.json
 //   node pr-attachments.mjs pins           < input.json
 //   node pr-attachments.mjs cleanup-set    < input.json
+//   node pr-attachments.mjs verify         < input.json
 //
 // classify sorts explicit image paths into accepted entries with destination
 // names, or rejects the whole batch.
@@ -93,6 +94,40 @@
 // `reached`: the step it stopped at, and the progress made (paths done for
 // pins, whether removal had started for cleanup-set).
 //
+// verify is the one subcommand that uses the network. It checks that each
+// managed raw URL serves an image, retrying while GitHub's CDN catches up
+// with a push. It sends a bare GET (no credentials), follows at most 5
+// redirects and only to raw.githubusercontent.com or media.githubusercontent.com
+// over https, reads only the status and headers, and drops the body unread.
+// Nothing from a response is ever printed.
+//   urls               non-empty array (at most 50) of managed raw URLs:
+//                      https://raw.githubusercontent.com/<owner>/<repo>/
+//                      <40-hex>/docs/evidence/<slug>/<name>, with no query or
+//                      fragment. A blob URL is a usage error (`blob-url`):
+//                      the skill checks those through `gh api`.
+//   head_repo          optional "owner/repo"; every URL must belong to it
+//   max_wait_s         optional, default 90, at most 300: the most this call
+//                      spends waiting between attempts
+//   waited_s           optional, default 0: seconds earlier calls for the same
+//                      URLs already waited (`waited_s` of their reports, added
+//                      up). The schedule resumes there, and the 300 s total
+//                      counts it.
+//   request_timeout_s  optional, default 10, at most 300: per request
+//   Retried (404, 429, 5xx, network error, timeout): wait 2, 4, 8, 15, then 30 s
+//   again and again, each with +-20% jitter, and never less than a 429's
+//   Retry-After. A call stops when the next wait would pass `max_wait_s` or
+//   the 300 s total. Final at once: a 200 that is not image/*, 401/403, any
+//   other status, a redirect off the allowed hosts, a missing Location, or a
+//   6th redirect. Every URL is checked at the same time.
+//   result  verified (0), failed (1)
+//   Each URL is { url, status, http_status, attempts, retryable }. `status` is
+//   ok, not-found, rate-limited, server-error, network-error, timeout,
+//   not-an-image, forbidden, unexpected-status, bad-redirect,
+//   redirect-off-host or too-many-redirects. `retryable` is true when waiting
+//   longer could help and the 300 s total has room for the next wait. The
+//   report has `failed` (the failing entries), top-level `retryable` (any
+//   failure is retryable) and `waited_s` (the longest wait, rounded up).
+//
 // Section rules (no markers; the heading is the only boundary):
 //   - The heading matches ^ {0,3}##[ \t]+Demo([ \t]+#+)?[ \t]*$.
 //   - A section runs to the next H1 or H2 (ATX or setext) or to the end.
@@ -104,8 +139,8 @@
 //     inserted verbatim.
 //
 // Exit codes: 0 success, 1 domain failure (rejected batch, or a question
-// the user must answer, or an output file that cannot be written), 2 usage
-// error.
+// the user must answer, or an output file that cannot be written, or an embed
+// that does not serve an image), 2 usage error.
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -128,7 +163,7 @@ const MAX_SLUG_LENGTH = 60
 const EVIDENCE_ROOT = 'docs/evidence'
 const SVG_MESSAGE = 'SVG is not supported by this skill'
 const USAGE =
-  'node pr-attachments.mjs <classify|splice|extract|urls|repin-rewrite|pins|cleanup-set> < input.json'
+  'node pr-attachments.mjs <classify|splice|extract|urls|repin-rewrite|pins|cleanup-set|verify> < input.json'
 
 const EXTENSIONS = { png: 'png', jpeg: 'jpg', gif: 'gif', webp: 'webp' }
 
@@ -1522,6 +1557,284 @@ function withGit(operation, timeoutMs, reached, work) {
   }
 }
 
+// ── Verification ───────────────────────────────────────────────────────────
+//
+// The one network call in the helper, because retry timing has to be exact.
+// It sends a bare GET (no credentials, redirects handled here, hop by hop),
+// looks at the status and headers, and drops the body unread. The clock, the
+// sleep, the timer, the random source, the fetch and the host rule are
+// injected, so tests need no network and no real waiting.
+
+const ALLOWED_HOSTS = new Set([
+  'raw.githubusercontent.com',
+  'media.githubusercontent.com',
+])
+const MAX_REDIRECTS = 5
+const MAX_VERIFY_URLS = 50
+const BACKOFF_MS = [2000, 4000, 8000, 15_000, 30_000]
+const JITTER = 0.2
+const TOTAL_BUDGET_MS = 300_000
+const DEFAULT_MAX_WAIT_MS = 90_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+// A backstop for odd injected schedules; the default schedule ends by time.
+const DEFAULT_MAX_ATTEMPTS = 30
+const IMAGE_TYPE = /^image\/[a-z0-9][a-z0-9.+-]*$/
+const REDIRECT_CODES = new Set([301, 302, 303, 307, 308])
+const RETRYABLE_STATUSES = new Set([
+  'not-found',
+  'rate-limited',
+  'server-error',
+  'network-error',
+  'timeout',
+])
+const TIMED_OUT = Symbol('timed-out')
+
+/**
+ * Where a request may go: https, one of the two GitHub content hosts, the
+ * default port, no credentials in the URL.
+ * @param {URL} target
+ */
+function isManagedTarget(target) {
+  return (
+    target.protocol === 'https:' &&
+    ALLOWED_HOSTS.has(target.hostname) &&
+    target.port === '' &&
+    target.username === '' &&
+    target.password === ''
+  )
+}
+
+/** @param {unknown} response */
+function dropBody(response) {
+  try {
+    // Not awaited: cancelling must never be able to hold the check up.
+    Promise.resolve(response.body?.cancel()).catch(() => {})
+  } catch {}
+}
+
+/**
+ * Reads only the status and headers of a response.
+ * @param {Response} response
+ */
+function judgeResponse(response) {
+  const code = response.status
+  const known = (status, extra = {}) => ({ status, httpStatus: code, ...extra })
+  if (REDIRECT_CODES.has(code)) {
+    return known('redirect', { location: response.headers.get('location') })
+  }
+  if (code === 200) {
+    const type = (response.headers.get('content-type') ?? '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase()
+    return known(IMAGE_TYPE.test(type) ? 'ok' : 'not-an-image')
+  }
+  if (code === 404) {
+    return known('not-found')
+  }
+  if (code === 429) {
+    // Delta-seconds only; an HTTP date falls back to the schedule.
+    const header = response.headers.get('retry-after')?.trim() ?? ''
+    return known('rate-limited', {
+      retryAfterMs: /^\d{1,6}$/.test(header) ? Number(header) * 1000 : 0,
+    })
+  }
+  if (code >= 500 && code < 600) {
+    return known('server-error')
+  }
+  if (code === 401 || code === 403) {
+    return known('forbidden')
+  }
+  return known('unexpected-status')
+}
+
+/**
+ * One request, bounded by the per-request timeout. The body is cancelled
+ * whatever the status was, and a stalled request is aborted.
+ * @param {string} url
+ * @param {Record<string, any>} ctx
+ */
+async function probe(url, ctx) {
+  const controller = new AbortController()
+  let cancelTimer = () => {}
+  const timedOut = new Promise((resolve) => {
+    cancelTimer = ctx.startTimer(ctx.requestTimeoutMs, () => resolve(TIMED_OUT))
+  })
+  const pending = Promise.resolve().then(() =>
+    ctx.fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      credentials: 'omit',
+      headers: { accept: 'image/*' },
+      signal: controller.signal,
+    }),
+  )
+  try {
+    const winner = await Promise.race([pending, timedOut])
+    if (winner === TIMED_OUT) {
+      controller.abort()
+      pending.then(dropBody, () => {})
+      return { status: 'timeout', httpStatus: null }
+    }
+    try {
+      return judgeResponse(winner)
+    } finally {
+      dropBody(winner)
+    }
+  } catch {
+    controller.abort()
+    return { status: 'network-error', httpStatus: null }
+  } finally {
+    cancelTimer()
+  }
+}
+
+/**
+ * One attempt: the request plus the redirects it leads to, each hop checked
+ * against the host rule before anything is sent to it.
+ * @param {string} startUrl
+ * @param {Record<string, any>} ctx
+ */
+async function attempt(startUrl, ctx) {
+  let current = startUrl
+  for (let hops = 0; ; hops += 1) {
+    const seen = await probe(current, ctx)
+    if (seen.status !== 'redirect') {
+      return seen
+    }
+    const { httpStatus } = seen
+    if (hops === MAX_REDIRECTS) {
+      return { status: 'too-many-redirects', httpStatus }
+    }
+    let next = null
+    try {
+      next = seen.location ? new URL(seen.location, current) : null
+    } catch {}
+    if (next === null) {
+      return { status: 'bad-redirect', httpStatus }
+    }
+    if (!ctx.isAllowedTarget(next)) {
+      return { status: 'redirect-off-host', httpStatus }
+    }
+    current = next.href
+  }
+}
+
+/**
+ * Where in the schedule to start, given the seconds earlier calls already
+ * waited: the delays that fit in that time are behind us.
+ * @param {readonly number[]} schedule
+ * @param {number} waitedMs
+ */
+function scheduleStart(schedule, waitedMs) {
+  let index = 0
+  let spent = 0
+  while (index < 1000 && spent + delayAt(schedule, index) <= waitedMs) {
+    spent += delayAt(schedule, index)
+    index += 1
+  }
+  return index
+}
+
+/**
+ * @param {readonly number[]} schedule
+ * @param {number} index
+ */
+function delayAt(schedule, index) {
+  return schedule[Math.min(index, schedule.length - 1)] ?? 0
+}
+
+/**
+ * @param {string} url
+ * @param {{ status: string, httpStatus: number | null, retryAfterMs?: number }} seen
+ * @param {number} attempts
+ * @param {boolean} budgetLeft
+ */
+function verdict(url, seen, attempts, budgetLeft) {
+  return {
+    url,
+    status: seen.status,
+    http_status: seen.httpStatus,
+    attempts,
+    retryable: RETRYABLE_STATUSES.has(seen.status) && budgetLeft,
+  }
+}
+
+/**
+ * Retries 404, 429 (never sooner than Retry-After), 5xx, network errors and
+ * timeouts. Everything else, a 200 that is not an image included, is final.
+ * `retryable` on a failure means that waiting longer could still help and the
+ * 300 s total has room for the next wait.
+ * @param {string} url
+ * @param {Record<string, any>} ctx
+ */
+async function verifyOne(url, ctx) {
+  let attempts = 0
+  let step = ctx.firstStep
+  for (;;) {
+    attempts += 1
+    const seen = await attempt(url, ctx)
+    if (seen.status === 'ok' || !RETRYABLE_STATUSES.has(seen.status)) {
+      return verdict(url, seen, attempts, false)
+    }
+    const spread = 1 + (ctx.random() * 2 - 1) * JITTER
+    const delay = Math.max(
+      Math.round(delayAt(ctx.scheduleMs, step) * spread),
+      seen.retryAfterMs ?? 0,
+    )
+    const elapsed = ctx.now() - ctx.start
+    if (attempts >= ctx.maxAttempts || elapsed + delay > ctx.callLimitMs) {
+      const budgetLeft = ctx.waitedMs + elapsed + delay <= ctx.totalBudgetMs
+      return verdict(url, seen, attempts, budgetLeft)
+    }
+    await ctx.sleep(delay)
+    step += 1
+  }
+}
+
+/**
+ * Checks each URL, all at once. The time taken is the longest one's, and the
+ * result lists every URL in the order given, duplicates dropped.
+ * @param {readonly string[]} urls
+ * @param {Record<string, any>} [options]
+ */
+export async function verifyUrls(urls, options = {}) {
+  const scheduleMs = options.scheduleMs ?? BACKOFF_MS
+  const waitedMs = options.waitedMs ?? 0
+  const totalBudgetMs = options.totalBudgetMs ?? TOTAL_BUDGET_MS
+  const now = options.now ?? (() => performance.now())
+  const ctx = {
+    fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
+    sleep:
+      options.sleep ??
+      ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+    startTimer:
+      options.startTimer ??
+      ((ms, fire) => {
+        const timer = setTimeout(fire, ms)
+        return () => clearTimeout(timer)
+      }),
+    random: options.random ?? Math.random,
+    isAllowedTarget: options.isAllowedTarget ?? isManagedTarget,
+    requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    maxAttempts: options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+    callLimitMs: Math.min(
+      options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
+      totalBudgetMs - waitedMs,
+    ),
+    scheduleMs,
+    waitedMs,
+    totalBudgetMs,
+    firstStep: scheduleStart(scheduleMs, waitedMs),
+    now,
+    start: now(),
+  }
+  const results = await Promise.all(
+    [...new Set(urls)].map((url) => verifyOne(url, ctx)),
+  )
+  return { results, waitedMs: now() - ctx.start }
+}
+
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 /**
@@ -1612,7 +1925,8 @@ function parseInput(raw) {
  * spliced, extracted, absent, urls, repinned, needs-input, write-failed,
  * usage-error, already-valid, repin-needed, partial, unresolved, set, empty,
  * removed, digest-mismatch, head-not-found, base-not-found, no-merge-base,
- * head-not-checked-out, git-failed or git-timeout, and `asks` carries the
+ * head-not-checked-out, git-failed, git-timeout, verified or failed, and
+ * `asks` carries the
  * question when it is needs-input.
  * @param {string} operation
  * @param {number} exitCode
@@ -1960,6 +2274,120 @@ function runCleanup(raw) {
   )
 }
 
+const MAX_CALL_WAIT_S = TOTAL_BUDGET_MS / 1000
+
+/**
+ * @param {unknown} value
+ * @param {number} max
+ */
+function isSeconds(value, max) {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= max
+  )
+}
+
+/**
+ * Only managed raw URLs are checked: the raw host, a commit ref and a
+ * docs/evidence path, nothing else in the URL. A blob URL has its own code,
+ * because the skill routes those to the authenticated `gh api` check.
+ * @param {unknown} raw
+ */
+function parseVerifyInput(raw) {
+  if (
+    !isPlainObject(raw) ||
+    !Array.isArray(raw.urls) ||
+    (raw.max_wait_s !== undefined &&
+      !isSeconds(raw.max_wait_s, MAX_CALL_WAIT_S)) ||
+    (raw.request_timeout_s !== undefined &&
+      !isSeconds(raw.request_timeout_s, MAX_CALL_WAIT_S)) ||
+    (raw.waited_s !== undefined &&
+      !(
+        typeof raw.waited_s === 'number' &&
+        Number.isFinite(raw.waited_s) &&
+        raw.waited_s >= 0
+      )) ||
+    (raw.head_repo !== undefined &&
+      !(typeof raw.head_repo === 'string' && HEAD_REPO.test(raw.head_repo)))
+  ) {
+    return { ok: false, error: 'invalid-input' }
+  }
+  if (raw.urls.length === 0) {
+    return { ok: false, error: 'empty-urls' }
+  }
+  if (raw.urls.length > MAX_VERIFY_URLS) {
+    return { ok: false, error: 'too-many-urls' }
+  }
+  for (const url of raw.urls) {
+    if (typeof url !== 'string') {
+      return { ok: false, error: 'invalid-url' }
+    }
+    if (BLOB_URL.test(url)) {
+      return { ok: false, error: 'blob-url' }
+    }
+    const managed = RAW_URL.test(url)
+    if (
+      !managed ||
+      (raw.head_repo !== undefined &&
+        parseManagedUrl(url, raw.head_repo) === null)
+    ) {
+      return { ok: false, error: 'invalid-url' }
+    }
+  }
+  return {
+    ok: true,
+    input: {
+      urls: raw.urls,
+      maxWaitS: raw.max_wait_s,
+      requestTimeoutS: raw.request_timeout_s,
+      waitedS: raw.waited_s,
+    },
+  }
+}
+
+/**
+ * `verify` reports every URL as { url, status, http_status, attempts,
+ * retryable }. `status` is ok, or the reason it failed: not-found,
+ * rate-limited, server-error, network-error, timeout (all retried),
+ * not-an-image, forbidden, unexpected-status, bad-redirect,
+ * redirect-off-host or too-many-redirects (all final).
+ * @param {unknown} raw
+ * @param {Record<string, any>} [options]
+ */
+export async function runVerify(raw, options = {}) {
+  const parsed = parseVerifyInput(raw)
+  if (!parsed.ok) {
+    return usageError('verify', parsed.error)
+  }
+  const { input } = parsed
+  const { results, waitedMs } = await verifyUrls(input.urls, {
+    ...options,
+    ...(input.maxWaitS === undefined
+      ? {}
+      : { maxWaitMs: input.maxWaitS * 1000 }),
+    ...(input.requestTimeoutS === undefined
+      ? {}
+      : { requestTimeoutMs: input.requestTimeoutS * 1000 }),
+    ...(input.waitedS === undefined ? {} : { waitedMs: input.waitedS * 1000 }),
+  })
+  const failed = results.filter((entry) => entry.status !== 'ok')
+  return outcome(
+    'verify',
+    failed.length === 0 ? 0 : 1,
+    failed.length === 0 ? 'verified' : 'failed',
+    {
+      checked: results.length,
+      passed: results.length - failed.length,
+      waited_s: Math.ceil(waitedMs / 1000),
+      retryable: failed.some((entry) => entry.retryable),
+      results,
+      failed,
+    },
+  )
+}
+
 const OPERATIONS = {
   classify: runClassify,
   splice: runSplice,
@@ -1968,10 +2396,11 @@ const OPERATIONS = {
   'repin-rewrite': runRepin,
   pins: runPins,
   'cleanup-set': runCleanup,
+  verify: runVerify,
 }
 
 /** @param {string[]} argv */
-function run(argv) {
+async function run(argv) {
   const operation = argv.length === 1 ? argv[0] : undefined
   if (operation === undefined || !Object.hasOwn(OPERATIONS, operation)) {
     return usageError('unknown', 'unknown-operation')
@@ -1985,10 +2414,10 @@ function run(argv) {
   return OPERATIONS[operation](raw)
 }
 
-function main() {
+async function main() {
   let outcome
   try {
-    outcome = run(process.argv.slice(2))
+    outcome = await run(process.argv.slice(2))
   } catch {
     // One fixed object and exit 1, never a stack trace with local paths.
     outcome = {
@@ -2011,5 +2440,5 @@ const isDirectInvocation =
   import.meta.url === pathToFileURL(process.argv[1]).href
 
 if (isDirectInvocation) {
-  main()
+  await main()
 }
