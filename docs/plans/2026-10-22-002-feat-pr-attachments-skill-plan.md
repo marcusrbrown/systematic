@@ -3,6 +3,7 @@ title: "feat: Attach local screenshots to a pull request"
 type: feat
 status: active
 date: 2026-10-22
+deepened: 2026-10-23
 origin: docs/brainstorms/2026-10-22-pr-attachments-requirements.md
 ---
 
@@ -74,6 +75,7 @@ The origin requirements R1–R18 carry forward, with the four owner decisions ma
 
 - A render check through the PR's `body_html` Camo URLs. It is stronger than the raw-URL check and would amend R16, so it is a follow-up if live checks show raw-200-but-no-render cases.
 - PR mode in a temporary worktree when the PR head is not checked out. v1 stops and says how to fix it.
+- Switching `git-commit-push-pr`'s three body apply sites to `--body-file` to stop trailing-newline loss: separate `fix(skills)` PR with its own round-trip test.
 
 ## Context & Research
 
@@ -203,31 +205,55 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
 
 ## Key Technical Decisions
 
-- **The order is commit, push, verify, then write the body (O1).** A failed check leaves the body untouched. Reviewers never see broken images, and a re-run reuses the pushed commit. In embed mode a failure returns status `failed` with no Demo text. The caller then says the evidence files are pushed and unreferenced, and that cleanup applies.
+- **The order is commit, push, verify, then write the body (O1).** A failed check leaves the body untouched. Reviewers never see broken images, and a re-run reuses the pushed commit. In embed mode a failure returns status `failed` with no Demo text. The caller then says: "evidence files are pushed and unreferenced; cleanup is offered after the PR opens via the zero-path re-run".
 - **Cleanup comes from a zero-path re-run (O2).** Running the skill on an open PR without image paths runs the re-pin check, which is a no-op on a fresh PR, and ends with the cleanup offer. `git-commit-push-pr` prints that exact command after it creates the PR, marked "recommended before merge". There is no fourth mode.
 - **Embed mode covers new PRs and the Step 7 rewrite (O3).** The description-only update path makes no offer. If the user asks there to attach images, it routes to PR mode. Its existing preserve-Demo rule then carries the section through.
-- **Private "proceed" uses the blob link form, gated on a probe (O4).** On a private or unknown-visibility repo, proceeding emits `https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`. Verification switches to an authenticated `gh api` contents check: the file exists at the SHA and its bytes are an image. A live probe decides whether this ships. If repository members cannot see the images, private repos become skip-only.
+- **Private "proceed" uses the blob link form, gated on a probe (O4).**
+  - On a private or unknown-visibility repo, proceeding emits `https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`.
+  - Verification switches to an authenticated `gh api` contents check: the file exists at the SHA and its bytes are an image.
+  - Until a live probe passes, private and unknown-visibility repos are skip-only, and the blob branch is unreachable.
+  - The probe runs before the PR opens. If it fails, v1 ships skip-only.
+  - The proceed prompt adds one sentence: the images stay in history, and if the repo is later made public or forked they become public. Cleanup will not remove them.
 - **SVG stays excluded, with a corrected reason.** Raw SVG is served as `image/svg+xml` and renders through Camo. The exclusion stands because SVG is markup that can carry invisible content (metadata, comments, editor paths, hidden layers, embedded data, scripts), and a visual scrub cannot cover it. The message reads "SVG is not supported by this skill".
-- **One built-in-only helper, with git and gh in prose.** Byte-exact splicing, content classification and bounded retry are gates that an LLM re-emitting text cannot hold. The helper keeps no state, takes JSON in and gives JSON out, and exits 0, 1 (domain failure) or 2 (usage), like `cleanup.mjs`. Target under about 400 lines.
-- **Managed markers inside `## Demo`.** The generated content sits between `<!-- pr-attachments:v1 -->` and `<!-- /pr-attachments -->`. Markers fix the section boundary, and they let a whole-body rewrite in `git-commit-push-pr` copy the block verbatim through the helper's `splice`. The cost is invisible text in the body.
+- **One built-in-only helper, with git and gh in prose.** Byte-exact splicing, content classification and bounded retry are gates that an LLM re-emitting text cannot hold. The helper keeps no state, takes JSON in and gives JSON out, and exits 0 (success), 1 (domain failure) or 2 (usage).
+- **No markers; managed URLs are recognised by pattern.**
+  - The section boundary is the heading rule only, so no invisible text goes into the PR body.
+  - A URL is managed only when all of these hold:
+    - the host is raw or blob;
+    - owner/repo equals the head repo;
+    - the path matches `^docs/evidence/<slug>/<name>$`, where both slug and name are whitelisted.
+  - Re-pin and cleanup ignore every other URL and report how many they ignored.
 - **PR mode requires the PR head to be checked out and level.** After a fetch, the current branch must be the PR head branch, `HEAD` must equal `headRefOid`, and a remote must map to the head repo. Otherwise the skill stops with the exact fix. This prevents committing to the wrong branch or publishing unpushed commits. A temporary worktree is deferred.
 - **Evidence is committed by pathspec only.** The skill copies the images into place and never moves them. It runs `git add -- <dest>` without `-f`, and stops if the destination is gitignored. It then runs `git commit -- <dest>`. Afterwards it asserts that the commit's file list equals the expected set exactly. It stops on an LFS `filter` attribute. The commit subject reads `chore(evidence): add screenshots for <topic>` so it reads as housekeeping in a squash message.
 - **Pushes use an explicit refspec.** `HEAD:refs/heads/<head branch>` goes to the remote that maps to the head repo, with no force. A non-fast-forward rejection stops the run.
 - **Reuse is keyed on content.** The idempotency key is `(dest path, blob SHA)`, compared with `git rev-parse <headRefOid>:<path>` and with unpushed commits. A re-run after any partial failure reuses what already exists.
 - **Topic naming.**
-  - The slug comes from the full branch name: NFKC, lowercase, each run of non-`[a-z0-9]` becomes `-`, trimmed, at most 60 characters.
-  - A 6-hex hash is added when the name is truncated or lossy.
-  - An empty slug means ask.
-  - Directory collisions get `-2`, `-3`, chosen deterministically.
-  - In a batch, a repeated filename gets `-2`.
-  - Across runs, identical bytes are reused. Different bytes overwrite only a file the skill added; otherwise the new file gets `-2`.
-  - Extensions follow the detected type, and alt text is the sanitized basename.
+  - The slug comes from the branch name, or from a topic the user supplies. Both go through the same slug function, and the result is shown for confirmation.
+  - The slug function: NFKC, lowercase, each run of non-`[a-z0-9]` becomes `-`, trimmed, at most 60 characters. Its output never contains `/`, `..`, `%` or `#`, and never starts with `-`. An empty slug means ask.
+  - Destination basenames are slugged the same way to `[a-z0-9._-]`. The extension comes from the detected type, and the source-to-destination mapping is shown to the user.
+  - Alt text is the destination slug.
+  - A destination with identical bytes is reused.
+  - Any conflict stops and asks for a topic or a rename: different bytes at the destination, or two inputs that map to the same name in one batch.
 - **Retry.**
   - Wait about 2 s after the push.
-  - Retry 404, 429 (honouring `Retry-After`), 5xx and network errors, with backoff of about 2/4/8/15/30 s, ±20% jitter and a cap of about 300 s.
+  - Retry 404, 429 (honouring `Retry-After`), 5xx and network errors, with backoff of about 2/4/8/15/30 s and ±20% jitter.
   - Fail at once on a 200 that is not an image, on 401/403, on a redirect off `raw.githubusercontent.com` or `media.githubusercontent.com`, or after more than 5 redirects.
-  - `verify --max-wait-s` defaults to about 90. The skill calls it up to about four times so that no single call outlasts a host tool timeout.
-- **The handoff is a file.** Embed mode writes the Demo text to a temp file and reports its path plus a status line. `git-commit-push-pr` splices from that file. The model never re-types 40-hex SHAs.
+  - The 30 s step repeats until about 300 s in total, split across bounded `verify` calls.
+  - `verify --max-wait-s` defaults to about 90 and bounds a single call, so no call outlasts a host tool timeout.
+- **The handoff is a file.**
+  - Embed mode writes the Demo text to a `mktemp` file (mode 0600) and reports its path plus a status line.
+  - `git-commit-push-pr` splices from that file and deletes it once it is consumed.
+  - The model never re-types 40-hex SHAs.
+- **The cleanup set comes from git, not from the PR body.**
+  - The set is every file under `docs/evidence/` that the PR added, minus anything already on the base.
+  - Cleanup therefore works with no Demo block, and it can never touch files outside `docs/evidence/` or files the PR did not add.
+  - The skill lists the set and waits for an explicit yes before `git rm`.
+- **Re-pin pins to the newest add-or-modify commit.**
+  - Each managed path pins to the newest commit reachable from `headRefOid` that added or modified it.
+  - A pin is valid when the blob at the pinned SHA equals the blob at that commit, not merely when it is reachable.
+  - This keeps a replaced image from coming back.
+- **Declined: a confirmation digest for the scrub gate.** It proves set equality, not that the user answered. The post-commit file-set assertion already guarantees that what was listed is what was committed.
+- **Declined: rejecting trailing data after the image end marker.** It stays a warning, consistent with not stripping metadata.
 
 ## Open Questions
 
@@ -269,16 +295,25 @@ Docs reference pages, bootstrap, Pi and npm pick up the skill automatically.
 | Embed | `mode:embed` from `git-commit-push-pr` | Required | Evidence commit | No; returns a temp file path | Status line |
 | Re-pin | Open PR, no paths | None | None | Only if a SHA changed | Cleanup offer |
 
+Dispatch: with no open PR and no `mode:embed`, or with no paths and no PR, the skill stops with "open the PR first, or run through git-commit-push-pr".
+
 ```mermaid
 flowchart TD
-  A[Resolve target and mode] --> B{Paths given?}
-  B -- no --> R[Re-pin: reachability check on headRefOid]
-  R --> RV[Rewrite unreachable SHAs, verify] --> W
+  A[Resolve target and mode] --> D{Open PR?}
+  D -- no --> E0{mode:embed with paths?}
+  E0 -- no --> N[Stop: open the PR first, or run through git-commit-push-pr]
+  E0 -- yes --> C
+  D -- yes --> B{Paths given?}
+  B -- no --> R[Re-pin: newest add-or-modify commit per managed path, blob match]
+  R --> RV[Rewrite stale pins, verify] --> W
   B -- yes --> C[classify: content, size, SVG, names]
   C --> V[Visibility: PUBLIC continues, else stop and ask]
-  V --> S[List accepted set, scrub confirmation]
-  S --> K[Pathspec commit, assert file set]
-  K --> P[Push with explicit refspec, no force]
+  V --> L[List accepted set]
+  L --> S[Scrub confirmation]
+  S --> Y[Copy into place]
+  Y --> K[Pathspec commit]
+  K --> E[Assert committed file set]
+  E --> P[Push with explicit refspec, no force]
   P --> Q[verify with bounded retry]
   Q -- fail --> F[Report, body untouched]
   Q -- ok --> M{Mode}
@@ -308,13 +343,15 @@ flowchart TD
   - GIF: `GIF87a` or `GIF89a`.
   - WebP: `RIFF` at offset 0 and `WEBP` at offset 8.
 - Reject SVG by content, with the message "SVG is not supported by this skill". Reject anything else unrecognised, any file over 100 MB, and missing or unreadable paths. One failure rejects the batch, and the result lists a reason for every file.
+- An empty path list is a usage error (exit 2).
 - Soft warnings, not fatal: trailing bytes after the format end marker (PNG `IEND`, JPEG `FFD9`, GIF trailer), and a size above about 10 MB.
-- Apply the topic and destination naming from Key Technical Decisions. Each accepted entry reports source, destination, type, byte count and blob SHA (`sha1("blob <len>\0" + bytes)`).
+- Apply the topic and destination naming from Key Technical Decisions. The input includes the blob SHAs already present at the destination paths, so the result can mark a destination as reused or as a conflict.
+- Each accepted entry reports source, destination, type, byte count and blob SHA (`sha1("blob <len>\0" + bytes)`).
 - Only built-in modules, no relative imports, and pure functions behind a thin CLI.
 
 **Execution note:** Test-first. Each named mutation below must fail its fixture before the implementation lands.
 
-**Patterns to follow:** `skills/ce-review-cleanup/scripts/cleanup.mjs` for the CLI shape, JSON output and exit codes.
+**Patterns to follow:** `skills/ce-review-cleanup/scripts/cleanup.mjs` for the CLI shape and JSON output. The exit codes are 0 success, 1 domain failure and 2 usage.
 
 **Test scenarios:**
 - Happy path: one file each of PNG, JPEG, GIF87a, GIF89a and WebP is accepted. The destination extension follows the detected type, even when the source extension differs.
@@ -325,10 +362,14 @@ flowchart TD
 - Edge case: a PNG with appended data after `IEND` is accepted with a warning.
 - Naming:
   - `feat/x` and `fix/x` yield different slugs.
+  - Slug output never contains `/`, `..`, `%` or `#`, and never starts with `-`.
   - A branch made only of separators yields an empty slug, and the result asks for a topic.
-  - A long branch name is truncated, with the hash added.
-  - Two `shot.png` files in one batch become `shot.png` and `shot-2.png`.
-  - Path traversal in a topic (`..`, `/`, `%`, `#`, space, backslash) is rejected.
+  - A user-supplied topic goes through the same slug function, and the result is returned for confirmation.
+  - Source names containing `](`, `-->`, `<`, a backtick or a newline yield destination names within `[a-z0-9._-]`.
+  - A destination with identical bytes is reused.
+  - A destination with different bytes stops and asks.
+  - Two inputs that map to one name in one batch stop and ask.
+  - An empty path list exits 2.
 - Mutation killers: extension-based detection fails the renamed `.env` fixture, and dropping the batch-wide rejection fails the mixed-batch fixture.
 
 **Verification:**
@@ -338,7 +379,7 @@ flowchart TD
 
 - [ ] **Unit 2: Helper splice, URL extraction and re-pin rewrite**
 
-**Goal:** Byte-exact `## Demo` splicing with managed markers, plus extraction and SHA rewriting of managed URLs.
+**Goal:** Byte-exact `## Demo` splicing, plus Demo extraction, managed-URL extraction and SHA rewriting.
 
 **Requirements:** R11, R12, R13, R15.
 
@@ -353,7 +394,7 @@ flowchart TD
 - **Section boundaries.**
   - The heading matches `^ {0,3}##[ \t]+Demo[ \t]*#*[ \t]*$`.
   - Fenced code is excluded, including an unclosed fence that runs to EOF. So are multi-line HTML comments, indented code and blockquotes.
-  - The section ends at the next H1 or H2 outside those regions, or at the managed markers.
+  - The section ends at the next H1 or H2 outside those regions.
 - **Line endings.** Lines split on CRLF, LF or CR, and each keeps its terminator. Inserted lines use the adjacent or dominant EOL.
 - **Edge cases.**
   - An empty body becomes exactly the section.
@@ -361,7 +402,10 @@ flowchart TD
   - When appending, add exactly enough to leave one blank line.
   - Two existing `## Demo` sections stop the run and ask.
   - The heading line's bytes are kept.
-- `urls` extracts the managed embed URLs as owner, repo, SHA, path and form (`raw` or `blob`).
+- `extract` takes a body as JSON and returns the existing `## Demo` section bytes verbatim, from the heading through the end of the section. With no Demo section it reports `absent`. `splice` then inserts the extracted bytes into a regenerated body.
+- `urls` takes a body and the head repo. It extracts the managed embed URLs as owner, repo, SHA, path and form (`raw` or `blob`).
+  - A URL is managed only when the host is raw or blob, owner/repo equals the head repo, and the path matches `^docs/evidence/<slug>/<name>$`.
+  - It reports how many other URLs it ignored.
 - `repin-rewrite` takes a path-to-SHA map and rewrites only the 40-hex segment. Captions and hand edits are left unchanged.
 
 **Execution note:** Test-first, using a prefix and suffix oracle.
@@ -378,7 +422,10 @@ flowchart TD
   - An empty body, and a whitespace-only body.
 - Edge case: `## Screenshots` with no Demo leaves Screenshots unchanged, appends Demo, and reports Screenshots present (AE8).
 - Error path: a body with two `## Demo` sections reports a conflict and returns no output body.
-- Re-pin: rewriting one SHA changes only that 40-hex segment. A caption edited by hand inside the markers survives.
+- Re-pin: rewriting one SHA changes only that 40-hex segment. A caption edited by hand inside the section survives.
+- `extract`: it returns the Demo section bytes verbatim, and `absent` for a body with none.
+- Step 7 round-trip: `extract` from an old body, then `splice` into a regenerated body, leaves the Demo section byte-identical.
+- `urls`: URLs with another host, another owner/repo or a path outside `docs/evidence/<slug>/<name>` are ignored and counted.
 - Mutation killers:
   - A naive `indexOf('## Demo')` fails the fence fixture.
   - Normalising EOLs fails the CRLF fixture.
@@ -406,7 +453,8 @@ flowchart TD
 - Apply the retry schedule and failure classes from Key Technical Decisions, with an injectable clock, sleep and fetch.
 - Check URLs concurrently.
 - `--max-wait-s` bounds a single call. The result is per URL: status, last HTTP code, attempts, and whether the failure is retryable.
-- Blob-form URLs for private repos are not fetched. The skill verifies them through `gh api`, and the helper only reports which form each URL takes.
+- Blob-form URLs for private repos are not fetched. A blob URL given to `verify` exits 2 with a usage error, and the skill routes blob URLs to the `gh api` check.
+- Exit codes: 0 when every URL passes, 1 when any fails, 2 for usage errors.
 
 **Execution note:** Test-first, against a local `node:http` stub server.
 
@@ -418,6 +466,7 @@ flowchart TD
 - Edge case: a 429 with `Retry-After` waits that long before retrying.
 - Edge case: a persistent 404 stops at `--max-wait-s` with a retryable failure.
 - Multiple URLs: the result lists each failing URL by name, and the total time is the maximum, not the sum.
+- Usage error: a blob URL exits 2.
 - Mutation killers:
   - Accepting any 200 fails the HTML fixture.
   - Not following redirects fails the redirect fixture.
@@ -449,31 +498,48 @@ flowchart TD
   - Avoid `!` lines.
 - **Target resolution.**
   - Parse the `mode:*` tokens. Conflicting tokens stop with an error, and the remaining tokens are paths.
-  - Resolve the PR and its head with `gh pr view --json …`.
+  - Dispatch:
+    - With no open PR and no `mode:embed`, stop.
+    - With no paths and no PR, stop.
+    - Both stops say "open the PR first, or run through git-commit-push-pr".
+  - PR and re-pin modes: resolve the PR and its head with `gh pr view --json …`.
+  - Embed mode: resolve the head from the upstream of the current branch.
+    - Run `git rev-parse --abbrev-ref @{u}`.
+    - Match that remote's URL against `git remote -v` to get owner/repo, then run `gh repo view`.
+    - With no upstream, stop.
   - Refuse a null `headRepository`, a non-`github.com` host, or a fork the user cannot push to.
   - PR mode checks that the PR head is checked out and level.
-- **Ordering.** The prose runs: visibility check, `classify`, list the accepted set, scrub confirmation, copy into place, pathspec commit, file-set assertion, push with an explicit refspec, verify, then write the body or return the file, then the cleanup offer.
+- **Ordering.** classify, visibility, list the accepted set, scrub confirmation, copy into place, pathspec commit, file-set assertion, push with an explicit refspec, verify, write the body or return the file, then the cleanup offer.
+  - `classify` runs first. It is local and cheap, and it catches a bad batch before any network work.
 - **Body write.**
   - Read the body with `gh pr view --json body`.
-  - Back it up to a temp file and tell the user the path.
+  - Back it up to a `mktemp` file (mode 0600) and tell the user the path.
   - Re-read it immediately before writing.
   - Write with `--body-file`.
   - Re-read afterwards and compare the regions outside Demo.
+  - On a mismatch, warn and print the backup path. Never auto-restore, because that could overwrite a concurrent edit.
+  - Keep the backup until the re-read passes.
 - **Re-pin.**
-  - Use `headRefOid` from `gh`.
-  - If local `HEAD` differs, say "push first".
-  - Reachability check: `git merge-base --is-ancestor <sha> <headRefOid>`. If every SHA is reachable, report "already valid" and write nothing.
-  - Otherwise find each path's add commit with `git log --diff-filter=A -1 <headRefOid> -- <path>`.
-  - When only some resolve, report "partial" and name the unresolved paths.
+  - Use `headRefOid` from `gh`. If local `HEAD` differs, say "push first".
+  - Take managed paths from the body by pattern: the host is raw or blob, owner/repo equals the head repo, and the path matches `^docs/evidence/<slug>/<name>$`. Ignore every other URL and report how many were ignored.
+  - Pin each managed path to the newest commit reachable from `headRefOid` that added or modified it: `git log --diff-filter=AM -1 <headRefOid> -- <path>`.
+  - A pin is valid when the blob at the pinned SHA equals the blob at that commit, compared with `git rev-parse <sha>:<path>`. Reachability alone is not enough.
+  - If every pin is valid, report "already valid" and write nothing.
+  - When only some paths resolve, report "partial" and name the unresolved paths.
   - If no path ever existed on the head, stop and point to PR mode.
 - **Cleanup.**
-  - Offered only once a PR exists, and recommended before merge.
-  - `git rm` only the managed paths, then commit and push without force.
-  - Includes the verbatim disclosure: cleanup does not revoke access, so any published secret must be rotated.
+  - The set is every file under `docs/evidence/` that the PR added, minus anything already on the base: `git diff --name-only --diff-filter=A <base>...<headRefOid> -- docs/evidence/`.
+  - Offer cleanup only once a PR exists, only if at least one such file exists at `headRefOid`, and recommend it before merge. Otherwise report "cleanup already done".
+  - List the set and wait for an explicit yes before `git rm`. Then commit and push without force.
+  - Read `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`. If non-squash merges are allowed, add one line: the images stay in default-branch history unless the PR is squash-merged.
+  - Include the verbatim disclosure: cleanup does not revoke access, so any published secret must be rotated.
 - **Private proceed.**
-  - Emits the blob form after an explicit answer.
-  - Verifies through `gh api repos/<o>/<r>/contents/<path>?ref=<sha>`, checking that the file exists and its decoded bytes are an image.
-  - States that rendering for members is pending the live probe.
+  - Until the live probe passes, private and unknown-visibility repos are skip-only, and this branch is unreachable.
+  - The probe runs before the PR opens. If it fails, v1 ships skip-only.
+  - Once the probe passes, proceeding emits the blob form after an explicit answer.
+  - The proceed prompt says the images stay in history, and if the repo is later made public or forked they become public. Cleanup will not remove them.
+  - Verify through `gh api repos/<o>/<r>/contents/<path>?ref=<sha>`, checking that the file exists and its decoded bytes are an image.
+  - State that rendering for members is pending the live probe.
 - **Disclosures.**
   - Evidence binaries appear in the Files tab until cleanup.
   - A rebase or force-push needs a zero-path re-run.
@@ -485,14 +551,22 @@ flowchart TD
 
 **Test scenarios:**
 - Contract: the frontmatter name, `argument-hint`, and the three mode names are present.
-- Contract ordering, using `indexOf`: visibility < scrub confirmation < commit < push < verify < body write < cleanup offer.
+- Contract ordering, using `indexOf`: classify < visibility < scrub confirmation < copy < commit < file-set assertion < push < verify < body write < cleanup offer.
 - Contract bans:
   - push commands with `--force`, `-f` or a `+` refspec
   - `git add -A` and `git add .`
   - `--body "$(`
   - `git add -f`
 - Contract: every helper invocation is anchored on `SKILL_DIR`.
-- Contract text: the `## Screenshots` warning, the cleanup-does-not-revoke disclosure, the "SVG is not supported by this skill" message, and "push first" for a local and remote mismatch.
+- Contract text:
+  - the `## Screenshots` warning;
+  - the cleanup-does-not-revoke disclosure;
+  - the "SVG is not supported by this skill" message;
+  - "push first" for a local and remote mismatch;
+  - "open the PR first, or run through git-commit-push-pr";
+  - "cleanup already done";
+  - the explicit yes before `git rm`;
+  - the mismatch warning that prints the backup path and never auto-restores.
 - Packaging:
   - The OCX registry component lists `scripts/pr-attachments.mjs`.
   - `npm pack` includes it.
@@ -504,10 +578,11 @@ flowchart TD
 **Verification:**
 - `bun run schema:generate`, `bun scripts/generate-registry.ts`, `bun run registry:drift`, `bun run schema:drift`, `bun scripts/content-integrity.ts` and `bun run claude-code:build` are clean.
 - The generated `claude-code/` bundle contains the skill and resolves `systematic:pr-attachments`.
+- Until the private blob probe passes, the skill text keeps private and unknown-visibility repos skip-only.
 
 - [ ] **Unit 5: git-commit-push-pr integration**
 
-**Goal:** Add the publish option to the evidence step. Keep the screenshots out of the feature commit and the PR narrative. Carry the managed Demo through body rewrites.
+**Goal:** Add the publish option to the evidence step. Keep the screenshots out of the feature commit and the PR narrative. Carry the Demo section through body rewrites.
 
 **Requirements:** R14, R17, R18 (decisions O2, O3).
 
@@ -521,24 +596,23 @@ flowchart TD
 - **Step 4.** Never stage untracked image files without asking. When untracked images exist, ask the evidence-source question first.
 - **Step 6 evidence decision.**
   - Add a third option, "Publish local images". It loads `systematic:pr-attachments` with `mode:embed` and explicit paths. That covers both new PRs and the Step 7 rewrite.
-  - Capture `PRE=$(git rev-parse HEAD)` before the call. The body generator uses `<base>..$PRE` and excludes `docs/evidence/**` and the evidence commit.
-  - Splice the returned file at the existing splice point.
+  - The skill's status line reports the evidence commit SHA. The body generator uses `<base>..<evidence-sha>^` and excludes `docs/evidence/**`. No shell variable carries a value across calls.
+  - Splice the returned file at the existing splice point, then delete it.
   - On status `failed`, report that the evidence files are pushed but unreferenced, then continue without evidence.
-- **Fallback.** If the skill is not available (a standalone install), offer only the existing two options.
+- **Fallback.** If loading `systematic:pr-attachments` fails, offer only the existing two options.
 - **Rewrites (Step 7 and DU-3).**
-  - When a managed Demo block exists, copy it verbatim into the regenerated body through the helper's `splice`. Prose-only preservation stays as the fallback.
+  - When a Demo section exists, run the helper's `extract` on the old body and `splice` the result into the regenerated body. Prose-only preservation stays as the fallback.
   - DU-3 makes no publish offer. A request to attach images routes to PR mode.
 - **After PR creation.** Print the zero-path re-run command, marked "recommended before merge".
-- Apply bodies with `--body-file` instead of `--body "$(cat …)"` at the three apply sites. This also fixes the trailing-newline strip for every body.
 
 **Test scenarios:**
 - Contract: the evidence decision lists "Publish local images" with `systematic:pr-attachments` and `mode:embed`.
 - Contract: Step 4 forbids staging untracked images without asking.
-- Contract: the narrative instruction excludes `docs/evidence/**` and the evidence commit.
+- Contract: the narrative instruction uses `<base>..<evidence-sha>^`, excludes `docs/evidence/**`, and has no `PRE` variable.
 - Contract: the post-create instruction prints the zero-path re-run command.
 - Contract: DU-3 has no publish offer and routes to PR mode.
-- Contract: no `--body "$(cat` remains, and `--body-file` appears at every apply site.
-- Contract: the fallback text for an absent skill is present.
+- Contract: the Step 7 rewrite uses `extract` and `splice`.
+- Contract: the fallback text for a skill that fails to load offers only the two existing options.
 
 **Verification:**
 - `bun run claude-code:build` resolves `systematic:pr-attachments` from `git-commit-push-pr`.
@@ -546,24 +620,18 @@ flowchart TD
 
 - [ ] **Unit 6: Docs and requirements alignment**
 
-**Goal:** Record the skill in architecture docs and fix the README count. Align the local requirements doc with the planning decisions.
+**Goal:** Record the skill in architecture docs and fix the README count.
 
 **Requirements:** Documentation for all of the above.
 
 **Dependencies:** Units 4–5.
 
 **Files:**
-- Modify: `ARCHITECTURE.md` (a paragraph next to the review-artifact cleanup one), `README.md` (bundled skill count)
-- Modify (local, untracked): `docs/brainstorms/2026-10-22-pr-attachments-requirements.md`
-  - SVG reason.
-  - Private proceed uses the blob form.
-  - Verify before write.
-  - Embed mode covers the Step 7 rewrite.
-  - Cleanup through a zero-path re-run.
+- Modify: `ARCHITECTURE.md` (a paragraph next to the review-artifact cleanup one), `README.md` (bundled skill count, set to 33)
 
 **Test expectation:** none. These are docs. `content-integrity` and markdownlint cover them.
 
-**Verification:** `bun scripts/content-integrity.ts` and markdownlint are clean. The README count matches the number of `skills/` directories.
+**Verification:** `bun scripts/content-integrity.ts` and markdownlint are clean. The README count is 33 and matches the number of `skills/` directories.
 
 ## System-Wide Impact
 
@@ -575,10 +643,10 @@ flowchart TD
 - **State lifecycle risks:**
   - An evidence commit pushed without a body write leaves unreferenced files. These are reported, and cleanup applies.
   - The body is backed up before every write.
-- **API surface parity:** `git-commit-push-pr` changes for all three hosts. The `--body-file` change fixes the trailing-newline loss for every PR body, not only bodies with evidence.
+- **API surface parity:** `git-commit-push-pr` changes for all three hosts.
 - **Unchanged invariants:**
   - The existing "use existing evidence" and "skip" options behave as before.
-  - DU-1..3 still makes no commit or push.
+  - DU-1..3 makes no commit or push unless the user asks to attach images, which routes to PR mode.
   - No new runtime dependency.
 
 ## Risks & Dependencies
@@ -590,7 +658,6 @@ flowchart TD
 | A first-fetch 404 is cached for up to 300 s | Retry for up to about 300 s, split across bounded calls. |
 | Camo refuses large images even when the raw URL returns 200 | A soft warning above about 10 MB, plus a live size check. The `body_html` render check is deferred. |
 | The agent skips a prose gate such as the scrub confirmation | Contract tests pin the ordering. Live transcripts on each host are the behavioural evidence. |
-| The `--body-file` change alters an existing skill's apply path | Contract test, plus one live body round-trip on a scratch PR. |
 
 ## Documentation / Operational Notes
 
@@ -601,8 +668,9 @@ flowchart TD
   4. Re-pin after a force-push on the scratch PR.
   5. Measure the 404 cache TTL with `curl -sI` on a nonexistent raw path.
   6. Check Camo rendering at 6, 12 and 25 MB.
-  7. Run the private-repo blob-form probe (O4).
+  7. Run the private-repo blob-form probe (O4). It must pass before the PR opens. If it fails, v1 ships skip-only.
   8. Capture one transcript per host showing the scrub confirmation before the commit.
+- The local requirements doc (`docs/brainstorms/...`, gitignored, primary checkout only) is updated to match the planning decisions.
 - The PR title is `feat(skills): add a skill for attaching screenshots to pull requests`, which is a minor release, and the PR closes #1073.
 
 ## Sources & References
