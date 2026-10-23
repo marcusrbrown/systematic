@@ -43,7 +43,7 @@ Every export/refresh/cleanup operation walks every path component from a scope-a
 
 The package manifest exposes the extension and skills at `package.json:17-23` (and the packaged personas at `package.json:24-28`), with tests verifying both manifest entries and their packaged paths `tests/unit/package-exports.test.ts:64-84,268-288` [PI-4]. Pi's RPC/JSONL test fixture isolates its environment (`tests/integration/pi.test.ts:349-388`), and the installed runtime exposes environment-specific agent/session directories `node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398` [PI-5].
 
-Pi honors Systematic's disable settings. `src/pi.ts` loads the merged config once at extension start and passes `disabled_skills` to the skill resolver, so a disabled skill is absent from the `systematic_skill` description and parameter hint and fails to load as unknown. It filters the `systematic_delegate` catalog with `isAgentDisabled`, so a persona disabled by `disabled_agents` (bare name or `category/name`) or by an `agents.<name>.disable` overlay disappears from the tool's description, hint and lookup. The pi-subagents export applies the same predicate, and `tests/unit/disable-parity.test.ts` pins it to what OpenCode's config handler omits [PI-6]. Settings are read at extension start, so a Pi restart applies a change. Pi's own skill discovery is a separate path: `pi.skills` ships the whole `./skills` directory and Pi's `/skill:name` commands, so those still list and load disabled skills [PI-4], [PI-5]. Pi's skill loading also has no OpenCode-style permission gate — OpenCode's `skill-tool.ts` calls `context.ask({ permission: 'skill', ... })` before returning skill content, but Pi 0.80.6's extension API has no equivalent hook and Systematic's Pi tool implementation does not call one [PI-6]. Those are deliberate honesty boundaries, not implied parity.
+Pi honors Systematic's disable settings. `src/pi.ts` loads the merged config once at extension start and passes `disabled_skills` to the skill resolver, so a disabled skill is absent from the `systematic_skill` description and parameter hint and fails to load as unknown. It filters the `systematic_delegate` catalog with `isAgentDisabled`, so a persona disabled by `disabled_agents` (bare name or `category/name`) or by an `agents.<name>.disable` overlay disappears from the tool's description, hint and lookup. The pi-subagents export applies the same predicate, and `tests/unit/disable-parity.test.ts` pins it to what OpenCode's config handler omits [PI-6]. Settings are read at extension start, so a Pi restart applies a change. Pi's `systematic_skill` takes a single `name` parameter and no arguments (`src/pi.ts:215-219`) [PI-3], so a skill that needs arguments, such as `mode:embed` and image paths for `pr-attachments`, reads them from the invoking instruction text instead; OpenCode and Claude Code can also pass skill arguments. Pi's own skill discovery is a separate path: `pi.skills` ships the whole `./skills` directory and Pi's `/skill:name` commands, so those still list and load disabled skills [PI-4], [PI-5]. Pi's skill loading also has no OpenCode-style permission gate — OpenCode's `skill-tool.ts` calls `context.ask({ permission: 'skill', ... })` before returning skill content, but Pi 0.80.6's extension API has no equivalent hook and Systematic's Pi tool implementation does not call one [PI-6]. Those are deliberate honesty boundaries, not implied parity.
 
 ## Claude Code — Tier 1 shipped adapter
 
@@ -89,6 +89,38 @@ No live Pi, OCX, or Claude Code runtime host was executed for this check; those
 layouts are proven by package-tree execution under real Node, not by running the
 harness. This is package-tree execution plus one real OpenCode scripted host,
 not cross-harness runtime parity.
+
+## PR attachments helper — packaged paths
+
+The `pr-attachments` skill ships one self-contained Node helper,
+`skills/pr-attachments/scripts/pr-attachments.mjs`. It imports only `node:` builtins and has no
+relative imports. Eight subcommands (`classify`, `splice`, `extract`, `urls`, `repin-rewrite`,
+`pins`, `cleanup-set`, `verify`) each read one JSON object on stdin and write one JSON object on
+stdout, with exit code 0 for success, 1 for a domain failure and 2 for a usage error. The skill
+invokes the helper as `node "$SKILL_DIR/scripts/pr-attachments.mjs"`, so the file mode bit is not
+part of the contract. The helper needs `node` 18+ on PATH. A Bun-only OpenCode install does not
+have it, and the skill stops with its state reported rather than running the helper's work by hand.
+Recorded execution evidence for this surface:
+
+- **npm / OpenCode / Pi package layout** — real Node execution from an extracted
+  `npm pack --ignore-scripts` archive, resolving the helper through its packaged
+  `skills/pr-attachments` directory [PA-1].
+- **OCX-selected tree** — real Node execution from the `pr-attachments` component's declared file
+  selection, with a negative control for a selection that omits the helper [PA-1].
+- **Claude Code generated bundle** — real Node execution from the output written by
+  `generatePluginFiles`/`writePluginFiles`, with the helper byte-identical to source [PA-1].
+- **Skill contract** — `SKILL.md` is parsed as data: the mode and dispatch tables, the `SKILL_DIR`
+  anchor in every fenced block, the publishing order, and the bans on force-pushes, blanket staging,
+  inline bodies and hand-run `git rm` [PA-2].
+- **Offline dry run** — the fenced blocks of `SKILL.md` run against a temporary repository with a
+  local bare remote and the real helper: the pathspec commit, the file-set assertion, the explicit
+  refspec push, the rejected non-fast-forward push, carry mode and cleanup [PA-3].
+
+No live OpenCode, Pi, OCX or Claude Code host was executed for this check. The dry run uses no `gh`
+and no network, so GitHub's raw-content serving and image rendering are not exercised. The helper's
+`verify` subcommand is tested against a local HTTP server (`tests/unit/pr-attachments-verify.test.ts`). `SKILL_DIR` resolution on Pi and Claude
+Code is evidenced from the package tree only. These layouts are proven by package-tree execution
+under real Node and by a scripted run of the skill's own commands, not cross-harness runtime parity.
 
 ## Codex CLI — Tier 2 documented portability target
 
@@ -157,3 +189,6 @@ Migrated-skill discipline is enforced by the [content-integrity gate](scripts/co
 - **GH-8** — [Copilot `AGENTS.md` support](https://github.blog/changelog/2025-08-28-copilot-coding-agent-now-supports-agents-md-custom-instructions/).
 - **RV-1** — `tests/unit/ce-review-validator-packaging.test.ts` (real Node execution from the npm/OpenCode/Pi package tree, the OCX-selected tree, and the Claude Code generated bundle).
 - **RV-2** — `tests/integration/ce-review-return-validation.test.ts` (real OpenCode scripted host invoking the packaged `skills/ce-review/scripts/validate-review.mjs` through its `SKILL_DIR` anchor).
+- **PA-1** — `tests/unit/pr-attachments-packaging.test.ts` (real Node execution of `skills/pr-attachments/scripts/pr-attachments.mjs` from the npm-packed archive, the OCX-selected tree and the Claude Code generated bundle; nothing under `docs/evidence/` ships).
+- **PA-2** — `tests/unit/pr-attachments-contract.test.ts` (`skills/pr-attachments/SKILL.md` contract: modes, argument dispatch, `SKILL_DIR` anchor, publishing order, bans).
+- **PA-3** — `tests/unit/pr-attachments-dry-run.test.ts` (the skill's fenced blocks run offline against a temporary repository and a local bare remote, with the real helper).

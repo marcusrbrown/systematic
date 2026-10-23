@@ -13,6 +13,8 @@ This page gets you from zero to your first Systematic workflow in under five min
 
 You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime, and Pi itself needs **Node.js 22.19+**. No API keys, no accounts, no extra tooling.
 
+The `pr-attachments` skill, which `git-commit-push-pr` uses to attach screenshots to a pull request, also needs **Node.js 18+** on your `PATH`. An OpenCode install that runs on Bun alone does not have it. Without Node.js, the skill stops and publishes nothing; every other skill works as before.
+
 ## Install the OpenCode plugin
 
 The OpenCode plugin is the recommended installation path. It provides the full experience: slash commands, the `systematic_skill` tool, agent registration, and automatic bootstrap.

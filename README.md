@@ -29,7 +29,7 @@ You want AI that follows your process, not just your prompts. You want repeatabl
 
 ## What You Get
 
-Systematic is a compound-engineering loop: brainstorm, plan, work, review — each phase a structured skill that guides the AI through requirements exploration, implementation planning, execution, and code review, capturing what was learned along the way. It ships 31 bundled skills and 37 specialized agents for architecture, security, performance, design, and code review.
+Systematic is a compound-engineering loop: brainstorm, plan, work, review — each phase a structured skill that guides the AI through requirements exploration, implementation planning, execution, and code review, capturing what was learned along the way. It ships 33 bundled skills and 37 specialized agents for architecture, security, performance, design, and code review.
 
 The workflow runs on three harnesses from one source: [OpenCode](https://opencode.ai/), [Pi](https://github.com/earendil-works/pi-coding-agent), and Claude Code. Each gets a native install path; skill and agent content is identical across all three.
 

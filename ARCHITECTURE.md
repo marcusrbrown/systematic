@@ -284,6 +284,23 @@ Persistence has a paired prerequisite: the `ce:review` workflow invokes
 headless mode. A blocked or malformed result stops the workflow before allocating a run ID or
 creating its directory; report-only mode never invokes the helper.
 
+**PR attachments** (`skills/pr-attachments/SKILL.md`,
+`skills/pr-attachments/scripts/pr-attachments.mjs`) — publishes local images as commit-pinned
+embeds in a managed `## Demo` section of a pull request description. It has four modes: PR mode
+writes the description; embed mode returns a Demo file and a status line for `git-commit-push-pr`
+to splice; carry mode copies the Demo section from an old description file into a regenerated one;
+re-pin mode re-points the embeds after a rebase or force-push. A run with no image paths ends with
+an offer to remove the evidence files from the branch. The skill commits images by pathspec under
+`docs/evidence/<topic>/`, pushes with an explicit refspec, and writes the description only after
+every embed URL serves an image. It publishes to public repositories only; private, internal and
+unknown-visibility repositories are skip-only. A bundled Node helper holds the steps that must be
+exact: image classification, byte-exact splicing, pin selection, the cleanup set and bounded
+verification. It takes JSON on stdin, writes JSON on stdout, and keeps no state. The `gh` calls and
+the push stay in the skill's prose. The helper needs `node` 18+ on PATH, and the skill stops with
+its state reported when `node` is missing or the helper fails; it never writes a helper result by
+hand. `git-commit-push-pr` loads the skill in embed mode to publish images and in carry mode to keep
+the Demo section through a description rewrite; its narrative excludes `docs/evidence/**` by path.
+
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
 or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
