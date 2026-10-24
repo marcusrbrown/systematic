@@ -118,3 +118,21 @@ describe('ce:review validator shim invocation', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('pr-attachments helper invocation', () => {
+  const PINNED = 'node "$SKILL_DIR/scripts/pr-attachments.mjs"'
+  const hits = linesMatching(/pr-attachments\.mjs/).filter((hit) =>
+    hit.startsWith('pr-attachments/'),
+  )
+
+  // The helper lives beside pr-attachments/SKILL.md, so the anchor is that
+  // skill's own directory. A bare path or another runtime would resolve against
+  // the consumer's project instead.
+  test('every helper reference in its own skill is a node call through a SKILL_DIR anchor', () => {
+    expect(hits.filter((hit) => !hit.includes(PINNED))).toEqual([])
+  })
+
+  test('the skill does call the helper, so the guard above is not vacuous', () => {
+    expect(hits.length).toBeGreaterThan(0)
+  })
+})
