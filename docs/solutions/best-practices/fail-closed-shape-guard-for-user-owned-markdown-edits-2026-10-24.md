@@ -67,7 +67,7 @@ such as an embed-only Demo inside a comment, so the scanner still errs toward hi
 **Never hand-write the section when the tool refuses.** When the `pr-attachments` carry ends with
 `status=failed`, the caller leaves the description as it is and offers to retry, to apply the new body
 without a Demo section after an explicit yes, or to keep the current description
-(`skills/git-commit-push-pr/SKILL.md:319`).
+(`skills/git-commit-push-pr/SKILL.md:319-320`).
 
 ## Why This Matters
 
