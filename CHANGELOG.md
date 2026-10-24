@@ -4,6 +4,22 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.26.1](https://github.com/marcusrbrown/systematic/compare/v3.26.0...v3.26.1) (2026-10-24)
+
+### Bug Fixes
+
+* **security:** patch compatible Undici consumers ([#1215](https://github.com/marcusrbrown/systematic/issues/1215)) ([3de13d4](https://github.com/marcusrbrown/systematic/commit/3de13d481b792ea0901f88fa57c5b7a0a235fdbd))
+* **skills:** pass git-commit-push-pr PR bodies with --body-file ([#1213](https://github.com/marcusrbrown/systematic/issues/1213)) ([c62268a](https://github.com/marcusrbrown/systematic/commit/c62268ab84009d0e88c1e82005aa795b633318f3))
+
+### Documentation
+
+* **solutions:** record how to publish PR evidence images and edit a managed Markdown section safely ([#1212](https://github.com/marcusrbrown/systematic/issues/1212)) ([75ea6ea](https://github.com/marcusrbrown/systematic/commit/75ea6ea39e25d3c634f9e89d3f0f2c5c5120b558))
+
+### Miscellaneous Chores
+
+* **deps:** update dependency @biomejs/biome to v2.6.2 ([#1216](https://github.com/marcusrbrown/systematic/issues/1216)) ([e4c101e](https://github.com/marcusrbrown/systematic/commit/e4c101e45f62eac3faf55dc7a9bc6ed867a243ba))
+* **deps:** update fro-bot/agent to v0.125.3 ([#1211](https://github.com/marcusrbrown/systematic/issues/1211)) ([b1cdfb0](https://github.com/marcusrbrown/systematic/commit/b1cdfb0536c8056b07c27516d939d7d2d7474318))
+
 ## [3.26.0](https://github.com/marcusrbrown/systematic/compare/v3.25.2...v3.26.0) (2026-10-24)
 
 ### Features
