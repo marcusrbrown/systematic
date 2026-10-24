@@ -21,7 +21,7 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, review_requested]
   schedule:
-    - cron: '30 3 * * *'
+    - cron: "30 3 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -39,7 +39,7 @@ on:
           Ignored only when empty AND `mode` is set to `autoheal` (then the
           corresponding env prompt is used).
         required: false
-        default: ''
+        default: ""
       correlation-id:
         description: >-
           Optional UUID for callers that need to identify their dispatched run by
@@ -739,7 +739,7 @@ jobs:
       - name: Run Fro Bot
         uses: fro-bot/agent@c1173a2e8b68294594927ff9a1d8be5067cc2932 # v0.125.3
         env:
-          OPENCODE_PROMPT_ARTIFACT: 'true'
+          OPENCODE_PROMPT_ARTIFACT: "true"
           # IS_SUNDAY_UTC is set by the "Detect Sunday UTC" step only on schedule
           # and workflow_dispatch events. For all other entry points (PR review,
           # comment triggers, issue events, workflow_call), the fallback 'false'

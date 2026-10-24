@@ -15,7 +15,7 @@ rulesets:
     enforcement: active
     conditions:
       ref_name:
-        include: ['refs/heads/release/**']
+        include: ["refs/heads/release/**"]
         exclude: []
     rules:
       - type: creation
@@ -35,7 +35,7 @@ rulesets:
     enforcement: active
     conditions:
       ref_name:
-        include: ['~DEFAULT_BRANCH']
+        include: ["~DEFAULT_BRANCH"]
         exclude: []
     rules:
       - type: deletion
@@ -54,18 +54,18 @@ rulesets:
           strict_required_status_checks_policy: true
           do_not_enforce_on_create: false
           required_status_checks:
-            - {context: Build, integration_id: 15368}
-            - {context: Docs Build, integration_id: 15368}
-            - {context: Fro Bot, integration_id: 15368}
-            - {context: Typecheck, integration_id: 15368}
-            - {context: Lint, integration_id: 15368}
-            - {context: Test, integration_id: 15368}
-            - {context: Host Contract, integration_id: 15368}
-            - {context: Registry, integration_id: 15368}
-            - {context: Release, integration_id: 15368}
-            - {context: Analyze (typescript), integration_id: 15368}
-            - {context: CodeQL, integration_id: 57789}
-            - {context: Renovate / Renovate, integration_id: 15368}
+            - { context: Build, integration_id: 15368 }
+            - { context: Docs Build, integration_id: 15368 }
+            - { context: Fro Bot, integration_id: 15368 }
+            - { context: Typecheck, integration_id: 15368 }
+            - { context: Lint, integration_id: 15368 }
+            - { context: Test, integration_id: 15368 }
+            - { context: Host Contract, integration_id: 15368 }
+            - { context: Registry, integration_id: 15368 }
+            - { context: Release, integration_id: 15368 }
+            - { context: Analyze (typescript), integration_id: 15368 }
+            - { context: CodeQL, integration_id: 57789 }
+            - { context: Renovate / Renovate, integration_id: 15368 }
     bypass_actors: []
 
 branches:

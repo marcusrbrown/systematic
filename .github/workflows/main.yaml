@@ -255,7 +255,7 @@ jobs:
       - name: Run host contract suite
         id: suite
         env:
-          SYSTEMATIC_REQUIRE_OPENCODE: '1'
+          SYSTEMATIC_REQUIRE_OPENCODE: "1"
         run: |
           set -o pipefail
           bun test tests/integration \

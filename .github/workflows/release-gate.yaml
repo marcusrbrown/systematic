@@ -10,7 +10,7 @@ name: Release Gate
 
 on:
   schedule:
-    - cron: '0 15 * * 0,3'
+    - cron: "0 15 * * 0,3"
   workflow_dispatch:
 
 permissions: {}
@@ -155,4 +155,4 @@ jobs:
         with:
           subject-path: approval/approval.json
           predicate-type: https://github.com/marcusrbrown/systematic/attestations/release-gate-approval/v1
-          predicate: '{}'
+          predicate: "{}"

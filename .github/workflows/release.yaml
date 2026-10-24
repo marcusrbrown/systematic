@@ -7,7 +7,7 @@
 # `contents: read`, and hand small data artifacts to the jobs that act.
 name: Release
 
-'on':
+"on":
   push:
     branches:
       - main
@@ -220,7 +220,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          npm_config_ignore_scripts: 'true'
+          npm_config_ignore_scripts: "true"
         run: npx --no-install semantic-release --ci
 
   # Credential-free: renders the pending release from the CURRENT main tip, so
