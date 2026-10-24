@@ -4,6 +4,20 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.26.0](https://github.com/marcusrbrown/systematic/compare/v3.25.2...v3.26.0) (2026-10-24)
+
+### Features
+
+* **skills:** add a skill for attaching screenshots to pull requests ([#1210](https://github.com/marcusrbrown/systematic/issues/1210)) ([c0d5f85](https://github.com/marcusrbrown/systematic/commit/c0d5f854b84469e70708d1598945798c71b3b882))
+
+### Bug Fixes
+
+* **security:** patch Mermaid's DOMPurify sanitizer ([#1208](https://github.com/marcusrbrown/systematic/issues/1208)) ([03fd7d4](https://github.com/marcusrbrown/systematic/commit/03fd7d4d8a3c2e34e40e317fa9137a5cc079a2c6))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.125.2 ([#1204](https://github.com/marcusrbrown/systematic/issues/1204)) ([01c4b00](https://github.com/marcusrbrown/systematic/commit/01c4b00b132a10e315f36e1f13d523a38362603c))
+
 ## [3.25.2](https://github.com/marcusrbrown/systematic/compare/v3.25.1...v3.25.2) (2026-10-22)
 
 ### Bug Fixes
