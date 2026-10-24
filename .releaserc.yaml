@@ -3,13 +3,13 @@ branches:
   - main
 
 plugins:
-  - '@semantic-release/commit-analyzer'
+  - "@semantic-release/commit-analyzer"
 
-  - '@semantic-release/release-notes-generator'
+  - "@semantic-release/release-notes-generator"
 
-  - '@semantic-release/npm'
+  - "@semantic-release/npm"
 
-  - - '@semantic-release/github'
+  - - "@semantic-release/github"
     - releasedLabels: false
       successComment: false
 
@@ -68,4 +68,4 @@ presetConfig:
     - type: chore
       section: Miscellaneous Chores
 
-tagFormat: 'v${version}'
+tagFormat: "v${version}"

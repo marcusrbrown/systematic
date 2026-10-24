@@ -61,7 +61,7 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           RELEASE_AUTHOR: ${{ github.event.release.author.login }}
           EXPECTED_AUTHOR: ${{ vars.RELEASE_AUTHOR_LOGIN || 'systematic-release[bot]' }}
-          REQUIRE_LATEST: 'true'
+          REQUIRE_LATEST: "true"
           GH_TOKEN: ${{ github.token }}
         run: bash .release-target-validator/scripts/validate-release-target.sh
 
@@ -154,11 +154,11 @@ jobs:
           SHA: ${{ needs.build.outputs.sha }}
           # The unpacked archive is untrusted data while GH_TOKEN is in scope:
           # no git hook or fsmonitor command may run from it.
-          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_COUNT: "2"
           GIT_CONFIG_KEY_0: core.hooksPath
           GIT_CONFIG_VALUE_0: /dev/null
           GIT_CONFIG_KEY_1: core.fsmonitor
-          GIT_CONFIG_VALUE_1: 'false'
+          GIT_CONFIG_VALUE_1: "false"
         run: |
           set -euo pipefail
 

@@ -6,9 +6,9 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/settings.yml'
+      - ".github/settings.yml"
   schedule:
-    - cron: '23 12 * * *'
+    - cron: "23 12 * * *"
   workflow_dispatch:
 
 permissions:

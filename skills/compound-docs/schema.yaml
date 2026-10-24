@@ -19,41 +19,41 @@ required_fields:
   problem_type:
     type: enum
     values:
-      - build_error          # Rails, bundle, compilation errors
-      - test_failure         # Test failures, flaky tests
-      - runtime_error        # Exceptions, crashes during execution
-      - performance_issue    # Slow queries, memory issues, N+1 queries
-      - database_issue       # Migration, query, schema problems
-      - security_issue       # Authentication, authorization, XSS, SQL injection
-      - ui_bug               # Frontend, Stimulus, Turbo issues
-      - integration_issue    # External service, API integration problems
-      - logic_error          # Business logic bugs
+      - build_error # Rails, bundle, compilation errors
+      - test_failure # Test failures, flaky tests
+      - runtime_error # Exceptions, crashes during execution
+      - performance_issue # Slow queries, memory issues, N+1 queries
+      - database_issue # Migration, query, schema problems
+      - security_issue # Authentication, authorization, XSS, SQL injection
+      - ui_bug # Frontend, Stimulus, Turbo issues
+      - integration_issue # External service, API integration problems
+      - logic_error # Business logic bugs
       - developer_experience # DX issues: workflow, tooling, seed data, dev setup
-      - workflow_issue       # Development process, missing steps, unclear practices
-      - best_practice        # Documenting patterns and practices to follow
-      - documentation_gap    # Missing or inadequate documentation
+      - workflow_issue # Development process, missing steps, unclear practices
+      - best_practice # Documenting patterns and practices to follow
+      - documentation_gap # Missing or inadequate documentation
     description: "Primary category of the problem"
 
   component:
     type: enum
     values:
-      - rails_model          # ActiveRecord models
-      - rails_controller     # ActionController
-      - rails_view           # ERB templates, ViewComponent
-      - service_object       # Custom service classes
-      - background_job       # Sidekiq, Active Job
-      - database             # PostgreSQL, migrations, schema
-      - frontend_stimulus    # Stimulus JS controllers
-      - hotwire_turbo        # Turbo Streams, Turbo Drive
-      - email_processing     # Email handling, mailers
-      - brief_system         # Brief generation, summarization
-      - assistant            # AI assistant, prompts
-      - authentication       # Devise, user auth
-      - payments             # Stripe, billing
+      - rails_model # ActiveRecord models
+      - rails_controller # ActionController
+      - rails_view # ERB templates, ViewComponent
+      - service_object # Custom service classes
+      - background_job # Sidekiq, Active Job
+      - database # PostgreSQL, migrations, schema
+      - frontend_stimulus # Stimulus JS controllers
+      - hotwire_turbo # Turbo Streams, Turbo Drive
+      - email_processing # Email handling, mailers
+      - brief_system # Brief generation, summarization
+      - assistant # AI assistant, prompts
+      - authentication # Devise, user auth
+      - payments # Stripe, billing
       - development_workflow # Dev process, seed data, tooling
-      - testing_framework    # Test setup, fixtures, VCR
-      - documentation        # README, guides, inline docs
-      - tooling              # Scripts, generators, CLI tools
+      - testing_framework # Test setup, fixtures, VCR
+      - documentation # README, guides, inline docs
+      - tooling # Scripts, generators, CLI tools
     description: "CORA component involved"
 
   symptoms:
@@ -69,47 +69,47 @@ required_fields:
   root_cause:
     type: enum
     values:
-      - missing_association  # Incorrect Rails associations
-      - missing_include      # Missing eager loading (N+1)
-      - missing_index        # Database performance issue
-      - wrong_api            # Using deprecated/incorrect Rails API
-      - scope_issue          # Incorrect query scope or filtering
-      - thread_violation     # Real-time unsafe operation
-      - async_timing         # Async/background job timing
-      - memory_leak          # Memory leak or excessive allocation
-      - config_error         # Configuration or environment issue
-      - logic_error          # Algorithm/business logic bug
-      - test_isolation       # Test isolation or fixture issue
-      - missing_validation   # Missing model validation
-      - missing_permission   # Authorization check missing
+      - missing_association # Incorrect Rails associations
+      - missing_include # Missing eager loading (N+1)
+      - missing_index # Database performance issue
+      - wrong_api # Using deprecated/incorrect Rails API
+      - scope_issue # Incorrect query scope or filtering
+      - thread_violation # Real-time unsafe operation
+      - async_timing # Async/background job timing
+      - memory_leak # Memory leak or excessive allocation
+      - config_error # Configuration or environment issue
+      - logic_error # Algorithm/business logic bug
+      - test_isolation # Test isolation or fixture issue
+      - missing_validation # Missing model validation
+      - missing_permission # Authorization check missing
       - missing_workflow_step # Skipped or undocumented workflow step
       - inadequate_documentation # Missing or unclear documentation
-      - missing_tooling      # Lacking helper scripts or automation
-      - incomplete_setup     # Missing seed data, fixtures, or config
+      - missing_tooling # Lacking helper scripts or automation
+      - incomplete_setup # Missing seed data, fixtures, or config
     description: "Fundamental cause of the problem"
 
   resolution_type:
     type: enum
     values:
-      - code_fix             # Fixed by changing source code
-      - migration            # Fixed by database migration
-      - config_change        # Fixed by changing configuration
-      - test_fix             # Fixed by correcting tests
-      - dependency_update    # Fixed by updating gem/dependency
-      - environment_setup    # Fixed by environment configuration
+      - code_fix # Fixed by changing source code
+      - migration # Fixed by database migration
+      - config_change # Fixed by changing configuration
+      - test_fix # Fixed by correcting tests
+      - dependency_update # Fixed by updating gem/dependency
+      - environment_setup # Fixed by environment configuration
       - workflow_improvement # Improved development workflow or process
       - documentation_update # Added or updated documentation
-      - tooling_addition     # Added helper script or automation
-      - seed_data_update     # Updated db/seeds.rb or fixtures
+      - tooling_addition # Added helper script or automation
+      - seed_data_update # Updated db/seeds.rb or fixtures
     description: "Type of fix applied"
 
   severity:
     type: enum
     values:
-      - critical             # Blocks production or development (build fails, data loss)
-      - high                 # Impairs core functionality (feature broken, security issue)
-      - medium               # Affects specific feature (UI broken, performance impact)
-      - low                  # Minor issue or edge case
+      - critical # Blocks production or development (build fails, data loss)
+      - high # Impairs core functionality (feature broken, security issue)
+      - medium # Affects specific feature (UI broken, performance impact)
+      - low # Minor issue or edge case
     description: "Impact severity"
 
 optional_fields:
