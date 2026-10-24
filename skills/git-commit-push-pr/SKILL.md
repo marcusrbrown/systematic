@@ -74,11 +74,12 @@ When the command does not print `saved`, the temp file could not be created or t
 **Generate the updated title and body** — using the PR URL from DU-2 and the commit range it covers, write an updated PR title and body. The URL preserves repo/PR identity even when invoked from a worktree or subdirectory. If the user provided a focus (e.g., "include the benchmarking results"), incorporate it into the generated content. Write the body to an OS temp file:
 
 ```bash
-BODY_FILE=$(mktemp /tmp/pr-body-XXXXXX.md)
-cat > "$BODY_FILE" << 'EOF'
+BODY_FILE=$(mktemp) && cat > "$BODY_FILE" << 'EOF' && echo "saved $BODY_FILE"
 <generated body>
 EOF
 ```
+
+When the command does not print `saved` and the path, the temp file could not be created or written. Stop and apply nothing. Tell the user why, remove the old file, and ask how to proceed. Use the printed path as the body file below.
 
 If the PR is not open or the commit range cannot be resolved, report the issue and stop.
 
@@ -95,10 +96,10 @@ Do not offer to publish images here. If the user asks to attach local images, ro
 - If the user provided a focus, confirm it was addressed.
 - Ask the user to confirm before applying.
 
-If confirmed, apply with the returned title and body file:
+If confirmed, apply with the returned title and body file. `--body-file` makes `gh` read the file as written, so trailing newlines and shell-special characters in the body survive:
 
 ```bash
-gh pr edit --title "<returned title>" --body "$(cat "<returned body_file>")"
+gh pr edit --title "<returned title>" --body-file "<returned body_file>"
 ```
 
 Report the PR URL.
@@ -233,11 +234,11 @@ When evidence is not possible (docs-only, markdown-only, changelog-only, release
 - **Title**: conventional-commit format, under 72 characters, describing the value delivered (not the implementation).
 - **Body**: value-first narrative scaled to the change size. Apply the writing principles, commit classification, sizing, and narrative framing described in this skill. Write the body to an OS temp file:
   ```bash
-  BODY_FILE=$(mktemp /tmp/pr-body-XXXXXX.md)
-  cat > "$BODY_FILE" << 'EOF'
+  BODY_FILE=$(mktemp) && cat > "$BODY_FILE" << 'EOF' && echo "saved $BODY_FILE"
   <generated body>
   EOF
   ```
+  When the command does not print `saved` and the path, the temp file could not be created or written. Stop, and do not create or edit the PR, because there is no body to apply. Use the printed path as `<body_file>` below.
 - Splice any captured evidence as a `## Demo` section into the body file before applying. For the file that **Publish local images** returned, append it with the shell and delete it once it is appended, so no SHA is retyped:
   ```bash
   printf '\n' >> "<body_file>" && cat "<demo_file>" >> "<body_file>" && rm -f "<demo_file>"
@@ -261,10 +262,10 @@ If the branch diff is empty or the base ref is unresolved, report the issue and 
 Using the title and body file generated in Step 6:
 
 ```bash
-gh pr create --title "<title>" --body "$(cat "<body_file>")"
+gh pr create --title "<title>" --body-file "<body_file>"
 ```
 
-Keep the title under 72 characters.
+Keep the title under 72 characters. Pass the body with `--body-file`, never through command substitution, which strips trailing newlines.
 
 #### Existing PR (found in Step 3)
 
@@ -287,7 +288,7 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
   **Apply.** Only after `status=ok` or `status=absent`. The carry step edits the body file in place, so the apply step is the same:
 
   ```bash
-  gh pr edit --title "<title>" --body "$(cat "<body_file>")"
+  gh pr edit --title "<title>" --body-file "<body_file>"
   ```
 
 - If **no** -- skip Step 6 entirely and finish. Do not run evidence capture when the user declined the rewrite.

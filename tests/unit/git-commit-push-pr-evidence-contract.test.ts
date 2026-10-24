@@ -283,17 +283,17 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
     expect(carryBlock).toMatch(/new body file/i)
   })
 
-  test('both rewrite paths make their temp file with a portable bare mktemp, never an X template with a suffix', () => {
+  test('every mktemp call in the skill is a portable bare call, never an X template with a suffix', () => {
     // macOS mktemp creates a literal file when the template has a suffix after
-    // the X run, and GNU mktemp rejects it. Both break the carry silently.
-    const mktemps = [...fencedBlocks(stepSeven), ...fencedBlocks(duThree)]
+    // the X run, so every run shares one path. GNU mktemp may reject it. The
+    // skill makes four temp files: two old body files and two new body files.
+    const mktemps = fencedBlocks(skill)
       .join('\n')
       .split('\n')
       .filter((line) => line.includes('mktemp'))
-      .filter((line) => !line.includes('BODY_FILE=$(mktemp /tmp/pr-body-'))
-    expect(mktemps.length).toBeGreaterThan(1)
+    expect(mktemps.length).toBeGreaterThanOrEqual(4)
     for (const line of mktemps) {
-      expect(line).not.toMatch(/mktemp\s[^)\n]*X{3,}[^X)\s]/)
+      expect(line).not.toMatch(/mktemp\b[^)\n]*X{3,}[^X)\s'"]/)
     }
   })
 
@@ -383,10 +383,62 @@ describe('git-commit-push-pr evidence contract -- rewrites', () => {
       /attach[^.]*route[^.]*`systematic:pr-attachments`[^.]*PR mode/i,
     )
   })
+})
 
-  test('the --body apply sites are not touched by this change', () => {
-    const sites = skill.match(/--body "\$\(/g) ?? []
-    expect(sites.length).toBeLessThanOrEqual(3)
+describe('git-commit-push-pr body hand-off', () => {
+  const commands = fencedBlocks(skill).join('\n').split('\n')
+  const applyCommands = commands.filter((line) =>
+    /\bgh pr (?:create|edit)\b/.test(line),
+  )
+
+  test('no apply command passes the body through command substitution', () => {
+    // Command substitution strips every trailing newline and runs the body
+    // through the shell. --body-file hands gh the file byte for byte.
+    expect(skill.match(/--body "\$\(/g) ?? []).toHaveLength(0)
+    expect(skill).not.toMatch(/--body\s+"?\$\(cat\b/)
+  })
+
+  test('gh pr create and both gh pr edit apply sites use --body-file', () => {
+    expect(applyCommands).toHaveLength(3)
+    expect(
+      applyCommands.filter((line) => line.includes('gh pr create')),
+    ).toHaveLength(1)
+    expect(
+      applyCommands.filter((line) => line.includes('gh pr edit')),
+    ).toHaveLength(2)
+    for (const command of applyCommands) {
+      expect(command).toMatch(/--body-file "<[^>"]*body_file>"/)
+      expect(command).not.toMatch(/--body(?!-file)\b/)
+    }
+  })
+
+  test('the apply sites sit in DU-3 and Step 7', () => {
+    const inDuThree = fencedBlocks(duThree).join('\n')
+    const inStepSeven = fencedBlocks(stepSeven).join('\n')
+    expect(inDuThree).toMatch(/gh pr edit .*--body-file/)
+    expect(inStepSeven).toMatch(/gh pr create .*--body-file/)
+    expect(inStepSeven).toMatch(/gh pr edit .*--body-file/)
+  })
+
+  test('both body files come from a bare mktemp chained to the write, so a failed mktemp stops the step', () => {
+    const creations = commands.filter((line) =>
+      /(?<![A-Z_])BODY_FILE=\$\(mktemp/.test(line),
+    )
+    expect(creations).toHaveLength(2)
+    for (const line of creations) {
+      expect(line).toMatch(
+        /BODY_FILE=\$\(mktemp\) && cat > "\$BODY_FILE" << 'EOF' && echo "saved \$BODY_FILE"/,
+      )
+    }
+  })
+
+  test.each([
+    ['DU-3', duThree],
+    ['Step 6', stepSix],
+  ])('%s stops when the body file was not created', (_name, text) => {
+    expect(normalize(text)).toMatch(
+      /does not print `saved` and the path[^.]*could not be created or written\. Stop/i,
+    )
   })
 })
 
