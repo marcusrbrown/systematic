@@ -179,13 +179,18 @@
 //     code, never a fence. It closes on a run of the same character, at
 //     least as long, with no info string. An unclosed fence runs to the end.
 //   - Raw HTML blocks hide headings: `<pre>`, `<script>`, `<style>` and
-//     `<textarea>` (until the matching closing tag), and comments (until
-//     `-->` or `--!>`). Block quotes and indented code hide them too.
+//     `<textarea>` (until the matching closing tag), and comments (until a
+//     literal `-->`, as GitHub Markdown reads them). Block quotes and
+//     indented code hide them too.
 //   - Fail closed: when a block that never closes began inside the Demo
 //     section, splice and extract stop with `unterminated-region` (kind
 //     `fence`, `comment` or `html`) and write nothing, because where the
 //     section ends is unknown. Splice also stops, rather than append, when a
 //     block is still open at the end of a body that has no Demo section.
+//   - A comment that holds `--!>` before its `-->` (or that holds `--!>` and
+//     no `-->`) is ambiguous: a browser ends a comment at `--!>`, GitHub
+//     Markdown does not. Splice and extract stop with `unterminated-region`
+//     (kind `comment`) and write nothing, wherever in the body it sits.
 //   - Shape guard: an existing Demo section is replaced (splice) or returned
 //     (extract) only when every non-blank line under its heading is one the
 //     skill writes (`demoText`): `![<file stem>](<url>)`, where the URL is a
@@ -824,8 +829,11 @@ const FENCE_RUN = /^(`{3,}|~{3,})(.*)$/
 // the line is indented code, and never the start of a fence.
 const INDENTED_CODE = /^(?: {4}| {0,3}\t)/
 const COMMENT_OPEN = /^ {0,3}<!--/
-// HTML ends a comment at `-->` and also at `--!>`.
-const COMMENT_CLOSE = /--!?>/
+// GitHub Markdown ends a comment block only at a literal `-->`. HTML error
+// recovery in a browser also ends a comment at `--!>`, so a comment holding
+// one reads two ways. The scanner looks for both: `-->` ends the block, and a
+// `--!>` seen before it marks the body ambiguous (see `ambiguousComment`).
+const COMMENT_END = /--!?>/g
 const HTML_BLOCK_OPEN = /^ {0,3}<(pre|script|style|textarea)(?=[ \t>]|$)/i
 const BLOCK_QUOTE = /^ {0,3}>/
 const NOT_INDENTED = /^ {0,3}[^ \t]/
@@ -834,6 +842,23 @@ const BLANK = /^[ \t]*$/
 const HIDDEN_KINDS = new Set(['fence', 'comment', 'html'])
 const LINE_BREAK = /\r\n|\n|\r/g
 const ENDS_WITH_BREAK = /(?:\r\n|\n|\r)$/
+
+/**
+ * Reads one line of a comment block. `closed` is true when the line holds a
+ * `-->`; `ambiguous` is true when a `--!>` comes before it (or the line holds
+ * no `-->`). A `--!>` after the closing `-->` is outside the comment.
+ * @param {string} content
+ */
+function readCommentLine(content) {
+  let ambiguous = false
+  for (const end of content.matchAll(COMMENT_END)) {
+    if (end[0] === '-->') {
+      return { closed: true, ambiguous }
+    }
+    ambiguous = true
+  }
+  return { closed: false, ambiguous }
+}
 
 /**
  * Splits on CRLF, LF or CR. Every line keeps its terminator's position, so
@@ -890,7 +915,9 @@ function dominantEol(lines) {
  * `headings` holds H1 and H2 only: `line` is the first line of the heading
  * (the first line of the paragraph, for a setext heading). `endState` is the
  * block still open at the end of the text, and `openLine` the line it began
- * on (-1 when none is open).
+ * on (-1 when none is open). `ambiguousComment` is true when a comment block
+ * holds a `--!>` before its `-->` (or a `--!>` and no `-->` at all): GitHub
+ * Markdown and a browser then disagree on where it ends.
  * @param {string} text
  */
 function scanMarkdown(text) {
@@ -901,11 +928,12 @@ function scanMarkdown(text) {
   let openLine = -1
   let closer = null
   let paragraph = -1
+  let ambiguousComment = false
 
   /**
    * @param {'fence' | 'comment' | 'html'} next
    * @param {number} index
-   * @param {RegExp | null} end
+   * @param {RegExp | null} end  null for a comment, which `readCommentLine` ends
    */
   const open = (next, index, end) => {
     mode = next
@@ -924,7 +952,13 @@ function scanMarkdown(text) {
     if (mode !== 'normal') {
       // Inside a block every line is hidden; one that ends it is hidden too.
       kinds.push(mode)
-      if (closer.test(content)) {
+      if (mode === 'comment') {
+        const read = readCommentLine(content)
+        ambiguousComment ||= read.ambiguous
+        if (read.closed) {
+          close()
+        }
+      } else if (closer.test(content)) {
         close()
       }
       return
@@ -952,8 +986,10 @@ function scanMarkdown(text) {
     }
     if (COMMENT_OPEN.test(content)) {
       kinds.push('comment')
-      if (!COMMENT_CLOSE.test(content)) {
-        open('comment', index, COMMENT_CLOSE)
+      const read = readCommentLine(content)
+      ambiguousComment ||= read.ambiguous
+      if (!read.closed) {
+        open('comment', index, null)
       }
       paragraph = -1
       return
@@ -995,7 +1031,15 @@ function scanMarkdown(text) {
     }
   })
 
-  return { text, lines, kinds, headings, endState: mode, openLine }
+  return {
+    text,
+    lines,
+    kinds,
+    headings,
+    endState: mode,
+    openLine,
+    ambiguousComment,
+  }
 }
 
 /**
@@ -1111,7 +1155,8 @@ function parseDemoText(text) {
     scan.headings.length !== 1 ||
     only.line !== 0 ||
     !only.demo ||
-    scan.endState !== 'normal'
+    scan.endState !== 'normal' ||
+    scan.ambiguousComment
   ) {
     return { ok: false }
   }
@@ -1147,6 +1192,9 @@ export function spliceDemo(body, demoText) {
   }
   const { scan, sections, screenshots } = inspectBody(body)
   const base = { demoCount: sections.length, screenshots }
+  if (scan.ambiguousComment) {
+    return { kind: 'unterminated-region', region: 'comment', ...base }
+  }
   if (sections.length > 1) {
     return { kind: 'multiple-demo-sections', ...base }
   }
@@ -1241,6 +1289,9 @@ function separatorBeforeAppend(lines, eol) {
 export function extractDemo(body) {
   const { scan, sections, screenshots } = inspectBody(body)
   const base = { demoCount: sections.length, screenshots }
+  if (scan.ambiguousComment) {
+    return { kind: 'unterminated-region', region: 'comment', ...base }
+  }
   if (sections.length > 1) {
     return { kind: 'multiple-demo-sections', ...base }
   }

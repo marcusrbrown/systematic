@@ -740,6 +740,38 @@ describe('pr-attachments dry run -- carry mode over the real helper', () => {
     expect(fs.readFileSync(run.newFile, 'utf8')).toBe(newBody)
   })
 
+  test('a --!> inside a comment of the old body stops at extract and copies nothing', () => {
+    const oldBody = `<!-- archived\n--!>\n${OLD_DEMO}## Notes\n-->\n`
+    const run = carryFiles(oldBody, 'new\n')
+
+    const extracted = carryExtract(run)
+
+    expect(extracted.status).toBe(1)
+    const report = JSON.parse(extracted.stdout)
+    expect(report.result).toBe('needs-input')
+    expect(report.asks).toEqual([
+      { code: 'unterminated-region', kind: 'comment' },
+    ])
+    expect(fs.readFileSync(run.demoFile, 'utf8')).toBe('')
+    expect(fs.readFileSync(run.newFile, 'utf8')).toBe('new\n')
+  })
+
+  test('a --!> inside a comment of the new body stops the splice and leaves the file as it was', () => {
+    const newBody = '# T\n\n<!-- x --!> y -->\n\n## Demo\n'
+    const run = carryFiles(OLD_DEMO, newBody)
+    expect(carryExtract(run).status).toBe(0)
+
+    const spliced = carrySplice(run)
+
+    expect(spliced.status).toBe(1)
+    const report = JSON.parse(spliced.stdout)
+    expect(report.result).toBe('needs-input')
+    expect(report.asks).toEqual([
+      { code: 'unterminated-region', kind: 'comment' },
+    ])
+    expect(fs.readFileSync(run.newFile, 'utf8')).toBe(newBody)
+  })
+
   test('an unreadable old body is a usage error from the helper, not a hand-written result', () => {
     const run = carryFiles('', 'new\n')
     fs.rmSync(run.oldFile)

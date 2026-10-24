@@ -303,7 +303,9 @@ exact: image classification (a file over 10 MiB is rejected before anything is p
 GitHub does not serve larger files as images), byte-exact splicing, pin selection, the cleanup set and bounded
 verification. Splicing treats only a `## Demo` heading at column 0 as the managed section: a fence
 (also one opened inside a list item or a quote) or a raw HTML block hides a literal heading, and a
-block that never closes inside the section stops the run with `unterminated-region`. A line indented
+block that never closes inside the section stops the run with `unterminated-region`. A comment ends
+only at a literal `-->`, as GitHub Markdown reads it; a comment that holds `--!>` (where a browser
+would end it) is ambiguous, and the run stops with `unterminated-region` of kind `comment`. A line indented
 four columns or more with no list or quote marker is indented code, never a fence. An existing Demo
 section is replaced or copied only when every non-blank line under its heading is an image embed in
 the forms `pins` with `select` writes; any other line stops the run with `unexpected-section-content`

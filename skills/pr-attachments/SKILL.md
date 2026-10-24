@@ -481,7 +481,7 @@ Route the result:
 - `spliced` (exit 0): read `action`. `appended` and `replaced` continue. On `replaced`, tell the user the old Demo section is replaced and the backup holds it. On `unchanged`, the description already holds this Demo text: write nothing and go to Cleanup.
 - `needs-input` (exit 1): read `asks` and stop. Write nothing.
   - `multiple-demo-sections`: the description has more than one `## Demo` section. Ask the user which to keep.
-  - `unterminated-region`: a code fence (also one inside a list item or a quote), a comment, or a `<pre>`, `<script>`, `<style>` or `<textarea>` block is never closed. It would swallow the section, or it sits inside the existing Demo section so that the end of that section is unknown. Nothing is replaced. Ask the user to close it.
+  - `unterminated-region`: a code fence (also one inside a list item or a quote), a comment, or a `<pre>`, `<script>`, `<style>` or `<textarea>` block is never closed. It would swallow the section, or it sits inside the existing Demo section so that the end of that section is unknown. A comment that contains `--!>` is refused the same way (kind `comment`): GitHub ends a comment only at `-->`, but a browser also ends it at `--!>`, so the text after it cannot be placed. Nothing is replaced. Ask the user to close the block, or to remove the `--!>`.
   - `unexpected-section-content`: the existing Demo section holds a line this skill does not write, such as a heading, a table or prose. The section is not the managed one, or its end is misjudged. Nothing is replaced and the description stays untouched. Ask the user to move that content out of the section.
   - `line-ending-conflict`: the Demo text and the description use different line endings at the join. Ask the user.
 - `write-failed` (exit 1): the output file could not be written. Stop.
@@ -580,7 +580,7 @@ Route the result:
 
 - `extracted` (exit 0): continue.
 - `absent` (exit 0): the old description has no Demo section, so there is nothing to carry; leave the new file untouched, remove the demo file and finish with `status=absent`, which is not a failure.
-- `needs-input` (exit 1): the old file is untouched and nothing is copied. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the old description has more than one `## Demo` section), `unterminated-region` (an unclosed block sits inside its Demo section, so where that section ends is unknown) or `unexpected-section-content` (its Demo section holds a line this skill does not write, such as a heading, a table or prose).
+- `needs-input` (exit 1): the old file is untouched and nothing is copied. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the old description has more than one `## Demo` section), `unterminated-region` (an unclosed block, or a comment that contains `--!>`, sits in the old description, so where its Demo section ends is unknown) or `unexpected-section-content` (its Demo section holds a line this skill does not write, such as a heading, a table or prose).
 - `write-failed` (exit 1): finish with `status=failed`.
 - `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
 
@@ -597,7 +597,7 @@ node -e 'process.stdout.write(JSON.stringify({body: require("fs").readFileSync(p
 Route the result:
 
 - `spliced` (exit 0): `appended`, `replaced` and `unchanged` all finish with `status=ok`.
-- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence, comment or HTML block would swallow the section), `unexpected-section-content` (the existing Demo section in the new file holds a line this skill does not write) or `line-ending-conflict` (the two texts use different line endings at the join).
+- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence, comment or HTML block would swallow the section, or a comment contains `--!>` and so ends in two places), `unexpected-section-content` (the existing Demo section in the new file holds a line this skill does not write) or `line-ending-conflict` (the two texts use different line endings at the join).
 - `write-failed` (exit 1): finish with `status=failed`. The new file may be partly written, so the caller discards it.
 - `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
 

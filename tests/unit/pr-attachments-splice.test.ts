@@ -2101,42 +2101,82 @@ describe('Demo section shape guard: only lines the skill writes are replaced or 
   })
 })
 
-describe('Demo section detection: a comment ends at --> or --!>', () => {
+describe('Demo section detection: a comment ends only at -->', () => {
   const TAIL = '\n## Tests\n\nrun them\n'
+  const COMMENT_ASK = [{ code: 'unterminated-region', kind: 'comment' }]
 
-  for (const closer of ['-->', '--!>']) {
-    it(`hides a literal heading until ${closer}`, () => {
-      const body = `Intro\n\n<!--\n## Demo\n${closer}\n${TAIL}`
+  function expectRefusedSplice(body: string): void {
+    const run = runSplice(body, DEMO, { preCreate: true })
 
-      const run = runSplice(body, DEMO)
-
-      expectSplice(run, { before: body, middle: `\n${DEMO}`, after: '' })
-      expect(run.report.action).toBe('appended')
-      expect(run.report.demo_count).toBe(0)
-    })
-
-    it(`ends a one-line comment closed with ${closer}`, () => {
-      const body = `<!-- note ${closer}\n\n## Demo\n${TAIL}`
-
-      const run = runSplice(body, DEMO)
-
-      expect(run.report.demo_count).toBe(1)
-      expect(run.report.action).toBe('replaced')
-    })
-
-    it(`finds the real heading after a comment closed with ${closer}`, () => {
-      const body = `<!--\n## Demo\n${closer}\n\n## Demo\n${TAIL}`
-
-      const run = runSplice(body, DEMO)
-
-      expectSplice(run, {
-        before: `<!--\n## Demo\n${closer}\n\n## Demo\n`,
-        middle: DEMO.slice('## Demo\n'.length),
-        after: TAIL,
-      })
-      expect(run.report.demo_count).toBe(1)
-    })
+    expect(run.status).toBe(1)
+    expect(run.report.result).toBe('needs-input')
+    expect(listField(run.report, 'asks')).toEqual(COMMENT_ASK)
+    expect(run.out?.toString('utf8')).toBe('SENTINEL')
+    expect(runSplice(body, DEMO).out).toBeNull()
   }
+
+  function expectRefusedExtract(body: string): void {
+    const run = runExtract(body, { preCreate: true })
+
+    expect(run.status).toBe(1)
+    expect(run.report.result).toBe('needs-input')
+    expect(listField(run.report, 'asks')).toEqual(COMMENT_ASK)
+    expect(run.out?.toString('utf8')).toBe('SENTINEL')
+    expect(runExtract(body).out).toBeNull()
+  }
+
+  it('hides a literal heading until -->', () => {
+    const body = `Intro\n\n<!--\n## Demo\n-->\n${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expectSplice(run, { before: body, middle: `\n${DEMO}`, after: '' })
+    expect(run.report.action).toBe('appended')
+    expect(run.report.demo_count).toBe(0)
+  })
+
+  it('hides a whole Demo section, embed included, inside an ordinary comment', () => {
+    const body = `Intro\n\n<!--\n## Demo\n\n${OLD_EMBED}\n-->\n${TAIL}`
+
+    const extracted = runExtract(body)
+    const spliced = runSplice(body, DEMO)
+
+    expect(extracted.status).toBe(0)
+    expect(extracted.report.result).toBe('absent')
+    expectSplice(spliced, { before: body, middle: `\n${DEMO}`, after: '' })
+    expect(spliced.report.demo_count).toBe(0)
+  })
+
+  it('ends a one-line comment closed with -->', () => {
+    const body = `<!-- note -->\n\n## Demo\n${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expect(run.report.demo_count).toBe(1)
+    expect(run.report.action).toBe('replaced')
+  })
+
+  it('finds the real heading after a comment closed with -->', () => {
+    const body = `<!--\n## Demo\n-->\n\n## Demo\n${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expectSplice(run, {
+      before: '<!--\n## Demo\n-->\n\n## Demo\n',
+      middle: DEMO.slice('## Demo\n'.length),
+      after: TAIL,
+    })
+    expect(run.report.demo_count).toBe(1)
+  })
+
+  it('does not look at a --!> that comes after the --> closing the comment', () => {
+    const body = `<!-- note --> tail --!> more\n\n## Demo\n\n${OLD_EMBED}\n${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expect(run.report.demo_count).toBe(1)
+    expect(run.report.action).toBe('replaced')
+  })
 
   it('does not end a comment at a bare --', () => {
     const body = 'Intro\n\n<!--\n## Demo\n--\n\n## Tests\n'
@@ -2144,8 +2184,45 @@ describe('Demo section detection: a comment ends at --> or --!>', () => {
     const run = runSplice(body, DEMO)
 
     expect(run.status).toBe(1)
-    expect(listField(run.report, 'asks')).toEqual([
-      { code: 'unterminated-region', kind: 'comment' },
-    ])
+    expect(listField(run.report, 'asks')).toEqual(COMMENT_ASK)
+  })
+
+  describe('a --!> inside a comment is ambiguous, so both commands refuse', () => {
+    // GitHub Markdown ends the block at a literal -->, but HTML recovery in a
+    // browser ends a comment at --!> too. The two readings disagree on where
+    // the archived text stops, so the helper takes neither.
+    const ARCHIVED = `<!-- archived\n--!>\n## Demo\n\n${OLD_EMBED}\n## Notes\n-->\n`
+
+    it('extract does not return the archived section', () => {
+      expectRefusedExtract(ARCHIVED)
+    })
+
+    it('splice changes no byte of the block', () => {
+      expectRefusedSplice(ARCHIVED)
+    })
+
+    it('refuses when the --!> has no --> after it', () => {
+      const body = `Intro\n\n<!--\nnote --!>\n\n## Tests\n\nrun them\n`
+
+      expectRefusedSplice(body)
+      expectRefusedExtract(body)
+    })
+
+    it('refuses a one-line comment that holds --!> before its -->', () => {
+      // GitHub Markdown closes this comment on its own line, so the Demo that
+      // follows is real. A browser would end it at --!> and show " y -->" as
+      // text. Replacing the section on one reading is a guess, so it refuses.
+      const body = `<!-- x --!> y -->\n\n## Demo\n\n${OLD_EMBED}\n${TAIL}`
+
+      expectRefusedSplice(body)
+      expectRefusedExtract(body)
+    })
+
+    it('refuses a --!> inside a comment that opens after the Demo section', () => {
+      const body = `## Demo\n\n${OLD_EMBED}\n\n<!--\n--!>\n-->\n`
+
+      expectRefusedSplice(body)
+      expectRefusedExtract(body)
+    })
   })
 })
