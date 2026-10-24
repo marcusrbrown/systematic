@@ -70,6 +70,7 @@ const ROUTED_DETAIL_CODES = [
   'destination-conflict',
   'multiple-demo-sections',
   'unterminated-region',
+  'unexpected-section-content',
   'line-ending-conflict',
   'blob-url',
   'unchanged',
@@ -499,11 +500,31 @@ describe('pr-attachments skill contract -- PR mode body write', () => {
       'unchanged',
       'multiple-demo-sections',
       'unterminated-region',
+      'unexpected-section-content',
       'line-ending-conflict',
       'write-failed',
     ]) {
       expect(text, code).toContain(`\`${code}\``)
     }
+  })
+
+  test('a Demo section with content the skill did not write stops the run and leaves the description untouched', () => {
+    const bullet = step
+      .split('\n')
+      .find((line) => line.includes('`unexpected-section-content`'))
+    expect(bullet).toBeDefined()
+    expect(normalize(bullet ?? '')).toMatch(
+      /heading[^.]*table[^.]*prose|not (?:a line|something) the skill (?:wrote|writes)/i,
+    )
+    expect(normalize(bullet ?? '')).toMatch(/nothing is replaced/i)
+    expect(normalize(bullet ?? '')).toMatch(/ask/i)
+  })
+
+  test('re-pin mode does not meet that reason: it edits only the 40-hex segment', () => {
+    const repin = normalize(section(skill, '## Re-pin mode'))
+    expect(repin).toMatch(
+      /`unexpected-section-content`[^.]*(?:never|does not|not)/i,
+    )
   })
 })
 
@@ -565,6 +586,32 @@ describe('pr-attachments skill contract -- embed mode', () => {
     expect(skill).toMatch(
       /`pins` <<'JSON'\n\{"select"|pins <<'JSON'\n\{"select"/,
     )
+  })
+
+  test('a Demo file that cannot be written in the pin selection stops with the helper-failed reason', () => {
+    const select = section(skill, '### Select the pins and write the Demo text')
+    const bullet = select
+      .split('\n')
+      .find((line) => line.startsWith('- `write-failed`'))
+    expect(bullet).toBeDefined()
+    const text = normalize(bullet ?? '')
+    expect(text).toContain('(exit 1)')
+    expect(text).toMatch(/\bstop\b/i)
+    expect(text).toContain('`status=failed`')
+    expect(text).toContain('`reason=helper-failed`')
+    expect(text).toContain('`evidence=pushed`')
+    expect(normalize(select)).toMatch(/never return the Demo file/i)
+  })
+
+  test('the embed-mode reason table has a row for a helper call that returns write-failed', () => {
+    const row = section(
+      skill,
+      '## Step 8: Write the description or return the Demo file',
+    )
+      .split('\n')
+      .find((line) => line.startsWith('|') && line.includes('`write-failed`'))
+    expect(row).toBeDefined()
+    expect(row).toContain('`helper-failed`')
   })
 
   test('a pin that does not hold the classified blob stops the run with pin-mismatch', () => {
@@ -649,6 +696,7 @@ describe('pr-attachments skill contract -- carry mode', () => {
       'needs-input',
       'multiple-demo-sections',
       'unterminated-region',
+      'unexpected-section-content',
       'line-ending-conflict',
       'write-failed',
       'usage-error',
@@ -670,11 +718,22 @@ describe('pr-attachments skill contract -- carry mode', () => {
       'helper-failed',
       'multiple-demo-sections',
       'unterminated-region',
+      'unexpected-section-content',
       'line-ending-conflict',
       'write-failed',
     ]) {
       expect(text, reason).toContain(`\`${reason}\``)
     }
+  })
+
+  test('both the old and the new description can hold a section the skill did not write, and the carry fails without applying', () => {
+    const bullets = step
+      .split('\n')
+      .filter((line) => line.includes('`unexpected-section-content`'))
+    expect(bullets.length).toBeGreaterThanOrEqual(2)
+    expect(text).toMatch(
+      /Never write a Demo section by hand when carry mode fails/,
+    )
   })
 
   test('removes the extracted-section file and offers no cleanup', () => {

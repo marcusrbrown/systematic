@@ -1587,6 +1587,64 @@ describe('verify: a Retry-After longer than the call carries over to the next ca
     ])
   })
 
+  it('sends no request when the cooldown uses up the total, and stays within it', async () => {
+    const { call, requests, clock } = await session(() => HANG)
+    const deadline = EPOCH0 + clock.now() + 30_000
+
+    const run = await call({
+      max_wait_s: 90,
+      waited_s: 270,
+      request_timeout_s: 300,
+      resume_at: deadline,
+    })
+
+    expect(requests).toHaveLength(0)
+    expect(run.exitCode).toBe(1)
+    expect(run.body.waited_s).toBe(300)
+    expect(run.body.waited_s).toBeLessThanOrEqual(300)
+    expect(run.body.retryable).toBe(false)
+    expect(run.body.resume_at).toBeUndefined()
+    expect(run.body.failed).toEqual([
+      {
+        url: A_PNG,
+        status: 'rate-limited',
+        http_status: null,
+        attempts: 0,
+        retryable: false,
+      },
+    ])
+  })
+
+  it('sends no request when the cooldown uses up the call limit, and the total has room', async () => {
+    const { call, requests, clock } = await session(() => HANG)
+    const deadline = EPOCH0 + clock.now() + 30_000
+
+    const run = await call({
+      max_wait_s: 30,
+      request_timeout_s: 300,
+      resume_at: deadline,
+    })
+
+    expect(requests).toHaveLength(0)
+    expect(run.exitCode).toBe(1)
+    expect(run.body.waited_s).toBe(30)
+    expect(run.body.retryable).toBe(true)
+    // The cooldown is served, so there is no deadline left to hand on.
+    expect(run.body.resume_at).toBeUndefined()
+    expect(run.body.failed.map((entry) => entry.attempts)).toEqual([0])
+  })
+
+  it('sends the request after a cooldown that leaves part of the call limit', async () => {
+    const { call, requests, clock } = await session(() => ok())
+    const deadline = EPOCH0 + clock.now() + 20_000
+
+    const run = await call({ max_wait_s: 30, resume_at: deadline })
+
+    expect(requests).toHaveLength(1)
+    expect(run.exitCode).toBe(0)
+    expect(run.body.waited_s).toBe(20)
+  })
+
   it('does not wait for a deadline that has already passed', async () => {
     const { call, requests, clock } = await session(() => ok())
     const past = EPOCH0 + clock.now() - 1000

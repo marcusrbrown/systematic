@@ -14,6 +14,8 @@ The images are committed under `docs/evidence/<topic>/` on the PR head branch an
 
 The managed section starts at a `## Demo` heading at column 0. A `## Demo` line that is indented, or that sits inside a code fence, a quote, a comment or a `<pre>`, `<script>`, `<style>` or `<textarea>` block, is text and not the section. The helper never replaces or copies it, and it never removes a line outside the section.
 
+The helper replaces or copies an existing Demo section only when every non-blank line under its heading is one this skill writes: an image embed (`![<file stem>](<url>)`) in the raw or the blob form. A heading, a fence, HTML, a table or free prose under the heading means the section is not the managed one, or its end was misjudged. The helper then changes nothing and reports `unexpected-section-content`.
+
 | Mode | Trigger | Writes the description |
 |---|---|---|
 | PR mode | An open PR and image paths | Yes |
@@ -370,6 +372,7 @@ JSON
 - `pin-mismatch` (exit 1): at a chosen pin, the blob of a destination differs from its `blob_sha`. Read `mismatched`. The Demo file is not written. Stop: the pushed image is not the approved one. In embed mode the reason is `pin-mismatch`.
 - `unresolved` (exit 1): no commit on `HEAD` added a destination, so there is no pin to embed. Treat it as a `pin-mismatch`, and name `unresolved_paths`.
 - `head-not-found`, `git-failed` or `git-timeout` (exit 1): stop and report `reached`. In embed mode the reason is `git-failed`.
+- `write-failed` (exit 1): the Demo file could not be written. Stop with `status=failed`, `reason=helper-failed` and `evidence=pushed`.
 - `usage-error` (exit 2): stop. In embed mode the reason is `helper-failed`.
 
 Never write the description, and never return the Demo file, after a stop here. The evidence commit is pushed and unreferenced. In PR mode say: the evidence commit is pushed, the description is not written, and a re-run retries and reuses the pushed commit.
@@ -479,6 +482,7 @@ Route the result:
 - `needs-input` (exit 1): read `asks` and stop. Write nothing.
   - `multiple-demo-sections`: the description has more than one `## Demo` section. Ask the user which to keep.
   - `unterminated-region`: a code fence (also one inside a list item or a quote), a comment, or a `<pre>`, `<script>`, `<style>` or `<textarea>` block is never closed. It would swallow the section, or it sits inside the existing Demo section so that the end of that section is unknown. Nothing is replaced. Ask the user to close it.
+  - `unexpected-section-content`: the existing Demo section holds a line this skill does not write, such as a heading, a table or prose. The section is not the managed one, or its end is misjudged. Nothing is replaced and the description stays untouched. Ask the user to move that content out of the section.
   - `line-ending-conflict`: the Demo text and the description use different line endings at the join. Ask the user.
 - `write-failed` (exit 1): the output file could not be written. Stop.
 - `usage-error` (exit 2): stop.
@@ -528,6 +532,7 @@ pr-attachments: status=failed evidence=<pushed|local|none> reason=<reason>
 | Node is missing or cannot launch | `node-unavailable` |
 | A helper call exits 2 with a `usage-error` | `helper-failed` |
 | A helper call returns `internal-error` | `helper-failed` |
+| A helper call returns `write-failed` | `helper-failed` |
 | Classify returns `rejected` | `rejected-images` |
 | Classify returns `needs-input` and the user does not settle it | `needs-input` |
 | No image paths, no upstream, an unlisted remote or a host other than github.com | `no-target` |
@@ -575,7 +580,7 @@ Route the result:
 
 - `extracted` (exit 0): continue.
 - `absent` (exit 0): the old description has no Demo section, so there is nothing to carry; leave the new file untouched, remove the demo file and finish with `status=absent`, which is not a failure.
-- `needs-input` (exit 1): the old file is untouched and nothing is copied. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the old description has more than one `## Demo` section) or `unterminated-region` (an unclosed block sits inside its Demo section, so where that section ends is unknown).
+- `needs-input` (exit 1): the old file is untouched and nothing is copied. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the old description has more than one `## Demo` section), `unterminated-region` (an unclosed block sits inside its Demo section, so where that section ends is unknown) or `unexpected-section-content` (its Demo section holds a line this skill does not write, such as a heading, a table or prose).
 - `write-failed` (exit 1): finish with `status=failed`.
 - `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
 
@@ -592,7 +597,7 @@ node -e 'process.stdout.write(JSON.stringify({body: require("fs").readFileSync(p
 Route the result:
 
 - `spliced` (exit 0): `appended`, `replaced` and `unchanged` all finish with `status=ok`.
-- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence, comment or HTML block would swallow the section) or `line-ending-conflict` (the two texts use different line endings at the join).
+- `needs-input` (exit 1): the new file is untouched. Finish with `status=failed`. The reason is the code in `asks`: `multiple-demo-sections` (the new file has more than one `## Demo` section), `unterminated-region` (an unclosed code fence, comment or HTML block would swallow the section), `unexpected-section-content` (the existing Demo section in the new file holds a line this skill does not write) or `line-ending-conflict` (the two texts use different line endings at the join).
 - `write-failed` (exit 1): finish with `status=failed`. The new file may be partly written, so the caller discards it.
 - `usage-error` (exit 2) or `internal-error`: finish with `status=failed`.
 
@@ -609,7 +614,7 @@ Then print exactly one status line:
 pr-attachments: status=<ok|absent|failed> [reason=<reason>]
 ```
 
-`reason` appears only with `failed`. It is one of `node-unavailable`, `bad-arguments`, `helper-failed`, `multiple-demo-sections`, `unterminated-region`, `line-ending-conflict` or `write-failed`. A missing node is `node-unavailable`, and a `usage-error` or `internal-error` is `helper-failed`. Never write a Demo section by hand when carry mode fails.
+`reason` appears only with `failed`. It is one of `node-unavailable`, `bad-arguments`, `helper-failed`, `multiple-demo-sections`, `unterminated-region`, `unexpected-section-content`, `line-ending-conflict` or `write-failed`. A missing node is `node-unavailable`, and a `usage-error` or `internal-error` is `helper-failed`. Never write a Demo section by hand when carry mode fails.
 
 ## Re-pin mode
 
@@ -673,6 +678,8 @@ node "$SKILL_DIR/scripts/pr-attachments.mjs" repin-rewrite < "$BACKUP"
 ### Verify and write
 
 Verify the URLs of the rewritten file with Step 7. Take the list from the new body file. A public repository uses the raw form subsection. Any other repository uses "Private repositories: the blob form", with `local` as the expected SHA of every URL.
+
+Re-pin mode never meets `unexpected-section-content`, because it does not call `splice` or `extract`: it edits only the 40-hex segment of managed URLs and no other line.
 
 Then do the write step of Step 8 with the new body file and this backup. Tell the user the backup path first. The guard compares only `body`, so this backup works although it also holds `head_repo` and `pins`. Then go to Cleanup.
 

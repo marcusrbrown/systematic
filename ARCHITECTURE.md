@@ -303,10 +303,16 @@ exact: image classification (a file over 10 MiB is rejected before anything is p
 GitHub does not serve larger files as images), byte-exact splicing, pin selection, the cleanup set and bounded
 verification. Splicing treats only a `## Demo` heading at column 0 as the managed section: a fence
 (also one opened inside a list item or a quote) or a raw HTML block hides a literal heading, and a
-block that never closes inside the section stops the run with `unterminated-region`. Every pin the
+block that never closes inside the section stops the run with `unterminated-region`. A line indented
+four columns or more with no list or quote marker is indented code, never a fence. An existing Demo
+section is replaced or copied only when every non-blank line under its heading is an image embed in
+the forms `pins` with `select` writes; any other line stops the run with `unexpected-section-content`
+and nothing is written. Every pin the
 skill embeds comes from `pins` with `select`, which picks the newest add-or-modify commit (merges
 included), requires its blob to equal the classified `blob_sha`, and writes the Demo text.
 Verification hands a Retry-After longer than one call to the next call as a `resume_at` deadline.
+A call that sleeps through such a cooldown sends no request when the sleep used up its time or the
+300 s total.
 It takes JSON on stdin, writes JSON on stdout, and keeps no state. The `gh` calls and
 the push stay in the skill's prose. The helper needs `node` 18+ on PATH, and the skill stops with
 its state reported when `node` is missing or the helper fails; it never writes a helper result by

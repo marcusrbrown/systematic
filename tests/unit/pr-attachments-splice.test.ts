@@ -45,6 +45,11 @@ function demoSection(sha = SHA_A, name = 'login.png'): string {
 
 const DEMO = demoSection()
 
+// An embed in the shapes the skill writes, for an existing section the helper
+// may replace or copy.
+const OLD_EMBED = `![old](${rawUrl(SHA_B, 'old.png')})`
+const OLD_BLOB_EMBED = `![old](${blobUrl(SHA_B, 'old.png')})`
+
 // ── Process and filesystem harness ─────────────────────────────────────────
 
 interface RawRun {
@@ -343,8 +348,7 @@ describe('splice: appending to a body with no Demo section', () => {
 
 describe('splice: replacing an existing Demo section', () => {
   const before = '## Summary\n\nDid things.\n\n'
-  const oldDemo =
-    '## Demo\n\n![old](https://example.com/old.png)\n\nHand caption.\n'
+  const oldDemo = `## Demo\n\n${OLD_EMBED}\n\n${OLD_BLOB_EMBED}\n`
   const tail = '\n## Testing\n\nRan bun test.\n'
 
   for (const [name, eol] of Object.entries(EOLS)) {
@@ -373,7 +377,7 @@ describe('splice: replacing an existing Demo section', () => {
       '## Demo #',
       '##  Demo',
     ]) {
-      const body = `Intro\n\n${heading}\nold\n${tail}`
+      const body = `Intro\n\n${heading}\n${OLD_EMBED}\n${tail}`
 
       const run = runSplice(body, DEMO)
 
@@ -385,9 +389,8 @@ describe('splice: replacing an existing Demo section', () => {
     }
   })
 
-  it('ends the section only at an H1 or H2, not at deeper headings', () => {
-    const old =
-      '## Demo\n\nold\n\n### Three\n\n#### Four\n\nmore\n\n#hashtag text\n\n---\n\nlast\n'
+  it('ends the section at an H1 or an H2', () => {
+    const old = `## Demo\n\n${OLD_EMBED}\n`
     for (const next of ['## Testing\n', '# Title\n', '##\n']) {
       const body = `${before}${old}\n${next}rest\n`
 
@@ -398,7 +401,19 @@ describe('splice: replacing an existing Demo section', () => {
         middle: DEMO.slice('## Demo\n'.length),
         after: `\n${next}rest\n`,
       })
-      expect(outText(run)).not.toContain('#### Four')
+    }
+  })
+
+  it('does not end the section at a deeper heading: it is content the helper refuses', () => {
+    for (const deeper of ['### Three', '#### Four']) {
+      const body = `${before}## Demo\n\n${OLD_EMBED}\n\n${deeper}\n\n## Testing\n`
+
+      const run = runSplice(body, DEMO)
+
+      expect(run.status).toBe(1)
+      expect(listField(run.report, 'asks')).toEqual([
+        { code: 'unexpected-section-content' },
+      ])
     }
   })
 
@@ -429,34 +444,34 @@ describe('splice: replacing an existing Demo section', () => {
     })
   })
 
-  it('does not end the section at a thematic break', () => {
-    const body = '## Demo\n\nold\n\n---\n\n***\n\nmore\n'
+  it('does not end the section at a thematic break: it is content the helper refuses', () => {
+    const body = `## Demo\n\n${OLD_EMBED}\n\n---\n\n${OLD_EMBED}\n\n## Testing\n`
 
-    const run = runSplice(body, DEMO)
+    const run = runSplice(body, DEMO, { preCreate: true })
 
-    expectSplice(run, {
-      before: '## Demo\n',
-      middle: DEMO.slice('## Demo\n'.length),
-      after: '',
-    })
+    expect(run.status).toBe(1)
+    expect(listField(run.report, 'asks')).toEqual([
+      { code: 'unexpected-section-content' },
+    ])
+    expect(run.out?.toString('utf8')).toBe('SENTINEL')
   })
 
-  it('does not look inside fences, comments or quotes for the section end', () => {
+  it('does not look inside fences, comments or quotes for the section end: they are content the helper refuses', () => {
     const old =
       '## Demo\n\n```md\n## Fake\n```\n\n<!--\n## Hidden\n-->\n\n> ## Quoted\n\nend\n'
     const body = `${old}\n## Testing\n`
 
-    const run = runSplice(body, DEMO)
+    const run = runSplice(body, DEMO, { preCreate: true })
 
-    expectSplice(run, {
-      before: '## Demo\n',
-      middle: DEMO.slice('## Demo\n'.length),
-      after: '\n## Testing\n',
-    })
+    expect(run.status).toBe(1)
+    expect(listField(run.report, 'asks')).toEqual([
+      { code: 'unexpected-section-content' },
+    ])
+    expect(run.out?.toString('utf8')).toBe('SENTINEL')
   })
 
   it('keeps a trailing gap of blank lines outside the section', () => {
-    const body = '## Demo\nold\n\n\n\n## Testing\n'
+    const body = `## Demo\n${OLD_EMBED}\n\n\n\n## Testing\n`
 
     const run = runSplice(body, DEMO)
 
@@ -470,7 +485,7 @@ describe('splice: replacing an existing Demo section', () => {
   it('ends an unterminated last line of the new section before a heading', () => {
     const demo = DEMO.slice(0, -1)
 
-    const run = runSplice('## Demo\nold\n## Testing\n', demo)
+    const run = runSplice(`## Demo\n${OLD_EMBED}\n## Testing\n`, demo)
 
     expectSplice(run, {
       before: '## Demo\n',
@@ -480,7 +495,7 @@ describe('splice: replacing an existing Demo section', () => {
   })
 
   it('handles a Demo section that is last, with and without a final newline', () => {
-    for (const oldEnd of ['old\n', 'old']) {
+    for (const oldEnd of [`${OLD_EMBED}\n`, OLD_EMBED]) {
       for (const newEnd of ['new\n', 'new']) {
         const body = `x\n\n## Demo\n${oldEnd}`
 
@@ -536,7 +551,7 @@ describe('splice: replacing an existing Demo section', () => {
 
   it('keeps a later section that holds an unclosed fence untouched', () => {
     const notes = '## Notes\n\n```\ncode that never closes\n## Demo\n'
-    const body = `## Demo\nold\n\n${notes}`
+    const body = `## Demo\n${OLD_EMBED}\n\n${notes}`
 
     const run = runSplice(body, DEMO)
 
@@ -558,9 +573,9 @@ describe('splice: fixed point', () => {
     'empty body': '',
     'whitespace-only body': '  \n',
     'an existing Demo in the middle': `a\n\n${DEMO}\n## Testing\n\nx\n`,
-    'an existing Demo, last, no newline': 'a\n\n## Demo\nold',
-    'a Demo with a gap of blank lines': '## Demo\nold\n\n\n## Testing\n',
-    CRLF: 'a\r\n\r\n## Demo\r\nold\r\n\r\n## Testing\r\nx\r\n',
+    'an existing Demo, last, no newline': `a\n\n## Demo\n${OLD_EMBED}`,
+    'a Demo with a gap of blank lines': `## Demo\n${OLD_EMBED}\n\n\n## Testing\n`,
+    CRLF: `a\r\n\r\n## Demo\r\n${OLD_EMBED}\r\n\r\n## Testing\r\nx\r\n`,
   }
 
   for (const [name, body] of Object.entries(bodies)) {
@@ -578,7 +593,10 @@ describe('splice: fixed point', () => {
 
   it('holds for a CR-only body with a CR-only Demo text', () => {
     const demo = withEol(DEMO, '\r')
-    const first = runSplice('a\r\r## Demo\rold\r\r## Testing\rx\r', demo)
+    const first = runSplice(
+      `a\r\r## Demo\r${OLD_EMBED}\r\r## Testing\rx\r`,
+      demo,
+    )
 
     const second = runSplice(outText(first), demo)
 
@@ -628,7 +646,7 @@ describe('splice: a Demo heading the parser must not see', () => {
 
   it('does not take a backtick line with a backtick info string for a fence', () => {
     // `inline` code on its own line is not a fence, so the heading is real.
-    const body = '```not a fence```\n\n## Demo\nold\n'
+    const body = `\`\`\`not a fence\`\`\`\n\n## Demo\n${OLD_EMBED}\n`
 
     const run = runSplice(body, DEMO)
 
@@ -645,7 +663,7 @@ describe('splice: a Demo heading the parser must not see', () => {
   })
 
   it('finds the real heading after a comment closes', () => {
-    const body = '<!--\n## Demo\n-->\n\n## Demo\nold\n'
+    const body = `<!--\n## Demo\n-->\n\n## Demo\n${OLD_EMBED}\n`
 
     const run = runSplice(body, DEMO)
 
@@ -658,13 +676,13 @@ describe('splice: a Demo heading the parser must not see', () => {
   })
 
   it('does not let a fence marker inside a comment open a fence', () => {
-    const body = '<!--\n```\n-->\n\n## Demo\nold\n'
+    const body = `<!--\n\`\`\`\n-->\n\n## Demo\n${OLD_EMBED}\n`
 
     expect(runSplice(body, DEMO).report.demo_count).toBe(1)
   })
 
   it('does not let a comment marker inside a fence open a comment', () => {
-    const body = '```\n<!--\n```\n\n## Demo\nold\n'
+    const body = `\`\`\`\n<!--\n\`\`\`\n\n## Demo\n${OLD_EMBED}\n`
 
     expect(runSplice(body, DEMO).report.demo_count).toBe(1)
   })
@@ -719,7 +737,7 @@ describe('splice: a Demo heading the parser must not see', () => {
   })
 
   it('does not take a hash-closed heading with a trailing # run for another word', () => {
-    const run = runSplice('## Demo ##\nold\n', DEMO)
+    const run = runSplice(`## Demo ##\n${OLD_EMBED}\n`, DEMO)
 
     expect(run.report.demo_count).toBe(1)
   })
@@ -751,7 +769,7 @@ describe('splice: an existing ## Screenshots section', () => {
   })
 
   it('reports Screenshots next to a replaced Demo', () => {
-    const body = '## Screenshots\n\nx\n\n## Demo\nold\n'
+    const body = `## Screenshots\n\nx\n\n## Demo\n${OLD_EMBED}\n`
 
     const run = runSplice(body, DEMO)
 
@@ -785,7 +803,7 @@ describe('splice: stops and asks', () => {
   })
 
   it('counts only Demo headings outside hidden regions', () => {
-    const body = `${DEMO}\n\`\`\`\n## Demo\n\`\`\`\n`
+    const body = `${DEMO}\n## Tests\n\n\`\`\`\n## Demo\n\`\`\`\n`
 
     const run = runSplice(body, DEMO)
 
@@ -796,7 +814,7 @@ describe('splice: stops and asks', () => {
   it('stops when a CR would fuse with an LF at a seam', () => {
     // A CR-ended heading followed by an LF-ended Demo text would read as one
     // CRLF and drop a line, and the next run would not reproduce the output.
-    for (const body of ['a\r\r## Demo\rold\r', 'a\nb\nc\nd\r']) {
+    for (const body of [`a\r\r## Demo\r${OLD_EMBED}\r`, 'a\nb\nc\nd\r']) {
       const run = runSplice(body, DEMO)
 
       expect(run.status).toBe(1)
@@ -1059,8 +1077,7 @@ describe('splice: usage errors', () => {
 // ── extract ────────────────────────────────────────────────────────────────
 
 describe('extract', () => {
-  const section =
-    '## Demo ##\n\n![a](https://example.com/a.png)\n\n#### Notes\n\nHand written: café — “quoted” \n'
+  const section = `## Demo ##\n\n${OLD_EMBED}\n\n${OLD_BLOB_EMBED}\n`
 
   for (const [name, eol] of Object.entries(EOLS)) {
     it(`returns the section bytes verbatim, heading to section end (${name})`, () => {
@@ -1080,24 +1097,32 @@ describe('extract', () => {
     })
   }
 
-  it('keeps fenced text that looks like headings, including a fake Demo', () => {
+  it('refuses fenced text that looks like headings, including a fake Demo', () => {
     const inner = '## Demo\n\n```md\n# not a heading\n## Demo\n```\n\ntail\n'
 
-    const run = runExtract(`a\n\n${inner}\n## Testing\n`)
+    const run = runExtract(`a\n\n${inner}\n## Testing\n`, { preCreate: true })
 
     expect(run.report.demo_count).toBe(1)
-    expect(outText(run)).toBe(inner)
+    expect(run.status).toBe(1)
+    expect(listField(run.report, 'asks')).toEqual([
+      { code: 'unexpected-section-content' },
+    ])
+    expect(run.out?.toString('utf8')).toBe('SENTINEL')
   })
 
   it('returns a last section with and without a final newline', () => {
-    expect(outText(runExtract('a\n\n## Demo\nold\n'))).toBe('## Demo\nold\n')
-    expect(outText(runExtract('a\n\n## Demo\nold'))).toBe('## Demo\nold')
+    expect(outText(runExtract(`a\n\n## Demo\n${OLD_EMBED}\n`))).toBe(
+      `## Demo\n${OLD_EMBED}\n`,
+    )
+    expect(outText(runExtract(`a\n\n## Demo\n${OLD_EMBED}`))).toBe(
+      `## Demo\n${OLD_EMBED}`,
+    )
     expect(outText(runExtract('## Demo'))).toBe('## Demo')
   })
 
   it('leaves trailing blank lines out of the section', () => {
-    expect(outText(runExtract('## Demo\nold\n\n\n## Testing\n'))).toBe(
-      '## Demo\nold\n',
+    expect(outText(runExtract(`## Demo\n${OLD_EMBED}\n\n\n## Testing\n`))).toBe(
+      `## Demo\n${OLD_EMBED}\n`,
     )
   })
 
@@ -1171,7 +1196,7 @@ describe('extract', () => {
 })
 
 describe('step 7 round trip: extract, then splice into a regenerated body', () => {
-  const oldSection = `## Demo\n\n![login](${rawUrl(SHA_A, 'login.png')})\n\nCaption I edited by hand.\n\n#### Detail\n\n![dash](${blobUrl(SHA_A, 'dash.png')})\n`
+  const oldSection = `## Demo\n\n![login](${rawUrl(SHA_A, 'login.png')})\n\n![dash](${blobUrl(SHA_A, 'dash.png')})\n`
 
   for (const [name, eol] of Object.entries(EOLS)) {
     it(`keeps the Demo section byte-identical (${name})`, () => {
@@ -1696,7 +1721,7 @@ describe('Demo section detection: a literal heading inside a container is not th
   it('replaces a real column-0 heading that follows a closed list fence, and only its section', () => {
     const before = 'Intro\n\n- ```markdown\n  ## Demo\n  ```\n\n## Demo\n'
     const after = '\n## Tests\n\nrun them\n'
-    const body = `${before}old text\n${after}`
+    const body = `${before}${OLD_EMBED}\n${after}`
 
     const run = runSplice(body, DEMO)
 
@@ -1713,7 +1738,7 @@ describe('Demo section detection: a literal heading inside a container is not th
     const before = '<pre>\n## Demo\n</pre>\n\n## Demo\n'
     const after = '\n## Tests\n\nrun them\n'
 
-    const run = runSplice(`${before}old text\n${after}`, DEMO)
+    const run = runSplice(`${before}${OLD_EMBED}\n${after}`, DEMO)
 
     expectSplice(run, {
       before,
@@ -1723,19 +1748,18 @@ describe('Demo section detection: a literal heading inside a container is not th
   })
 
   it('extracts exactly the real section that follows a closed list fence', () => {
-    const body =
-      'Intro\n\n- ```markdown\n  ## Demo\n  ```\n\n## Demo\n\nreal text\n\n## Tests\n'
+    const body = `Intro\n\n- \`\`\`markdown\n  ## Demo\n  \`\`\`\n\n## Demo\n\n${OLD_EMBED}\n\n## Tests\n`
 
     const run = runExtract(body)
 
     expect(run.status).toBe(0)
     expect(run.report.result).toBe('extracted')
-    expect(outText(run)).toBe('## Demo\n\nreal text\n')
+    expect(outText(run)).toBe(`## Demo\n\n${OLD_EMBED}\n`)
   })
 
   it('does not take an indented heading for the managed one', () => {
     for (const heading of [' ## Demo', '  ## Demo', '   ## Demo']) {
-      const body = `Intro\n\n${heading}\n\nold\n`
+      const body = `Intro\n\n${heading}\n\n${OLD_EMBED}\n`
 
       const run = runSplice(body, DEMO)
 
@@ -1746,7 +1770,7 @@ describe('Demo section detection: a literal heading inside a container is not th
   })
 
   it('still ends the managed section at an indented H2', () => {
-    const body = '## Demo\nold\n\n  ## Tests\n\nrun them\n'
+    const body = `## Demo\n${OLD_EMBED}\n\n  ## Tests\n\nrun them\n`
 
     const run = runSplice(body, DEMO)
 
@@ -1759,7 +1783,7 @@ describe('Demo section detection: a literal heading inside a container is not th
 
   it('still accepts the existing closing-hash and tab tolerance at column 0', () => {
     for (const heading of ['## Demo ##', '##\tDemo', '##  Demo  ']) {
-      const run = runSplice(`${heading}\nold\n`, DEMO)
+      const run = runSplice(`${heading}\n${OLD_EMBED}\n`, DEMO)
 
       expect(run.report.action).toBe('replaced')
       expect(run.report.demo_count).toBe(1)
@@ -1792,7 +1816,7 @@ describe('Demo section detection: a literal heading inside a container is not th
   })
 
   it('keeps a pre block that closes on its opening line out of the way', () => {
-    const body = '<pre>x</pre>\n\n## Demo\nold\n'
+    const body = `<pre>x</pre>\n\n## Demo\n${OLD_EMBED}\n`
 
     const run = runSplice(body, DEMO)
 
@@ -1800,7 +1824,7 @@ describe('Demo section detection: a literal heading inside a container is not th
   })
 
   it('does not treat a tag that only starts with pre as a pre block', () => {
-    const body = '<prefix>\n\n## Demo\nold\n'
+    const body = `<prefix>\n\n## Demo\n${OLD_EMBED}\n`
 
     const run = runSplice(body, DEMO)
 
@@ -1820,7 +1844,7 @@ describe('Demo section detection: it fails closed when an open block would decid
   ]
 
   for (const [name, opener, kind] of UNTERMINATED) {
-    const body = `Intro\n\n## Demo\n\nold text\n\n${opener}\n## Tests\n\nrun them\n`
+    const body = `Intro\n\n## Demo\n\n${OLD_EMBED}\n\n${opener}\n## Tests\n\nrun them\n`
 
     it(`splice stops when ${name} opens inside the Demo section and never closes`, () => {
       const run = runSplice(body, DEMO, { preCreate: true })
@@ -1845,7 +1869,7 @@ describe('Demo section detection: it fails closed when an open block would decid
     })
 
     it(`a Demo section that ends before ${name} is still replaced`, () => {
-      const earlier = 'Intro\n\n## Demo\n\nold text\n\n## Tests\n\nrun them\n'
+      const earlier = `Intro\n\n## Demo\n\n${OLD_EMBED}\n\n## Tests\n\nrun them\n`
       const tail = `\n${opener}`
 
       const run = runSplice(`${earlier}${tail}`, DEMO)
@@ -1869,9 +1893,259 @@ describe('Demo section detection: it fails closed when an open block would decid
   }
 
   it('a block that opened before the heading hides it, as it always did', () => {
-    const run = runExtract('```\n## Demo\nold\n')
+    const run = runExtract(`\`\`\`\n## Demo\n${OLD_EMBED}\n`)
 
     expect(run.status).toBe(0)
     expect(run.report.result).toBe('absent')
+  })
+})
+
+// ── Demo section shape: indented code, and what the helper may replace ────
+
+describe('Demo section detection: indented code is not a fence', () => {
+  const EMBED = OLD_EMBED
+  const OLD_DEMO = `## Demo\n\n${EMBED}\n`
+  const TAIL = '\n## Tests\n\nrun them\n'
+
+  for (const [name, indent] of [
+    ['four spaces', '    '],
+    ['eight spaces', '        '],
+    ['a tab', '\t'],
+    ['a space and a tab', ' \t'],
+  ] as const) {
+    it(`does not open a fence on a line indented with ${name}`, () => {
+      const example = `${indent}\`\`\`md\n${indent}sample\n`
+      const body = `Intro\n\n${example}\n${OLD_DEMO}${TAIL}\n${example}`
+
+      const run = runSplice(body, DEMO)
+
+      expectSplice(run, {
+        before: `Intro\n\n${example}\n## Demo\n`,
+        middle: DEMO.slice('## Demo\n'.length),
+        after: `${TAIL}\n${example}`,
+      })
+      expect(run.report.action).toBe('replaced')
+      expect(run.report.demo_count).toBe(1)
+    })
+  }
+
+  it('still opens a fence inside a list item whose marker line carries the run', () => {
+    const body = `Intro\n\n- a\n  - \`\`\`\n    ## Demo\n    \`\`\`\n\n${OLD_DEMO}${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expect(run.report.demo_count).toBe(1)
+    expect(run.report.action).toBe('replaced')
+  })
+})
+
+describe('Demo section shape guard: only lines the skill writes are replaced or copied', () => {
+  const EMBED = OLD_EMBED
+  const BLOB_EMBED = OLD_BLOB_EMBED
+  const OLD_DEMO = `## Demo\n\n${EMBED}\n`
+  const TAIL = '\n## Tests\n\nrun them\n'
+
+  const FOREIGN: ReadonlyArray<readonly [string, string]> = [
+    ['an H3 heading', '### Notes\n'],
+    ['an H4 heading', '#### Notes\n'],
+    ['a table', '| a | b |\n| - | - |\n| 1 | 2 |\n'],
+    ['a prose paragraph', 'The login screen after the change.\n'],
+    ['a prose line next to an embed', 'Before:\n'],
+    ['a fenced block', '```md\nsample\n```\n'],
+    ['an indented code block', '    sample\n'],
+    ['an indented fence line', '    ```\n'],
+    ['an HTML tag', '<img src="https://example.com/a.png">\n'],
+    ['an HTML comment', '<!-- note -->\n'],
+    ['a list item', '- one\n'],
+    ['a block quote', '> quoted\n'],
+    ['a thematic break', '---\n'],
+    ['an image with a foreign URL', '![x](https://example.com/x.png)\n'],
+    ['a bare managed URL', `${rawUrl(SHA_B, 'old.png')}\n`],
+    ['an embed with trailing text', `${EMBED} caption\n`],
+    ['an embed with a title', `![old](${rawUrl(SHA_B, 'old.png')} "t")\n`],
+    [
+      'an embed for a path outside docs/evidence',
+      `![x](https://raw.githubusercontent.com/${HEAD_REPO}/${SHA_B}/src/x.png)\n`,
+    ],
+    [
+      'an embed with a short pin',
+      `![x](https://raw.githubusercontent.com/${HEAD_REPO}/abc/docs/evidence/topic/x.png)\n`,
+    ],
+    [
+      'an embed with a bracket in the alt text',
+      `![a]b](${rawUrl(SHA_B, 'old.png')})\n`,
+    ],
+    ['a link wrapped around an embed', `[${EMBED}](https://example.com)\n`],
+  ]
+
+  for (const [name, foreign] of FOREIGN) {
+    it(`splice refuses a section holding ${name}, and writes nothing`, () => {
+      const body = `Intro\n\n## Demo\n\n${EMBED}\n\n${foreign}${TAIL}`
+
+      const run = runSplice(body, DEMO, { preCreate: true })
+
+      expect(run.status).toBe(1)
+      expect(run.report.result).toBe('needs-input')
+      expect(listField(run.report, 'asks')).toEqual([
+        { code: 'unexpected-section-content' },
+      ])
+      expect(run.out?.toString('utf8')).toBe('SENTINEL')
+    })
+
+    it(`extract refuses a section holding ${name}, and writes nothing`, () => {
+      const body = `Intro\n\n## Demo\n\n${EMBED}\n\n${foreign}${TAIL}`
+
+      const run = runExtract(body, { preCreate: true })
+
+      expect(run.status).toBe(1)
+      expect(run.report.result).toBe('needs-input')
+      expect(listField(run.report, 'asks')).toEqual([
+        { code: 'unexpected-section-content' },
+      ])
+      expect(run.out?.toString('utf8')).toBe('SENTINEL')
+    })
+  }
+
+  it('refuses the section with two indented examples around a real Tests heading, and keeps the description untouched', () => {
+    const body = `## Demo\n\n${EMBED}\n\n    \`\`\`sh\n    one\n${TAIL}\n    \`\`\`\n`
+
+    const spliced = runSplice(body, DEMO, { preCreate: true })
+    const extracted = runExtract(body, { preCreate: true })
+
+    for (const run of [spliced, extracted]) {
+      expect(run.status).toBe(1)
+      expect(listField(run.report, 'asks')).toEqual([
+        { code: 'unexpected-section-content' },
+      ])
+      expect(run.out?.toString('utf8')).toBe('SENTINEL')
+    }
+  })
+
+  it('names the new reason in the report without echoing the section', () => {
+    const body = `## Demo\n\n${CANARY}\n`
+
+    const run = runSplice(body, DEMO)
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).not.toContain(CANARY)
+    expect(run.stderr).not.toContain(CANARY)
+  })
+
+  it('replaces a section the skill wrote, and keeps every other byte', () => {
+    const section = `## Demo\n\n${EMBED}\n\n${BLOB_EMBED}\n`
+    const body = `Intro\n\n${section}${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expectSplice(run, {
+      before: 'Intro\n\n## Demo\n',
+      middle: DEMO.slice('## Demo\n'.length),
+      after: TAIL,
+    })
+    expect(run.report.action).toBe('replaced')
+  })
+
+  it('replaces a skill-written section in every line ending', () => {
+    for (const eol of Object.values(EOLS)) {
+      const body = withEol(`Intro\n\n${OLD_DEMO}${TAIL}`, eol)
+
+      const run = runSplice(body, withEol(DEMO, eol))
+
+      expectSplice(run, {
+        before: withEol('Intro\n\n## Demo\n', eol),
+        middle: withEol(DEMO.slice('## Demo\n'.length), eol),
+        after: withEol(TAIL, eol),
+      })
+    }
+  })
+
+  it('accepts a section with only its heading, or with blank lines after it', () => {
+    for (const section of ['## Demo\n', '## Demo\n\n\n', '## Demo ##\n\n']) {
+      const run = runSplice(`${section}${TAIL}`, DEMO)
+
+      expect(run.status).toBe(0)
+      expect(run.report.demo_count).toBe(1)
+    }
+  })
+
+  it('carries a skill-written section byte for byte', () => {
+    const section = `## Demo\n\n${EMBED}\n\n${BLOB_EMBED}\n`
+    const extracted = runExtract(`Old story.\n\n${section}${TAIL}`)
+
+    expect(extracted.status).toBe(0)
+    expect(outText(extracted)).toBe(section)
+
+    const carried = runSplice('New story.\n', extracted.out ?? '')
+
+    expectSplice(carried, {
+      before: 'New story.\n',
+      middle: `\n${section}`,
+      after: '',
+    })
+  })
+
+  it('does not apply to a body that has no Demo section', () => {
+    const body = `Intro\n\n### Notes\n\nprose\n${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expectSplice(run, { before: body, middle: `\n${DEMO}`, after: '' })
+  })
+
+  it('does not look at a section that is only mentioned inside a fence', () => {
+    const body = `\`\`\`md\n## Demo\n\nprose\n\`\`\`\n${TAIL}`
+
+    const run = runSplice(body, DEMO)
+
+    expect(run.report.action).toBe('appended')
+  })
+})
+
+describe('Demo section detection: a comment ends at --> or --!>', () => {
+  const TAIL = '\n## Tests\n\nrun them\n'
+
+  for (const closer of ['-->', '--!>']) {
+    it(`hides a literal heading until ${closer}`, () => {
+      const body = `Intro\n\n<!--\n## Demo\n${closer}\n${TAIL}`
+
+      const run = runSplice(body, DEMO)
+
+      expectSplice(run, { before: body, middle: `\n${DEMO}`, after: '' })
+      expect(run.report.action).toBe('appended')
+      expect(run.report.demo_count).toBe(0)
+    })
+
+    it(`ends a one-line comment closed with ${closer}`, () => {
+      const body = `<!-- note ${closer}\n\n## Demo\n${TAIL}`
+
+      const run = runSplice(body, DEMO)
+
+      expect(run.report.demo_count).toBe(1)
+      expect(run.report.action).toBe('replaced')
+    })
+
+    it(`finds the real heading after a comment closed with ${closer}`, () => {
+      const body = `<!--\n## Demo\n${closer}\n\n## Demo\n${TAIL}`
+
+      const run = runSplice(body, DEMO)
+
+      expectSplice(run, {
+        before: `<!--\n## Demo\n${closer}\n\n## Demo\n`,
+        middle: DEMO.slice('## Demo\n'.length),
+        after: TAIL,
+      })
+      expect(run.report.demo_count).toBe(1)
+    })
+  }
+
+  it('does not end a comment at a bare --', () => {
+    const body = 'Intro\n\n<!--\n## Demo\n--\n\n## Tests\n'
+
+    const run = runSplice(body, DEMO)
+
+    expect(run.status).toBe(1)
+    expect(listField(run.report, 'asks')).toEqual([
+      { code: 'unterminated-region', kind: 'comment' },
+    ])
   })
 })

@@ -139,7 +139,9 @@
 //                      300 s total, nothing is sent and the report is not
 //                      retryable; if it lies past this call, the call sleeps
 //                      its whole limit, sends nothing and returns the same
-//                      deadline. Such URLs report `rate-limited`, no HTTP
+//                      deadline. If the sleep uses up the call limit or the
+//                      total, nothing is sent either and no deadline is
+//                      handed on. Such URLs report `rate-limited`, no HTTP
 //                      status and 0 attempts.
 //   request_timeout_s  optional, default 10, at most 300: per request
 //   Retried (404, 429, 5xx, network error, timeout): wait 2, 4, 8, 15, then 30 s
@@ -148,7 +150,8 @@
 //   the 300 s total. Each request is cut short at the time the call has left,
 //   and no attempt starts once that time is gone, so a call ends at its
 //   `max_wait_s` and not one request later. (A call always makes its first
-//   request, even when earlier calls used up the whole total.) Final at once: a 200 that is not image/*, 401/403, any
+//   request, even when earlier calls used up the whole total, unless the
+//   cooldown it served took the last of its time.) Final at once: a 200 that is not image/*, 401/403, any
 //   other status, a redirect off the allowed hosts, a missing Location, or a
 //   6th redirect. Every URL is checked at the same time.
 //   result  verified (0), failed (1)
@@ -171,17 +174,25 @@
 //   - A section runs to the next H1 or H2 (ATX or setext) or to the end.
 //   - Fenced code hides headings. A fence opens on a run of three or more
 //     backticks or tildes after any leading whitespace, quote markers and
-//     list markers, so a fence inside a list item or a quote counts. It
-//     closes on a run of the same character, at least as long, with no info
-//     string. An unclosed fence runs to the end.
+//     list markers, so a fence inside a list item or a quote counts. A run
+//     indented four columns or more with no marker before it is indented
+//     code, never a fence. It closes on a run of the same character, at
+//     least as long, with no info string. An unclosed fence runs to the end.
 //   - Raw HTML blocks hide headings: `<pre>`, `<script>`, `<style>` and
 //     `<textarea>` (until the matching closing tag), and comments (until
-//     `-->`). Block quotes and indented code hide them too.
+//     `-->` or `--!>`). Block quotes and indented code hide them too.
 //   - Fail closed: when a block that never closes began inside the Demo
 //     section, splice and extract stop with `unterminated-region` (kind
 //     `fence`, `comment` or `html`) and write nothing, because where the
 //     section ends is unknown. Splice also stops, rather than append, when a
 //     block is still open at the end of a body that has no Demo section.
+//   - Shape guard: an existing Demo section is replaced (splice) or returned
+//     (extract) only when every non-blank line under its heading is one the
+//     skill writes (`demoText`): `![<file stem>](<url>)`, where the URL is a
+//     raw or blob URL of a managed path (the forms `pins select` writes).
+//     Any other line, a heading, a fence, HTML, a table or prose, stops both
+//     with `unexpected-section-content` and writes nothing, because the
+//     section is not the managed one or its end was misjudged.
 //   - Trailing blank lines belong to the gap after a section, not to it.
 //   - Lines split on CRLF, LF or CR and keep their terminators. Lines the
 //     helper inserts use the body's dominant terminator; Demo text is
@@ -809,8 +820,12 @@ const CONTAINER_LEAD =
 const CONTAINER_PREFIX = new RegExp(`^${CONTAINER_LEAD}`)
 const PLAIN_PREFIX = /^ {0,3}$/
 const FENCE_RUN = /^(`{3,}|~{3,})(.*)$/
+// Indentation of four columns or more: with no list or quote marker before it,
+// the line is indented code, and never the start of a fence.
+const INDENTED_CODE = /^(?: {4}| {0,3}\t)/
 const COMMENT_OPEN = /^ {0,3}<!--/
-const COMMENT_CLOSE = /-->/
+// HTML ends a comment at `-->` and also at `--!>`.
+const COMMENT_CLOSE = /--!?>/
 const HTML_BLOCK_OPEN = /^ {0,3}<(pre|script|style|textarea)(?=[ \t>]|$)/i
 const BLOCK_QUOTE = /^ {0,3}>/
 const NOT_INDENTED = /^ {0,3}[^ \t]/
@@ -937,7 +952,7 @@ function scanMarkdown(text) {
     }
     if (COMMENT_OPEN.test(content)) {
       kinds.push('comment')
-      if (!content.includes('-->')) {
+      if (!COMMENT_CLOSE.test(content)) {
         open('comment', index, COMMENT_CLOSE)
       }
       paragraph = -1
@@ -986,7 +1001,8 @@ function scanMarkdown(text) {
 /**
  * A line that opens a fence, or null. The run may follow whitespace, quote
  * markers and list markers, so a fence inside a list item or a quote counts.
- * `closer` matches the line that ends it: the same character, at least as
+ * A run indented four columns or more with no marker before it is indented
+ * code, not a fence. `closer` matches the line that ends it: the same character, at least as
  * long, nothing after it. A fence that opened at the top level is closed
  * only by a run indented at most 3 spaces, so an indented line inside it
  * cannot end it early; one that opened inside a container may be closed with
@@ -995,6 +1011,9 @@ function scanMarkdown(text) {
  */
 function fenceStart(content) {
   const prefix = CONTAINER_PREFIX.exec(content)[0]
+  if (BLANK.test(prefix) && INDENTED_CODE.test(prefix)) {
+    return null
+  }
   const run = FENCE_RUN.exec(content.slice(prefix.length))
   if (run === null || (run[1][0] === '`' && run[2].includes('`'))) {
     return null
@@ -1043,6 +1062,29 @@ function endsInOpenBlock(scan, section) {
     scan.openLine > section.headingLine &&
     scan.openLine < section.endLine
   )
+}
+
+/**
+ * Whether every non-blank line under the section's heading is one the skill
+ * writes itself (see `demoText`): an image embed in the raw or the blob form,
+ * with the file stem as its alt text. Any other line, a heading, a fence, HTML,
+ * a table or free prose, means the section is not the managed one or its end
+ * was misjudged, so it is neither replaced nor copied.
+ * @param {ReturnType<typeof scanMarkdown>} scan
+ * @param {{ headingLine: number, contentEnd: number }} section
+ */
+function holdsOnlyWrittenLines(scan, section) {
+  for (
+    let line = section.headingLine + 1;
+    line < section.contentEnd;
+    line += 1
+  ) {
+    const { text } = scan.lines[line]
+    if (!BLANK.test(text) && !DEMO_EMBED_LINE.test(text)) {
+      return false
+    }
+  }
+  return true
 }
 
 /**
@@ -1114,6 +1156,9 @@ export function spliceDemo(body, demoText) {
     const [section] = sections
     if (endsInOpenBlock(scan, section)) {
       return { kind: 'unterminated-region', region: scan.endState, ...base }
+    }
+    if (!holdsOnlyWrittenLines(scan, section)) {
+      return { kind: 'unexpected-section-content', ...base }
     }
     const heading = scan.lines[section.headingLine]
     const content = demo.section.slice(demo.scan.lines[0].next)
@@ -1206,6 +1251,9 @@ export function extractDemo(body) {
   if (endsInOpenBlock(scan, section)) {
     return { kind: 'unterminated-region', region: scan.endState, ...base }
   }
+  if (!holdsOnlyWrittenLines(scan, section)) {
+    return { kind: 'unexpected-section-content', ...base }
+  }
   return {
     kind: 'extracted',
     section: body.slice(
@@ -1231,6 +1279,11 @@ const RAW_URL = new RegExp(
 )
 const BLOB_URL = new RegExp(
   `^https://github\\.com/(${OWNER_OR_REPO})/(${OWNER_OR_REPO})/blob/(${SHA_SEGMENT})/(${EVIDENCE_PATH})(?:\\?raw=true)?$`,
+)
+// A line of a Demo section the skill writes: `![<file stem>](<url>)`, where
+// the URL is the raw or the blob form `demoText` builds for a managed path.
+const DEMO_EMBED_LINE = new RegExp(
+  `^!\\[[a-z0-9][a-z0-9._-]*\\]\\((?:https://raw\\.githubusercontent\\.com/${OWNER_OR_REPO}/${OWNER_OR_REPO}/${SHA_SEGMENT}/${EVIDENCE_PATH}|https://github\\.com/${OWNER_OR_REPO}/${OWNER_OR_REPO}/blob/${SHA_SEGMENT}/${EVIDENCE_PATH}\\?raw=true)\\)$`,
 )
 const URL_CANDIDATE = /https?:\/\/[^\s<>()"'`[\]]+/g
 const TRAILING_PUNCTUATION = /[.,;:!?]+$/
@@ -2172,8 +2225,9 @@ async function verifyOne(url, ctx) {
  * before the first request, within this call's own limit. Returns null when
  * the first request may go out. Otherwise no request is sent, and the verdicts
  * say so (`rate-limited`, no attempt): when the deadline lies past the total
- * budget they cannot be retried, and when it lies past this call the same
- * deadline is handed on.
+ * budget they cannot be retried, when it lies past this call the same
+ * deadline is handed on, and when the sleep itself used up the call limit or
+ * the total there is no time left for a request, so none is sent.
  * @param {readonly string[]} urls
  * @param {VerifyContext} ctx
  * @param {number} resumeAtMs
@@ -2199,6 +2253,15 @@ async function serveCooldown(urls, ctx, resumeAtMs) {
   }
   if (wait > 0) {
     await ctx.sleep(wait)
+    if (timeLeft(ctx) <= 0) {
+      // The sleep used the last of the call limit or of the total. A request
+      // now would run past either, so none goes out. The cooldown is served,
+      // so no deadline is handed on.
+      const spent = ctx.waitedMs + (ctx.now() - ctx.start)
+      return unsent(
+        spent + delayAt(ctx.scheduleMs, ctx.firstStep) <= ctx.totalBudgetMs,
+      )
+    }
   }
   return null
 }
@@ -2495,6 +2558,11 @@ function runSplice(raw) {
         ...report,
         asks: [{ code: 'unterminated-region', kind: result.region }],
       })
+    case 'unexpected-section-content':
+      return outcome('splice', 1, 'needs-input', {
+        ...report,
+        asks: [{ code: 'unexpected-section-content' }],
+      })
     case 'line-ending-conflict':
       return outcome('splice', 1, 'needs-input', {
         ...report,
@@ -2533,6 +2601,11 @@ function runExtract(raw) {
       return outcome('extract', 1, 'needs-input', {
         ...report,
         asks: [{ code: 'unterminated-region', kind: result.region }],
+      })
+    case 'unexpected-section-content':
+      return outcome('extract', 1, 'needs-input', {
+        ...report,
+        asks: [{ code: 'unexpected-section-content' }],
       })
     case 'absent':
       return outcome('extract', 0, 'absent', report)

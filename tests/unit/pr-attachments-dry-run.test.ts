@@ -692,8 +692,9 @@ describe('pr-attachments dry run -- carry mode over the real helper', () => {
   })
 
   test('replaces a stale Demo in the new body and leaves the bytes outside it identical', () => {
-    const newBody =
-      '# T\n\nNew story.\n\n## Demo\n\nstale text\n\n## Notes\n\nnew notes\n'
+    const stale =
+      '![stale](https://raw.githubusercontent.com/octo/widgets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/docs/evidence/topic/stale.png)'
+    const newBody = `# T\n\nNew story.\n\n## Demo\n\n${stale}\n\n## Notes\n\nnew notes\n`
     const run = carryFiles(`# T\n\n${OLD_DEMO}`, newBody)
     expect(carryExtract(run).status).toBe(0)
     const spliced = carrySplice(run)
@@ -702,7 +703,7 @@ describe('pr-attachments dry run -- carry mode over the real helper', () => {
 
     const result = fs.readFileSync(run.newFile, 'utf8')
     expect(result).toContain(EMBED)
-    expect(result).not.toContain('stale text')
+    expect(result).not.toContain(stale)
     expect(outsideDemo(result)).toBe(outsideDemo(newBody))
   })
 

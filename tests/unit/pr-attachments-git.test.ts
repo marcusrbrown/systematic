@@ -678,6 +678,47 @@ describe('pins: selecting the pin to embed', () => {
     )
   })
 
+  for (const form of ['raw', 'blob'] as const) {
+    it(`writes a Demo section that extract returns unchanged and splice replaces (${form} form)`, () => {
+      const repo = createRepo()
+      startPr(repo)
+      const dotted = 'docs/evidence/topic/shot.v2-final.png'
+      const addA = commitFiles(repo.work, { [A_PNG]: png('A') }, 'add A')
+      const addD = commitFiles(repo.work, { [dotted]: png('D') }, 'add D')
+      const selected = runSelect(
+        repo,
+        [
+          { path: A_PNG, blob_sha: blobAt(repo, addA, A_PNG) },
+          { path: dotted, blob_sha: blobAt(repo, addD, dotted) },
+        ],
+        { form },
+      )
+      expect(selected.report.result).toBe('selected')
+      const demo = fs.readFileSync(selected.outFile, 'utf8')
+      const body = `Summary\n\n${demo}\n## Tests\n\nrun them\n`
+      const dir = makeDir()
+
+      const extractFile = path.join(dir, 'extracted.md')
+      const extracted = runHelper(
+        'extract',
+        { body, out_file: extractFile },
+        { cwd: dir },
+      )
+      const spliceFile = path.join(dir, 'spliced.md')
+      const spliced = runHelper(
+        'splice',
+        { body, demo_file: selected.outFile, out_file: spliceFile },
+        { cwd: dir },
+      )
+
+      expect(extracted.report.result).toBe('extracted')
+      expect(fs.readFileSync(extractFile, 'utf8')).toBe(demo)
+      expect(spliced.report.result).toBe('spliced')
+      expect(spliced.report.action).toBe('unchanged')
+      expect(fs.readFileSync(spliceFile, 'utf8')).toBe(body)
+    })
+  }
+
   it('stops with pin-mismatch when the pin blob is not the classified one', () => {
     const { repo, merge } = mergeResolvedRepo()
     const classified = blobAt(repo, merge, A_PNG)
