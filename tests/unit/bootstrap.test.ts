@@ -1047,9 +1047,9 @@ describe('worktree placement rule', () => {
     })
 
     test('is 350 bytes or fewer and names the skill and the placement path', () => {
-      const bytes = fs.statSync(rulePath).size
-      expect(bytes).toBeLessThanOrEqual(350)
-      const text = fs.readFileSync(rulePath, 'utf8')
+      const buffer = fs.readFileSync(rulePath)
+      expect(buffer.byteLength).toBeLessThanOrEqual(350)
+      const text = buffer.toString('utf8')
       expect(text).toContain('git-worktree')
       expect(text).toContain('.worktrees/<branch>')
     })

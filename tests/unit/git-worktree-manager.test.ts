@@ -80,6 +80,15 @@ describe('create: placement', () => {
   })
 })
 
+function readWithMtime(file: string): { text: string; mtimeMs: number } {
+  const fd = fs.openSync(file, 'r')
+  try {
+    return { text: fs.readFileSync(fd, 'utf8'), mtimeMs: fs.fstatSync(fd).mtimeMs }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 describe('create: ignore policy', () => {
   it('writes .worktrees/.gitignore once, leaves root .gitignore alone and status clean', () => {
     const repo = createRepo()
@@ -89,10 +98,11 @@ describe('create: ignore policy', () => {
     expect(fs.readFileSync(ignore, 'utf8')).toBe('*\n')
     expect(fs.existsSync(path.join(repo.work, '.gitignore'))).toBe(false)
 
-    const before = fs.statSync(ignore).mtimeMs
+    const before = readWithMtime(ignore)
     create(repo.work, 'feat/b')
-    expect(fs.readFileSync(ignore, 'utf8')).toBe('*\n')
-    expect(fs.statSync(ignore).mtimeMs).toBe(before)
+    const after = readWithMtime(ignore)
+    expect(after.text).toBe('*\n')
+    expect(after.mtimeMs).toBe(before.mtimeMs)
     expect(git(repo.work, ['status', '--porcelain'])).toBe('')
   })
 
