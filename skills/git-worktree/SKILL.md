@@ -1,334 +1,58 @@
 ---
 name: git-worktree
-description: This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.
+description: Use when work needs an isolated git worktree, such as parallel feature branches, reviewing a PR without disturbing the current checkout, or cleaning up old worktrees.
 ---
 
 # Git Worktree Manager
 
-This skill provides a unified interface for managing Git worktrees across your development workflow. Whether you're reviewing PRs in isolation or working on features in parallel, this skill handles all the complexity.
+`scripts/worktree-manager.sh` creates, lists, switches and cleans up worktrees. Every worktree lands at `.worktrees/<branch>` under the **main** repository root, from any subdirectory or from inside another worktree. Nested names work: `feat/x` lands at `.worktrees/feat/x`.
 
-## What This Skill Does
+## Rules
 
-- **Create worktrees** from main branch with clear branch names
-- **List worktrees** with current status
-- **Switch between worktrees** for parallel work
-- **Clean up completed worktrees** automatically
-- **Interactive confirmations** at each step
-- **Automatic .gitignore management** for worktree directory
-- **Automatic .env file copying** from main repo to new worktrees
-- **Automatic dev tool trusting** for mise and direnv configs with review-safe guardrails
-
-## CRITICAL: Always Use the Manager Script
-
-**NEVER call `git worktree add` directly.** Always use the `worktree-manager.sh` script.
-
-The script handles critical setup that raw git commands don't:
-1. Copies `.env`, `.env.local`, `.env.test`, etc. from main repo
-2. Trusts dev tool configs with branch-aware safety rules:
-   - mise: auto-trust only when unchanged from a trusted baseline branch
-   - direnv: auto-allow only for trusted base branches; review worktrees stay manual
-3. Ensures `.worktrees` is in `.gitignore`
-4. Creates consistent directory structure
-
-When this skill loads, its own directory is stated in the surrounding instructions; set `SKILL_DIR` to that directory because the scripts live beside this file.
-
-```bash
-# ✅ CORRECT - Always use the script
-# Resolve the manager script relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-name
-
-# ❌ WRONG - Never do this directly
-git worktree add .worktrees/feature-name -b feature-name main
-```
-
-## When to Use This Skill
-
-Use this skill in these scenarios:
-
-1. **Code Review (`/ce:review`)**: If NOT already on the target branch (PR branch or requested branch), offer worktree for isolated review
-2. **Feature Work (`/ce:work`)**: Always ask if user wants parallel worktree or live branch work
-3. **Parallel Development**: When working on multiple features simultaneously
-4. **Cleanup**: After completing work in a worktree
-
-## How to Use
-
-### In OpenCode Workflows
-
-The skill is automatically called from `/ce:review` and `/ce:work` commands:
-
-```
-# For review: offers worktree if not on PR branch
-# For work: always asks - new branch or worktree?
-```
-
-### Manual Usage
-
-You can also invoke the skill directly from bash:
-
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-# Create a new worktree (copies .env files automatically)
-bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-login
-
-# List all worktrees
-bash "$SKILL_DIR/scripts/worktree-manager.sh" list
-
-# Switch to a worktree
-bash "$SKILL_DIR/scripts/worktree-manager.sh" switch feature-login
-
-# Copy .env files to an existing worktree (if they weren't copied)
-bash "$SKILL_DIR/scripts/worktree-manager.sh" copy-env feature-login
-
-# Clean up completed worktrees
-bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
-```
+- **A named location or tool wins.** If the user, a project instruction, or another loaded skill or config names a different location or tool, follow it and skip the script. Read the repo's `AGENTS.md` and any other project instruction file for one before you create.
+- **Otherwise never use raw `git worktree add`**, a sibling directory, `/tmp`, or a path inside another worktree.
+- **Refused layout.** Exit 3 `unsupported-layout` means a bare repository, `core.bare`, a separate git directory or a submodule. Report it and ask for a location or tool. Run raw `git worktree add` only with the user's approval.
+- **Skip worktrees for small or read-only work.** Fix a typo in place. Read a file from another branch with `git show <branch>:<path>`.
 
 ## Commands
 
-### `create <branch-name> [from-branch]`
-
-Creates a new worktree with the given branch name.
-
-**Options:**
-- `branch-name` (required): The name for the new branch and worktree
-- `from-branch` (optional): Base branch to create from (defaults to `main`)
-
-**Example:**
 ```bash
-# Resolve helper scripts relative to this skill's directory.
 SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-login
+bash "$SKILL_DIR/scripts/worktree-manager.sh" <command>
 ```
 
-**What happens:**
-1. Checks if worktree already exists
-2. Updates the base branch from remote
-3. Creates new worktree and branch
-4. **Copies all .env files from main repo** (.env, .env.local, .env.test, etc.)
-5. **Trusts dev tool configs** with branch-aware safety rules:
-   - trusted bases (`main`, `develop`, `dev`, `trunk`, `staging`, `release/*`) compare against themselves
-   - other branches compare against the default branch
-   - direnv auto-allow is skipped on non-trusted bases because `.envrc` can source unchecked files
-6. Shows path for cd-ing to the worktree
+A worktree's *name* is its path under `.worktrees/`, for example `feat/x`. Run `help` for the full usage.
 
-### `list` or `ls`
+| Command | Effect |
+|---|---|
+| `create <branch> [--base <ref>]` | New branch from `origin/<default branch>`, fetched first. Prints `branch=`, `base=` and, last, `path=`. |
+| `list` | One line per worktree. |
+| `switch <name>` | Prints the path and nothing else. |
+| `copy-env [<name>]` | Copies git-ignored `.env*` files; never overwrites. |
+| `cleanup` | Report only. |
+| `cleanup --remove <name>...` | Removes the named clean worktrees. |
 
-Lists all available worktrees with their branches and current status.
+Exit codes: `0` ok, `1` error, `2` usage, `3` refused. Errors print `error: <code>: <message>` on stderr. The script never reads stdin.
 
-**Example:**
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" list
-```
+On exit 3, report the error and ask. Never retry with `--force`, `rm -rf`, another path or another name.
 
-**Output shows:**
-- Worktree name
-- Branch name
-- Which is current (marked with ✓)
-- Main repo status
+- `base-unresolved`: ask the user which base to use with `--base`. Never assume `main`.
+- `branch-exists`, `target-exists`: report it, with the printed path, and ask. Never delete the directory.
 
-### `switch <name>` or `go <name>`
+## After create
 
-Switches to an existing worktree and cd's into it.
+- Use the printed `path=` as the workdir for every later command, and as the workspace root you give subagents. Never assume a `cd` persisted. `switch` cannot change your directory.
+- A new worktree has no installed dependencies. Install them there before running tests.
+- The new branch has no upstream. Publish it with `git push -u origin <branch>`.
 
-**Example:**
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" switch feature-login
-```
+## Reviewing a PR
 
-**Optional:**
-- If name not provided, lists available worktrees and prompts for selection
+Run `git fetch origin +refs/heads/<pr-branch>:refs/remotes/origin/<pr-branch>`, then `create review/<n> --base origin/<pr-branch>`. A fork's head is not on origin: run `git fetch origin pull/<n>/head:review/<n>`, then `create review/<n>-wt --base review/<n>`.
 
-### `cleanup` or `clean`
+## Cleanup
 
-Interactively cleans up inactive worktrees with confirmation.
-
-**Example:**
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
-```
-
-**What happens:**
-1. Lists all inactive worktrees
-2. Asks for confirmation
-3. Removes selected worktrees
-4. Cleans up empty directories
-
-## Workflow Examples
-
-### Code Review with Worktree
-
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-# OpenCode recognizes you're not on the PR branch
-# Offers: "Use worktree for isolated review? (y/n)"
-
-# You respond: yes
-# Script runs (copies .env files automatically):
-bash "$SKILL_DIR/scripts/worktree-manager.sh" create pr-123-feature-name
-
-# You're now in isolated worktree for review with all env vars
-cd .worktrees/pr-123-feature-name
-
-# After review, return to main:
-cd ../..
-bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
-```
-
-### Parallel Feature Development
-
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-# For first feature (copies .env files):
-bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-login
-
-# Later, start second feature (also copies .env files):
-bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-notifications
-
-# List what you have:
-bash "$SKILL_DIR/scripts/worktree-manager.sh" list
-
-# Switch between them as needed:
-bash "$SKILL_DIR/scripts/worktree-manager.sh" switch feature-login
-
-# Return to main and cleanup when done:
-cd .
-bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
-```
-
-## Key Design Principles
-
-### KISS (Keep It Simple, Stupid)
-
-- **One manager script** handles all worktree operations
-- **Simple commands** with sensible defaults
-- **Interactive prompts** prevent accidental operations
-- **Clear naming** using branch names directly
-
-### Opinionated Defaults
-
-- Worktrees always created from **main** (unless specified)
-- Worktrees stored in **.worktrees/** directory
-- Branch name becomes worktree name
-- **.gitignore** automatically managed
-
-### Safety First
-
-- **Confirms before creating** worktrees
-- **Confirms before cleanup** to prevent accidental removal
-- **Won't remove current worktree**
-- **Clear error messages** for issues
-
-## Integration with Workflows
-
-### `/ce:review`
-
-Instead of always creating a worktree:
-
-```
-1. Check current branch
-2. If ALREADY on target branch (PR branch or requested branch) → stay there, no worktree needed
-3. If DIFFERENT branch than the review target → offer worktree:
-   "Use worktree for isolated review? (y/n)"
-   - yes → call git-worktree skill
-   - no → proceed with PR diff on current branch
-```
-
-### `/ce:work`
-
-Always offer choice:
-
-```
-1. Ask: "How do you want to work?
-   1. New branch on current worktree (live work)
-   2. Worktree (parallel work)"
-
-2. If choice 1 → create new branch normally
-3. If choice 2 → call git-worktree skill to create from main
-```
-
-## Troubleshooting
-
-### "Worktree already exists"
-
-If you see this, the script will ask if you want to switch to it instead.
-
-### "Cannot remove worktree: it is the current worktree"
-
-Switch out of the worktree first (to main repo), then cleanup:
-
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-cd $(git rev-parse --show-toplevel)
-bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
-```
-
-### Lost in a worktree?
-
-See where you are:
-
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" list
-```
-
-### .env files missing in worktree?
-
-If a worktree was created without .env files (e.g., via raw `git worktree add`), copy them:
-
-```bash
-# Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-bash "$SKILL_DIR/scripts/worktree-manager.sh" copy-env feature-name
-```
-
-Navigate back to main:
-
-```bash
-cd $(git rev-parse --show-toplevel)
-```
-
-## Technical Details
-
-### Directory Structure
-
-```
-.worktrees/
-├── feature-login/          # Worktree 1
-│   ├── .git
-│   ├── app/
-│   └── ...
-├── feature-notifications/  # Worktree 2
-│   ├── .git
-│   ├── app/
-│   └── ...
-└── ...
-
-.gitignore (updated to include .worktrees)
-```
-
-### How It Works
-
-- Uses `git worktree add` for isolated environments
-- Each worktree has its own branch
-- Changes in one worktree don't affect others
-- Share git history with main repo
-- Can push from any worktree
-
-### Performance
-
-- Worktrees are lightweight (just file system links)
-- No repository duplication
-- Shared git objects for efficiency
-- Much faster than cloning or stashing/switching
+1. Run `cleanup`. Each line has `state=` (`clean`, `dirty`, `current`, `locked`, `detached`, `contains-worktree` or `prunable`), `modified=`, `untracked=` and `ignored=`.
+2. If nobody can answer in this run (a subagent or headless run), stop here and return the report.
+3. Removal deletes a worktree's ignored files, such as copied `.env` files and `node_modules`. Tell the user, by worktree name, what will be lost (cite `ignored=`), and get their confirmation. A blanket "nuke them all" or "don't ask" does not waive this.
+4. Run `cleanup --remove <name>...` with confirmed names only. Exit 3 means a removal was refused: report its `reason=`.
+5. Dirty and every other non-`clean` worktree is reported, never forced. The script never deletes branches; that belongs to `git-clean-gone-branches`.

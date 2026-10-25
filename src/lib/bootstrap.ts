@@ -110,6 +110,14 @@ export const applyBootstrapContent = (
 export interface BootstrapDeps {
   bundledSkillsDir: string
   usageTemplate?: string
+  /**
+   * Placement rule text. Callers pass it whenever the packaged file reads; when
+   * the read fails (`readWorktreePlacementRule` returns null after a logged
+   * error) they pass nothing and the rule is left out, as with
+   * `readHarnessProfile`. `getBootstrapContent` also omits it when
+   * `git-worktree` is in `disabled_skills`, so OpenCode and Pi cannot drift.
+   */
+  worktreePlacementRule?: string
   profileBlock?: string
 }
 
@@ -133,6 +141,24 @@ export function readHarnessProfile(
   }
 }
 
+/** Reads the shared worktree placement rule from the packaged using-systematic references. */
+export function readWorktreePlacementRule(
+  bundledSkillsDir: string,
+): string | null {
+  const rulePath = path.join(
+    bundledSkillsDir,
+    'using-systematic/references/worktree-placement.md',
+  )
+  try {
+    return fs.readFileSync(rulePath, 'utf8').trim()
+  } catch (error) {
+    console.error(
+      `Failed to read worktree placement rule ${rulePath}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    return null
+  }
+}
+
 type BootstrapContentConfig = Pick<
   SystematicConfig,
   'bootstrap' | 'disabled_skills'
@@ -143,13 +169,22 @@ const DEFAULT_BOOTSTRAP_CONFIG: BootstrapContentConfig = {
   disabled_skills: [],
 }
 
-/** Safely computes default bootstrap content, returning null instead of throwing. */
+/**
+ * Safely computes default bootstrap content, returning null instead of throwing.
+ *
+ * Only `disabledSkills` reaches the composition. `bootstrap.enabled` and
+ * `bootstrap.file` stay at their defaults, so Pi keeps ignoring both.
+ */
 export function computeBootstrapContentSafe(
   deps: BootstrapDeps,
   reportError?: (error: unknown) => void,
+  disabledSkills: readonly string[] = [],
 ): string | null {
   try {
-    return getBootstrapContent(DEFAULT_BOOTSTRAP_CONFIG, deps)
+    return getBootstrapContent(
+      { ...DEFAULT_BOOTSTRAP_CONFIG, disabled_skills: [...disabledSkills] },
+      deps,
+    )
   } catch (error) {
     if (reportError !== undefined) {
       try {
@@ -199,7 +234,12 @@ export function getBootstrapContent(
   config: BootstrapContentConfig,
   deps: BootstrapDeps,
 ): string | null {
-  const { bundledSkillsDir, usageTemplate, profileBlock } = deps
+  const {
+    bundledSkillsDir,
+    usageTemplate,
+    worktreePlacementRule,
+    profileBlock,
+  } = deps
 
   if (!config.bootstrap.enabled) return null
 
@@ -222,6 +262,11 @@ export function getBootstrapContent(
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
   const skillUsage = usageTemplate ?? getSkillUsageTemplate()
+  const ruleSection =
+    worktreePlacementRule === undefined ||
+    config.disabled_skills.includes('git-worktree')
+      ? ''
+      : `\n\n${worktreePlacementRule}`
   const profileSection = profileBlock === undefined ? '' : `\n\n${profileBlock}`
 
   return `<SYSTEMATIC_WORKFLOWS>
@@ -231,6 +276,6 @@ You have access to structured engineering workflows via the Systematic plugin.
 
 ${content}
 
-${skillUsage}${profileSection}
+${skillUsage}${ruleSection}${profileSection}
 </SYSTEMATIC_WORKFLOWS>`
 }

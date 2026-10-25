@@ -437,7 +437,7 @@
     {
       "name": "git-worktree",
       "type": "skill",
-      "description": "This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.",
+      "description": "Use when work needs an isolated git worktree, such as parallel feature branches, reviewing a PR without disturbing the current checkout, or cleaning up old worktrees.",
       "files": [
         "skills/git-worktree/SKILL.md",
         "skills/git-worktree/scripts/worktree-manager.sh"
@@ -532,7 +532,8 @@
         "skills/using-systematic/SKILL.md",
         "skills/using-systematic/references/claude-code-profile.md",
         "skills/using-systematic/references/opencode-profile.md",
-        "skills/using-systematic/references/pi-profile.md"
+        "skills/using-systematic/references/pi-profile.md",
+        "skills/using-systematic/references/worktree-placement.md"
       ]
     },
     {

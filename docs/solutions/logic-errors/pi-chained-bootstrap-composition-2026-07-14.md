@@ -117,11 +117,11 @@ A sentinel pattern identifies syntax, not authorship; foreign content can legiti
 The harness-portability increment (PR #653, v3.1.0) widened the same seam this
 doc established. `BootstrapDeps` now carries an optional `profileBlock`
 alongside `usageTemplate`; `getBootstrapContent` appends it inside the
-`<SYSTEMATIC_WORKFLOWS>` zone in fixed order: usage template → profile block (`src/lib/bootstrap.ts:198-236`).
+`<SYSTEMATIC_WORKFLOWS>` zone in fixed order: usage template → worktree placement rule (omitted when `git-worktree` is in `disabled_skills`) → profile block (`src/lib/bootstrap.ts:230-278`).
 
 - Harness capability profiles are plain markdown under
   `skills/using-systematic/references/{opencode,pi}-profile.md`, read by
-  `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:117-134`).
+  `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:122-139`).
 - Per-harness population at the entry points: OpenCode passes
   `readHarnessProfile(..., 'opencode')` (`src/index.ts:65`); Pi passes the
   `'pi'` profile through `computeBootstrapContentSafe` (`computeBootstrapContentSafe`, `src/pi.ts:188-196`).

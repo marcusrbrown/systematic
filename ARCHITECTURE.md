@@ -54,10 +54,11 @@ harness:
   an overlay or a disable cannot reach the packaged files.
 - **Claude Code** — a separate, self-contained plugin bundle built in CI from `skills/` and `agents/`
   by `scripts/build-claude-code-plugin.ts`. The build flattens agent personas, composes an output
-  style from the using-systematic skill body, emits a declarative `SessionStart` hook, and translates
-  internal identifiers (`ce:<name>`, `systematic:<category>:<name>`) into Claude Code's
-  plugin-namespaced form. The generated bundle is never committed to `main` — CI publishes it to the
-  orphan `claude-code-plugin` branch on every push to `main`. Users install it through Claude Code's
+  style from the using-systematic skill body, the worktree placement rule and the Claude Code
+  profile, emits a declarative `SessionStart` hook, and translates internal identifiers
+  (`ce:<name>`, `systematic:<category>:<name>`) into Claude Code's plugin-namespaced form. The
+  generated bundle is never committed to `main` — CI publishes it to the orphan
+  `claude-code-plugin` branch on every push to `main`. Users install it through Claude Code's
   plugin marketplace, pointed at `.claude-plugin/marketplace.json`.
 
 ## Codemap
@@ -89,7 +90,7 @@ Skill tool (plugin tool hook)
   src/lib/skill-tool.ts      — createSkillTool: systematic_skill tool factory
 
 Bootstrap injection (plugin transform hook)
-  src/lib/bootstrap.ts       — getBootstrapContent, INTERNAL_AGENT_SIGNATURES
+  src/lib/bootstrap.ts       — getBootstrapContent (body, usage template, worktree placement rule, harness profile), readWorktreePlacementRule, INTERNAL_AGENT_SIGNATURES
 
 Config overlays and validation
   src/lib/agent-overlays.ts — buildBundledAgentInventory, validateAgentOverlays, resolveAgentOverlaySet
@@ -210,6 +211,13 @@ Skill discovery is harness-owned and does not depend on the bootstrap prompt car
 Bootstrap deliberately carries no skill catalog. The host and tool-description surfaces already
 carry the needed discovery data; the Systematic copy was stale, permission-blind, and leaked
 absolute machine paths into the prompt.
+
+The bootstrap does carry one short worktree placement rule, read from
+`skills/using-systematic/references/worktree-placement.md` and placed after the usage template and
+before the harness profile. OpenCode and Pi omit it when `git-worktree` is in `disabled_skills`.
+On OpenCode, a user-supplied `bootstrap.file` is returned verbatim and gets no rule. Pi reads
+neither `bootstrap.file` nor `bootstrap.enabled`, so it carries the rule unless the skill is
+disabled. The Claude Code output style is static and always carries the rule.
 
 The `host-skill-coverage` eval case is a standing gate. Re-run it whenever the pinned OpenCode
 runtime changes: host catalog rendering is version-dependent, so coverage proven at one pinned

@@ -1,6 +1,6 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`getBootstrapContent pins the production-shaped OpenCode bootstrap with its profile inlined 1`] = `
+exports[`getBootstrapContent pins the production-shaped OpenCode bootstrap with its profile and placement rule inlined 1`] = `
 "<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the Systematic plugin.
 
@@ -126,6 +126,8 @@ When a mechanism is unavailable, present numbered options in chat and wait for q
 
 **Skills location:**
 Bundled skills ship with the Systematic plugin and are discoverable via \`systematic_skill\`.
+
+When work needs a git worktree, create it at \`.worktrees/<branch>\` under the main repository root with the \`git-worktree\` skill's script. Never use raw \`git worktree add\`, a sibling directory, \`/tmp\`, or a path inside another worktree. If the user or a project instruction names a different location or tool, follow that instead.
 
 # OpenCode Capability Profile
 

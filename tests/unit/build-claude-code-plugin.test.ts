@@ -81,6 +81,11 @@ function writeUsingSystematicAndProfile(root: string): void {
     'skills/using-systematic/references/claude-code-profile.md',
     '# Claude Code Capability Profile\n\nProfile body content.\n',
   )
+  writeFile(
+    root,
+    'skills/using-systematic/references/worktree-placement.md',
+    'Placement rule body content.\n',
+  )
 }
 
 afterAll(() => {
@@ -171,6 +176,8 @@ You have access to structured engineering workflows via the Systematic plugin.
 **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
 
 Using-systematic body content.
+
+Placement rule body content.
 
 # Claude Code Capability Profile
 
@@ -447,6 +454,62 @@ describe('buildOutputStyleContent — error paths', () => {
     expect(() => buildOutputStyleContent(root)).toThrow(
       /claude-code-profile\.md/,
     )
+  })
+
+  test('missing worktree-placement.md fails the build with a clear diagnostic', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    fs.rmSync(
+      path.join(
+        root,
+        'skills/using-systematic/references/worktree-placement.md',
+      ),
+    )
+    expect(() => buildOutputStyleContent(root)).toThrow(
+      /worktree-placement\.md/,
+    )
+  })
+
+  test('the existing diagnostics win when the rule file is missing too', () => {
+    const noSkill = makeFixtureRepo()
+    expect(() => buildOutputStyleContent(noSkill)).toThrow(
+      /using-systematic\/SKILL\.md/,
+    )
+
+    const noProfile = makeFixtureRepo()
+    writeFile(
+      noProfile,
+      'skills/using-systematic/SKILL.md',
+      '---\nname: using-systematic\ndescription: test\n---\n\nBody.\n',
+    )
+    expect(() => buildOutputStyleContent(noProfile)).toThrow(
+      /claude-code-profile\.md/,
+    )
+  })
+})
+
+describe('buildOutputStyleContent — worktree placement rule', () => {
+  const RULE_FILE = path.join(
+    REPO_ROOT,
+    'skills/using-systematic/references/worktree-placement.md',
+  )
+
+  test('the real repo output style carries the rule exactly once, between the body and the profile', () => {
+    const rule = fs.readFileSync(RULE_FILE, 'utf8').trim()
+    const content = buildOutputStyleContent(REPO_ROOT)
+
+    expect(content.split(rule)).toHaveLength(2)
+    const body = content.indexOf('## Instruction Priority')
+    const profile = content.indexOf('# Claude Code Capability Profile')
+    expect(body).toBeGreaterThan(-1)
+    expect(profile).toBeGreaterThan(-1)
+    expect(content.indexOf(rule)).toBeGreaterThan(body)
+    expect(content.indexOf(rule)).toBeLessThan(profile)
+  })
+
+  test('the rule file adds no CLAUDE.md literal to the output style', () => {
+    const rule = fs.readFileSync(RULE_FILE, 'utf8')
+    expect(rule).not.toContain('CLAUDE.md')
   })
 })
 

@@ -68,6 +68,7 @@ This hook allows Systematic to inject a "bootstrap" instruction into the AI's sy
 - Discover available workflows.
 - Use the `systematic_skill` tool.
 - Follow the "invoke before response" discipline.
+- Create git worktrees at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill, unless you or a project instruction name a different location or tool. This rule is left out when `git-worktree` is in `disabled_skills`.
 
 ## Code Map
 

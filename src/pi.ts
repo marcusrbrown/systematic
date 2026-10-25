@@ -12,6 +12,7 @@ import {
   composeSystemPromptWithBootstrap,
   computeBootstrapContentSafe,
   readHarnessProfile,
+  readWorktreePlacementRule,
 } from './lib/bootstrap.js'
 import type { SourcedOverlayConfigMap, SystematicConfig } from './lib/config.js'
 import { isAgentDisabled, loadConfigWithSources } from './lib/config.js'
@@ -189,10 +190,16 @@ export default async function systematicPiExtension(
     {
       bundledSkillsDir,
       usageTemplate: PI_BOOTSTRAP_USAGE_TEMPLATE,
+      // Always supplied; the bootstrap omits it when git-worktree is disabled.
+      worktreePlacementRule:
+        readWorktreePlacementRule(bundledSkillsDir) ?? undefined,
       // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
       profileBlock: readHarnessProfile(bundledSkillsDir, 'pi') ?? undefined,
     },
     reportPiBootstrapFailure,
+    // Only `disabled_skills` reaches the bootstrap: Pi keeps ignoring
+    // `bootstrap.enabled` and `bootstrap.file`.
+    piConfig.disabled_skills,
   )
 
   pi.on(
