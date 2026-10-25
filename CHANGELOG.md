@@ -4,6 +4,20 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.26.2](https://github.com/marcusrbrown/systematic/compare/v3.26.1...v3.26.2) (2026-10-25)
+
+### Bug Fixes
+
+* **skills:** refresh git-worktree and place worktrees under .worktrees ([#1220](https://github.com/marcusrbrown/systematic/issues/1220)) ([86b667d](https://github.com/marcusrbrown/systematic/commit/86b667d463332747a2df9ef1c00f31daac1ca611))
+
+### Build System
+
+* **dev:** update OpenCode to v1.19.4 ([#1219](https://github.com/marcusrbrown/systematic/issues/1219)) ([53aede5](https://github.com/marcusrbrown/systematic/commit/53aede5333aa1e19ecb2c17f1785282fdbbb4956))
+
+### Miscellaneous Chores
+
+* **dev:** update dependency typebox to v1.4.3 ([#1218](https://github.com/marcusrbrown/systematic/issues/1218)) ([6674504](https://github.com/marcusrbrown/systematic/commit/6674504071c69116e0540bad67cfeba21d51f317))
+
 ## [3.26.1](https://github.com/marcusrbrown/systematic/compare/v3.26.0...v3.26.1) (2026-10-25)
 
 ### Bug Fixes
