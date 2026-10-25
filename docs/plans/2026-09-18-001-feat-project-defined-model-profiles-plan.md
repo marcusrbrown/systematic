@@ -183,7 +183,7 @@ The advisory guarantee is the `H -> J` edge combined with field-additive granula
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add the opt-in field**
+- [x] **Unit 1: Add the opt-in field**
 
 **Goal:** `allow_project_profiles` exists, is user-owned, and is inert.
 
@@ -213,7 +213,7 @@ The advisory guarantee is the `H -> J` edge combined with field-additive granula
 
 **Verification:** flag resolves from user and custom only; every pre-existing config test stays green.
 
-- [ ] **Unit 2: Gate the strip on the opt-in**
+- [x] **Unit 2: Gate the strip on the opt-in**
 
 **Goal:** With the opt-in on, project `profiles` survives into the parsed project source.
 
@@ -244,7 +244,7 @@ The advisory guarantee is the `H -> J` edge combined with field-additive granula
 
 **Verification:** the locked strip test passes unmodified with the flag off, and project bundles are present on the source with it on.
 
-- [ ] **Unit 3: Validate and look up project bundles**
+- [x] **Unit 3: Validate and look up project bundles**
 
 **Goal:** Project-defined bundles are validated with every other bundle and are resolvable by name, ranked last.
 
@@ -272,7 +272,7 @@ The advisory guarantee is the `H -> J` edge combined with field-additive granula
 
 **Verification:** a project-only name resolves; a colliding name resolves to the user bundle; invalid bundles fail the load regardless of selection.
 
-- [ ] **Unit 4: Advisory merge**
+- [x] **Unit 4: Advisory merge**
 
 **Goal:** A project-sourced active bundle supplies routing only where user-owned config is silent, field by field.
 
@@ -307,7 +307,7 @@ The advisory guarantee is the `H -> J` edge combined with field-additive granula
 
 **Verification:** no user-set field is ever replaced by a project-sourced bundle, and partial overlap on one agent never erases an unrelated field.
 
-- [ ] **Unit 5: Profile provenance in `config show`**
+- [x] **Unit 5: Profile provenance in `config show`**
 
 **Goal:** The file that defined the active profile is visible without opening anything.
 
@@ -338,7 +338,7 @@ The advisory guarantee is the `H -> J` edge combined with field-additive granula
 
 **Verification:** every definition source prints its own path, and `systematic capabilities` still exits 0.
 
-- [ ] **Unit 6: Per-target routing attribution**
+- [x] **Unit 6: Per-target routing attribution**
 
 **Goal:** A user can tell whether a project bundle applied, partially applied, or did nothing.
 
@@ -379,7 +379,7 @@ The five states this surface must separate:
 
 The third row is the one that is otherwise indistinguishable from the bundle not existing, and is the reason this unit is in scope.
 
-- [ ] **Unit 7: `SYSTEMATIC_PROFILE` environment override**
+- [x] **Unit 7: `SYSTEMATIC_PROFILE` environment override**
 
 **Goal:** A user can override the active profile from their shell, outranking every config source.
 
@@ -413,6 +413,8 @@ The third row is the one that is otherwise indistinguishable from the bundle not
 **Verification:** the variable outranks all three config sources; an unresolvable value degrades rather than failing the load.
 
 - [ ] **Unit 8: Documentation**
+
+> **Mostly shipped (#1011, `7fbecd08`); open: two approach bullets.** The opt-in, its user-owned scope, the advisory guarantee, repository-selects-profile, the `SYSTEMATIC_PROFILE` override and the `ARCHITECTURE.md` chain-position text are documented, and `docs:generate` shows no drift. Still absent from `ARCHITECTURE.md`, `docs/src/content/docs/guides/model-profiles.mdx` and `docs/src/content/docs/reference/configuration.mdx`: (1) a statement that enabling the opt-in lets a repository route unrouted agents to endpoints that repository declares, and (2) a record that the environment override reverses the rejection in `docs/brainstorms/2026-09-04-model-config-profiles-requirements.md`, with the selection-only reasoning.
 
 **Goal:** The opt-in, the advisory guarantee, the selection consequence, the environment override, and the trust rationale are documented.
 

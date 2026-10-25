@@ -804,6 +804,8 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 
 - [ ] **Unit 15: Remove the legacy path and `NPM_TOKEN`**
 
+> **Partly shipped (#1100, `15eca8fb`); open: `.releaserc.yaml`.** Done at HEAD: `legacy-release` and the mode guard are gone, no workflow references `NPM_TOKEN`, `NODE_AUTH_TOKEN` or `RELEASE_MODE` (locked by `tests/unit/release-publish-path.test.ts` and `tests/unit/main-release-workflow.test.ts`), the repo has no `NPM_TOKEN` secret and no `RELEASE_MODE` variable, and `RELEASING.md` holds the runbook. Still open: `.releaserc.yaml` keeps `@semantic-release/release-notes-generator` and omits `@semantic-release/exec`, so it does not match the plugin list in `scripts/release/gated-config.ts`, and no test pins that match. This unit stays unticked until that lands. Unit 14, which this unit depends on, is open: live rulesets are only `main` and `release-branch` (no `v*` tag rulesets), immutable releases and `sha_pinning_required` are off, and `SECURITY.md` does not exist.
+
 **Goal:** One publish path, with no long-lived npm token.
 
 **Requirements:** R1, R12
