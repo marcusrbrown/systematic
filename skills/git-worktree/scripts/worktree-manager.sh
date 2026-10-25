@@ -50,7 +50,7 @@ WORKTREE_DIR=""
 # a linked worktree still lands at the main checkout. Layouts with no such root
 # are refused.
 resolve_main_root() {
-  local common_raw common superproject root toplevel
+  local common_raw common superproject root toplevel gitdir
 
   common_raw=$(git rev-parse --git-common-dir 2> /dev/null) ||
     die 1 not-a-repository "not inside a git repository: $PWD"
@@ -78,6 +78,20 @@ resolve_main_root() {
   if [ "$toplevel" != "$root" ] ||
     [ "$(git -C "$root" rev-parse --is-bare-repository 2> /dev/null)" = "true" ]; then
     die 3 unsupported-layout "$root is not the work tree of $common; there is no main work tree to place .worktrees in"
+  fi
+
+  # In the main checkout (not a linked worktree) the caller's own work tree must
+  # be that root. Plain `git init --separate-git-dir` leaves core.worktree
+  # unset, so the check above passes for the storage directory; this one
+  # catches it. A linked worktree cannot tell this layout apart, so it is not
+  # checked further.
+  gitdir=$(git rev-parse --absolute-git-dir 2> /dev/null) && gitdir=$(cd "$gitdir" 2> /dev/null && pwd -P) || gitdir=""
+  if [ "$gitdir" = "$common" ]; then
+    toplevel=$(git rev-parse --show-toplevel 2> /dev/null) || toplevel=""
+    toplevel=$(cd "$toplevel" 2> /dev/null && pwd -P) || toplevel=""
+    if [ "$toplevel" != "$root" ]; then
+      die 3 unsupported-layout "your work tree ${toplevel:-(none)} is not $root, which holds the git directory $common"
+    fi
   fi
 
   MAIN_ROOT="$root"

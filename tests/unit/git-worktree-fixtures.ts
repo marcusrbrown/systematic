@@ -174,9 +174,11 @@ export function createSeparateGitDirRepo(): string {
 
 /**
  * Git metadata at `storage/.git` (a directory literally named `.git`) for a
- * checkout elsewhere: the git dir is not inside its work tree.
+ * checkout elsewhere: the git dir is not inside its work tree. Plain
+ * `git init --separate-git-dir` leaves `core.worktree` unset, and git then
+ * treats `storage` as the work tree; `coreWorktree` sets it explicitly.
  */
-export function createDetachedDotGitRepo(): {
+export function createDetachedDotGitRepo(coreWorktree = false): {
   readonly work: string
   readonly storage: string
 } {
@@ -192,7 +194,9 @@ export function createDetachedDotGitRepo(): {
     'main',
     `--separate-git-dir=${path.join(storage, '.git')}`,
   ])
-  git(work, ['config', 'core.worktree', work])
+  if (coreWorktree) {
+    git(work, ['config', 'core.worktree', work])
+  }
   commitFiles(work, { 'README.md': 'base\n' }, 'base')
   return { work, storage }
 }

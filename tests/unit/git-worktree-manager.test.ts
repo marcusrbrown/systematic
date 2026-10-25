@@ -94,8 +94,8 @@ function readWithMtime(file: string): { text: string; mtimeMs: number } {
 }
 
 describe('create: inferred main root', () => {
-  it('refuses a .git directory that is not inside its work tree and writes nothing', () => {
-    const { work, storage } = createDetachedDotGitRepo()
+  it('refuses a .git directory with core.worktree elsewhere and writes nothing', () => {
+    const { work, storage } = createDetachedDotGitRepo(true)
     const before = fs.readdirSync(storage).sort()
     const result = run(['create', 'feat/x', '--base', 'main'], { cwd: work })
 
@@ -103,6 +103,20 @@ describe('create: inferred main root', () => {
     expect(result.stderr).toContain('error: unsupported-layout:')
     expect(fs.readdirSync(storage).sort()).toEqual(before)
     expect(fs.existsSync(path.join(work, '.worktrees'))).toBe(false)
+  })
+
+  it('refuses a separate .git directory without core.worktree and writes nothing', () => {
+    const { work, storage } = createDetachedDotGitRepo()
+    const before = fs.readdirSync(storage).sort()
+    const branches = git(work, ['branch', '--list'])
+    const result = run(['create', 'escaped', '--base', 'main'], { cwd: work })
+
+    expect(result.status).toBe(3)
+    expect(result.stderr).toContain('error: unsupported-layout:')
+    expect(fs.readdirSync(storage).sort()).toEqual(before)
+    expect(fs.existsSync(path.join(storage, '.worktrees'))).toBe(false)
+    expect(fs.existsSync(path.join(work, '.worktrees'))).toBe(false)
+    expect(git(work, ['branch', '--list'])).toBe(branches)
   })
 })
 
