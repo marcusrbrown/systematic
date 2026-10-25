@@ -85,7 +85,7 @@ The root is inferred, not observed. Each fix replaces an assumption with a quest
 - Which commit does this ref name in the caller's checkout?
 - Which registered worktree most closely contains the caller?
 
-Every `unsupported-layout` refusal exits 3 before the first write, so an unsupported layout never leaves a stray `.worktrees/` behind.
+Every `unsupported-layout` refusal exits 3 before the first write, so a layout the script detects never leaves a stray `.worktrees/` behind. The undetected case is the one above: a run from a linked worktree in a plain `--separate-git-dir` layout can still write beside the git dir.
 
 ## Prevention
 
