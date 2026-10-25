@@ -1,0 +1,1 @@
+When work needs a git worktree, create it at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill's script. Never use raw `git worktree add`, a sibling directory, `/tmp`, or a path inside another worktree. If the user or a project instruction names a different location or tool, follow that instead.

@@ -1,4 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  spyOn,
+  test,
+} from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,11 +19,14 @@ import {
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
   readHarnessProfile,
+  readWorktreePlacementRule,
 } from '../../src/lib/bootstrap.ts'
 import {
   buildCapabilitySnapshot,
   serializeCapabilitySnapshot,
 } from '../../src/lib/capability-snapshot.ts'
+import { loadConfig } from '../../src/lib/config.ts'
+import { resolveSkill } from '../../src/lib/skill-resolver.ts'
 
 /**
  * Reconstruct the production skip predicate from src/index.ts:91-97 using the
@@ -413,17 +426,23 @@ describe('getBootstrapContent', () => {
     }
   })
 
-  test('pins the production-shaped OpenCode bootstrap with its profile inlined', () => {
+  test('pins the production-shaped OpenCode bootstrap with its profile and placement rule inlined', () => {
     const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    // Same deps as src/index.ts passes: the rule is always supplied and the
+    // gate lives in getBootstrapContent.
+    const worktreePlacementRule = readWorktreePlacementRule(bundledSkillsDir)
+    expect(worktreePlacementRule).not.toBeNull()
     const content = getBootstrapContent(
       { bootstrap: { enabled: true }, disabled_skills: [] },
       {
         bundledSkillsDir,
+        worktreePlacementRule: worktreePlacementRule ?? undefined,
         profileBlock:
           readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
       },
     )
     expect(content).not.toBeNull()
+    expect(content).toContain(worktreePlacementRule as string)
     expect(
       normalizeBootstrapSnapshot(content as string, bundledSkillsDir),
     ).toMatchSnapshot()
@@ -950,5 +969,210 @@ describe('composeSystemPromptWithBootstrap', () => {
     const existing = 'You are a primary agent. Earlier extension contribution.'
     const result = composeSystemPromptWithBootstrap(existing, null)
     expect(result).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Worktree placement rule
+// ---------------------------------------------------------------------------
+
+describe('worktree placement rule', () => {
+  const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+  const rulePath = path.join(
+    bundledSkillsDir,
+    'using-systematic/references/worktree-placement.md',
+  )
+  // The exact rule text. A rewording must be a deliberate change to this pin.
+  const RULE_TEXT =
+    "When work needs a git worktree, create it at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill's script. Never use raw `git worktree add`, a sibling directory, `/tmp`, or a path inside another worktree. If the user or a project instruction names a different location or tool, follow that instead."
+  const CARVE_OUT =
+    'If the user or a project instruction names a different location or tool, follow that instead.'
+
+  // `loadConfig` reads `os.homedir()/.config/opencode/systematic.json(c)`, and
+  // Bun ignores in-process HOME changes, so swap `os.homedir` the way
+  // tests/unit/pi.test.ts does. Without it a developer's real
+  // `disabled_skills` changes the result.
+  let isolatedHome: string
+  const realHomedir = os.homedir
+  const realConfigDir = process.env.OPENCODE_CONFIG_DIR
+  const tempDirs: string[] = []
+
+  beforeAll(() => {
+    isolatedHome = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-bootstrap-home-'),
+    )
+    os.homedir = () => isolatedHome
+    delete process.env.OPENCODE_CONFIG_DIR
+  })
+
+  afterAll(() => {
+    os.homedir = realHomedir
+    if (realConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = realConfigDir
+    fs.rmSync(isolatedHome, { recursive: true, force: true })
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  function projectWithConfig(config: unknown): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-rule-proj-'))
+    tempDirs.push(dir)
+    fs.mkdirSync(path.join(dir, '.opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, '.opencode/systematic.json'),
+      JSON.stringify(config),
+    )
+    return dir
+  }
+
+  /** Mirrors src/index.ts: real loadConfig, rule always supplied. */
+  function openCodeBootstrap(config: unknown): string | null {
+    const loaded = loadConfig(projectWithConfig(config))
+    return getBootstrapContent(loaded, {
+      bundledSkillsDir,
+      worktreePlacementRule:
+        readWorktreePlacementRule(bundledSkillsDir) ?? undefined,
+      profileBlock:
+        readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
+    })
+  }
+
+  function countOf(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1
+  }
+
+  describe('rule file', () => {
+    test('is exactly the pinned rule text', () => {
+      expect(fs.readFileSync(rulePath, 'utf8').trim()).toBe(RULE_TEXT)
+      expect(readWorktreePlacementRule(bundledSkillsDir)).toBe(RULE_TEXT)
+    })
+
+    test('is 350 bytes or fewer and names the skill and the placement path', () => {
+      const bytes = fs.statSync(rulePath).size
+      expect(bytes).toBeLessThanOrEqual(350)
+      const text = fs.readFileSync(rulePath, 'utf8')
+      expect(text).toContain('git-worktree')
+      expect(text).toContain('.worktrees/<branch>')
+    })
+
+    test('keeps the raw-add ban and the carve-out sentence', () => {
+      const text = fs.readFileSync(rulePath, 'utf8')
+      expect(text).toContain('Never use raw `git worktree add`')
+      expect(text).toContain(CARVE_OUT)
+    })
+
+    test('stays harness-neutral and carries no CLAUDE.md literal', () => {
+      const text = fs.readFileSync(rulePath, 'utf8')
+      expect(text).not.toContain('CLAUDE.md')
+      expect(text).not.toMatch(
+        /claude|opencode|codex|cursor|\bpi\b|systematic_skill|AskUserQuestion/i,
+      )
+    })
+
+    test('the bare skill name resolves through the systematic_skill resolver', () => {
+      const skill = resolveSkill(
+        { bundledSkillsDir, disabledSkills: [] },
+        'git-worktree',
+      )
+      expect(skill.name).toBe('git-worktree')
+    })
+
+    test('a missing rule file logs an error and returns null', () => {
+      const emptyDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-rule-'),
+      )
+      tempDirs.push(emptyDir)
+      const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        expect(readWorktreePlacementRule(emptyDir)).toBeNull()
+        expect(errorSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('OpenCode composition through the real loadConfig', () => {
+    test('with no config the bootstrap carries the rule once, after the usage template and before the profile', () => {
+      const content = openCodeBootstrap({}) as string
+      expect(content).not.toBeNull()
+      expect(countOf(content, RULE_TEXT)).toBe(1)
+      const usageEnd = content.indexOf(
+        'Bundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.',
+      )
+      const rule = content.indexOf(RULE_TEXT)
+      const profile = content.indexOf('# OpenCode Capability Profile')
+      expect(usageEnd).toBeGreaterThan(-1)
+      expect(profile).toBeGreaterThan(-1)
+      expect(rule).toBeGreaterThan(usageEnd)
+      expect(rule).toBeLessThan(profile)
+    })
+
+    test('disabling git-worktree removes the rule and nothing else', () => {
+      const withRule = openCodeBootstrap({}) as string
+      const without = openCodeBootstrap({
+        disabled_skills: ['git-worktree'],
+      }) as string
+      expect(without).not.toContain(RULE_TEXT)
+      expect(without).not.toContain('.worktrees/<branch>')
+      expect(without).toBe(withRule.replace(`\n\n${RULE_TEXT}`, ''))
+    })
+
+    test('disabling a different skill keeps the rule', () => {
+      const content = openCodeBootstrap({
+        disabled_skills: ['ce:plan'],
+      }) as string
+      expect(countOf(content, RULE_TEXT)).toBe(1)
+    })
+
+    test('a qualified systematic:git-worktree entry fails config load instead of silently disabling the rule', () => {
+      expect(() =>
+        loadConfig(
+          projectWithConfig({ disabled_skills: ['systematic:git-worktree'] }),
+        ),
+      ).toThrow(/Unrecognized skill name 'systematic:git-worktree'/)
+    })
+
+    test('bootstrap.enabled false returns null', () => {
+      expect(openCodeBootstrap({ bootstrap: { enabled: false } })).toBeNull()
+    })
+
+    test('an existing custom bootstrap.file is returned verbatim with no rule', () => {
+      const customPath = path.join(isolatedHome, 'custom-bootstrap.md')
+      fs.writeFileSync(customPath, 'CUSTOM bootstrap override content')
+      const content = openCodeBootstrap({
+        bootstrap: { enabled: true, file: customPath },
+      })
+      expect(content).toBe('CUSTOM bootstrap override content')
+    })
+
+    test('a missing custom bootstrap.file falls through to the bundled body, rule included once', () => {
+      const content = openCodeBootstrap({
+        bootstrap: {
+          enabled: true,
+          file: path.join(isolatedHome, 'does-not-exist.md'),
+        },
+      }) as string
+      expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
+      expect(countOf(content, RULE_TEXT)).toBe(1)
+    })
+  })
+
+  describe('computeBootstrapContentSafe (Pi composition)', () => {
+    test('carries the rule once by default and drops it only when git-worktree is disabled', () => {
+      const deps = { bundledSkillsDir, worktreePlacementRule: RULE_TEXT }
+      const withRule = computeBootstrapContentSafe(deps) as string
+      expect(countOf(withRule, RULE_TEXT)).toBe(1)
+
+      const without = computeBootstrapContentSafe(deps, undefined, [
+        'git-worktree',
+      ]) as string
+      expect(without).not.toContain(RULE_TEXT)
+      expect(without).toBe(withRule.replace(`\n\n${RULE_TEXT}`, ''))
+
+      const other = computeBootstrapContentSafe(deps, undefined, [
+        'ce:plan',
+      ]) as string
+      expect(other).toBe(withRule)
+    })
   })
 })

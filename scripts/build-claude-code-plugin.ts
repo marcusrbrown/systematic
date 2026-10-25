@@ -100,7 +100,10 @@ export function buildPluginManifest(_rootDir: string): ClaudePluginManifest {
  * template does not apply).
  *
  * The enforcement text is read from `skills/using-systematic/SKILL.md` directly
- * (not duplicated) so it cannot drift from the single source of truth.
+ * (not duplicated) so it cannot drift from the single source of truth. The
+ * worktree placement rule (`references/worktree-placement.md`) sits between
+ * the body and the profile, and is always present: this static output style
+ * cannot follow `disabled_skills`.
  */
 export function buildOutputStyleContent(rootDir: string): string {
   const usingSystematicPath = path.join(
@@ -123,10 +126,24 @@ export function buildOutputStyleContent(rootDir: string): string {
     )
   }
 
+  // Checked after the SKILL.md and profile checks so their diagnostics win.
+  // Unconditional: this output style is static and the build reads no user
+  // config, so it cannot follow `disabled_skills` (see HARNESSES.md).
+  const rulePath = path.join(
+    rootDir,
+    'skills/using-systematic/references/worktree-placement.md',
+  )
+  if (!fs.existsSync(rulePath)) {
+    throw buildError(
+      `Missing ${path.relative(rootDir, rulePath)}; cannot render output style.`,
+    )
+  }
+
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const { body } = parseFrontmatter(fullContent)
   const usingSystematicBody = body.trim()
 
+  const ruleContent = fs.readFileSync(rulePath, 'utf8').trim()
   const profileContent = fs.readFileSync(profilePath, 'utf8').trim()
 
   const body_ = `You have access to structured engineering workflows via the Systematic plugin.
@@ -134,6 +151,8 @@ export function buildOutputStyleContent(rootDir: string): string {
 **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
 
 ${usingSystematicBody}
+
+${ruleContent}
 
 ${profileContent}`
 

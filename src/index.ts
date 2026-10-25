@@ -7,6 +7,7 @@ import {
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
   readHarnessProfile,
+  readWorktreePlacementRule,
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
@@ -62,6 +63,9 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
   // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
   const bootstrapContent = getBootstrapContent(config, {
     bundledSkillsDir,
+    // Always supplied; getBootstrapContent omits it when git-worktree is disabled.
+    worktreePlacementRule:
+      readWorktreePlacementRule(bundledSkillsDir) ?? undefined,
     profileBlock: readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
   })
 

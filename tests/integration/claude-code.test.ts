@@ -137,6 +137,30 @@ describe('claude-code bundle — shared-core content fidelity', () => {
     expect(content).toContain('AskUserQuestion')
   })
 
+  test('output-style carries the worktree placement rule exactly once, between the body and the profile', () => {
+    const content = fs.readFileSync(
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
+      'utf8',
+    )
+    const rule = fs
+      .readFileSync(
+        path.join(
+          REPO_ROOT,
+          'skills/using-systematic/references/worktree-placement.md',
+        ),
+        'utf8',
+      )
+      .trim()
+
+    expect(content.split(rule)).toHaveLength(2)
+    expect(content.indexOf(rule)).toBeGreaterThan(
+      content.indexOf('## Instruction Priority'),
+    )
+    expect(content.indexOf(rule)).toBeLessThan(
+      content.indexOf('Claude Code Capability Profile'),
+    )
+  })
+
   test('output-style frontmatter has force-for-plugin: true', () => {
     const content = fs.readFileSync(
       path.join(BUILD_DIR, 'output-styles/systematic.md'),

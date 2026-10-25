@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1392,4 +1392,141 @@ describe('the messages transform', () => {
       })
     },
   )
+})
+
+// Worktree placement rule. Drives the real
+// plugin init (src/index.ts) with real config loading. `loadConfig` reads
+// `os.homedir()`, and Bun ignores in-process HOME changes, so swap it.
+describe('worktree placement rule in the OpenCode bootstrap', () => {
+  // The exact rule text, pinned against the rule file in tests/unit/bootstrap.test.ts.
+  const RULE_TEXT =
+    "When work needs a git worktree, create it at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill's script. Never use raw `git worktree add`, a sibling directory, `/tmp`, or a path inside another worktree. If the user or a project instruction names a different location or tool, follow that instead."
+  const realHomedir = os.homedir
+  const realConfigDir = process.env.OPENCODE_CONFIG_DIR
+  let isolatedHome: string
+
+  beforeAll(() => {
+    isolatedHome = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-plugin-rule-home-'),
+    )
+    os.homedir = () => isolatedHome
+    delete process.env.OPENCODE_CONFIG_DIR
+  })
+
+  afterAll(() => {
+    os.homedir = realHomedir
+    if (realConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = realConfigDir
+    fs.rmSync(isolatedHome, { recursive: true, force: true })
+  })
+
+  /** Runs the real init in a temp project and returns the injected system text. */
+  async function injectedSystem(config: unknown): Promise<string> {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-rule-'))
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    if (config !== undefined) {
+      fs.writeFileSync(
+        path.join(tempDir, '.opencode/systematic.json'),
+        JSON.stringify(config),
+      )
+    }
+    try {
+      const pluginModule = (await import(
+        pathToFileURL(path.join(SRC_DIR, 'index.ts')).href
+      )) as {
+        default: (args: {
+          client: { app: { log: (entry: unknown) => Promise<void> } }
+          directory: string
+        }) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+      const plugin = await pluginModule.default({
+        client: { app: { log: async () => {} } },
+        directory: tempDir,
+      })
+      const output = { system: ['base system prompt'] }
+      await plugin['experimental.chat.system.transform'](
+        { sessionID: 'rule-session' },
+        output,
+      )
+      return output.system.join('\n')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  const countOf = (haystack: string, needle: string): number =>
+    haystack.split(needle).length - 1
+
+  test('the real plugin init injects the rule exactly once, before the OpenCode profile', async () => {
+    const system = await injectedSystem(undefined)
+
+    expect(countOf(system, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+    expect(countOf(system, RULE_TEXT)).toBe(1)
+    expect(system.indexOf(RULE_TEXT)).toBeLessThan(
+      system.indexOf('# OpenCode Capability Profile'),
+    )
+  })
+
+  test('the real plugin init omits the rule when git-worktree is in disabled_skills', async () => {
+    const system = await injectedSystem({ disabled_skills: ['git-worktree'] })
+
+    // Control: the bootstrap is there, so the absence below is not vacuous.
+    expect(countOf(system, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+    expect(system).not.toContain(RULE_TEXT)
+  })
+
+  test('the real plugin init keeps the rule when a different skill is disabled', async () => {
+    const system = await injectedSystem({ disabled_skills: ['ce:plan'] })
+
+    expect(countOf(system, RULE_TEXT)).toBe(1)
+  })
+
+  test('the real plugin init still injects the bootstrap, without the rule and after one logged error, when the rule file cannot be read', async () => {
+    const originalReadFileSync = fs.readFileSync
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      options?: Parameters<typeof fs.readFileSync>[1],
+    ) => {
+      if (
+        String(file).endsWith(
+          'using-systematic/references/worktree-placement.md',
+        )
+      ) {
+        throw new Error('rule file unreadable')
+      }
+      return originalReadFileSync(file, options as never)
+    }) as unknown as typeof fs.readFileSync)
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const system = await injectedSystem(undefined)
+
+      expect(countOf(system, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+      expect(system).toContain('# OpenCode Capability Profile')
+      expect(system).not.toContain(RULE_TEXT)
+      expect(system).not.toContain('.worktrees/<branch>')
+      const logged = errorSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('worktree placement rule'),
+      )
+      expect(logged).toHaveLength(1)
+    } finally {
+      readSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  test('the real plugin init gives a user-supplied bootstrap file no rule', async () => {
+    const customFile = path.join(isolatedHome, 'custom-bootstrap.md')
+    fs.writeFileSync(customFile, 'CUSTOM OPENCODE BOOTSTRAP')
+    const system = await injectedSystem({
+      bootstrap: { enabled: true, file: customFile },
+    })
+
+    expect(system).toBe('base system prompt\n\nCUSTOM OPENCODE BOOTSTRAP')
+    expect(system).not.toContain(RULE_TEXT)
+  })
 })

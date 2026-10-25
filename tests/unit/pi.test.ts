@@ -1306,3 +1306,172 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     expect(typeof api.handlers.before_agent_start).toBe('function')
   })
 })
+
+// Worktree placement rule. Real extension init,
+// real config loading, isolated home. Pi passes `disabled_skills` to the
+// bootstrap and nothing else, so `bootstrap.enabled` and `bootstrap.file` stay
+// ignored.
+describe('src/pi.ts worktree placement rule', () => {
+  // The exact rule text, pinned against the rule file in tests/unit/bootstrap.test.ts.
+  const RULE_TEXT =
+    "When work needs a git worktree, create it at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill's script. Never use raw `git worktree add`, a sibling directory, `/tmp`, or a path inside another worktree. If the user or a project instruction names a different location or tool, follow that instead."
+  const FOREIGN =
+    'Project convention: create worktrees under .slim/worktrees/<lane>.'
+
+  function countOf(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1
+  }
+
+  /** Runs the real Pi init under `userConfig` and returns the real handler. */
+  async function initWith(userConfig: Record<string, unknown> | undefined) {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pi-rule-home-'),
+    )
+    const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => tempDir
+    try {
+      if (userConfig !== undefined) {
+        const userFile = path.join(
+          tempDir,
+          '.config',
+          'opencode',
+          'systematic.json',
+        )
+        fs.mkdirSync(path.dirname(userFile), { recursive: true })
+        fs.writeFileSync(userFile, JSON.stringify(userConfig))
+      }
+      const api = createFakeExtensionApi()
+      await piExtension(api)
+      const handler = api.handlers.before_agent_start as ExtensionHandler<
+        BeforeAgentStartEvent,
+        BeforeAgentStartEventResult
+      >
+      return {
+        tempDir,
+        run: async (systemPrompt: string): Promise<string> =>
+          (await handler(userEvent(systemPrompt), fakeExtensionContext))
+            ?.systemPrompt as string,
+      }
+    } finally {
+      os.homedir = () => isolatedHome
+      if (originalConfigDir !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+      }
+    }
+  }
+
+  test('by default the real init injects the rule once, after the usage template and before the profile', async () => {
+    const { run } = await initWith(undefined)
+    const prompt = await run('Earlier prompt.')
+
+    expect(countOf(prompt, RULE_TEXT)).toBe(1)
+    const usage = prompt.indexOf(
+      'Use `systematic_skill` for Systematic skills.',
+    )
+    const rule = prompt.indexOf(RULE_TEXT)
+    const profile = prompt.indexOf('# Pi Capability Profile')
+    expect(usage).toBeGreaterThan(-1)
+    expect(profile).toBeGreaterThan(-1)
+    expect(rule).toBeGreaterThan(usage)
+    expect(rule).toBeLessThan(profile)
+  })
+
+  test('disabling git-worktree removes the rule from the real init and nothing else', async () => {
+    const withRule = await (await initWith(undefined)).run('Earlier prompt.')
+    const without = await (
+      await initWith({ disabled_skills: ['git-worktree'] })
+    ).run('Earlier prompt.')
+
+    expect(without).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(without).not.toContain(RULE_TEXT)
+    expect(without).toBe(withRule.replace(`\n\n${RULE_TEXT}`, ''))
+  })
+
+  test('disabling a different skill keeps the rule', async () => {
+    const prompt = await (await initWith({ disabled_skills: ['ce:plan'] })).run(
+      'Earlier prompt.',
+    )
+
+    expect(countOf(prompt, RULE_TEXT)).toBe(1)
+  })
+
+  test('a bootstrap.file that exists is ignored on Pi and the rule is still present', async () => {
+    const customFile = path.join(isolatedHome, 'pi-custom-bootstrap.md')
+    fs.writeFileSync(customFile, 'CUSTOM PI BOOTSTRAP SENTINEL')
+    const { run } = await initWith({
+      bootstrap: { enabled: true, file: customFile },
+    })
+    const prompt = await run('Earlier prompt.')
+
+    expect(prompt).not.toContain('CUSTOM PI BOOTSTRAP SENTINEL')
+    expect(prompt).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(countOf(prompt, RULE_TEXT)).toBe(1)
+  })
+
+  test('bootstrap.enabled false is ignored on Pi: the bootstrap and the rule are still injected', async () => {
+    const { run } = await initWith({ bootstrap: { enabled: false } })
+    const prompt = await run('Earlier prompt.')
+
+    expect(prompt).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(countOf(prompt, RULE_TEXT)).toBe(1)
+  })
+
+  test('the rule is absent only when git-worktree is disabled, even with bootstrap.file set', async () => {
+    const customFile = path.join(isolatedHome, 'pi-custom-bootstrap-2.md')
+    fs.writeFileSync(customFile, 'CUSTOM PI BOOTSTRAP SENTINEL')
+    const { run } = await initWith({
+      bootstrap: { enabled: true, file: customFile },
+      disabled_skills: ['git-worktree'],
+    })
+    const prompt = await run('Earlier prompt.')
+
+    expect(prompt).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(prompt).not.toContain(RULE_TEXT)
+  })
+
+  test('a rule file that cannot be read leaves the bootstrap without the rule, after one logged error', async () => {
+    const originalReadFileSync = fs.readFileSync
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      options?: Parameters<typeof fs.readFileSync>[1],
+    ) => {
+      if (
+        String(file).endsWith(
+          'using-systematic/references/worktree-placement.md',
+        )
+      ) {
+        throw new Error('rule file unreadable')
+      }
+      return originalReadFileSync(file, options as never)
+    }) as unknown as typeof fs.readFileSync)
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { run } = await initWith(undefined)
+      const prompt = await run('Earlier prompt.')
+
+      expect(countOf(prompt, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+      expect(prompt).toContain('# Pi Capability Profile')
+      expect(prompt).not.toContain(RULE_TEXT)
+      const logged = errorSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('worktree placement rule'),
+      )
+      expect(logged).toHaveLength(1)
+    } finally {
+      readSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  test('foreign prompt text, including a competing worktree convention, is preserved and the block is not doubled across calls', async () => {
+    const { run } = await initWith(undefined)
+    const first = await run(FOREIGN)
+    const second = await run(first)
+
+    expect(first.startsWith(FOREIGN)).toBe(true)
+    expect(second).toBe(first)
+    expect(countOf(second, FOREIGN)).toBe(1)
+    expect(countOf(second, RULE_TEXT)).toBe(1)
+    expect(countOf(second, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+  })
+})
