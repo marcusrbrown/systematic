@@ -43,6 +43,7 @@ On exit 3, report the error and ask. Never retry with `--force`, `rm -rf`, anoth
 
 - Use the printed `path=` as the workdir for every later command, and as the workspace root you give subagents. Never assume a `cd` persisted. `switch` cannot change your directory.
 - A new worktree has no installed dependencies. Install them there before running tests.
+- The new branch has no upstream. Publish it with `git push -u origin <branch>`.
 
 ## Reviewing a PR
 
