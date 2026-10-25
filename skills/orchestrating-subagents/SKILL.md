@@ -25,7 +25,7 @@ Return: List the changed files and summarize the implementation.
 - **Specialist** — the registered agent or persona best suited to the work (for example, an implementer or researcher)
 - **Objective** — a concise statement of the outcome
 - **Scope** — full instructions, boundaries, dependencies, and files in scope
-- **Workspace** — for any write-capable dispatch, the explicit expected repository or worktree root
+- **Workspace** — for any write-capable dispatch, the explicit expected repository or worktree root. To create a worktree for the work, use the `git-worktree` skill, which places it at `.worktrees/<branch>` under the main repository root; pass its printed `path=` as the workspace root
 - **Return** — the result format expected from the specialist
 
 **Optional brief elements:**
