@@ -117,6 +117,8 @@ The bootstrap inlines the active harness profile naming the exact mechanisms for
 
 When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
 
+When work needs a git worktree, create it at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill's script. Never use raw `git worktree add`, a sibling directory, `/tmp`, or a path inside another worktree. If the user or a project instruction names a different location or tool, follow that instead.
+
 # Claude Code Capability Profile
 
 | Capability | Mechanism | Status | Fallback |
