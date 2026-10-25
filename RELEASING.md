@@ -13,6 +13,8 @@ Merging a feature PR never publishes.
 3. The merge push runs `publish`: it re-verifies the merge and the approval, then runs semantic-release with the approved changelog entry as the notes. It publishes to npm with trusted publishing (OIDC), then creates the GitHub release. The release exists only if the npm publish succeeded.
 4. The published release then triggers `release-notes.yaml` (narrative), `docs.yaml` (docs deploy) and `publish-claude-code-plugin.yaml` (the `claude-code-plugin` branch).
 
+Auto-merge keeps the squash subject it was armed with, so retitling a PR with auto-merge armed does not change the commit subject. The refresh job disables and re-arms auto-merge with the new subject whenever it retitles the release PR. See [the source write-up](docs/solutions/logic-errors/auto-merge-rearm-keeps-stale-squash-subject-2026-10-19.md).
+
 If `main` moves after a release merge but before `publish` runs, publish refuses (`superseded`) and the next release PR carries the change.
 
 A publish that fails before it creates the tag can be retried while `main` still points at the release merge: re-run the failed `Release` run, or dispatch `release.yaml` (see Recovery). Once `main` moves, the next release PR re-proposes the commits and needs a fresh approval.
