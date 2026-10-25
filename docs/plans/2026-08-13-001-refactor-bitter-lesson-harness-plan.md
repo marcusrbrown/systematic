@@ -1,10 +1,14 @@
 ---
 title: 'refactor: Bitter Lesson Engineering program for Systematic'
 type: refactor
-status: active
+status: superseded
 date: 2026-08-13
 deepened: 2026-08-13
+superseded_at: 2026-10-25
+superseded_reason: "Retained as architectural rationale. The follow-on work proceeds as independent slices, not as this program plan; child plans 2026-08-13-002, 2026-08-13-003, 2026-08-14-001, 2026-08-16-001 and 2026-08-16-002 already cite it as their origin."
 ---
+
+> **Status: superseded.** Retained as architectural rationale. The follow-on work proceeds as independent slices, not as this program plan. The unticked units below are not a backlog.
 
 # refactor: Bitter Lesson Engineering Program for Systematic
 

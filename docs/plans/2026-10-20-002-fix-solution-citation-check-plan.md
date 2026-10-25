@@ -1,7 +1,7 @@
 ---
 title: "fix: Verify path:line citations in docs/solutions"
 type: fix
-status: active
+status: completed
 date: 2026-10-20
 ---
 
@@ -153,7 +153,7 @@ Issue #1014. At `dc79ac8b`, `docs/solutions/` holds 83 citations in 22 of 113 do
 
 ## Implementation Units
 
-- [ ] **Unit 1: Citation check and its tests**
+- [x] **Unit 1: Citation check and its tests**
 
 **Goal:** add `checkSolutionCitations(rootDir, solutionMarkdownFiles)`, exported but not yet called by the gate.
 
@@ -209,7 +209,7 @@ Issue #1014. At `dc79ac8b`, `docs/solutions/` holds 83 citations in 22 of 113 do
 
 **Verification:** the new tests pass, `bun run typecheck:scripts` passes, and the gate is unchanged.
 
-- [ ] **Unit 2: Citation convention in doc guidance**
+- [x] **Unit 2: Citation convention in doc guidance**
 
 **Goal:** tell doc writers how to cite.
 
@@ -231,7 +231,7 @@ Issue #1014. At `dc79ac8b`, `docs/solutions/` holds 83 citations in 22 of 113 do
 
 **Verification:** `bun scripts/content-integrity.ts`, `bun run registry:drift`, `bun scripts/generate-pi-subagents-personas.ts --check`, the parity and bootstrap tests, and markdownlint all pass. Regenerate the registry if drift reports a change.
 
-- [ ] **Unit 3: Fix every citation and turn the gate on**
+- [x] **Unit 3: Fix every citation and turn the gate on**
 
 **Goal:** make the tree clean, then make violations fail the gate.
 

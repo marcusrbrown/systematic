@@ -3,6 +3,7 @@ title: "fix: Place git worktrees at .worktrees/ and make the git-worktree skill 
 type: fix
 status: completed
 date: 2026-10-25
+origin: docs/brainstorms/2026-10-24-worktree-placement-requirements.md
 ---
 
 # fix: Place git worktrees at .worktrees/ and make the git-worktree skill idempotent

@@ -1,7 +1,7 @@
 ---
 title: "feat: pi-subagents interop — export Systematic personas + runtime detection"
 type: feat
-status: active
+status: completed
 date: 2026-07-28
 deepened: 2026-07-28
 origin: docs/brainstorms/2026-07-28-pi-subagents-interop-requirements.md
@@ -295,6 +295,8 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 
 - [ ] **Unit 4: pi-subagents presence detection (best-effort, non-fatal)**
 
+> **Dropped, not shipped.** Phase 2 was deliberately not built: there is no `src/lib/pi-subagents-detect.ts` and nothing in `src/` listens for `subagents:ready`. The follow-on plan `docs/plans/2026-10-20-003-feat-pi-subagents-package-agents-plan.md` states "No auto-detection of pi-subagents", and `src/pi.ts` documents that its warnings "neither detect pi-subagents" nor touch the filesystem. Units 1-3 carry the shipped scope.
+
 **Goal:** Detect `pi-subagents` at runtime via `pi.events` (`subagents:ready` + `subagents:rpc:ping`), capturing a version, wrapped so any failure/absence is silent-degraded and observable — never blocking.
 
 **Requirements:** R9, R10, R11
@@ -327,6 +329,8 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 **Verification:** State machine correct across all cases; no unhandled throw; default path untouched when absent.
 
 - [ ] **Unit 5: Conditional Pi guidance + real-runtime verification**
+
+> **Dropped, not shipped.** This unit depended on Unit 4's detection, which was dropped (see above and `docs/plans/2026-10-20-003-feat-pi-subagents-package-agents-plan.md`). No conditional interop guidance is composed into the Pi bootstrap.
 
 **Goal:** Inject version-templated conditional guidance into the Pi bootstrap only in the `present-supported` state; verify the end-to-end behavior against the real Pi runtime.
 
