@@ -9,6 +9,7 @@ import {
   create,
   createBareRepo,
   createCoreBareRepo,
+  createDetachedDotGitRepo,
   createdFields,
   createRepo,
   createSeparateGitDirRepo,
@@ -83,11 +84,27 @@ describe('create: placement', () => {
 function readWithMtime(file: string): { text: string; mtimeMs: number } {
   const fd = fs.openSync(file, 'r')
   try {
-    return { text: fs.readFileSync(fd, 'utf8'), mtimeMs: fs.fstatSync(fd).mtimeMs }
+    return {
+      text: fs.readFileSync(fd, 'utf8'),
+      mtimeMs: fs.fstatSync(fd).mtimeMs,
+    }
   } finally {
     fs.closeSync(fd)
   }
 }
+
+describe('create: inferred main root', () => {
+  it('refuses a .git directory that is not inside its work tree and writes nothing', () => {
+    const { work, storage } = createDetachedDotGitRepo()
+    const before = fs.readdirSync(storage).sort()
+    const result = run(['create', 'feat/x', '--base', 'main'], { cwd: work })
+
+    expect(result.status).toBe(3)
+    expect(result.stderr).toContain('error: unsupported-layout:')
+    expect(fs.readdirSync(storage).sort()).toEqual(before)
+    expect(fs.existsSync(path.join(work, '.worktrees'))).toBe(false)
+  })
+})
 
 describe('create: ignore policy', () => {
   it('writes .worktrees/.gitignore once, leaves root .gitignore alone and status clean', () => {
@@ -252,6 +269,20 @@ describe('create: base', () => {
     expect(git(out.path ?? '', ['rev-parse', 'HEAD'])).toBe(local)
   })
 
+  it("resolves --base in the caller's checkout, not the main checkout", () => {
+    const repo = createRepo()
+    const linked = create(repo.work, 'feat/a')
+    const linkedHead = commitFiles(linked, { 'linked.txt': 'l\n' }, 'linked')
+    expect(linkedHead).not.toBe(git(repo.work, ['rev-parse', 'HEAD']))
+
+    const result = run(['create', 'x', '--base', 'HEAD'], { cwd: linked })
+
+    expect(result.status).toBe(0)
+    const out = createdFields(result.stdout)
+    expect(out.base).toBe('HEAD')
+    expect(git(out.path ?? '', ['rev-parse', 'HEAD'])).toBe(linkedHead)
+  })
+
   it('exits 3 base-unresolved when --base does not resolve locally', () => {
     const repo = createRepo()
     const result = run(['create', 'feat/a', '--base', 'origin/nope'], {
@@ -366,6 +397,18 @@ describe('list and switch', () => {
     expect(listed.map((row) => row.name)).toEqual(['(main)', 'feat/x'])
     expect(listed[1]?.path).toBe(created)
     expect(listed[1]?.branch).toBe('feat/x')
+  })
+
+  it('marks only the innermost checkout as current', () => {
+    const repo = createRepo()
+    const linked = create(repo.work, 'feat/x')
+    const current = (cwd: string) =>
+      rows(run(['list'], { cwd }).stdout)
+        .filter((row) => row.current === 'yes')
+        .map((row) => row.name)
+
+    expect(current(linked)).toEqual(['feat/x'])
+    expect(current(repo.work)).toEqual(['(main)'])
   })
 
   it('switch prints the path only', () => {

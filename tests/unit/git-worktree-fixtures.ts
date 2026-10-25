@@ -172,6 +172,31 @@ export function createSeparateGitDirRepo(): string {
   return work
 }
 
+/**
+ * Git metadata at `storage/.git` (a directory literally named `.git`) for a
+ * checkout elsewhere: the git dir is not inside its work tree.
+ */
+export function createDetachedDotGitRepo(): {
+  readonly work: string
+  readonly storage: string
+} {
+  const root = makeDir()
+  const work = path.join(root, 'checkout')
+  const storage = path.join(root, 'storage')
+  fs.mkdirSync(work)
+  fs.mkdirSync(storage)
+  git(work, [
+    'init',
+    '-q',
+    '-b',
+    'main',
+    `--separate-git-dir=${path.join(storage, '.git')}`,
+  ])
+  git(work, ['config', 'core.worktree', work])
+  commitFiles(work, { 'README.md': 'base\n' }, 'base')
+  return { work, storage }
+}
+
 export function createSubmoduleRepo(): string {
   const library = createRepo()
   const host = createRepo()

@@ -50,7 +50,7 @@ WORKTREE_DIR=""
 # a linked worktree still lands at the main checkout. Layouts with no such root
 # are refused.
 resolve_main_root() {
-  local common_raw common superproject
+  local common_raw common superproject root toplevel
 
   common_raw=$(git rev-parse --git-common-dir 2> /dev/null) ||
     die 1 not-a-repository "not inside a git repository: $PWD"
@@ -69,7 +69,18 @@ resolve_main_root() {
     die 3 unsupported-layout "separate git directory $common has no main work tree to place .worktrees in"
   fi
 
-  MAIN_ROOT=$(dirname "$common")
+  # A git directory named .git can still belong to a work tree elsewhere
+  # (core.worktree), so the inferred root must be its own work tree. Nothing is
+  # written before this check.
+  root=$(dirname "$common")
+  toplevel=$(git -C "$root" rev-parse --show-toplevel 2> /dev/null) || toplevel=""
+  toplevel=$(cd "$toplevel" 2> /dev/null && pwd -P) || toplevel=""
+  if [ "$toplevel" != "$root" ] ||
+    [ "$(git -C "$root" rev-parse --is-bare-repository 2> /dev/null)" = "true" ]; then
+    die 3 unsupported-layout "$root is not the work tree of $common; there is no main work tree to place .worktrees in"
+  fi
+
+  MAIN_ROOT="$root"
   WORKTREE_DIR="$MAIN_ROOT/.worktrees"
 }
 
@@ -295,7 +306,7 @@ ensure_ignore_file() {
 }
 
 create_worktree() {
-  local branch="" base_arg="" base_ref worktree_path status_out i
+  local branch="" base_arg="" base_ref base_commit worktree_path status_out i
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -336,7 +347,8 @@ create_worktree() {
   fi
 
   if [ -n "$base_arg" ]; then
-    git -C "$MAIN_ROOT" rev-parse --verify --quiet "$base_arg^{commit}" > /dev/null 2>&1 ||
+    # Resolved in the caller's checkout, so HEAD means the caller's HEAD.
+    base_commit=$(git rev-parse --verify --quiet "$base_arg^{commit}" 2> /dev/null) ||
       die 3 base-unresolved "--base $base_arg does not resolve locally; fetch it first"
     base_ref="$base_arg"
     # Local only: the default branch is needed just to pick the trust baseline.
@@ -350,11 +362,12 @@ create_worktree() {
       die 1 fetch-failed "$(printf '%s\n' "$status_out" | head -n 1); pass --base <ref> to skip the fetch"
     fi
     base_ref="origin/$DEFAULT_BRANCH"
+    base_commit="$base_ref"
   fi
 
   ensure_ignore_file
   say "creating $worktree_path from $base_ref"
-  git -C "$MAIN_ROOT" worktree add --quiet --no-track -b "$branch" "$worktree_path" "$base_ref" ||
+  git -C "$MAIN_ROOT" worktree add --quiet --no-track -b "$branch" "$worktree_path" "$base_commit" ||
     die 1 git-failure "git worktree add failed"
 
   status_out=$(git -C "$MAIN_ROOT" status --porcelain -- .worktrees) ||
@@ -396,15 +409,25 @@ trust_after_create() {
 # One line per worktree, tab-separated key=value fields. The main checkout is
 # listed with name=(main).
 list_worktrees() {
-  local i=0 name cwd current
+  local i=0 name cwd current best=-1 best_len=0
   resolve_main_root
   load_worktrees
   cwd=$(pwd -P)
+  # Every linked worktree under .worktrees is also inside the main root, so
+  # only the longest path containing the caller is current.
+  while [ "$i" -lt "${#WT_PATHS[@]}" ]; do
+    if path_within "$cwd" "${WT_PATHS[$i]}" && [ "${#WT_PATHS[$i]}" -gt "$best_len" ]; then
+      best="$i"
+      best_len="${#WT_PATHS[$i]}"
+    fi
+    i=$((i + 1))
+  done
+  i=0
   while [ "$i" -lt "${#WT_PATHS[@]}" ]; do
     name=$(worktree_name "${WT_PATHS[$i]}")
     [ "$i" -eq 0 ] && name="(main)"
     current="no"
-    path_within "$cwd" "${WT_PATHS[$i]}" && current="yes"
+    [ "$i" -eq "$best" ] && current="yes"
     printf 'name=%s\tbranch=%s\tcurrent=%s\tpath=%s\n' \
       "${name:--}" "${WT_BRANCHES[$i]}" "$current" "${WT_PATHS[$i]}"
     i=$((i + 1))

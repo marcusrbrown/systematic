@@ -68,6 +68,12 @@ describe('git-worktree SKILL.md', () => {
     expect(SKILL).toMatch(/`base-unresolved`[^\n]*never assume `main`/i)
   })
 
+  test('the PR recipe fetches into a remote-tracking ref', () => {
+    expect(SKILL).toContain(
+      'git fetch origin +refs/heads/<pr-branch>:refs/remotes/origin/<pr-branch>',
+    )
+  })
+
   test('every block that calls the script anchors it with SKILL_DIR', () => {
     const calling = fencedBlocks(SKILL).filter((block) =>
       block.includes('worktree-manager.sh'),

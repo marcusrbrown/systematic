@@ -47,7 +47,7 @@ On exit 3, report the error and ask. Never retry with `--force`, `rm -rf`, anoth
 
 ## Reviewing a PR
 
-Run `git fetch origin <pr-branch>`, then `create review/<n> --base origin/<pr-branch>`. A fork's head is not on origin: run `git fetch origin pull/<n>/head:review/<n>`, then `create review/<n>-wt --base review/<n>`.
+Run `git fetch origin +refs/heads/<pr-branch>:refs/remotes/origin/<pr-branch>`, then `create review/<n> --base origin/<pr-branch>`. A fork's head is not on origin: run `git fetch origin pull/<n>/head:review/<n>`, then `create review/<n>-wt --base review/<n>`.
 
 ## Cleanup
 
