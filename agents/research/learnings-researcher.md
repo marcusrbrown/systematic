@@ -70,10 +70,10 @@ If the Step 0 listing shows a `patterns/` directory, list it. If `critical-patte
 Run ONE content search across all of `docs/solutions/` for the lifecycle fields, with line output (not files-only):
 
 ```
-content-search: pattern="^(status|superseded_by):" path=docs/solutions/ case_insensitive=false
+content-search: pattern="^(status|superseded_by|stale_reason):" path=docs/solutions/ case_insensitive=false
 ```
 
-Record each file's `status` and `superseded_by` from the matching lines, stripping quotes and surrounding whitespace. A file with no `status` line has no status. This one search covers candidates and successors alike, so no further status reads are needed.
+Record each file's `status`, `superseded_by` and `stale_reason` from the matching lines, stripping quotes and surrounding whitespace. A file with no `status` line has no status. This one search covers candidates and successors alike, so no further status reads are needed.
 
 Then resolve every candidate before scoring:
 
@@ -157,7 +157,7 @@ For each relevant document, return a summary in this format. `Supersedes:` and `
 - **Key Insight**: [The most important takeaway - the thing that prevents repeating the mistake]
 - **Severity**: [severity level]
 - **Supersedes**: [path of each retired doc this one replaces, e.g. "retires docs/solutions/x/old.md"]
-- **Caution**: [when status is stale: say the doc is marked stale and quote its stale_reason if it has one]
+- **Caution**: [when status is stale: say the doc is marked stale and quote the stale_reason from the status map if it has one]
 ```
 
 ## Output Format
