@@ -1,7 +1,7 @@
 ---
 title: "fix: Make the solution-doc contract stack-neutral and consistent"
 type: fix
-status: active
+status: completed
 date: 2026-10-25
 origin: docs/brainstorms/2026-10-25-solution-doc-contract-requirements.md
 ---
@@ -199,7 +199,7 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 
 ## Implementation Units
 
-- [ ] U1. Canonical schema and validator
+- [x] U1. Canonical schema and validator
 
 **Goal:** The canonical schema carries the neutral vocabulary, `legacy_values` and the lifecycle fields. The validator accepts legacy values and enforces `status` and `superseded_by`.
 
@@ -261,7 +261,7 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 - The parity test passes with the new `ce-compound-refresh` copies.
 - Rails and product tokens appear in the canonical schema only inside `legacy_values`, the legacy-marked `rails_version` entry and the legacy paragraph.
 
-- [ ] U2. compound-docs on the canonical contract
+- [x] U2. compound-docs on the canonical contract
 
 **Goal:** `compound-docs` ships byte copies of the canonical contract and a knowledge-track path through its workflow, and no longer writes `patterns/`.
 
@@ -304,7 +304,7 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 - Nothing in the `compound-docs` prose requires `symptoms`, an error message, a stage or a Rails version for a knowledge-track doc.
 - No reference to `patterns/`, `critical-patterns.md`, Required Reading, common-solutions or hotwire-native remains in `compound-docs`.
 
-- [ ] U3. ce-compound and ce-compound-refresh writer prose
+- [x] U3. ce-compound and ce-compound-refresh writer prose
 
 **Goal:** The two writers preserve legacy values, keep lifecycle fields consistent, and file by the canonical mapping.
 
@@ -338,7 +338,7 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 - Both files give the same rule for clearing stale fields, and neither writes `patterns/` or `critical-patterns.md`.
 - The Delete step, the retargeting step and the stale guard each appear once in `ce-compound-refresh`, and the scenario pass in U4 exercises them.
 
-- [ ] U4. learnings-researcher, scenario pass and config-corpus
+- [x] U4. learnings-researcher, scenario pass and config-corpus
 
 **Goal:** The researcher discovers what exists, resolves lifecycle status and reports it. One scenario pass verifies the prose behaviors, and the config-corpus fixtures are regenerated once afterward.
 
@@ -394,7 +394,7 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 - No instruction in the prompt reads a path that may not exist unconditionally.
 - The scenario-pass results are recorded, and the fixtures were regenerated after the last prompt change.
 
-- [ ] U5. Corpus tidy
+- [x] U5. Corpus tidy
 
 **Goal:** Systematic's own corpus satisfies the contract.
 
