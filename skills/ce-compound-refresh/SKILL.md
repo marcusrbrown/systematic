@@ -23,7 +23,7 @@ Check if `$ARGUMENTS` contains `mode:autofix`. If present, strip it from argumen
 - **Skip all user questions.** Never pause for input.
 - **Process all docs in scope.** No scope narrowing questions — if no scope hint was provided, process everything.
 - **Attempt all safe actions:** Keep (no-op), Update (fix references), Consolidate (merge and delete subsumed doc), auto-Delete (unambiguous criteria met), Replace (when evidence is sufficient). If a write succeeds, record it as **applied**. If a write fails (e.g., permission denied), record the action as **recommended** in the report and continue — do not stop or ask for permissions.
-- **Mark as stale when uncertain.** If classification is genuinely ambiguous (Update vs Replace vs Consolidate vs Delete) or Replace evidence is insufficient, mark as stale with `status: stale`, `stale_reason`, and `stale_date` in the frontmatter. If even the stale-marking write fails, include it as a recommendation.
+- **Mark as stale when uncertain.** If classification is genuinely ambiguous (Update vs Replace vs Consolidate vs Delete) or Replace evidence is insufficient, mark as stale with `status: stale`, `stale_reason`, and `stale_date` in the frontmatter (subject to the stale guard in Lifecycle Consistency). If even the stale-marking write fails, include it as a recommendation.
 - **Use conservative confidence.** In interactive mode, borderline cases get a user question. In autofix mode, borderline cases get marked stale. Err toward stale-marking over incorrect action.
 - **Always generate a report.** The report is the primary deliverable. It has two sections: **Applied** (actions that were successfully written) and **Recommended** (actions that could not be written, with full rationale so a human can apply them or run the skill interactively). The report structure is the same regardless of what permissions were granted — the only difference is which section each action lands in.
 
@@ -82,9 +82,10 @@ For each candidate artifact, classify it into one of five outcomes:
    - the user has provided enough concrete replacement context to document the successor honestly, or
    - the codebase investigation found the current approach and can document it as the successor, or
    - newer docs, pattern docs, PRs, or issues provide strong successor evidence.
-8. **Delete when the code is gone.** If the referenced code, controller, or workflow no longer exists in the codebase and no successor can be found, delete the file — don't default to Keep just because the general advice is still "sound." A learning about a deleted feature misleads readers into thinking that feature still exists. When in doubt between Keep and Delete, ask the user (in interactive mode) or mark as stale (in autofix mode). But missing referenced files with no matching code is **not** a doubt case — it is strong, unambiguous Delete evidence. Auto-delete it.
+8. **Delete when the code is gone.** If the referenced code, module, or workflow no longer exists in the codebase and no successor can be found, delete the file — don't default to Keep just because the general advice is still "sound." A learning about a deleted feature misleads readers into thinking that feature still exists. When in doubt between Keep and Delete, ask the user (in interactive mode) or mark as stale (in autofix mode). But missing referenced files with no matching code is **not** a doubt case — it is strong, unambiguous Delete evidence. Auto-delete it.
 9. **Evaluate document-set design, not just accuracy.** In addition to checking whether each doc is accurate, evaluate whether it is still the right unit of knowledge. If two or more docs overlap heavily, determine whether they should remain separate, be cross-scoped more clearly, or be consolidated into one canonical document. Redundant docs are dangerous because they drift silently — two docs saying the same thing will eventually say different things.
 10. **Delete, don't archive.** There is no `_archived/` directory. When a doc is no longer useful, delete it. Git history preserves every deleted file — that is the archive. A dedicated archive directory creates problems: archived docs accumulate, pollute search results, and nobody reads them. If someone needs a deleted doc, `git log --diff-filter=D -- docs/solutions/` will find it.
+11. **Preserve legacy values.** Existing docs may carry values that `references/schema.yaml` lists under `legacy_values` (older `component` values, the `root_cause` and `resolution_type` values listed there) and the version field that the schema marks LEGACY. They are valid. Do not report them as off-vocabulary and do not rewrite them. Only a new doc, such as a Replace successor, reads the offered `values`.
 
 ## Scope Selection
 
@@ -195,7 +196,7 @@ Three guidelines that are easy to get wrong:
 
 ## Phase 1.5: Investigate Pattern Docs
 
-After reviewing the underlying learning docs, investigate any relevant pattern docs under `docs/solutions/patterns/`.
+After reviewing the underlying learning docs, investigate any relevant pattern docs under `docs/solutions/patterns/` **only if that directory exists**. It is a legacy location: no writer creates it, so most repos never have one. Treat it as read-only. Use it as evidence and report findings about it, but do not edit, delete or create files there, and do not create the directory. If it does not exist, skip this phase.
 
 Pattern docs are high-leverage — a stale pattern is more dangerous than a stale individual learning because future work may treat it as broadly applicable guidance. Evaluate whether the generalized rule still holds given the refreshed state of the learnings it depends on.
 
@@ -290,7 +291,7 @@ After gathering evidence, assign one recommended action.
 
 ### Keep
 
-The learning is still accurate and useful. Do not edit the file — report that it was reviewed and remains trustworthy. Only add `last_refreshed` if you are already making a meaningful update for another reason.
+The learning is still accurate and useful. Do not edit the file — report that it was reviewed and remains trustworthy. Only add `last_refreshed` if you are already making a meaningful update for another reason. The one exception is a doc that carries a stale marker: see Lifecycle Consistency.
 
 ### Update
 
@@ -328,7 +329,7 @@ By the time you identify a Replace candidate, Phase 1 investigation has already 
 
 - **Sufficient evidence** — you understand both what the old learning recommended AND what the current approach is. The investigation found the current code patterns, the new file locations, the changed architecture. → Proceed to write the replacement (see Phase 4 Replace Flow).
 - **Insufficient evidence** — the drift is so fundamental that you cannot confidently document the current approach. The entire subsystem was replaced, or the new architecture is too complex to understand from a file scan alone. → Mark as stale in place:
-   - Add `status: stale`, `stale_reason: [what you found]`, `stale_date: YYYY-MM-DD` to the frontmatter
+   - Add `status: stale`, `stale_reason: [what you found]`, `stale_date: YYYY-MM-DD` to the frontmatter (subject to the stale guard in Lifecycle Consistency)
    - Report what evidence you found and what is missing
    - Recommend the user run `ce:compound` after their next encounter with that area, when they have fresh problem-solving context
 
@@ -347,7 +348,7 @@ Action: delete the file. No archival directory, no metadata — just delete it. 
 
 When a learning's referenced files are gone, that is strong evidence — but only that the **implementation** is gone. Before deleting, reason about whether the **problem the learning solves** is still a concern in the codebase:
 
-- A learning about session token storage where `auth_token.rb` is gone — does the application still handle session tokens? If so, the concept persists under a new implementation. That is Replace, not Delete.
+- A learning about session token storage where `src/auth/auth-token.ts` is gone — does the application still handle session tokens? If so, the concept persists under a new implementation. That is Replace, not Delete.
 - A learning about a deprecated API endpoint where the entire feature was removed — the problem domain is gone. That is Delete.
 
 Do not search mechanically for keywords from the old learning. Instead, understand what problem the learning addresses, then investigate whether that problem domain still exists in the codebase. The agent understands concepts — use that understanding to look for where the problem lives now, not where the old code used to be.
@@ -358,13 +359,13 @@ Do not search mechanically for keywords from the old learning. Instead, understa
 - the learning is fully superseded by a clearly better successor AND the old doc adds no distinct value
 - the document is plainly redundant and adds nothing the canonical doc doesn't already say
 
-If the implementation is gone but the problem domain persists (the app still does auth, still processes payments, still handles migrations), classify as **Replace** — the problem still matters and the current approach should be documented.
+If the implementation is gone but the problem domain persists (the app still does auth, still sends notifications, still handles migrations), classify as **Replace** — the problem still matters and the current approach should be documented.
 
 Do not keep a learning just because its general advice is "still sound" — if the specific code it references is gone, the learning misleads readers. But do not delete a learning whose problem domain is still active — that knowledge gap should be filled with a replacement.
 
 ## Pattern Guidance
 
-Apply the same five outcomes (Keep, Update, Consolidate, Replace, Delete) to pattern docs, but evaluate them as **derived guidance** rather than incident-level learnings. Key differences:
+Apply the same five outcomes (Keep, Update, Consolidate, Replace, Delete) to pattern docs, but evaluate them as **derived guidance** rather than incident-level learnings. This covers broad pattern or convention docs filed anywhere under `docs/solutions/` by the canonical category mapping. It does not cover a legacy `docs/solutions/patterns/` directory, which stays read-only (see Phase 1.5). Key differences:
 
 - **Keep**: the underlying learnings still support the generalized rule and examples remain representative
 - **Update**: the rule holds but examples, links, scope, or supporting references drifted
@@ -469,7 +470,7 @@ Apply in-place edits only when the solution is still substantively correct.
 
 Examples of valid in-place updates:
 
-- Rename `app/models/auth_token.rb` reference to `app/models/session_token.rb`
+- Rename `src/auth/auth-token.ts` reference to `src/auth/session-token.ts`
 - Update `module: AuthToken` to `module: SessionToken`
 - Fix outdated links to related docs
 - Refresh implementation notes after a directory move
@@ -485,6 +486,8 @@ Examples that should **not** be in-place updates:
 
 Those cases require **Replace**, not Update.
 
+An Update also clears any stale marker on the doc: see Lifecycle Consistency. Preserve legacy values (Core Rule 11).
+
 ### Consolidate Flow
 
 The orchestrator handles consolidation directly (no subagent needed — the docs are already read and the merge is a focused edit). Process Consolidate candidates by topic cluster. For each cluster identified in Phase 1.75:
@@ -492,7 +495,7 @@ The orchestrator handles consolidation directly (no subagent needed — the docs
 1. **Confirm the canonical doc** — the broader, more current, more accurate doc in the cluster.
 2. **Extract unique content** from the subsumed doc(s) — anything the canonical doc does not already cover. This might be specific edge cases, additional prevention rules, or alternative debugging approaches.
 3. **Merge unique content** into the canonical doc in a natural location. Do not just append — integrate it where it logically belongs. If the unique content is small (a bullet point, a sentence), inline it. If it is a substantial sub-topic, add it as a clearly labeled section.
-4. **Update cross-references** — if any other docs reference the subsumed doc, update those references to point to the canonical doc.
+4. **Update cross-references** — if any other docs reference the subsumed doc, update those references to point to the canonical doc. Retarget any `superseded_by` pointer to the subsumed doc as described in Lifecycle Consistency.
 5. **Delete the subsumed doc.** Do not archive it, do not add redirect metadata — just delete the file. Git history preserves it.
 
 If a doc cluster has 3+ overlapping docs, process pairwise: consolidate the two most overlapping docs first, then evaluate whether the merged result should be consolidated with the next doc.
@@ -516,14 +519,14 @@ Do not let replacement subagents invent frontmatter fields, enum values, or sect
 1. Spawn a single subagent to write the replacement learning. Pass it:
    - The old learning's full content
    - A summary of the investigation evidence (what changed, what the current code does, why the old guidance is misleading)
-   - The target path and category (same category as the old learning unless the category itself changed)
+   - The target path. File the new learning in the directory that the category mapping in `references/yaml-schema.md` gives for its `problem_type`, not simply the old learning's directory. Create that directory on first use (`mkdir -p`).
    - The relevant contents of the three support files listed above
-2. The subagent writes the new learning using the support files as the source of truth: `references/schema.yaml` for frontmatter fields and enum values, `references/yaml-schema.md` for category mapping, and `assets/resolution-template.md` for section order. It should use dedicated file search and read tools if it needs additional context beyond what was passed.
-3. After the subagent completes, the orchestrator deletes the old learning file. The new learning's frontmatter may include `supersedes: [old learning filename]` for traceability, but this is optional — the git history and commit message provide the same information.
+2. The subagent writes the new learning using the support files as the source of truth, and uses only the offered `values` for enum fields, never a `legacy_values` entry: `references/schema.yaml` for frontmatter fields and enum values, `references/yaml-schema.md` for category mapping, and `assets/resolution-template.md` for section order. It should use dedicated file search and read tools if it needs additional context beyond what was passed.
+3. After the subagent completes, the orchestrator retargets any `superseded_by` pointer to the old learning at the new one (Lifecycle Consistency), then deletes the old learning file. Do not write a `supersedes` field or any other back-pointer into the new learning — the git history and commit message record the replacement.
 
 **When evidence is insufficient:**
 
-1. Mark the learning as stale in place:
+1. Mark the learning as stale in place (subject to the stale guard in Lifecycle Consistency):
    - Add to frontmatter: `status: stale`, `stale_reason: [what you found]`, `stale_date: YYYY-MM-DD`
 2. Report what evidence was found and what is missing
 3. Recommend the user run `ce:compound` after their next encounter with that area
@@ -531,6 +534,17 @@ Do not let replacement subagents invent frontmatter fields, enum values, or sect
 ### Delete Flow
 
 Delete only when a learning is clearly obsolete, redundant (with no unique content to merge), or its problem domain is gone. Do not delete a document just because it is old — age alone is not a signal.
+
+Before deleting, apply the Delete cascade in Lifecycle Consistency.
+
+### Lifecycle Consistency
+
+The lifecycle fields (`status`, `stale_reason`, `stale_date`, `superseded_by`, `superseded_date`) must stay consistent after every action. In a user repo this prose is the only protection, since the validator runs only in Systematic's own CI. Find pointers with a content search for `superseded_by:` under `docs/solutions/`. A `superseded_by` value is a repo-root path such as `docs/solutions/best-practices/example.md`.
+
+- **Clear stale markers.** A Keep or Update on a doc with `status: stale` removes `status`, `stale_reason` and `stale_date` from its frontmatter. The review just showed the doc is accurate, so the marker would mislead. This is the one case where Keep writes to the file. Leave a doc with no stale marker untouched.
+- **Stale guard.** Never overwrite `status: superseded` with `status: stale`. A superseded doc is already retired. Skip every stale-marking write for it, leave its fields unchanged, and list it in the report as superseded and left unchanged.
+- **Retarget before removing.** Before Consolidate or Replace deletes a file, find every doc whose `superseded_by` names that file and set it to the surviving doc's repo-root path (the canonical doc for Consolidate, the new learning for Replace). Retarget first, then delete, so no pointer is ever left dangling. Name each retargeted doc in the report.
+- **Delete cascade.** A plain Delete leaves no surviving doc, so a superseded doc pointing at the deleted file would be retired with its replacement gone. Find every doc whose `superseded_by` names the file being deleted and name each in the Delete action. Delete them in the same action, and repeat the check for each of those. In interactive mode, show the list and ask the user to confirm before deleting anything. In autofix mode, delete them and list them under the Delete entry in the report.
 
 ## Output Format
 
@@ -558,6 +572,9 @@ Then for EVERY file processed, list:
 - What evidence was found -- tag any memory-sourced findings with "(auto memory [claude])" to distinguish them from codebase-sourced evidence
 - What action was taken (or recommended)
 - For Consolidate: which doc was canonical, what unique content was merged, what was deleted
+- For Consolidate and Replace: any docs whose `superseded_by` was retargeted to the surviving doc
+- For Delete: any superseded docs deleted with it
+- For a superseded doc skipped by the stale guard: its path, listed as superseded and left unchanged
 
 For **Keep** outcomes, list them under a reviewed-without-edits section so the result is visible without creating git churn.
 
@@ -571,7 +588,7 @@ Split actions into two sections:
 - For each **Updated** file: the file path, what references were fixed, and why
 - For each **Consolidated** cluster: the canonical doc, what unique content was merged from each subsumed doc, and the subsumed docs that were deleted
 - For each **Replaced** file: what the old learning recommended vs what the current code does, and the path to the new successor
-- For each **Deleted** file: the file path and why it was removed (problem domain gone, fully redundant, etc.)
+- For each **Deleted** file: the file path, why it was removed (problem domain gone, fully redundant, etc.), and the superseded docs deleted with it
 - For each **Marked stale** file: the file path, what evidence was found, and why it was ambiguous
 
 **Recommended** (actions that could not be written — e.g., permission denied):
