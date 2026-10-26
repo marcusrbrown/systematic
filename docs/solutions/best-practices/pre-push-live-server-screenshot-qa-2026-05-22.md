@@ -106,6 +106,6 @@ Catching a redirect bug in dev costs five minutes. Catching it in production cos
 
 ## Related
 
-- [iterative-oracle-plan-review](../workflow-patterns/iterative-oracle-plan-review.md) — the generic verification-pattern precedent for "review the live thing, not the spec for the thing."
+- [iterative-oracle-plan-review](../workflow-issues/iterative-oracle-plan-review.md) — the generic verification-pattern precedent for "review the live thing, not the spec for the thing."
 - [astro-redirect-destinations-missing-base-prefix-2026-05-22](../integration-issues/astro-redirect-destinations-missing-base-prefix-2026-05-22.md) — the canonical example of build-pass / production-404.
 - [mdx-heading-anchor-crashes-astro-build-2026-05-22](../build-errors/mdx-heading-anchor-crashes-astro-build-2026-05-22.md) — second build-class example from the same branch.

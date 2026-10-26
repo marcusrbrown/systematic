@@ -172,7 +172,7 @@ Wrong change — strips phantom-validation coverage and breaks corpus convention
 
 ## Related
 
-- `docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md`
+- `docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md`
   — the origin of `checkReferenceIntegrity`; same reference-integrity family, but
   from the phantom-ref angle. This doc is its complement: the qualified form it
   validates is the form to *preserve*, not strip.

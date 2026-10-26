@@ -4,7 +4,7 @@ date: 2026-04-17
 module: ce-brainstorm-to-ship-pipeline
 problem_type: workflow_issue
 severity: medium
-category: workflow-patterns
+category: workflow-issues
 component: development_workflow
 tags:
   - workflow-patterns
@@ -25,8 +25,8 @@ resolution_type: workflow_improvement
 confidence: verified
 related:
   - docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md
-  - docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md
-  - docs/solutions/workflow-patterns/iterative-oracle-plan-review.md
+  - docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md
+  - docs/solutions/workflow-issues/iterative-oracle-plan-review.md
 ---
 
 # Truth Reset: Narrow Initiatives Outperform Bundled Ones, and Document-Review Convergence Is a Scope Signal
