@@ -4744,6 +4744,83 @@ describe('real schema.yaml — vocabulary contract', () => {
   })
 })
 
+describe('checkSolutionSchema — circular YAML aliases', () => {
+  // `&a [*a]` is valid YAML that parses to an array containing itself, which
+  // JSON.stringify cannot serialize. Each check that echoes a bad value in its
+  // message must report the field instead of aborting the whole run.
+  function validate(...overrides: string[]) {
+    const lines = KNOWLEDGE_BASE.filter(
+      (line) => !overrides.some((o) => line.startsWith(`${o.split(':')[0]}:`)),
+    )
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/doc.md',
+        solutionFrontmatter(...lines, ...overrides),
+      )
+      return checkSolutionSchema(root, ['docs/solutions/best-practices/doc.md'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  describe.each(['module', 'date', 'problem_type', 'component', 'severity'])(
+    'required field %s (checkSolutionRequiredField)',
+    (field) => {
+      test('a circular value reports the field without throwing', () => {
+        const violations = validate(`${field}: &a [*a]`)
+        expect(violations).toEqual([
+          expect.objectContaining({ rule: 'schema-violation', field }),
+        ])
+        expect(violations[0]?.message).toContain(
+          `\`${field}\` must be a non-empty string, got an array`,
+        )
+      })
+    },
+  )
+
+  test('a mapping in a required field names its type', () => {
+    const violations = validate('module: { a: 1 }')
+    expect(violations).toEqual([expect.objectContaining({ field: 'module' })])
+    expect(violations[0]?.message).toContain('got an object')
+  })
+
+  describe.each(['root_cause', 'resolution_type', 'status'])(
+    'optional enum field %s (checkSolutionEnumField)',
+    (field) => {
+      test('a circular value reports the field without throwing', () => {
+        const violations = validate(`${field}: &a [*a]`)
+        expect(violations).toEqual([
+          expect.objectContaining({ rule: 'schema-violation', field }),
+        ])
+        expect(violations[0]?.message).toContain(
+          `\`${field}\` value an array is not in the allowed vocabulary`,
+        )
+      })
+    },
+  )
+
+  test('a string in an enum field still echoes the offending value', () => {
+    const violations = validate('status: archived')
+    expect(violations[0]?.message).toContain('value "archived" is not in')
+  })
+
+  test('a null enum value is reported as null', () => {
+    const violations = validate('status:')
+    expect(violations[0]?.message).toContain('value null is not in')
+  })
+
+  test('a string in the date field still echoes the offending value (checkSolutionDate)', () => {
+    const violations = validate('date: 05/17/2026')
+    expect(violations).toEqual([expect.objectContaining({ field: 'date' })])
+    expect(violations[0]?.message).toContain(
+      'value "05/17/2026" does not match',
+    )
+  })
+})
+
 describe('loadCompoundSchema — legacy_values and status shape', () => {
   function loadWith(mutate: (schemaText: string) => string): void {
     const root = makeFixtureRepo()
@@ -4970,7 +5047,44 @@ describe('checkSolutionLifecycle', () => {
         }),
       ])
       expect(violations[0]?.message).toContain('not a string')
+      expect(violations[0]?.message).toContain('an array')
     })
+
+    test('a circular superseded_by (valid YAML anchor) fails without throwing', () => {
+      // `&loop [*loop]` parses to an array that contains itself, which
+      // JSON.stringify cannot serialize. The report must survive it.
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', 'superseded_by: &loop [*loop]'),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'superseded-by-not-a-string',
+        }),
+      ])
+      expect(violations[0]?.message).toContain('not a string')
+      expect(violations[0]?.message).toContain('an array')
+    })
+
+    test.each([
+      ['a mapping', 'superseded_by: { path: x.md }', 'an object'],
+      ['a number', 'superseded_by: 42', 'a number'],
+      ['a boolean', 'superseded_by: true', 'a boolean'],
+    ])(
+      '%s superseded_by names its type in the not-a-string cause',
+      (_label, line, type) => {
+        const violations = lifecycle({
+          [OLD]: doc('status: superseded', line),
+        })
+        expect(violations).toEqual([
+          expect.objectContaining({
+            file: OLD,
+            class: 'superseded-by-not-a-string',
+          }),
+        ])
+        expect(violations[0]?.message).toContain(`is not a string, got ${type}`)
+      },
+    )
 
     test('an empty-string superseded_by fails with an empty cause', () => {
       const violations = lifecycle({

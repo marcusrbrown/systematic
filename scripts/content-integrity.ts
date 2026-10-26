@@ -1579,6 +1579,31 @@ function pushSchemaViolation(
 }
 
 /**
+ * Bounded description of a parsed YAML value's type. Messages that echo a
+ * frontmatter value must use this (or `describeYamlValue`) instead of
+ * `JSON.stringify`, because valid YAML anchors can build a circular structure
+ * that `JSON.stringify` throws on and so aborts the whole report.
+ */
+function describeYamlValueType(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'an array'
+  if (typeof value === 'object') return 'an object'
+  if (typeof value === 'number') return 'a number'
+  if (typeof value === 'boolean') return 'a boolean'
+  return typeof value
+}
+
+/**
+ * Describes a parsed YAML value for a violation message: a string is quoted
+ * so the author sees exactly what was written, anything else is named by type.
+ */
+function describeYamlValue(value: unknown): string {
+  return typeof value === 'string'
+    ? JSON.stringify(value)
+    : describeYamlValueType(value)
+}
+
+/**
  * Checks presence of a shared required field. Returns true when present as a
  * non-empty (post-trim) string, matching the schema's declared `type: string`.
  *
@@ -1602,7 +1627,7 @@ function checkSolutionRequiredField(
   const isPresentWrongShape =
     Object.hasOwn(data, field) && value !== null && value !== ''
   const message = isPresentWrongShape
-    ? `Solution-doc frontmatter field \`${field}\` must be a non-empty string, got ${JSON.stringify(value)}.`
+    ? `Solution-doc frontmatter field \`${field}\` must be a non-empty string, got ${describeYamlValue(value)}.`
     : `Solution-doc frontmatter is missing required field \`${field}\`.`
   pushSchemaViolation(
     relPath,
@@ -1633,7 +1658,7 @@ function checkSolutionEnumField(
   pushSchemaViolation(
     relPath,
     field,
-    `Solution-doc frontmatter field \`${field}\` value ${JSON.stringify(value)} is not in the allowed vocabulary defined in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    `Solution-doc frontmatter field \`${field}\` value ${describeYamlValue(value)} is not in the allowed vocabulary defined in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     `Use one of the enum values defined for \`${field}\` in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     violations,
   )
@@ -1651,7 +1676,7 @@ function checkSolutionDate(
   pushSchemaViolation(
     relPath,
     'date',
-    `Solution-doc frontmatter field \`date\` value ${JSON.stringify(value)} does not match the required pattern ${datePattern.source}.`,
+    `Solution-doc frontmatter field \`date\` value ${describeYamlValue(value)} does not match the required pattern ${datePattern.source}.`,
     `Use YYYY-MM-DD format for \`date\` per ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     violations,
   )
@@ -1930,7 +1955,7 @@ function classifySupersededBy(
   if (typeof target !== 'string') {
     return {
       class: 'superseded-by-not-a-string',
-      message: `Superseded solution doc \`superseded_by\` is not a string, got ${JSON.stringify(target)}; use a single repo-root path.`,
+      message: `Superseded solution doc \`superseded_by\` is not a string, got ${describeYamlValueType(target)}; use a single repo-root path.`,
     }
   }
   if (target.trim() === '') {
