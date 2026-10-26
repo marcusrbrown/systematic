@@ -193,6 +193,9 @@ Caution: <text>
 #### 2. [Title]
 ...
 
+### Overlap Assessment
+Overlap: <repo-root path> | problem=match|no-match root_cause=match|no-match solution=match|no-match files=match|no-match prevention=match|no-match | count=N | score=High|Moderate|Low
+
 ### Recommendations
 - [Specific actions to take based on learnings]
 - [Patterns to follow]
@@ -201,6 +204,8 @@ Caution: <text>
 ### No Matches
 [If no relevant learnings found, explicitly state this. Say so when docs/solutions/ does not exist.]
 ```
+
+**Overlap lines.** Include the Overlap Assessment section only when the caller asks for an overlap assessment against a new doc. Write one `Overlap:` line per compared doc. Judge each of the five dimensions (problem statement, root cause, solution approach, referenced files, prevention rules) as `match` or `no-match` first, then count the matches. The score follows the count: 4-5 is High, 2-3 is Moderate, 0-1 is Low. If the score you would write disagrees with the count, the count wins.
 
 ## Efficiency Guidelines
 
