@@ -52,7 +52,7 @@ export interface ManifestEntry {
  *   - agents/review/project-standards-reviewer.md — CRITICAL: requires orchestrator <standards-paths>.
  *   - agents/review/kieran-typescript-reviewer.md — WARNING: excluded by plan recommendation.
  *   - agents/research/slack-researcher.md — CRITICAL: requires Slack MCP environment.
- *   - agents/research/learnings-researcher.md — CRITICAL: references Systematic skill paths.
+ *   - agents/research/learnings-researcher.md — not curated: it reads the host project's docs/solutions/ layout, so curating it is a separate decision.
  *   - agents/workflow/pr-comment-resolver.md — WARNING: "Spawned by the resolve-pr-feedback skill".
  */
 export interface CuratedPersonaEntry {
