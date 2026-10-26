@@ -112,7 +112,7 @@ Launch research subagents. Each returns text data to the orchestrator.
    - **What Didn't Work**: Failed investigation attempts and why they failed
    - **Solution**: The actual fix with code examples (before/after when applicable)
    - **Why This Works**: Root cause explanation and why the solution addresses it
-   - **Prevention**: Strategies to avoid recurrence, best practices, and test cases. Include concrete code examples where applicable (e.g., gem configurations, test assertions, linting rules)
+   - **Prevention**: Strategies to avoid recurrence, best practices, and test cases. Include concrete code examples where applicable (e.g., dependency configurations, test assertions, linting rules)
 
    **Knowledge track output sections:**
 
@@ -176,9 +176,11 @@ The orchestrating agent (main conversation) performs these steps:
 
    When updating an existing doc, preserve its file path and frontmatter structure. Update the solution, code examples, prevention tips, and any stale references. Add a `last_updated: YYYY-MM-DD` field to the frontmatter. Do not change the title unless the problem framing has materially shifted.
 
+Keep the doc's lifecycle fields consistent. If it carries `status: stale`, remove `status`, `stale_reason` and `stale_date`, because the update just refreshed it. Never touch `status: superseded` or `superseded_by`. Existing legacy values (older `component`, `root_cause` and `resolution_type` values listed under `legacy_values` in `references/schema.yaml`, and the version field the schema marks LEGACY) are preserved and never rewritten; only new docs read the offered `values`.
+
 3. Assemble complete markdown file from the collected pieces, reading `assets/resolution-template.md` for the section structure of new docs
 4. Validate YAML frontmatter against `references/schema.yaml`
-5. Create directory if needed: `mkdir -p docs/solutions/[category]/`
+5. Create the category directory on first use: `mkdir -p docs/solutions/[category]/`, where `[category]` is the directory the mapping in `references/yaml-schema.md` gives for the `problem_type`
 6. Write the file: either the updated existing doc or the new `docs/solutions/[category]/[filename].md`
 
 When creating a new doc, preserve the section order from `assets/resolution-template.md` unless the user explicitly asks for a different structure.
@@ -218,14 +220,14 @@ When invoking or recommending `systematic:ce-compound-refresh`, be explicit abou
 - **Specific file** when one learning or pattern doc is the likely stale artifact
 - **Module or component name** when several related docs may need review
 - **Category name** when the drift is concentrated in one solutions area
-- **Pattern filename or pattern topic** when the stale guidance lives in `docs/solutions/patterns/`
+- **Pattern topic** when the stale guidance is a broad pattern or convention doc
 
 Examples:
 
 - `/systematic:ce-compound-refresh plugin-versioning-requirements`
-- `/systematic:ce-compound-refresh payments`
+- `/systematic:ce-compound-refresh authentication`
 - `/systematic:ce-compound-refresh performance-issues`
-- `/systematic:ce-compound-refresh critical-patterns`
+- `/systematic:ce-compound-refresh api-conventions`
 
 A single scope hint may still expand to multiple related docs when the change is cross-cutting within one domain, category, or pattern area.
 
@@ -298,7 +300,7 @@ The orchestrator (main conversation) performs ALL of the following in one sequen
 
 1. **Extract from conversation**: Identify the problem and solution from conversation history. Also scan the "user's auto-memory" block injected into your system prompt, if present (OpenCode only) -- use any relevant notes as supplementary context alongside conversation history. Tag any memory-sourced content incorporated into the final doc with "(auto memory [claude])"
 2. **Classify**: Read `references/schema.yaml` and `references/yaml-schema.md`, then determine track (bug vs knowledge), category, and filename
-3. **Write minimal doc**: Create `docs/solutions/[category]/[filename].md` using the appropriate track template from `assets/resolution-template.md`, with:
+3. **Write minimal doc**: Create the category directory on first use (`mkdir -p`), then create `docs/solutions/[category]/[filename].md` using the appropriate track template from `assets/resolution-template.md`, with:
    - YAML frontmatter with track-appropriate fields
    - Bug track: Problem, root cause, solution with key code snippets, one prevention tip
    - Knowledge track: Context, guidance with key examples, one applicability note
@@ -391,7 +393,7 @@ Knowledge track:
 Auto memory: 2 relevant entries used as supplementary evidence
 
 Subagent Results:
-  ✓ Context Analyzer: Identified performance_issue in brief_system, category: performance-issues/
+  ✓ Context Analyzer: Identified performance_issue in report_service, category: performance-issues/
   ✓ Solution Extractor: 3 code fixes, prevention strategies
   ✓ Related Docs Finder: 2 related issues
   ✓ Session History: 3 prior sessions on same branch, 2 failed approaches surfaced
@@ -402,10 +404,10 @@ Specialized Agent Reviews (Auto-Triggered):
   ✓ code-simplicity-reviewer: Solution is appropriately minimal
 
 File created:
-- docs/solutions/performance-issues/n-plus-one-brief-generation.md
+- docs/solutions/performance-issues/n-plus-one-report-generation.md
 
 This documentation will be searchable for future reference when similar
-issues occur in the Email Processing or Brief System modules.
+issues occur in the Report Service or Export modules.
 
 What's next?
 1. Continue workflow (recommended)
@@ -435,8 +437,8 @@ File updated:
 
 This creates a compounding knowledge system:
 
-1. First time you solve "N+1 query in brief generation" → Research (30 min)
-2. Document the solution → docs/solutions/performance-issues/n-plus-one-briefs.md (5 min)
+1. First time you solve "N+1 query in report generation" → Research (30 min)
+2. Document the solution → docs/solutions/performance-issues/n-plus-one-report-queries.md (5 min)
 3. Next time similar issue occurs → Quick lookup (2 min)
 4. Knowledge compounds → Team gets smarter
 

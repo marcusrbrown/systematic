@@ -1,0 +1,331 @@
+# Documentation schema for learnings written by ce:compound
+# Treat this as the canonical frontmatter contract for docs/solutions/.
+#
+# The schema has two tracks based on problem_type:
+#   Bug track  — problem_type is a defect or failure (build_error, test_failure, etc.)
+#   Knowledge track — problem_type is guidance or practice (best_practice, workflow_issue, etc.)
+#
+# Both tracks share the same required core fields. The tracks differ in which
+# additional fields are required vs optional (see track_rules below).
+
+# --- Track classification ---------------------------------------------------
+tracks:
+  bug:
+    description: "Defects, failures, and errors that were diagnosed and fixed"
+    problem_types:
+      - build_error
+      - test_failure
+      - runtime_error
+      - performance_issue
+      - database_issue
+      - security_issue
+      - ui_bug
+      - integration_issue
+      - logic_error
+  knowledge:
+    description: "Best practices, workflow improvements, patterns, conventions, and documentation"
+    problem_types:
+      - best_practice
+      - documentation_gap
+      - workflow_issue
+      - developer_experience
+      - architecture_pattern
+      - design_pattern
+      - tooling_decision
+      - convention
+
+# --- Fields required by BOTH tracks -----------------------------------------
+required_fields:
+  module:
+    type: string
+    description: "Module or area affected"
+
+  date:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date documented (YYYY-MM-DD)"
+
+  problem_type:
+    type: enum
+    values:
+      - build_error
+      - test_failure
+      - runtime_error
+      - performance_issue
+      - database_issue
+      - security_issue
+      - ui_bug
+      - integration_issue
+      - logic_error
+      - developer_experience
+      - workflow_issue
+      - best_practice
+      - documentation_gap
+      - architecture_pattern
+      - design_pattern
+      - tooling_decision
+      - convention
+    description: >-
+      Primary category — determines track (bug vs knowledge).
+      Prefer the narrowest applicable value; best_practice is the fallback
+      when no narrower knowledge-track value fits.
+      architecture_pattern: structural decisions about how components relate.
+      design_pattern: reusable solutions to recurring design problems.
+      tooling_decision: choices about tools, libraries, or build infrastructure.
+      convention: agreed-upon naming, formatting, or style rules.
+
+  component:
+    type: enum
+    values:
+      - backend
+      - frontend
+      - api
+      - database
+      - background_job
+      - authentication
+      - infrastructure
+      - configuration
+      - dependencies
+      - tooling
+      - development_workflow
+      - testing_framework
+      - documentation
+      - assistant
+    # Accepted by validators and refresh, never offered to writers. Existing
+    # docs that carry these values keep passing; do not rewrite them. Only new
+    # docs read `values` above.
+    legacy_values:
+      - rails_model
+      - rails_controller
+      - rails_view
+      - service_object
+      - frontend_stimulus
+      - hotwire_turbo
+      - email_processing
+      - brief_system
+      - payments
+    description: "Component involved"
+
+  severity:
+    type: enum
+    values:
+      - critical
+      - high
+      - medium
+      - low
+    description: "Impact severity"
+
+# --- Track-specific rules ----------------------------------------------------
+track_rules:
+  bug:
+    required:
+      symptoms:
+        type: array[string]
+        min_items: 1
+        max_items: 5
+        description: "Observable symptoms such as errors or broken behavior"
+      root_cause:
+        type: enum
+        values:
+          - missing_include
+          - missing_index
+          - wrong_api
+          - scope_issue
+          - thread_violation
+          - async_timing
+          - memory_leak
+          - config_error
+          - logic_error
+          - test_isolation
+          - missing_validation
+          - missing_permission
+          - missing_workflow_step
+          - inadequate_documentation
+          - missing_tooling
+          - incomplete_setup
+        legacy_values:
+          - missing_association
+        description: >-
+          Fundamental technical cause of the problem.
+          missing_include: a missing eager load or an N+1 query.
+          wrong_api: an API used in a way that does not fit the situation.
+      resolution_type:
+        type: enum
+        values:
+          - code_fix
+          - migration
+          - config_change
+          - test_fix
+          - dependency_update
+          - environment_setup
+          - workflow_improvement
+          - documentation_update
+          - tooling_addition
+        legacy_values:
+          - seed_data_update
+        description: "Type of fix applied"
+
+  knowledge:
+    optional:
+      applies_when:
+        type: array[string]
+        max_items: 5
+        description: "Conditions or situations where this guidance applies"
+      symptoms:
+        type: array[string]
+        max_items: 5
+        description: "Observable gaps or friction that prompted this guidance (optional for knowledge track)"
+      root_cause:
+        type: enum
+        values:
+          - missing_include
+          - missing_index
+          - wrong_api
+          - scope_issue
+          - thread_violation
+          - async_timing
+          - memory_leak
+          - config_error
+          - logic_error
+          - test_isolation
+          - missing_validation
+          - missing_permission
+          - missing_workflow_step
+          - inadequate_documentation
+          - missing_tooling
+          - incomplete_setup
+        legacy_values:
+          - missing_association
+        description: >-
+          Underlying cause, if there is a specific one (optional for knowledge track).
+          missing_include: a missing eager load or an N+1 query.
+          wrong_api: an API used in a way that does not fit the situation.
+      resolution_type:
+        type: enum
+        values:
+          - code_fix
+          - migration
+          - config_change
+          - test_fix
+          - dependency_update
+          - environment_setup
+          - workflow_improvement
+          - documentation_update
+          - tooling_addition
+        legacy_values:
+          - seed_data_update
+        description: "Type of change, if applicable (optional for knowledge track)"
+
+# --- Fields optional for BOTH tracks ----------------------------------------
+optional_fields:
+  related_components:
+    type: array[string]
+    description: "Other components involved"
+
+  tags:
+    type: array[string]
+    max_items: 8
+    description: "Search keywords, lowercase and hyphen-separated"
+
+  title:
+    type: string
+    description: "Human-readable title of the learning"
+
+  environment:
+    type: string
+    description: "Runtime, platform, or toolchain the learning applies to (free text)"
+
+  category:
+    type: string
+    description: "Directory name under docs/solutions/ the doc is filed in (matches the category mapping)"
+
+  last_updated:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was last edited (YYYY-MM-DD)"
+
+  last_refreshed:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was last verified against the codebase (YYYY-MM-DD)"
+
+  # Lifecycle fields. A missing status means active. Writers keep these
+  # consistent: updating or verifying a doc clears status: stale together with
+  # stale_reason and stale_date. Superseding is a manual edit; nothing writes it.
+  status:
+    type: enum
+    values:
+      - active
+      - stale
+      - superseded
+    description: "Lifecycle state. Missing means active."
+
+  superseded_by:
+    type: string
+    description: >-
+      Repo-root path of the doc that replaces this one, for example
+      docs/solutions/best-practices/example.md. Required when status is superseded.
+      The target must exist and must not itself be superseded.
+
+  superseded_date:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was superseded (YYYY-MM-DD)"
+
+  stale_reason:
+    type: string
+    description: "Why the doc is marked stale. Present only while status is stale."
+
+  stale_date:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was marked stale (YYYY-MM-DD). Present only while status is stale."
+
+# --- Fields optional for bug track only -------------------------------------
+bug_optional_fields:
+  rails_version:
+    type: string
+    pattern: '^\d+\.\d+\.\d+$'
+    description: "LEGACY. Rails version in X.Y.Z format. Preserved on existing bug-track docs, never offered to writers. Documentation only: the validator does not read it."
+
+# --- Backward compatibility --------------------------------------------------
+# Docs created before the track system was introduced may have bug-track
+# fields (symptoms, root_cause, resolution_type) on knowledge-type
+# problem_types. These are valid legacy docs:
+#   - Bug-track fields present on a knowledge-track doc are harmless. Do not
+#     strip them during refresh unless the doc is being rewritten for other reasons.
+#   - When creating NEW docs, follow the track rules above.
+#
+# Legacy vocabulary. Older docs may carry Rails and product-specific values:
+# component values listed under `legacy_values`, the root_cause
+# missing_association, the resolution_type seed_data_update, and the
+# rails_version field. Validators and refresh accept them. Update paths
+# preserve them and never rewrite them. Only new docs read `values`, so writers
+# are never offered a legacy value.
+
+# --- Validation rules --------------------------------------------------------
+validation_rules:
+  - "Determine track from problem_type using the tracks section above"
+  - "All shared required_fields must be present"
+  - "Bug-track required fields (symptoms, root_cause, resolution_type) must be present on bug-track docs"
+  - "Knowledge-track docs have no additional required fields beyond the shared ones"
+  - "Bug-track fields on existing knowledge-track docs are harmless (see backward compatibility note)"
+  - "Track-specific optional fields may be included but are not required"
+  - "Enum fields must match allowed values exactly; legacy_values are accepted but never offered to writers"
+  - "status, if present, must be one of active, stale, superseded; missing means active"
+  - "A doc with status superseded must carry superseded_by naming an existing doc that is not itself superseded"
+  - "Clearing status: stale also clears stale_reason and stale_date"
+  - "Array fields must respect min_items/max_items when specified"
+  - "date must match YYYY-MM-DD format"
+  - "Legacy fields and values (see the backward compatibility note) are preserved on update and never offered to writers"
+  - "tags should be lowercase and hyphen-separated"
+  - |-
+    YAML quoting: scalar values that contain ' #' (space-hash) must be
+    double-quoted to prevent silent YAML comment truncation (the YAML parser
+    treats ' #' as an inline comment, silently dropping the rest of the value
+    with parseError: false). Example: problem: "cache miss # under load".
+  - |-
+    YAML quoting: array-of-strings frontmatter items must be double-quoted when
+    the value starts with a YAML reserved indicator (e.g., '{', '[', '|', '>',
+    '!', '&', '*', '?', ':', '-') or contains ': ' (colon-space). Example:
+    symptoms: - "[mdx-js/rollup] Could not parse expression"
