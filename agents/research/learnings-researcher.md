@@ -65,15 +65,17 @@ content-search: pattern="cache" path=docs/solutions/ files_only=true case_insens
 
 If the Step 0 listing shows a `patterns/` directory, list it. If `critical-patterns.md` is there, read it and scan for patterns relevant to the current task. Most projects have neither. If the directory or the file is absent, skip this step without reading a missing path and without reporting an error.
 
-### Step 4: Build the Status Map and Resolve Lifecycle
+### Step 4: Read Lifecycle Fields and Resolve
 
-Run ONE content search across all of `docs/solutions/` for the lifecycle fields, with line output (not files-only):
+Run ONE content search across all of `docs/solutions/` to find which files mention the lifecycle fields, returning file paths only:
 
 ```
-content-search: pattern="^(status|superseded_by|stale_reason):" path=docs/solutions/ case_insensitive=false
+content-search: pattern="^(status|superseded_by|stale_reason):" path=docs/solutions/ files_only=true case_insensitive=false
 ```
 
-Record each file's `status`, `superseded_by` and `stale_reason` from the matching lines, stripping quotes and surrounding whitespace. A file with no `status` line has no status. This one search covers candidates and successors alike, so no further status reads are needed.
+Use the search only to learn which files to read. Do not take values from the matched lines: a raw line can keep a trailing comment, can be a folded scalar, and can sit in a doc body (for example in a fenced example) instead of the frontmatter. A file that does not match has no lifecycle fields, so it has no status.
+
+Before routing any candidate, and at every successor hop, read that doc's frontmatter (the block between the opening and closing `---`, with limit:30 as in Step 5, reading on if the closing `---` is not in view). Take `status`, `superseded_by` and `stale_reason` from that frontmatter, parsed as YAML. `status: superseded # retired` is `superseded`. Ignore any match outside the frontmatter block.
 
 Then resolve every candidate before scoring:
 
@@ -86,11 +88,11 @@ Then resolve every candidate before scoring:
 **Resolving a successor.** Only a repo-root path counts: a value that starts with `docs/solutions/`, ends in `.md`, contains no `..` segment, is not a `README.md`, is not under `_archived/`, and names a file that exists. A bare filename, a relative path, an empty value, a list, a missing file and any other form are all unresolvable. Do not guess.
 
 1. Start with the candidate's `superseded_by` value. Keep a visited set holding the candidate's own path.
-2. At every hop, before taking the target as the successor, check that it passes the form rule above and that the file exists. Check existence against the Step 0 listing or Glob results you already have, or with a direct existence check. A target that fails either check makes the chain unresolvable. A target missing from the status map is not evidence that it exists, because most active docs have no `status` line.
+2. At every hop, before taking the target as the successor, check that it passes the form rule above and that the file exists. Check existence against the Step 0 listing or Glob results you already have, or with a direct existence check. A target that fails either check makes the chain unresolvable. A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.
 3. If the target is already in the visited set, the chain is a cycle: unresolvable.
-4. Look up the target's `status` in the status map. If it is `superseded`, follow its `superseded_by` and repeat from step 2.
+4. Read the target's frontmatter and take its `status`. If it is `superseded`, follow its `superseded_by` and repeat from step 2.
 5. One hop is one `superseded_by` link. Follow at most 5 hops. A target still superseded after the fifth hop makes the chain unresolvable.
-6. The first target that is not `superseded` is the successor. An unrecognized status counts as active. If reading the successor in Step 5 fails, the chain is unresolvable.
+6. The first target that is not `superseded` is the successor. An unrecognized status counts as active. If reading the target's frontmatter fails, the chain is unresolvable.
 
 **Then apply the result.**
 - A superseded candidate with a resolvable successor is never returned. Return the successor in its place, labelled with a `Supersedes:` line (see Output Format). The successor does not need to match the keywords itself, because it stands in for a doc that did.
@@ -116,7 +118,7 @@ Extract these fields from the YAML frontmatter:
 - **tags**: Searchable keywords
 - **severity**: critical, high, medium, low
 
-`status` and `superseded_by` come from the Step 4 map. Values for these fields are whatever the docs use. Do not validate them against a fixed list.
+`status`, `superseded_by` and `stale_reason` come from the Step 4 frontmatter read, not from search lines. Values for these fields are whatever the docs use. Do not validate them against a fixed list.
 
 ### Step 6: Score and Rank Relevance
 
@@ -147,7 +149,7 @@ Only for files that pass the filter (strong or moderate matches), read the compl
 
 ### Step 8: Return Distilled Summaries
 
-For each relevant document, return a summary in this format. `Supersedes:` and `Caution:` are optional; include each only when it applies. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from the status map if it has one.
+For each relevant document, return a summary in this format. `Supersedes:` and `Caution:` are optional; include each only when it applies. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from its frontmatter if it has one.
 
 ```markdown
 ### [Title from document]
@@ -212,7 +214,7 @@ Caution: <text>
 - Use category directories to narrow scope when feature type is clear
 - Do a broader content search as fallback if <3 candidates found
 - Re-narrow with more specific patterns if >25 candidates found
-- Build the status map with one search, and resolve superseded docs before scoring
+- Use one search to find which files mention the lifecycle fields, read each such doc's frontmatter for the values, and resolve superseded docs before scoring
 - Read the critical patterns file only when it exists
 - Only read frontmatter of search-matched candidates (not all files)
 - Filter aggressively - only fully read truly relevant files
