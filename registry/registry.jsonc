@@ -377,10 +377,9 @@
       "description": "Capture solved problems as categorized documentation with YAML frontmatter for fast lookup",
       "files": [
         "skills/compound-docs/SKILL.md",
-        "skills/compound-docs/assets/critical-pattern-template.md",
         "skills/compound-docs/assets/resolution-template.md",
-        "skills/compound-docs/references/yaml-schema.md",
-        "skills/compound-docs/schema.yaml"
+        "skills/compound-docs/references/schema.yaml",
+        "skills/compound-docs/references/yaml-schema.md"
       ]
     },
     {

@@ -1,95 +1,92 @@
----
-module: [Module name or "System" for system-wide]
-date: [YYYY-MM-DD]
-problem_type: [build_error|test_failure|runtime_error|performance_issue|database_issue|security_issue|ui_bug|integration_issue|logic_error]
-component: [rails_model|rails_controller|rails_view|service_object|background_job|database|frontend_stimulus|hotwire_turbo|email_processing|brief_system|assistant|authentication|payments]
-symptoms:
-  - [Observable symptom 1 - specific error message or behavior]
-  - [Observable symptom 2 - what user actually saw/experienced]
-root_cause: [missing_association|missing_include|missing_index|wrong_api|scope_issue|thread_violation|async_timing|memory_leak|config_error|logic_error|test_isolation|missing_validation|missing_permission]
-rails_version: [7.1.2 - optional]
-resolution_type: [code_fix|migration|config_change|test_fix|dependency_update|environment_setup]
-severity: [critical|high|medium|low]
-tags: [keyword1, keyword2, keyword3]
+# Resolution Templates
+
+Choose the template matching the problem_type track (see `references/schema.yaml`).
+
+**Citing code:** write a repo-relative path with the line or range (`<file>:<line>` or `<file>:<start>-<end>`), never a bare file name, and put the backticked symbol it points at in the same sentence. Link a tag or commit for code outside the repo or deleted code. Write placeholders such as `<file>:<line>` in examples. The content-integrity gate checks citations in `docs/solutions/`.
+
 ---
 
-# Troubleshooting: [Clear Problem Title]
+## Bug Track Template
+
+Use for: `build_error`, `test_failure`, `runtime_error`, `performance_issue`, `database_issue`, `security_issue`, `ui_bug`, `integration_issue`, `logic_error`
+
+```markdown
+---
+title: [Clear problem title]
+date: [YYYY-MM-DD]
+category: [docs/solutions subdirectory]
+module: [Module or area]
+problem_type: [schema enum]
+component: [schema enum]
+symptoms:
+  - [Observable symptom 1]
+root_cause: [schema enum]
+resolution_type: [schema enum]
+severity: [schema enum]
+tags: [keyword-one, keyword-two]
+---
+
+# [Clear problem title]
 
 ## Problem
-[1-2 sentence clear description of the issue and what the user experienced]
-
-## Environment
-- Module: [Name or "System-wide"]
-- Rails Version: [e.g., 7.1.2]
-- Affected Component: [e.g., "Email Processing model", "Brief System service", "Authentication controller"]
-- Date: [YYYY-MM-DD when this was solved]
+[1-2 sentence description of the issue and user-visible impact]
 
 ## Symptoms
-- [Observable symptom 1 - what the user saw/experienced]
-- [Observable symptom 2 - error messages, visual issues, unexpected behavior]
-- [Continue as needed - be specific]
+- [Observable symptom or error]
 
 ## What Didn't Work
-
-**Attempted Solution 1:** [Description of what was tried]
-- **Why it failed:** [Technical reason this didn't solve the problem]
-
-**Attempted Solution 2:** [Description of second attempt]
-- **Why it failed:** [Technical reason]
-
-[Continue for all significant attempts that DIDN'T work]
-
-[If nothing else was attempted first, write:]
-**Direct solution:** The problem was identified and fixed on the first attempt.
+- [Attempted fix and why it failed]
 
 ## Solution
-
-[The actual fix that worked - provide specific details]
-
-[Cite code as a repo-relative `<file>:<line>` or `<file>:<start>-<end>`, with the backticked symbol in the same sentence. Link a tag or commit for code outside the repo or deleted code. The content-integrity gate checks these citations.]
-
-**Code changes** (if applicable):
-```ruby
-# Before (broken):
-[Show the problematic code]
-
-# After (fixed):
-[Show the corrected code with explanation]
-```
-
-**Database migration** (if applicable):
-```ruby
-# Migration change:
-[Show what was changed in the migration]
-```
-
-**Commands run** (if applicable):
-```bash
-# Steps taken to fix:
-[Commands or actions]
-```
+[The fix that worked, including code snippets when useful]
 
 ## Why This Works
-
-[Technical explanation of:]
-1. What was the ROOT CAUSE of the problem?
-2. Why does the solution address this root cause?
-3. What was the underlying issue (API misuse, configuration error, Rails version issue, etc.)?
-
-[Be detailed enough that future developers understand the "why", not just the "what"]
+[Root cause explanation and why the fix addresses it]
 
 ## Prevention
-
-[How to avoid this problem in future development:]
-- [Specific coding practice, check, or pattern to follow]
-- [What to watch out for]
-- [How to catch this early]
+- [Concrete practice, test, or guardrail]
 
 ## Related Issues
+- [Related docs or issues, if any]
+```
 
-[If any similar problems exist in docs/solutions/, link to them:]
-- See also: [another-related-issue.md](../category/another-related-issue.md)
-- Similar to: [related-problem.md](../category/related-problem.md)
+---
 
-[If no related issues, write:]
-No related issues documented yet.
+## Knowledge Track Template
+
+Use for: `best_practice`, `documentation_gap`, `workflow_issue`, `developer_experience`, `architecture_pattern`, `design_pattern`, `tooling_decision`, `convention`
+
+```markdown
+---
+title: [Clear, descriptive title]
+date: [YYYY-MM-DD]
+category: [docs/solutions subdirectory]
+module: [Module or area]
+problem_type: [schema enum]
+component: [schema enum]
+severity: [schema enum]
+applies_when:
+  - [Condition where this applies]
+tags: [keyword-one, keyword-two]
+---
+
+# [Clear, descriptive title]
+
+## Context
+[What situation, gap, or friction prompted this guidance]
+
+## Guidance
+[The practice, pattern, or recommendation with code examples when useful]
+
+## Why This Matters
+[Rationale and impact of following or not following this guidance]
+
+## When to Apply
+- [Conditions or situations where this applies]
+
+## Examples
+[Concrete before/after or usage examples showing the practice in action]
+
+## Related
+- [Related docs or issues, if any]
+```
