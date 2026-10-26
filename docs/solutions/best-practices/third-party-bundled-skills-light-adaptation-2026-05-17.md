@@ -207,8 +207,8 @@ Draft #1 came back at 6,490 bytes (490 over the 6,000-byte ceiling), all other c
 ## Related
 
 - [`docs/solutions/best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md`](destructive-to-nondestructive-converter-Systematic-20260209.md) — adjacent "light adaptation, preserve unknowns" precedent from the CEP→Systematic conversion era. This doc extends it with explicit licensing + originality discipline.
-- [`docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md`](../workflow-issues/reconciliation-sync-reference-integrity-20260417.md) — verify the reference graph after any sync. Same defensive pattern applied here: don't trust the import; verify every cross-reference resolves on disk.
-- [`docs/solutions/workflow-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md`](../workflow-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md) — earlier integrity-check precedent for multi-file imports (some content archived).
+- [`docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md`](../integration-issues/reconciliation-sync-reference-integrity-20260417.md) — verify the reference graph after any sync. Same defensive pattern applied here: don't trust the import; verify every cross-reference resolves on disk.
+- [`docs/solutions/integration-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md`](../integration-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md) — earlier integrity-check precedent for multi-file imports (some content archived).
 - [`docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md`](../integration-issues/converter-code-block-tool-name-capitalization-20260210.md) — manual audit backstop after mechanical conversion.
 - [`ATTRIBUTIONS.md`](../../../ATTRIBUTIONS.md) — the canonical attribution surface in this repo, structured per this guidance.
 - PR [#394](https://github.com/marcusrbrown/systematic/pull/394) — the merge that landed both bundled skills + the distilled CC-BY-4.0 reference + ATTRIBUTIONS.md.

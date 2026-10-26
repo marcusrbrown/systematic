@@ -202,7 +202,7 @@ The shipped tree is the ground truth; the workflow that produced it is incidenta
 - `docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md` —
   same failure class (silent batch operation + matching-blind-spot verification),
   different mechanism (shell semantics vs import iteration)
-- `docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md` —
+- `docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md` —
   adjacent integrity check (cross-skill references, not within-skill sub-files);
   both ride on `scripts/content-integrity.ts`
 - `scripts/content-integrity.ts` (`checkSubfileReferences`) — the surviving

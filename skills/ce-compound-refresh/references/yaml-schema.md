@@ -30,15 +30,16 @@ Prefer the narrowest applicable value. `best_practice` is the fallback when no n
 - **module**: Module or area affected
 - **date**: ISO date in `YYYY-MM-DD`
 - **problem_type**: One of the values listed in the Tracks table above
-- **component**: One of `rails_model`, `rails_controller`, `rails_view`, `service_object`, `background_job`, `database`, `frontend_stimulus`, `hotwire_turbo`, `email_processing`, `brief_system`, `assistant`, `authentication`, `payments`, `development_workflow`, `testing_framework`, `documentation`, `tooling`
+- **component**: One of `backend`, `frontend`, `api`, `database`, `background_job`, `authentication`, `infrastructure`, `configuration`, `dependencies`, `tooling`, `development_workflow`, `testing_framework`, `documentation`, `assistant`
 - **severity**: One of `critical`, `high`, `medium`, `low`
 
 ## Bug Track Fields
 
 Required:
 - **symptoms**: YAML array with 1-5 observable symptoms (errors, broken behavior)
-- **root_cause**: One of `missing_association`, `missing_include`, `missing_index`, `wrong_api`, `scope_issue`, `thread_violation`, `async_timing`, `memory_leak`, `config_error`, `logic_error`, `test_isolation`, `missing_validation`, `missing_permission`, `missing_workflow_step`, `inadequate_documentation`, `missing_tooling`, `incomplete_setup`
-- **resolution_type**: One of `code_fix`, `migration`, `config_change`, `test_fix`, `dependency_update`, `environment_setup`, `workflow_improvement`, `documentation_update`, `tooling_addition`, `seed_data_update`
+- **root_cause**: One of `missing_include`, `missing_index`, `wrong_api`, `scope_issue`, `thread_violation`, `async_timing`, `memory_leak`, `config_error`, `logic_error`, `test_isolation`, `missing_validation`, `missing_permission`, `missing_workflow_step`, `inadequate_documentation`, `missing_tooling`, `incomplete_setup`
+  - `missing_include` is a missing eager load or an N+1 query. `wrong_api` is an API used in a way that does not fit the situation.
+- **resolution_type**: One of `code_fix`, `migration`, `config_change`, `test_fix`, `dependency_update`, `environment_setup`, `workflow_improvement`, `documentation_update`, `tooling_addition`
 
 ## Knowledge Track Fields
 
@@ -55,10 +56,25 @@ No additional required fields beyond the shared ones. All fields below are optio
 
 - **related_components**: Other components involved
 - **tags**: Search keywords, lowercase and hyphen-separated
+- **title**: Human-readable title of the learning
+- **environment**: Runtime, platform, or toolchain the learning applies to (free text)
+- **category**: Directory name under `docs/solutions/` the doc is filed in (see Category Mapping)
+- **last_updated**: Date the doc was last edited, `YYYY-MM-DD`
+- **last_refreshed**: Date the doc was last verified against the codebase, `YYYY-MM-DD`
 
-## Optional Fields (bug track only)
+## Lifecycle Fields (both tracks, optional)
 
-- **rails_version**: Rails version in `X.Y.Z` format
+- **status**: One of `active`, `stale`, `superseded`. A missing `status` means `active`. An explicit empty value is invalid.
+- **superseded_by**: Repo-root path of the doc that replaces this one, for example `docs/solutions/best-practices/example.md`. Required when `status` is `superseded`. The target must be an existing doc under `docs/solutions/` (not `README.md`) that is not itself superseded. A bare filename or any other path form does not resolve.
+- **superseded_date**: Date the doc was superseded, `YYYY-MM-DD`
+- **stale_reason**: Why the doc is marked stale. Present only while `status` is `stale`.
+- **stale_date**: Date the doc was marked stale, `YYYY-MM-DD`. Present only while `status` is `stale`.
+
+Writers keep these fields consistent. Updating or verifying a doc clears `status: stale` together with `stale_reason` and `stale_date`. Nothing writes `status: superseded`: superseding is a manual edit. A `superseded_by` on a doc that is not superseded is ignored.
+
+## Optional Fields (bug track only, legacy)
+
+- **rails_version**: Legacy. Rails version in `X.Y.Z` format. Preserved on existing bug-track docs, never offered to writers. Documentation only: the validator does not check it.
 
 ## Backward Compatibility
 
@@ -66,6 +82,18 @@ Docs created before the track system may have `symptoms`/`root_cause`/`resolutio
 
 - Bug-track fields present on a knowledge-track doc are harmless. Do not strip them during refresh unless the doc is being rewritten for other reasons.
 - When creating **new** docs, follow the track rules above.
+
+## Legacy Values
+
+Older docs may carry Rails and product-specific values. Validators and refresh accept them, update paths preserve them and never rewrite them, and writers are never offered them. Only new docs read the offered values above.
+
+| Field | Legacy values |
+|-------|---------------|
+| `component` | `rails_model`, `rails_controller`, `rails_view`, `service_object`, `frontend_stimulus`, `hotwire_turbo`, `email_processing`, `brief_system`, `payments` |
+| `root_cause` | `missing_association` |
+| `resolution_type` | `seed_data_update` |
+
+`schema.yaml` lists these under `legacy_values`, beside `values`, on the bug-required and knowledge-optional lists alike.
 
 ## Category Mapping
 
@@ -98,7 +126,8 @@ directories that fragment search.
 3. Bug-track required fields (`symptoms`, `root_cause`, `resolution_type`) must be present on bug-track docs.
 4. Knowledge-track docs have no additional required fields beyond the shared ones.
 5. Bug-track fields on existing knowledge-track docs are harmless (see Backward Compatibility).
-6. Enum fields must match the allowed values exactly.
+6. Enum fields must match the allowed values exactly. Legacy values are accepted too (see Legacy Values).
 7. Array fields must respect min/max item counts.
 8. `date` must match `YYYY-MM-DD`.
-9. `rails_version`, if present, must match `X.Y.Z` and only applies to bug-track docs.
+9. `status`, if present, must be `active`, `stale` or `superseded`.
+10. A `superseded` doc must carry a `superseded_by` that names an existing doc which is not itself superseded.

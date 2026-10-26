@@ -26,8 +26,8 @@ resolution_type: workflow_improvement
 confidence: verified
 related:
   - docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md
-  - docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md
-  - docs/solutions/workflow-patterns/truth-reset-scope-split-20260417.md
+  - docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md
+  - docs/solutions/workflow-issues/truth-reset-scope-split-20260417.md
 ---
 
 # Zsh `for` Loops Silently Fail on Unquoted Variables: 41 Unconverted Files Shipped Past Verification

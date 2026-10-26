@@ -58,7 +58,7 @@ Only (1) is a defect. (2) is correct, validated, and conventional.
 - **Do not add a gate banning qualified IDs in skill bodies.** It would directly
   conflict with `checkReferenceIntegrity`, which *requires* the qualified form to
   validate references. The migrated-set identifier gate
-  (`checkMigratedSkillIdentifiers`, `scripts/content-integrity.ts:3399-3464`) bans
+  (`checkMigratedSkillIdentifiers`, `scripts/content-integrity.ts:3635-3700`) bans
   harness-specific tool syntax (`task(`, `subagent_type`, `todowrite`, …) and
   correctly does **not** list qualified persona IDs.
 
@@ -172,7 +172,7 @@ Wrong change — strips phantom-validation coverage and breaks corpus convention
 
 ## Related
 
-- `docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md`
+- `docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md`
   — the origin of `checkReferenceIntegrity`; same reference-integrity family, but
   from the phantom-ref angle. This doc is its complement: the qualified form it
   validates is the form to *preserve*, not strip.

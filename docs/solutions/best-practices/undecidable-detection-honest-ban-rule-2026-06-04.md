@@ -1,6 +1,6 @@
 ---
 title: When detection is undecidable, ban the pattern instead of guessing
-category: best_practice
+category: best-practices
 problem_type: best_practice
 module: content-integrity
 component: tooling

@@ -1,6 +1,6 @@
 ---
 title: content-integrity has no non-failing warning channel; gate checks are violation-or-nothing
-category: best_practice
+category: best-practices
 problem_type: best_practice
 module: content-integrity
 component: tooling

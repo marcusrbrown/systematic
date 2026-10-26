@@ -359,6 +359,7 @@ export interface CheckResult {
   parseSafetyViolations: FrontmatterViolation[]
   solutionSchemaViolations: FrontmatterViolation[]
   solutionCitationViolations: SolutionCitationViolation[]
+  solutionLifecycleViolations: SolutionLifecycleViolation[]
   agentModelViolations: AgentModelViolation[]
   agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
@@ -1330,12 +1331,19 @@ const COMPOUND_SCHEMA_RELATIVE_PATH =
 // belong here: fix the doc, don't exempt it.
 export const SOLUTION_SCHEMA_EXEMPTIONS: ReadonlySet<string> = new Set()
 
+/**
+ * Vocabulary derived from schema.yaml. `component`, `root_cause` and
+ * `resolution_type` sets are the union of the offered `values` and the
+ * `legacy_values` the validator still accepts: legacy values are accepted,
+ * never offered to writers.
+ */
 interface CompoundSchema {
   bugProblemTypes: ReadonlySet<string>
   knowledgeProblemTypes: ReadonlySet<string>
   allProblemTypes: ReadonlySet<string>
   componentValues: ReadonlySet<string>
   severityValues: ReadonlySet<string>
+  statusValues: ReadonlySet<string>
   datePattern: RegExp
   rootCauseValues: ReadonlySet<string>
   resolutionTypeValues: ReadonlySet<string>
@@ -1367,6 +1375,16 @@ function schemaStringArray(
     )
   }
   return value
+}
+
+/** Like `schemaStringArray`, but an absent key reads as an empty list. */
+function schemaOptionalStringArray(
+  parent: Record<string, unknown>,
+  key: string,
+  context: string,
+): string[] {
+  if (!Object.hasOwn(parent, key)) return []
+  return schemaStringArray(parent, key, context)
 }
 
 function schemaString(
@@ -1433,13 +1451,18 @@ function loadCompoundSchema(rootDir: string): CompoundSchema | null {
     'required_fields.severity',
   )
   const dateField = schemaRecord(requiredFields, 'date', 'required_fields.date')
-  const componentValues = new Set(
-    schemaStringArray(
+  const componentValues = new Set([
+    ...schemaStringArray(
       componentField,
       'values',
       'required_fields.component.values',
     ),
-  )
+    ...schemaOptionalStringArray(
+      componentField,
+      'legacy_values',
+      'required_fields.component.legacy_values',
+    ),
+  ])
   const severityValues = new Set(
     schemaStringArray(
       severityField,
@@ -1479,19 +1502,43 @@ function loadCompoundSchema(rootDir: string): CompoundSchema | null {
     'resolution_type',
     'track_rules.bug.required.resolution_type',
   )
-  const rootCauseValues = new Set(
-    schemaStringArray(
+  const rootCauseValues = new Set([
+    ...schemaStringArray(
       rootCauseField,
       'values',
       'track_rules.bug.required.root_cause.values',
     ),
-  )
-  const resolutionTypeValues = new Set(
-    schemaStringArray(
+    ...schemaOptionalStringArray(
+      rootCauseField,
+      'legacy_values',
+      'track_rules.bug.required.root_cause.legacy_values',
+    ),
+  ])
+  const resolutionTypeValues = new Set([
+    ...schemaStringArray(
       resolutionTypeField,
       'values',
       'track_rules.bug.required.resolution_type.values',
     ),
+    ...schemaOptionalStringArray(
+      resolutionTypeField,
+      'legacy_values',
+      'track_rules.bug.required.resolution_type.legacy_values',
+    ),
+  ])
+
+  const optionalFields = schemaRecord(
+    parsed,
+    'optional_fields',
+    'optional_fields',
+  )
+  const statusField = schemaRecord(
+    optionalFields,
+    'status',
+    'optional_fields.status',
+  )
+  const statusValues = new Set(
+    schemaStringArray(statusField, 'values', 'optional_fields.status.values'),
   )
 
   return {
@@ -1500,6 +1547,7 @@ function loadCompoundSchema(rootDir: string): CompoundSchema | null {
     allProblemTypes: new Set([...bugProblemTypes, ...knowledgeProblemTypes]),
     componentValues,
     severityValues,
+    statusValues,
     datePattern,
     rootCauseValues,
     resolutionTypeValues,
@@ -1531,6 +1579,31 @@ function pushSchemaViolation(
 }
 
 /**
+ * Bounded description of a parsed YAML value's type. Messages that echo a
+ * frontmatter value must use this (or `describeYamlValue`) instead of
+ * `JSON.stringify`, because valid YAML anchors can build a circular structure
+ * that `JSON.stringify` throws on and so aborts the whole report.
+ */
+function describeYamlValueType(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'an array'
+  if (typeof value === 'object') return 'an object'
+  if (typeof value === 'number') return 'a number'
+  if (typeof value === 'boolean') return 'a boolean'
+  return typeof value
+}
+
+/**
+ * Describes a parsed YAML value for a violation message: a string is quoted
+ * so the author sees exactly what was written, anything else is named by type.
+ */
+function describeYamlValue(value: unknown): string {
+  return typeof value === 'string'
+    ? JSON.stringify(value)
+    : describeYamlValueType(value)
+}
+
+/**
  * Checks presence of a shared required field. Returns true when present as a
  * non-empty (post-trim) string, matching the schema's declared `type: string`.
  *
@@ -1554,7 +1627,7 @@ function checkSolutionRequiredField(
   const isPresentWrongShape =
     Object.hasOwn(data, field) && value !== null && value !== ''
   const message = isPresentWrongShape
-    ? `Solution-doc frontmatter field \`${field}\` must be a non-empty string, got ${JSON.stringify(value)}.`
+    ? `Solution-doc frontmatter field \`${field}\` must be a non-empty string, got ${describeYamlValue(value)}.`
     : `Solution-doc frontmatter is missing required field \`${field}\`.`
   pushSchemaViolation(
     relPath,
@@ -1585,7 +1658,7 @@ function checkSolutionEnumField(
   pushSchemaViolation(
     relPath,
     field,
-    `Solution-doc frontmatter field \`${field}\` value ${JSON.stringify(value)} is not in the allowed vocabulary defined in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    `Solution-doc frontmatter field \`${field}\` value ${describeYamlValue(value)} is not in the allowed vocabulary defined in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     `Use one of the enum values defined for \`${field}\` in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     violations,
   )
@@ -1603,7 +1676,7 @@ function checkSolutionDate(
   pushSchemaViolation(
     relPath,
     'date',
-    `Solution-doc frontmatter field \`date\` value ${JSON.stringify(value)} does not match the required pattern ${datePattern.source}.`,
+    `Solution-doc frontmatter field \`date\` value ${describeYamlValue(value)} does not match the required pattern ${datePattern.source}.`,
     `Use YYYY-MM-DD format for \`date\` per ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     violations,
   )
@@ -1742,6 +1815,16 @@ function scanSolutionSchema(
     )
   }
 
+  // `status` is optional: absent means active. A present-but-empty or
+  // off-enum value fails (checkSolutionEnumField skips only absent fields).
+  checkSolutionEnumField(
+    relPath,
+    data,
+    'status',
+    schema.statusValues,
+    violations,
+  )
+
   const problemType = data.problem_type
   let rootCauseOk = true
   let resolutionTypeOk = true
@@ -1804,6 +1887,159 @@ export function checkSolutionSchema(
     const content = readFileSafe(path.join(rootDir, relPath))
     if (content === null) continue
     scanSolutionSchema(relPath, content, schema, violations)
+  }
+
+  return violations
+}
+
+// ---------------------------------------------------------------------------
+// Solution lifecycle check
+// ---------------------------------------------------------------------------
+
+export type SolutionLifecycleClass =
+  | 'missing-superseded-by'
+  | 'superseded-by-not-a-string'
+  | 'superseded-by-empty'
+  | 'self-reference'
+  | 'dangling-superseded-by'
+  | 'unreadable-successor'
+  | 'successor-superseded'
+
+export interface SolutionLifecycleViolation {
+  file: string
+  class: SolutionLifecycleClass
+  message: string
+}
+
+/**
+ * Frontmatter mapping of a solution doc, or null when the file cannot be read,
+ * has no frontmatter, fails to parse, or does not parse to a mapping. The
+ * schema scan already reports each of those, so the lifecycle check only needs
+ * to know that the doc is unusable.
+ */
+function readSolutionFrontmatter(
+  rootDir: string,
+  relPath: string,
+): Record<string, unknown> | null {
+  const content = readFileSafe(path.join(rootDir, relPath))
+  if (content === null) return null
+  const parsed = parseFrontmatter(content)
+  if (parsed.parseError || !parsed.hadFrontmatter) return null
+  return isRecord(parsed.data) ? parsed.data : null
+}
+
+type SolutionLifecycleProblem = Pick<
+  SolutionLifecycleViolation,
+  'class' | 'message'
+>
+
+/**
+ * Classifies the `superseded_by` value of a doc already known to be
+ * `status: superseded`. Returns null when it names a parseable, non-superseded
+ * doc in the solution-file set. Checks run from the cheapest shape problem to
+ * the successor's own state, so each defect gets exactly one cause.
+ */
+function classifySupersededBy(
+  relPath: string,
+  target: unknown,
+  solutionSet: ReadonlySet<string>,
+  frontmatterOf: (relPath: string) => Record<string, unknown> | null,
+): SolutionLifecycleProblem | null {
+  if (target === undefined || target === null) {
+    return {
+      class: 'missing-superseded-by',
+      message:
+        'Superseded solution doc is missing `superseded_by`; name the repo-root path of the doc that replaces it.',
+    }
+  }
+  if (typeof target !== 'string') {
+    return {
+      class: 'superseded-by-not-a-string',
+      message: `Superseded solution doc \`superseded_by\` is not a string, got ${describeYamlValueType(target)}; use a single repo-root path.`,
+    }
+  }
+  if (target.trim() === '') {
+    return {
+      class: 'superseded-by-empty',
+      message:
+        'Superseded solution doc has an empty `superseded_by`; name the repo-root path of the doc that replaces it.',
+    }
+  }
+  if (target === relPath) {
+    return {
+      class: 'self-reference',
+      message: 'Superseded solution doc names itself in `superseded_by`.',
+    }
+  }
+  if (!solutionSet.has(target)) {
+    return {
+      class: 'dangling-superseded-by',
+      message: `\`superseded_by\` names ${JSON.stringify(target)}, which is not a solution doc in docs/solutions/ (use the repo-root path, e.g. docs/solutions/<category>/<file>.md).`,
+    }
+  }
+  const successor = frontmatterOf(target)
+  if (successor === null) {
+    return {
+      class: 'unreadable-successor',
+      message: `\`superseded_by\` names ${JSON.stringify(target)}, an unreadable successor: its frontmatter is missing or does not parse.`,
+    }
+  }
+  if (successor.status === 'superseded') {
+    return {
+      class: 'successor-superseded',
+      message: `\`superseded_by\` names ${JSON.stringify(target)}, which is itself superseded; point at the doc that is still in force.`,
+    }
+  }
+  return null
+}
+
+/**
+ * Enforces the supersession half of the solution-doc lifecycle: a doc marked
+ * `status: superseded` must name, in `superseded_by`, a repo-root path to a
+ * parseable doc in the solution-file set that is not itself superseded.
+ *
+ * - The solution-file set is `solutionMarkdownFiles` minus exempt paths and
+ *   any `README.md`. Membership is by exact path, so a bare filename or a
+ *   file outside the set is unresolved.
+ * - Requiring a non-superseded target rules out chains, cycles and
+ *   self-reference with one rule. A stale target is allowed.
+ * - `superseded_by` on a doc that is not superseded is ignored, as are exempt
+ *   docs and docs whose frontmatter cannot be parsed (the schema scan reports
+ *   those). An unknown `status` is likewise left to the schema scan.
+ * - Returns nothing when the schema file is absent, like `checkSolutionSchema`.
+ */
+export function checkSolutionLifecycle(
+  rootDir: string,
+  solutionMarkdownFiles: readonly string[],
+  exemptSolutions: ReadonlySet<string> = SOLUTION_SCHEMA_EXEMPTIONS,
+): SolutionLifecycleViolation[] {
+  const violations: SolutionLifecycleViolation[] = []
+  if (loadCompoundSchema(rootDir) === null) return violations
+
+  const solutionSet = new Set(
+    solutionMarkdownFiles.filter(
+      (relPath) =>
+        !exemptSolutions.has(relPath) && path.basename(relPath) !== 'README.md',
+    ),
+  )
+  const frontmatterCache = new Map<string, Record<string, unknown> | null>()
+  const frontmatterOf = (relPath: string): Record<string, unknown> | null => {
+    if (!frontmatterCache.has(relPath)) {
+      frontmatterCache.set(relPath, readSolutionFrontmatter(rootDir, relPath))
+    }
+    return frontmatterCache.get(relPath) ?? null
+  }
+
+  for (const relPath of solutionSet) {
+    const data = frontmatterOf(relPath)
+    if (data === null || data.status !== 'superseded') continue
+    const problem = classifySupersededBy(
+      relPath,
+      data.superseded_by,
+      solutionSet,
+      frontmatterOf,
+    )
+    if (problem !== null) violations.push({ file: relPath, ...problem })
   }
 
   return violations
@@ -3769,6 +4005,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.solutionMarkdown,
   )
+  const solutionLifecycleViolations = checkSolutionLifecycle(
+    rootDir,
+    targets.solutionMarkdown,
+  )
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
   const agentModeViolations = checkAgentMode(rootDir, targets.markdown)
   const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
@@ -3824,6 +4064,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     parseSafetyViolations,
     solutionSchemaViolations,
     solutionCitationViolations,
+    solutionLifecycleViolations,
     agentModelViolations,
     agentModeViolations,
     agentColorViolations,
@@ -3889,6 +4130,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
     'Solution-doc schema violations',
   )
   printSolutionCitationViolations(result.solutionCitationViolations)
+  printSolutionLifecycleViolations(result.solutionLifecycleViolations)
   printAgentModelViolations(result.agentModelViolations)
   printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
@@ -3927,6 +4169,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
         `solutionSchemaViolations: ${result.solutionSchemaViolations.length}\n` +
         `solutionCitationViolations: ${result.solutionCitationViolations.length}\n` +
+        `solutionLifecycleViolations: ${result.solutionLifecycleViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
         `agentModeViolations: ${result.agentModeViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
@@ -3987,6 +4230,18 @@ function printSolutionCitationViolations(
     process.stderr.write(
       `  ${v.file}:${v.line}  ${v.citation}  ${v.class}${suggestion}\n`,
     )
+  }
+}
+
+function printSolutionLifecycleViolations(
+  violations: readonly SolutionLifecycleViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nSolution lifecycle violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    process.stderr.write(`  ${v.file}  ${v.class}  ${v.message}\n`)
   }
 }
 
@@ -4205,6 +4460,7 @@ function totalViolations(result: CheckResult): number {
     result.parseSafetyViolations.length +
     result.solutionSchemaViolations.length +
     result.solutionCitationViolations.length +
+    result.solutionLifecycleViolations.length +
     result.agentModelViolations.length +
     result.agentModeViolations.length +
     result.agentColorViolations.length +

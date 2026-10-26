@@ -79,8 +79,8 @@ Proving absence, server-verified first pushes, fork exclusion and drift handling
 
 ## Related
 
-- [Truth Reset: document-review convergence is a scope signal](../workflow-patterns/truth-reset-scope-split-20260417.md). That doc covers splitting a plan when reviewers agree up front that it is overscoped. This doc covers the later signal: fixes from the first round breaking in the second.
-- [Iterative Oracle plan review loop](../workflow-patterns/iterative-oracle-plan-review.md). Iterating until reviews are clean fits independent findings. When round 2 breaks round 1's mechanisms for a shared reason, stop there instead of iterating further.
+- [Truth Reset: document-review convergence is a scope signal](../workflow-issues/truth-reset-scope-split-20260417.md). That doc covers splitting a plan when reviewers agree up front that it is overscoped. This doc covers the later signal: fixes from the first round breaking in the second.
+- [Iterative Oracle plan review loop](../workflow-issues/iterative-oracle-plan-review.md). Iterating until reviews are clean fits independent findings. When round 2 breaks round 1's mechanisms for a shared reason, stop there instead of iterating further.
 - Issues: #1005, #1081, #1082, #1095, #1099, #1126, #1129.
 - Plans:
   - `docs/plans/2026-10-11-002-fix-remote-seeding-deferral-plan.md`

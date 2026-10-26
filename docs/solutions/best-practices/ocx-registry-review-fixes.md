@@ -4,9 +4,9 @@ date: 2026-02-11
 module: registry
 problem_type: best_practice
 component: tooling
-category: code-quality
+category: best-practices
 severity: medium
-components:
+related_components:
   - tests/unit/registry.test.ts
   - scripts/build-registry.ts
   - registry/files/profiles/standalone/ocx.jsonc

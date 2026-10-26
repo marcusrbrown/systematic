@@ -4,7 +4,7 @@ date: 2026-04-17
 module: content-integrity
 problem_type: integration_issue
 severity: high
-category: workflow-issues
+category: integration-issues
 component: tooling
 tags:
   - reference-integrity
@@ -24,7 +24,7 @@ resolution_type: workflow_improvement
 confidence: verified
 related:
   - docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md
-  - docs/solutions/workflow-patterns/truth-reset-scope-split-20260417.md
+  - docs/solutions/workflow-issues/truth-reset-scope-split-20260417.md
   - docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md
 ---
 

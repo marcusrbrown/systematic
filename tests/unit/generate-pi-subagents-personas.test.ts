@@ -495,7 +495,7 @@ describe('CURATED_PERSONAS list', () => {
     expect(paths).not.toContain('agents/review/project-standards-reviewer.md')
     // slack-researcher: requires Slack MCP environment
     expect(paths).not.toContain('agents/research/slack-researcher.md')
-    // learnings-researcher: references Systematic skill paths directly
+    // learnings-researcher: not curated; it reads the host project's docs/solutions/ layout
     expect(paths).not.toContain('agents/research/learnings-researcher.md')
   })
 
