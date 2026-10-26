@@ -138,9 +138,9 @@ Proceed directly to Step 4 (no user interaction needed).
 <step number="4" required="true" depends_on="2">
 ### Step 4: Generate Filename
 
-Format: `[sanitized-symptom-or-title]-[module]-[YYYYMMDD].md`
+Format: `[sanitized-slug]-[YYYY-MM-DD].md`
 
-Bug-track docs name the file after the symptom. Knowledge-track docs have no symptom, so they use a short sanitized title of the guidance.
+The slug is the symptom for bug-track docs. Knowledge-track docs have no symptom, so the slug is a short sanitized title of the guidance.
 
 **Sanitization rules:**
 
@@ -151,10 +151,10 @@ Bug-track docs name the file after the symptom. Knowledge-track docs have no sym
 
 **Examples:**
 
-- `n-plus-one-report-generation-ReportService-20251110.md` (bug track)
-- `parameter-not-saving-state-Checkout-20251110.md` (bug track)
-- `webview-crash-on-resize-Assistant-20251110.md` (bug track)
-- `prefer-explicit-request-timeouts-HttpClient-20251110.md` (knowledge track)
+- `n-plus-one-report-generation-2025-11-10.md` (bug track)
+- `parameter-not-saving-state-2025-11-10.md` (bug track)
+- `webview-crash-on-resize-2025-11-10.md` (bug track)
+- `prefer-explicit-request-timeouts-2025-11-10.md` (knowledge track)
 </step>
 
 <step number="5" required="true" depends_on="4" blocking="true">
@@ -418,7 +418,7 @@ Documentation is successful when ALL of the following are true:
    - Solution: Loaded the comments for all reports in one eager-loaded query
    - Root cause: Missing eager loading causing a separate database query per comment thread
 3. **Check existing:** No similar issue found
-4. **Generate filename:** `n-plus-one-report-generation-ReportService-20251110.md`
+4. **Generate filename:** `n-plus-one-report-generation-2025-11-10.md`
 5. **Validate YAML:**
    ```yaml
    module: Report Service
@@ -434,7 +434,7 @@ Documentation is successful when ALL of the following are true:
    ```
    ✅ Valid
 6. **Create documentation:**
-   - `docs/solutions/performance-issues/n-plus-one-report-generation-ReportService-20251110.md`
+   - `docs/solutions/performance-issues/n-plus-one-report-generation-2025-11-10.md`
 7. **Cross-reference:** None needed (no similar issues)
 
 **Output:**
@@ -443,7 +443,7 @@ Documentation is successful when ALL of the following are true:
 ✓ Solution documented
 
 File created:
-- docs/solutions/performance-issues/n-plus-one-report-generation-ReportService-20251110.md
+- docs/solutions/performance-issues/n-plus-one-report-generation-2025-11-10.md
 
 What's next?
 1. Continue workflow (recommended)

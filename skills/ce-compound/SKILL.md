@@ -95,7 +95,7 @@ Launch research subagents. Each returns text data to the orchestrator.
      - **Knowledge track**: applies_when (symptoms/root_cause/resolution_type optional)
    - Incorporates auto memory excerpts (if provided by the orchestrator) as supplementary evidence
    - Reads `references/yaml-schema.md` for category mapping into `docs/solutions/`
-   - Suggests a filename using the pattern `[sanitized-problem-slug]-[date].md`
+   - Suggests a filename using the pattern `[sanitized-slug]-[YYYY-MM-DD].md`, where the slug is the symptom for bug-track docs and a short title of the guidance for knowledge-track docs
    - Returns: YAML frontmatter skeleton (must include `category:` field mapped from problem_type), category directory path, suggested filename, and which track applies
    - Does not invent enum values, categories, or frontmatter fields from memory; reads the schema and mapping files above
    - Does not force bug-track fields onto knowledge-track learnings or vice versa
@@ -133,7 +133,7 @@ Launch research subagents. Each returns text data to the orchestrator.
      - **Low**: 0-1 dimensions match — related but distinct
 
      The score is a function of the count, not a separate judgment about how related the docs feel. Two docs on the same topic that match on one dimension score Low. When the score you are inclined to write disagrees with the count, the count wins.
-   - Returns: Links, relationships, refresh candidates, and overlap assessment. State the per-dimension verdicts, then the resulting count, then the score, in that order. Two consistency checks apply in sequence and both must hold: the score follows the count, and the recommendation follows the score. High overlap means update the existing doc, so an assessment that scores High while recommending a new doc has broken the second check even if the first one held. Either break is a defect to re-derive, not a nuance to note.
+   - Returns: Links, relationships, refresh candidates, and overlap assessment. Ask for the overlap assessment in the dispatch and take it back as one `Overlap:` line per compared doc (the researcher's format), with the per-dimension verdicts first, then the count, then the score, in that order. Phase 2 reads the score from those lines. Two consistency checks apply in sequence and both must hold: the score follows the count, and the recommendation follows the score. High overlap means update the existing doc, so an assessment that scores High while recommending a new doc has broken the second check even if the first one held. Either break is a defect to re-derive, not a nuance to note.
 
    **Search strategy (grep-first filtering for efficiency):**
 
@@ -164,7 +164,7 @@ Launch research subagents. Each returns text data to the orchestrator.
 The orchestrating agent (main conversation) performs these steps:
 
 1. Collect all text results from Phase 1 subagents
-2. **Check the overlap assessment** from the Related Docs Finder before deciding what to write:
+2. **Check the overlap assessment** from the Related Docs Finder (the `score=` value of its `Overlap:` lines) before deciding what to write:
 
    | Overlap | Action |
    |---------|--------|

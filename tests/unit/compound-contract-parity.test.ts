@@ -118,3 +118,48 @@ describe('ce:compound contract parity', () => {
     ).toBe(false)
   })
 })
+
+describe('compound skills prose contract', () => {
+  const readText = (relativePath: string): string =>
+    fs.readFileSync(path.join(REPO_ROOT, relativePath), 'utf8')
+
+  it('refresh Rule 8 applies the problem-domain check before deleting', () => {
+    const rule8 = readText(`${REFRESH_SKILL}/SKILL.md`)
+      .split('\n')
+      .find((line) => line.startsWith('8. **'))
+    expect(rule8).toBeDefined()
+    expect(rule8).toContain('problem domain')
+    expect(rule8).toContain('Replace')
+    expect(rule8).not.toContain('Auto-delete it')
+  })
+
+  it('the researcher defines the Overlap line and ce:compound reads it', () => {
+    const researcher = readText('agents/research/learnings-researcher.md')
+    const outputFormat = researcher.slice(
+      researcher.indexOf('## Output Format'),
+    )
+    expect(outputFormat).toContain('Overlap:')
+    expect(outputFormat).toContain('count=')
+    expect(outputFormat).toContain('score=')
+    expect(readText(`${SOURCE_SKILL}/SKILL.md`)).toContain('Overlap:')
+  })
+
+  it.each([SOURCE_SKILL, DOCS_SKILL])(
+    '%s uses the one shared filename rule',
+    (skill) => {
+      const body = readText(`${skill}/SKILL.md`)
+      expect(body).toContain('[sanitized-slug]-[YYYY-MM-DD].md')
+      expect(body).not.toContain('-[module]-[YYYYMMDD]')
+      expect(body).not.toContain('[sanitized-problem-slug]-[date]')
+    },
+  )
+
+  it.each([SOURCE_SKILL, ...COPY_SKILLS])(
+    '%s template names the category as a directory, not a path',
+    (skill) => {
+      const template = readText(`${skill}/assets/resolution-template.md`)
+      expect(template).not.toContain('docs/solutions subdirectory')
+      expect(template).toContain('directory name under docs/solutions/')
+    },
+  )
+})
