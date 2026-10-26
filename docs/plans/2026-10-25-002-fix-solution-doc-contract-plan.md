@@ -54,19 +54,20 @@ Acceptance examples:
 | ID | Covers | Unit | Verified by |
 |----|--------|------|-------------|
 | AE1 | R1, R2, R16, R17 | U1, U2 | Validator test: a `convention` doc with no `symptoms` passes the real schema. U2 outcome checks on the `compound-docs` prose. |
-| AE2 | R4, R5 | U1, U3, U5 | Validator test with `component: rails_model`. Scenario pass: a legacy-value doc under update. |
-| AE3 | R12 | U4, U5 | Scenario pass. |
-| AE4 | R12 | U4, U5 | Scenario pass, including a two-hop chain. |
-| AE5 | R13 | U4, U5 | Scenario pass, including a stale successor. |
-| AE6 | R14, R15 | U4, U5 | Scenario pass: no `docs/solutions/`, and no `critical-patterns.md`. |
+| AE2 | R4, R5 | U1, U3, U4 | Validator test with `component: rails_model`. Scenario pass: a legacy-value doc under update. |
+| AE3 | R12 | U4 | Scenario pass. |
+| AE4 | R12 | U4 | Scenario pass, including a hand-built two-hop chain. |
+| AE5 | R13 | U4 | Scenario pass, including a stale successor. |
+| AE6 | R14, R15 | U4 | Scenario pass: no `docs/solutions/`, and no `critical-patterns.md`. |
 | AE7 | R10, R11 | U1 | Validator tests naming the specific cause. |
 
 ## Scope Boundaries
 
 - No change to the category mapping. The four narrow knowledge types keep sharing `best-practices/`.
 - No change to the researcher's frontmatter `description`, so the registry and docs site do not churn.
-- No curation of the researcher into `CURATED_PERSONAS`. Only the stale comment changes.
+- No curation of the researcher into `CURATED_PERSONAS`. Only the two stale comments (src and test) change.
 - Existing `docs/plans/` links are not rewritten.
+- No writer produces `status: superseded`. Superseding stays a manual edit.
 
 ### Deferred to Separate Tasks
 
@@ -79,7 +80,7 @@ Acceptance examples:
 
 ### Relevant Code and Patterns
 
-Line numbers are as of HEAD `de3ab1bd`.
+Line numbers are as of HEAD `739b3135`. The cited source files are unchanged since `de3ab1bd`, the survey baseline.
 
 - `scripts/content-integrity.ts`: `COMPOUND_SCHEMA_RELATIVE_PATH` (`:1322`), `CompoundSchema` (`:1333`), `loadCompoundSchema` (`:1394`), `checkSolutionEnumField` (`:1575`), `scanSolutionSchema` (`:1651`, hardcoded required fields at `:1693-1712`), `checkSolutionCitations` (`:2478`).
   - The loader reads `values` from `required_fields.component` and `required_fields.severity`, and the bug-track `root_cause` and `resolution_type` lists. It does not read the knowledge-track duplicates of those two lists.
@@ -169,16 +170,16 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 ## Key Technical Decisions
 
 - **Per-skill byte-identical copies.** The Claude Code build flattens skills, so a cross-skill path cannot survive it. `compound-docs/schema.yaml` moves to `references/` so its path matches the canonical layout. Its `references/yaml-schema.md` and `assets/resolution-template.md` become copies of the canonical files, and the parity test loops over `ce-compound-refresh` and `compound-docs`.
-- **`legacy_values` beside `values`.** It is on `component`, `root_cause` and `resolution_type`, and on both the bug-required and knowledge-optional `root_cause` and `resolution_type` lists, because the loader reads the bug list only. Writers read `values` only. The schema comment says update paths preserve existing legacy values and new docs read `values` only.
-- **Vocabulary.** `missing_include` is reworded as a missing eager load or N+1, and `wrong_api` is reworded generically. `missing_association` and `seed_data_update` move to legacy. `rails_version` is legacy and `environment` is documented. `related`, `confidence`, `related_issues` and `resolution_time` stay undocumented.
-- **Lifecycle semantics.** `status` is an enum (`active`, `stale`, `superseded`) checked inside the schema scan. A missing `status` means active and an explicit empty value fails. A separate exported `checkSolutionLifecycle` follows the `checkSolutionCitations` pattern. A superseded doc's `superseded_by` must be a string naming an existing doc in the solution-file set that is not itself superseded. That one rule excludes chains, cycles and self-reference.
-- **Validator strict, researcher lenient.** The validator accepts the repo-root-relative path form that all 11 existing docs use. The researcher also resolves a bare filename by Glob, because hand-edited docs exist.
-- **Researcher resolution is bounded.** It follows chains up to 5 hops with a visited set. An unresolvable successor (missing, absent, cycle or over the cap) omits the doc and adds a line "Skipped: superseded, successor unresolved". This refines origin R12, which says "never returns a superseded doc", by saying what happens when no successor exists.
-- **Refresh keeps the lifecycle consistent.** Keep or Update clears `status: stale`, `stale_reason` and `stale_date`. A ce-compound update does the same. Refresh never overwrites `superseded` with `stale`. Before Replace, Consolidate or Delete removes a file, refresh retargets any `superseded_by` pointing at it to the survivor. Replace keeps deleting the old file but stops writing `supersedes:`.
+- **`legacy_values` beside `values`.** It is on `component`, `root_cause` and `resolution_type`, and on both the bug-required and knowledge-optional `root_cause` and `resolution_type` lists, so writers see the same legacy set on either track. The loader reads the bug lists only. Writers read `values` only. The schema comment says update paths preserve existing legacy values and new docs read `values` only.
+- **Vocabulary.** U1 lists the values. `rails_version` stays under `bug_optional_fields`, marked legacy. That is documentation only: the validator does not read the field today and gains no check for it. `environment` is documented. `related`, `confidence`, `related_issues` and `resolution_time` stay undocumented.
+- **Lifecycle semantics.** `status` is an enum (`active`, `stale`, `superseded`) checked inside the schema scan. A missing `status` means active and an explicit empty value fails. A separate exported `checkSolutionLifecycle` follows the `checkSolutionCitations` pattern. A superseded doc's `superseded_by` must be a string naming a doc in the solution-file set (`docs/solutions/**/*.md`, excluding `README.md`) that parses and is not itself superseded. That one rule excludes chains, cycles and self-reference.
+- **Repo-root path form only.** `superseded_by` is a repo-root `docs/solutions/...` path. No writer produces any other form, and all 11 existing docs use it. Anything else counts as unresolved: the validator fails it, and the researcher skips it with the "Skipped" line.
+- **Researcher resolution is bounded.** The validator forbids chains in validated repos. The researcher's chain-following exists for user repos the validator never checks. It follows up to 5 hops with a visited set. An unresolvable successor (missing, absent, non-conforming path, cycle or over the cap) omits the doc and adds a line "Skipped: superseded, successor unresolved". This refines origin R12, which says "never returns a superseded doc", by saying what happens when no successor exists.
+- **Refresh keeps the lifecycle consistent.** Keep or Update clears `status: stale`, `stale_reason` and `stale_date`. A ce-compound update does the same. Refresh never overwrites `superseded` with `stale`. Replace and Consolidate retarget any `superseded_by` pointing at the removed file to the survivor, before removing it. Delete leaves no survivor, so the superseded docs pointing at the deleted file are deleted in the same action: they are retired and their replacement is gone. Refresh names each one in the Delete action. Interactive mode asks the user to confirm the list, and autofix mode lists them in the report. Replace keeps deleting the old file but stops writing `supersedes:`.
 - **Writers file by the canonical mapping.** Replace files the new doc by the mapping, not "same category as the old doc". `compound-docs` files knowledge docs under `best-practices/`, creating the directory on first use. Refresh Phase 1.5 scans `patterns/` only when it exists, as legacy and read-only.
-- **`compound-docs` loses three options.** The common-solutions write, the critical-pattern suggestion and the Required Reading option go, as does the hotwire-native option. `assets/critical-pattern-template.md` is deleted as an orphan. The Rails worked example and prose become neutral.
-- **config-corpus is regenerated deliberately.** All 14 `expected.opencode.json` files embed the researcher prompt. A throwaway script outside the repo reproduces the corpus helpers and rewrites them. A parse of old and new JSON must show only `learnings-researcher.prompt` differing in each file.
-- **Prose behavior gets one scenario pass.** AE2 to AE6 describe prose. One subagent pass against a fixture corpus in a temp directory verifies them. There is no CI test and no repeated run.
+- **`compound-docs` loses four things.** Two decision-menu options (Required Reading, hotwire-native) and two Step 7 writes (common-solutions, critical-pattern suggestion) go. Removing hotwire-native serves the success criterion that no Rails or product value is offered. `assets/critical-pattern-template.md` is deleted as an orphan. The Rails worked example and prose become neutral.
+- **Prose behavior gets one scenario pass.** AE2 to AE6 and the writer lifecycle rules describe prose. One subagent pass against a fixture corpus in a temp directory verifies them, at the end of U4. There is no CI test and no repeated run.
+- **config-corpus is regenerated once, after the scenario pass.** All 14 `expected.opencode.json` files embed the researcher prompt. A throwaway script outside the repo reproduces the corpus helpers and rewrites them. A parse of old and new JSON must show only `learnings-researcher.prompt` differing in each file. If the prompt changes after regeneration, rerun the regeneration and the parse check.
 - **Single patch.** The release is one `fix(skills)` PR.
 
 ## Open Questions
@@ -193,24 +194,8 @@ No existing `legacy_values` mechanism exists, so U1 introduces it beside `values
 
 - Where the reworded `missing_include` and `wrong_api` glosses live (schema description or `yaml-schema.md`): depends on how the final text reads.
 - The violation `rule` name and message wording for lifecycle violations: set when the type is written, mirroring the citation type.
-- The final wording of the merged researcher output template and its labels: fixed while editing the prompt.
+- The wording of the `Supersedes:` and `Caution:` lines: fixed while editing the prompt.
 - The fixture-corpus layout for the scenario pass: chosen when it is built.
-
-## High-Level Technical Design
-
-> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
-
-How the researcher treats a candidate doc once the status map is built:
-
-| Candidate state | Result |
-|-----------------|--------|
-| Active, or unknown or absent `status` | Returned normally |
-| Stale | Returned with a Caution line |
-| Superseded, successor resolves to an active doc | Successor returned, labelled "Supersedes/retires X". The superseded doc is omitted |
-| Superseded, successor resolves to a stale doc | Successor returned with the label and a Caution line |
-| Superseded, successor unresolvable (missing, absent, cycle, over 5 hops) | Doc omitted. Line added: "Skipped: superseded, successor unresolved" |
-| Several superseded docs share one successor | Successor returned once, listing every doc it supersedes |
-| `_archived/`, `README.md`, `critical-patterns.md` | Never candidates. `critical-patterns.md` is read only if it exists |
 
 ## Implementation Units
 
@@ -232,11 +217,15 @@ How the researcher treats a candidate doc once the status map is built:
 - Modify: `ARCHITECTURE.md` (the content-integrity gate description under Cross-Cutting Concerns)
 
 **Approach:**
-- Schema: 14 offered `component` values and 9 legacy. `legacy_values` on both `root_cause` lists and both `resolution_type` lists. `rails_version` moves out of the offered fields into legacy, with `environment`, `title`, `category`, `last_updated`, `last_refreshed` and the lifecycle fields documented as optional. `optional_fields.status.values` holds the enum.
+- Schema `component`: the current schema has 17 values. Offer 14 and move 9 to `legacy_values`.
+  - Offered: `backend`, `frontend`, `api`, `database`, `background_job`, `authentication`, `infrastructure`, `configuration`, `dependencies`, `tooling`, `development_workflow`, `testing_framework`, `documentation`, `assistant`. Six are new: `backend`, `frontend`, `api`, `infrastructure`, `configuration`, `dependencies`.
+  - Legacy: `rails_model`, `rails_controller`, `rails_view`, `service_object`, `frontend_stimulus`, `hotwire_turbo`, `email_processing`, `brief_system`, `payments`.
+- Schema `root_cause` and `resolution_type`: `missing_association` (root cause) and `seed_data_update` (resolution type) move to `legacy_values`, on both the bug-required and knowledge-optional lists. `missing_include` is reworded as a missing eager load or N+1, and `wrong_api` generically.
+- Schema optional fields: `environment`, `title`, `category`, `last_updated`, `last_refreshed` and the lifecycle fields (`status`, `superseded_by`, `superseded_date`, `stale_reason`, `stale_date`). `optional_fields.status.values` holds the enum. `rails_version` stays under `bug_optional_fields`, marked legacy, with no new validator check.
 - `yaml-schema.md` mirrors the schema: vocabulary, optional fields, lifecycle semantics, and the legacy paragraph.
 - Loader: `legacy_values` is optional. `optional_fields.status.values` is read like its siblings, and a malformed shape throws. `checkSolutionEnumField` accepts the union of `values` and `legacy_values`.
 - Scan: check `status` as an enum after the severity check. Absent means active. An explicit empty value fails.
-- `checkSolutionLifecycle(rootDir, files)`: apply the superseded rule from the decisions above. A `superseded_by` on a doc that is not superseded is ignored. Exempt and unparseable files are skipped. With no schema present it does nothing.
+- `checkSolutionLifecycle(rootDir, files)`: apply the superseded rule from the decisions above. An unparseable successor fails as "unreadable successor". A non-string value fails as "not a string" and an empty string as "empty". A `superseded_by` on a doc that is not superseded is ignored. Exempt and unparseable source docs are skipped. With no schema present it does nothing.
 - Wire the new violation type through `CheckResult`, the runner, the printer, the verbose line and `totalViolations`, as `checkSolutionCitations` does.
 - ARCHITECTURE: describe legacy values, the `status` enum and the lifecycle check.
 
@@ -253,22 +242,24 @@ How the researcher treats a candidate doc once the status map is built:
 - Happy path (AE1): a `convention` doc with no `symptoms` passes.
 - Error path: `component: nonsense` fails, and the message names `component`.
 - Error path (AE7): `status: archived` fails naming `status`. An explicit empty `status:` fails. A missing `status` passes, and so do `active`, `stale` and `superseded`.
-- Error path (AE7): a superseded doc with no `superseded_by` fails with a "missing" cause. A non-string value (list or empty string) fails with a "not a string" cause.
-- Error path (AE7): a superseded doc whose `superseded_by` names no file in the set fails and names the dangling target.
+- Error path (AE7): a superseded doc with no `superseded_by` fails with a "missing" cause.
+- Error path: a non-string `superseded_by` (a list) fails with a "not a string" cause. An empty string fails with an "empty" cause. Each is its own test.
+- Error path (AE7): a superseded doc whose `superseded_by` names no file in the set fails and names the dangling target. A bare filename fails the same way.
+- Error path: a successor that exists but has unparseable frontmatter fails with an "unreadable successor" cause.
+- Edge case: `docs/solutions/README.md` is not in the solution-file set, so naming it as a successor fails.
 - Error path: a target that is itself superseded fails. A self-reference fails. A two-doc cycle fails on both docs.
 - Edge case: `superseded_by` on an active doc is ignored, even when it dangles.
 - Edge case: a superseded doc pointing at a stale doc passes.
 - Edge case: an exempt file and a malformed-frontmatter file are skipped by the lifecycle check, with no duplicate report.
 - Edge case: with no schema file at the root, `checkSolutionLifecycle` returns nothing.
-- Integration: the real schema's `values` and `legacy_values` are disjoint for `component`, `root_cause` and `resolution_type`. The knowledge-optional lists match the bug-required lists.
+- Integration: the real schema's `values` and `legacy_values` are disjoint for `component`, `root_cause` and `resolution_type`.
 - Integration: the aggregate result includes lifecycle violations and counts them in `totalViolations`. The CLI exits non-zero on a dangling `superseded_by` in a fixture repo, and the real repo passes.
 - Integration: `writeSchemaFixture` carries `legacy_values` and the `status` block, and the existing schema tests still pass.
 
 **Verification:**
 - `bun scripts/content-integrity.ts` passes on the current corpus.
 - The parity test passes with the new `ce-compound-refresh` copies.
-- Every new rejection test fails for its named cause when its check is disabled.
-- Rails and product tokens appear in the canonical schema only inside `legacy_values` and the legacy paragraph.
+- Rails and product tokens appear in the canonical schema only inside `legacy_values`, the legacy-marked `rails_version` entry and the legacy paragraph.
 
 - [ ] U2. compound-docs on the canonical contract
 
@@ -294,7 +285,9 @@ How the researcher treats a candidate doc once the status map is built:
   - Step 4: naming works without a symptom.
   - Step 5: the gate validates against `references/schema.yaml`, and `symptoms` is required for the bug track only. The example failure is neutral.
   - Step 6: the hard-coded "lines 49-61" cite becomes a pointer to the mapping section. The mapped directory is created on first use.
-- Remove the common-solutions write and the critical-pattern suggestion from Step 7. Remove the Required Reading and hotwire-native options from the decision menu, and renumber it. Neutralize the Rails worked example and the Rails prose in the overview and context steps.
+- Step 7: remove the common-solutions write and the critical-pattern suggestion.
+- Remove the Required Reading and hotwire-native options from both menus and renumber them: the post-capture decision menu (around `:259-279`) and the Example Scenario output (around `:491-505`).
+- Neutralize the Rails worked example and the Rails prose in the overview and context steps.
 - Point every reference at `references/schema.yaml`.
 
 **Patterns to follow:**
@@ -307,7 +300,6 @@ How the researcher treats a candidate doc once the status map is built:
 - Test expectation for the `SKILL.md` prose: none. No test pins skill body wording, so AE1 rests on the U1 validator test and the verification outcomes below.
 
 **Verification:**
-- Diverging a `compound-docs` copy by hand makes the parity test fail naming the file. Revert it afterward.
 - `bun scripts/generate-registry.ts` then `bun run registry:drift` is clean. The registry lists the moved schema and no longer lists the deleted template.
 - Nothing in the `compound-docs` prose requires `symptoms`, an error message, a stage or a Rails version for a knowledge-track doc.
 - No reference to `patterns/`, `critical-patterns.md`, Required Reading, common-solutions or hotwire-native remains in `compound-docs`.
@@ -327,7 +319,8 @@ How the researcher treats a candidate doc once the status map is built:
 **Approach:**
 - Update paths: one line in each `SKILL.md` saying existing legacy values and `rails_version` are preserved and never rewritten, and that only new docs read `values`.
 - Stale lifecycle: Keep or Update clears `status: stale`, `stale_reason` and `stale_date`, and a ce-compound update does the same. Guard the three stale writes in refresh (`:26`, `:331`, `:527`) so refresh never overwrites `status: superseded`.
-- Retargeting: add a step before Replace, Consolidate or Delete removes a file. Find any doc whose `superseded_by` names that file and point it at the survivor.
+- Retargeting: before Replace or Consolidate removes a file, find any doc whose `superseded_by` names it and point that doc at the survivor.
+- Delete: add a step that finds every doc whose `superseded_by` names the file being deleted, names each in the Delete action, and deletes them in the same action. Interactive mode asks the user to confirm the list. Autofix mode lists them in the report.
 - Replace flow (`:504-522`): file the new doc by the canonical mapping, and stop offering `supersedes:`. The old file is still deleted.
 - Phase 1.5 (`:196-198`): scan `patterns/` only when it exists, as legacy and read-only.
 - Reword the `patterns/` and `critical-patterns` hints at `ce-compound/SKILL.md:221` and `:228`.
@@ -337,20 +330,21 @@ How the researcher treats a candidate doc once the status map is built:
 - Existing `ce-compound` wording for "create the directory on first use".
 
 **Test scenarios:**
-- Test expectation: none. No test pins these skill bodies. Content-integrity still covers phantom references and sub-file links. The U5 scenario pass covers AE2 (a legacy-value doc under update).
+- Test expectation: none. No test pins these skill bodies. Content-integrity still covers phantom references and sub-file links. The U4 scenario pass covers AE2 and the writer lifecycle rules.
 
 **Verification:**
 - `bun scripts/content-integrity.ts` passes.
 - Rails and product tokens are gone from both `SKILL.md` files.
 - Both files give the same rule for clearing stale fields, and neither writes `patterns/` or `critical-patterns.md`.
+- The Delete step, the retargeting step and the stale guard each appear once in `ce-compound-refresh`, and the scenario pass in U4 exercises them.
 
-- [ ] U4. learnings-researcher, ce-review carry-through and config-corpus
+- [ ] U4. learnings-researcher, scenario pass and config-corpus
 
-**Goal:** The researcher discovers what exists, resolves lifecycle status, and reports it. The change flows through to ce-review output, the config-corpus fixtures and the stale Pi comment.
+**Goal:** The researcher discovers what exists, resolves lifecycle status and reports it. One scenario pass verifies the prose behaviors, and the config-corpus fixtures are regenerated once afterward.
 
-**Requirements:** R12, R13, R14, R15, R17
+**Requirements:** R12, R13, R14, R15, R17 (AE2 to AE6)
 
-**Dependencies:** U1
+**Dependencies:** U1, U3
 
 **Files:**
 - Modify: `agents/research/learnings-researcher.md`
@@ -362,37 +356,51 @@ How the researcher treats a candidate doc once the status map is built:
 
 **Approach:**
 - Researcher discovery: list the directories that exist under `docs/solutions/`. Drop the routing rows for missing directories, the hand-typed enum list, the Frontmatter Schema Reference section and its `../../skills/...` path, and the Rails examples.
-- `critical-patterns.md`: read only if it exists, and exclude it from the candidate grep.
-- Status map: one grep for `^(status|superseded_by):` across candidates replaces the 30-line frontmatter read for those fields. Add a step before scoring that applies the resolution table above.
-- Resolution: chains up to 5 hops with a visited set. `superseded_by` may be a repo-root path or a bare filename resolved by Glob. Skip `_archived/` and `README.md`.
-- Output: merge the two templates into one, with optional `Supersedes:` and `Caution:` lines. Fix the Integration Points list to the real callers: `ce:plan`, `ce:review`, `ce:ideate`, `ce:compound` and `deepen-plan`.
+- `critical-patterns.md`: read only if it exists, and exclude it from the candidate grep. Skip `_archived/` and `README.md`.
+- Status map: one grep for `^(status|superseded_by):` across candidates replaces the 30-line frontmatter read for those fields. Add a step before scoring that resolves each candidate:
+  - Active, or unknown or absent `status`: returned normally.
+  - Stale: returned with a `Caution:` line.
+  - Superseded with a resolvable successor: the superseded doc is omitted and the successor is returned, labelled "Supersedes/retires X". A stale successor also gets a `Caution:` line. Several superseded docs sharing one successor return it once, listing all of them.
+  - Superseded with an unresolvable successor: omitted, with the "Skipped" line.
+- Resolution: only the repo-root path form counts. Follow chains up to 5 hops with a visited set.
+- Output: keep the two templates and add optional `Supersedes:` and `Caution:` lines to each. Fix the Integration Points list to the real callers: `ce:plan`, `ce:review`, `ce:ideate`, `ce:compound` and `deepen-plan`.
 - Keep the frontmatter `description` unchanged.
 - ce-review: add one line to each file saying `Supersedes` and `Caution` lines are carried into the Known Pattern output.
-- Pi comment: the researcher no longer references skill paths, so update both comments to say it is not curated and why. Do not add it to `CURATED_PERSONAS`.
-- config-corpus: write a throwaway script outside the repo that reproduces `canonicalJson` and `runCorpusEntry`, then rewrite the 14 files. Parse old and new JSON for each and confirm only `learnings-researcher.prompt` differs.
+- Pi comments: the researcher no longer references skill paths, so update both comments to say it is not curated and why. Do not add it to `CURATED_PERSONAS`.
+- Scenario pass, once the prompt and U3 prose are final: build a fixture corpus in a temp directory outside the repo and run one subagent pass against the researcher and the refresh actions. Record the results for the PR body.
+- config-corpus, after the pass: write a throwaway script outside the repo that reproduces `canonicalJson` and `runCorpusEntry`, then rewrite the 14 files. Parse old and new JSON for each and confirm only `learnings-researcher.prompt` differs. If the pass changes the prompt, rerun this step.
 
 **Patterns to follow:**
 - `tests/fixtures/config-corpus/README.md` on deliberate regeneration.
 - The existing grep-first structure of the researcher.
 
 **Test scenarios:**
-- Integration: `tests/unit/config-corpus.test.ts` passes byte-for-byte on the regenerated fixtures.
-- Integration: for each of the 14 fixtures, the old and new JSON differ only at `learnings-researcher.prompt`.
+- Test expectation for the prompt and refresh prose: none in CI. No test pins their wording. The scenario pass runs once and is not repeated.
+- AE6: with no `docs/solutions/`, or no `critical-patterns.md`, the researcher completes without reading a missing file and without an error.
+- AE3: when A (superseded, `superseded_by` B) and B both match, only B is returned.
+- AE4: when only A matches, B is returned labelled "Supersedes/retires A". The fixture chain is hand-built, since the validator forbids chains: when B is superseded by C, C is returned. Two superseded docs sharing one successor return it once.
+- AE5: a stale match, and a stale successor of a superseded match, each carry a `Caution:` line.
+- Edge case: a cycle, a dangling pointer, a bare-filename successor or a chain over 5 hops omits the doc and adds the "Skipped" line. An unknown status is treated as active.
+- AE2: refresh Update on a `rails_model` doc leaves the value in place, raises no off-vocabulary finding, and a new doc written there is not offered `rails_model`.
+- Refresh Update clears `status: stale`, `stale_reason` and `stale_date`. Refresh never overwrites `status: superseded` with `stale`.
+- Refresh Replace and Consolidate retarget a doc whose `superseded_by` named the removed file to the survivor.
+- Refresh Delete of a file that other docs supersede into deletes those docs in the same action, names them, and asks for confirmation in interactive mode.
+- Integration: `tests/unit/config-corpus.test.ts` passes byte-for-byte on the regenerated fixtures, and the old and new JSON differ only at `learnings-researcher.prompt` in all 14.
 - Integration: `tests/unit/generate-pi-subagents-personas.test.ts` and `tests/unit/ce-review-selection-contract.test.ts` pass after the comment and one-line edits.
-- Test expectation for the researcher prompt itself: none. No test pins its wording. AE3 to AE6 are verified by the U5 scenario pass.
 
 **Verification:**
 - `bun run registry:drift` and `bun scripts/generate-pi-subagents-personas.ts --check` report no change. The `description` is untouched and the researcher is not curated.
 - The prompt contains no hand-typed enum list, no relative skill path and no Rails example.
 - No instruction in the prompt reads a path that may not exist unconditionally.
+- The scenario-pass results are recorded, and the fixtures were regenerated after the last prompt change.
 
-- [ ] U5. Corpus tidy and prose-behavior verification
+- [ ] U5. Corpus tidy
 
-**Goal:** Systematic's own corpus satisfies the contract, and the prose behaviors are verified once against a fixture corpus.
+**Goal:** Systematic's own corpus satisfies the contract.
 
-**Requirements:** R18, R19, R12, R13, R14, R15 (AE2 to AE6)
+**Requirements:** R18, R19
 
-**Dependencies:** U1, U2, U3, U4
+**Dependencies:** U1
 
 **Files:**
 - Move: `docs/solutions/code-quality/ocx-registry-review-fixes.md` to `docs/solutions/best-practices/`
@@ -400,47 +408,30 @@ How the researcher treats a candidate doc once the status map is built:
 - Move: `docs/solutions/workflow-patterns/iterative-oracle-plan-review.md` to `docs/solutions/workflow-issues/`
 - Move: `docs/solutions/workflow-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md` to `docs/solutions/integration-issues/`
 - Move: `docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md` to `docs/solutions/integration-issues/`
-- Modify: `docs/solutions/best-practices/undecidable-detection-honest-ban-rule-2026-06-04.md` and `docs/solutions/best-practices/content-integrity-has-no-warning-channel-2026-06-06.md` (`category: best_practice`)
+- Modify: `docs/solutions/best-practices/undecidable-detection-honest-ban-rule-2026-06-04.md` and `docs/solutions/best-practices/content-integrity-has-no-warning-channel-2026-06-06.md` (`category: best_practice` to `best-practices`)
 - Modify: inbound references in `docs/solutions/**`, including `related:` lists
 
 **Approach:**
-- Capture the dead-link baseline before moving anything. Research counted 7, but a Markdown-link-only scan counts 5. Fix the method first and compare like with like.
+- Measure the dead-link baseline before moving anything, with a Markdown-link scan of `docs/solutions/` only (5 at HEAD). Compare like with like afterward.
 - Move with history preserved. Set each moved doc's `category` to its new directory name. The SyncCEP doc is already correct. Fix `components` to `related_components` in the OCX doc. Remove the emptied `code-quality/` and `workflow-patterns/`.
-- Rewrite inbound references by slug, not only by directory-qualified path, since relative links and bare filenames both occur. At HEAD the slug search hits 12 files outside `docs/plans/`, all under `docs/solutions/` and 3 of them the moved docs, and 5 files in `docs/plans/`, which stay untouched.
-- Scenario pass: build a fixture corpus in a temp directory outside the repo, run one subagent pass against the researcher and the refresh Update path, and record the results for the PR body. Cases:
-  - no `docs/solutions/`
-  - no `critical-patterns.md`
-  - a chain, including two superseded docs sharing one successor
-  - a cycle
-  - a dangling pointer
-  - an unknown status
-  - a stale successor
-  - a bare-filename successor
-  - a legacy-value doc under update, checked for preserved `component: rails_model` and no offer of it for a new doc
+- Rewrite inbound references by slug, not only by directory-qualified path, since relative links and bare filenames both occur. At HEAD the slug search hits 12 files outside `docs/plans/`, all under `docs/solutions/` and 3 of them the moved docs.
+- `docs/plans/` has 9 files besides this plan that reference the moved slugs. They stay untouched, including the live link at `docs/plans/2026-04-18-001-feat-content-integrity-gate-plan.md:398`, which becomes dead. That is accepted.
 
 **Test scenarios:**
-- Test expectation: none for CI. The scenario pass is run once and not repeated. The per-case expectations follow.
-- AE6: with no `docs/solutions/` or no `critical-patterns.md`, the researcher completes without reading a missing file and without an error.
-- AE3: when A (superseded, `superseded_by` B) and B both match, only B is returned.
-- AE4: when only A matches, B is returned labelled "Supersedes/retires A". When B is superseded by C, C is returned.
-- AE5: a stale match, and a stale successor of a superseded match, each carry a Caution line.
-- Edge case: a cycle, a dangling pointer, or a chain over 5 hops omits the doc and adds the "Skipped" line. An unknown status is treated as active. A bare-filename successor resolves.
-- AE2: refresh Update on a `rails_model` doc leaves the value in place and raises no off-vocabulary finding.
+- Test expectation: none. The moves are verified by search and by the gates below.
 
 **Verification:**
 - A search for the five old paths returns no hit under `docs/solutions/`, and the dead-link set equals the baseline.
 - The five moved docs sit in the directory their `problem_type` maps to, with matching `category`.
 - No doc has `category: best_practice`.
-- `bun scripts/content-integrity.ts` passes on the tidied corpus, and fails on a deliberately bad `status` or dangling `superseded_by` in a temp fixture (covered by U1).
-- A Rails-token search across the four consumers hits only `legacy_values` and the legacy paragraph. Other agents that mention Rails for unrelated reasons are out of scope.
+- `bun scripts/content-integrity.ts` passes on the tidied corpus.
+- A Rails-token search across the four consumers hits only `legacy_values`, the legacy-marked `rails_version` entry and the legacy paragraph. Other agents that mention Rails for unrelated reasons are out of scope.
 - `bun scripts/generate-registry.ts`, `bun run registry:drift`, `bun scripts/generate-pi-subagents-personas.ts --check` and markdownlint on changed Markdown are clean.
-- The scenario-pass results are recorded for the PR body.
-
 ## System-Wide Impact
 
 - **Interaction graph:** `ce:plan`, `ce:ideate`, `ce:compound` (Related Docs Finder), `deepen-plan` and `ce:review` dispatch the researcher. Only `ce:review` renders its output, in the Known Pattern section. The others read it as text.
 - **Error propagation:** a missing `docs/solutions/` or `critical-patterns.md` is not an error. An unresolvable successor surfaces as a "Skipped" line, not a failure.
-- **State lifecycle risks:** refresh deletion can strand a `superseded_by` pointer, so retargeting runs before any removal. The validator catches whatever slips through.
+- **State lifecycle risks:** refresh removal can strand a `superseded_by` pointer. Replace and Consolidate retarget it to the survivor, and Delete removes the referring docs with it. The validator runs only in Systematic's CI, so in user repos the writer prose is the only protection for the lifecycle.
 - **API surface parity:** `ce-compound`, `ce-compound-refresh` and `compound-docs` must stay byte-identical on three files. The parity test enforces it.
 - **Delivery paths:**
   - npm ships `skills` and `agents` via the package `files` list.
@@ -456,7 +447,7 @@ How the researcher treats a candidate doc once the status map is built:
 |------|------------|
 | config-corpus churn: 14 fixtures change for one prompt edit. | Regenerate deliberately with a script outside the repo. Parse old and new JSON and require that only `learnings-researcher.prompt` differs. Explain it in the PR body. |
 | Missed inbound links after the moves: no link checker exists. | Search by slug, capture the dead-link baseline first, and require zero hits for the old paths and an unchanged dead-link set. |
-| Prose behavior cannot be CI-tested. | One scenario pass with cited results, plus validator tests for the parts that are code. Accept that the prose is not regression-protected. |
+| Prose behavior cannot be CI-tested. | One scenario pass at the end of U4 with cited results, plus validator tests for the parts that are code. Accept that the prose is not regression-protected. |
 | The new lifecycle check fails on an existing doc. | All 11 superseded docs already name existing, non-superseded targets, so the corpus passes before U5. |
 | Parity copies drift after this patch. | The loop-based parity test fails CI on any divergence. |
 | `compound-docs/schema.yaml` has an outside consumer. | Search for references before moving it. Only `SKILL.md` and the registry reference it at HEAD. |
@@ -464,7 +455,7 @@ How the researcher treats a candidate doc once the status map is built:
 ## Documentation / Operational Notes
 
 - `ARCHITECTURE.md`: update the content-integrity description for legacy values, the `status` enum and the lifecycle check (U1).
-- The PR body lists the removed `compound-docs` options (common-solutions, Required Reading, hotwire-native). It states that no user docs are migrated. It explains the config-corpus regeneration and cites the scenario-pass results.
+- The PR body lists the removed `compound-docs` items: the Required Reading and hotwire-native menu options, and the common-solutions and critical-pattern Step 7 writes. It states that no user docs are migrated. It explains the config-corpus regeneration and cites the scenario-pass results.
 - The docs-site reference content is generated and gitignored, so it needs no manual edit. `HARNESSES.md` has nothing on this surface.
 
 ## Sources & References
