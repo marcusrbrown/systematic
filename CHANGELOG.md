@@ -4,6 +4,25 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.26.3](https://github.com/marcusrbrown/systematic/compare/v3.26.2...v3.26.3) (2026-10-26)
+
+### Bug Fixes
+
+* **skills:** make the solution-doc contract stack-neutral and consistent ([#1228](https://github.com/marcusrbrown/systematic/issues/1228)) ([aca6b9a](https://github.com/marcusrbrown/systematic/commit/aca6b9a632136aeb0a06a297d3e539036ebbb72c))
+
+### Documentation
+
+* **contributing:** add test isolation, verification and release-title rules to AGENTS.md ([#1224](https://github.com/marcusrbrown/systematic/issues/1224)) ([1ab2fe8](https://github.com/marcusrbrown/systematic/commit/1ab2fe8ef211f8e586035bee3f5d6bf888f727fa))
+* **plans:** reconcile plan statuses with shipped work and record the 2026-10-25 ideation ([#1225](https://github.com/marcusrbrown/systematic/issues/1225)) ([de3ab1b](https://github.com/marcusrbrown/systematic/commit/de3ab1bdaab9e02465d09b0019ef8835588938f9))
+* **solutions:** record restating CI-only lifecycle rules in agent prose and reporting circular YAML values ([#1230](https://github.com/marcusrbrown/systematic/issues/1230)) ([e2e7644](https://github.com/marcusrbrown/systematic/commit/e2e764471680a06138097533e7be42032df79f94))
+* **solutions:** record sizing a skill refresh to the ask and inferring the main worktree root ([#1222](https://github.com/marcusrbrown/systematic/issues/1222)) ([671d8b5](https://github.com/marcusrbrown/systematic/commit/671d8b563fd8b232b0521e0403582c3e56f64f44))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.125.4 ([#1226](https://github.com/marcusrbrown/systematic/issues/1226)) ([1fade54](https://github.com/marcusrbrown/systematic/commit/1fade5451b26373dcc9d99fff35a86fd89579fb9))
+* **deps:** update fro-bot/agent to v0.125.5 ([#1227](https://github.com/marcusrbrown/systematic/issues/1227)) ([4b395a5](https://github.com/marcusrbrown/systematic/commit/4b395a5bc97bb1ad876673297754334f2a5b3e2a))
+* **dev:** update dependency agent-browser to v0.39.2 ([#1223](https://github.com/marcusrbrown/systematic/issues/1223)) ([0cbde86](https://github.com/marcusrbrown/systematic/commit/0cbde86f1ffbee9afa8c350932aaa6a1c7c7e106))
+
 ## [3.26.2](https://github.com/marcusrbrown/systematic/compare/v3.26.1...v3.26.2) (2026-10-25)
 
 ### Bug Fixes
