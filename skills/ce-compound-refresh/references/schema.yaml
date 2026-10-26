@@ -77,23 +77,33 @@ required_fields:
   component:
     type: enum
     values:
+      - backend
+      - frontend
+      - api
+      - database
+      - background_job
+      - authentication
+      - infrastructure
+      - configuration
+      - dependencies
+      - tooling
+      - development_workflow
+      - testing_framework
+      - documentation
+      - assistant
+    # Accepted by validators and refresh, never offered to writers. Existing
+    # docs that carry these values keep passing; do not rewrite them. Only new
+    # docs read `values` above.
+    legacy_values:
       - rails_model
       - rails_controller
       - rails_view
       - service_object
-      - background_job
-      - database
       - frontend_stimulus
       - hotwire_turbo
       - email_processing
       - brief_system
-      - assistant
-      - authentication
       - payments
-      - development_workflow
-      - testing_framework
-      - documentation
-      - tooling
     description: "Component involved"
 
   severity:
@@ -117,7 +127,6 @@ track_rules:
       root_cause:
         type: enum
         values:
-          - missing_association
           - missing_include
           - missing_index
           - wrong_api
@@ -134,7 +143,12 @@ track_rules:
           - inadequate_documentation
           - missing_tooling
           - incomplete_setup
-        description: "Fundamental technical cause of the problem"
+        legacy_values:
+          - missing_association
+        description: >-
+          Fundamental technical cause of the problem.
+          missing_include: a missing eager load or an N+1 query.
+          wrong_api: an API used in a way that does not fit the situation.
       resolution_type:
         type: enum
         values:
@@ -147,6 +161,7 @@ track_rules:
           - workflow_improvement
           - documentation_update
           - tooling_addition
+        legacy_values:
           - seed_data_update
         description: "Type of fix applied"
 
@@ -163,7 +178,6 @@ track_rules:
       root_cause:
         type: enum
         values:
-          - missing_association
           - missing_include
           - missing_index
           - wrong_api
@@ -180,7 +194,12 @@ track_rules:
           - inadequate_documentation
           - missing_tooling
           - incomplete_setup
-        description: "Underlying cause, if there is a specific one (optional for knowledge track)"
+        legacy_values:
+          - missing_association
+        description: >-
+          Underlying cause, if there is a specific one (optional for knowledge track).
+          missing_include: a missing eager load or an N+1 query.
+          wrong_api: an API used in a way that does not fit the situation.
       resolution_type:
         type: enum
         values:
@@ -193,6 +212,7 @@ track_rules:
           - workflow_improvement
           - documentation_update
           - tooling_addition
+        legacy_values:
           - seed_data_update
         description: "Type of change, if applicable (optional for knowledge track)"
 
@@ -207,12 +227,66 @@ optional_fields:
     max_items: 8
     description: "Search keywords, lowercase and hyphen-separated"
 
+  title:
+    type: string
+    description: "Human-readable title of the learning"
+
+  environment:
+    type: string
+    description: "Runtime, platform, or toolchain the learning applies to (free text)"
+
+  category:
+    type: string
+    description: "Directory name under docs/solutions/ the doc is filed in (matches the category mapping)"
+
+  last_updated:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was last edited (YYYY-MM-DD)"
+
+  last_refreshed:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was last verified against the codebase (YYYY-MM-DD)"
+
+  # Lifecycle fields. A missing status means active. Writers keep these
+  # consistent: updating or verifying a doc clears status: stale together with
+  # stale_reason and stale_date. Superseding is a manual edit; nothing writes it.
+  status:
+    type: enum
+    values:
+      - active
+      - stale
+      - superseded
+    description: "Lifecycle state. Missing means active."
+
+  superseded_by:
+    type: string
+    description: >-
+      Repo-root path of the doc that replaces this one, for example
+      docs/solutions/best-practices/example.md. Required when status is superseded.
+      The target must exist and must not itself be superseded.
+
+  superseded_date:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was superseded (YYYY-MM-DD)"
+
+  stale_reason:
+    type: string
+    description: "Why the doc is marked stale. Present only while status is stale."
+
+  stale_date:
+    type: string
+    pattern: '^\d{4}-\d{2}-\d{2}$'
+    description: "Date the doc was marked stale (YYYY-MM-DD). Present only while status is stale."
+
 # --- Fields optional for bug track only -------------------------------------
 bug_optional_fields:
   rails_version:
     type: string
     pattern: '^\d+\.\d+\.\d+$'
-    description: "Rails version in X.Y.Z format. Only relevant for bug-track docs."
+    description: "LEGACY. Rails version in X.Y.Z format. Preserved on existing bug-track docs, never offered to writers. Documentation only: the validator does not read it."
 
 # --- Backward compatibility --------------------------------------------------
 # Docs created before the track system was introduced may have bug-track
@@ -221,6 +295,13 @@ bug_optional_fields:
 #   - Bug-track fields present on a knowledge-track doc are harmless. Do not
 #     strip them during refresh unless the doc is being rewritten for other reasons.
 #   - When creating NEW docs, follow the track rules above.
+#
+# Legacy vocabulary. Older docs may carry Rails and product-specific values:
+# component values listed under `legacy_values`, the root_cause
+# missing_association, the resolution_type seed_data_update, and the
+# rails_version field. Validators and refresh accept them. Update paths
+# preserve them and never rewrite them. Only new docs read `values`, so writers
+# are never offered a legacy value.
 
 # --- Validation rules --------------------------------------------------------
 validation_rules:
@@ -230,10 +311,13 @@ validation_rules:
   - "Knowledge-track docs have no additional required fields beyond the shared ones"
   - "Bug-track fields on existing knowledge-track docs are harmless (see backward compatibility note)"
   - "Track-specific optional fields may be included but are not required"
-  - "Enum fields must match allowed values exactly"
+  - "Enum fields must match allowed values exactly; legacy_values are accepted but never offered to writers"
+  - "status, if present, must be one of active, stale, superseded; missing means active"
+  - "A doc with status superseded must carry superseded_by naming an existing doc that is not itself superseded"
+  - "Clearing status: stale also clears stale_reason and stale_date"
   - "Array fields must respect min_items/max_items when specified"
   - "date must match YYYY-MM-DD format"
-  - "rails_version, if provided, must match X.Y.Z format and only applies to bug-track docs"
+  - "Legacy fields and values (see the backward compatibility note) are preserved on update and never offered to writers"
   - "tags should be lowercase and hyphen-separated"
   - |-
     YAML quoting: scalar values that contain ' #' (space-hash) must be

@@ -233,10 +233,17 @@ checkboxes. It does not inspect deliverables or verify that work shipped. `check
 additionally validates every `docs/solutions/**` frontmatter against
 `skills/ce-compound/references/schema.yaml`. The enum vocabularies (`problem_type`, `component`,
 `severity`, bug-track `root_cause`/`resolution_type`) and the `date` pattern are read from that
-schema file at runtime, so changing a vocabulary there takes effect without editing the gate. The
-required-field list is hardcoded in the gate, and schema constraints such as array maximums and
-optional-field patterns are not enforced — changing either still requires a matching validator
-change. `checkSolutionCitations` verifies every `path:line` citation in `docs/solutions/**`: the cited
+schema file at runtime, so changing a vocabulary there takes effect without editing the gate.
+`component`, `root_cause` and `resolution_type` also carry optional `legacy_values`: Rails and
+product-specific values that the gate accepts but writers are never offered. The optional `status`
+field is an enum (`active`, `stale`, `superseded`) read from `optional_fields.status.values`, and a
+missing `status` means active. The required-field list is hardcoded in the gate, and schema
+constraints such as array maximums and optional-field patterns are not enforced — changing either
+still requires a matching validator change. `checkSolutionLifecycle` additionally requires every
+`status: superseded` doc to carry a `superseded_by` repo-root path naming an existing doc under
+`docs/solutions/` (not `README.md`) that parses and is not itself superseded; that one rule rules out
+chains, cycles and self-reference, and `superseded_by` on any other doc is ignored.
+`checkSolutionCitations` verifies every `path:line` citation in `docs/solutions/**`: the cited
 file exists as a regular file outside `dist/`, `node_modules/`, `.slim/`, `.context/` and `.worktrees/`, the
 line or range is inside it, the span is not only blank or comment lines, and a compound identifier
 named in the citing sentence is inside the span. Must pass before any release.

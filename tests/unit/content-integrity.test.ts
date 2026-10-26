@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import yaml from 'js-yaml'
 import {
   type AllowlistEntry,
   BANNED_PATTERNS,
@@ -26,6 +27,7 @@ import {
   checkRemovedNamesOverlap,
   checkSkillReferenceIntegrity,
   checkSolutionCitations,
+  checkSolutionLifecycle,
   checkSolutionSchema,
   checkStalePlanStatus,
   checkStaleSkillLoadNames,
@@ -35,6 +37,7 @@ import {
   loadAllowlist,
   matchesPathGlob,
   type SolutionCitationViolation,
+  type SolutionLifecycleViolation,
   SUBFILE_DIRECTORY_NAMES,
 } from '../../scripts/content-integrity.ts'
 
@@ -126,7 +129,8 @@ const FIXTURE_PLUGIN_HOOKS = [
 /**
  * Minimal ce:compound schema fixture matching the shape `loadCompoundSchema`
  * reads: tracks.{bug,knowledge}.problem_types, required_fields.{component,
- * severity,date}, and track_rules.bug.required.{root_cause,resolution_type}.
+ * severity,date}, track_rules.bug.required.{root_cause,resolution_type},
+ * their optional `legacy_values`, and optional_fields.status.values.
  * `extraProblemType` lets a test prove the gate reads vocabulary from this
  * file at runtime rather than a hardcoded list.
  */
@@ -163,6 +167,8 @@ function writeSchemaFixture(
       '    values:',
       '      - tooling',
       '      - documentation',
+      '    legacy_values:',
+      '      - rails_model',
       '  severity:',
       '    type: enum',
       '    values:',
@@ -180,11 +186,22 @@ function writeSchemaFixture(
       '        values:',
       '          - config_error',
       '          - logic_error',
+      '        legacy_values:',
+      '          - missing_association',
       '      resolution_type:',
       '        type: enum',
       '        values:',
       '          - code_fix',
       '          - documentation_update',
+      '        legacy_values:',
+      '          - seed_data_update',
+      'optional_fields:',
+      '  status:',
+      '    type: enum',
+      '    values:',
+      '      - active',
+      '      - stale',
+      '      - superseded',
       '',
     ].join('\n'),
   )
@@ -4362,6 +4379,938 @@ describe('checkSolutionSchema', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Solution-doc contract: legacy vocabulary, status enum (real schema)
+// ---------------------------------------------------------------------------
+
+const OFFERED_COMPONENTS = [
+  'backend',
+  'frontend',
+  'api',
+  'database',
+  'background_job',
+  'authentication',
+  'infrastructure',
+  'configuration',
+  'dependencies',
+  'tooling',
+  'development_workflow',
+  'testing_framework',
+  'documentation',
+  'assistant',
+]
+
+const LEGACY_COMPONENTS = [
+  'rails_model',
+  'rails_controller',
+  'rails_view',
+  'service_object',
+  'frontend_stimulus',
+  'hotwire_turbo',
+  'email_processing',
+  'brief_system',
+  'payments',
+]
+
+const REAL_SCHEMA_PATH = path.join(
+  REPO_ROOT,
+  'skills/ce-compound/references/schema.yaml',
+)
+
+function solutionFrontmatter(...lines: string[]): string {
+  return ['---', ...lines, '---', 'body'].join('\n')
+}
+
+const KNOWLEDGE_BASE = [
+  'module: foo',
+  'date: 2026-01-01',
+  'problem_type: best_practice',
+  'component: tooling',
+  'severity: low',
+] as const
+
+describe('checkSolutionSchema — real schema: legacy vocabulary and status', () => {
+  /** Validates one doc against a temp-root copy of the real canonical schema. */
+  function validateAgainstRealSchema(doc: string) {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+        fs.readFileSync(REAL_SCHEMA_PATH, 'utf8'),
+      )
+      writeFile(root, 'docs/solutions/best-practices/doc.md', doc)
+      return checkSolutionSchema(root, ['docs/solutions/best-practices/doc.md'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  function withOverride(field: string, value: string): string[] {
+    return KNOWLEDGE_BASE.map((line) =>
+      line.startsWith(`${field}:`) ? `${field}:${value}` : line,
+    )
+  }
+
+  describe('component vocabulary', () => {
+    test.each(OFFERED_COMPONENTS)(
+      'offered component %s passes',
+      (component) => {
+        expect(
+          validateAgainstRealSchema(
+            solutionFrontmatter(...withOverride('component', ` ${component}`)),
+          ),
+        ).toEqual([])
+      },
+    )
+
+    test.each(LEGACY_COMPONENTS)(
+      'legacy component %s is still accepted',
+      (component) => {
+        expect(
+          validateAgainstRealSchema(
+            solutionFrontmatter(...withOverride('component', ` ${component}`)),
+          ),
+        ).toEqual([])
+      },
+    )
+
+    test('an unknown component fails and the message names component', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(...withOverride('component', ' nonsense')),
+      )
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        rule: 'schema-violation',
+        field: 'component',
+      })
+      expect(violations[0]?.message).toContain('`component`')
+      expect(violations[0]?.message).toContain('"nonsense"')
+    })
+
+    test('a legacy root_cause value is not valid as a component', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(
+          ...withOverride('component', ' missing_association'),
+        ),
+      )
+      expect(violations).toEqual([
+        expect.objectContaining({ field: 'component' }),
+      ])
+    })
+  })
+
+  describe('root_cause and resolution_type legacy values', () => {
+    const BUG_BASE = [
+      'module: foo',
+      'date: 2026-01-01',
+      'problem_type: build_error',
+      'component: tooling',
+      'severity: high',
+      'symptoms:',
+      '  - "build fails"',
+    ]
+
+    test('a bug doc with the legacy root_cause and resolution_type passes', () => {
+      expect(
+        validateAgainstRealSchema(
+          solutionFrontmatter(
+            ...BUG_BASE,
+            'root_cause: missing_association',
+            'resolution_type: seed_data_update',
+          ),
+        ),
+      ).toEqual([])
+    })
+
+    test('a knowledge doc carrying the same legacy values passes', () => {
+      expect(
+        validateAgainstRealSchema(
+          solutionFrontmatter(
+            ...KNOWLEDGE_BASE,
+            'root_cause: missing_association',
+            'resolution_type: seed_data_update',
+          ),
+        ),
+      ).toEqual([])
+    })
+
+    test('an unknown root_cause still fails naming root_cause', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(
+          ...BUG_BASE,
+          'root_cause: nonsense',
+          'resolution_type: code_fix',
+        ),
+      )
+      expect(violations).toEqual([
+        expect.objectContaining({ field: 'root_cause' }),
+      ])
+    })
+
+    test('an unknown resolution_type still fails naming resolution_type', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(
+          ...BUG_BASE,
+          'root_cause: config_error',
+          'resolution_type: nonsense',
+        ),
+      )
+      expect(violations).toEqual([
+        expect.objectContaining({ field: 'resolution_type' }),
+      ])
+    })
+  })
+
+  describe('knowledge track (AE1)', () => {
+    test('a convention doc with no symptoms passes', () => {
+      expect(
+        validateAgainstRealSchema(
+          solutionFrontmatter(
+            ...withOverride('problem_type', ' convention'),
+            'applies_when:',
+            '  - "naming new modules"',
+          ),
+        ),
+      ).toEqual([])
+    })
+  })
+
+  describe('status enum', () => {
+    test('a missing status passes (means active)', () => {
+      expect(
+        validateAgainstRealSchema(solutionFrontmatter(...KNOWLEDGE_BASE)),
+      ).toEqual([])
+    })
+
+    test.each(['active', 'stale', 'superseded'])(
+      'status %s passes the schema scan',
+      (status) => {
+        expect(
+          validateAgainstRealSchema(
+            solutionFrontmatter(...KNOWLEDGE_BASE, `status: ${status}`),
+          ),
+        ).toEqual([])
+      },
+    )
+
+    test('an unknown status fails and the message names status', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(...KNOWLEDGE_BASE, 'status: archived'),
+      )
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        rule: 'schema-violation',
+        field: 'status',
+      })
+      expect(violations[0]?.message).toContain('`status`')
+      expect(violations[0]?.message).toContain('"archived"')
+    })
+
+    test('an explicit empty status fails naming status', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(...KNOWLEDGE_BASE, 'status:'),
+      )
+      expect(violations).toEqual([
+        expect.objectContaining({
+          rule: 'schema-violation',
+          field: 'status',
+        }),
+      ])
+    })
+
+    test('a status with the wrong case fails (enum match is exact)', () => {
+      const violations = validateAgainstRealSchema(
+        solutionFrontmatter(...KNOWLEDGE_BASE, 'status: Superseded'),
+      )
+      expect(violations).toEqual([expect.objectContaining({ field: 'status' })])
+    })
+  })
+})
+
+describe('real schema.yaml — vocabulary contract', () => {
+  type Mapping = Record<string, unknown>
+
+  function asMapping(value: unknown, label: string): Mapping {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`${label} must be a mapping`)
+    }
+    return value as Mapping
+  }
+
+  function stringList(value: unknown, label: string): string[] {
+    if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
+      throw new Error(`${label} must be an array of strings`)
+    }
+    return value
+  }
+
+  const schema = asMapping(
+    yaml.load(fs.readFileSync(REAL_SCHEMA_PATH, 'utf8')),
+    'schema',
+  )
+  const requiredFields = asMapping(schema.required_fields, 'required_fields')
+  const trackRules = asMapping(schema.track_rules, 'track_rules')
+  const bugRules = asMapping(trackRules.bug, 'track_rules.bug')
+  const knowledgeRules = asMapping(
+    trackRules.knowledge,
+    'track_rules.knowledge',
+  )
+  const bugRequired = asMapping(bugRules.required, 'track_rules.bug.required')
+  const knowledgeOptional = asMapping(
+    knowledgeRules.optional,
+    'track_rules.knowledge.optional',
+  )
+
+  const fields: ReadonlyArray<[string, Mapping]> = [
+    ['component', asMapping(requiredFields.component, 'component')],
+    ['bug root_cause', asMapping(bugRequired.root_cause, 'bug root_cause')],
+    [
+      'bug resolution_type',
+      asMapping(bugRequired.resolution_type, 'bug resolution_type'),
+    ],
+    [
+      'knowledge root_cause',
+      asMapping(knowledgeOptional.root_cause, 'knowledge root_cause'),
+    ],
+    [
+      'knowledge resolution_type',
+      asMapping(knowledgeOptional.resolution_type, 'knowledge resolution_type'),
+    ],
+  ]
+
+  test.each(fields)(
+    '%s: values and legacy_values are disjoint, and both non-empty',
+    (label, field) => {
+      const values = stringList(field.values, `${label}.values`)
+      const legacy = stringList(field.legacy_values, `${label}.legacy_values`)
+      expect(values.length).toBeGreaterThan(0)
+      expect(legacy.length).toBeGreaterThan(0)
+      expect(values.filter((v) => legacy.includes(v))).toEqual([])
+    },
+  )
+
+  test('component offers exactly the 14 stack-neutral values', () => {
+    const component = fields[0]?.[1] ?? {}
+    expect(
+      [...stringList(component.values, 'component.values')].sort(),
+    ).toEqual([...OFFERED_COMPONENTS].sort())
+    expect(
+      [
+        ...stringList(component.legacy_values, 'component.legacy_values'),
+      ].sort(),
+    ).toEqual([...LEGACY_COMPONENTS].sort())
+  })
+
+  test('both tracks carry the same root_cause and resolution_type vocabularies', () => {
+    const [, bugRoot, bugResolution, knowledgeRoot, knowledgeResolution] =
+      fields.map(([, field]) => field)
+    expect(knowledgeRoot).toMatchObject({
+      values: bugRoot?.values,
+      legacy_values: bugRoot?.legacy_values,
+    })
+    expect(knowledgeResolution).toMatchObject({
+      values: bugResolution?.values,
+      legacy_values: bugResolution?.legacy_values,
+    })
+  })
+
+  test('the legacy values are exactly the Rails-flavored ones', () => {
+    const [, bugRoot, bugResolution] = fields.map(([, field]) => field)
+    expect(bugRoot?.legacy_values).toEqual(['missing_association'])
+    expect(bugResolution?.legacy_values).toEqual(['seed_data_update'])
+  })
+
+  test('optional_fields documents status with the three-value enum', () => {
+    const optional = asMapping(schema.optional_fields, 'optional_fields')
+    const status = asMapping(optional.status, 'optional_fields.status')
+    expect(stringList(status.values, 'status.values')).toEqual([
+      'active',
+      'stale',
+      'superseded',
+    ])
+    for (const key of [
+      'superseded_by',
+      'superseded_date',
+      'stale_reason',
+      'stale_date',
+      'environment',
+      'title',
+      'category',
+      'last_updated',
+      'last_refreshed',
+    ]) {
+      expect(Object.hasOwn(optional, key)).toBe(true)
+    }
+  })
+})
+
+describe('loadCompoundSchema — legacy_values and status shape', () => {
+  function loadWith(mutate: (schemaText: string) => string): void {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      const schemaPath = path.join(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+      )
+      const original = fs.readFileSync(schemaPath, 'utf8')
+      const mutated = mutate(original)
+      // A no-op mutation would make the test vacuous.
+      expect(mutated).not.toBe(original)
+      fs.writeFileSync(schemaPath, mutated)
+      checkSolutionSchema(root, [])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  test('legacy_values is optional: a schema without any loads and rejects legacy values', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      const schemaPath = path.join(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+      )
+      const stripped = fs
+        .readFileSync(schemaPath, 'utf8')
+        .split('\n')
+        .filter(
+          (line) =>
+            !/legacy_values:|^\s+- (rails_model|missing_association|seed_data_update)$/.test(
+              line,
+            ),
+        )
+        .join('\n')
+      fs.writeFileSync(schemaPath, stripped)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/doc.md',
+        solutionFrontmatter(
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: rails_model',
+          'severity: low',
+        ),
+      )
+      expect(
+        checkSolutionSchema(root, ['docs/solutions/best-practices/doc.md']),
+      ).toEqual([expect.objectContaining({ field: 'component' })])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('throws when component.legacy_values is not an array of strings', () => {
+    expect(() =>
+      loadWith((text) =>
+        text.replace(
+          '    legacy_values:\n      - rails_model',
+          '    legacy_values: rails_model',
+        ),
+      ),
+    ).toThrow(
+      /Malformed compound schema \(skills\/ce-compound\/references\/schema\.yaml\): expected `required_fields\.component\.legacy_values` to be an array of strings\./,
+    )
+  })
+
+  test('throws when root_cause.legacy_values is not an array of strings', () => {
+    expect(() =>
+      loadWith((text) =>
+        text.replace(
+          '        legacy_values:\n          - missing_association',
+          '        legacy_values: missing_association',
+        ),
+      ),
+    ).toThrow(
+      /expected `track_rules\.bug\.required\.root_cause\.legacy_values` to be an array of strings\./,
+    )
+  })
+
+  test('throws when resolution_type.legacy_values is not an array of strings', () => {
+    expect(() =>
+      loadWith((text) =>
+        text.replace(
+          '        legacy_values:\n          - seed_data_update',
+          '        legacy_values: seed_data_update',
+        ),
+      ),
+    ).toThrow(
+      /expected `track_rules\.bug\.required\.resolution_type\.legacy_values` to be an array of strings\./,
+    )
+  })
+
+  test('throws when optional_fields.status is absent', () => {
+    expect(() =>
+      loadWith((text) => text.slice(0, text.indexOf('optional_fields:'))),
+    ).toThrow(
+      /Malformed compound schema \(skills\/ce-compound\/references\/schema\.yaml\): expected `optional_fields` to be a mapping\./,
+    )
+  })
+
+  test('throws when optional_fields.status.values is not an array of strings', () => {
+    expect(() =>
+      loadWith((text) =>
+        text.replace(
+          / {4}values:\n {6}- active\n {6}- stale\n {6}- superseded\n/,
+          '    values: active\n',
+        ),
+      ),
+    ).toThrow(
+      /expected `optional_fields\.status\.values` to be an array of strings\./,
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// checkSolutionLifecycle — superseded_by integrity
+// ---------------------------------------------------------------------------
+
+describe('checkSolutionLifecycle', () => {
+  const DOCS_DIR = 'docs/solutions/best-practices'
+
+  function doc(...extra: string[]): string {
+    return solutionFrontmatter(...KNOWLEDGE_BASE, ...extra)
+  }
+
+  /**
+   * Writes the docs (keys are repo-relative paths) with the fixture schema and
+   * runs the lifecycle check over `files` (default: every key).
+   */
+  function lifecycle(
+    docs: Record<string, string>,
+    options: { files?: string[]; exempt?: ReadonlySet<string> } = {},
+  ): SolutionLifecycleViolation[] {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      for (const [relPath, content] of Object.entries(docs)) {
+        writeFile(root, relPath, content)
+      }
+      const files = options.files ?? Object.keys(docs)
+      return options.exempt
+        ? checkSolutionLifecycle(root, files, options.exempt)
+        : checkSolutionLifecycle(root, files)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  const SUCCESSOR = `${DOCS_DIR}/successor.md`
+  const OLD = `${DOCS_DIR}/old.md`
+
+  describe('valid chains', () => {
+    test('a superseded doc pointing at an active doc passes', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+          [SUCCESSOR]: doc('status: active'),
+        }),
+      ).toEqual([])
+    })
+
+    test('a superseded doc pointing at a doc with no status passes', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+          [SUCCESSOR]: doc(),
+        }),
+      ).toEqual([])
+    })
+
+    test('a superseded doc pointing at a stale doc passes', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+          [SUCCESSOR]: doc('status: stale', 'stale_reason: "unverified"'),
+        }),
+      ).toEqual([])
+    })
+
+    test('a quoted superseded_by path passes like a bare one', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: superseded', `superseded_by: "${SUCCESSOR}"`),
+          [SUCCESSOR]: doc(),
+        }),
+      ).toEqual([])
+    })
+  })
+
+  describe('missing, wrong-shape and empty superseded_by', () => {
+    test('a superseded doc with no superseded_by fails with a missing cause', () => {
+      const violations = lifecycle({ [OLD]: doc('status: superseded') })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'missing-superseded-by',
+        }),
+      ])
+      expect(violations[0]?.message).toContain('missing')
+    })
+
+    test('a null superseded_by (key present, no value) is missing, not empty', () => {
+      expect(
+        lifecycle({ [OLD]: doc('status: superseded', 'superseded_by:') }).map(
+          (v) => v.class,
+        ),
+      ).toEqual(['missing-superseded-by'])
+    })
+
+    test('a list superseded_by fails with a not-a-string cause', () => {
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', 'superseded_by:', `  - ${SUCCESSOR}`),
+        [SUCCESSOR]: doc(),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'superseded-by-not-a-string',
+        }),
+      ])
+      expect(violations[0]?.message).toContain('not a string')
+    })
+
+    test('an empty-string superseded_by fails with an empty cause', () => {
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', 'superseded_by: ""'),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'superseded-by-empty',
+        }),
+      ])
+      expect(violations[0]?.message).toContain('empty')
+    })
+  })
+
+  describe('unresolvable successors', () => {
+    test('a superseded_by naming no file fails and names the dangling target', () => {
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', `superseded_by: ${DOCS_DIR}/ghost.md`),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'dangling-superseded-by',
+        }),
+      ])
+      expect(violations[0]?.message).toContain(`${DOCS_DIR}/ghost.md`)
+    })
+
+    test('a bare filename fails the same way, even when that file exists', () => {
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', 'superseded_by: successor.md'),
+        [SUCCESSOR]: doc(),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'dangling-superseded-by',
+        }),
+      ])
+      expect(violations[0]?.message).toContain('successor.md')
+    })
+
+    test('a file that exists on disk but is outside the file set is dangling', () => {
+      expect(
+        lifecycle(
+          {
+            [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+            [SUCCESSOR]: doc(),
+          },
+          { files: [OLD] },
+        ).map((v) => v.class),
+      ).toEqual(['dangling-superseded-by'])
+    })
+
+    test('docs/solutions/README.md is not in the solution-file set', () => {
+      const readme = 'docs/solutions/README.md'
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', `superseded_by: ${readme}`),
+        [readme]: '# Index\n',
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'dangling-superseded-by',
+        }),
+      ])
+      expect(violations[0]?.message).toContain(readme)
+    })
+
+    test('an exempt file is not a valid successor', () => {
+      const violations = lifecycle(
+        {
+          [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+          [SUCCESSOR]: doc(),
+        },
+        { exempt: new Set([SUCCESSOR]) },
+      )
+      expect(violations.map((v) => v.class)).toEqual(['dangling-superseded-by'])
+    })
+
+    test('a successor with unparseable frontmatter fails as an unreadable successor', () => {
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+        [SUCCESSOR]: [
+          '---',
+          'module: foo',
+          'applies_when:',
+          "  - Emitting JSON Schema with reused: 'ref' enabled",
+          '---',
+          'body',
+        ].join('\n'),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'unreadable-successor',
+        }),
+      ])
+      expect(violations[0]?.message).toContain('unreadable successor')
+    })
+
+    test('a successor with no frontmatter at all is an unreadable successor', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+          [SUCCESSOR]: '# Just a heading\n',
+        }).map((v) => v.class),
+      ).toEqual(['unreadable-successor'])
+    })
+  })
+
+  describe('chains and cycles are forbidden', () => {
+    test('a successor that is itself superseded fails', () => {
+      const third = `${DOCS_DIR}/third.md`
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+        [SUCCESSOR]: doc('status: superseded', `superseded_by: ${third}`),
+        [third]: doc(),
+      })
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'successor-superseded',
+        }),
+      ])
+      expect(violations[0]?.message).toContain(SUCCESSOR)
+    })
+
+    test('a self-reference fails', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: superseded', `superseded_by: ${OLD}`),
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'self-reference',
+        }),
+      ])
+    })
+
+    test('a two-doc cycle fails on both docs', () => {
+      const violations = lifecycle({
+        [OLD]: doc('status: superseded', `superseded_by: ${SUCCESSOR}`),
+        [SUCCESSOR]: doc('status: superseded', `superseded_by: ${OLD}`),
+      })
+      expect(violations.map((v) => [v.file, v.class]).sort()).toEqual(
+        [
+          [OLD, 'successor-superseded'],
+          [SUCCESSOR, 'successor-superseded'],
+        ].sort(),
+      )
+    })
+  })
+
+  describe('docs the check ignores', () => {
+    test('superseded_by on an active doc is ignored, even when it dangles', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: active', `superseded_by: ${DOCS_DIR}/ghost.md`),
+        }),
+      ).toEqual([])
+    })
+
+    test('superseded_by on a doc with no status is ignored', () => {
+      expect(
+        lifecycle({ [OLD]: doc(`superseded_by: ${DOCS_DIR}/ghost.md`) }),
+      ).toEqual([])
+    })
+
+    test('superseded_by on a stale doc is ignored', () => {
+      expect(
+        lifecycle({
+          [OLD]: doc('status: stale', `superseded_by: ${DOCS_DIR}/ghost.md`),
+        }),
+      ).toEqual([])
+    })
+
+    test('a doc with an unknown status is left to the schema scan', () => {
+      expect(lifecycle({ [OLD]: doc('status: archived') })).toEqual([])
+    })
+
+    test('an exempt source doc is skipped', () => {
+      expect(
+        lifecycle(
+          { [OLD]: doc('status: superseded') },
+          { exempt: new Set([OLD]) },
+        ),
+      ).toEqual([])
+    })
+
+    test('a source doc with malformed frontmatter is skipped, not double-reported', () => {
+      expect(
+        lifecycle({
+          [OLD]: [
+            '---',
+            'status: superseded',
+            'applies_when:',
+            "  - Emitting JSON Schema with reused: 'ref' enabled",
+            '---',
+            'body',
+          ].join('\n'),
+        }),
+      ).toEqual([])
+    })
+
+    test('a source doc with no frontmatter is skipped', () => {
+      expect(lifecycle({ [OLD]: '# Heading only\n' })).toEqual([])
+    })
+
+    test('a listed file that cannot be read is skipped', () => {
+      expect(lifecycle({}, { files: [OLD] })).toEqual([])
+    })
+  })
+
+  test('returns nothing when the schema file does not exist', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, OLD, doc('status: superseded'))
+      expect(checkSolutionLifecycle(root, [OLD])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports each violation against its own source doc', () => {
+    const other = `${DOCS_DIR}/other.md`
+    const violations = lifecycle({
+      [OLD]: doc('status: superseded'),
+      [other]: doc('status: superseded', 'superseded_by: ""'),
+      [SUCCESSOR]: doc(),
+    })
+    expect(violations.map((v) => [v.file, v.class]).sort()).toEqual(
+      [
+        [OLD, 'missing-superseded-by'],
+        [other, 'superseded-by-empty'],
+      ].sort(),
+    )
+  })
+})
+
+describe('checkContentIntegrity — solution lifecycle wiring', () => {
+  const OLD = 'docs/solutions/best-practices/old.md'
+  const NEW = 'docs/solutions/best-practices/new.md'
+  const GHOST = 'docs/solutions/best-practices/ghost.md'
+
+  function writeDocs(root: string, oldExtra: string[]): void {
+    writeSchemaFixture(root)
+    writeFile(root, OLD, solutionFrontmatter(...KNOWLEDGE_BASE, ...oldExtra))
+    writeFile(root, NEW, solutionFrontmatter(...KNOWLEDGE_BASE))
+  }
+
+  test('surfaces a dangling superseded_by on the result', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeDocs(root, ['status: superseded', `superseded_by: ${GHOST}`])
+      const result = checkContentIntegrity(root)
+      expect(result.solutionLifecycleViolations).toEqual([
+        expect.objectContaining({
+          file: OLD,
+          class: 'dangling-superseded-by',
+        }),
+      ])
+      // The schema scan stays clean: only the lifecycle check fires.
+      expect(result.solutionSchemaViolations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports nothing for a resolvable supersession', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeDocs(root, ['status: superseded', `superseded_by: ${NEW}`])
+      expect(checkContentIntegrity(root).solutionLifecycleViolations).toEqual(
+        [],
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('the CLI exits 1 and prints the lifecycle violation for a dangling superseded_by', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeDocs(root, ['status: superseded', `superseded_by: ${GHOST}`])
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(result.exitCode).toBe(1)
+      const stderr = result.stderr.toString()
+      expect(stderr).toContain('Solution lifecycle violations (1)')
+      expect(stderr).toContain(OLD)
+      expect(stderr).toContain(GHOST)
+      expect(stderr).toContain('dangling-superseded-by')
+      expect(result.stdout.toString()).not.toContain('content-integrity: clean')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('the CLI exits 0 for a resolvable supersession (valid control)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeDocs(root, ['status: superseded', `superseded_by: ${NEW}`])
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(result.stderr.toString()).toBe('')
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.toString()).toContain('content-integrity: clean')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('the verbose CLI output counts lifecycle violations', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeDocs(root, ['status: superseded', `superseded_by: ${GHOST}`])
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, '--verbose', root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(result.stdout.toString()).toContain(
+        'solutionLifecycleViolations: 1',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // checkSolutionCitations
 // ---------------------------------------------------------------------------
 
@@ -5679,6 +6628,16 @@ describe('integration: real repo', () => {
       },
       'Solution citation violations in repo',
     )
+    assertNoViolations(
+      result.solutionLifecycleViolations,
+      (v) => {
+        const lv = v as (typeof result.solutionLifecycleViolations)[number]
+        return `${lv.file}  ${lv.class}  ${lv.message}`
+      },
+      'Solution lifecycle violations in repo',
+    )
+    expect(result.solutionSchemaViolations).toEqual([])
+    expect(result.solutionLifecycleViolations).toEqual([])
 
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])

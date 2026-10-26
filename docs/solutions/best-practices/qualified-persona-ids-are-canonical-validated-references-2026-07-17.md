@@ -58,7 +58,7 @@ Only (1) is a defect. (2) is correct, validated, and conventional.
 - **Do not add a gate banning qualified IDs in skill bodies.** It would directly
   conflict with `checkReferenceIntegrity`, which *requires* the qualified form to
   validate references. The migrated-set identifier gate
-  (`checkMigratedSkillIdentifiers`, `scripts/content-integrity.ts:3399-3464`) bans
+  (`checkMigratedSkillIdentifiers`, `scripts/content-integrity.ts:3610-3675`) bans
   harness-specific tool syntax (`task(`, `subagent_type`, `todowrite`, …) and
   correctly does **not** list qualified persona IDs.
 
