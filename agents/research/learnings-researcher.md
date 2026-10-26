@@ -83,19 +83,20 @@ Then resolve every candidate before scoring:
 | `stale` | Keep it, and give it a `Caution:` line (see Output Format). |
 | `superseded` | Replace it with its successor, if the successor resolves. Otherwise omit it and report the skip. |
 
-**Resolving a successor.** Only a repo-root path counts: a value that starts with `docs/solutions/`, ends in `.md`, contains no `..` segment, and names a file that exists. A bare filename, a relative path, an empty value, a list, a missing file and any other form are all unresolvable. Do not guess.
+**Resolving a successor.** Only a repo-root path counts: a value that starts with `docs/solutions/`, ends in `.md`, contains no `..` segment, is not a `README.md`, is not under `_archived/`, and names a file that exists. A bare filename, a relative path, an empty value, a list, a missing file and any other form are all unresolvable. Do not guess.
 
 1. Start with the candidate's `superseded_by` value. Keep a visited set holding the candidate's own path.
-2. If the target is already in the visited set, the chain is a cycle: unresolvable.
-3. Look up the target's `status` in the status map. If it is `superseded`, follow its `superseded_by` and repeat from step 2.
-4. One hop is one `superseded_by` link. Follow at most 5 hops. A target still superseded after the fifth hop makes the chain unresolvable.
-5. The first target that is not `superseded` is the successor. An unrecognized status counts as active.
+2. At every hop, before taking the target as the successor, check that it passes the form rule above and that the file exists. Check existence against the Step 0 listing or Glob results you already have, or with a direct existence check. A target that fails either check makes the chain unresolvable. A target missing from the status map is not evidence that it exists, because most active docs have no `status` line.
+3. If the target is already in the visited set, the chain is a cycle: unresolvable.
+4. Look up the target's `status` in the status map. If it is `superseded`, follow its `superseded_by` and repeat from step 2.
+5. One hop is one `superseded_by` link. Follow at most 5 hops. A target still superseded after the fifth hop makes the chain unresolvable.
+6. The first target that is not `superseded` is the successor. An unrecognized status counts as active. If reading the successor in Step 5 fails, the chain is unresolvable.
 
 **Then apply the result.**
 - A superseded candidate with a resolvable successor is never returned. Return the successor in its place, labelled with a `Supersedes:` line (see Output Format). The successor does not need to match the keywords itself, because it stands in for a doc that did.
 - If the successor is `stale`, it also gets a `Caution:` line.
 - Several superseded docs that resolve to the same successor return that successor once. Its `Supersedes:` line lists all of them. If the successor is also a candidate in its own right, merge the two into one entry.
-- A superseded candidate with an unresolvable successor is omitted. Add a line `Skipped: superseded, successor unresolved: [path]` for it to the search results.
+- A superseded candidate with an unresolvable successor is omitted. Add a line `Skipped: superseded, successor unresolved: <path>` for it to the search results.
 
 ### Step 5: Read Frontmatter of Candidates Only
 
@@ -146,7 +147,7 @@ Only for files that pass the filter (strong or moderate matches), read the compl
 
 ### Step 8: Return Distilled Summaries
 
-For each relevant document, return a summary in this format. `Supersedes:` and `Caution:` are optional; include each only when it applies.
+For each relevant document, return a summary in this format. `Supersedes:` and `Caution:` are optional; include each only when it applies. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from the status map if it has one.
 
 ```markdown
 ### [Title from document]
@@ -156,8 +157,8 @@ For each relevant document, return a summary in this format. `Supersedes:` and `
 - **Relevance**: [Brief explanation of why this is relevant to the current task]
 - **Key Insight**: [The most important takeaway - the thing that prevents repeating the mistake]
 - **Severity**: [severity level]
-- **Supersedes**: [path of each retired doc this one replaces, e.g. "retires docs/solutions/x/old.md"]
-- **Caution**: [when status is stale: say the doc is marked stale and quote the stale_reason from the status map if it has one]
+Supersedes: <path>[, <path>]
+Caution: <text>
 ```
 
 ## Output Format
@@ -172,7 +173,7 @@ Structure your findings as:
 - **Keywords Used**: [tags, modules, symptoms searched]
 - **Files Scanned**: [X total files]
 - **Relevant Matches**: [Y files]
-Skipped: superseded, successor unresolved: [path]   <- one line per such doc; omit when none
+Skipped: superseded, successor unresolved: <path>   <- one line per such doc; omit when none
 
 ### Critical Patterns
 [Matching patterns from critical-patterns.md. Include this section only when that file exists.]
@@ -184,8 +185,8 @@ Skipped: superseded, successor unresolved: [path]   <- one line per such doc; om
 - **Module**: [module]
 - **Relevance**: [why this matters for current task]
 - **Key Insight**: [the gotcha or pattern to apply]
-- **Supersedes**: [retired docs this one replaces; omit when none]
-- **Caution**: [stale warning; omit when the doc is not stale]
+Supersedes: <path>[, <path>]
+Caution: <text>
 
 #### 2. [Title]
 ...
