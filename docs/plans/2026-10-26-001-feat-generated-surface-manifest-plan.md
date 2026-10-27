@@ -1,7 +1,7 @@
 ---
 title: "feat: Declare generated surfaces once and drive regen, drift and affected from them"
 type: feat
-status: active
+status: completed
 date: 2026-10-26
 origin: docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md
 ---
@@ -262,7 +262,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 
 ## Implementation Units
 
-- [ ] U1. Pi fixture writes are idempotent
+- [x] U1. Pi fixture writes are idempotent
 
 **Goal:** Running the Pi generator on an up-to-date tree writes nothing, including the manifest JSON, and the generator gets its two package scripts.
 
@@ -297,7 +297,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - Two consecutive writes into a temp directory change no bytes on the second.
 - The committed `tests/fixtures/pi-subagents-personas/` is untouched by the test run.
 
-- [ ] U2. Check mode for the field-reference generator
+- [x] U2. Check mode for the field-reference generator
 
 **Goal:** `configuration.mdx` gets a write-free check that compares only the marker region, with distinct failures, and two package scripts.
 
@@ -338,7 +338,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - A temp mdx with a tampered marker region fails the check and one with tampered prose passes.
 - On a tagged clone, the check passes against the committed file.
 
-- [ ] U3. Surface list, closure and change-set logic
+- [x] U3. Surface list, closure and change-set logic
 
 **Goal:** The ordered surface list exists with its closure, glob matching and git change-set logic, guarded by coverage tests against the real repo.
 
@@ -386,7 +386,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - The real-repo coverage tests pass with the seven entries and fail for each seeded defect above.
 - Editing a trigger file in a temp repo selects exactly the surfaces and downstream surfaces the rule predicts.
 
-- [ ] U4. Runner CLI and the three commands
+- [x] U4. Runner CLI and the three commands
 
 **Goal:** `surfaces:regen`, `surfaces:drift` and `surfaces:affected` work end to end, with injectable process spawning for tests.
 
@@ -432,7 +432,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - `drift`, `regen` and `affected` behave as above against fake lists in temp repos.
 - `bun run surfaces:affected` on this branch lists the surfaces its own edits touch, and `bun run surfaces:drift` on a tagged clone reports all seven as passing once U1 and U2 are in.
 
-- [ ] U5. Consumers, docs and the consolidated wiring test
+- [x] U5. Consumers, docs and the consolidated wiring test
 
 **Goal:** CI, `postupgrade`, the Fro Bot workflow, AGENTS.md and the architecture docs all point at the three commands, and one test pins that wiring. Lands as one commit.
 
