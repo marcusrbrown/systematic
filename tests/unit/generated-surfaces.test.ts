@@ -874,6 +874,31 @@ describe('affected selection in a temp repo', () => {
     expect(names(picked.downstream)).toEqual(['config-reference'])
   })
 
+  test('a nested skill (skills/group/new-skill/SKILL.md) selects schema and, downstream, config-reference', () => {
+    // findSkillsInDir walks subdirectories, so the bundled-name list changes
+    // for a skill below a group directory too.
+    const repo = seededRepo()
+    write(repo.work, 'skills/group/new-skill/SKILL.md', 'new\n')
+    const picked = select(repo.work)
+    expect(names(picked.direct)).toContain('schema')
+    expect(names(picked.direct)).toContain('registry')
+    expect(names(picked.downstream)).toContain('config-reference')
+  })
+
+  test('a SKILL.md at any depth matches a trigger of the schema surface', () => {
+    const schema = GENERATED_SURFACES.find((s) => s.name === 'schema')
+    if (schema === undefined) {
+      throw new Error('schema surface missing')
+    }
+    for (const file of [
+      'skills/one/SKILL.md',
+      'skills/group/two/SKILL.md',
+      'skills/a/b/three/SKILL.md',
+    ]) {
+      expect(schema.triggers.some((t) => matchesGlob(t, file))).toBe(true)
+    }
+  })
+
   test('a hand edit to a generated output selects the surface that writes it', () => {
     const repo = seededRepo()
     write(

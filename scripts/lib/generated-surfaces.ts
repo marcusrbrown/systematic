@@ -84,7 +84,7 @@ export const GENERATED_SURFACES: readonly GeneratedSurface[] = [
       'src/lib/validation.ts',
       'src/lib/walk-dir.ts',
       'agents/**/*.md',
-      'skills/*/SKILL.md',
+      'skills/**/SKILL.md',
       'biome.json',
       'package.json',
       'bun.lock',
