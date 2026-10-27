@@ -111,7 +111,7 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
+    "@biomejs/biome": "2.6.3",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@opencode-ai/plugin": "1.19.4",
     "@opencode-ai/sdk": "1.19.4",
