@@ -1,7 +1,16 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { resolveVersion } from '../../scripts/generate-config-schema.js'
 
 const TEMP_ROOTS: string[] = []
 
@@ -811,5 +820,225 @@ describe('resolveAgentOverlaySchema', () => {
   test('returns undefined when agents property is absent', () => {
     const result = resolveFn({ categories: {} })
     expect(result).toBeUndefined()
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// checkConfigReference — write-free drift check (U2)
+// ═════════════════════════════════════════════════════════════════
+
+describe('checkConfigReference', () => {
+  const START = '{/* SYSTEMATIC:FIELD-REFERENCE:START */}'
+  const END = '{/* SYSTEMATIC:FIELD-REFERENCE:END */}'
+  const REAL_MDX_PATH = path.resolve(
+    import.meta.dir,
+    '../../docs/src/content/docs/reference/configuration.mdx',
+  )
+
+  type Mod = typeof import('../../docs/scripts/generate-config-reference.js')
+  let mod: Mod
+  let tmpDir: string
+  let errors: string[]
+  let originalError: typeof console.error
+  let realMdxBefore: Buffer
+
+  beforeAll(async () => {
+    mod = await import('../../docs/scripts/generate-config-reference.js')
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-config-ref-'))
+    TEMP_ROOTS.push(tmpDir)
+    realMdxBefore = fs.readFileSync(REAL_MDX_PATH)
+    originalError = console.error
+  })
+
+  beforeEach(() => {
+    errors = []
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    }
+  })
+
+  afterEach(() => {
+    console.error = originalError
+  })
+
+  afterAll(() => {
+    // No test may write the committed file.
+    expect(fs.readFileSync(REAL_MDX_PATH).equals(realMdxBefore)).toBe(true)
+  })
+
+  /** Temp mdx whose marker region is freshly generated at 2.11.0. */
+  async function freshMdx(name: string, content?: string): Promise<string> {
+    const p = path.join(tmpDir, name)
+    fs.writeFileSync(
+      p,
+      content ?? `prose before\n${START}\nstale\n${END}\nprose after\n`,
+      'utf-8',
+    )
+    expect(await mod.execMain('2.11.0', p)).toBe(0)
+    return p
+  }
+
+  /** Snapshot content + mtime so we can prove a path did not write. */
+  function snapshot(p: string): { content: string; mtimeMs: number } {
+    return {
+      content: fs.readFileSync(p, 'utf-8'),
+      mtimeMs: fs.statSync(p).mtimeMs,
+    }
+  }
+
+  function expectUntouched(p: string, before: ReturnType<typeof snapshot>) {
+    const after = snapshot(p)
+    expect(after.content).toBe(before.content)
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+  }
+
+  test('exports the builder and the check function', () => {
+    expect(typeof mod.buildConfigReferenceFile).toBe('function')
+    expect(typeof mod.checkConfigReference).toBe('function')
+  })
+
+  test('buildConfigReferenceFile is pure: returns text, writes nothing', async () => {
+    const p = await freshMdx('build-pure.mdx')
+    const before = snapshot(p)
+    const built = mod.buildConfigReferenceFile('2.11.0', p)
+    expect(built).toBe(before.content)
+    expectUntouched(p, before)
+  })
+
+  test('happy path: generate then check exits 0 and leaves the file unchanged', async () => {
+    const p = await freshMdx('happy.mdx')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(0)
+    expect(errors).toEqual([])
+    expectUntouched(p, before)
+  })
+
+  test('edit outside the markers still passes (AE7)', async () => {
+    const p = await freshMdx('prose-edit.mdx')
+    const edited = fs
+      .readFileSync(p, 'utf-8')
+      .replace('prose before', 'hand-edited prose before')
+      .replace('prose after', 'hand-edited prose after')
+    fs.writeFileSync(p, edited, 'utf-8')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(0)
+    expectUntouched(p, before)
+  })
+
+  test('edit between the markers fails as drift and leaves the file byte-identical (AE7)', async () => {
+    const p = await freshMdx('region-edit.mdx')
+    const tampered = fs
+      .readFileSync(p, 'utf-8')
+      .replace('**Type:**', '**Tampered:**')
+    expect(tampered).toContain('**Tampered:**')
+    fs.writeFileSync(p, tampered, 'utf-8')
+    const before = snapshot(p)
+    const bytesBefore = fs.readFileSync(p)
+
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+
+    const msg = errors.join('\n')
+    expect(msg).toContain('drift')
+    expect(msg).toContain(p)
+    expect(msg).toContain('config-reference:generate')
+    expect(fs.readFileSync(p).equals(bytesBefore)).toBe(true)
+    expectUntouched(p, before)
+  })
+
+  test('missing markers fail with their own message and write nothing', async () => {
+    const p = path.join(tmpDir, 'no-markers.mdx')
+    fs.writeFileSync(p, 'just prose, no markers\n', 'utf-8')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('markers missing or reversed')
+    expect(msg).toContain('sentinel markers not found')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('reversed markers fail with their own message and write nothing', async () => {
+    const p = path.join(tmpDir, 'reversed.mdx')
+    fs.writeFileSync(p, `a\n${END}\nmiddle\n${START}\nb\n`, 'utf-8')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('markers missing or reversed')
+    expect(msg).toContain('Malformed markers')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('unresolved version fails with its own message and writes nothing', async () => {
+    const p = await freshMdx('no-version.mdx')
+    const before = snapshot(p)
+    // A directory with no git history and no package.json resolves nothing.
+    const emptyRoot = fs.mkdtempSync(path.join(tmpDir, 'empty-root-'))
+    const unresolved = (): string => {
+      resolveVersion(null, emptyRoot)
+      return ''
+    }
+    expect(mod.checkConfigReference(undefined, p, unresolved)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('version unresolved')
+    expect(msg).toContain('No resolvable version')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('missing examples fail with their own message and write nothing', async () => {
+    const p = await freshMdx('no-examples.mdx')
+    const before = snapshot(p)
+    const failing = (): string => {
+      throw new Error(
+        'Examples check failed:\nError: Field "agents" has no examples. Add .meta({ examples: [...] }) to the corresponding Zod schema field.',
+      )
+    }
+    expect(mod.checkConfigReference('2.11.0', p, failing)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('examples missing')
+    expect(msg).toContain('Field "agents" has no examples')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('an invalid explicit version fails as a version failure, not drift', async () => {
+    const p = await freshMdx('bad-version.mdx')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('garbage', p)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('version unresolved')
+    expect(msg).toContain('Invalid version format')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('an unreadable file fails without writing or creating it', () => {
+    const p = path.join(tmpDir, 'does-not-exist.mdx')
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+    expect(fs.existsSync(p)).toBe(false)
+    expect(errors.join('\n')).toContain(p)
+  })
+
+  test('execMain still writes the regenerated text (regeneration unchanged)', async () => {
+    const p = path.join(tmpDir, 'exec-main-writes.mdx')
+    fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+    const expected = mod.buildConfigReferenceFile('2.11.0', p)
+    expect(expected).not.toContain('STALE')
+
+    expect(await mod.execMain('2.11.0', p)).toBe(0)
+
+    expect(fs.readFileSync(p, 'utf-8')).toBe(expected)
+    expect(fs.readFileSync(p, 'utf-8')).toBe(
+      mod.injectFieldReference(p, mod.generateConfigReference('2.11.0')),
+    )
+  })
+
+  test('execMain on a failing input returns 1 and does not write', async () => {
+    const p = path.join(tmpDir, 'exec-main-fails.mdx')
+    fs.writeFileSync(p, 'no markers here\n', 'utf-8')
+    const before = snapshot(p)
+    expect(await mod.execMain('2.11.0', p)).toBe(1)
+    expectUntouched(p, before)
   })
 })

@@ -53,6 +53,8 @@
     "docs:build": "bun run docs:generate && bun run --cwd docs build",
     "docs:preview": "bun run --cwd docs preview",
     "docs:verify": "bun install --frozen-lockfile && bun run --cwd docs playwright install --with-deps chromium && bun run docs:build",
+    "config-reference:generate": "bun docs/scripts/generate-config-reference.ts",
+    "config-reference:drift": "bun docs/scripts/generate-config-reference.ts --check",
     "docs:generate": "bun docs/scripts/generate-stats.ts && bun docs/scripts/transform-content.ts && bun scripts/generate-config-schema.ts && bun docs/scripts/generate-config-reference.ts && bun docs/scripts/generate-release-notes.ts && bun docs/scripts/generate-changelog-page.ts",
     "schema:generate": "bun scripts/generate-config-schema.ts",
     "schema:drift": "bun scripts/generate-config-schema.ts --check",

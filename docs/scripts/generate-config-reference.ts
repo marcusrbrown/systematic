@@ -1,18 +1,21 @@
 #!/usr/bin/env bun
 /**
- * Generate the Starlight reference page for `systematic-config` from the Zod schema.
+ * Generate the field reference for `systematic-config` from the Zod schema.
  *
  * Reads the `SystematicConfigSchema` from `src/lib/config-schema.ts`, generates a
- * draft-07 JSON Schema, and emits a Starlight-compatible `.mdx` page at
- * `docs/src/content/docs/reference/systematic-config.mdx`.
+ * draft-07 JSON Schema, and injects the rendered field reference between the
+ * `SYSTEMATIC:FIELD-REFERENCE` markers in
+ * `docs/src/content/docs/reference/configuration.mdx`. Prose outside the markers
+ * is human-authored and preserved byte-for-byte.
  *
- * The page documents every field with its description, type, default, enum values,
- * and at least one example. Every described field MUST have at least one
+ * The reference documents every field with its description, type, default, enum
+ * values, and at least one example. Every described field MUST have at least one
  * `.meta({ examples: [...] })` annotation; the build fails otherwise.
  *
  * Usage:
  *   bun docs/scripts/generate-config-reference.ts   # Generate + write
  *   bun docs/scripts/generate-config-reference.ts --version 3.0.0  # Explicit version
+ *   bun docs/scripts/generate-config-reference.ts --check  # Drift check, writes nothing
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -739,17 +742,35 @@ function checkExamples(
 }
 
 /**
+ * Build the full text of the config reference file: a fresh field reference
+ * injected into the file's current text. Pure with respect to the file system —
+ * it reads `mdxPath` but never writes. Write mode and check mode share it.
+ *
+ * `generate` is a seam for tests; production callers use the default.
+ */
+export function buildConfigReferenceFile(
+  version?: string,
+  mdxPath: string = CONFIG_MDX_PATH,
+  generate: (version?: string) => string = generateConfigReference,
+): string {
+  return injectFieldReference(mdxPath, generate(version))
+}
+
+/**
  * Run the generator and return an exit code (0 = success, 1 = error).
  * Replaces `process.exit(1)` with a return value for testability.
+ * The only writer in this module.
  */
 export async function execMain(
   version?: string,
   mdxPath: string = CONFIG_MDX_PATH,
 ): Promise<number> {
   try {
-    const fieldRef = generateConfigReference(version)
-    const withFieldRef = injectFieldReference(mdxPath, fieldRef)
-    fs.writeFileSync(mdxPath, withFieldRef, 'utf-8')
+    fs.writeFileSync(
+      mdxPath,
+      buildConfigReferenceFile(version, mdxPath),
+      'utf-8',
+    )
     return 0
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -758,10 +779,57 @@ export async function execMain(
   }
 }
 
-function main(): void {
-  const args = process.argv.slice(2)
-  let version: string | null = null
+/** Distinct reasons the check can fail before reaching a content comparison. */
+function classifyBuildFailure(msg: string): string {
+  if (/sentinel markers not found|Malformed markers/.test(msg)) {
+    return 'markers missing or reversed'
+  }
+  if (/No resolvable version|Invalid version format/.test(msg)) {
+    return 'version unresolved'
+  }
+  if (/Examples check failed/.test(msg)) return 'examples missing'
+  return 'cannot build'
+}
 
+/**
+ * Compare the freshly built file text with the file on disk. Never writes, on
+ * any path. Returns an exit code (0 = in sync, 1 = failure) instead of exiting.
+ *
+ * Injection preserves everything outside the markers byte-for-byte, so
+ * whole-file equality is marker-region equality: prose edits outside the
+ * markers are not drift.
+ */
+export function checkConfigReference(
+  version?: string,
+  mdxPath: string = CONFIG_MDX_PATH,
+  generate: (version?: string) => string = generateConfigReference,
+): number {
+  let built: string
+  let onDisk: string
+  try {
+    built = buildConfigReferenceFile(version, mdxPath, generate)
+    onDisk = fs.readFileSync(mdxPath, 'utf-8')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(
+      `Config reference check failed (${classifyBuildFailure(msg)}) for ${mdxPath}:\n${msg}`,
+    )
+    return 1
+  }
+
+  if (built !== onDisk) {
+    console.error(
+      `Config reference drift: the field reference in ${mdxPath} is out of date with the schema. ` +
+        'Run `bun run config-reference:generate` and commit the result.',
+    )
+    return 1
+  }
+  return 0
+}
+
+function parseArgs(args: string[]): { version: string | null; check: boolean } {
+  let version: string | null = null
+  let check = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === undefined) continue
@@ -769,15 +837,27 @@ function main(): void {
       version = args[++i] ?? null
     } else if (arg.startsWith('--version=')) {
       version = arg.slice('--version='.length)
+    } else if (arg === '--check') {
+      check = true
     }
   }
+  return { version, check }
+}
+
+function main(): void {
+  const { version, check } = parseArgs(process.argv.slice(2))
 
   const relPath = path.relative(PROJECT_ROOT, CONFIG_MDX_PATH)
 
+  if (check) {
+    if (checkConfigReference(version ?? undefined) !== 0) process.exit(1)
+    console.log(`✓ Field reference in ${relPath} is up to date`)
+    return
+  }
+
   // Inject field reference content between SYSTEMATIC:FIELD-REFERENCE markers
   try {
-    const fieldRef = generateConfigReference(version ?? undefined)
-    const updated = injectFieldReference(CONFIG_MDX_PATH, fieldRef)
+    const updated = buildConfigReferenceFile(version ?? undefined)
     fs.writeFileSync(CONFIG_MDX_PATH, updated, 'utf-8')
     console.log(`✓ Injected field reference into ${relPath}`)
   } catch (err) {
