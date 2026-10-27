@@ -26,7 +26,7 @@ docs/
 ├── astro.config.mjs          # Site config (sidebar, social, base path)
 ├── scripts/
 │   ├── transform-content.ts       # Skills/agents content generator
-│   └── generate-config-reference.ts  # Config reference MDX generator
+│   └── generate-config-reference.ts  # Config reference MDX generator (+ --check)
 ├── src/
 │   ├── styles/custom.css     # Theme overrides
 │   └── content/docs/
@@ -76,6 +76,8 @@ Derives field reference content by walking `SystematicConfigSchema`'s JSON Schem
 Adding a new top-level field to `SystematicConfigSchema` with `.meta({ description })` automatically produces a new MDX section on the next `docs:generate` run — no manual template update required.
 
 The injection is **idempotent**: running `docs:generate` twice in a row produces no diff.
+
+The generator also has a write-free check mode: `bun docs/scripts/generate-config-reference.ts --check` (`bun run config-reference:drift`). It builds the injected text in memory and compares it with the committed file, so a hand edit between the markers fails as drift while a prose edit outside them passes. Missing or reversed markers, an unresolved version and missing examples each fail with their own message, and nothing is ever written. `bun run config-reference:generate` is the matching write command. Both are entries in the generated-surface list, so `bun run surfaces:drift` runs the check and `bun run surfaces:regen` rewrites the region. Like the schema generator, it reads the version from git tags, so a clone without tags fails.
 
 The retired category routing table is preserved for migration purposes in
 `docs/src/content/docs/guides/model-defaults-migration.mdx`. It is historical

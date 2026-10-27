@@ -138,14 +138,13 @@ describe('plugin loading', () => {
     }
   })
 
-  test('CI smoke test validates the workflow plugin export and registry drift contract', () => {
+  test('CI smoke test validates the workflow plugin export contract', () => {
     const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
     const workflow = fs.readFileSync(workflowPath, 'utf8')
 
     expect(workflow).toContain('const pluginFactory = m.default;')
     expect(workflow).toContain('await pluginFactory({')
     expect(workflow).not.toContain('m.SystematicPlugin')
-    expect(workflow).toContain('bun run registry:drift')
   })
 
   test('package exposes distinct registry validation and drift commands', () => {

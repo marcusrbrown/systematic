@@ -73,15 +73,11 @@ export function stripHiddenFromFrontmatter(content: string): string {
 
 ### 3. The drift gate is not circular
 
-The gate runs `generate --check`: it regenerates the expected output in memory and compares it to the committed file (CRLF and trailing whitespace normalized), sitting alongside the sibling drift checks:
+The gate runs `generate --check`: it regenerates the expected output in memory and compares it to the committed file (CRLF and trailing whitespace normalized), as one entry in the list of generated surfaces (`scripts/lib/generated-surfaces.ts`). CI runs a single step that checks every entry and names each failure, so adding a vendored artifact means adding an entry, not another workflow step:
 
 ```yaml
-- name: agent-browser skill drift check
-  run: bun run agent-browser:drift
-- name: Registry drift check
-  run: bun run registry:drift
-- name: Schema drift check
-  run: bun run schema:drift
+- name: Generated surfaces drift check
+  run: bun run surfaces:drift
 ```
 
 Renovate and the gate check independent invariants: Renovate signals _"upstream released a new version"_; the drift gate guarantees _"what is committed matches what the pinned version produces."_ Neither substitutes for the other. This mirrors the [registry drift](../workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md) and [content-integrity](./content-integrity-mirror-runtime-drop-rules-2026-05-17.md) discipline already in the repo.
@@ -108,13 +104,13 @@ So a version bump with a byte-identical stub _still fails_ the drift check until
 postUpgradeTasks: {
   // Regenerates the stub from the pinned package so a bump lands the new stub
   // in the same Renovate PR. If the runner's allowlist blocks the command,
-  // the CI agent-browser:drift gate is the backstop.
-  commands: ['bun install', 'bun run agent-browser:build', 'bun run fix'],
+  // the CI surfaces:drift gate is the backstop.
+  commands: ['bun install', 'bun run fix', 'bun run postupgrade'],
   executionMode: 'branch',
 }
 ```
 
-`bun install` must come first to populate `node_modules` at the new version. The two-layer design (postUpgradeTasks + CI gate) means neither layer is a single point of failure.
+`bun install` must come first to populate `node_modules` at the new version. `postupgrade` builds, then calls `bun run surfaces:regen`, which regenerates every surface (the agent-browser stub included) from the one list. The two-layer design (postUpgradeTasks + CI gate) means neither layer is a single point of failure.
 
 ## Why This Matters
 

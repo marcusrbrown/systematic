@@ -44,6 +44,14 @@ bun run docs:verify      # Run docs build the same way CI does (use before appro
 bun run registry:build   # Build OCX registry
 bun run registry:drift   # Check registry source drift vs generated assets
 bun run registry:validate  # Validate registry without building
+bun run registry:generate  # Regenerate registry/registry.jsonc
+bun run pi-personas:generate  # Regenerate the Pi persona fixtures
+bun run pi-personas:drift  # Check the Pi persona fixtures (write-free)
+bun run config-reference:generate  # Regenerate the field reference in configuration.mdx
+bun run config-reference:drift  # Check that field reference (write-free)
+bun run surfaces:affected  # List the generated surfaces your changes touch (--run: regenerate them, then check)
+bun run surfaces:regen   # Regenerate every committed generated surface
+bun run surfaces:drift   # Check every surface and name each failure (CI runs this)
 ```
 
 ## Conventions
@@ -69,18 +77,8 @@ bun run registry:validate  # Validate registry without building
 
   A flat `agents.<name>.model` overlay applies to both OpenCode agents and in-process Pi delegates, not just OpenCode.
 
-  **Generated surfaces:** Editing an `agents/` frontmatter `description` updates `registry/registry.jsonc`; if the persona is in `CURATED_PERSONAS`, it also updates `tests/fixtures/pi-subagents-personas/`. Editing any agent body updates the Pi fixture too. The same render is also the second consumer behind `dist/pi-subagents/agents/`, which `bun run build` generates for the package's `pi.subagents.agents` manifest key. It is not committed, so no regeneration step is needed for it. Adding, removing, or renaming a file under a skill's `references/` updates the registry's per-component file list. Regenerate and check both surfaces:
-
-  ```bash
-  bun scripts/generate-registry.ts
-  bun scripts/generate-pi-subagents-personas.ts
-  bun run registry:drift
-  bun scripts/generate-pi-subagents-personas.ts --check
-  ```
-
-  See [`docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md`](docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md) for prior art.
-
   Creating a module under `src/lib/` also requires an `ARCHITECTURE.md` codemap entry and a `src/lib/AGENTS.md` module-table row; both registration surfaces are gate-enforced. Verify them with `bun scripts/content-integrity.ts`.
+- **Generated surfaces:** Seven committed files are generated, and `scripts/lib/generated-surfaces.ts` is the one list of them (outputs, triggers, regenerate and check scripts). Before committing or opening a PR, run `bun run surfaces:affected --run` (regenerates only the surfaces your changes touch, plus those downstream, then checks them), then `bun run surfaces:drift` (checks all seven, the same as CI). If `affected` cannot resolve `origin/main`, run `bun run surfaces:regen`, then `drift`. After deleting an agent or skill, run `bun scripts/generate-config-schema.ts --allow-shrink` once (the schema generator refuses to drop names without it), then `bun run surfaces:regen`. After a `[FAIL]`, fix the named cause and rerun the same command; the generators are idempotent. The schema and config-reference surfaces read the version from git tags, so a clone without tags needs `git fetch --tags` first. `dist/pi-subagents/agents/` is build output, not a surface. See [`docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md`](docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md) for prior art.
 
 ## Anti-Patterns
 

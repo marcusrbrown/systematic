@@ -628,22 +628,6 @@ describe('unavailable validator surfaces as an error, not malformed input', () =
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Workflow drift wiring (source-level, no brittle line numbers)
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe('drift wiring', () => {
-  test('main CI and Fro Bot invoke the validator bundle drift check', () => {
-    for (const workflow of ['main.yaml', 'fro-bot.yaml']) {
-      const content = fs.readFileSync(
-        path.join(REPO_ROOT, '.github/workflows', workflow),
-        'utf8',
-      )
-      expect(content, workflow).toContain('ce-review-validator:drift')
-    }
-  })
-})
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Generator drift: missing/stale bytes fail loudly, generation is deterministic
 // ═══════════════════════════════════════════════════════════════════════════
 

@@ -353,15 +353,16 @@ describe('Fro Bot workflow contracts', () => {
     expect(autohealPrompt).not.toContain('### Tasks for Agents')
   })
 
-  test('names all four drift-check commands in the autoheal prompt', () => {
+  test('points the autoheal prompt at the single drift command, not per-surface ones', () => {
     const { workflow } = readWorkflow()
     const env = asRecord(workflow.env, 'workflow env')
     const autohealPrompt = asString(env.AUTOHEAL_PROMPT, 'AUTOHEAL_PROMPT')
 
-    expect(autohealPrompt).toContain('bun run registry:drift')
-    expect(autohealPrompt).toContain('bun run schema:drift')
-    expect(autohealPrompt).toContain('bun run review-schema:drift')
-    expect(autohealPrompt).toContain('bun run agent-browser:drift')
+    // The surface list lives in scripts/lib/generated-surfaces.ts; the full
+    // wiring (ordering, never-hand-edit superset) is pinned in
+    // generated-surfaces-wiring.test.ts.
+    expect(autohealPrompt).toContain('bun run surfaces:drift')
+    expect(autohealPrompt).not.toMatch(/bun run (?!surfaces:)[\w-]+:drift/)
   })
 
   test('limits reactive healing and deferred notes to their safe execution model', () => {

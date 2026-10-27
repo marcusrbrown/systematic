@@ -107,7 +107,8 @@ enforces this.
 directory or via the root `bun run docs:*` scripts.
 
 **Contains:**
-- `docs/scripts/` — content generation scripts (`transform-content.ts`, `generate-config-reference.ts`)
+- `docs/scripts/` — content generation scripts (`transform-content.ts`, `generate-config-reference.ts`;
+  the latter has a write-free `--check`, `bun run config-reference:drift`)
 - `docs/src/content/` — manual guides and generated reference pages
 - `docs/solutions/` — documented solutions to past problems, organized by category with YAML
   frontmatter (`module`, `tags`, `problem_type`)
@@ -121,7 +122,8 @@ bundled assets before editing or building the docs site.
 **Purpose:** OCX component-level installation config.
 
 **Contains:** Registry config and two profiles — `omo` (full) and `standalone` (minimal). Used by
-`bun run registry:build` / `registry:drift` / `registry:validate`.
+`bun run registry:build` / `registry:generate` / `registry:validate`; `registry:drift` is one of the
+checks behind `bun run surfaces:drift`.
 
 ### `scripts/`
 
@@ -139,7 +141,7 @@ bundled assets before editing or building the docs site.
 - `scripts/build-registry.ts` — builds the OCX registry output packument from `registry/registry.jsonc`;
   pass `--validate-only` to validate without writing (`bun run registry:validate`)
 - `scripts/generate-pi-subagents-personas.ts` — curates and writes the Pi-subagents persona fixture;
-  pass `--check` for drift detection
+  pass `--check` for drift detection (`bun run pi-personas:generate` / `pi-personas:drift`)
 - `scripts/generate-agent-browser-skill.ts` — generates the agent-browser skill content; pass
   `--check` for drift detection
 - `scripts/generate-config-schema.ts` — JSON Schema codegen + drift check
@@ -159,6 +161,11 @@ bundled assets before editing or building the docs site.
   release-notes narrative-rewrite workflow
 - `scripts/validate-release-target.sh` — validates the release tag, author, and (for docs)
   latest-release status before `docs.yaml` or `release-notes.yaml` acts on a release
+- `scripts/generated-surfaces.ts` — CLI behind `bun run surfaces:regen`, `surfaces:drift` and
+  `surfaces:affected` (`--run` regenerates the matched surfaces, then checks them); CI runs
+  `surfaces:drift` as its one drift step
+- `scripts/lib/generated-surfaces.ts` — the ordered list of the seven committed generated surfaces
+  (outputs, triggers, regenerate and check scripts) plus the closure, glob and git change-set logic
 - `scripts/lib/`, `scripts/eval-cases/` — shared helpers and eval case definitions consumed by
   `run-evals.ts`
 
@@ -252,6 +259,8 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | File | Role |
 |------|------|
 | `scripts/content-integrity.ts` | CI content-integrity gate |
+| `scripts/generated-surfaces.ts` | `surfaces:regen` / `surfaces:drift` / `surfaces:affected` runner |
+| `scripts/lib/generated-surfaces.ts` | The list of generated surfaces, their closure and git change-set logic |
 | `scripts/generate-registry.ts` | Registry generation from frontmatter + drift check |
 | `scripts/build-registry.ts` | OCX registry output packument builder |
 | `scripts/generate-config-schema.ts` | JSON Schema codegen |
@@ -259,7 +268,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | `scripts/run-evals.ts` | Local eval CLI + fixture lifecycle |
 | `.claude-plugin/marketplace.json` | Claude Code marketplace catalog entry |
 | `docs/scripts/transform-content.ts` | Docs reference content generation |
-| `docs/scripts/generate-config-reference.ts` | Docs config reference page codegen |
+| `docs/scripts/generate-config-reference.ts` | Docs config reference page codegen + write-free `--check` |
 
 ### Tests
 

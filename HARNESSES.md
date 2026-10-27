@@ -78,7 +78,7 @@ The raw-return validator and the four-phase synthesis pipeline (`screen`, `prepa
 `finalize`) ship as one self-contained Node bundle,
 `skills/ce-review/scripts/validate-review.mjs`, generated from
 `src/ce-review-validator.ts` by `scripts/generate-ce-review-validator.ts` and
-gated by `bun run ce-review-validator:drift`. The bundle dispatches six subcommands (`return`,
+gated by `bun run ce-review-validator:drift` (run by `bun run surfaces:drift`). The bundle dispatches six subcommands (`return`,
 `artifact`, `screen`, `prepare`, `merge`, `finalize`) through one shared exit-code vocabulary (0
 ok, 1 rejection/oversized/invalid UTF-8, 2 usage/TTY/read failure) and one exception boundary;
 `merge` and `finalize` run through one shared strict-JSON stdin runner bounded by

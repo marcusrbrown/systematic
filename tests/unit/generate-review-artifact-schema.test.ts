@@ -204,15 +204,4 @@ describe('review artifact schema generator', () => {
       expected,
     )
   })
-
-  test('the CI workflow invokes the review schema drift gate', () => {
-    const workflow = fs.readFileSync(
-      path.join(REPO_ROOT, '.github/workflows/main.yaml'),
-      'utf8',
-    )
-
-    expect(workflow).toContain(
-      '- name: Review artifact schema drift check\n        run: bun run review-schema:drift',
-    )
-  })
 })

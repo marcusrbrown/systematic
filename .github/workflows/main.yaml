@@ -86,20 +86,10 @@ jobs:
       - name: Claude Code plugin build + integrity
         run: bun run claude-code:build
 
-      - name: agent-browser skill drift check
-        run: bun run agent-browser:drift
-
-      - name: Registry drift check
-        run: bun run registry:drift
-
-      - name: Schema drift check
-        run: bun run schema:drift
-
-      - name: Review artifact schema drift check
-        run: bun run review-schema:drift
-
-      - name: ce:review validator bundle drift check
-        run: bun run ce-review-validator:drift
+      # One step for every committed generated surface. The list lives in
+      # scripts/lib/generated-surfaces.ts; the report names each failing surface.
+      - name: Generated surfaces drift check
+        run: bun run surfaces:drift
 
   typecheck:
     name: Typecheck

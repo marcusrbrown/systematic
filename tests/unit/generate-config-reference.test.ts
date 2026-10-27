@@ -1,7 +1,17 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { resolveVersion } from '../../scripts/generate-config-schema.js'
 
 const TEMP_ROOTS: string[] = []
 
@@ -811,5 +821,354 @@ describe('resolveAgentOverlaySchema', () => {
   test('returns undefined when agents property is absent', () => {
     const result = resolveFn({ categories: {} })
     expect(result).toBeUndefined()
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// checkConfigReference — write-free drift check (U2)
+// ═════════════════════════════════════════════════════════════════
+
+describe('checkConfigReference', () => {
+  const START = '{/* SYSTEMATIC:FIELD-REFERENCE:START */}'
+  const END = '{/* SYSTEMATIC:FIELD-REFERENCE:END */}'
+  const REAL_MDX_PATH = path.resolve(
+    import.meta.dir,
+    '../../docs/src/content/docs/reference/configuration.mdx',
+  )
+
+  type Mod = typeof import('../../docs/scripts/generate-config-reference.js')
+  let mod: Mod
+  let tmpDir: string
+  let errors: string[]
+  let originalError: typeof console.error
+  let realMdxBefore: Buffer
+
+  beforeAll(async () => {
+    mod = await import('../../docs/scripts/generate-config-reference.js')
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-config-ref-'))
+    TEMP_ROOTS.push(tmpDir)
+    realMdxBefore = fs.readFileSync(REAL_MDX_PATH)
+    originalError = console.error
+  })
+
+  beforeEach(() => {
+    errors = []
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    }
+  })
+
+  afterEach(() => {
+    console.error = originalError
+  })
+
+  afterAll(() => {
+    // No test may write the committed file.
+    expect(fs.readFileSync(REAL_MDX_PATH).equals(realMdxBefore)).toBe(true)
+  })
+
+  /** Temp mdx whose marker region is freshly generated at 2.11.0. */
+  async function freshMdx(name: string, content?: string): Promise<string> {
+    const p = path.join(tmpDir, name)
+    fs.writeFileSync(
+      p,
+      content ?? `prose before\n${START}\nstale\n${END}\nprose after\n`,
+      'utf-8',
+    )
+    expect(await mod.execMain('2.11.0', p)).toBe(0)
+    return p
+  }
+
+  /** Snapshot content + mtime so we can prove a path did not write. */
+  function snapshot(p: string): { content: string; mtimeMs: number } {
+    return {
+      content: fs.readFileSync(p, 'utf-8'),
+      mtimeMs: fs.statSync(p).mtimeMs,
+    }
+  }
+
+  function expectUntouched(p: string, before: ReturnType<typeof snapshot>) {
+    const after = snapshot(p)
+    expect(after.content).toBe(before.content)
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+  }
+
+  test('exports the builder and the check function', () => {
+    expect(typeof mod.buildConfigReferenceFile).toBe('function')
+    expect(typeof mod.checkConfigReference).toBe('function')
+  })
+
+  test('buildConfigReferenceFile is pure: returns text, writes nothing', async () => {
+    const p = await freshMdx('build-pure.mdx')
+    const before = snapshot(p)
+    const built = mod.buildConfigReferenceFile('2.11.0', p)
+    expect(built).toBe(before.content)
+    expectUntouched(p, before)
+  })
+
+  test('happy path: generate then check exits 0 and leaves the file unchanged', async () => {
+    const p = await freshMdx('happy.mdx')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(0)
+    expect(errors).toEqual([])
+    expectUntouched(p, before)
+  })
+
+  test('edit outside the markers still passes (AE7)', async () => {
+    const p = await freshMdx('prose-edit.mdx')
+    const edited = fs
+      .readFileSync(p, 'utf-8')
+      .replace('prose before', 'hand-edited prose before')
+      .replace('prose after', 'hand-edited prose after')
+    fs.writeFileSync(p, edited, 'utf-8')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(0)
+    expectUntouched(p, before)
+  })
+
+  test('edit between the markers fails as drift and leaves the file byte-identical (AE7)', async () => {
+    const p = await freshMdx('region-edit.mdx')
+    const tampered = fs
+      .readFileSync(p, 'utf-8')
+      .replace('**Type:**', '**Tampered:**')
+    expect(tampered).toContain('**Tampered:**')
+    fs.writeFileSync(p, tampered, 'utf-8')
+    const before = snapshot(p)
+    const bytesBefore = fs.readFileSync(p)
+
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+
+    const msg = errors.join('\n')
+    expect(msg).toContain('drift')
+    expect(msg).toContain(p)
+    expect(msg).toContain('config-reference:generate')
+    expect(fs.readFileSync(p).equals(bytesBefore)).toBe(true)
+    expectUntouched(p, before)
+  })
+
+  test('missing markers fail with their own message and write nothing', async () => {
+    const p = path.join(tmpDir, 'no-markers.mdx')
+    fs.writeFileSync(p, 'just prose, no markers\n', 'utf-8')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('markers missing or reversed')
+    expect(msg).toContain('sentinel markers not found')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('reversed markers fail with their own message and write nothing', async () => {
+    const p = path.join(tmpDir, 'reversed.mdx')
+    fs.writeFileSync(p, `a\n${END}\nmiddle\n${START}\nb\n`, 'utf-8')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('markers missing or reversed')
+    expect(msg).toContain('Malformed markers')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('unresolved version fails with its own message and writes nothing', async () => {
+    const p = await freshMdx('no-version.mdx')
+    const before = snapshot(p)
+    // A directory with no git history and no package.json resolves nothing.
+    const emptyRoot = fs.mkdtempSync(path.join(tmpDir, 'empty-root-'))
+    const unresolved = (): string => {
+      resolveVersion(null, emptyRoot)
+      return ''
+    }
+    expect(mod.checkConfigReference(undefined, p, unresolved)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('version unresolved')
+    expect(msg).toContain('No resolvable version')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('missing examples fail with their own message and write nothing', async () => {
+    const p = await freshMdx('no-examples.mdx')
+    const before = snapshot(p)
+    const failing = (): string => {
+      throw new Error(
+        'Examples check failed:\nError: Field "agents" has no examples. Add .meta({ examples: [...] }) to the corresponding Zod schema field.',
+      )
+    }
+    expect(mod.checkConfigReference('2.11.0', p, failing)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('examples missing')
+    expect(msg).toContain('Field "agents" has no examples')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('an invalid explicit version fails as a version failure, not drift', async () => {
+    const p = await freshMdx('bad-version.mdx')
+    const before = snapshot(p)
+    expect(mod.checkConfigReference('garbage', p)).toBe(1)
+    const msg = errors.join('\n')
+    expect(msg).toContain('version unresolved')
+    expect(msg).toContain('Invalid version format')
+    expect(msg).not.toContain('drift')
+    expectUntouched(p, before)
+  })
+
+  test('an unreadable file fails without writing or creating it', () => {
+    const p = path.join(tmpDir, 'does-not-exist.mdx')
+    expect(mod.checkConfigReference('2.11.0', p)).toBe(1)
+    expect(fs.existsSync(p)).toBe(false)
+    expect(errors.join('\n')).toContain(p)
+  })
+
+  test('execMain still writes the regenerated text (regeneration unchanged)', async () => {
+    const p = path.join(tmpDir, 'exec-main-writes.mdx')
+    fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+    const expected = mod.buildConfigReferenceFile('2.11.0', p)
+    expect(expected).not.toContain('STALE')
+
+    expect(await mod.execMain('2.11.0', p)).toBe(0)
+
+    expect(fs.readFileSync(p, 'utf-8')).toBe(expected)
+    expect(fs.readFileSync(p, 'utf-8')).toBe(
+      mod.injectFieldReference(p, mod.generateConfigReference('2.11.0')),
+    )
+  })
+
+  test('execMain on a failing input returns 1 and does not write', async () => {
+    const p = path.join(tmpDir, 'exec-main-fails.mdx')
+    fs.writeFileSync(p, 'no markers here\n', 'utf-8')
+    const before = snapshot(p)
+    expect(await mod.execMain('2.11.0', p)).toBe(1)
+    expectUntouched(p, before)
+  })
+
+  describe('runCli delegates to the tested writer', () => {
+    let logs: string[]
+    let originalLog: typeof console.log
+
+    beforeEach(() => {
+      logs = []
+      originalLog = console.log
+      console.log = (...args: unknown[]) => {
+        logs.push(args.map(String).join(' '))
+      }
+    })
+
+    afterEach(() => {
+      console.log = originalLog
+    })
+
+    test('the write path regenerates the file exactly as execMain does and reports success', async () => {
+      const viaCli = path.join(tmpDir, 'cli-writes.mdx')
+      const viaExec = path.join(tmpDir, 'cli-writes-exec.mdx')
+      const seed = `top\n${START}\nSTALE\n${END}\nbottom\n`
+      fs.writeFileSync(viaCli, seed, 'utf-8')
+      fs.writeFileSync(viaExec, seed, 'utf-8')
+
+      expect(await mod.execMain('2.11.0', viaExec)).toBe(0)
+      expect(await mod.runCli(['--version', '2.11.0'], viaCli)).toBe(0)
+
+      expect(fs.readFileSync(viaCli, 'utf-8')).toBe(
+        fs.readFileSync(viaExec, 'utf-8'),
+      )
+      expect(logs.join('\n')).toContain('✓ Injected field reference into')
+    })
+
+    test('a failing write returns 1, writes nothing and prints no success line', async () => {
+      const p = path.join(tmpDir, 'cli-write-fails.mdx')
+      fs.writeFileSync(p, 'no markers here\n', 'utf-8')
+      const before = snapshot(p)
+
+      expect(await mod.runCli(['--version', '2.11.0'], p)).toBe(1)
+
+      expectUntouched(p, before)
+      expect(logs.join('\n')).not.toContain('Injected')
+      expect(errors.join('\n')).toContain('sentinel markers not found')
+    })
+
+    test.each(['--chek', '--check=true', '--help=1', 'extra'])(
+      'unknown argument %s returns 2 with usage on stderr and does not touch the file',
+      async (arg) => {
+        const p = path.join(
+          tmpDir,
+          `cli-unknown-${arg.replace(/\W/g, '_')}.mdx`,
+        )
+        fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+        const before = snapshot(p)
+
+        expect(await mod.runCli([arg], p)).toBe(2)
+
+        expectUntouched(p, before)
+        const err = errors.join('\n')
+        expect(err).toContain(`unknown argument: ${arg}`)
+        expect(err).toContain('Usage:')
+        expect(logs.join('\n')).not.toContain('Injected')
+      },
+    )
+
+    test('an unknown argument after valid ones still stops before any write', async () => {
+      const p = path.join(tmpDir, 'cli-unknown-late.mdx')
+      fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+      const before = snapshot(p)
+      expect(await mod.runCli(['--version', '2.11.0', '--chek'], p)).toBe(2)
+      expectUntouched(p, before)
+    })
+
+    test.each(['--help', '-h'])(
+      '%s prints usage on stdout, returns 0 and does not touch the file',
+      async (arg) => {
+        const p = path.join(tmpDir, `cli-help-${arg.replace(/\W/g, '_')}.mdx`)
+        fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+        const before = snapshot(p)
+
+        expect(await mod.runCli([arg], p)).toBe(0)
+
+        expectUntouched(p, before)
+        expect(logs.join('\n')).toContain('Usage:')
+        expect(errors).toEqual([])
+      },
+    )
+
+    test('--check never writes: in sync returns 0, stale returns 1', async () => {
+      const p = await freshMdx('cli-check.mdx')
+      const before = snapshot(p)
+      expect(await mod.runCli(['--check', '--version', '2.11.0'], p)).toBe(0)
+      expect(logs.join('\n')).toContain('is up to date')
+      expectUntouched(p, before)
+
+      const stale = path.join(tmpDir, 'cli-check-stale.mdx')
+      fs.writeFileSync(stale, `a\n${START}\nSTALE\n${END}\nb\n`, 'utf-8')
+      const staleBefore = snapshot(stale)
+      expect(await mod.runCli(['--check', '--version', '2.11.0'], stale)).toBe(
+        1,
+      )
+      expectUntouched(stale, staleBefore)
+    })
+  })
+
+  test('the real CLI in --check mode exits 0 against the repo and writes nothing', () => {
+    // The generator uses only the major version (the schema URL). Pass the
+    // major the committed file already carries, so the test does not depend on
+    // git tags, which CI's Test job does not fetch.
+    const major = /schemas\/v(\d+)\/systematic-config\.schema\.json/.exec(
+      realMdxBefore.toString('utf8'),
+    )?.[1]
+    if (major === undefined) {
+      throw new Error(`no schema URL with a major version in ${REAL_MDX_PATH}`)
+    }
+    const result = spawnSync(
+      process.execPath,
+      [
+        'docs/scripts/generate-config-reference.ts',
+        '--check',
+        '--version',
+        `${major}.0.0`,
+      ],
+      { cwd: path.resolve(import.meta.dir, '../..'), encoding: 'utf8' },
+    )
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('is up to date')
+    expect(fs.readFileSync(REAL_MDX_PATH).equals(realMdxBefore)).toBe(true)
   })
 })
