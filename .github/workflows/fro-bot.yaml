@@ -242,19 +242,9 @@ env:
        - Run `bun test tests/unit` and report any failures or new flakes.
        - Run `bun scripts/content-integrity.ts` and report any new phantom
          `systematic:*` refs or banned-pattern hits.
-        - Run `bun run registry:drift` and report drift
-          (regeneration intent is Developer Experience, not here).
-        - Run `bun run schema:drift` and report drift (the JSON Schema
-          emitted from the Zod source must stay aligned with the
-          committed artifact).
-        - Run `bun run review-schema:drift` and report drift (the review
-          schema must stay aligned with its committed artifact).
-        - Run `bun run ce-review-validator:drift` and report drift (the
-          committed Node validator shim under `skills/ce-review/scripts/` must
-          stay aligned with `src/ce-review-validator.ts`).
-        - Run `bun run agent-browser:drift` and report drift
-          (`skills/agent-browser/SKILL.md` and `ATTRIBUTIONS.md` must stay
-          aligned with the pinned `agent-browser` package generator).
+        - Run `bun run surfaces:drift` and report the failing surfaces
+          by name (every committed generated file must stay aligned with its
+          generator; regeneration intent is Developer Experience, not here).
         - Run `bun run docs:build` and report any docs build regressions
           (especially MDX parse errors, Starlight config-shape breaks).
         - Verify convention compliance:
@@ -305,13 +295,11 @@ env:
        c. `bun test tests/unit` — all tests passing.
        d. `bun run build` — completes without error.
        e. `bun scripts/content-integrity.ts` — 0 violations.
-        f. `bun run registry:drift` — 0 drift.
-        g. `bun run schema:drift` — 0 drift.
-        h. `bun run review-schema:drift` — 0 drift.
-        i. `bun run agent-browser:drift` — 0 drift.
-        j. `bun run ce-review-validator:drift` — 0 drift.
-        k. `bun run docs:verify` — completes without error.
-        l. Node ESM smoke test:
+        f. `bun run surfaces:drift` — 0 drift on every surface. Run this
+           before `docs:verify`, which regenerates the config reference and
+           the schema and would hide their drift.
+        g. `bun run docs:verify` — completes without error.
+        h. Node ESM smoke test:
            `node --input-type=module -e "import('./dist/index.js').then(m => console.log(Object.keys(m).sort()))"`
            — exports only `['default']` (regression contract from v2.5.2/v2.12.2;
            a named export of `SystematicPlugin` breaks OpenCode plugin loading).
@@ -453,8 +441,7 @@ env:
     | Lint (Biome) | ✅ Clean / ⚠️ Warnings / ❌ Errors | [details or #N] |
     | Tests | ✅ Pass / ❌ Fail | [details or #N] |
     | Content integrity | ✅ Clean / ❌ Violations | [details or #N] |
-    | Registry drift | ✅ Aligned / ⚠️ Drift | [details or #N] |
-    | Schema drift | ✅ Aligned / ⚠️ Drift | [details or #N] |
+    | Generated-surface drift | ✅ Aligned / ⚠️ Drift | [failing surfaces or #N] |
     | Docs build | ✅ Pass / ❌ Fail | [details or #N] |
     | Stale TODOs | N found | [#N or None] |
     | Convention drift | ✅ Clean / ⚠️ Issues | [details or #N] |
@@ -477,8 +464,7 @@ env:
     | tests | ✅ / ❌ | [pass/fail count] |
     | build | ✅ / ❌ | [details] |
     | content-integrity | ✅ / ❌ | [violation count or clean] |
-    | registry drift | ✅ / ❌ | [details] |
-    | schema drift | ✅ / ❌ | [details] |
+    | generated-surface drift | ✅ / ❌ | [failing surfaces] |
     | docs:verify | ✅ / ❌ | [details] |
     | ESM smoke test | ✅ / ❌ | [exports list or error] |
 
@@ -551,11 +537,21 @@ env:
       narrative release bodies. If a fix appears to require touching them,
       stop and log under "Needs Human Attention".
     - Never manually edit generated artifacts: `dist/registry/`,
-      `dist/schemas/`, `docs/public/schemas/`, `dist/index.js`, or
-      `dist/cli.js`. These are produced by `bun run build`,
-      `bun run registry:build`, `bun run schema:generate`, and the docs
-      build. If drift is found, regenerate via the canonical script and
-      open a PR with the regenerated output.
+      `dist/schemas/`, `dist/index.js`, `dist/cli.js`,
+      `docs/public/schemas/`, `src/lib/bundled-names.ts`,
+      `registry/registry.jsonc`, `skills/agent-browser/SKILL.md`,
+      `skills/ce-review/references/review-summary-schema.json`,
+      `skills/ce-review/references/findings-schema.json`,
+      `skills/ce-review/references/review-pipeline-schema.json`,
+      `skills/ce-review/scripts/validate-review.mjs`,
+      `tests/fixtures/pi-subagents-personas/`, the version references in
+      `ATTRIBUTIONS.md`, or the generated region of
+      `docs/src/content/docs/reference/configuration.mdx` (between the
+      `SYSTEMATIC:FIELD-REFERENCE` markers; the prose outside them is
+      hand-written). These are produced by `bun run build`,
+      `bun run registry:build`, and the generators behind
+      `bun run surfaces:regen`. If drift is found, regenerate with
+      `bun run surfaces:regen` and open a PR with the regenerated output.
 
     Project conventions (MUST follow for code changes):
     - TypeScript strict mode: no `any`, no `@ts-ignore`, no `@ts-expect-error`,
