@@ -29,7 +29,7 @@ tags: [ce-review, review-pipeline, zod, run-level-bounds, safeparse, capacity-te
 ## What Didn't Work
 
 - **A single run-wide budget for disagreement facts.** One budget would reject runs that are within capacity. A run where every decision is declined carries one reason plus up to 32 facts per decision, which is 2048 × 33 = 67,584 entries at full capacity.
-- **A scale test with a distinct file per finding.** The test at `tests/unit/ce-review-validator-routing.test.ts:1246-1377` gives every finding its own file and sends an empty adjudication. It proves byte headroom and 2048-entry survivor and merged sets, but builds no candidate groups, decisions, facts or validator requests.
+- **A scale test with a distinct file per finding.** The test at `tests/unit/ce-review-validator-routing.test.ts:1253-1384` gives every finding its own file and sends an empty adjudication. It proves byte headroom and 2048-entry survivor and merged sets, but builds no candidate groups, decisions, facts or validator requests.
 
 ## Solution
 
@@ -77,7 +77,7 @@ Volume is guarded by a different mechanism, the aggregate stdin byte cap of 16,8
 - **Probe each bound at the bound and one past it, at the exact path.** Build every probe from the exported constants, never from literals. Assert that the bound parses and that one past it yields `too_big` at that path. See the `RUN_LEVEL_PROBES` table driven at `tests/unit/review-pipeline-contract.test.ts:1618-1633` and the artifact equivalents in `tests/unit/review-artifact-schema.test.ts:2616-2670`. Probe a per-item bound separately from its aggregate.
 - **Re-read the old "one past" pins when a bound moves.** Rewrite pins on run-level sets to the new constant. Keep the per-reviewer pins as they are.
 - **Exercise every set at capacity.** The in-process run at `tests/unit/review-pipeline-merge.test.ts:1892-1980` builds shared-file candidate groups, merged and declined decisions with facts, and gated validator requests. Its expected counts come from local fixture constants, checked against `MAX_RUN_FINDINGS` and `MAX_RUN_DISAGREEMENT_FACTS`.
-- **Assert byte headroom, not time.** The CLI scale test asserts that finalize stdin stays under half of `AGGREGATE_STDIN_BYTE_CAP` (`tests/unit/ce-review-validator-routing.test.ts:1363`) and that 2048 findings reach the merged set. It logs phase times without asserting them. Pair it with an oversized-finding case that expects the named byte-cap message (`tests/unit/ce-review-validator-routing.test.ts:1523-1599`).
+- **Assert byte headroom, not time.** The CLI scale test asserts that finalize stdin stays under half of `AGGREGATE_STDIN_BYTE_CAP` (`tests/unit/ce-review-validator-routing.test.ts:1370`) and that 2048 findings reach the merged set. It logs phase times without asserting them. Pair it with an oversized-finding case that expects the named byte-cap message (`tests/unit/ce-review-validator-routing.test.ts:1530-1606`).
 - **Treat a carried envelope as untrusted.** Test each way the partition can break, and assert the reason and the path. The echo tests at `tests/unit/review-pipeline-merge.test.ts:1494-1578` use `expectNamedRejection` to cover a missing survivor, a repeated survivor and a repeated member.
 - **Label unreachable defense in depth.** Branches that input bounds make unreachable get a comment, not a test. Test each reachable path at the layer that can reach it.
 

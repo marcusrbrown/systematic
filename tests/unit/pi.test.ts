@@ -37,6 +37,7 @@ import {
 import { createSkillTool } from '../../src/lib/skill-tool.ts'
 import { findSkillsInDir } from '../../src/lib/skills.ts'
 import piExtension from '../../src/pi.ts'
+import { createTempDirTracker } from '../helpers/temp-dirs.ts'
 
 // The extension reads the real user config at init, and it warns about overlays
 // and disables it finds there. Point the home directory at an empty one for the
@@ -47,6 +48,7 @@ const isolatedHome = fs.mkdtempSync(
 )
 const realHomedir = os.homedir
 const realConfigDir = process.env.OPENCODE_CONFIG_DIR
+const tempDirs = createTempDirTracker()
 
 beforeAll(() => {
   os.homedir = () => isolatedHome
@@ -58,6 +60,7 @@ afterAll(() => {
   if (realConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
   else process.env.OPENCODE_CONFIG_DIR = realConfigDir
   fs.rmSync(isolatedHome, { recursive: true, force: true })
+  tempDirs.cleanup()
 })
 
 const bundledSkillsDir = fileURLToPath(new URL('../../skills', import.meta.url))
@@ -1324,8 +1327,8 @@ describe('src/pi.ts worktree placement rule', () => {
 
   /** Runs the real Pi init under `userConfig` and returns the real handler. */
   async function initWith(userConfig: Record<string, unknown> | undefined) {
-    const tempDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-pi-rule-home-'),
+    const tempDir = tempDirs.track(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-pi-rule-home-')),
     )
     const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
     delete process.env.OPENCODE_CONFIG_DIR

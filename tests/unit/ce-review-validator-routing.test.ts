@@ -12,7 +12,7 @@
 // execution (argv/stdin/env plumbing, process-scope exception handlers)
 // are actually exercised.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -30,6 +30,7 @@ import {
   screenReviewReturn,
 } from '../../src/lib/review-pipeline.js'
 import { AGGREGATE_STDIN_BYTE_CAP } from '../../src/lib/review-pipeline-contract.js'
+import { createTempDirTracker } from '../helpers/temp-dirs.js'
 import { buildScreenReturn, runPipeline } from './review-run-fixtures.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -110,9 +111,15 @@ function runValidator(
   }
 }
 
+const tempDirs = createTempDirTracker()
+
+afterAll(tempDirs.cleanup)
+
 function makeCwd(): string {
-  return fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-validator-routing-')),
+  return tempDirs.track(
+    fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-validator-routing-')),
+    ),
   )
 }
 
