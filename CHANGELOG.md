@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.26.4](https://github.com/marcusrbrown/systematic/compare/v3.26.3...v3.26.4) (2026-10-26)
+
+### Bug Fixes
+
+* **skills:** align compound refresh deletes, overlap output and doc naming ([#1231](https://github.com/marcusrbrown/systematic/issues/1231)) ([db26033](https://github.com/marcusrbrown/systematic/commit/db26033d4f1e47c4b7ddd4e1988abf6a102e500e))
+
 ## [3.26.3](https://github.com/marcusrbrown/systematic/compare/v3.26.2...v3.26.3) (2026-10-26)
 
 ### Bug Fixes
