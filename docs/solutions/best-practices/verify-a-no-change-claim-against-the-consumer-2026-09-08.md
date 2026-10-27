@@ -107,7 +107,7 @@ expect(output.system).toBe(originalRef)
 
 This fails against the `.map()` form and passes against `.entries()`. Every other test in that file reads `output.system` back off the same object, so it passes under both.
 
-The trust-boundary equivalent already existed: `tests/unit/config.test.ts:496`, *"project overlays cannot configure model, permission, or managed skills"*. The invariant was tested. Only the sentence describing it was wrong — a reminder that prose about a boundary needs the same verification as code that crosses one.
+The trust-boundary equivalent already existed: `tests/unit/config.test.ts:497`, *"project overlays cannot configure model, permission, or managed skills"*. The invariant was tested. Only the sentence describing it was wrong — a reminder that prose about a boundary needs the same verification as code that crosses one.
 
 ## Related
 

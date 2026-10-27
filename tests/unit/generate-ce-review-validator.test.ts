@@ -9,7 +9,7 @@
 // directory; nothing here touches this repository's own sources or the
 // committed `skills/ce-review/scripts/validate-review.mjs`.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -18,6 +18,7 @@ import {
   checkValidator,
   computeSourceDigest,
 } from '../../scripts/generate-ce-review-validator.ts'
+import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const BANNER_LINES = [
   '// biome-ignore-all lint: generated bundle',
@@ -28,8 +29,14 @@ const BANNER_LINES = [
 
 const ZERO_DIGEST = '0'.repeat(64)
 
+const tempDirs = createTempDirTracker()
+
+afterAll(tempDirs.cleanup)
+
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'generate-ce-review-validator-'))
+  return tempDirs.track(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'generate-ce-review-validator-')),
+  )
 }
 
 /**

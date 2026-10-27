@@ -80,7 +80,7 @@ branch, not a per-field test.
 replacement, a user who sets only `opencode.variant` on an agent whose project bundle
 sets `opencode.model` erases the model. That leaves a qualifier with no model, which
 `assertRoutingInvariants` rejects — so customising one field fails the entire config
-load, and with it plugin init. Pinned at `tests/unit/config.test.ts:4461`.
+load, and with it plugin init. Pinned at `tests/unit/config.test.ts:4466`.
 
 **There is no policy check to forget, invert, or skip.** A field the user set wins
 because of where the objects sit in the chain.
@@ -101,11 +101,11 @@ check it.
 **Non-local guarantees need tests at each site.** Two tests pin the two halves, each
 verified red-then-green:
 
-- `tests/unit/config.test.ts:4415` fails if a project-sourced bundle stops being
+- `tests/unit/config.test.ts:4420` fails if a project-sourced bundle stops being
   placed ahead of user base. Flipping the condition produces
   `Expected: "a/user-wins" / Received: "a/project-loses"` — it fails for the right
   reason, not incidentally.
-- `tests/unit/config.test.ts:4461` fails if the field-additive branch is removed,
+- `tests/unit/config.test.ts:4466` fails if the field-additive branch is removed,
   throwing on a variant with no model.
 
 A test that passes for several different implementations is not pinning anything.

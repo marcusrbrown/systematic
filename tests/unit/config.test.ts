@@ -30,6 +30,7 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
+import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
@@ -1454,6 +1455,7 @@ describe('config', () => {
             expect(() => loadConfig(testDir)).toThrow('permission')
           } finally {
             delete process.env.OPENCODE_CONFIG_DIR
+            fs.rmSync(customDir, { recursive: true, force: true })
           }
         })
 
@@ -2164,13 +2166,16 @@ describe('config', () => {
   })
 
   describe('OPENCODE_CONFIG_DIR environment variable', () => {
+    const customDirs = createTempDirTracker()
+
     afterEach(() => {
       delete process.env.OPENCODE_CONFIG_DIR
+      customDirs.cleanup()
     })
 
     test('custom config from OPENCODE_CONFIG_DIR has highest priority', () => {
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
+      const customDir = customDirs.track(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-custom-')),
       )
       process.env.OPENCODE_CONFIG_DIR = customDir
 
@@ -2222,8 +2227,8 @@ describe('config', () => {
     })
 
     test('getConfigPaths includes customConfig and customDir when env var is set', () => {
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
+      const customDir = customDirs.track(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-custom-')),
       )
       process.env.OPENCODE_CONFIG_DIR = customDir
 
@@ -2238,8 +2243,8 @@ describe('config', () => {
     })
 
     test('custom config bootstrap settings override project and user', () => {
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
+      const customDir = customDirs.track(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-custom-')),
       )
       process.env.OPENCODE_CONFIG_DIR = customDir
 
@@ -2268,8 +2273,8 @@ describe('config', () => {
     test('custom disabled_skills merges with project and user config', () => {
       writeUserConfig({ disabled_skills: ['ce:brainstorm'] })
 
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
+      const customDir = customDirs.track(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-custom-')),
       )
       process.env.OPENCODE_CONFIG_DIR = customDir
 
@@ -2295,8 +2300,8 @@ describe('config', () => {
     })
 
     test('custom config directory directory contents are loaded', () => {
-      const customDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'systematic-custom-'),
+      const customDir = customDirs.track(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-custom-')),
       )
       process.env.OPENCODE_CONFIG_DIR = customDir
 

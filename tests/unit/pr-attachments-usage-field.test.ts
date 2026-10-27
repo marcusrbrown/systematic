@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -40,6 +40,9 @@ function cli(operation: string, input: unknown, raw = false) {
 }
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-attachments-field-'))
+afterAll(() => {
+  fs.rmSync(scratch, { recursive: true, force: true })
+})
 const NOT_A_DEMO = path.join(scratch, 'not-a-demo.md')
 const MISSING_DEMO = path.join(scratch, 'missing.md')
 const OUT_FILE = path.join(scratch, 'out.md')
