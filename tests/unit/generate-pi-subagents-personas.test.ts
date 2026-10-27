@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url'
 // Drift-check types and helpers live in the script (fixture management)
 import {
   checkDrift,
+  checkFixtureDrift,
   type PersonaManifest,
   writeFixtures,
 } from '../../scripts/generate-pi-subagents-personas.ts'
@@ -34,6 +35,7 @@ import {
 import {
   CURATED_PERSONAS,
   classifyCompatibility,
+  generateAll,
   generatePersonaContent,
   generatePersonaManifest,
   type ManifestEntry,
@@ -979,6 +981,74 @@ describe('writeFixtures idempotence', () => {
     expect(raw).toBe(`${JSON.stringify(JSON.parse(raw), null, 2)}\n`)
     // Manifest entries never embed the generated content.
     expect(raw).not.toContain('Alpha body')
+  })
+})
+
+describe('writeFixtures removes orphaned persona files', () => {
+  test('a stale systematic-old.md is deleted, reported, and the drift check then passes', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = generateAll(REPO_ROOT)
+    writeFixtures(entries, dir)
+    fs.writeFileSync(path.join(dir, 'systematic-old.md'), 'orphan\n', 'utf-8')
+    expect(checkFixtureDrift(REPO_ROOT, dir).ok).toBe(false)
+
+    const result = writeFixtures(entries, dir)
+
+    expect(result.removed).toEqual(['systematic-old.md'])
+    expect(fs.existsSync(path.join(dir, 'systematic-old.md'))).toBe(false)
+    expect(checkFixtureDrift(REPO_ROOT, dir)).toEqual({
+      ok: true,
+      failures: [],
+    })
+  })
+
+  test('a persona newly excluded as critical loses its old file', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+    writeFixtures(entries, dir)
+    expect(fs.existsSync(path.join(dir, 'systematic-beta.md'))).toBe(true)
+
+    const excluded: ManifestEntry[] = [
+      entries[0] as ManifestEntry,
+      {
+        filename: 'systematic-beta.md',
+        status: 'excluded-critical',
+        sourceRelPath: 'agents/review/beta.md',
+        hash: '',
+        reason: 'dispatched by parent',
+      },
+      entries[2] as ManifestEntry,
+    ]
+    const result = writeFixtures(excluded, dir)
+
+    expect(result.removed).toEqual(['systematic-beta.md'])
+    expect(fs.existsSync(path.join(dir, 'systematic-beta.md'))).toBe(false)
+  })
+
+  test('the second run is a no-op: nothing removed or written, no bytes change', async () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+    writeFixtures(entries, dir)
+    fs.writeFileSync(path.join(dir, 'systematic-old.md'), 'orphan\n', 'utf-8')
+    writeFixtures(entries, dir)
+    const before = snapshotDir(dir)
+    const mtime = fs.statSync(path.join(dir, MANIFEST_NAME)).mtimeMs
+
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    const second = writeFixtures(entries, dir)
+
+    expect(second).toEqual({ written: 0, upToDate: 2, removed: [] })
+    expect(snapshotDir(dir)).toEqual(before)
+    expect(fs.statSync(path.join(dir, MANIFEST_NAME)).mtimeMs).toBe(mtime)
+  })
+
+  test('files that are not persona markdown are left alone', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    writeFixtures(sampleEntries(), dir)
+    fs.writeFileSync(path.join(dir, 'notes.txt'), 'keep\n', 'utf-8')
+    const result = writeFixtures(sampleEntries(), dir)
+    expect(result.removed).toEqual([])
+    expect(fs.existsSync(path.join(dir, 'notes.txt'))).toBe(true)
   })
 })
 

@@ -119,6 +119,22 @@ export function checkDrift(
 
 // ── Source-side fixture check (CLI --check) ───────────────────────────────────
 
+/** True when the entry has a `.md` fixture file. */
+function hasFixtureFile(
+  entry: ManifestEntry,
+): entry is ManifestEntry & { content: string } {
+  return entry.status !== 'excluded-critical' && Boolean(entry.content)
+}
+
+/**
+ * The `.md` filenames a fixture directory should hold for `entries`. The
+ * drift check flags every other `.md` file and the writer deletes them, so
+ * both read the same set.
+ */
+function expectedFixtureFilenames(entries: ManifestEntry[]): Set<string> {
+  return new Set(entries.filter(hasFixtureFile).map((e) => e.filename))
+}
+
 /**
  * Check committed fixtures in FIXTURE_DIR against freshly generated output.
  */
@@ -135,11 +151,7 @@ export function checkFixtureDrift(
     return { ok: false, failures: [(err as Error).message] }
   }
 
-  const expectedFilenames = new Set(
-    entries
-      .filter((e) => e.status !== 'excluded-critical' && e.content)
-      .map((e) => e.filename),
-  )
+  const expectedFilenames = expectedFixtureFilenames(entries)
 
   if (!fs.existsSync(fixtureDir)) {
     return {
@@ -152,7 +164,7 @@ export function checkFixtureDrift(
   }
 
   for (const entry of entries) {
-    if (entry.status === 'excluded-critical' || !entry.content) continue
+    if (!hasFixtureFile(entry)) continue
 
     const fixturePath = path.join(fixtureDir, entry.filename)
     const relFixture = path.relative(repoRoot, fixturePath)
@@ -224,6 +236,11 @@ function manifestIsCurrent(
  * Idempotent: unchanged `.md` files are skipped, and the manifest is rewritten
  * only when missing, unparseable, or its `entries` differ, so an up-to-date
  * tree stays byte-identical (a fresh `generatedAt` alone never dirties it).
+ *
+ * Also deletes every `.md` file the entries no longer call for (a renamed or
+ * removed persona, or one newly excluded as critical), because the drift check
+ * flags those. Other file types are left alone. The deleted names are returned
+ * in `removed`.
  */
 export function writeFixtures(
   entries: ManifestEntry[],
@@ -231,6 +248,7 @@ export function writeFixtures(
 ): {
   written: number
   upToDate: number
+  removed: string[]
 } {
   fs.mkdirSync(fixtureDir, { recursive: true })
 
@@ -238,7 +256,7 @@ export function writeFixtures(
   let upToDate = 0
 
   for (const entry of entries) {
-    if (entry.status === 'excluded-critical' || !entry.content) continue
+    if (!hasFixtureFile(entry)) continue
 
     const fixturePath = path.join(fixtureDir, entry.filename)
     let needsWrite = true
@@ -261,6 +279,15 @@ export function writeFixtures(
     }
   }
 
+  const expected = expectedFixtureFilenames(entries)
+  const removed = fs
+    .readdirSync(fixtureDir)
+    .filter((f) => f.endsWith('.md') && !expected.has(f))
+    .sort()
+  for (const name of removed) {
+    fs.rmSync(path.join(fixtureDir, name))
+  }
+
   const manifestEntries = toManifestEntries(entries)
   const manifestPath = path.join(
     fixtureDir,
@@ -278,7 +305,7 @@ export function writeFixtures(
     )
   }
 
-  return { written, upToDate }
+  return { written, upToDate, removed }
 }
 
 function printSummary(entries: ManifestEntry[]): void {
@@ -322,8 +349,14 @@ function main(): void {
     process.exit(1)
   }
 
-  const { written, upToDate } = writeFixtures(entries)
+  const { written, upToDate, removed } = writeFixtures(entries)
   const relDir = path.relative(PROJECT_ROOT, FIXTURE_DIR)
+
+  if (removed.length > 0) {
+    console.log(
+      `Removed ${removed.length} stale persona file(s) from ${relDir}/: ${removed.join(', ')}`,
+    )
+  }
 
   if (written > 0) {
     console.log(
