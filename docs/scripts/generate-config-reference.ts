@@ -16,6 +16,10 @@
  *   bun docs/scripts/generate-config-reference.ts   # Generate + write
  *   bun docs/scripts/generate-config-reference.ts --version 3.0.0  # Explicit version
  *   bun docs/scripts/generate-config-reference.ts --check  # Drift check, writes nothing
+ *   bun docs/scripts/generate-config-reference.ts --help   # Print usage, writes nothing
+ *
+ * An unrecognised argument prints `unknown argument: <arg>` and the usage line
+ * to stderr and exits 2 before anything is written.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -827,21 +831,35 @@ export function checkConfigReference(
   return 0
 }
 
-function parseArgs(args: string[]): { version: string | null; check: boolean } {
+const USAGE =
+  'Usage: bun docs/scripts/generate-config-reference.ts [--check] [--version <semver>] [--help]'
+
+type ParsedArgs =
+  | { kind: 'run'; version: string | null; check: boolean }
+  | { kind: 'help' }
+  | { kind: 'unknown'; arg: string }
+
+/** Parse the CLI arguments. Anything unrecognised is reported, never ignored. */
+function parseArgs(args: string[]): ParsedArgs {
   let version: string | null = null
   let check = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === undefined) continue
+    if (arg === '--help' || arg === '-h') {
+      return { kind: 'help' }
+    }
     if (arg === '--version') {
       version = args[++i] ?? null
     } else if (arg.startsWith('--version=')) {
       version = arg.slice('--version='.length)
     } else if (arg === '--check') {
       check = true
+    } else {
+      return { kind: 'unknown', arg }
     }
   }
-  return { version, check }
+  return { kind: 'run', version, check }
 }
 
 /**
@@ -853,7 +871,16 @@ export async function runCli(
   args: string[],
   mdxPath: string = CONFIG_MDX_PATH,
 ): Promise<number> {
-  const { version, check } = parseArgs(args)
+  const parsed = parseArgs(args)
+  if (parsed.kind === 'help') {
+    console.log(USAGE)
+    return 0
+  }
+  if (parsed.kind === 'unknown') {
+    console.error(`unknown argument: ${parsed.arg}\n${USAGE}`)
+    return 2
+  }
+  const { version, check } = parsed
 
   const relPath = path.relative(PROJECT_ROOT, mdxPath)
 

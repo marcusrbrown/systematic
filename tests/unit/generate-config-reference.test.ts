@@ -1087,6 +1087,49 @@ describe('checkConfigReference', () => {
       expect(errors.join('\n')).toContain('sentinel markers not found')
     })
 
+    test.each(['--chek', '--check=true', '--help=1', 'extra'])(
+      'unknown argument %s returns 2 with usage on stderr and does not touch the file',
+      async (arg) => {
+        const p = path.join(
+          tmpDir,
+          `cli-unknown-${arg.replace(/\W/g, '_')}.mdx`,
+        )
+        fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+        const before = snapshot(p)
+
+        expect(await mod.runCli([arg], p)).toBe(2)
+
+        expectUntouched(p, before)
+        const err = errors.join('\n')
+        expect(err).toContain(`unknown argument: ${arg}`)
+        expect(err).toContain('Usage:')
+        expect(logs.join('\n')).not.toContain('Injected')
+      },
+    )
+
+    test('an unknown argument after valid ones still stops before any write', async () => {
+      const p = path.join(tmpDir, 'cli-unknown-late.mdx')
+      fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+      const before = snapshot(p)
+      expect(await mod.runCli(['--version', '2.11.0', '--chek'], p)).toBe(2)
+      expectUntouched(p, before)
+    })
+
+    test.each(['--help', '-h'])(
+      '%s prints usage on stdout, returns 0 and does not touch the file',
+      async (arg) => {
+        const p = path.join(tmpDir, `cli-help-${arg.replace(/\W/g, '_')}.mdx`)
+        fs.writeFileSync(p, `top\n${START}\nSTALE\n${END}\nbottom\n`, 'utf-8')
+        const before = snapshot(p)
+
+        expect(await mod.runCli([arg], p)).toBe(0)
+
+        expectUntouched(p, before)
+        expect(logs.join('\n')).toContain('Usage:')
+        expect(errors).toEqual([])
+      },
+    )
+
     test('--check never writes: in sync returns 0, stale returns 1', async () => {
       const p = await freshMdx('cli-check.mdx')
       const before = snapshot(p)
