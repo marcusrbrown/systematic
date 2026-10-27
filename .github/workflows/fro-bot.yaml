@@ -552,6 +552,9 @@ env:
       `bun run registry:build`, and the generators behind
       `bun run surfaces:regen`. If drift is found, regenerate with
       `bun run surfaces:regen` and open a PR with the regenerated output.
+      If regen refuses because of a schema shrink, or drift still fails after
+      regen, report the case under Needs Human Attention: never hand-edit a
+      generated file and never pass `--allow-shrink`.
 
     Project conventions (MUST follow for code changes):
     - TypeScript strict mode: no `any`, no `@ts-ignore`, no `@ts-expect-error`,

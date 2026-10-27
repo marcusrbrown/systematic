@@ -330,6 +330,16 @@ describe('generated-surface wiring: Fro Bot autoheal prompt', () => {
     )
   })
 
+  test('stops and escalates when regen refuses or drift survives it', () => {
+    const section = neverHandEditSection(autohealPrompt()).replace(/\s+/g, ' ')
+
+    expect(section).toContain('schema shrink')
+    expect(section).toContain('drift still fails after regen')
+    expect(section).toContain('Needs Human Attention')
+    expect(section).toContain('never hand-edit a generated file')
+    expect(section).toContain('never pass `--allow-shrink`')
+  })
+
   test('the never-hand-edit list names every surface output (R14)', () => {
     expect(uncoveredOutputs(autohealPrompt(), GENERATED_SURFACES)).toEqual([])
   })
