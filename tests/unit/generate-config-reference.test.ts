@@ -1148,9 +1148,23 @@ describe('checkConfigReference', () => {
   })
 
   test('the real CLI in --check mode exits 0 against the repo and writes nothing', () => {
+    // The generator uses only the major version (the schema URL). Pass the
+    // major the committed file already carries, so the test does not depend on
+    // git tags, which CI's Test job does not fetch.
+    const major = /schemas\/v(\d+)\/systematic-config\.schema\.json/.exec(
+      realMdxBefore.toString('utf8'),
+    )?.[1]
+    if (major === undefined) {
+      throw new Error(`no schema URL with a major version in ${REAL_MDX_PATH}`)
+    }
     const result = spawnSync(
       process.execPath,
-      ['docs/scripts/generate-config-reference.ts', '--check'],
+      [
+        'docs/scripts/generate-config-reference.ts',
+        '--check',
+        '--version',
+        `${major}.0.0`,
+      ],
       { cwd: path.resolve(import.meta.dir, '../..'), encoding: 'utf8' },
     )
     expect(result.status).toBe(0)
