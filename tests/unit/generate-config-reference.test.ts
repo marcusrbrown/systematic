@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1040,5 +1041,77 @@ describe('checkConfigReference', () => {
     const before = snapshot(p)
     expect(await mod.execMain('2.11.0', p)).toBe(1)
     expectUntouched(p, before)
+  })
+
+  describe('runCli delegates to the tested writer', () => {
+    let logs: string[]
+    let originalLog: typeof console.log
+
+    beforeEach(() => {
+      logs = []
+      originalLog = console.log
+      console.log = (...args: unknown[]) => {
+        logs.push(args.map(String).join(' '))
+      }
+    })
+
+    afterEach(() => {
+      console.log = originalLog
+    })
+
+    test('the write path regenerates the file exactly as execMain does and reports success', async () => {
+      const viaCli = path.join(tmpDir, 'cli-writes.mdx')
+      const viaExec = path.join(tmpDir, 'cli-writes-exec.mdx')
+      const seed = `top\n${START}\nSTALE\n${END}\nbottom\n`
+      fs.writeFileSync(viaCli, seed, 'utf-8')
+      fs.writeFileSync(viaExec, seed, 'utf-8')
+
+      expect(await mod.execMain('2.11.0', viaExec)).toBe(0)
+      expect(await mod.runCli(['--version', '2.11.0'], viaCli)).toBe(0)
+
+      expect(fs.readFileSync(viaCli, 'utf-8')).toBe(
+        fs.readFileSync(viaExec, 'utf-8'),
+      )
+      expect(logs.join('\n')).toContain('✓ Injected field reference into')
+    })
+
+    test('a failing write returns 1, writes nothing and prints no success line', async () => {
+      const p = path.join(tmpDir, 'cli-write-fails.mdx')
+      fs.writeFileSync(p, 'no markers here\n', 'utf-8')
+      const before = snapshot(p)
+
+      expect(await mod.runCli(['--version', '2.11.0'], p)).toBe(1)
+
+      expectUntouched(p, before)
+      expect(logs.join('\n')).not.toContain('Injected')
+      expect(errors.join('\n')).toContain('sentinel markers not found')
+    })
+
+    test('--check never writes: in sync returns 0, stale returns 1', async () => {
+      const p = await freshMdx('cli-check.mdx')
+      const before = snapshot(p)
+      expect(await mod.runCli(['--check', '--version', '2.11.0'], p)).toBe(0)
+      expect(logs.join('\n')).toContain('is up to date')
+      expectUntouched(p, before)
+
+      const stale = path.join(tmpDir, 'cli-check-stale.mdx')
+      fs.writeFileSync(stale, `a\n${START}\nSTALE\n${END}\nb\n`, 'utf-8')
+      const staleBefore = snapshot(stale)
+      expect(await mod.runCli(['--check', '--version', '2.11.0'], stale)).toBe(
+        1,
+      )
+      expectUntouched(stale, staleBefore)
+    })
+  })
+
+  test('the real CLI in --check mode exits 0 against the repo and writes nothing', () => {
+    const result = spawnSync(
+      process.execPath,
+      ['docs/scripts/generate-config-reference.ts', '--check'],
+      { cwd: path.resolve(import.meta.dir, '../..'), encoding: 'utf8' },
+    )
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('is up to date')
+    expect(fs.readFileSync(REAL_MDX_PATH).equals(realMdxBefore)).toBe(true)
   })
 })

@@ -759,7 +759,7 @@ export function buildConfigReferenceFile(
 /**
  * Run the generator and return an exit code (0 = success, 1 = error).
  * Replaces `process.exit(1)` with a return value for testability.
- * The only writer in this module.
+ * The only writer in this module: `runCli` writes through it.
  */
 export async function execMain(
   version?: string,
@@ -844,29 +844,33 @@ function parseArgs(args: string[]): { version: string | null; check: boolean } {
   return { version, check }
 }
 
-function main(): void {
-  const { version, check } = parseArgs(process.argv.slice(2))
+/**
+ * The CLI, as a function: parse `args`, run the check or the write against
+ * `mdxPath`, print the outcome and return the exit code. The write goes
+ * through `execMain`, so the tested writer is the one the command line runs.
+ */
+export async function runCli(
+  args: string[],
+  mdxPath: string = CONFIG_MDX_PATH,
+): Promise<number> {
+  const { version, check } = parseArgs(args)
 
-  const relPath = path.relative(PROJECT_ROOT, CONFIG_MDX_PATH)
+  const relPath = path.relative(PROJECT_ROOT, mdxPath)
 
   if (check) {
-    if (checkConfigReference(version ?? undefined) !== 0) process.exit(1)
+    if (checkConfigReference(version ?? undefined, mdxPath) !== 0) return 1
     console.log(`✓ Field reference in ${relPath} is up to date`)
-    return
+    return 0
   }
 
   // Inject field reference content between SYSTEMATIC:FIELD-REFERENCE markers
-  try {
-    const updated = buildConfigReferenceFile(version ?? undefined)
-    fs.writeFileSync(CONFIG_MDX_PATH, updated, 'utf-8')
+  const code = await execMain(version ?? undefined, mdxPath)
+  if (code === 0) {
     console.log(`✓ Injected field reference into ${relPath}`)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    console.error(`Error injecting field reference:\n${msg}`)
-    process.exit(1)
   }
+  return code
 }
 
 if (import.meta.main) {
-  main()
+  process.exitCode = await runCli(process.argv.slice(2))
 }

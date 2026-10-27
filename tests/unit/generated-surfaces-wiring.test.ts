@@ -79,6 +79,42 @@ function perSurfaceDriftCommands(
 
 const SINGLE_DRIFT_COMMAND = 'bun run surfaces:drift'
 
+const STEP_ORDER_REFERENCES = [
+  'bun install --frozen-lockfile',
+  'bun run build',
+  'bun run claude-code:build',
+] as const
+
+/**
+ * Problems with the order of the `build` job's steps: the drift step must come
+ * after install, build and the Claude Code build. A reference step that is
+ * missing is a problem of its own, because `findIndex` returns -1 and
+ * `-1 < drift` would otherwise pass.
+ */
+function driftStepOrderProblems(workflow: RecordValue): string[] {
+  const steps = jobSteps(workflow, 'build')
+  const runIndex = (command: string) =>
+    steps.findIndex(
+      (step) => typeof step.run === 'string' && step.run.trim() === command,
+    )
+  const problems: string[] = []
+  const drift = runIndex(SINGLE_DRIFT_COMMAND)
+  if (drift < 0) {
+    problems.push(`the build job has no \`${SINGLE_DRIFT_COMMAND}\` step`)
+  }
+  for (const reference of STEP_ORDER_REFERENCES) {
+    const index = runIndex(reference)
+    if (index < 0) {
+      problems.push(`the build job has no \`${reference}\` step`)
+    } else if (drift >= 0 && drift < index) {
+      problems.push(
+        `\`${SINGLE_DRIFT_COMMAND}\` must come after \`${reference}\``,
+      )
+    }
+  }
+  return problems
+}
+
 /**
  * Problems with the `build` job's drift wiring; empty when it is right.
  * Takes the parsed workflow so a test can hand it a mutated copy.
@@ -183,16 +219,42 @@ describe('generated-surface wiring: main.yaml', () => {
   })
 
   test('the drift step runs after install, build and the Claude Code build', () => {
-    const steps = jobSteps(parseWorkflow(source), 'build')
-    const runIndex = (command: string) =>
-      steps.findIndex(
-        (step) => typeof step.run === 'string' && step.run.trim() === command,
-      )
+    expect(driftStepOrderProblems(parseWorkflow(source))).toEqual([])
+  })
 
-    const drift = runIndex(SINGLE_DRIFT_COMMAND)
-    expect(drift).toBeGreaterThan(runIndex('bun install --frozen-lockfile'))
-    expect(drift).toBeGreaterThan(runIndex('bun run build'))
-    expect(drift).toBeGreaterThan(runIndex('bun run claude-code:build'))
+  test('step-order check fails when a reference step is renamed or missing, not vacuously', () => {
+    for (const renamed of STEP_ORDER_REFERENCES) {
+      const copy = structuredClone(parseWorkflow(source))
+      const step = jobSteps(copy, 'build').find(
+        (candidate) =>
+          typeof candidate.run === 'string' && candidate.run.trim() === renamed,
+      )
+      if (step === undefined) {
+        throw new Error(`fixture is missing the \`${renamed}\` step`)
+      }
+      step.run = `${renamed}:renamed`
+      expect(driftStepOrderProblems(copy)).toContain(
+        `the build job has no \`${renamed}\` step`,
+      )
+    }
+  })
+
+  test('step-order check fails when the drift step comes first', () => {
+    const copy = structuredClone(parseWorkflow(source))
+    const steps = asArray(
+      asRecord(asRecord(copy.jobs, 'jobs').build, 'build').steps,
+      'steps',
+    ).slice()
+    const driftAt = steps.findIndex(
+      (step) =>
+        isRecord(step) &&
+        typeof step.run === 'string' &&
+        step.run.trim() === SINGLE_DRIFT_COMMAND,
+    )
+    const [drift] = steps.splice(driftAt, 1)
+    steps.unshift(drift)
+    asRecord(asRecord(copy.jobs, 'jobs').build, 'build').steps = steps
+    expect(driftStepOrderProblems(copy).length).toBeGreaterThan(0)
   })
 
   test('a copy that re-adds a per-surface drift step is reported', () => {
