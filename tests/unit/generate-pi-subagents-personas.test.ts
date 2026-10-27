@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 import {
   checkDrift,
   type PersonaManifest,
+  writeFixtures,
 } from '../../scripts/generate-pi-subagents-personas.ts'
 // Unit 1 tests: pure generation logic (now in src/lib)
 import {
@@ -42,6 +43,27 @@ import {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
+const COMMITTED_FIXTURE_DIR = path.join(
+  REPO_ROOT,
+  'tests',
+  'fixtures',
+  'pi-subagents-personas',
+)
+
+/** Map of filename to sha256 for every file in a directory (non-recursive). */
+function snapshotDir(dir: string): Record<string, string> {
+  const snapshot: Record<string, string> = {}
+  for (const name of fs.readdirSync(dir).sort()) {
+    snapshot[name] = crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(path.join(dir, name)))
+      .digest('hex')
+  }
+  return snapshot
+}
+
+// Taken at import time, before any test in this file can run.
+const COMMITTED_FIXTURE_SNAPSHOT = snapshotDir(COMMITTED_FIXTURE_DIR)
 
 // ---------------------------------------------------------------------------
 // Temp dir helpers
@@ -813,5 +835,161 @@ describe('import side-effect guard', () => {
       (f) => f.startsWith('systematic-') && f.endsWith('.md'),
     )
     expect(systematicFiles).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// writeFixtures — idempotence
+// ---------------------------------------------------------------------------
+
+const MANIFEST_NAME = 'systematic-personas-manifest.json'
+
+function makeEntry(
+  name: string,
+  content: string,
+  status: ManifestEntry['status'] = 'exported',
+): ManifestEntry {
+  return {
+    filename: `systematic-${name}.md`,
+    status,
+    sourceRelPath: `agents/review/${name}.md`,
+    hash: crypto.createHash('sha256').update(content).digest('hex'),
+    content,
+  }
+}
+
+function sampleEntries(): ManifestEntry[] {
+  return [
+    makeEntry('alpha', '---\ndescription: Alpha\n---\n\nAlpha body.\n'),
+    makeEntry('beta', '---\ndescription: Beta\n---\n\nBeta body.\n'),
+    {
+      filename: 'systematic-gamma.md',
+      status: 'excluded-critical',
+      sourceRelPath: 'agents/workflow/gamma.md',
+      hash: '',
+      reason: 'dispatched by parent',
+    },
+  ]
+}
+
+function readManifest(dir: string): PersonaManifest {
+  return JSON.parse(
+    fs.readFileSync(path.join(dir, MANIFEST_NAME), 'utf-8'),
+  ) as PersonaManifest
+}
+
+describe('writeFixtures idempotence', () => {
+  test('second write into the same dir changes no bytes and reports zero written', async () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+
+    const first = writeFixtures(entries, dir)
+    expect(first.written).toBe(2)
+    const before = snapshotDir(dir)
+    const mtimeBefore = fs.statSync(path.join(dir, MANIFEST_NAME)).mtimeMs
+
+    // Ensure a rewrite would produce a different generatedAt and mtime.
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    const second = writeFixtures(entries, dir)
+
+    expect(second.written).toBe(0)
+    expect(second.upToDate).toBe(2)
+    expect(snapshotDir(dir)).toEqual(before)
+    expect(fs.statSync(path.join(dir, MANIFEST_NAME)).mtimeMs).toBe(mtimeBefore)
+  })
+
+  test('excluded-critical entries produce no .md file', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    writeFixtures(sampleEntries(), dir)
+    expect(fs.existsSync(path.join(dir, 'systematic-gamma.md'))).toBe(false)
+    expect(readManifest(dir).entries.map((e) => e.filename)).toContain(
+      'systematic-gamma.md',
+    )
+  })
+
+  test('missing manifest with existing .md files writes the manifest only', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+    writeFixtures(entries, dir)
+    fs.rmSync(path.join(dir, MANIFEST_NAME))
+
+    const result = writeFixtures(entries, dir)
+
+    expect(result.written).toBe(0)
+    expect(fs.existsSync(path.join(dir, MANIFEST_NAME))).toBe(true)
+    expect(readManifest(dir).entries).toHaveLength(3)
+  })
+
+  test('a changed entry hash rewrites the manifest with new entries and only that .md', async () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+    writeFixtures(entries, dir)
+    const before = snapshotDir(dir)
+    const firstGeneratedAt = readManifest(dir).generatedAt
+
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    const changed = [
+      entries[0] as ManifestEntry,
+      makeEntry('beta', '---\ndescription: Beta v2\n---\n\nBeta body 2.\n'),
+      entries[2] as ManifestEntry,
+    ]
+    const result = writeFixtures(changed, dir)
+    const after = snapshotDir(dir)
+
+    expect(result.written).toBe(1)
+    expect(result.upToDate).toBe(1)
+    expect(after['systematic-alpha.md']).toBe(before['systematic-alpha.md'])
+    expect(after['systematic-beta.md']).not.toBe(before['systematic-beta.md'])
+
+    const manifest = readManifest(dir)
+    expect(manifest.generatedAt).not.toBe(firstGeneratedAt)
+    expect(
+      manifest.entries.find((e) => e.filename === 'systematic-beta.md'),
+    ).toMatchObject({ hash: (changed[1] as ManifestEntry).hash })
+  })
+
+  test('a malformed manifest is rewritten without throwing', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+    writeFixtures(entries, dir)
+    fs.writeFileSync(path.join(dir, MANIFEST_NAME), '{ not json', 'utf-8')
+
+    expect(() => writeFixtures(entries, dir)).not.toThrow()
+
+    const manifest = readManifest(dir)
+    expect(manifest.entries).toHaveLength(3)
+    expect(typeof manifest.generatedAt).toBe('string')
+  })
+
+  test('a manifest with a wrong shape (no entries array) is rewritten', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    const entries = sampleEntries()
+    writeFixtures(entries, dir)
+    fs.writeFileSync(path.join(dir, MANIFEST_NAME), '{"generatedAt":"x"}\n')
+
+    expect(() => writeFixtures(entries, dir)).not.toThrow()
+    expect(readManifest(dir).entries).toHaveLength(3)
+  })
+
+  test('manifest content ordering and format match the previous writer', () => {
+    const dir = path.join(makeTempDir(), 'fixtures')
+    writeFixtures(sampleEntries(), dir)
+    const raw = fs.readFileSync(path.join(dir, MANIFEST_NAME), 'utf-8')
+    expect(raw.endsWith('\n')).toBe(true)
+    expect(raw).toBe(`${JSON.stringify(JSON.parse(raw), null, 2)}\n`)
+    // Manifest entries never embed the generated content.
+    expect(raw).not.toContain('Alpha body')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Integration: tests never write tracked fixtures (must stay the last test)
+// ---------------------------------------------------------------------------
+
+describe('committed fixture directory', () => {
+  test('is byte-unchanged after this test file ran', () => {
+    expect(snapshotDir(COMMITTED_FIXTURE_DIR)).toEqual(
+      COMMITTED_FIXTURE_SNAPSHOT,
+    )
   })
 })

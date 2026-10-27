@@ -62,6 +62,8 @@
     "ce-review-validator:drift": "bun scripts/generate-ce-review-validator.ts --check",
     "agent-browser:build": "bun scripts/generate-agent-browser-skill.ts",
     "agent-browser:drift": "bun scripts/generate-agent-browser-skill.ts --check",
+    "pi-personas:generate": "bun scripts/generate-pi-subagents-personas.ts",
+    "pi-personas:drift": "bun scripts/generate-pi-subagents-personas.ts --check",
     "registry:build": "bun scripts/build-registry.ts",
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",

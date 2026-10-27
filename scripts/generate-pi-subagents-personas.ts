@@ -187,11 +187,52 @@ export function checkFixtureDrift(
 
 // ── Main helpers ──────────────────────────────────────────────────────────────
 
-function writeFixtures(entries: ManifestEntry[]): {
+/** Manifest entries as persisted: the generated content is never embedded. */
+function toManifestEntries(entries: ManifestEntry[]): ManifestEntry[] {
+  return entries.map((e) => ({
+    filename: e.filename,
+    status: e.status,
+    sourceRelPath: e.sourceRelPath,
+    hash: e.hash,
+    reason: e.reason,
+  }))
+}
+
+/**
+ * True when the manifest at `manifestPath` is readable and already holds
+ * `entries`. A missing, unparseable, or differently shaped file is not current.
+ */
+function manifestIsCurrent(
+  manifestPath: string,
+  entries: ManifestEntry[],
+): boolean {
+  try {
+    const existing: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+    if (typeof existing !== 'object' || existing === null) return false
+    const existingEntries = (existing as { entries?: unknown }).entries
+    if (!Array.isArray(existingEntries)) return false
+    // Compare serialized forms: JSON drops `undefined` fields on both sides.
+    return JSON.stringify(existingEntries) === JSON.stringify(entries)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Write persona fixtures and the manifest into `fixtureDir`.
+ *
+ * Idempotent: unchanged `.md` files are skipped, and the manifest is rewritten
+ * only when missing, unparseable, or its `entries` differ, so an up-to-date
+ * tree stays byte-identical (a fresh `generatedAt` alone never dirties it).
+ */
+export function writeFixtures(
+  entries: ManifestEntry[],
+  fixtureDir: string = FIXTURE_DIR,
+): {
   written: number
   upToDate: number
 } {
-  fs.mkdirSync(FIXTURE_DIR, { recursive: true })
+  fs.mkdirSync(fixtureDir, { recursive: true })
 
   let written = 0
   let upToDate = 0
@@ -199,7 +240,7 @@ function writeFixtures(entries: ManifestEntry[]): {
   for (const entry of entries) {
     if (entry.status === 'excluded-critical' || !entry.content) continue
 
-    const fixturePath = path.join(FIXTURE_DIR, entry.filename)
+    const fixturePath = path.join(fixtureDir, entry.filename)
     let needsWrite = true
     try {
       const existing = fs.readFileSync(fixturePath, 'utf-8')
@@ -220,25 +261,22 @@ function writeFixtures(entries: ManifestEntry[]): {
     }
   }
 
-  const manifest: PersonaManifest = {
-    generatedAt: new Date().toISOString(),
-    entries: entries.map((e) => ({
-      filename: e.filename,
-      status: e.status,
-      sourceRelPath: e.sourceRelPath,
-      hash: e.hash,
-      reason: e.reason,
-    })),
-  }
+  const manifestEntries = toManifestEntries(entries)
   const manifestPath = path.join(
-    FIXTURE_DIR,
+    fixtureDir,
     'systematic-personas-manifest.json',
   )
-  fs.writeFileSync(
-    manifestPath,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    'utf-8',
-  )
+  if (!manifestIsCurrent(manifestPath, manifestEntries)) {
+    const manifest: PersonaManifest = {
+      generatedAt: new Date().toISOString(),
+      entries: manifestEntries,
+    }
+    fs.writeFileSync(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'utf-8',
+    )
+  }
 
   return { written, upToDate }
 }
