@@ -22,7 +22,6 @@ import {
   REVIEW_SCHEMA_RELATIVE_PATH,
 } from '../../scripts/generate-review-artifact-schema.js'
 import {
-  ChangeSetError,
   checkPreflight,
   deriveClosureEdges,
   expandOutputs,
@@ -36,6 +35,7 @@ import {
   formatSurfaceResult,
   GENERATED_SURFACES,
   type GeneratedSurface,
+  isChangeSetError,
   listRepoFiles,
   literalPrefix,
   matchesGlob,
@@ -582,12 +582,17 @@ describe('resolveChangeSet', () => {
     } catch (error) {
       caught = error
     }
-    expect(caught).toBeInstanceOf(ChangeSetError)
-    const error = caught as ChangeSetError
+    if (!isChangeSetError(caught)) {
+      throw new Error('expected a change-set error')
+    }
+    const error = caught
     expect(error.ref).toBe('origin/main')
     expect(error.message).toContain('origin/main')
     expect(error.shallow).toBe(false)
     expect(error.message).not.toContain('unshallow')
+    // Schema and config-reference resolve their version from tags.
+    expect(error.message).toContain('git fetch origin main')
+    expect(error.message).toContain('git fetch --tags')
   })
 
   test('missing merge-base throws an error naming the ref', () => {
@@ -601,8 +606,10 @@ describe('resolveChangeSet', () => {
     } catch (error) {
       caught = error
     }
-    expect(caught).toBeInstanceOf(ChangeSetError)
-    const error = caught as ChangeSetError
+    if (!isChangeSetError(caught)) {
+      throw new Error('expected a change-set error')
+    }
+    const error = caught
     expect(error.message).toContain('merge-base')
     expect(error.message).toContain('origin/main')
     expect(error.shallow).toBe(false)
@@ -639,8 +646,10 @@ describe('resolveChangeSet', () => {
     } catch (error) {
       caught = error
     }
-    expect(caught).toBeInstanceOf(ChangeSetError)
-    const error = caught as ChangeSetError
+    if (!isChangeSetError(caught)) {
+      throw new Error('expected a change-set error')
+    }
+    const error = caught
     expect(error.shallow).toBe(true)
     expect(error.message).toContain('merge-base')
     expect(error.message).toContain('--unshallow')
@@ -664,9 +673,36 @@ describe('resolveChangeSet', () => {
     } catch (error) {
       caught = error
     }
-    const error = caught as ChangeSetError
+    if (!isChangeSetError(caught)) {
+      throw new Error('expected a change-set error')
+    }
+    const error = caught
     expect(error.ref).toBe('origin/main')
     expect(error.message).toContain('--unshallow')
+  })
+
+  test('isChangeSetError accepts only the typed error from resolveChangeSet', () => {
+    expect(isChangeSetError(new Error('plain'))).toBe(false)
+    expect(isChangeSetError(null)).toBe(false)
+    expect(isChangeSetError('missing-ref')).toBe(false)
+    expect(
+      isChangeSetError(
+        Object.assign(new Error('x'), {
+          kind: 'other',
+          ref: 'r',
+          shallow: false,
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      isChangeSetError(
+        Object.assign(new Error('x'), {
+          kind: 'missing-ref',
+          ref: 'origin/main',
+          shallow: false,
+        }),
+      ),
+    ).toBe(true)
   })
 
   test('outside a git repository it throws, not an empty set', () => {
@@ -761,7 +797,7 @@ describe('git launch failures', () => {
       caught = error
     }
     expect(caught).toBeInstanceOf(Error)
-    expect(caught).not.toBeInstanceOf(ChangeSetError)
+    expect(isChangeSetError(caught)).toBe(false)
     const message = (caught as Error).message
     expect(message).toContain('could not run')
     expect(message).toMatch(/ENOBUFS|maxBuffer/i)
@@ -777,7 +813,7 @@ describe('git launch failures', () => {
     } catch (error) {
       caught = error
     }
-    expect(caught).not.toBeInstanceOf(ChangeSetError)
+    expect(isChangeSetError(caught)).toBe(false)
     const message = (caught as Error).message
     expect(message).toContain('could not run')
     expect(message).not.toContain('unshallow')
@@ -971,6 +1007,73 @@ describe('report formatters', () => {
         '\n',
       ),
     ).toEqual(['[FAIL] one', '  fix: bun run one:generate'])
+  })
+
+  describe('after a shrink refusal', () => {
+    // The text the schema generator prints. Pinned against its source below.
+    const SHRINK_OUTPUT =
+      'Error: bundled-agent count shrank from 40 to 39. If this is an intentional removal, regenerate with `bun scripts/generate-config-schema.ts --allow-shrink`.\n'
+    const SHRINK_FIX =
+      '  fix: bun scripts/generate-config-schema.ts --allow-shrink (an agent or skill was removed; run once, then rerun)'
+
+    test('the matched phrase is still in the schema generator', () => {
+      const source = fs.readFileSync(
+        path.join(ROOT_DIR, 'scripts/generate-config-schema.ts'),
+        'utf8',
+      )
+      expect(source).toContain('bundled-agent count shrank from')
+      expect(source).toContain('bundled-skill count shrank from')
+    })
+
+    test('a failing check gets the --allow-shrink fix line instead of the regen command', () => {
+      const lines = formatSurfaceResult({
+        surface: first,
+        passed: false,
+        output: SHRINK_OUTPUT,
+      }).split('\n')
+      expect(lines.at(-1)).toBe(SHRINK_FIX)
+      expect(lines.join('\n')).not.toContain('fix: bun run one:generate')
+      expect(lines.join('\n')).toContain('count shrank from 40 to 39')
+    })
+
+    test('the skill-count variant is recognised too', () => {
+      const text = formatSurfaceResult({
+        surface: first,
+        passed: false,
+        output: 'Error: bundled-skill count shrank from 90 to 89.\n',
+      })
+      expect(text).toContain('--allow-shrink')
+    })
+
+    test('an ordinary failure keeps the normal fix line', () => {
+      const text = formatSurfaceResult({
+        surface: first,
+        passed: false,
+        output: 'Schema drift: file is out of date\n',
+      })
+      expect(text.split('\n').at(-1)).toBe('  fix: bun run one:generate')
+      expect(text).not.toContain('--allow-shrink')
+    })
+
+    test('a regen failure with the shrink text gets the same fix line', () => {
+      const text = formatRegenFailure({
+        failed: first,
+        output: SHRINK_OUTPUT,
+        completed: [],
+        notRun: [second],
+      })
+      expect(text.split('\n')).toContain(SHRINK_FIX)
+    })
+
+    test('an ordinary regen failure gets no fix line', () => {
+      const text = formatRegenFailure({
+        failed: first,
+        output: 'boom\n',
+        completed: [],
+        notRun: [],
+      })
+      expect(text).not.toContain('fix:')
+    })
   })
 
   test('the drift summary counts failures and names them', () => {

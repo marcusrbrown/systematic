@@ -21,7 +21,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import path from 'node:path'
 import {
-  ChangeSetError,
   checkPreflight,
   formatAffectedSurface,
   formatDriftSummary,
@@ -31,6 +30,7 @@ import {
   formatSurfaceResult,
   GENERATED_SURFACES,
   type GeneratedSurface,
+  isChangeSetError,
   listRepoFiles,
   resolveChangeSet,
   type SurfaceResult,
@@ -156,10 +156,15 @@ async function regenerateAll(
 /**
  * Checks every surface in `selected`, never stopping early, and prints one
  * line per surface plus the summary. `true` when every check passed.
+ *
+ * `fullCheck` is true for `drift`. Otherwise the pass summary says how many of
+ * the whole list were checked and points at `surfaces:drift`, so a clean
+ * `affected --run` is never mistaken for the full drift check.
  */
 async function checkAll(
   context: RunnerContext,
   selected: readonly GeneratedSurface[],
+  fullCheck: boolean,
 ): Promise<boolean> {
   const results: SurfaceResult[] = []
   for (const surface of selected) {
@@ -175,8 +180,15 @@ async function checkAll(
     results.push(result)
     emit(context, formatSurfaceResult(result), 'out')
   }
-  emit(context, formatDriftSummary(results), 'out')
-  return results.every((result) => result.passed)
+  const allPassed = results.every((result) => result.passed)
+  emit(
+    context,
+    allPassed && !fullCheck
+      ? `drift: ${results.length} of ${context.surfaces.length} surfaces passed; run surfaces:drift for the full check`
+      : formatDriftSummary(results),
+    'out',
+  )
+  return allPassed
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
@@ -198,7 +210,7 @@ export async function runDrift(context: RunnerContext): Promise<number> {
   if (!preflightPasses(context)) {
     return 1
   }
-  return (await checkAll(context, context.surfaces)) ? 0 : 1
+  return (await checkAll(context, context.surfaces, true)) ? 0 : 1
 }
 
 export interface AffectedOptions {
@@ -233,7 +245,7 @@ export async function runAffected(
     ])
     selected = context.surfaces.filter((surface) => reached.has(surface.name))
   } catch (error) {
-    if (error instanceof ChangeSetError) {
+    if (isChangeSetError(error)) {
       emit(context, error.message, 'err')
       return 1
     }
@@ -264,7 +276,7 @@ export async function runAffected(
   if (!(await regenerateAll(context, selected))) {
     return 1
   }
-  return (await checkAll(context, selected)) ? 0 : 1
+  return (await checkAll(context, selected, false)) ? 0 : 1
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────

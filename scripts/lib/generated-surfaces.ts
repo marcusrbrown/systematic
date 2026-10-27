@@ -363,24 +363,39 @@ export function resolveScriptFile(
 
 const BASE_REF = 'origin/main'
 
-/** Thrown when the change set cannot be built; never returned as an empty set. */
-export class ChangeSetError extends Error {
-  readonly ref: string
+/** The extra fields on the error thrown when the change set cannot be built. */
+export interface ChangeSetErrorShape extends Error {
   readonly kind: 'missing-ref' | 'missing-merge-base'
+  readonly ref: string
   readonly shallow: boolean
+}
 
-  constructor(
-    kind: 'missing-ref' | 'missing-merge-base',
-    ref: string,
-    shallow: boolean,
-    message: string,
-  ) {
-    super(message)
-    this.name = 'ChangeSetError'
-    this.kind = kind
-    this.ref = ref
-    this.shallow = shallow
+/** Built when the change set cannot be made; never returned as an empty set. */
+function changeSetError(
+  kind: ChangeSetErrorShape['kind'],
+  ref: string,
+  shallow: boolean,
+  message: string,
+): ChangeSetErrorShape {
+  return Object.assign(new Error(message), {
+    name: 'ChangeSetError',
+    kind,
+    ref,
+    shallow,
+  })
+}
+
+/** True for the error `resolveChangeSet` throws for a missing ref or merge-base. */
+export function isChangeSetError(value: unknown): value is ChangeSetErrorShape {
+  if (!(value instanceof Error)) {
+    return false
   }
+  const kind: unknown = Reflect.get(value, 'kind')
+  return (
+    (kind === 'missing-ref' || kind === 'missing-merge-base') &&
+    typeof Reflect.get(value, 'ref') === 'string' &&
+    typeof Reflect.get(value, 'shallow') === 'boolean'
+  )
 }
 
 const SHALLOW_HINT =
@@ -485,7 +500,7 @@ function isShallow(cwd: string): boolean {
  * and a deletion is kept), plus untracked files not excluded by ignore rules.
  * Paths are repo-root-relative and sorted. An empty array means no change.
  *
- * Throws `ChangeSetError` when `origin/main` or the merge-base cannot be
+ * Throws a change-set error (see `isChangeSetError`) when `origin/main` or the merge-base cannot be
  * resolved. It never fetches.
  */
 export function resolveChangeSet(rootDir: string): string[] {
@@ -498,12 +513,12 @@ export function resolveChangeSet(rootDir: string): string[] {
   }
   if (base.status !== 0) {
     const shallow = isShallow(top)
-    throw new ChangeSetError(
+    throw changeSetError(
       'missing-ref',
       BASE_REF,
       shallow,
       [
-        `Cannot resolve ${BASE_REF}. Fetch it (\`git fetch origin main\`) and retry.`,
+        `Cannot resolve ${BASE_REF}. Fetch it (\`git fetch origin main\`, and \`git fetch --tags\` so the schema and config-reference surfaces can resolve a version) and retry.`,
         ...(shallow ? [SHALLOW_HINT] : []),
       ].join(' '),
     )
@@ -517,7 +532,7 @@ export function resolveChangeSet(rootDir: string): string[] {
   const mergeBaseSha = mergeBase.stdout.trim()
   if (mergeBase.status !== 0 || mergeBaseSha === '') {
     const shallow = isShallow(top)
-    throw new ChangeSetError(
+    throw changeSetError(
       'missing-merge-base',
       BASE_REF,
       shallow,
@@ -578,7 +593,25 @@ function indentOutput(output: string): string[] {
     .map((line) => (line === '' ? '' : `${INDENT}${INDENT}${line}`))
 }
 
-function fixLine(surface: GeneratedSurface): string {
+/**
+ * The phrase both of `scripts/generate-config-schema.ts`'s shrink refusals
+ * contain ("bundled-agent count shrank from …", "bundled-skill count shrank
+ * from …"). A test pins it against that file.
+ */
+const SHRINK_REFUSAL = 'count shrank from'
+
+const SHRINK_FIX =
+  'bun scripts/generate-config-schema.ts --allow-shrink (an agent or skill was removed; run once, then rerun)'
+
+/**
+ * The command that fixes a failed surface. Normally its regeneration script;
+ * after a shrink refusal that script would refuse again, so it names the
+ * one-time override. This only prints the command: the runner never runs it.
+ */
+function fixLine(surface: GeneratedSurface, output: string): string {
+  if (output.includes(SHRINK_REFUSAL)) {
+    return `${INDENT}fix: ${SHRINK_FIX}`
+  }
   return `${INDENT}fix: bun run ${surface.regenScript}`
 }
 
@@ -596,7 +629,7 @@ export function formatSurfaceResult(result: SurfaceResult): string {
   return [
     `[FAIL] ${result.surface.name}`,
     ...indentOutput(result.output),
-    fixLine(result.surface),
+    fixLine(result.surface, result.output),
   ].join('\n')
 }
 
@@ -619,7 +652,7 @@ export function formatAffectedSurface(
 ): string {
   return [
     `[AFFECTED] ${surface.name}${downstreamOnly ? ' (downstream)' : ''}`,
-    fixLine(surface),
+    fixLine(surface, ''),
   ].join('\n')
 }
 
@@ -641,6 +674,9 @@ export function formatRegenFailure(failure: RegenFailure): string {
     `regen failed: ${failure.failed.name}`,
     ...indentOutput(failure.output),
   ]
+  if (failure.output.includes(SHRINK_REFUSAL)) {
+    lines.push(fixLine(failure.failed, failure.output))
+  }
   if (failure.completed.length > 0) {
     lines.push(
       `earlier surfaces were already rewritten (${failure.completed

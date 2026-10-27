@@ -408,7 +408,22 @@ describe('runAffected --run', () => {
       'b:drift',
     ])
     expect(h.cwds.every((cwd) => cwd === repo.work)).toBe(true)
-    expect(h.out.at(-1)).toBe('drift: all 2 surfaces passed')
+    // Two of the three surfaces were checked: the line must not read as the
+    // full drift check.
+    expect(h.out.at(-1)).toBe(
+      'drift: 2 of 3 surfaces passed; run surfaces:drift for the full check',
+    )
+  })
+
+  test('the pass summary uses the real list total and points at the full check', async () => {
+    const repo = readyRepo()
+    write(repo.work, 'src/c.ts', 'edited\n')
+    const h = harness(repo.work, CHAIN)
+    expect(await runAffected(h.context, { run: true })).toBe(0)
+    expect(h.out.at(-1)).toBe(
+      'drift: 1 of 3 surfaces passed; run surfaces:drift for the full check',
+    )
+    expect(text(h.out)).not.toContain('all ')
   })
 
   test('a full match regenerates all, in list order, before any check', async () => {
