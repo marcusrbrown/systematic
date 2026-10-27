@@ -67,6 +67,7 @@
     "pi-personas:generate": "bun scripts/generate-pi-subagents-personas.ts",
     "pi-personas:drift": "bun scripts/generate-pi-subagents-personas.ts --check",
     "registry:build": "bun scripts/build-registry.ts",
+    "registry:generate": "bun scripts/generate-registry.ts",
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
     "claude-code:build": "bun scripts/build-claude-code-plugin.ts",
