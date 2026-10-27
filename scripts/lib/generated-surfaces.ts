@@ -293,7 +293,7 @@ export function findBackwardEdges(
 }
 
 export interface AffectedSurfaces {
-  /** Surfaces with a trigger matching a changed path, in list order. */
+  /** Surfaces with a trigger or output matching a changed path, in list order. */
   readonly direct: readonly GeneratedSurface[]
   /** Surfaces reached only through the closure, in list order. */
   readonly downstream: readonly GeneratedSurface[]
@@ -304,9 +304,11 @@ export function selectAffected(
   changedPaths: readonly string[],
   repoFiles: readonly string[],
 ): AffectedSurfaces {
+  // A changed output (a hand edit, or a deleted generated file) makes its own
+  // surface stale just as a changed trigger does.
   const direct = surfaces.filter((surface) =>
-    surface.triggers.some((trigger) =>
-      changedPaths.some((file) => matchesGlob(trigger, file)),
+    [...surface.triggers, ...surface.outputs].some((pattern) =>
+      changedPaths.some((file) => matchesGlob(pattern, file)),
     ),
   )
   const edges = deriveClosureEdges(surfaces, repoFiles)
@@ -397,6 +399,8 @@ interface GitResult {
   readonly status: number | null
   readonly stdout: string
   readonly stderr: string
+  /** Set when git could not run to completion (not installed, output over `maxBuffer`). */
+  readonly error?: string
 }
 
 function runGit(cwd: string, args: readonly string[]): GitResult {
@@ -410,12 +414,28 @@ function runGit(cwd: string, args: readonly string[]): GitResult {
     status: result.status,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
+    error: result.error?.message,
   }
+}
+
+/** The failure text for a git call: the spawn error when there is one, else stderr. */
+function failureDetail(result: GitResult): string {
+  return result.error ?? result.stderr.trim()
+}
+
+/** Git never ran to completion: its exit status says nothing about the repo. */
+function launchError(args: readonly string[], result: GitResult): Error {
+  return new Error(
+    `git ${args.join(' ')} could not run: ${failureDetail(result)}`,
+  )
 }
 
 /** The repo root. `ls-files --others` is cwd-relative, so every call uses it. */
 function repoTopLevel(rootDir: string): string {
   const result = runGit(rootDir, ['rev-parse', '--show-toplevel'])
+  if (result.error !== undefined) {
+    throw launchError(['rev-parse', '--show-toplevel'], result)
+  }
   const top = result.stdout.trim()
   if (result.status !== 0 || top === '') {
     throw new Error(
@@ -432,7 +452,9 @@ function splitNul(output: string): string[] {
 function gitList(cwd: string, args: readonly string[]): string[] {
   const result = runGit(cwd, args)
   if (result.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`)
+    throw result.error === undefined
+      ? new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`)
+      : launchError(args, result)
   }
   return splitNul(result.stdout)
 }
@@ -469,12 +491,11 @@ function isShallow(cwd: string): boolean {
 export function resolveChangeSet(rootDir: string): string[] {
   const top = repoTopLevel(rootDir)
 
-  const base = runGit(top, [
-    'rev-parse',
-    '--verify',
-    '--quiet',
-    `${BASE_REF}^{commit}`,
-  ])
+  const baseArgs = ['rev-parse', '--verify', '--quiet', `${BASE_REF}^{commit}`]
+  const base = runGit(top, baseArgs)
+  if (base.error !== undefined) {
+    throw launchError(baseArgs, base)
+  }
   if (base.status !== 0) {
     const shallow = isShallow(top)
     throw new ChangeSetError(
@@ -488,7 +509,11 @@ export function resolveChangeSet(rootDir: string): string[] {
     )
   }
 
-  const mergeBase = runGit(top, ['merge-base', BASE_REF, 'HEAD'])
+  const mergeBaseArgs = ['merge-base', BASE_REF, 'HEAD']
+  const mergeBase = runGit(top, mergeBaseArgs)
+  if (mergeBase.error !== undefined) {
+    throw launchError(mergeBaseArgs, mergeBase)
+  }
   const mergeBaseSha = mergeBase.stdout.trim()
   if (mergeBase.status !== 0 || mergeBaseSha === '') {
     const shallow = isShallow(top)

@@ -675,6 +675,115 @@ describe('resolveChangeSet', () => {
   })
 })
 
+// ── git launch failures keep their real cause ───────────────────────────────
+
+describe('git launch failures', () => {
+  const REAL_GIT = Bun.which('git')
+
+  /** Runs `body` with PATH replaced, restoring it afterwards. */
+  function withPath<T>(value: string, body: () => T): T {
+    const saved = process.env.PATH
+    process.env.PATH = value
+    try {
+      return body()
+    } finally {
+      if (saved === undefined) {
+        delete process.env.PATH
+      } else {
+        process.env.PATH = saved
+      }
+    }
+  }
+
+  /**
+   * A `git` that flooded stdout past `maxBuffer` for the commands matching
+   * `floodWhen` (a `sh` condition on "$@") and delegates the rest to the real
+   * git. spawnSync reports that as `error` (ENOBUFS), not as an exit status.
+   */
+  function fakeGitDir(floodWhen: string): string {
+    if (REAL_GIT === null) {
+      throw new Error('git is not on PATH')
+    }
+    const dir = makeDir('surfaces-fakegit-')
+    const script = path.join(dir, 'git')
+    fs.writeFileSync(
+      script,
+      [
+        '#!/bin/sh',
+        `if ${floodWhen}; then head -c 70000000 /dev/zero; exit 0; fi`,
+        `exec ${JSON.stringify(REAL_GIT)} "$@"`,
+        '',
+      ].join('\n'),
+    )
+    fs.chmodSync(script, 0o755)
+    return dir
+  }
+
+  test('git missing from PATH says git could not run, not "not a git repository"', () => {
+    const repo = createRepo()
+    const empty = makeDir('surfaces-nopath-')
+    for (const call of [
+      () => resolveChangeSet(repo.work),
+      () => listRepoFiles(repo.work),
+    ]) {
+      let message = ''
+      try {
+        withPath(empty, call)
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain('could not run')
+      expect(message).toMatch(/not found|ENOENT/i)
+      expect(message).not.toContain('not inside a git repository')
+    }
+  })
+
+  test('a diff that overflows the buffer names the spawn error, not an empty failure', () => {
+    const repo = createRepo()
+    const bin = fakeGitDir('[ "$1" = diff ]')
+    let message = ''
+    try {
+      withPath(`${bin}:/usr/bin:/bin`, () => resolveChangeSet(repo.work))
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toContain('git diff')
+    expect(message).toMatch(/ENOBUFS|maxBuffer/i)
+  })
+
+  test('a launch failure while resolving origin/main does not give fetch advice', () => {
+    const repo = createRepo()
+    const bin = fakeGitDir('[ "$1" = rev-parse ] && [ "$2" = --verify ]')
+    let caught: unknown
+    try {
+      withPath(`${bin}:/usr/bin:/bin`, () => resolveChangeSet(repo.work))
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect(caught).not.toBeInstanceOf(ChangeSetError)
+    const message = (caught as Error).message
+    expect(message).toContain('could not run')
+    expect(message).toMatch(/ENOBUFS|maxBuffer/i)
+    expect(message).not.toContain('git fetch')
+  })
+
+  test('a launch failure while finding the merge-base does not give fetch advice', () => {
+    const repo = createRepo()
+    const bin = fakeGitDir('[ "$1" = merge-base ]')
+    let caught: unknown
+    try {
+      withPath(`${bin}:/usr/bin:/bin`, () => resolveChangeSet(repo.work))
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).not.toBeInstanceOf(ChangeSetError)
+    const message = (caught as Error).message
+    expect(message).toContain('could not run')
+    expect(message).not.toContain('unshallow')
+  })
+})
+
 // ── Matching against the real surface list in temp repos (AE2, AE3, AE5) ───
 
 function seedFor(
@@ -727,6 +836,36 @@ describe('affected selection in a temp repo', () => {
     const picked = select(repo.work)
     expect(names(picked.direct)).toEqual(['schema', 'registry'])
     expect(names(picked.downstream)).toEqual(['config-reference'])
+  })
+
+  test('a hand edit to a generated output selects the surface that writes it', () => {
+    const repo = seededRepo()
+    write(
+      repo.work,
+      'docs/src/content/docs/reference/configuration.mdx',
+      'edited by hand\n',
+    )
+    const picked = select(repo.work)
+    expect(names(picked.direct)).toContain('config-reference')
+    expect(names(picked.downstream)).not.toContain('config-reference')
+  })
+
+  test('deleting a generated output selects the surface directly', () => {
+    const repo = seededRepo()
+    fs.rmSync(path.join(repo.work, 'skills/agent-browser/SKILL.md'))
+    const picked = select(repo.work)
+    expect(names(picked.direct)).toContain('agent-browser')
+    expect(names(picked.downstream)).not.toContain('agent-browser')
+  })
+
+  test('an output glob match selects the surface, as a trigger match does', () => {
+    const surfaces = [fake('x', ['gen/*.txt'], ['src/x.ts'])]
+    const picked = selectAffected(
+      surfaces,
+      ['gen/one.txt'],
+      ['gen/one.txt', 'src/x.ts'],
+    )
+    expect(names(picked.direct)).toEqual(['x'])
   })
 
   test('AE5: a README-only change matches nothing', () => {
