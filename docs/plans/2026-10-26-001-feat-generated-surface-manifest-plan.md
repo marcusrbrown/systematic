@@ -52,7 +52,7 @@ Requirements and acceptance examples are those of the origin document.
 - R15. AGENTS.md carries the rule: `affected`, regenerate, `drift`. (U5)
 
 **Coverage guard**
-- R16. A test fails when a trigger path matches no file in the repo. (U3)
+- R16. A test fails when a trigger path matches no file in the repo. The plan extends it to outputs: each output must expand to at least one file. (U3)
 - R17. A test fails when a generator with a check mode has no entry. (U3)
 
 | Example | Covers | Verified in |
@@ -77,7 +77,7 @@ AE2 and AE4 are read as "includes": a description edit also matches the schema s
 - The ce:review validator's check stays provenance-only. A fresh-build comparison is out.
 - The shipped `git-commit-push-pr` skill does not change.
 - No git hook, and `affected` does not run in CI. CI runs the full `drift`.
-- The `drift` job stays inside the CI `build` job. The other jobs use shallow clones without tags.
+- The `drift` step stays inside the CI `build` job. The `typecheck`, `lint` and `test` jobs use shallow clones without tags. The docs and release jobs also fetch full history, so depth is not the reason: `build` already runs the install and the build that the generators need first.
 
 ### Deferred to Separate Tasks
 
@@ -187,17 +187,17 @@ Line numbers are as of HEAD `db26033d`.
 ## Key Technical Decisions
 
 - **Location and names.** Data, closure, git logic and pure helpers go in `scripts/lib/generated-surfaces.ts`. The CLI goes in `scripts/generated-surfaces.ts` behind `import.meta.main`. Tests go in `tests/unit/generated-surfaces.test.ts`. "Manifest" stays out of the filenames: the Pi manifest JSON, a pi-subagents export and the OCX packument already use the word.
-- **Entry shape.** Each entry holds a name, a regeneration script name, a check script name, `outputs` globs and `triggers` globs. Commands are package-script names, and the runner executes each as `bun run <script>`. Outputs let one declaration feed the closure, the dead-output test and the Fro Bot superset test.
-- **Literal paths, no generator imports.** The list declares paths as literals. Importing the generators would load Zod and the schemas on every command. The outputs-match-a-file test catches renames, and a test compares the review-schema, validator and bundled-names literals with the generators' exported constants.
-- **Static closure, list order.** Surface B is downstream of A when any output of A matches a trigger of B, ignoring self-edges. `affected` reports the matched set plus everything downstream. `--run` regenerates that set in list order. The list order is: agent-browser, schema, config-reference, review-schemas, validator, registry, Pi. A test asserts every derived edge points forward in that order, so a future entry in the wrong place fails loudly. A surface whose outputs are also its triggers (agent-browser's `ATTRIBUTIONS.md`, the registry's own file) re-matches itself after a commit. That over-reports harmlessly, and a comment says so.
-- **Checks are subprocesses.** `drift` runs `bun run <check script>` per surface, sequentially, with output buffered per child. A failing check never stops the rest. The mdx check goes through the generator's `execMain` seam and gets distinct failure messages: markers missing or reversed, version unresolved, examples missing, and plain drift.
+- **Entry shape.** Each entry holds a name, a regeneration script name, a check script name, `outputs` and `triggers`. Commands are package-script names, and the runner executes each as `bun run <script>`. Outputs let one declaration feed the closure, the dead-output test and the Fro Bot superset test. Entries store brace-free literals, one per file, so the review-schemas entry lists three output paths; the brace shorthand in the table below is for reading only. Only two outputs keep a glob: the schema file `docs/public/schemas/v*/systematic-config.schema.json` and the Pi fixtures `tests/fixtures/pi-subagents-personas/**`. Triggers may be globs. The expanded outputs of a surface are its output entries with each glob matched against tracked plus untracked files.
+- **Literal paths, no generator imports.** The list declares paths as literals. Importing the generators would load Zod and the schemas on every command. The test that every output expands to at least one file catches renames, and a test compares the review-schema, validator and bundled-names literals with the generators' exported constants.
+- **Static closure, list order.** Surface B is downstream of A when any expanded output path of A matches a trigger glob of B, ignoring self-edges. The match is path against pattern, never pattern against pattern. `affected` reports the matched set plus everything downstream. `--run` regenerates that set in list order. The list order is: agent-browser, schema, config-reference, review-schemas, validator, registry, Pi. A test asserts every derived edge points forward in that order, so a future entry in the wrong place fails loudly. A surface whose outputs are also its triggers (agent-browser's `ATTRIBUTIONS.md`, the registry's own file) re-matches itself after a commit. That over-reports harmlessly, and a comment says so.
+- **Checks are subprocesses.** `drift` runs `bun run <check script>` per surface, sequentially, with output buffered per child. A failing check never stops the rest. The mdx check is a new exported function in the field-reference generator. It compares the text a pure builder returns with the file on disk, writes nothing, and returns distinct failures: markers missing or reversed, version unresolved, examples missing, and plain drift. `execMain` stays the only writer, so regeneration behavior does not change, and `main` parses the check flag and calls the new function.
 - **Failure semantics.** `regen` and `affected --run` stop at the first failing regeneration. They print the failed surface and the surfaces not run, and say that earlier surfaces were already rewritten, so the tree is partly regenerated. After a `--run` regeneration succeeds, the checks over the same set report like `drift` does. The runner never passes `--allow-shrink` through. The child's output is printed unaltered, so the schema generator's own shrink-guard message, with its `--allow-shrink` instruction, reaches the user.
 - **Report format.** Per surface, `[PASS] <name>` or `[FAIL] <name>`. A failure is followed by the indented child output and `fix: bun run <regen script>`. A final summary line reads `drift: N of M failed: <names>`.
 - **Environment preflight.** `regen`, `drift` and `affected --run` need `node_modules`, since generators read it and Biome runs from it. If `node_modules/.bin/biome` or `node_modules/zod` is missing, they print "run bun install" and exit non-zero. Plain `affected` runs no generator and skips the check.
 - **Git mechanics.** Every git call runs with the repo root as cwd, because `ls-files --others` is cwd-relative. Resolve `origin/main` and the merge-base first. The change set is the diff against the merge-base with `--no-renames` and `-z`, plus untracked files not excluded by ignore rules. Paths are never filtered by existence, so deletions count. An empty set exits 0. A missing ref exits non-zero and names it, with an unshallow or deepen hint when the clone is shallow. The runner never fetches.
-- **Tag-less clones.** The schema and field-reference generators read the version from git tags. In a clone without tags they fail with their own message, and the runner shows it unaltered. That is why `drift` stays in the `build` job, and AE8 needs a tagged clone.
+- **Tag-less clones.** The schema and field-reference generators read the version from git tags. In a clone without tags they fail with their own message, and the runner shows it unaltered. AE8 needs a tagged clone, and `drift` stays in the `build` job, which fetches full history with tags.
 - **Pi triggers over-report.** The Pi surface triggers on `agents/**/*.md` plus its two source modules, not on the 29 curated paths. Over-reporting is the safe direction, and the curated list can drift out from under a narrow trigger.
-- **Coverage rule for generators.** A non-test file under `scripts/` or `docs/scripts/` that contains the quoted `'--check'` literal must be the target of some entry's check script, resolved through `package.json`, and every entry's check script must resolve to such a file. The rule is bidirectional. Neither the runner nor the lib may contain the quoted literal, so they are never mistaken for generators.
+- **Coverage rule for generators.** A non-test file under `scripts/` or `docs/scripts/` that contains the quoted `'--check'` literal, in the repo's single-quote style (Biome-enforced), must be the target of some entry's check script, resolved through `package.json`, and every entry's check script must resolve to such a file. The rule is bidirectional. Neither the runner nor the lib may contain the quoted literal, so they are never mistaken for generators.
 - **One wiring test.** Four tests pin CI and prompt text. The assertion at `tests/unit/plugin.test.ts:148` goes, and `:162`, which checks the `registry:drift` script, stays. The two workflow-text checks in `tests/unit/generate-review-artifact-schema.test.ts` and `tests/unit/ce-review-validator-packaging.test.ts` go. The test in `tests/unit/fro-bot-workflow.test.ts` becomes one wiring test that parses the YAML of both workflows.
 - **Pi `generatedAt` fix comes first.** The manifest JSON is written only when it is missing or its entries differ. Without this, AE8 cannot hold.
 - **No per-script existence test.** CI `drift` and `postupgrade` call every script by name, so a missing one fails on first use.
@@ -244,17 +244,17 @@ flowchart TB
   rl2 --> dl2[check the same set, report like drift]
 ```
 
-The surface list, in regeneration order. Package-script names are listed; new ones are marked.
+The surface list, in regeneration order. Package-script names are listed; new ones are marked. Brace groups in the trigger cells are shorthand; entries store one literal per file.
 
 | # | Surface | Regen / check script | Outputs | Triggers |
 |---|---------|----------------------|---------|----------|
 | 1 | agent-browser | `agent-browser:build` / `agent-browser:drift` | `skills/agent-browser/SKILL.md`, `ATTRIBUTIONS.md` | generator, `package.json`, `bun.lock`, `ATTRIBUTIONS.md` |
-| 2 | schema | `schema:generate` / `schema:drift` | `docs/public/schemas/v*/systematic-config.schema.json`, `src/lib/bundled-names.ts` | generator, `scripts/lib/zod-internals.ts`, `src/lib/{agent-colors,agents,bundled-names,config-schema,frontmatter,removed-names,skills,validation,walk-dir}.ts`, `agents/**/*.md`, `skills/*/SKILL.md`, `biome.json`, `package.json`, `bun.lock` |
-| 3 | config-reference | `config-reference:generate` / `config-reference:drift` (both new) | `docs/src/content/docs/reference/configuration.mdx` | generator, the schema surface's source modules, `package.json`, `bun.lock` |
-| 4 | review-schemas | `review-schema:generate` / `review-schema:drift` | `skills/ce-review/references/{review-summary,findings,review-pipeline}-schema.json` | generator, `src/lib/{review-artifact-schema,review-pipeline-contract}.ts`, `biome.json`, `package.json`, `bun.lock` |
+| 2 | schema | `schema:generate` / `schema:drift` | `docs/public/schemas/v*/systematic-config.schema.json` (glob), `src/lib/bundled-names.ts` | generator, `scripts/lib/zod-internals.ts`, `src/lib/{agent-colors,agents,bundled-names,config-schema,frontmatter,removed-names,skills,validation,walk-dir}.ts`, `agents/**/*.md`, `skills/*/SKILL.md`, `biome.json`, `package.json`, `bun.lock` |
+| 3 | config-reference | `config-reference:generate` / `config-reference:drift` (both new) | `docs/src/content/docs/reference/configuration.mdx` | generator, `scripts/generate-config-schema.ts` (it exports the version helpers and schema ID template the generator imports), the schema surface's source modules, `package.json`, `bun.lock` |
+| 4 | review-schemas | `review-schema:generate` / `review-schema:drift` | `skills/ce-review/references/review-summary-schema.json`, `skills/ce-review/references/findings-schema.json`, `skills/ce-review/references/review-pipeline-schema.json` | generator, `src/lib/{review-artifact-schema,review-pipeline-contract}.ts`, `biome.json`, `package.json`, `bun.lock` |
 | 5 | validator | `ce-review-validator:build` / `ce-review-validator:drift` | `skills/ce-review/scripts/validate-review.mjs` | generator, `src/ce-review-validator.ts`, `src/claude-code-validator.ts`, `src/lib/{review-artifact-path,review-artifact-schema,review-pipeline-contract,review-pipeline,review-return-validator}.ts`, `biome.json`, `package.json`, `bun.lock` |
 | 6 | registry | `registry:generate` (new) / `registry:drift` | `registry/registry.jsonc` | generator, `src/lib/{agents,frontmatter,skills,validation,walk-dir}.ts`, `agents/**`, `skills/**`, the registry file itself, `biome.json` |
-| 7 | Pi personas | `pi-personas:generate` / `pi-personas:drift` (both new) | `tests/fixtures/pi-subagents-personas/**` | generator, `src/lib/{pi-subagents-personas,frontmatter}.ts`, `agents/**/*.md` |
+| 7 | Pi personas | `pi-personas:generate` / `pi-personas:drift` (both new) | `tests/fixtures/pi-subagents-personas/**` (glob) | generator, `src/lib/{pi-subagents-personas,frontmatter}.ts`, `agents/**/*.md` |
 
 Closure edges the rule is expected to derive, all forward: agent-browser to schema and to registry (it writes a skill file), schema to config-reference (it writes `bundled-names.ts`), review-schemas to registry and validator to registry (they write files under `skills/`). The test derives the edges rather than pinning this list.
 
@@ -311,9 +311,10 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - Test: `tests/unit/generate-config-reference.test.ts`
 
 **Approach:**
-- Add a check flag. The check builds the fresh field reference, injects it into the file's current text, and compares the result with the file on disk. Because injection preserves everything outside the markers byte for byte, whole-file equality is region equality, and a prose edit outside the markers is not drift.
-- Route the check through `execMain` so it returns an exit code and tests need no process exit. Check mode never writes.
-- Report distinct failures: markers missing or reversed, version unresolved, examples missing, and content drift. Drift names the file and points at `config-reference:generate`.
+- Split building from writing. A pure builder returns the full file text: the fresh field reference injected into the file's current text. `execMain` stays the only writer and calls the builder, so regeneration behavior is unchanged.
+- Add an exported check function. It compares the builder's text with the file on disk, never writes, and returns an exit code so tests need no process exit. Because injection preserves everything outside the markers byte for byte, whole-file equality is region equality, and a prose edit outside the markers is not drift.
+- `main` parses a check flag next to the existing version flag and calls the check function instead of `execMain`.
+- The check function reports distinct failures: markers missing or reversed, version unresolved, examples missing, and content drift. Drift names the file and points at `config-reference:generate`.
 - Correct the stale header comment that names `systematic-config.mdx`.
 - Add `config-reference:generate` and `config-reference:drift`. The generate script keeps the generator's current behavior.
 
@@ -326,10 +327,11 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 **Test scenarios:**
 - Happy path: generate into a temp copy of the mdx, then check it, and the exit code is 0 with the file unchanged.
 - Edge case (AE7): a prose edit outside the markers still passes.
-- Error path (AE7): a hand edit between the markers fails and names drift, and the file is not modified.
+- Error path (AE7): a hand edit between the markers fails and names drift, and the drifted file is byte-identical afterwards.
 - Error path: missing markers and reversed markers each fail with their own message.
 - Error path: unresolved version and missing examples each fail with their own message.
-- Edge case: check mode never writes, asserted by content and modification time on the temp file.
+- Edge case: the check function never writes on any failure path, asserted by content and modification time on the temp file.
+- Integration: `execMain` still writes the regenerated text as before, so regeneration behavior is unchanged.
 - Integration: the real committed mdx is never passed to a writer by any test.
 
 **Verification:**
@@ -350,8 +352,8 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - Test: `tests/unit/generated-surfaces.test.ts`
 
 **Approach:**
-- Declare the seven entries in the order and with the triggers in the table above. Declare paths as literals and keep the quoted `'--check'` literal out of this file.
-- Provide pure helpers: glob matching through `Bun.Glob`, the literal prefix of a glob (the text before the first `*`), the downstream closure, a forward-order check over the derived edges, and the report line formatters.
+- Declare the seven entries in the order and with the triggers in the table above. Declare brace-free literal paths, one per file, and keep the quoted `'--check'` literal out of this file.
+- Provide pure helpers: glob matching through `Bun.Glob`, the expansion of outputs against tracked plus untracked files, the literal prefix of a glob (the text before the first `*`), the downstream closure (expanded output path against trigger glob), a forward-order check over the derived edges, and the report line formatters.
 - Provide the preflight check for `node_modules/.bin/biome` and `node_modules/zod`.
 - Provide the change-set function: resolve `origin/main`, resolve the merge-base, then take the `--no-renames` diff union untracked files, all with the repo root as cwd and without existence filtering. On failure it throws an error that names the ref and adds the shallow-clone hint when applicable.
 - Add `registry:generate` as a plain wrapper over the registry generator. `registry:build` is taken by the OCX builder.
@@ -375,7 +377,8 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 - Error path: `origin/main` exists but no merge-base resolves, as in a depth-1 clone, and the error names the merge-base and carries the unshallow hint.
 - Error path: preflight reports "run bun install" when `node_modules/.bin/biome` is absent and passes when both entries exist, using temp directories.
 - Integration: closure edges derived from the real list all point forward. A fake list with a downstream surface placed before its upstream is reported as a violation, so the check is not vacuous.
-- Integration (R16): for every trigger glob and every output glob of the real list, individually, at least one file in `git ls-files` plus untracked files matches. A fake dead glob fails.
+- Integration (R16): every trigger glob, individually, matches at least one file in `git ls-files` plus untracked files, and every output entry expands to at least one file. A fake dead trigger and a fake dead output each fail.
+- Edge case: the closure matches an expanded output path against a trigger glob. A fake surface whose output glob and another surface's trigger glob are patterns that never share a real path is not linked.
 - Integration (R17): the set of non-test files under `scripts/` and `docs/scripts/` containing the quoted `'--check'` literal equals the set of files that the entries' check scripts resolve to through `package.json`. A temp extra file with the literal fails the first direction, and an entry with no literal in its target fails the second.
 - Integration: the review-schema, validator and bundled-names literals equal the generators' exported path constants.
 
@@ -464,7 +467,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
   - Collapse the two registry and schema rows in each of the two report tables into one "Generated-surface drift" row.
   - Extend the never-hand-edit list to every surface output, with wording that `ATTRIBUTIONS.md` and `configuration.mdx` are only partly generated: say "generated region of", "version references in".
   - Rewrite the "regenerate via the canonical script" sentence to name `surfaces:regen`.
-- `AGENTS.md`: add the three commands, `registry:generate` and the new generator scripts to the Commands block. Remove the nested "Generated surfaces" prose under the bundled-agents bullet and keep its prior-art link. Add a separate Conventions bullet carrying the rule: before committing or opening a PR, run `bun run surfaces:affected --run`, then `bun run surfaces:drift`. If `affected` cannot resolve `origin/main`, run `bun run surfaces:regen`, then `drift`. A change that removes a skill or agent shrinks the config schema and needs `--allow-shrink` once.
+- `AGENTS.md`: add the three commands, `registry:generate` and the new generator scripts to the Commands block. Remove the nested "Generated surfaces" prose under the bundled-agents bullet and keep its prior-art link. Add a separate Conventions bullet carrying the rule: before committing or opening a PR, run `bun run surfaces:affected --run`, then `bun run surfaces:drift`. If `affected` cannot resolve `origin/main`, run `bun run surfaces:regen`, then `drift`. After deleting an agent or skill, run `bun scripts/generate-config-schema.ts --allow-shrink` once, then `bun run surfaces:regen`.
 - Docs: `ARCHITECTURE.md` (the registry-drift paragraph and the validator drift sentence), `STRUCTURE.md` (the `scripts/` file list and the Build / CI table), `docs/AGENTS.md` (the field-reference section: add the check mode and idempotence), `HARNESSES.md` (the validator gate mention). Both solution docs lose their stale sequences and per-surface step examples and point at the new commands.
 - Tests: delete the `registry:drift` assertion in `plugin.test.ts` and keep the script-exists test. Delete the workflow-text test in `generate-review-artifact-schema.test.ts` and the drift-wiring block in `ce-review-validator-packaging.test.ts`. Rewrite the four-commands test in `fro-bot-workflow.test.ts` as the wiring test below.
 
@@ -477,7 +480,7 @@ Closure edges the rule is expected to derive, all forward: agent-browser to sche
 **Test scenarios:**
 - Happy path: parsed `main.yaml` has exactly one step whose run is `bun run surfaces:drift`, in the job whose checkout uses `fetch-depth: 0`.
 - Happy path: the Fro Bot prompt names `bun run surfaces:drift` and no longer lists per-surface drift commands.
-- Edge case (R14): every surface output's literal prefix is covered by some backticked token in the never-hand-edit list, with tokens parsed across line wraps and covered by prefix containment. The list may keep naming build outputs.
+- Edge case (R14): every surface output's literal prefix (the text before its first `*`) starts with some backticked token in the never-hand-edit list, so the token `docs/public/schemas/` covers the prefix `docs/public/schemas/v`. Tokens are parsed across line wraps. The list may keep naming build outputs.
 - Error path: a copy of the prompt with one surface's token removed fails the superset check and names that surface.
 - Error path: a `main.yaml` copy that re-adds a per-surface drift step fails the one-step assertion.
 - Integration: the removed text-pinning assertions leave no test that fails when only the wording of a step name changes.
