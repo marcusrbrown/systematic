@@ -22,7 +22,7 @@ CI gains a full real-host contract on a pinned v2 CLI and a v1 smoke test at the
 
 OpenCode v2 is GA (2.0.0 on 2026-09-11, 2.2.0 on 2026-10-27) under the `@opencode/*` npm scope. Its migration guide says v1 plugin implementations do not run on v2. Systematic's peer is `@opencode-ai/plugin` `^1.1.30`, and its CI host is the v1 CLI. v1 stays current on npm and GitHub, so the user base is probably split for some time. That split is inferred and has not been measured.
 
-The v1 plugin writes into one mutable config object, registers string-keyed hooks (three experimental), builds its tool with the zod-based helper, and depends on host-internal text such as the truncation marker and the prune placeholder. v2 removes or reshapes all of these. The origin document carries the full frame (see origin: `docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md`).
+The v1 plugin writes into one mutable config object, registers string-keyed hooks (two experimental), builds its tool with the zod-based helper, and depends on host-internal text such as the truncation marker and the prune placeholder. v2 removes or reshapes all of these. The origin document carries the full frame (see origin: `docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md`).
 
 Marcus settled these points before planning:
 - The v1 floor stays at 1.18.29. No callable-hybrid export is attempted.
@@ -71,8 +71,8 @@ Requirements and acceptance examples are those of the origin document.
 | AE3 | R7 | U12: `git-worktree` disabled omits the worktree rule on v2 |
 | AE4 | R10 | U10: a disabled skill is refused on v2 |
 | AE5 | R4, R5 | U6: install and load with no OpenCode package present |
-| AE6 | R1 | U15: floor documented, no shim |
-| AE7 | R9 | U11: expanded arguments reach the configured agent, and `!`-backtick is not run |
+| AE6 | R1 | U15: v1 below 1.18.29 and v2 below 2.2.0 documented as unsupported, no shim |
+| AE7 | R9 | U11: expanded arguments reach the configured agent (or the session's current agent, with one diagnostic, when that agent is not registered), and `!`-backtick is not run |
 
 ---
 
@@ -91,6 +91,7 @@ Requirements and acceptance examples are those of the origin document.
 - OCX installer and registry support for v2 config: a separate issue.
 - Dropping v1: a later major, at a time Marcus chooses.
 - The roughly 2,000 lines of guard-era test and fixture remnants that still pin versions: a separate cleanup.
+- Solution-doc refreshes: a `ce:compound-refresh` run after merge over the named-exports, truncation, subprocess-fixtures, silent-defect-swallow, host-contract-evidence and subagent-permission docs, and the config-key doc that says the key is singular `plugin`. Mark each as v1 behavior and link the v2 behavior.
 - A new `docs/solutions/` entry for the dual-export pitfalls: write it with `ce:compound` after the PR merges.
 
 ---
@@ -125,7 +126,7 @@ Each constraint is re-verified on v2 by a probe or a contract test.
 - `docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`: evidence comes from required CI at the exact pin, and a bump and its evidence land together (U14, U15).
 - `docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md`: run the surfaces commands and update the hook parser (U6, U12, U13).
 - `docs/solutions/integration-issues/verify-a-no-change-claim-against-the-consumer-2026-09-08.md`: mutate output arrays in place. Re-verify on v2 (U3).
-- No solution doc covers `!`-backtick semantics, the dual export gate, or Renovate grouping for a second scope. U15 refreshes the stale docs listed there.
+- No solution doc covers `!`-backtick semantics, the dual export gate, or Renovate grouping for a second scope. The stale docs listed there are refreshed after merge (see Deferred to Separate Tasks).
 
 ### External References
 
@@ -263,7 +264,7 @@ Each constraint is re-verified on v2 by a probe or a contract test.
 - **Probe-chosen mechanisms.** Bootstrap, agents, skills, commands and restoration follow the matrix in High-Level Technical Design. A failed agent-creation probe stops work at the U9 gate.
 - **Dev dependencies.** `@opencode/plugin` and `@opencode/sdk` at 2.2.0 join as exact-pinned dev dependencies in lockstep, added in U6 because type-only imports need them. `@opencode/cli` is not a dependency, because its postinstall pulls roughly 180 MB.
 - **Pins.** The three CLI pins (v2, v1 current, v1 floor) live in a committed JSON pin file under `scripts/`, because Renovate ignores `tests/**`. A Renovate regex manager tracks the two moving pins and excludes the floor. Equality tests tie each CLI pin to its plugin and sdk dev dependencies.
-- **CI shape.** The existing shard jobs retarget to the v2 host and run the full suite. Two separate v1 jobs (floor and current) run a smoke subset. All host jobs feed the existing required `Host Contract` aggregator, so repository settings do not change. Each job gets its own guard profile.
+- **CI shape.** The existing shard jobs retarget to the v2 host and run the v2 profile's files. Two separate v1 jobs (floor and current) run a smoke subset. All host jobs feed the existing required `Host Contract` aggregator, so repository settings do not change. Each job gets its own guard profile.
 - **Host-neutral tests run once.** U7 triages every integration file into v2-suite, v1-smoke or both. Shared behavior is host-parameterized. v1-only behavior (restoration, `systematic_skill`, the `!`-backtick command probe) stays in the v1 smoke set. Host-neutral files (Pi, Claude Code, release notes) run once in the v2 job.
 - **Workflow edits.** Marcus's CI decision covers the edits to `main.yaml` and `renovate.json5` in U6, U7 and U14.
 - **Evidence trail.** Probe outcomes go to a gitignored scratch log under `.context/systematic/opencode-v2-probes/` during U1 to U3, then into `HARNESSES.md` in U15. Probe plugins never leave that directory.
@@ -301,7 +302,7 @@ Each constraint is re-verified on v2 by a probe or a contract test.
 | F5 | Config lifecycle: load once, invalid config, project trust and missing directory | U8 |
 | F6 | Transform replay: fresh state, shared module state, duplicate subscriptions, one snapshot per setup | U8, U9 |
 | F7 | Loader shape: baseline main at 1.18.29, extra keys on v1, type declarations referencing both optional peers | U1, U6 |
-| F8 | Below-floor hosts: v1 below 1.18.29 and v2 below 2.2.0 | U1, U8, U15 |
+| F8 | Below-floor hosts: v1 below 1.18.29 and v2 below 2.2.0 are unsupported with no shim; U1 records the failure modes (including v2 2.1.x) and U15 documents them | U1, U15 |
 | F9 | The git-commit wording change reaches Pi and Claude Code text; clean install with no OpenCode package | U6, U13 |
 | F10 | CI and harness: aggregator `needs`, skip versus fail, per-job profiles, timings, path filters, local-prefix v2 install, per-host fixture caches, SDK client choice, lockstep equality, pure-move rename, host-specific system assertions, packaged-plugin linking | U7, U14 |
 | F11 | Pins, profile and one PR: pin file, Renovate group, literal guards, v2 profile file, registry surface, bootstrap snapshot | U7, U12 |
@@ -367,8 +368,9 @@ Phase A probes (U1 to U3), Phase B v1 safety net and shared core (U4 to U7), Pha
 
 **Approach:**
 - Build three stubs: today's main build (function default), an object default with `id`, `setup` and `server`, and an object with an extra named export.
-- Run each against v2 2.2.0, v1 1.18.29, v1 1.19.4 and the newest v1 below the floor, using a fresh isolated process per cell.
-- Record whether it loads, which entry the host calls, whether the unused member is ignored, how a v2 config entry written under the old `plugin` key is normalized, how the `id` is used, and the failure mode below the floor (F8).
+- Run each against v2 2.2.0, v2 2.1.x (the newest 2.1 release), v1 1.18.29, v1 1.19.4 and the newest v1 below the floor, using a fresh isolated process per cell.
+- Record what the v2 2.1.x cell does so the release note can state it. This cell is evidence only and creates no runtime shim.
+- Record whether it loads, which entry the host calls, whether the unused member is ignored, how a v2 config entry written under the old `plugin` key is normalized, how the `id` is used, and the failure mode below each floor (F8).
 - Load the packed tarball form on both hosts, not only the directory form.
 
 **Execution note:** Throwaway probe. Nothing from this unit is committed.
@@ -496,18 +498,21 @@ Test expectation: none -- throwaway probe.
 - Modify: `src/lib/skill-tool.ts`
 - Modify: `src/lib/bootstrap.ts`
 - Modify: `src/index.ts`
+- Modify: `scripts/content-integrity.ts` (hook-inventory parser retarget)
 - Modify: `ARCHITECTURE.md` (codemap entries)
 - Modify: `src/lib/AGENTS.md` (module-table rows)
 - Test: `tests/unit/asset-plan.test.ts`
 - Test: `tests/unit/config-handler.test.ts`
 - Test: `tests/unit/opencode-v1-golden.test.ts`
+- Test: `tests/unit/content-integrity.test.ts`
 
 **Approach:**
 - A pure asset-plan builder takes the loaded config, discovered assets and the list of native agent names, and returns agents, commands, enabled skills and the skills directory.
 - The permission accumulator returns an ordered list of permission, pattern and setting triples. The v1 adapter folds that list into the same map `config-handler.ts` writes today.
 - The v1 closure keeps its re-entrancy heuristics and its reads of the v1 config object. Only the pure parts move.
-- Add a pure descriptor for the skill tool (name, description, argument names) that both adapters can render. The v1 tool, `ask`, `metadata`, `callID` use and the restore functions stay in `skill-tool.ts`.
-- Expose a host-neutral bootstrap composition entry that takes the profile name, so U12 can select the v2 profile without touching v1.
+- The v1 skill tool, its `ask`, `metadata` and `callID` use, and the restore functions stay in `skill-tool.ts`. No shared tool descriptor is built here. U10 builds one only if it has to port the tool.
+- Expose a host-neutral bootstrap composition entry that takes the profile name and the skill usage template, so U12 can select the v2 profile and a v2 usage template without touching v1.
+- Retarget the hook-inventory parser in `scripts/content-integrity.ts` to read `REGISTERED_PLUGIN_HOOKS` from `src/lib/opencode-v1.ts`, move its fixtures in `tests/unit/content-integrity.test.ts`, and keep the `HOOK_PARITY_DOCUMENTS` check passing against the moved inventory. The parser must follow the const in the same commit, or this unit is red.
 - `src/index.ts` keeps its function default for now and calls the v1 adapter. U6 changes the shape.
 - `REGISTERED_PLUGIN_HOOKS` moves with the hooks into `opencode-v1.ts`.
 - Register both new modules in `ARCHITECTURE.md` and `src/lib/AGENTS.md`.
@@ -522,12 +527,13 @@ Test expectation: none -- throwaway probe.
 - Edge case: the ordered permission list keeps insertion order for integer-like keys, and folding it into the v1 map gives the golden map.
 - Error path: invalid config yields the same plan as before.
 - Integration: all U4 goldens and the whole existing `config-handler` corpus pass unchanged.
-- Integration: the built `dist/pi.js` is byte-identical to the pre-U5 build, and `tests/unit/pi.test.ts` passes (the core must not change what Pi imports).
+- Integration: `tests/unit/pi.test.ts` passes, and `bun run pi-personas:drift` and `bun run surfaces:drift` are clean (the core must not change Pi behavior). Byte identity of `dist/pi.js` is not required, because bundler output can change on its own.
+- Integration: `bun scripts/content-integrity.ts` reads the hook inventory from the v1 adapter, and a deleted hook fails parity.
 
 **Verification:**
 - U4 goldens and `tests/unit/config-handler.test.ts` pass without edits to their expectations.
 - `bun scripts/content-integrity.ts` passes with the two new modules registered.
-- The Pi bundle comparison shows no change.
+- The Pi tests and the Pi persona and surfaces drift checks are clean.
 
 - [ ] U6. Export shape and every gate that assumes it
 
@@ -541,18 +547,16 @@ Test expectation: none -- throwaway probe.
 - Modify: `src/index.ts`
 - Modify: `package.json` (exact-pinned `@opencode/plugin` and `@opencode/sdk` dev dependencies; optional peers `@opencode-ai/plugin` from the floor and `@opencode/plugin` from 2.2.0; build externals)
 - Modify: `bun.lock`
-- Modify: `scripts/content-integrity.ts`
 - Modify: `.github/workflows/main.yaml` (the Node smoke script in the build job)
 - Modify: `ARCHITECTURE.md`, `STRUCTURE.md`, `AGENTS.md`, `.github/copilot-instructions.md` (hook inventory and invariant 1)
 - Test: `tests/unit/package-exports.test.ts`
 - Test: `tests/unit/plugin.test.ts`
-- Test: `tests/unit/content-integrity.test.ts`
 
 **Approach:**
 - `src/index.ts` exports only `default`, an object whose `server` runs the U5 v1 adapter and whose `setup` is a no-op until U8.
 - Type the object against v2's definition type with a type-only import. If the v1 and v2 type packages disagree on the object, define the narrow local type and note it.
 - The export-shape check asserts an object with a string `id` and function `setup` and `server`. The runtime-import check covers both `@opencode-ai/` and `@opencode/`, and ignores type-only imports. The isolated `node -e` install check asserts the object shape.
-- The hook-inventory parser reads `REGISTERED_PLUGIN_HOOKS` from the v1 adapter file, and its test fixtures follow. The four parity documents and ARCHITECTURE invariant 1 are reworded to describe the object and where the v1 hooks live.
+- The hook-inventory parser already reads the v1 adapter file (U5). The four parity documents and ARCHITECTURE invariant 1 are reworded here to describe the object and where the v1 hooks live.
 - The 19 `default()` calls in `plugin.test.ts` become `default.server(...)`. The assertion that reads the `main.yaml` smoke text and the smoke script itself change together.
 - Add a peer-declaration check for both optional peers.
 
@@ -568,7 +572,7 @@ Test expectation: none -- throwaway probe.
 - Edge case: a planted runtime import of `@opencode/plugin` in `dist` fails the runtime-import gate, and a type-only import does not.
 - Error path: a planted function default fails the new shape check.
 - Integration (AE5): an isolated install with no OpenCode package present loads the built entry, and the Pi entry still loads.
-- Integration: `bun scripts/content-integrity.ts` reads the hook inventory from the v1 adapter, and a deleted hook fails parity.
+- Integration: `bun scripts/content-integrity.ts` still passes after the document rewording.
 
 **Verification:**
 - All gates in the Files list pass with the object export.
@@ -590,20 +594,23 @@ Test expectation: none -- throwaway probe.
 - Modify: `scripts/run-evals.ts`
 - Rename: `tests/integration/fixtures/receipt-workflow-host.ts` to a host-neutral name (for example `opencode-host.ts`)
 - Rename: `tests/unit/receipt-workflow-host.test.ts` and `tests/unit/receipt-workflow-host-no-spawn.test.ts` to match
-- Modify: integration importers (`opencode.test.ts`, `skill-delivery.test.ts`, `skill-command-probe.test.ts`, `ce-review-return-validation.test.ts`, `eval-runner.test.ts`)
+- Modify: importers of the harness (`tests/integration/opencode.test.ts`, `skill-delivery.test.ts`, `skill-command-probe.test.ts`, `ce-review-return-validation.test.ts`, and `tests/unit/opencode-pin.test.ts`, which imports the harness by path). `eval-runner.test.ts` only mentions it in a comment and is not an importer.
+- Modify: `scripts/host-contract-guard.ts` (the per-profile integration file lists)
 - Modify: `.github/renovate.json5`
 - Test: `tests/unit/opencode-pin.test.ts`
 - Test: `tests/unit/opencode-availability.test.ts`
 - Test: `tests/unit/renovate-workflow.test.ts`
+- Test: `tests/unit/host-contract-guard.test.ts`
 
 **Approach:**
 - The rename lands first as a pure move: file moves and import-path updates only, so history shows the rename. Historic plan and solution docs keep their old path mentions.
 - The pin file holds three CLI versions: v2, v1 current and v1 floor. The pin reader exposes all three. `readOpencodeSdkPin` keeps returning the v1 current pin for evals.
 - Equality tests tie the v2 CLI pin to the `@opencode/plugin` and `@opencode/sdk` dev dependencies, and the v1 current CLI pin to the `@opencode-ai` pair. The R1 and R2 literal guards extend to all three versions, with the pin file as the only allowed home. The floor literal is allowed only there.
-- Renovate gets an `OpenCode v2` group for `@opencode/**` and a regex manager for the two moving pins in the pin file, with each pin in its host's group. The regex excludes the floor.
+- The existing `OpenCode` group matches `@opencode-ai/{/,}**` only, so the unscoped v1 CLI package `opencode-ai` falls outside it. Add `opencode-ai` to that group's package names. Add a separate `OpenCode v2` group for `@opencode/**`.
+- A regex manager tracks the two moving pins in the pin file and states a package name for each: `opencode-ai` for v1 current and `@opencode/cli` for v2. The regex excludes the floor.
 - The harness takes a host parameter. Version, binary path, availability cache and require-flag state are keyed by host. The v2 probe plugin, the host-specific system-prompt assertion, and the packaged-plugin linking (`@opencode/plugin` for v2) are separate paths. The v2 harness uses the `@opencode/sdk` client.
 - The harness fails at import when the installed host does not report the pinned version.
-- Triage every file under `tests/integration/` into v2-suite, v1-smoke or both, using the rule in Key Technical Decisions. Commit the triage as a table in the harness header or the guard module, whichever U14 consumes.
+- Triage every file under `tests/integration/` into v2-suite, v1-smoke or both, using the rule in Key Technical Decisions. The triage is written as per-profile file lists in `scripts/host-contract-guard.ts`. Those lists are the single source: `EXPECTED_SUITE_FILES` becomes per-profile from them, and U14 adds the `files --profile` subcommand that feeds `bun test`.
 
 **Patterns to follow:**
 - The existing R1 and R2 guard structure and its planted-violation probe.
@@ -613,6 +620,8 @@ Test expectation: none -- throwaway probe.
 - Happy path: the pin reader returns three exact versions, and the lockstep tests pass.
 - Edge case: bumping one of a lockstep pair in a temp copy of `package.json` fails the equality test.
 - Edge case: the Renovate regex, applied to the pin file, matches the v2 and v1-current entries and does not match the floor.
+- Integration: each pin lands in its host's group: the v1 current pin (`opencode-ai`) in `OpenCode`, the v2 pin (`@opencode/cli`) in `OpenCode v2`, and the floor in none.
+- Edge case: every `tests/integration/*.test.ts` file appears in at least one profile list, so a new file cannot silently go unrun.
 - Error path: a planted v2 or floor literal in a script or test fails R1, and a planted non-sentinel fixture version fails R2.
 - Integration: asking the harness for v1 and then v2 returns each host's own version and cache, never the other's.
 - Integration: a host reporting the wrong version fails at import with a message naming both versions.
@@ -620,7 +629,7 @@ Test expectation: none -- throwaway probe.
 **Verification:**
 - `bun run typecheck:all`, lint and the unit tests for the touched files pass.
 - Existing integration tests run unchanged against v1 through the renamed harness.
-- The triage table covers every integration test file.
+- The per-profile lists cover every integration test file.
 
 - [ ] U8. v2 adapter scaffold
 
@@ -642,7 +651,7 @@ Test expectation: none -- throwaway probe.
 - `setup` loads config with invalid-source reporting and a warning sink, builds the asset plan and bootstrap content once, and hands that one snapshot to every domain installer.
 - A safe wrapper runs each installer and each registered callback in a try/catch and reports through `console.error` with the `systematic` prefix. The wrapper shape follows P-ERR.
 - Project config is included only when `ctx` provides the project directory (P-TRUST).
-- Feature detection: a missing domain on `ctx` (a v2 older than 2.2.0) skips that installer and emits one diagnostic. Other domains still install.
+- There is no runtime detect-and-degrade branch. v2 below 2.2.0 is documented as unsupported with no shim, the same as v1 below 1.18.29.
 - Module state is not shared between `setup` calls. Transform callbacks start from fresh state on each replay. Re-running `setup` does not stack subscriptions.
 - Domain installers for agents, skills, commands and bootstrap arrive in U9 to U12. This unit leaves empty slots and tests the wrapper with stand-ins.
 - No network calls and no telemetry are added.
@@ -655,7 +664,6 @@ Test expectation: none -- throwaway probe.
 - Happy path (F5): with a `ctx` that has a directory, config loads once and each installer receives the same snapshot object.
 - Edge case (F5): a config edit after `setup` is not picked up, unlike v1.
 - Edge case (F5): no project directory means user-level config only, plus one diagnostic.
-- Edge case (F8): a `ctx` without the skill domain installs the rest and emits one diagnostic.
 - Error path (F5): invalid `systematic.json` completes `setup` fail-open with a diagnostic.
 - Error path: a throwing installer and a throwing transform callback are caught, and later installers still run.
 - Edge case (F6): the same transform called twice on fresh editors gives identical results.
@@ -674,7 +682,7 @@ Test expectation: none -- throwaway probe.
 
 **Dependencies:** U3, U8
 
-**Gate:** Do not start this unit if P-AGENT failed in U3. Stop and ask Marcus. The fallback is in the matrix: an upstream issue tracked with a smart note, v2 shipped without bundled agents, and release notes that say agents are v1-only for now. In that case U10 to U12 still proceed.
+**Gate:** Do not start this unit if P-AGENT failed in U3. Stop and ask Marcus. The fallback is in the matrix: an upstream issue tracked with a smart note, v2 shipped without bundled agents, and release notes that say agents are v1-only for now. In that case U10 to U12 and U14 still proceed. They depend on U9's outcome (agents registered, or the fallback chosen), not on U9 being built.
 
 **Files:**
 - Modify: `src/lib/opencode-v2.ts`
@@ -715,7 +723,7 @@ Test expectation: none -- throwaway probe.
 
 **Requirements:** R8, R10, R11, R13
 
-**Dependencies:** U3, U8
+**Dependencies:** U3, U8, and U9's outcome for the per-agent deny test
 
 **Files:**
 - Modify: `src/lib/opencode-v2.ts`
@@ -727,18 +735,18 @@ Test expectation: none -- throwaway probe.
 **Approach:**
 - Add each enabled skill with its ID, name, description, path and content. Disabled skills are never added, which is stricter than v1's native tool (deferred issue).
 - The skill ID equals the permission resource used in U9. Inline content keeps its base directory so references resolve. Duplicate IDs against user or OCX copies follow the P-SKILL finding.
-- Branch on P-SKILL. If all three conditions hold, `systematic_skill` is not registered on v2. Otherwise port it through the tool domain, using `ctx.permission.assert` in place of `ask` and progress in place of `metadata`, reusing the pure descriptor and `SkillOutputStore`.
+- Branch on P-SKILL. If all three conditions hold, `systematic_skill` is not registered on v2. Otherwise port it through the tool domain, using `ctx.permission.assert` in place of `ask` and progress in place of `metadata`. Build a pure descriptor for the tool here, only on this branch, and reuse `SkillOutputStore`.
 - Branch on P-TRUNC. If a body above the limit arrives intact, build no restoration. Otherwise build it on the structured signal through the tool hook and the context hook, and record any marker-text dependence in `HARNESSES.md`.
-- Bundled prose that names `systematic_skill` appears only in the harness profiles, so no skill prose changes. U12 writes the v2 profile for the chosen branch.
+- Bundled skill and agent prose that names `systematic_skill` appears only in the harness profiles and in the default usage template (`getSkillUsageTemplate` in `src/lib/bootstrap.ts`, which tells the model to use `systematic_skill`). No skill prose changes. U12 writes the v2 profile and passes a v2 usage template for the chosen branch.
 
 **Patterns to follow:**
 - `docs/solutions/integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md`.
-- `src/lib/skill-tool.ts` for the store and descriptor.
+- `src/lib/skill-tool.ts` for the output store.
 
 **Test scenarios:**
 - Happy path (AE1): an enabled skill loads by name on v2.
 - Error path (AE4): a skill in `disabled_skills` is refused on v2.
-- Error path (F4): an agent whose rules deny a skill cannot load it, while a sibling agent can.
+- Error path (F4): an agent whose rules deny a skill cannot load it, while a sibling agent can. If U9 took the no-agents fallback, the test uses a user-configured agent created in the test fixture instead of a bundled one.
 - Edge case (F4): a skill with an argument receives the substituted text.
 - Edge case (F4): two skills with the same ID from different sources follow the recorded rule and emit one diagnostic.
 - Edge case: a skill body above the host limit reaches the model intact, or the restoration path returns it in full (per the P-TRUNC branch).
@@ -754,7 +762,7 @@ Test expectation: none -- throwaway probe.
 
 **Requirements:** R9
 
-**Dependencies:** U3, U8, U9
+**Dependencies:** U3, U8, and U9's outcome
 
 **Files:**
 - Modify: `src/lib/opencode-v2.ts`
@@ -767,7 +775,7 @@ Test expectation: none -- throwaway probe.
 - Register one command per planned command through `ctx.command.transform`. Each `execute` builds its prompt with `wrapSkillTemplate`, expands `$ARGUMENTS` and positionals with `substituteSkillArguments`, and submits through `ctx.session.prompt` to the command's agent, model and subagent mode.
 - `execute` never runs `!`-backtick blocks. The text stays literal in the prompt.
 - Names are `systematic:<n>` with the "(Systematic) " description prefix, subject to the P-CMD colon finding. Discovered skills register under their bare name, gated by `skills_as_commands`, and skip any name a native command already owns.
-- Pass `delivery`, `@file` and attachments through. A command whose agent is disabled or missing falls back to the current agent and emits a diagnostic.
+- Pass `delivery`, `@file` and attachments through. If a command's configured agent is not registered on v2 (disabled, missing, or no bundled agents under the U9 fallback), the command runs on the session's current agent and logs one diagnostic with the `systematic` prefix.
 - Model strings are converted to whatever shape P-CMD found.
 
 **Patterns to follow:**
@@ -776,12 +784,14 @@ Test expectation: none -- throwaway probe.
 
 **Test scenarios:**
 - Happy path (AE7): a command with `$ARGUMENTS` submits the expanded prompt to its configured agent.
+- Happy path (P-CMD format): a command with a configured model submits with that model.
+- Happy path (P-CMD format): a subagent-mode command runs as a subagent and returns its result to the session.
 - Happy path: positional arguments `$1` and `$2` expand, and the last positional takes the rest.
 - Edge case: no placeholders and non-blank arguments appends the arguments after a blank line.
 - Edge case (F3): `@file` references and attachments reach the prompt input unchanged.
 - Edge case (F3): a discovered skill whose bare name collides with a native command is skipped.
 - Error path (AE7): a `!`-backtick block in a template is not executed, and the literal text is in the prompt.
-- Error path (F3): a disabled agent behind a command falls back with a diagnostic.
+- Error path (F3): a command whose configured agent is not registered runs on the session's current agent and logs exactly one `systematic`-prefixed diagnostic.
 - Integration: on the pinned v2 host, running a command with arguments reaches the scripted provider with the expanded text.
 
 **Verification:**
@@ -810,6 +820,7 @@ Test expectation: none -- throwaway probe.
 - If P-INSTR holds: subscribe to `session.created` once per `setup`, and put one keyed entry per session. A content change replaces by key. A subagent session gets the bootstrap, as on v1. Cover the resumed-session gap named in the P-INSTR record.
 - If P-INSTR fails: register the context hook, edit the system list with text objects, replace a marker block for idempotency, and skip title and compaction requests using the internal-agent signatures. A gap only the hook can close is closed there even when instructions are used.
 - The v2 profile names the v2 mechanisms: the skill tool as chosen in U10, native task delegation, question and todo tools as P-CTX or the docs show. Wording is harness-neutral where the Pi and Claude Code profiles already are.
+- The default usage template tells the model to use `systematic_skill`. The v2 adapter passes a v2 usage template (through the U5 bootstrap entry) that names only the tools actually registered on v2, chosen by the P-SKILL branch.
 - Profile selection is by host. v1 keeps `opencode-profile.md`.
 - Content rules are unchanged: `bootstrap.enabled: false` returns nothing, an existing `bootstrap.file` is returned verbatim with no worktree rule, and `git-worktree` in `disabled_skills` omits the rule.
 - Run `bun run surfaces:affected --run`, then `bun run surfaces:drift`. Update the bootstrap snapshot deliberately.
@@ -821,6 +832,7 @@ Test expectation: none -- throwaway probe.
 **Test scenarios:**
 - Happy path (AE1): a new session receives the bootstrap with the v2 profile.
 - Happy path (AE3): `git-worktree` in `disabled_skills` omits the worktree rule on v2.
+- Edge case (F4): when `systematic_skill` is not registered on v2, the v2 bootstrap does not mention it.
 - Edge case: `bootstrap.enabled: false` registers nothing.
 - Edge case (F2): a custom `bootstrap.file` is returned verbatim with no rule.
 - Edge case (F2): re-running `setup` or re-firing `session.created` leaves one entry (or one marker block).
@@ -877,7 +889,7 @@ Test expectation: none -- throwaway probe.
 
 **Requirements:** R1, R2, R15, R16
 
-**Dependencies:** U7, U8, U9, U10, U11, U12
+**Dependencies:** U7, U8, U10, U11, U12, and U9's outcome (agents registered, or the no-agents fallback)
 
 **Files:**
 - Modify: `.github/workflows/main.yaml`
@@ -888,11 +900,13 @@ Test expectation: none -- throwaway probe.
 - Create: `tests/integration/opencode-v1-smoke.test.ts` (only if the U7 triage finds no existing file set that covers the smoke list)
 
 **Approach:**
-- The existing gate and its path filter stay. The four shards retarget to the v2 host and run the v2-suite and both-host files from the U7 triage.
+- The existing gate and its path filter stay. The four shards retarget to the v2 host. The guard gains a `files --profile <p>` subcommand that prints a profile's file list from the U7 lists in `scripts/host-contract-guard.ts`. Each shard or job step passes that output to `bun test` together with `--shard`. The lists are the single source for what each job runs.
 - Install the v2 CLI with lifecycle scripts into a local prefix using npm, call it by absolute path, and fail before any test if `--version` differs from the pin. Never install the v1 and v2 CLIs globally, because both expose `opencode`. Read the pins from the pin file.
 - Add two separate jobs, v1 floor and v1 current, each running the v1 smoke set: load and bootstrap, registration, enabled and disabled skill loads, per-agent permissions including managed skills, and output restoration. They use `bunx` at their pins. Separate jobs keep JUnit names unique.
-- The guard takes a profile per job (v2 shards, v1 floor, v1 current). Each profile has its own expected-file list, pass floor and skip exemptions. The mixed-version exemption applies to the v1 profiles only.
-- The aggregator `needs` every host job and downloads each job's reports. A workflow-text test asserts that the aggregator `needs` list contains every job whose name starts with the host-contract prefix, so a future host job cannot be left out.
+- The guard CLI takes a profile argument (v2 shards, v1 floor, v1 current) and runs once per profile. Each profile has its own expected-file list (from the same lists), pass floor and skip exemptions. The mixed-version exemption applies to the v1 profiles only.
+- The aggregator `needs` every host job. Its verdict step checks every host job's result, not only the shards: the v2 shards and both v1 smoke jobs each get their own env var and exit rule. Today it reads only `needs.host-contract-shard.result`.
+- Artifacts: each job uploads under its own name, and the report files inside carry the profile and job in their names, so downloading with `merge-multiple` cannot overwrite one job's files with another's. The aggregator downloads and guards each profile separately.
+- `tests/unit/host-contract-workflow.test.ts` currently pins the aggregator `needs` to exactly two jobs and asserts the single `SHARD_RESULT` variable. Update both to the new job set. A workflow-text test asserts that the aggregator `needs` list contains every job whose name starts with the host-contract prefix, so a future host job cannot be left out.
 - Timings: add entries for new and renamed files. The v1 jobs are not sharded.
 - Skip versus fail: a host job skipped by the gate reports as "not required" in the aggregator, and a job that was required but did not succeed fails it.
 
@@ -906,6 +920,8 @@ Test expectation: none -- throwaway probe.
 - Error path: an unexpected skip in a v1 profile fails, and the exempt skip passes only on v1 profiles.
 - Error path: a pass count under a profile's floor fails.
 - Edge case (F10): the workflow-text test fails when a new `host-contract-*` job is not in the aggregator's `needs`.
+- Error path (F10): a failed or cancelled v1 smoke job turns the aggregator red even when every v2 shard passed, and the reverse.
+- Edge case (F10): `files --profile` output for each profile equals that profile's expected-file list.
 - Edge case (F10): path filters leave the aggregator reporting "not required" on an unrelated change.
 - Integration: a PR run installs the v2 CLI, reports the pinned version, and runs the suite on Linux. The v1 floor job reports 1.18.29, and the v1 current job reports the current pin.
 
@@ -916,7 +932,7 @@ Test expectation: none -- throwaway probe.
 
 - [ ] U15. Docs, evidence and release notes
 
-**Goal:** Docs, `HARNESSES.md` and stale solution docs describe both hosts, and the release note points are ready.
+**Goal:** Docs and `HARNESSES.md` describe both hosts, and the release note points are ready.
 
 **Requirements:** R13, R14, R18
 
@@ -927,14 +943,14 @@ Test expectation: none -- throwaway probe.
 - Modify: `ARCHITECTURE.md` (hooks, delivery, data flow, skill discovery), `STRUCTURE.md`, `src/lib/AGENTS.md` (data flow)
 - Modify: `HARNESSES.md` (v2 evidence entries, repaired OC-4, OC-5, OC-7 and OC-8 citations)
 - Modify: `docs/src/content/docs/privacy.mdx` only if the persistence note needs it
-- Modify: stale solution docs under `docs/solutions/` (see Approach)
 
 **Approach:**
 - Install docs show the `plugin` key for v1 and the `plugins` key for v2, state both floors (v1 1.18.29, v2 2.2.0), and say OCX installs still write v1 config, so bundled agent routing is not guaranteed on v2.
 - `HARNESSES.md` gets v2 evidence entries next to the OpenCode ones. Each cites the version, the CI job and the test file, not a local clone, because `.slim/clonedeps` is absent here. Transcribe the probe outcomes from the scratch log, including which mechanism each probe chose.
+- Every probe's entry either names the CI test that covers it or is labeled "local probe, version X, date" with the scratch-log location. Name the CI tests for P-ORDER (the U8 and U9 replay tests on the real host), P-ERR (the induced-failure diagnostic test) and P-TRUST (the project-config test). P-CTX is local-only unless U12 takes the context-hook branch.
 - Repair the OC-4, OC-5, OC-7 and OC-8 citations, which are stale.
-- Refresh with `ce:compound-refresh`: the named-exports, truncation, subprocess-fixtures, silent-defect-swallow, host-contract-evidence and subagent-permission solution docs, and the config-key doc that says the key is singular `plugin`. Mark each as v1 behavior and link the v2 behavior.
-- Release note points: v1 below 1.18.29 is unsupported, and auto-update on an old v1 may fail silently; v2 2.2.0 and later is supported; v2 loads config once at startup; the `git-commit` wording change touches Pi and Claude Code text; bootstrap instruction entries persist in the session database, which matters for a custom `bootstrap.file`; `!`-backtick blocks do not run on v2; OCX still writes v1 config; if P-AGENT failed, agents are v1-only for now.
+- The stale solution-doc refreshes are not in this unit (see Deferred to Separate Tasks).
+- Release note points: v1 below 1.18.29 and v2 below 2.2.0 are unsupported, with no shim, and auto-update on an old v1 may fail silently; state what U1 recorded for v2 2.1.x; v2 2.2.0 and later is supported; v2 loads config once at startup; the `git-commit` wording change touches Pi and Claude Code text; bootstrap instruction entries persist in the session database, which matters for a custom `bootstrap.file`; `!`-backtick blocks do not run on v2; OCX still writes v1 config; if P-AGENT failed, agents are v1-only for now.
 - Check `docs:build` and the config reference drift after the edits.
 
 **Test scenarios:**
@@ -950,8 +966,8 @@ Test expectation: none -- docs and evidence; the content-integrity and docs gate
 
 ## System-Wide Impact
 
-- **Interaction graph:** `src/index.ts` is the only entry both hosts load. `src/pi.ts` and the Claude Code build share `src/lib` modules that U5 touches, so U5 compares the Pi bundle before and after. `scripts/content-integrity.ts`, `package-exports.test.ts`, `plugin.test.ts`, the `main.yaml` smoke script and the hook-parity documents all read the export shape.
-- **Error propagation:** v1 keeps its never-break-the-host rule. v2 wraps `setup`, every installer and every callback, and reports through `console.error` with the `systematic` prefix. A missing v2 domain degrades with one diagnostic.
+- **Interaction graph:** `src/index.ts` is the only entry both hosts load. `src/pi.ts` and the Claude Code build share `src/lib` modules that U5 touches, so U5 checks Pi behavior (Pi tests and the persona and surfaces drift checks) after the move. `scripts/content-integrity.ts`, `package-exports.test.ts`, `plugin.test.ts`, the `main.yaml` smoke script and the hook-parity documents all read the export shape.
+- **Error propagation:** v1 keeps its never-break-the-host rule. v2 wraps `setup`, every installer and every callback, and reports through `console.error` with the `systematic` prefix.
 - **State lifecycle risks:** v2 instruction entries persist in the session database, can go stale when bootstrap content changes, and may double on compaction. U3 measures each and U12 handles them. v2 config loads once, so a config edit needs a restart. A re-run of `setup` must not stack subscriptions.
 - **API surface parity:** Commands, agents and skills must match across v1 and v2 by name and description. The tool surface may differ if the native skill tool has parity. The release notes say so.
 - **Integration coverage:** Real-host tests prove what unit tests with a fake `ctx` cannot: instruction reach, agent creation, native tool refusal, command routing, truncation, and the packed-artifact load on both loaders.
@@ -973,18 +989,18 @@ Test expectation: none -- docs and evidence; the content-integrity and docs gate
 | `!`-backtick removal from the v2 path leaves two skills without git context | U13 rewords them for inert blocks. |
 | Renovate cannot read the pin file or mis-groups the floor | A test applies the manager's regex to the file, and the floor is excluded. |
 | Old v1 users auto-update and break silently | Release notes, and U1 records the below-floor failure mode so the note is accurate. |
-| One large PR is hard to review | Units are ordered as separable commits, with the pure-move rename first. |
+| One large PR is hard to review | Units are ordered as separable commits. The pure-move rename is the first commit inside U7. |
 
 ---
 
 ## Documentation / Operational Notes
 
 - The squash PR title uses the `feat` type so semantic-release cuts a minor. Merging does not publish, because releases go through the gated release PR.
-- Release note points, to be written in the release PR: the v1 floor and what happens below it, v2 support from 2.2.0, config loaded once on v2, the git-commit wording change touching Pi and Claude Code text, persistence of instruction entries, no `!`-backtick on v2, OCX still writes v1 config, and the agent fallback if it applies.
+- Release note points, to be written in the release PR: the v1 floor and what happens below it, v2 support from 2.2.0, config loaded once on v2, v2 below 2.2.0 unsupported with no shim (plus the v2 2.1.x behavior U1 recorded), the git-commit wording change touching Pi and Claude Code text, persistence of instruction entries, no `!`-backtick on v2, OCX still writes v1 config, and the agent fallback if it applies.
 - Regenerate surfaces before pushing: `bun run surfaces:affected --run`, then `bun run surfaces:drift`.
 - A new `src/lib` module needs an `ARCHITECTURE.md` codemap entry and a `src/lib/AGENTS.md` row; `bun scripts/content-integrity.ts` checks both.
 - Telemetry: none is added. The v2 adapter makes no network calls and sends nothing off-device.
-- After merge: write the dual-export solution doc with `ce:compound`, and file the deferred issues listed under Scope Boundaries.
+- After merge: run `ce:compound-refresh` over the stale solution docs, write the dual-export solution doc with `ce:compound`, and file the deferred issues listed under Scope Boundaries.
 
 ---
 
