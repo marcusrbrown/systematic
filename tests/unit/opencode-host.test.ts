@@ -14,17 +14,14 @@ import {
   spawnOpencodeChild,
   startScriptedSkillModelServer,
   withScriptedProvider,
-} from '../integration/fixtures/receipt-workflow-host.js'
+} from '../integration/fixtures/opencode-host.js'
 
 // Absolute file:// URL to the real fixture source, resolved from THIS file
 // so the isolated child process spawned below (its own fresh module graph,
 // its own empty `process.listeners('SIGINT')`) can `import()` the exact
 // same module under test.
 const FIXTURE_MODULE_URL = pathToFileURL(
-  path.join(
-    import.meta.dirname,
-    '../integration/fixtures/receipt-workflow-host.ts',
-  ),
+  path.join(import.meta.dirname, '../integration/fixtures/opencode-host.ts'),
 ).href
 
 const WORKFLOW_OPEN = '<SYSTEMATIC_WORKFLOWS>'

@@ -47,7 +47,7 @@ import {
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
-} from './fixtures/receipt-workflow-host.js'
+} from './fixtures/opencode-host.js'
 
 requireOpencodeAvailable(getOpencodeAvailability())
 if (!isOpencodeAvailable()) {

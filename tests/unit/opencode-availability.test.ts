@@ -4,9 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   type OpencodeAvailabilityClassification,
+  opencodeBinaryEnvName,
   probeOpencodeAvailability,
   requireOpencodeAvailable,
   resolveBunInstallCacheDir,
+  resolveOpencodeBinary,
+  resolveOpencodeHost,
 } from '../../scripts/lib/opencode-availability.ts'
 
 // This suite's fixture literals below ("9999.0.0", "9999.0.1") are
@@ -30,13 +33,22 @@ const SENTINEL_PIN = '9999.0.0'
 /** A second, distinct sentinel used wherever a case needs a deliberate mismatch against {@link SENTINEL_PIN}. */
 const SENTINEL_MISMATCH_PIN = '9999.0.1'
 
-const ORIGINAL_REQUIRE_FLAG = process.env.SYSTEMATIC_REQUIRE_OPENCODE
+const REQUIRE_FLAG_NAMES = [
+  'SYSTEMATIC_REQUIRE_OPENCODE',
+  'SYSTEMATIC_REQUIRE_OPENCODE_V1',
+  'SYSTEMATIC_REQUIRE_OPENCODE_V2',
+] as const
+const ORIGINAL_REQUIRE_FLAGS = REQUIRE_FLAG_NAMES.map(
+  (name) => [name, process.env[name]] as const,
+)
 
 afterEach(() => {
-  if (ORIGINAL_REQUIRE_FLAG === undefined) {
-    delete process.env.SYSTEMATIC_REQUIRE_OPENCODE
-  } else {
-    process.env.SYSTEMATIC_REQUIRE_OPENCODE = ORIGINAL_REQUIRE_FLAG
+  for (const [name, value] of ORIGINAL_REQUIRE_FLAGS) {
+    if (value === undefined) {
+      delete process.env[name]
+    } else {
+      process.env[name] = value
+    }
   }
 })
 
@@ -249,6 +261,7 @@ describe('requireOpencodeAvailable', () => {
   test('an available classification never throws, flag set or not', () => {
     const available: OpencodeAvailabilityClassification = {
       status: 'available',
+      host: 'v1',
       expectedVersion: SENTINEL_PIN,
       reportedVersion: SENTINEL_PIN,
       reason: `opencode-ai@${SENTINEL_PIN} is available`,
@@ -262,6 +275,7 @@ describe('requireOpencodeAvailable', () => {
   test('a non-available classification throws only under SYSTEMATIC_REQUIRE_OPENCODE=1', () => {
     const unavailable: OpencodeAvailabilityClassification = {
       status: 'unavailable',
+      host: 'v1',
       expectedVersion: SENTINEL_PIN,
       reason: 'launcher unavailable: boom',
     }
@@ -276,6 +290,7 @@ describe('requireOpencodeAvailable', () => {
   test('a mismatch classification throws only under SYSTEMATIC_REQUIRE_OPENCODE=1', () => {
     const mismatch: OpencodeAvailabilityClassification = {
       status: 'mismatch',
+      host: 'v1',
       expectedVersion: SENTINEL_PIN,
       reportedVersion: SENTINEL_MISMATCH_PIN,
       reason: `expected opencode-ai@${SENTINEL_PIN} but bunx resolved opencode-ai@${SENTINEL_MISMATCH_PIN}`,
@@ -396,5 +411,178 @@ describe('resolveBunInstallCacheDir', () => {
       spy.mockRestore()
       fs.rmSync(tmpRoot, { recursive: true, force: true })
     }
+  })
+})
+
+describe('probeOpencodeAvailability on the v2 host', () => {
+  test('a binary printing the v2 version line for the pin classifies as available', () => {
+    const dir = tempDir()
+    try {
+      const binary = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\necho "opencode v${SENTINEL_PIN}"\n`,
+      )
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        host: 'v2',
+        binary,
+        env: { PATH: process.env.PATH ?? '' },
+        quiet: true,
+      })
+      expect(classification.status).toBe('available')
+      expect(classification.host).toBe('v2')
+      expect(classification.reportedVersion).toBe(SENTINEL_PIN)
+      expect(classification.reason).toBe(
+        `@opencode/cli@${SENTINEL_PIN} is available`,
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a binary reporting a different version is a mismatch that names both versions and the binary', () => {
+    const dir = tempDir()
+    try {
+      const binary = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\necho "opencode v${SENTINEL_MISMATCH_PIN}"\n`,
+      )
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        host: 'v2',
+        binary,
+        env: { PATH: process.env.PATH ?? '' },
+        quiet: true,
+      })
+      expect(classification.status).toBe('mismatch')
+      expect(classification.reason).toContain(SENTINEL_PIN)
+      expect(classification.reason).toContain(SENTINEL_MISMATCH_PIN)
+      expect(classification.reason).toContain(binary)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a bare semver line is not a v2 version line', () => {
+    const dir = tempDir()
+    try {
+      const binary = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\necho "${SENTINEL_PIN}"\n`,
+      )
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        host: 'v2',
+        binary,
+        env: { PATH: process.env.PATH ?? '' },
+        quiet: true,
+      })
+      expect(classification.status).toBe('unavailable')
+      expect(classification.reason).toContain('no parseable version')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('without a binary the v2 host is unavailable, names the env var, and spawns nothing', () => {
+    const classification = probeOpencodeAvailability({
+      pin: SENTINEL_PIN,
+      host: 'v2',
+      env: { PATH: '' },
+      quiet: true,
+    })
+    expect(classification.status).toBe('unavailable')
+    expect(classification.reason).toContain(opencodeBinaryEnvName('v2'))
+    expect(classification.reason).toContain(`@opencode/cli@${SENTINEL_PIN}`)
+  })
+
+  test('a missing binary path classifies as unavailable', () => {
+    const classification = probeOpencodeAvailability({
+      pin: SENTINEL_PIN,
+      host: 'v2',
+      binary: path.join(os.tmpdir(), 'no-such-opencode-binary'),
+      env: { PATH: process.env.PATH ?? '' },
+      quiet: true,
+    })
+    expect(classification.status).toBe('unavailable')
+  })
+
+  test('a v1 host given a binary runs that binary and still expects a bare semver', () => {
+    const dir = tempDir()
+    try {
+      const binary = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\necho "${SENTINEL_PIN}"\n`,
+      )
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        host: 'v1',
+        binary,
+        env: { PATH: process.env.PATH ?? '' },
+        quiet: true,
+      })
+      expect(classification.status).toBe('available')
+      expect(classification.host).toBe('v1')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('requireOpencodeAvailable per host', () => {
+  const unavailableV2: OpencodeAvailabilityClassification = {
+    status: 'mismatch',
+    host: 'v2',
+    expectedVersion: SENTINEL_PIN,
+    reportedVersion: SENTINEL_MISMATCH_PIN,
+    reason: `expected @opencode/cli@${SENTINEL_PIN} but /bin/x resolved @opencode/cli@${SENTINEL_MISMATCH_PIN}`,
+  }
+
+  test('a host-specific flag requires that host only', () => {
+    for (const name of REQUIRE_FLAG_NAMES) delete process.env[name]
+    process.env.SYSTEMATIC_REQUIRE_OPENCODE_V1 = '1'
+    expect(() => requireOpencodeAvailable(unavailableV2)).not.toThrow()
+
+    process.env.SYSTEMATIC_REQUIRE_OPENCODE_V2 = '1'
+    expect(() => requireOpencodeAvailable(unavailableV2)).toThrow(
+      new RegExp(
+        `${SENTINEL_PIN.replaceAll('.', '\\.')}.*${SENTINEL_MISMATCH_PIN.replaceAll('.', '\\.')}`,
+      ),
+    )
+  })
+
+  test('the generic flag requires whichever host is classified', () => {
+    for (const name of REQUIRE_FLAG_NAMES) delete process.env[name]
+    process.env.SYSTEMATIC_REQUIRE_OPENCODE = '1'
+    expect(() => requireOpencodeAvailable(unavailableV2)).toThrow()
+  })
+})
+
+describe('host selection from the environment', () => {
+  test('resolveOpencodeHost defaults to v1 and accepts the two host lines', () => {
+    expect(resolveOpencodeHost({})).toBe('v1')
+    expect(resolveOpencodeHost({ SYSTEMATIC_OPENCODE_HOST: '' })).toBe('v1')
+    expect(resolveOpencodeHost({ SYSTEMATIC_OPENCODE_HOST: 'v1' })).toBe('v1')
+    expect(resolveOpencodeHost({ SYSTEMATIC_OPENCODE_HOST: 'v2' })).toBe('v2')
+  })
+
+  test('resolveOpencodeHost rejects an unknown host instead of guessing', () => {
+    expect(() =>
+      resolveOpencodeHost({ SYSTEMATIC_OPENCODE_HOST: 'v3' }),
+    ).toThrow(/Unknown OpenCode host "v3"/)
+  })
+
+  test('resolveOpencodeBinary reads the per-host variable and treats empty as unset', () => {
+    expect(opencodeBinaryEnvName('v1')).toBe('SYSTEMATIC_OPENCODE_V1_BIN')
+    expect(opencodeBinaryEnvName('v2')).toBe('SYSTEMATIC_OPENCODE_V2_BIN')
+    expect(
+      resolveOpencodeBinary('v2', { SYSTEMATIC_OPENCODE_V2_BIN: '/opt/oc' }),
+    ).toBe('/opt/oc')
+    expect(
+      resolveOpencodeBinary('v1', { SYSTEMATIC_OPENCODE_V2_BIN: '/opt/oc' }),
+    ).toBeUndefined()
+    expect(
+      resolveOpencodeBinary('v2', { SYSTEMATIC_OPENCODE_V2_BIN: '' }),
+    ).toBeUndefined()
   })
 })

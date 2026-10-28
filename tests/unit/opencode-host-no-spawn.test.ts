@@ -5,19 +5,19 @@ import { pathToFileURL } from 'node:url'
 
 const FIXTURE_PATH = path.resolve(
   import.meta.dirname,
-  '../integration/fixtures/receipt-workflow-host.ts',
+  '../integration/fixtures/opencode-host.ts',
 )
 
 // Locks Unit 2's load-bearing invariant: importing this fixture must never
 // spawn bunx/opencode at module scope. `bun test tests/unit` (which the
 // required `test` job runs, with no network and no launcher on PATH)
-// imports this fixture indirectly through `receipt-workflow-host.test.ts`.
+// imports this fixture indirectly through `opencode-host.test.ts`.
 // The availability probe only runs behind the memoizing `isOpencodeAvailable()`
 // function, called lazily by integration modules at their own scope — never
 // by the fixture module itself. Driven as a child process so a stray spawn
 // (which would need network or a real launcher and could hang or take
 // seconds) shows up as elapsed wall time rather than a mocked assertion.
-describe('receipt-workflow-host fixture import', () => {
+describe('opencode-host fixture import', () => {
   test('importing the fixture module does not spawn bunx/opencode at module scope', () => {
     const script = `
       const start = Date.now()

@@ -48,25 +48,82 @@ export const EXEMPT_SKIPS: readonly {
 ]
 
 /**
- * Every test file under `tests/integration/`, enumerated by hand and
- * verified against `ls tests/integration/*.test.ts`. A file producing zero
- * JUnit `<testsuite>` entries means `bun test` never actually ran it — the
- * exact failure mode a mass-skip or an early crash would produce while the
- * console summary and pass floor alone could still look plausible.
+ * The host contract runs as three profiles: the full contract on the v2 host,
+ * and a smoke subset on the v1 host at its floor and at its current pin. Each
+ * profile lists the integration files it must run.
  */
-export const EXPECTED_SUITE_FILES: readonly string[] = [
+export const HOST_CONTRACT_PROFILES = ['v2', 'v1-floor', 'v1-current'] as const
+
+export type HostContractProfile = (typeof HOST_CONTRACT_PROFILES)[number]
+
+/**
+ * What the v2 profile runs. Host-neutral files (the Pi and Claude Code
+ * bundles, release tooling, the eval fixtures) run here once and nowhere else.
+ * The OpenCode host files are shared behavior, so they also run on v1; they
+ * must take their host from the harness before this profile can pass on them.
+ */
+const V2_SUITE_FILES: readonly string[] = [
   'tests/integration/ce-review-return-validation.test.ts',
   'tests/integration/claude-code.test.ts',
   'tests/integration/eval-artifact.test.ts',
   'tests/integration/eval-fixture.test.ts',
-  'tests/integration/eval-runner.test.ts',
   'tests/integration/opencode.test.ts',
   'tests/integration/pi.test.ts',
   'tests/integration/release-notes-ci.test.ts',
-  'tests/integration/skill-command-probe.test.ts',
   'tests/integration/skill-delivery.test.ts',
   'tests/integration/validate-release-target.test.ts',
 ]
+
+/**
+ * What both v1 profiles run: the behaviors a v1 user relies on. Load and
+ * bootstrap, registration, enabled and disabled skill loads and per-agent
+ * permissions live in `opencode.test.ts` and `ce-review-return-validation`.
+ * Output restoration lives in `skill-delivery.test.ts`. The `!`-backtick
+ * command probe in `skill-command-probe.test.ts` observes v1-only behavior
+ * that v2 never reproduces.
+ */
+const V1_SMOKE_FILES: readonly string[] = [
+  'tests/integration/ce-review-return-validation.test.ts',
+  'tests/integration/opencode.test.ts',
+  'tests/integration/skill-command-probe.test.ts',
+  'tests/integration/skill-delivery.test.ts',
+]
+
+/**
+ * `eval-runner.test.ts` drives the eval runner, which launches the current v1
+ * CLI through its own pin whatever host a job targets. It belongs to the
+ * current-pin profile only: the floor job would run it against the wrong host,
+ * and the v2 job would need a v1 install it does not otherwise have.
+ */
+const V1_CURRENT_ONLY_FILES: readonly string[] = [
+  'tests/integration/eval-runner.test.ts',
+]
+
+/**
+ * The per-profile file lists, the single source for what each host job runs.
+ * Every test file under `tests/integration/` must appear in at least one list,
+ * so a new file cannot silently go unrun; `host-contract-guard.test.ts` checks
+ * that against the directory.
+ */
+export const PROFILE_SUITE_FILES: Readonly<
+  Record<HostContractProfile, readonly string[]>
+> = {
+  v2: V2_SUITE_FILES,
+  'v1-floor': V1_SMOKE_FILES,
+  'v1-current': [...V1_SMOKE_FILES, ...V1_CURRENT_ONLY_FILES],
+}
+
+/**
+ * Every integration test file any profile runs, sorted. The guard evaluates one
+ * merged report against this union until each job reports under its own
+ * profile. A file producing zero JUnit `<testsuite>` entries means `bun test`
+ * never actually ran it — the exact failure mode a mass-skip or an early crash
+ * would produce while the console summary and pass floor alone could still
+ * look plausible.
+ */
+export const EXPECTED_SUITE_FILES: readonly string[] = [
+  ...new Set(Object.values(PROFILE_SUITE_FILES).flat()),
+].sort()
 
 /**
  * The floor catches a mass collapse of the suite: a run that passes far fewer

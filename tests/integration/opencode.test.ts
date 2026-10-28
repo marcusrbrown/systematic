@@ -40,11 +40,11 @@ import {
   runOpencode,
   spawnOpencodeChild,
   TIMEOUT_MS,
-} from './fixtures/receipt-workflow-host.js'
+} from './fixtures/opencode-host.js'
 
 // This call lives here rather than in the fixture module, so importing the
 // fixture never spawns the launcher at module scope (see
-// tests/unit/receipt-workflow-host-no-spawn.test.ts).
+// tests/unit/opencode-host-no-spawn.test.ts).
 requireOpencodeAvailable(getOpencodeAvailability())
 if (!isOpencodeAvailable()) {
   console.warn(
@@ -354,7 +354,7 @@ const DIST_INDEX = path.join(REPO_ROOT, 'dist/index.js')
 const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
 
 // stdout under the scripted provider is entirely fixture-authored text (see
-// runOpencode's completionText in fixtures/receipt-workflow-host.ts), so an
+// runOpencode's completionText in fixtures/opencode-host.ts), so an
 // assertion on its wording would only test the fixture, never the host. The
 // stderr check below is the load-bearing one: it is the *host's own*
 // tool-invocation log line, produced only if OpenCode actually dispatched
@@ -840,7 +840,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
     })
 
     // Runs against `runOpencode`'s scripted local provider (no network,
-    // no hosted-model dependency); see fixtures/receipt-workflow-host.ts.
+    // no hosted-model dependency); see fixtures/opencode-host.ts.
     test(
       'packaged plugin loads, warns on a removed disabled_skills name, and exposes a compliant catalog',
       async () => {

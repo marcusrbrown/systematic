@@ -6,15 +6,28 @@ import { pathToFileURL } from 'node:url'
 
 import {
   type OpencodeAvailabilityClassification,
+  opencodeBinaryEnvName,
   probeOpencodeAvailability,
   resolveBunInstallCacheDir,
+  resolveOpencodeBinary,
+  resolveOpencodeHost,
 } from '../../../scripts/lib/opencode-availability.js'
-import { readOpencodeSdkPin } from '../../../scripts/lib/opencode-pin.js'
+import {
+  OPENCODE_CLI_PACKAGES,
+  type OpencodeHost,
+  readOpencodeHostPin,
+} from '../../../scripts/lib/opencode-pin.js'
 import { stopProcessGroup } from '../../../scripts/lib/process-group.js'
 
+export type { OpencodeHost }
+
 export const TIMEOUT_MS = 180_000
-// `string`, read from package.json at import time; throws if the pin is missing or not exact.
-export const EXACT_OPENCODE_VERSION = readOpencodeSdkPin()
+// The host line this run targets: `SYSTEMATIC_OPENCODE_HOST`, `v1` when unset.
+// Every host-taking function below defaults to it, so a suite written for one
+// host runs unchanged until a caller passes a host explicitly.
+export const TARGET_OPENCODE_HOST: OpencodeHost = resolveOpencodeHost()
+// `string`, read from the pin file at import time; throws if the pin is missing or not exact.
+export const EXACT_OPENCODE_VERSION = readOpencodeHostPin(TARGET_OPENCODE_HOST)
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
 export const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
@@ -28,6 +41,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // tool-invocation decision is deterministic and requires no network.
 const SCRIPTED_PROVIDER_ID = 'systematic-host-contract-provider'
 const SCRIPTED_MODEL_ID = 'systematic-host-contract-model'
+// The env var a v2 scripted provider reads its key from. The key is a dummy:
+// the scripted server ignores it.
+const SCRIPTED_PROVIDER_KEY_ENV = 'SYSTEMATIC_HOST_CONTRACT_KEY'
+// A v2 host's OpenAI-compatible provider package.
+const V2_OPENAI_COMPATIBLE_PACKAGE = '@opencode/ai/providers/openai-compatible'
 
 export interface OpencodeResult {
   stdout: string
@@ -44,6 +62,8 @@ export interface IsolatedFixture {
   xdgDataHome: string
   xdgCacheHome: string
   xdgStateHome: string
+  /** Per-fixture TMPDIR; a v2 host keeps its scratch space under it. */
+  tmpDir: string
 }
 
 export function createIsolatedFixture(): IsolatedFixture {
@@ -57,6 +77,7 @@ export function createIsolatedFixture(): IsolatedFixture {
   const xdgDataHome = path.join(tempRoot, 'xdg-data')
   const xdgCacheHome = path.join(tempRoot, 'xdg-cache')
   const xdgStateHome = path.join(tempRoot, 'xdg-state')
+  const tmpDir = path.join(tempRoot, 'tmp')
 
   for (const dir of [
     projectDir,
@@ -66,6 +87,7 @@ export function createIsolatedFixture(): IsolatedFixture {
     xdgDataHome,
     xdgCacheHome,
     xdgStateHome,
+    tmpDir,
   ]) {
     fs.mkdirSync(dir, { recursive: true })
   }
@@ -88,6 +110,7 @@ export function createIsolatedFixture(): IsolatedFixture {
     xdgDataHome,
     xdgCacheHome,
     xdgStateHome,
+    tmpDir,
   }
 }
 
@@ -138,32 +161,71 @@ function redactSensitive(text: string): string {
   return result
 }
 
+/**
+ * The allowlisted parent env plus `overrides`. Only a v1 host is launched
+ * through `bunx`, so only a v1 child gets the shared `BUN_INSTALL_CACHE_DIR`
+ * for its pin; a v2 child runs an installed binary and never touches it.
+ */
 export function buildChildEnv(
   overrides: Record<string, string>,
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
 ): Record<string, string> {
   const base: Record<string, string> = {}
   for (const key of ENV_ALLOWLIST) {
     const value = process.env[key]
     if (value !== undefined) base[key] = value
   }
+  const bunCache: Record<string, string> =
+    host === 'v1'
+      ? {
+          BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
+            pin: readOpencodeHostPin('v1'),
+          }),
+        }
+      : {}
+  return { ...base, ...bunCache, ...overrides }
+}
+
+// Computed lazily and memoized per host only by `getOpencodeAvailability()`
+// below, never eagerly at module scope: this module must do no probing and no
+// throwing at import time, so `tests/unit/*` importers (and the required `test`
+// job) never spawn `bunx`. Each integration test module that gates on the host
+// calls `getOpencodeAvailability()` / `isOpencodeAvailable()` at its own module
+// scope and passes the result to `requireOpencodeAvailable()` itself.
+export interface HostAvailabilityCache {
+  get(host: OpencodeHost): OpencodeAvailabilityClassification
+}
+
+/**
+ * One memo slot per host, so asking for v2 after v1 (or the reverse) returns
+ * each host's own classification and never the other's. `compute` runs at most
+ * once per host.
+ */
+export function createHostAvailabilityCache(
+  compute: (host: OpencodeHost) => OpencodeAvailabilityClassification,
+): HostAvailabilityCache {
+  const cached = new Map<OpencodeHost, OpencodeAvailabilityClassification>()
   return {
-    ...base,
-    BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
-      pin: EXACT_OPENCODE_VERSION,
-    }),
-    ...overrides,
+    get(host) {
+      const existing = cached.get(host)
+      if (existing !== undefined) return existing
+      const classification = compute(host)
+      cached.set(host, classification)
+      return classification
+    },
   }
 }
 
-// Computed lazily and memoized only by `getOpencodeAvailability()` below, never
-// eagerly at module scope: this module must do no probing and no throwing at
-// import time, so `tests/unit/*` importers (and the required `test` job) never
-// spawn `bunx`. Each integration test module that gates on the host calls
-// `getOpencodeAvailability()` / `isOpencodeAvailable()` at its own module
-// scope and passes the result to `requireOpencodeAvailable()` itself.
-let cachedOpencodeAvailability: OpencodeAvailabilityClassification | undefined
+const AUTOUPDATE_AND_FETCH_FLAGS = {
+  OPENCODE_DISABLE_AUTOUPDATE: '1',
+  OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+  OPENCODE_DISABLE_MODELS_FETCH: '1',
+  OPENCODE_DISABLE_PRUNE: '1',
+} as const
 
-function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
+function computeOpencodeAvailability(
+  host: OpencodeHost,
+): OpencodeAvailabilityClassification {
   const probeRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), 'systematic-opencode-probe-'),
   )
@@ -172,57 +234,102 @@ function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
     // environment. The OPENCODE_DISABLE_* flags mirror buildIsolatedOpencodeEnv
     // below (the real hosts' env) so a first-run autoupdate/models fetch can't
     // pollute the probe's stdout or add network latency the real hosts don't pay.
+    // A v2 host also keeps its scratch space under TMPDIR, which the probe
+    // redirects too.
     return probeOpencodeAvailability({
-      pin: EXACT_OPENCODE_VERSION,
-      env: buildChildEnv({
-        OPENCODE_DISABLE_AUTOUPDATE: '1',
-        OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
-        OPENCODE_DISABLE_MODELS_FETCH: '1',
-        OPENCODE_DISABLE_PRUNE: '1',
-        HOME: probeRoot,
-        XDG_CONFIG_HOME: probeRoot,
-        XDG_DATA_HOME: probeRoot,
-        XDG_CACHE_HOME: probeRoot,
-        XDG_STATE_HOME: probeRoot,
-      }),
+      pin: readOpencodeHostPin(host),
+      host,
+      binary: resolveOpencodeBinary(host),
+      env: buildChildEnv(
+        {
+          ...AUTOUPDATE_AND_FETCH_FLAGS,
+          HOME: probeRoot,
+          XDG_CONFIG_HOME: probeRoot,
+          XDG_DATA_HOME: probeRoot,
+          XDG_CACHE_HOME: probeRoot,
+          XDG_STATE_HOME: probeRoot,
+          ...(host === 'v2' ? { TMPDIR: probeRoot } : {}),
+        },
+        host,
+      ),
     })
   } finally {
     fs.rmSync(probeRoot, { recursive: true, force: true })
   }
 }
 
-export function getOpencodeAvailability(): OpencodeAvailabilityClassification {
-  cachedOpencodeAvailability ??= computeOpencodeAvailability()
-  return cachedOpencodeAvailability
+const availabilityCache = createHostAvailabilityCache(
+  computeOpencodeAvailability,
+)
+
+export function getOpencodeAvailability(
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): OpencodeAvailabilityClassification {
+  return availabilityCache.get(host)
 }
 
-export function isOpencodeAvailable(): boolean {
-  return getOpencodeAvailability().status === 'available'
+export function isOpencodeAvailable(
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): boolean {
+  return getOpencodeAvailability(host).status === 'available'
 }
 
-export function opencodeAvailabilityReason(): string {
-  return getOpencodeAvailability().reason
+export function opencodeAvailabilityReason(
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): string {
+  return getOpencodeAvailability(host).reason
 }
 
+/**
+ * The environment a fixture's host child runs under: HOME, the four XDG roots
+ * and the config dir all inside the fixture. A v1 host takes its config as
+ * `OPENCODE_CONFIG_CONTENT`. A v2 host reads the project's `opencode.json`
+ * (see {@link writeHostProjectConfig}), keeps its scratch space under TMPDIR,
+ * and needs the scripted provider's key variable.
+ */
 export function buildIsolatedOpencodeEnv(
   fixture: IsolatedFixture,
   configContent: string,
   overrides?: Record<string, string>,
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
 ): Record<string, string> {
-  return buildChildEnv({
-    OPENCODE_DISABLE_AUTOUPDATE: '1',
-    OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
-    OPENCODE_DISABLE_MODELS_FETCH: '1',
-    OPENCODE_DISABLE_PRUNE: '1',
-    ...overrides,
-    HOME: fixture.homeDir,
-    XDG_CONFIG_HOME: fixture.xdgConfigHome,
-    XDG_DATA_HOME: fixture.xdgDataHome,
-    XDG_CACHE_HOME: fixture.xdgCacheHome,
-    XDG_STATE_HOME: fixture.xdgStateHome,
-    OPENCODE_CONFIG_DIR: fixture.configDir,
-    OPENCODE_CONFIG_CONTENT: configContent,
-  })
+  const hostSpecific: Record<string, string> =
+    host === 'v2'
+      ? {
+          TMPDIR: fixture.tmpDir,
+          [SCRIPTED_PROVIDER_KEY_ENV]: 'unused-host-contract-key',
+        }
+      : { OPENCODE_CONFIG_CONTENT: configContent }
+  return buildChildEnv(
+    {
+      ...AUTOUPDATE_AND_FETCH_FLAGS,
+      ...overrides,
+      HOME: fixture.homeDir,
+      XDG_CONFIG_HOME: fixture.xdgConfigHome,
+      XDG_DATA_HOME: fixture.xdgDataHome,
+      XDG_CACHE_HOME: fixture.xdgCacheHome,
+      XDG_STATE_HOME: fixture.xdgStateHome,
+      OPENCODE_CONFIG_DIR: fixture.configDir,
+      ...hostSpecific,
+    },
+    host,
+  )
+}
+
+/**
+ * Writes the config a v2 host reads from the project directory, and returns
+ * the path. A v1 host takes its config through the environment instead, so
+ * this is a no-op for v1 and returns `undefined`.
+ */
+export function writeHostProjectConfig(
+  fixture: IsolatedFixture,
+  configContent: string,
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): string | undefined {
+  if (host !== 'v2') return undefined
+  const configPath = path.join(fixture.projectDir, 'opencode.json')
+  fs.writeFileSync(configPath, configContent)
+  return configPath
 }
 
 export interface ScriptedToolCall {
@@ -442,11 +549,19 @@ export function extractSkillNameFromPrompt(prompt: string): string {
   return skillName
 }
 
+/**
+ * Adds the scripted provider to a host-neutral config. A v1 host takes a
+ * `provider` map and the plugin list under `plugin`. A v2 host takes
+ * `providers`, a provider `package`, a top-level `model`, and the plugin list
+ * under `plugins`, so a `plugin` list in the input is moved to `plugins`.
+ */
 export function withScriptedProvider(
   configContent: string,
   baseUrl: string,
+  host: OpencodeHost = 'v1',
 ): string {
   const parsed = JSON.parse(configContent) as Record<string, unknown>
+  if (host === 'v2') return withScriptedProviderV2(parsed, baseUrl)
   const existingProvider =
     typeof parsed.provider === 'object' && parsed.provider !== null
       ? (parsed.provider as Record<string, unknown>)
@@ -480,10 +595,38 @@ export function withScriptedProvider(
   })
 }
 
+function withScriptedProviderV2(
+  parsed: Record<string, unknown>,
+  baseUrl: string,
+): string {
+  const { plugin, providers, ...rest } = parsed
+  const existingProviders = isRecord(providers) ? providers : {}
+  const pluginList = rest.plugins ?? plugin
+  return JSON.stringify({
+    ...rest,
+    ...(pluginList === undefined ? {} : { plugins: pluginList }),
+    providers: {
+      ...existingProviders,
+      [SCRIPTED_PROVIDER_ID]: {
+        name: 'Systematic Host Contract Provider',
+        package: V2_OPENAI_COMPATIBLE_PACKAGE,
+        env: [SCRIPTED_PROVIDER_KEY_ENV],
+        settings: { baseURL: baseUrl },
+        models: {
+          [SCRIPTED_MODEL_ID]: { name: 'Systematic Host Contract Model' },
+        },
+      },
+    },
+    model: `${SCRIPTED_PROVIDER_ID}/${SCRIPTED_MODEL_ID}`,
+  })
+}
+
 export interface RunOpencodeOptions {
   fixture: IsolatedFixture
   configContent: string
   extraEnv?: Record<string, string>
+  /** Defaults to the run's target host. */
+  host?: OpencodeHost
 }
 
 /**
@@ -598,11 +741,68 @@ export async function spawnOpencodeChild(
   })
 }
 
+/**
+ * The argv prefix that launches a host's CLI: the configured binary when its
+ * env var is set, else `bunx opencode-ai@<pin>` for v1. A v2 host has no
+ * default launcher, so it throws when no binary is configured.
+ */
+export function opencodeLauncherArgv(host: OpencodeHost): string[] {
+  const binary = resolveOpencodeBinary(host)
+  if (binary !== undefined) return [binary]
+  if (host === 'v1') {
+    return ['bunx', `${OPENCODE_CLI_PACKAGES.v1}@${readOpencodeHostPin('v1')}`]
+  }
+  throw new Error(
+    `no ${host} binary configured: set ${opencodeBinaryEnvName(host)} to the absolute path of an installed ${OPENCODE_CLI_PACKAGES[host]}@${readOpencodeHostPin(host)}`,
+  )
+}
+
+/**
+ * The argv for one scripted prompt. A v1 host is told the model on the command
+ * line. A v2 host reads it from the config, and runs `--standalone` so the
+ * test owns a private server: the default `run` starts a detached service on a
+ * shared port that outlives the test.
+ */
+export function buildOpencodeRunArgv(
+  host: OpencodeHost,
+  prompt: string,
+): string[] {
+  const launcher = opencodeLauncherArgv(host)
+  if (host === 'v2') {
+    return [
+      ...launcher,
+      'run',
+      '--standalone',
+      '--print-logs',
+      '--log-level',
+      'warn',
+      prompt,
+    ]
+  }
+  return [
+    ...launcher,
+    'run',
+    '--model',
+    `${SCRIPTED_PROVIDER_ID}/${SCRIPTED_MODEL_ID}`,
+    prompt,
+  ]
+}
+
+/** The argv for a long-lived server on an OS-assigned port. */
+export function buildOpencodeServeArgv(host: OpencodeHost): string[] {
+  const launcher = opencodeLauncherArgv(host)
+  if (host === 'v2') {
+    return [...launcher, 'serve', '--hostname', '127.0.0.1', '--port', '0']
+  }
+  return [...launcher, 'serve', '--port', '0', '--print-logs']
+}
+
 export async function runOpencode(
   prompt: string,
   options: RunOpencodeOptions,
 ): Promise<OpencodeResult> {
   const { fixture, configContent, extraEnv } = options
+  const host = options.host ?? TARGET_OPENCODE_HOST
   const skillName = extractSkillNameFromPrompt(prompt)
   const model = startScriptedSkillModelServer(
     skillName,
@@ -610,26 +810,27 @@ export async function runOpencode(
   )
 
   try {
-    const scriptedConfigContent = withScriptedProvider(configContent, model.url)
+    const scriptedConfigContent = withScriptedProvider(
+      configContent,
+      model.url,
+      host,
+    )
+    writeHostProjectConfig(fixture, scriptedConfigContent, host)
     const childEnv = buildIsolatedOpencodeEnv(
       fixture,
       scriptedConfigContent,
       extraEnv,
+      host,
     )
+    const argv = buildOpencodeRunArgv(host, prompt)
     let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      lastResult = await spawnOpencodeChild(
-        [
-          'bunx',
-          `opencode-ai@${EXACT_OPENCODE_VERSION}`,
-          'run',
-          '--model',
-          `${SCRIPTED_PROVIDER_ID}/${SCRIPTED_MODEL_ID}`,
-          prompt,
-        ],
-        { cwd: fixture.projectDir, env: childEnv, timeoutMs: TIMEOUT_MS },
-      )
+      lastResult = await spawnOpencodeChild(argv, {
+        cwd: fixture.projectDir,
+        env: childEnv,
+        timeoutMs: TIMEOUT_MS,
+      })
 
       const isTimeout =
         lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
@@ -763,10 +964,70 @@ function countMarkerOccurrences(
   )
 }
 
-export function createProbePlugin(fixture: IsolatedFixture): {
+export interface ProbePlugin {
+  /** `file://` URL of the probe plugin directory. */
   url: string
+  /** What the host's config lists to load the probe: the URL for v1, the directory path for v2. */
+  spec: string
   capturePath: string
-} {
+}
+
+// What the v2 probe records. A v2 plugin hooks the system prompt per request
+// kind, and each system part is an object whose `text` is the content. The
+// `context` hook is the main request, so it maps to the `chat` kind.
+function v2ProbeSource(capturePath: string): string {
+  return `import fs from 'node:fs'
+
+const capturePath = ${JSON.stringify(capturePath)}
+
+function append(entry) {
+  fs.appendFileSync(capturePath, JSON.stringify(entry) + '\\n')
+}
+
+function recordSystem(kind) {
+  return (event) => {
+    append({
+      type: 'system',
+      kind,
+      input: { sessionID: event.sessionID },
+      system: event.system.map((part) => part.text ?? ''),
+    })
+  }
+}
+
+export default {
+  id: 'systematic-integration-probe',
+  setup(ctx) {
+    append({ type: 'loaded' })
+    ctx.session.hook('context', recordSystem('chat'))
+    ctx.session.hook('title', recordSystem('title'))
+    ctx.session.hook('compaction', recordSystem('unknown'))
+  },
+}
+`
+}
+
+function createProbePluginV2(fixture: IsolatedFixture): ProbePlugin {
+  const probeDir = path.join(fixture.tempRoot, 'probe-plugin')
+  const capturePath = path.join(fixture.tempRoot, 'probe-capture.jsonl')
+  fs.mkdirSync(probeDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(probeDir, 'package.json'),
+    JSON.stringify({
+      name: 'systematic-integration-probe',
+      type: 'module',
+      exports: { '.': './index.js' },
+    }),
+  )
+  fs.writeFileSync(path.join(probeDir, 'index.js'), v2ProbeSource(capturePath))
+  return { url: pathToFileURL(probeDir).href, spec: probeDir, capturePath }
+}
+
+export function createProbePlugin(
+  fixture: IsolatedFixture,
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): ProbePlugin {
+  if (host === 'v2') return createProbePluginV2(fixture)
   const probeDir = path.join(fixture.tempRoot, 'probe-plugin')
   const probePath = path.join(probeDir, 'index.mjs')
   const capturePath = path.join(fixture.tempRoot, 'probe-capture.jsonl')
@@ -815,7 +1076,8 @@ export default async function probe() {
 `,
   )
 
-  return { url: pathToFileURL(probeDir).href, capturePath }
+  const url = pathToFileURL(probeDir).href
+  return { url, spec: url, capturePath }
 }
 
 export function readProbeEvents(capturePath: string): ProbeEvent[] {
@@ -838,7 +1100,51 @@ export function assertProbeCapturedEvents(probe: {
   )
 }
 
-function assertWorkflowSystem(system: readonly string[]): void {
+/**
+ * The v2 counterpart of {@link assertWorkflowSystem}. A v2 host injects the
+ * workflow block as an instruction entry inside the system message, after the
+ * host's own preamble, so the block need not be the first entry. It must
+ * still appear exactly once, whole and in order. The block does not name
+ * `systematic_skill`, so no tool guidance is asserted.
+ */
+function assertWorkflowSystemV2(system: readonly string[]): void {
+  const openingMarkerCount = countMarkerOccurrences(
+    system,
+    '<SYSTEMATIC_WORKFLOWS>',
+  )
+  const closingMarkerCount = countMarkerOccurrences(
+    system,
+    '</SYSTEMATIC_WORKFLOWS>',
+  )
+  if (openingMarkerCount !== 1 || closingMarkerCount !== 1) {
+    throw new Error(
+      'workflow system must contain exactly one opening and one closing marker',
+    )
+  }
+  const block = system.find((entry) => entry.includes('<SYSTEMATIC_WORKFLOWS>'))
+  if (!block?.includes('</SYSTEMATIC_WORKFLOWS>')) {
+    throw new Error('workflow system block was not closed')
+  }
+  if (
+    block.indexOf('</SYSTEMATIC_WORKFLOWS>') <
+    block.indexOf('<SYSTEMATIC_WORKFLOWS>')
+  ) {
+    throw new Error('workflow system block markers were out of order')
+  }
+}
+
+function assertWorkflowSystem(
+  system: readonly string[],
+  host: OpencodeHost,
+): void {
+  if (host === 'v2') {
+    assertWorkflowSystemV2(system)
+    return
+  }
+  assertWorkflowSystemV1(system)
+}
+
+function assertWorkflowSystemV1(system: readonly string[]): void {
   const openingMarkerCount = countMarkerOccurrences(
     system,
     '<SYSTEMATIC_WORKFLOWS>',
@@ -881,7 +1187,10 @@ function assertWorkflowSystem(system: readonly string[]): void {
   }
 }
 
-export function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
+export function assertMixedVersionProbeEvents(
+  events: ProbeEvent[],
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): void {
   const systemEvents = events.filter(isProbeSystemEvent)
   const chatSystemEvents = systemEvents.filter((event) => event.kind === 'chat')
   const workflowSystems = chatSystemEvents
@@ -897,7 +1206,7 @@ export function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
       'mixed-version probe did not observe a workflow system block',
     )
   }
-  for (const system of workflowSystems) assertWorkflowSystem(system)
+  for (const system of workflowSystems) assertWorkflowSystem(system, host)
 
   for (const event of systemEvents.filter((entry) => entry.kind === 'title')) {
     if (countWorkflowBlocks(event.system) !== 0) {
@@ -906,13 +1215,37 @@ export function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
   }
 }
 
+export interface ServerAnnouncement {
+  url: string
+  /** The Basic-auth password a v2 server prints; v1 prints none. */
+  password?: string
+}
+
+/**
+ * Reads a server's startup output. A v1 server prints its URL. A v2 server
+ * prints `server listening on <url>` and then `server password <password>`,
+ * possibly in a later chunk, so a v2 announcement is complete only once both
+ * have arrived.
+ */
+export function parseServerAnnouncement(
+  output: string,
+  awaitPassword: boolean,
+): ServerAnnouncement | undefined {
+  const url = /(http:\/\/[\d.:]+)/.exec(output)?.[1]
+  if (url === undefined) return undefined
+  if (!awaitPassword) return { url }
+  const password = /server password (\S+)/.exec(output)?.[1]
+  return password === undefined ? undefined : { url, password }
+}
+
 async function startOpencodeProcess(
   fixture: IsolatedFixture,
   command: string,
   args: readonly string[],
   env: Record<string, string>,
-  timeoutMs = TIMEOUT_MS,
+  options: { awaitPassword?: boolean; timeoutMs?: number } = {},
 ): Promise<OpencodeServer> {
+  const { awaitPassword = false, timeoutMs = TIMEOUT_MS } = options
   const server = spawn(
     command,
     [...args],
@@ -921,42 +1254,46 @@ async function startOpencodeProcess(
   const pid = server.pid
   if (!pid) throw new Error('opencode server did not expose a process id')
 
-  const url = await new Promise<string>((resolve, reject) => {
-    let buffer = ''
-    const timeout = setTimeout(() => {
-      void stopOpencodeProcess(server).then(() => {
-        reject(
-          new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
-        )
-      })
-    }, timeoutMs)
+  const announcement = await new Promise<ServerAnnouncement>(
+    (resolve, reject) => {
+      let buffer = ''
+      const timeout = setTimeout(() => {
+        void stopOpencodeProcess(server).then(() => {
+          reject(
+            new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
+          )
+        })
+      }, timeoutMs)
 
-    const onChunk = (chunk: Buffer): void => {
-      buffer += chunk.toString()
-      const match = buffer.match(/(http:\/\/[\d.:]+)/)
-      const [, serverUrl] = match ?? []
-      if (serverUrl === undefined) return
-      clearTimeout(timeout)
-      resolve(serverUrl)
-    }
-
-    server.stdout?.on('data', onChunk)
-    server.stderr?.on('data', onChunk)
-    server.once('error', (error) => {
-      clearTimeout(timeout)
-      reject(error)
-    })
-    server.once('exit', (code) => {
-      if (code !== null && code !== 0) {
+      const onChunk = (chunk: Buffer): void => {
+        buffer += chunk.toString()
+        const parsed = parseServerAnnouncement(buffer, awaitPassword)
+        if (parsed === undefined) return
         clearTimeout(timeout)
-        reject(new Error(`OpenCode server exited early with code ${code}`))
+        resolve(parsed)
       }
-    })
-  })
+
+      server.stdout?.on('data', onChunk)
+      server.stderr?.on('data', onChunk)
+      server.once('error', (error) => {
+        clearTimeout(timeout)
+        reject(error)
+      })
+      server.once('exit', (code) => {
+        if (code !== null && code !== 0) {
+          clearTimeout(timeout)
+          reject(new Error(`OpenCode server exited early with code ${code}`))
+        }
+      })
+    },
+  )
 
   let stopped = false
   const host: OpencodeServer = {
-    url,
+    url: announcement.url,
+    ...(announcement.password === undefined
+      ? {}
+      : { password: announcement.password }),
     pid,
     async stop(): Promise<void> {
       if (stopped) return
@@ -987,25 +1324,57 @@ export async function startOpencodeServer(
   fixture: IsolatedFixture,
   configContent: string,
   extraEnv?: Record<string, string>,
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
 ): Promise<OpencodeServer> {
+  writeHostProjectConfig(fixture, configContent, host)
+  const [command, ...args] = buildOpencodeServeArgv(host)
+  if (command === undefined) throw new Error('empty serve argv')
   return startOpencodeProcess(
     fixture,
-    'bunx',
-    [
-      `opencode-ai@${EXACT_OPENCODE_VERSION}`,
-      'serve',
-      '--port',
-      '0',
-      '--print-logs',
-    ],
-    buildIsolatedOpencodeEnv(fixture, configContent, extraEnv),
+    command,
+    args,
+    buildIsolatedOpencodeEnv(fixture, configContent, extraEnv, host),
+    { awaitPassword: host === 'v2' },
   )
 }
 
 export interface OpencodeServer {
   url: string
+  /** The Basic-auth password of a v2 server; absent for v1. */
+  password?: string
   pid: number
   stop(): Promise<void>
+}
+
+/**
+ * The request headers a v2 server needs: Basic auth as user `opencode` with the
+ * password the server printed at startup. Empty for a server without one.
+ */
+export function opencodeServerAuthHeaders(
+  server: OpencodeServer,
+): Record<string, string> {
+  if (server.password === undefined) return {}
+  const token = Buffer.from(`opencode:${server.password}`).toString('base64')
+  return { authorization: `Basic ${token}` }
+}
+
+export type OpencodeV2Client = ReturnType<
+  typeof import('@opencode/client')['OpenCode']['make']
+>
+
+/**
+ * A client for a running v2 server, from `@opencode/client` (the remote client;
+ * `@opencode/sdk` only embeds a host in-process). Imported on demand so a v1
+ * run never loads it.
+ */
+export async function createOpencodeV2Client(
+  server: OpencodeServer,
+): Promise<OpencodeV2Client> {
+  const { OpenCode } = await import('@opencode/client')
+  return OpenCode.make({
+    baseUrl: server.url,
+    headers: opencodeServerAuthHeaders(server),
+  })
 }
 
 const liveOpencodeHosts = new Set<OpencodeServer>()
@@ -1204,9 +1573,25 @@ function linkRuntimeDependency(
   fs.symlinkSync(source, target, 'dir')
 }
 
-export function extractPackagedPlugin(fixture: IsolatedFixture): {
+/** The OpenCode plugin package each host's plugin imports types from. */
+const HOST_PLUGIN_PACKAGES = {
+  v1: '@opencode-ai/plugin',
+  v2: '@opencode/plugin',
+} as const satisfies Record<OpencodeHost, string>
+
+/**
+ * Unpacks the packed plugin into the fixture project and links its runtime
+ * dependencies from this repository. `pluginUrl` is the package directory as a
+ * `file://` URL, the v1 config form. `pluginSpec` is the entry a host's config
+ * lists: the URL for v1, the directory path for v2.
+ */
+export function extractPackagedPlugin(
+  fixture: IsolatedFixture,
+  host: OpencodeHost = TARGET_OPENCODE_HOST,
+): {
   packageDir: string
   pluginUrl: string
+  pluginSpec: string
 } {
   if (!packedTarballPath) throw new Error('packTarballOnce() has not run')
 
@@ -1231,7 +1616,12 @@ export function extractPackagedPlugin(fixture: IsolatedFixture): {
   for (const depName of Object.keys(extractedPackageJson.dependencies ?? {})) {
     linkRuntimeDependency(fixture, depName)
   }
-  linkRuntimeDependency(fixture, '@opencode-ai/plugin')
+  linkRuntimeDependency(fixture, HOST_PLUGIN_PACKAGES[host])
 
-  return { packageDir, pluginUrl: pathToFileURL(packageDir).href }
+  const pluginUrl = pathToFileURL(packageDir).href
+  return {
+    packageDir,
+    pluginUrl,
+    pluginSpec: host === 'v2' ? packageDir : pluginUrl,
+  }
 }

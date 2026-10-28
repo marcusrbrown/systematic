@@ -37,17 +37,17 @@ fixes the job itself caught: #932, #933, #936).
 
 The pin now lives in exactly one place: the `@opencode-ai/sdk` /
 `@opencode-ai/plugin` devDependencies in `package.json` (`package.json:100-101`),
-read through `readOpencodeSdkPin()` (`scripts/lib/opencode-pin.ts:120-125`).
+read through `readOpencodeSdkPin()` (`scripts/lib/opencode-pin.ts:196-198`).
 `EXPECTED_OPENCODE_VERSION` and `EXACT_OPENCODE_VERSION` are re-exports of that
 value, not hand-edited constants (#916).
 
 The host is launched through `bunx opencode-ai@<pin>`, never a bare `opencode`
 on `PATH` and never `npx` (#928). `probeOpencodeAvailability()`
-(`scripts/lib/opencode-availability.ts:109-183`) runs that launcher with
+(`scripts/lib/opencode-availability.ts:219-299`) runs that launcher with
 `--version` under a caller-built, isolated env and classifies the result as
 `available`, `mismatch`, or `unavailable` — it never throws and never
 memoizes. Every fixture-consuming suite wraps it in a memoizing
-`isOpencodeAvailable()` (`tests/integration/fixtures/receipt-workflow-host.ts:199`).
+`isOpencodeAvailable()` (`tests/integration/fixtures/opencode-host.ts:271`).
 
 The evidence itself is three jobs in `.github/workflows/main.yaml`:
 
@@ -109,7 +109,7 @@ consequence differs by design:
   development requires a live host.
 - **In CI**, `SYSTEMATIC_REQUIRE_OPENCODE=1` is set only by the
   `host-contract-shard` jobs. Every fixture-consuming suite calls `requireOpencodeAvailable()`
-  (`scripts/lib/opencode-availability.ts:192-201`) at module scope right after
+  (`scripts/lib/opencode-availability.ts:320-329`) at module scope right after
   `isOpencodeAvailable()`. When the classification is not `available`, that
   call throws — a module-scope throw fails the file to load, Bun reports it as
   a suite error, that shard goes red, the aggregator goes red with it, and the

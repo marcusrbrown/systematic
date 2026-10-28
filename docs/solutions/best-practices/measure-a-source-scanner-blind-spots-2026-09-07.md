@@ -28,9 +28,9 @@ tags:
 
 `tests/unit/opencode-pin.test.ts` holds two guards that scan repository source text:
 
-- **R1** (`tests/unit/opencode-pin.test.ts:175`) — the real OpenCode pin literal must appear nowhere under `scripts/` or `tests/`;
-  code that needs it calls `readOpencodeSdkPin()` (`scripts/lib/opencode-pin.ts:120`).
-- **R2** (`tests/unit/opencode-pin.test.ts:558`) — fixture files must use unpinnable sentinel versions, never realistic ones.
+- **R1** (`tests/unit/opencode-pin.test.ts:326`) — the real OpenCode pin literal must appear nowhere under `scripts/` or `tests/`;
+  code that needs it calls `readOpencodeSdkPin()` (`scripts/lib/opencode-pin.ts:196`).
+- **R2** (`tests/unit/opencode-pin.test.ts:779`) — fixture files must use unpinnable sentinel versions, never realistic ones.
 
 R2 exists because R1 had a design flaw. `probeOpencodeAvailability` takes `pin` as a *parameter*,
 so `tests/unit/opencode-availability.test.ts` held ~30 arbitrary literals like `'1.18.28'`. When a
@@ -83,22 +83,22 @@ measurement found.
 
 2. **Prefer a structural bound over another heuristic patch.** A `'` or `"` string cannot span a
    newline in JS/TS, so an unterminated string ends at the line break
-   (`tryConsumeStringLiteral`, `tests/unit/opencode-pin.test.ts:398-409`). That caps how far *any*
+   (`tryConsumeStringLiteral`, `tests/unit/opencode-pin.test.ts:619-630`). That caps how far *any*
    mis-detection can blind the scan, whatever caused it — including causes not yet known. It is
    worth more than a third refinement of the heuristic that keeps being wrong: `precedesRegexLiteral`
-   (`tests/unit/opencode-pin.test.ts:411-419`) still only recognises a regex after `(`, `,`, `=`, or `[`, and the bound makes that
+   (`tests/unit/opencode-pin.test.ts:632-640`) still only recognises a regex after `(`, `,`, `=`, or `[`, and the bound makes that
    residual harmless.
 
 3. **Never put a realistic value in a parameterised fixture.** If the argument does not need to be
    real, use one reality can never reach: `SENTINEL_PIN = '9999.0.0'` and
-   `SENTINEL_MISMATCH_PIN = '9999.0.1'` (`tests/unit/opencode-availability.test.ts:29,31`), checked
-   by an anchored `SENTINEL_PATTERN = /^9999\./` (`tests/unit/opencode-pin.test.ts:242`). A
+   `SENTINEL_MISMATCH_PIN = '9999.0.1'` (`tests/unit/opencode-availability.test.ts:32,34`), checked
+   by an anchored `SENTINEL_PATTERN = /^9999\./` (`tests/unit/opencode-pin.test.ts:463`). A
    realistic literal in a fixture is a delayed false positive: it fires the moment reality reaches
    it, and it will be "fixed" by picking another realistic value unless the range is impossible.
 
 4. **Inside an allowlist, prefer blanket matching plus justified exemptions to context-anchored
    matching.** When the scanned scope is already a short file list
-   (`ALLOWLISTED_FIXTURE_FILES`, `tests/unit/opencode-pin.test.ts:256`), take precision from the
+   (`ALLOWLISTED_FIXTURE_FILES`, `tests/unit/opencode-pin.test.ts:477`), take precision from the
    file list and completeness from the rule. Anchoring instead to recognised contexts trades away
    completeness for a precision the allowlist already provides. Each exemption carries its reason;
    an unexplained exemption is how the guard rots.
@@ -151,7 +151,7 @@ the opposite direction.
 The shipped design keeps comment awareness — `tryConsumeLineComment` and `tryConsumeBlockComment`
 remain — but as a single pass over the source rather than a separate stripping pass, plus the
 newline bound from Guidance 2. Three regression tests pin both hazards and the bound
-(`tests/unit/opencode-pin.test.ts:638`). What was removed was the two-pass stripper, not comment
+(`tests/unit/opencode-pin.test.ts:859`). What was removed was the two-pass stripper, not comment
 handling itself.
 
 ## Related

@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { readOpencodeHostPins } from '../../scripts/lib/opencode-pin.ts'
 import { generateAll } from '../../src/lib/pi-subagents-personas.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -161,8 +162,15 @@ describe('package.json Pi manifest', () => {
 
   test('declares both OpenCode plugin packages as optional peers from their floors', () => {
     const pkg = readPackageJson()
-    expect(pkg.peerDependencies?.['@opencode-ai/plugin']).toBe('>=1.18.29')
-    expect(pkg.peerDependencies?.['@opencode/plugin']).toBe('>=2.2.0')
+    const pins = readOpencodeHostPins()
+    // The v1 range starts exactly at the floor. The v2 range may start below
+    // the pinned CLI, but the pin must satisfy it.
+    expect(pkg.peerDependencies?.['@opencode-ai/plugin']).toBe(
+      `>=${pins.v1Floor}`,
+    )
+    const v2Range = pkg.peerDependencies?.['@opencode/plugin']
+    expect(v2Range).toMatch(/^>=\d+\.\d+\.\d+$/)
+    expect(Bun.semver.satisfies(pins.v2, v2Range ?? '')).toBe(true)
     expect(pkg.peerDependenciesMeta?.['@opencode-ai/plugin']?.optional).toBe(
       true,
     )

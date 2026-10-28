@@ -7,8 +7,10 @@ import {
   EXPECTED_SUITE_FILES,
   evaluate,
   type GuardViolation,
+  HOST_CONTRACT_PROFILES,
   mergeEvidence,
   PASS_FLOOR,
+  PROFILE_SUITE_FILES,
   parseJUnitXml,
   parseLogPassCount,
   readArtifact,
@@ -70,6 +72,65 @@ describe('EXPECTED_SUITE_FILES', () => {
     // class of drift the guard exists to catch.
     const actual = listIntegrationSuiteFiles()
     expect([...EXPECTED_SUITE_FILES].sort()).toEqual(actual)
+  })
+})
+
+describe('PROFILE_SUITE_FILES', () => {
+  test('every integration test file appears in at least one profile list, so a new file cannot silently go unrun', () => {
+    const listed = new Set(Object.values(PROFILE_SUITE_FILES).flat())
+    const unlisted = listIntegrationSuiteFiles().filter(
+      (file) => !listed.has(file),
+    )
+
+    expect(unlisted).toEqual([])
+  })
+
+  test('every listed file exists, and no profile lists a file twice', () => {
+    for (const profile of HOST_CONTRACT_PROFILES) {
+      const files = PROFILE_SUITE_FILES[profile]
+      expect(new Set(files).size).toBe(files.length)
+      for (const file of files) {
+        expect(fs.existsSync(path.join(REPO_ROOT, file))).toBe(true)
+      }
+    }
+  })
+
+  test('host-neutral files run in the v2 profile only', () => {
+    const neutral = [
+      'tests/integration/claude-code.test.ts',
+      'tests/integration/pi.test.ts',
+      'tests/integration/release-notes-ci.test.ts',
+      'tests/integration/validate-release-target.test.ts',
+      'tests/integration/eval-artifact.test.ts',
+      'tests/integration/eval-fixture.test.ts',
+    ]
+    for (const file of neutral) {
+      expect(PROFILE_SUITE_FILES.v2).toContain(file)
+      expect(PROFILE_SUITE_FILES['v1-floor']).not.toContain(file)
+      expect(PROFILE_SUITE_FILES['v1-current']).not.toContain(file)
+    }
+  })
+
+  test('v1-only behavior stays out of the v2 profile', () => {
+    expect(PROFILE_SUITE_FILES.v2).not.toContain(
+      'tests/integration/skill-command-probe.test.ts',
+    )
+    expect(PROFILE_SUITE_FILES.v2).not.toContain(
+      'tests/integration/eval-runner.test.ts',
+    )
+    expect(PROFILE_SUITE_FILES['v1-floor']).not.toContain(
+      'tests/integration/eval-runner.test.ts',
+    )
+  })
+
+  test('the two v1 profiles run the same smoke set, and the current pin adds only the eval runner', () => {
+    const floor = PROFILE_SUITE_FILES['v1-floor']
+    const current = PROFILE_SUITE_FILES['v1-current']
+
+    expect(current.filter((file) => !floor.includes(file))).toEqual([
+      'tests/integration/eval-runner.test.ts',
+    ])
+    expect(floor.every((file) => current.includes(file))).toBe(true)
   })
 })
 
