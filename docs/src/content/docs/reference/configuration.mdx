@@ -86,6 +86,36 @@ Bundled agents inherit the invoking model unless high-trust user or `$OPENCODE_C
 
 A flat `agents.<name>.model` now also routes in-process Pi delegates, not just OpenCode — previously it applied to OpenCode only.
 
+## Skill Permissions on OpenCode v1
+
+OpenCode v1 has two tools that load a skill: the native `skill` tool and the `systematic_skill` tool. They ask for permission under different names. The native tool asks with the bare name, such as `git-worktree`. `systematic_skill` asks with the prefixed name, such as `systematic:git-worktree`. A permission rule only reaches the tool whose name form it uses.
+
+Systematic writes both forms where it writes the rules itself:
+
+- **`skills` list on an agent or category.** The list denies every skill and then allows each one you name. Each allow is written for both name forms, so the agent can load a listed skill with either tool. A skill whose name already contains a colon, such as `ce:plan`, has only one form.
+- **`disabled_skills`.** A disabled skill is hidden from `systematic_skill` and from the generated commands. OpenCode's own skill discovery still scans the whole bundled skills folder, so Systematic also adds a top-level `permission.skill` deny for each disabled skill, in both name forms. The native tool then leaves the skill out of its list and refuses to load it. Your own top-level `permission` rules are kept. If you already wrote a rule for the same skill name, yours stays as it is. When you take a skill out of `disabled_skills`, the denies Systematic added are removed on the next load.
+
+A managed `skills` list that names a disabled skill is rejected when the config loads, with an error that names the skill.
+
+Rules you write yourself in `permission.skill` are not copied to the other name form. To block a skill completely with a hand-written rule, write both forms:
+
+```json
+{
+  "agents": {
+    "correctness-reviewer": {
+      "permission": {
+        "skill": {
+          "git-worktree": "deny",
+          "systematic:git-worktree": "deny"
+        }
+      }
+    }
+  }
+}
+```
+
+OpenCode v2 uses one name form for both tools, so this only applies to v1.
+
 ## Profiles and Per-Harness Routing
 
 For a task-oriented walkthrough, see the [model profiles guide](/systematic/guides/model-profiles/). A **profile** is a named, reusable bundle of routing overrides — `model`, `variant`, `temperature`, `top_p`, and the `opencode`/`pi` blocks below — defined once in your user config's `profiles` map and selected by name. Profiles exist for people who work across repositories that warrant different model routing from the same harness: define `work` and `personal` profiles once in user config, then let each repository pick one.

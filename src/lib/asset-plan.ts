@@ -52,10 +52,18 @@ export interface PermissionRuleTriple {
  *   `config.permission` (from its frontmatter) applies untouched.
  * - `managed`: overlays control permissions. `rules` replaces
  *   `config.permission` entirely; an empty list means "no permission".
+ *   `skillsListNames` is the skill names a managed `skills` list named, so an
+ *   adapter can tell the allows that list wrote from allows a user wrote by
+ *   hand. Only the OpenCode v1 adapter reads it, because only v1 has two
+ *   skill tools that ask under two names; `rules` itself is unchanged.
  */
 export type PlannedAgentPermission =
   | { kind: 'unmanaged' }
-  | { kind: 'managed'; rules: readonly PermissionRuleTriple[] }
+  | {
+      kind: 'managed'
+      rules: readonly PermissionRuleTriple[]
+      skillsListNames?: readonly string[]
+    }
 
 export interface PlannedAgent {
   /** Emitted agent key (the bare agent name, category dropped). */
@@ -329,9 +337,29 @@ function applyAgentOverlays(
     name: agentInfo.name,
     config: result,
     permission: hasPermissionOverlay
-      ? { kind: 'managed', rules: permissionRulesToTriples(permissionRules) }
+      ? {
+          kind: 'managed',
+          rules: permissionRulesToTriples(permissionRules),
+          skillsListNames: skillsListNames([
+            categoryOverlay?.value,
+            exactOverlay?.value,
+          ]),
+        }
       : { kind: 'unmanaged' },
   }
+}
+
+function skillsListNames(
+  overlays: readonly (Record<string, unknown> | undefined)[],
+): string[] {
+  const names = new Set<string>()
+  for (const overlay of overlays) {
+    if (!Array.isArray(overlay?.skills)) continue
+    for (const skill of overlay.skills) {
+      if (typeof skill === 'string') names.add(skill)
+    }
+  }
+  return [...names]
 }
 
 /**

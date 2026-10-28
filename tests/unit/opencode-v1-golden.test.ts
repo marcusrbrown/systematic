@@ -539,7 +539,7 @@ describe('opencode v1 goldens: config hook', () => {
     })
   }
 
-  test('managed skills list is deny * first, then one allow per skill, in order', async () => {
+  test('managed skills list is deny * first, then each skill under both name forms, in order', async () => {
     const captured = await captureConfigScenario({
       name: 'managed-order-probe',
       setup: {
@@ -557,7 +557,9 @@ describe('opencode v1 goldens: config hook', () => {
     expect(Object.entries(rules ?? {})).toEqual([
       ['*', 'deny'],
       ['fixture-beta', 'allow'],
+      ['systematic:fixture-beta', 'allow'],
       ['fixture-alpha', 'allow'],
+      ['systematic:fixture-alpha', 'allow'],
     ])
   })
 
@@ -571,8 +573,10 @@ describe('opencode v1 goldens: config hook', () => {
       ),
     ).toEqual([
       ['fixture-alpha', 'allow'],
+      ['systematic:fixture-alpha', 'allow'],
       ['*', 'deny'],
       ['fixture-beta', 'allow'],
+      ['systematic:fixture-beta', 'allow'],
     ])
     // An explicitly empty managed list is deny-all with no allows.
     expect(
@@ -598,7 +602,10 @@ describe('opencode v1 goldens: config hook', () => {
       ['2', 'allow'],
       ['10', 'allow'],
       ['*', 'deny'],
+      ['systematic:10', 'allow'],
       ['fixture-alpha', 'allow'],
+      ['systematic:fixture-alpha', 'allow'],
+      ['systematic:2', 'allow'],
     ])
   })
 
@@ -613,6 +620,24 @@ describe('opencode v1 goldens: config hook', () => {
     expect(record.command).not.toHaveProperty('systematic:fixture-command')
     expect(record.agent).not.toHaveProperty('adversarial-reviewer')
     expect(record.command).toHaveProperty('systematic:fixture-alpha')
+  })
+
+  test('a disabled skill is denied under both name forms, so the native skill tool refuses it too', async () => {
+    const baseline = await captureConfigScenario(pick(CONFIG_SCENARIOS, 'none'))
+    const disabled = await captureConfigScenario(
+      pick(CONFIG_SCENARIOS, 'disabled'),
+    )
+    expect((baseline.config as Record<string, unknown>).permission).toBe(
+      undefined,
+    )
+    expect((disabled.config as Record<string, unknown>).permission).toEqual({
+      skill: {
+        'git-worktree': 'deny',
+        'systematic:git-worktree': 'deny',
+      },
+    })
+    // The hook ran twice on one object and the bytes did not change.
+    expect(disabled.repeat).toBe('identical')
   })
 
   test('skills_as_commands=false drops discovered skills but keeps bundled skill commands', async () => {

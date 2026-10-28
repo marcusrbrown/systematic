@@ -267,11 +267,18 @@ function evaluateV1(
   return outcome
 }
 
+/**
+ * The resources to compare. v1 emits a `systematic:<id>` entry next to each
+ * managed skill allow, for the `systematic_skill` tool that asks under that
+ * name. v2 asks with the bare id and strips the prefix from rules, so a prefixed
+ * resource is never a v2 query; the bare id is already probed.
+ */
 function probeResources(permission: Record<string, unknown>): string[] {
   const resources = new Set<string>(['unmatched-resource'])
   for (const rules of Object.values(permission)) {
     if (!isRecord(rules)) continue
     for (const pattern of Object.keys(rules)) {
+      if (pattern.startsWith('systematic:')) continue
       resources.add(pattern)
       resources.add(pattern.replaceAll('*', 'x').replaceAll('?', 'y'))
     }

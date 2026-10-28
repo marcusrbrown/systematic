@@ -1467,8 +1467,10 @@ model: gpt-4
           ?.skill,
       ).toEqual({
         'skill-b': 'allow',
+        'systematic:skill-b': 'allow',
         '*': 'deny',
         'skill-a': 'allow',
+        'systematic:skill-a': 'allow',
       })
     })
 
@@ -1524,6 +1526,7 @@ model: gpt-4
       ).toEqual({
         '*': 'deny',
         'skill-a': 'allow',
+        'systematic:skill-a': 'allow',
       })
     })
 
@@ -1560,6 +1563,315 @@ model: gpt-4
       ).toEqual({
         '*': 'deny',
         'skill-a': 'allow',
+        'systematic:skill-a': 'allow',
+      })
+    })
+
+    describe('skill permissions cover both skill tools', () => {
+      // OpenCode v1 has two skill tools that ask under different names: the
+      // native `skill` tool asks with the bare name, and `systematic_skill`
+      // asks with `systematic:<name>`. A rule only reaches the tool whose name
+      // form it uses, so the emitted config has to carry both forms.
+
+      function newHandler() {
+        return createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+      }
+
+      function skillRulesOf(config: Config, agent: string) {
+        return Object.entries(
+          readEmittedAgentPermission(config.agent?.[agent])?.skill ?? {},
+        )
+      }
+
+      function topLevelSkill(config: Config): unknown {
+        const permission = (config as { permission?: Record<string, unknown> })
+          .permission
+        return permission?.skill
+      }
+
+      function seedReviewers(): void {
+        createSkill(path.join(bundledDir, 'skills'), 'skill-a', 'Skill A')
+        createSkill(path.join(bundledDir, 'skills'), 'skill-b', 'Skill B')
+        createSkill(path.join(bundledDir, 'skills'), 'ce:review', 'Review')
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        createCategorizedAgent('review', 'security-reviewer', {
+          name: 'security-reviewer',
+          description: 'Security reviewer',
+        })
+      }
+
+      test('a managed skills list allows each skill under both name forms, after the deny-all', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          agents: {
+            'correctness-reviewer': { skills: ['skill-b', 'skill-a'] },
+          },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'correctness-reviewer')).toEqual([
+          ['*', 'deny'],
+          ['skill-b', 'allow'],
+          ['systematic:skill-b', 'allow'],
+          ['skill-a', 'allow'],
+          ['systematic:skill-a', 'allow'],
+        ])
+      })
+
+      test('a skill whose name already carries a colon is not given a second entry', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          agents: { 'correctness-reviewer': { skills: ['ce:review'] } },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'correctness-reviewer')).toEqual([
+          ['*', 'deny'],
+          ['ce:review', 'allow'],
+        ])
+      })
+
+      test('a later explicit deny for the skill still wins over the list, in both forms', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          categories: { review: { skills: ['skill-a'] } },
+          agents: {
+            'security-reviewer': {
+              permission: {
+                skill: { 'skill-a': 'deny', 'systematic:skill-a': 'deny' },
+              },
+            },
+          },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'security-reviewer')).toEqual([
+          ['*', 'deny'],
+          ['skill-a', 'deny'],
+          ['systematic:skill-a', 'deny'],
+        ])
+      })
+
+      test('a skill rule the user wrote by hand is not mirrored to the other name form', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          agents: {
+            'correctness-reviewer': {
+              permission: { skill: { 'skill-a': 'allow', 'skill-b': 'deny' } },
+            },
+          },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'correctness-reviewer')).toEqual([
+          ['skill-a', 'allow'],
+          ['skill-b', 'deny'],
+        ])
+      })
+
+      test('a disabled skill is denied at the top level under both name forms', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(topLevelSkill(config)).toEqual({
+          'git-worktree': 'deny',
+          'systematic:git-worktree': 'deny',
+        })
+      })
+
+      test('a disabled skill whose name carries a colon is denied once', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['ce:plan'] })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(topLevelSkill(config)).toEqual({ 'ce:plan': 'deny' })
+      })
+
+      test('with nothing disabled the config gains no permission block', async () => {
+        seedReviewers()
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(config).not.toHaveProperty('permission')
+      })
+
+      test('the own top-level permission rules of the user survive, and the denies land after them', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+
+        const config = {
+          permission: {
+            edit: 'deny',
+            bash: { '*': 'ask' },
+            skill: { 'my-skill': 'allow', '*': 'ask' },
+          },
+        } as unknown as Config
+        await newHandler()(config)
+
+        const permission = (config as { permission: Record<string, unknown> })
+          .permission
+        expect(permission.edit).toBe('deny')
+        expect(permission.bash).toEqual({ '*': 'ask' })
+        expect(Object.entries(permission.skill as object)).toEqual([
+          ['my-skill', 'allow'],
+          ['*', 'ask'],
+          ['git-worktree', 'deny'],
+          ['systematic:git-worktree', 'deny'],
+        ])
+      })
+
+      test('a string shorthand for the skill rules keeps its meaning as the * rule', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+
+        const config = { permission: { skill: 'ask' } } as unknown as Config
+        await newHandler()(config)
+
+        expect(Object.entries(topLevelSkill(config) as object)).toEqual([
+          ['*', 'ask'],
+          ['git-worktree', 'deny'],
+          ['systematic:git-worktree', 'deny'],
+        ])
+      })
+
+      test('a string shorthand for the whole permission keeps its meaning as the * rule', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+
+        const config = { permission: 'allow' } as unknown as Config
+        await newHandler()(config)
+
+        expect((config as { permission: unknown }).permission).toEqual({
+          '*': 'allow',
+          skill: {
+            'git-worktree': 'deny',
+            'systematic:git-worktree': 'deny',
+          },
+        })
+      })
+
+      test('a rule the user already wrote for a disabled skill is left as it is', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+
+        const config = {
+          permission: { skill: { 'git-worktree': 'ask' } },
+        } as unknown as Config
+        await newHandler()(config)
+
+        expect(topLevelSkill(config)).toEqual({
+          'git-worktree': 'ask',
+          'systematic:git-worktree': 'deny',
+        })
+      })
+
+      test('running the hook again on the same config changes nothing', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          disabled_skills: ['git-worktree'],
+          agents: { 'correctness-reviewer': { skills: ['skill-a'] } },
+        })
+        const handler = newHandler()
+
+        const config = {
+          permission: { skill: { 'my-skill': 'allow' } },
+        } as unknown as Config
+        await handler(config)
+        const first = JSON.stringify(config)
+        await handler(config)
+        await newHandler()(config)
+
+        expect(JSON.stringify(config)).toBe(first)
+      })
+
+      test('re-enabling the skill removes its denies and leaves the user rules', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+        const handler = newHandler()
+
+        const config = {
+          permission: { skill: { 'my-skill': 'allow' } },
+        } as unknown as Config
+        await handler(config)
+        expect(topLevelSkill(config)).toHaveProperty('git-worktree')
+
+        writeCustomSystematicConfig({ disabled_skills: [] })
+        await handler(config)
+
+        expect(topLevelSkill(config)).toEqual({ 'my-skill': 'allow' })
+      })
+
+      test('re-enabling every skill removes the permission block the hook created', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+        const handler = newHandler()
+
+        const config: Config = {}
+        await handler(config)
+        expect(config).toHaveProperty('permission')
+
+        writeCustomSystematicConfig({ disabled_skills: [] })
+        await handler(config)
+
+        expect(config).not.toHaveProperty('permission')
+      })
+
+      test('a deny the user wrote for the skill is not removed when it is re-enabled', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+        const handler = newHandler()
+
+        const config = {
+          permission: { skill: { 'git-worktree': 'deny' } },
+        } as unknown as Config
+        await handler(config)
+        expect(topLevelSkill(config)).toEqual({
+          'git-worktree': 'deny',
+          'systematic:git-worktree': 'deny',
+        })
+
+        writeCustomSystematicConfig({ disabled_skills: [] })
+        await handler(config)
+
+        expect(topLevelSkill(config)).toEqual({ 'git-worktree': 'deny' })
+      })
+
+      test('a managed skills list that names a disabled skill is rejected', async () => {
+        createSkill(path.join(bundledDir, 'skills'), 'git-worktree', 'Worktree')
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        writeCustomSystematicConfig({
+          disabled_skills: ['git-worktree'],
+          agents: { 'correctness-reviewer': { skills: ['git-worktree'] } },
+        })
+
+        const config: Config = {}
+        await expect(newHandler()(config)).rejects.toThrow(/git-worktree/)
+        expect(config).not.toHaveProperty('permission')
       })
     })
 
