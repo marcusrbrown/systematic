@@ -491,7 +491,9 @@ describe('per-invocation plugin registration', () => {
             args: ReturnType<typeof makeInput>,
           ) => Promise<
             Awaited<
-              ReturnType<typeof import('../../src/index.js').default.server>
+              ReturnType<
+                typeof import('../../src/lib/opencode-v1.js').createOpenCodeV1Hooks
+              >
             >
           >
         }

@@ -7,8 +7,10 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readOpencodeHostPins } from '../../scripts/lib/opencode-pin.ts'
 import { generateAll } from '../../src/lib/pi-subagents-personas.js'
+import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
+const tempDirs = createTempDirTracker()
 const SRC_DIR = path.join(ROOT_DIR, 'src')
 const DIST_DIR = path.join(ROOT_DIR, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.js')
@@ -291,6 +293,7 @@ describe('build output and packaging', () => {
   }, 200_000)
 
   afterAll(() => {
+    tempDirs.cleanup()
     if (packTempDir) {
       fs.rmSync(packTempDir, { recursive: true, force: true })
     }
@@ -302,6 +305,89 @@ describe('build output and packaging', () => {
       unknown
     >
     expect(entryShapeProblems(mod)).toEqual([])
+  })
+
+  test('dist/index.d.ts names neither OpenCode plugin package', () => {
+    const declaration = fs.readFileSync(
+      path.join(DIST_DIR, 'index.d.ts'),
+      'utf8',
+    )
+
+    expect(declaration).not.toContain('@opencode')
+    expect(declaration).toContain('export default')
+  })
+
+  describe.each([
+    ['only the v1 plugin package installed', '@opencode-ai/plugin'],
+    ['only the v2 plugin package installed', '@opencode/plugin'],
+    ['neither plugin package installed', undefined],
+  ] as const)('a consumer with %s', (_label, installedPeer) => {
+    test('type-checks the entry declaration with skipLibCheck off', () => {
+      const project = tempDirs.track(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-dts-consumer-')),
+      )
+      const modules = path.join(project, 'node_modules')
+      fs.mkdirSync(modules, { recursive: true })
+      // The installed package is the packed tarball, so only what ships counts.
+      const extract = Bun.spawnSync(
+        ['tar', 'xzf', packedTarballPath, '-C', project],
+        { timeout: 30_000 },
+      )
+      expect(extract.exitCode).toBe(0)
+      fs.mkdirSync(path.join(modules, '@fro.bot'), { recursive: true })
+      fs.renameSync(
+        path.join(project, 'package'),
+        path.join(modules, '@fro.bot/systematic'),
+      )
+      if (installedPeer !== undefined) {
+        // A stand-in for the one peer: enough to resolve, nothing more.
+        const peerDir = path.join(modules, installedPeer)
+        fs.mkdirSync(peerDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(peerDir, 'package.json'),
+          JSON.stringify({
+            name: installedPeer,
+            version: '0.0.0',
+            types: 'index.d.ts',
+          }),
+        )
+        fs.writeFileSync(path.join(peerDir, 'index.d.ts'), 'export {}\n')
+      }
+      fs.writeFileSync(
+        path.join(project, 'consumer.ts'),
+        [
+          "import plugin from '@fro.bot/systematic'",
+          'export const id: string = plugin.id',
+          'export const setup: (ctx: unknown) => Promise<void> = plugin.setup',
+          'export const server: (input: unknown) => Promise<unknown> = plugin.server',
+          '',
+        ].join('\n'),
+      )
+      fs.writeFileSync(
+        path.join(project, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: {
+            target: 'ESNext',
+            module: 'ESNext',
+            moduleResolution: 'bundler',
+            strict: true,
+            skipLibCheck: false,
+            noEmit: true,
+            types: [],
+          },
+          include: ['consumer.ts'],
+        }),
+      )
+
+      const tsc = spawnSync(
+        path.join(ROOT_DIR, 'node_modules/.bin/tsc'),
+        ['-p', project],
+        { encoding: 'utf8', timeout: 120_000 },
+      )
+
+      expect(`${tsc.stdout}${tsc.stderr}`).toBe('')
+      expect(tsc.status).toBe(0)
+    })
   })
 
   test('emitted JavaScript contains no OpenCode runtime imports', () => {

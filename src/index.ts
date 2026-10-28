@@ -20,7 +20,7 @@ type SystematicPluginModule = OpenCodeV2.Plugin & PluginModule
 // OpenCode's plugin loader requires a default export only. The hooks, the
 // `REGISTERED_PLUGIN_HOOKS` inventory and the shared-core wiring live in
 // `src/lib/opencode-v1.ts`.
-const systematicPlugin: SystematicPluginModule = {
+const systematicPlugin = {
   id: 'systematic',
   async setup(ctx) {
     // A v1 host that receives an object default also calls `setup`, with a
@@ -31,6 +31,20 @@ const systematicPlugin: SystematicPluginModule = {
     await setupOpenCodeV2(ctx, { packageRoot })
   },
   server: async (input) => createOpenCodeV1Hooks(input, { packageRoot }),
+} satisfies SystematicPluginModule
+
+// What the declaration file shows. The object above is checked against both
+// hosts' plugin types, but naming those types in the public declaration would
+// put an import of each peer into `dist/index.d.ts`, and a consumer with only
+// one of the two optional peers installed (and `skipLibCheck` off) would fail
+// to resolve the other. Each host passes its own context to the entry it calls,
+// so the public shape takes `unknown`.
+interface SystematicPluginEntry {
+  readonly id: string
+  setup(ctx: unknown): Promise<void>
+  server(input: unknown): Promise<unknown>
 }
 
-export default systematicPlugin
+const entry: SystematicPluginEntry = systematicPlugin
+
+export default entry

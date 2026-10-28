@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Config, PluginInput } from '@opencode-ai/plugin'
+import type { Config, Hooks, PluginInput } from '@opencode-ai/plugin'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import SystematicPlugin from '../../src/index.js'
@@ -418,8 +418,8 @@ describe('SystematicPlugin config hook integration', () => {
     // Exercise the duplicate plugin-factory path that happens when multiple
     // OpenCode config sources reference Systematic in the same process. Both
     // invocations must expose the real config hook surface.
-    const firstHooks = await SystematicPlugin.server(input)
-    const hooks = await SystematicPlugin.server(input)
+    const firstHooks = (await SystematicPlugin.server(input)) as Hooks
+    const hooks = (await SystematicPlugin.server(input)) as Hooks
 
     expect(firstHooks.config).toBeDefined()
     expect(hooks.config).toBeDefined()
