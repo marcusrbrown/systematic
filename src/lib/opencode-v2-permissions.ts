@@ -31,10 +31,23 @@ const RENAMED_ACTIONS: ReadonlyMap<string, string> = new Map([
 /** v1 actions with no v2 counterpart. */
 const DROPPED_ACTIONS: ReadonlySet<string> = new Set(['doom_loop', 'lsp'])
 
+const SKILL_PREFIX = 'systematic:'
+
+/**
+ * v1 asks permission for `systematic:<id>`, so a rule written against that
+ * name is valid on v1. The v2 tool asserts the bare id, so the prefix is
+ * dropped from skill rules and both spellings match the same skill.
+ */
+function skillResource(pattern: string): string {
+  return pattern.startsWith(SKILL_PREFIX)
+    ? pattern.slice(SKILL_PREFIX.length)
+    : pattern
+}
+
 /**
  * Ordered triples to v2 rules. Every other action name passes through
- * unchanged: v2 action names are open strings, and `skill` carries the skill
- * id as its resource.
+ * unchanged: v2 action names are open strings, and `skill` carries the bare
+ * skill id as its resource.
  */
 export function translatePermissionRules(
   rules: readonly PermissionRuleTriple[],
@@ -44,7 +57,7 @@ export function translatePermissionRules(
     if (DROPPED_ACTIONS.has(permission)) continue
     translated.push({
       action: RENAMED_ACTIONS.get(permission) ?? permission,
-      resource: pattern,
+      resource: permission === 'skill' ? skillResource(pattern) : pattern,
       effect: setting,
     })
   }

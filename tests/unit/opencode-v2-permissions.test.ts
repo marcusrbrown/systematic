@@ -126,6 +126,56 @@ describe('translatePermissionRules', () => {
     expect(evaluateV2(rules, 'skill', 'alpha')).toBe('deny')
   })
 
+  test('a skill rule keyed with the systematic: prefix becomes a bare-id rule, in the same place', () => {
+    const rules = translatePermissionRules([
+      triple('skill', '*', 'allow'),
+      triple('skill', 'systematic:alpha', 'deny'),
+      triple('skill', 'beta', 'deny'),
+    ])
+
+    expect(rules).toEqual([
+      { action: 'skill', resource: '*', effect: 'allow' },
+      { action: 'skill', resource: 'alpha', effect: 'deny' },
+      { action: 'skill', resource: 'beta', effect: 'deny' },
+    ])
+    // The tool asserts the bare id, so both key forms refuse it.
+    expect(evaluateV2(rules, 'skill', 'alpha')).toBe('deny')
+    expect(evaluateV2(rules, 'skill', 'beta')).toBe('deny')
+    expect(evaluateV2(rules, 'skill', 'gamma')).toBe('allow')
+  })
+
+  test('a managed list that mixes prefixed and bare allows allows each skill and denies the rest', () => {
+    const rules = translatePermissionRules([
+      triple('skill', '*', 'deny'),
+      triple('skill', 'systematic:alpha', 'allow'),
+      triple('skill', 'beta', 'allow'),
+      triple('skill', 'systematic:ce:review', 'allow'),
+    ])
+
+    expect(rules.map((rule) => rule.resource)).toEqual([
+      '*',
+      'alpha',
+      'beta',
+      'ce:review',
+    ])
+    for (const id of ['alpha', 'beta', 'ce:review']) {
+      expect(evaluateV2(rules, 'skill', id)).toBe('allow')
+    }
+    expect(evaluateV2(rules, 'skill', 'gamma')).toBe('deny')
+  })
+
+  test('only a skill rule loses the prefix, and only a leading one', () => {
+    const rules = translatePermissionRules([
+      triple('edit', 'systematic:notes.md', 'deny'),
+      triple('skill', 'alpha-systematic:beta', 'deny'),
+    ])
+
+    expect(rules.map((rule) => rule.resource)).toEqual([
+      'systematic:notes.md',
+      'alpha-systematic:beta',
+    ])
+  })
+
   test('translating does not mutate the input list', () => {
     const input = [triple('bash', '*', 'deny')]
     const snapshot = structuredClone(input)
