@@ -42,7 +42,7 @@ import {
 import { buildCatalogEntries } from '../../src/lib/skill-catalog.js'
 
 // This module has no fixture at module scope (unlike the five suites built on
-// tests/integration/fixtures/receipt-workflow-host.ts), so it computes its own
+// tests/integration/fixtures/opencode-host.ts), so it computes its own
 // availability gate once here: a minimal explicit env (parent PATH/HOME/XDG,
 // a throwaway TMPDIR, and the shared BUN_INSTALL_CACHE_DIR so the gate shares
 // one bunx download rather than paying its own), removed afterwards. Never at

@@ -17,9 +17,7 @@ For description-only updates, follow the Description Update workflow below. Othe
 
 ## Context
 
-**If you are not OpenCode**, skip to the "Context fallback" section below and run the command there to gather context.
-
-**If you are OpenCode**, the six labeled sections below contain pre-populated data. Use them directly -- do not re-run these commands.
+The six labeled sections below (Git status, Working tree diff, Current branch, Recent commits, Remote default branch, Existing PR check) may be filled in by the host before you read them. If any section is empty, or still shows its raw command line instead of output, the host did not run the commands: run the command in the "Context fallback" section below and use its output instead. Otherwise, use the data directly throughout this skill and do not re-run these commands.
 
 **Git status:**
 !`git status`
@@ -41,7 +39,7 @@ For description-only updates, follow the Description Update workflow below. Othe
 
 ### Context fallback
 
-**If you are OpenCode, skip this section — the data above is already available.**
+**Run this only when the sections above are empty or still show raw command lines.**
 
 Run this single command to gather all context:
 
@@ -110,7 +108,7 @@ Report the PR URL.
 
 ### Step 1: Gather context
 
-Use the context above. All data needed for this step and Step 3 is already available -- do not re-run those commands.
+Use the context above, or the output of the Context fallback command if the sections were empty. This covers this step and Step 3. Do not re-run commands whose output you already have.
 
 The remote default branch value returns something like `origin/main`. Strip the `origin/` prefix. If it returned `DEFAULT_BRANCH_UNRESOLVED` or a bare `HEAD`, try:
 

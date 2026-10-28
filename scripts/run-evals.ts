@@ -1892,7 +1892,7 @@ export function serializeRunManifest(input: unknown): string {
   return serialized
 }
 
-// `string`, read from package.json at import time; throws if the pin is missing or not exact.
+// `string`, read from the pin file at import time; throws if the pin is missing or not exact.
 export const EXPECTED_OPENCODE_VERSION = readOpencodeSdkPin()
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
@@ -3182,7 +3182,15 @@ async function executeInstalledArtifactCase(input: {
     const installedModule = (await import(
       pathToFileURL(input.artifact.moduleEntry).href
     )) as { default?: unknown }
-    if (typeof installedModule.default !== 'function') {
+    // The plugin's default export is an object whose `server` member is what
+    // an OpenCode v1 host calls.
+    const entry = installedModule.default
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      !('server' in entry) ||
+      typeof entry.server !== 'function'
+    ) {
       return { runtime, execution: failedExecution('artifact_resolution') }
     }
   } catch {

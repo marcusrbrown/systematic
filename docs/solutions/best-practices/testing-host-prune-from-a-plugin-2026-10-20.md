@@ -21,7 +21,7 @@ tags: [opencode, compaction-prune, integration-test, negative-control, real-host
 
 Issue #1028 needed a real-host test showing that a pruned `systematic_skill` result still reaches the model. Any one of three gaps would have let the test pass without the fix:
 
-- **The fixture host never prunes.** The isolated fixture sets `OPENCODE_DISABLE_PRUNE=1` (`tests/integration/fixtures/receipt-workflow-host.ts:216`). OpenCode documents this flag as "Disable pruning of old data" ([`cli.mdx`, line 696 at v1.19.3](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/web/src/content/docs/cli.mdx#L696)). With it set, `compaction.prune: true` in config has no effect.
+- **The fixture host never prunes.** The isolated fixture sets `OPENCODE_DISABLE_PRUNE=1` (`tests/integration/fixtures/opencode-host.ts:223`). OpenCode documents this flag as "Disable pruning of old data" ([`cli.mdx`, line 696 at v1.19.3](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/web/src/content/docs/cli.mdx#L696)). With it set, `compaction.prune: true` in config has no effect.
 - **The assertion came too early.** Prune only touches parts from two prompts back. See [Pruning](../integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md#pruning). An assertion on prompt 3 sees nothing from prompt 1 pruned yet.
 - **The lookup helper read the request from before the mutation.** `toolResultContent` (`tests/integration/skill-delivery.test.ts:213-228`) scans every captured request in arrival order. It returns the content of the first `role: "tool"` message whose `tool_call_id` matches, and that is always the copy from before prune. An assertion through it passes with or without the fix.
 

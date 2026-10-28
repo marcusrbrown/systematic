@@ -1,0 +1,100 @@
+{
+  "scenario": "none",
+  "outcome": "ok",
+  "repeat": "identical",
+  "config": {
+    "agent": {
+      "adversarial-reviewer": {
+        "description": "Adversarially reviews fixtures (Adversarial-Reviewer - Systematic)",
+        "prompt": "# Adversarial Reviewer\n\nAdversarial fixture prompt.",
+        "mode": "subagent"
+      },
+      "correctness-reviewer": {
+        "description": "Reviews fixture correctness (Correctness-Reviewer - Systematic)",
+        "prompt": "# Correctness Reviewer\n\nFixture reviewer prompt.",
+        "temperature": 0.1,
+        "mode": "subagent",
+        "permission": {
+          "edit": "deny"
+        }
+      },
+      "repo-research-analyst": {
+        "description": "Researches fixture repos (Repo-Research-Analyst - Systematic)",
+        "prompt": "# Repo Research Analyst\n\nFixture research prompt.",
+        "model": "fixture-provider/planner-model",
+        "mode": "subagent"
+      },
+      "security-reviewer": {
+        "description": "User native agent",
+        "prompt": "native"
+      }
+    },
+    "command": {
+      "fixture-discovered": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/projects/config-none/.claude/skills/fixture-discovered/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Discovered\n\nDiscovered body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "Discovered fixture skill"
+      },
+      "native-command": {
+        "description": "Native command",
+        "template": "native"
+      },
+      "ns:fixture-gamma": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/fixture-gamma/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Gamma\n\nGamma body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Namespaced fixture skill"
+      },
+      "systematic:10": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/10/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Ten\n\nTen body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Integer-like fixture skill ten"
+      },
+      "systematic:2": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/2/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Two\n\nTwo body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Integer-like fixture skill two"
+      },
+      "systematic:fixture-alpha": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/fixture-alpha/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Alpha\n\nAlpha body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Alpha fixture skill"
+      },
+      "systematic:fixture-args": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/fixture-args/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Args\n\nFirst: $1\nEverything: $ARGUMENTS\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Argument-substitution fixture skill"
+      },
+      "systematic:fixture-beta": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/fixture-beta/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Beta\n\nBeta body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Beta fixture skill"
+      },
+      "systematic:fixture-command": {
+        "template": "<command-instruction>\nCommand body with $ARGUMENTS reference.\n</command-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Synthetic command",
+        "agent": "repo-research-analyst",
+        "model": "fixture-provider/fixture-model",
+        "subtask": true
+      },
+      "systematic:fixture-manual": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/fixture-manual/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Manual\n\nManual body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Command-only fixture skill, not in the tool catalog"
+      },
+      "systematic:fixture-routed": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/fixture-routed/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Routed\n\nRouted body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Routed fixture skill",
+        "agent": "repo-research-analyst",
+        "model": "fixture-provider/fixture-model",
+        "subtask": true
+      },
+      "systematic:git-worktree": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/git-worktree/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Worktree\n\nWorktree skill body.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Synthetic worktree skill"
+      },
+      "systematic:using-systematic": {
+        "template": "<skill-instruction>\nBase directory for this skill: <TMP>/pkg/skills/using-systematic/\nFile references (@path) in this skill are relative to this directory.\n\n# Using Fixture Systematic\n\nSynthetic bootstrap body for the v1 goldens.\n</skill-instruction>\n\n<user-request>\n$ARGUMENTS\n</user-request>",
+        "description": "(Systematic) Synthetic bootstrap skill"
+      }
+    },
+    "skills": {
+      "paths": ["/fixture-user/own/skills", "<TMP>/pkg/skills"]
+    }
+  },
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}

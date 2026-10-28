@@ -34,6 +34,58 @@ describe('plugin loading', () => {
     expect(pluginModule.SystematicPlugin).toBeUndefined()
   })
 
+  test('the default export is a plugin object with an id, setup and server', async () => {
+    const pluginPath = path.join(SRC_DIR, 'index.ts')
+    const pluginModule = (await import(
+      pathToFileURL(pluginPath).href
+    )) as Record<string, unknown>
+    expect(Object.keys(pluginModule)).toEqual(['default'])
+    const plugin = pluginModule.default as Record<string, unknown>
+    expect(typeof plugin).toBe('object')
+    expect(plugin.id).toBe('systematic')
+    expect(typeof plugin.setup).toBe('function')
+    expect(typeof plugin.server).toBe('function')
+  })
+
+  test('setup returns without touching the context a v1 host passes it', async () => {
+    const pluginPath = path.join(SRC_DIR, 'index.ts')
+    const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+      default: { setup: (ctx: object) => unknown }
+    }
+    const touched: string[] = []
+    const domain = (name: string) =>
+      new Proxy(
+        {},
+        {
+          get(_target, property) {
+            touched.push(`${name}.${String(property)}`)
+            return undefined
+          },
+        },
+      )
+    // The reduced bridge a v1 host hands to `setup`: no `location`, no `session`.
+    const v1Bridge = Object.fromEntries(
+      [
+        'options',
+        'agent',
+        'aisdk',
+        'catalog',
+        'command',
+        'integration',
+        'plugin',
+        'reference',
+        'skill',
+      ].map((name) => [name, domain(name)]),
+    )
+    const keysBefore = Object.keys(v1Bridge)
+
+    const result = await pluginModule.default.setup(v1Bridge)
+
+    expect(result).toBeUndefined()
+    expect(touched).toEqual([])
+    expect(Object.keys(v1Bridge)).toEqual(keysBefore)
+  })
+
   test('plugin snapshots bootstrap content at init instead of re-reading files per transform', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
     const opencodeDir = path.join(tempDir, '.opencode')
@@ -55,18 +107,20 @@ describe('plugin loading', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: {
-          client: { app: { log: (entry: unknown) => Promise<void> } }
-          directory: string
-        }) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: {
+            client: { app: { log: (entry: unknown) => Promise<void> } }
+            directory: string
+          }) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
 
-      const plugin = await pluginModule.default({
+      const plugin = await pluginModule.default.server({
         client: {
           app: {
             log: async () => {},
@@ -107,18 +161,20 @@ describe('plugin loading', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: {
-          client: { app: { log: (entry: unknown) => Promise<void> } }
-          directory: string
-        }) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: {
+            client: { app: { log: (entry: unknown) => Promise<void> } }
+            directory: string
+          }) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
 
-      const plugin = await pluginModule.default({
+      const plugin = await pluginModule.default.server({
         client: {
           app: {
             log: async () => {},
@@ -142,8 +198,11 @@ describe('plugin loading', () => {
     const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
     const workflow = fs.readFileSync(workflowPath, 'utf8')
 
-    expect(workflow).toContain('const pluginFactory = m.default;')
-    expect(workflow).toContain('await pluginFactory({')
+    expect(workflow).toContain('const systematicPlugin = m.default;')
+    expect(workflow).toContain("typeof systematicPlugin.id !== 'string'")
+    expect(workflow).toContain("typeof systematicPlugin.setup !== 'function'")
+    expect(workflow).toContain('await systematicPlugin.server({')
+    expect(workflow).not.toContain('pluginFactory')
     expect(workflow).not.toContain('m.SystematicPlugin')
   })
 
@@ -185,10 +244,12 @@ describe('plugin loading', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: {
-          client: { app: { log: (entry: unknown) => Promise<void> } }
-          directory: string
-        }) => Promise<Record<string, unknown>>
+        default: {
+          server: (args: {
+            client: { app: { log: (entry: unknown) => Promise<void> } }
+            directory: string
+          }) => Promise<Record<string, unknown>>
+        }
       }
 
       const input = {
@@ -200,9 +261,9 @@ describe('plugin loading', () => {
         directory: tempDir,
       }
 
-      const hooks1 = await pluginModule.default(input)
-      const hooks2 = await pluginModule.default(input)
-      const hooks3 = await pluginModule.default(input)
+      const hooks1 = await pluginModule.default.server(input)
+      const hooks2 = await pluginModule.default.server(input)
+      const hooks3 = await pluginModule.default.server(input)
 
       // All invocations — including duplicates — get the real hook surface
       // (config + tool + transform). The singleton returns cached real hooks
@@ -235,9 +296,9 @@ describe('registered plugin surface', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: object) => Promise<Record<string, unknown>>
+        default: { server: (args: object) => Promise<Record<string, unknown>> }
       }
-      return await pluginModule.default({
+      return await pluginModule.default.server({
         client: { app: { log: async () => {} } },
         directory: tempDir,
       })
@@ -402,13 +463,15 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (
-          args: ReturnType<typeof makeInput>,
-        ) => Promise<Record<string, unknown>>
+        default: {
+          server: (
+            args: ReturnType<typeof makeInput>,
+          ) => Promise<Record<string, unknown>>
+        }
       }
       const input = makeInput(tempDir)
-      const result1 = await pluginModule.default(input)
-      const result2 = await pluginModule.default(input)
+      const result1 = await pluginModule.default.server(input)
+      const result2 = await pluginModule.default.server(input)
       expect(result1).not.toBe(result2)
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true })
@@ -423,15 +486,21 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (
-          args: ReturnType<typeof makeInput>,
-        ) => Promise<
-          Awaited<ReturnType<typeof import('../../src/index.js').default>>
-        >
+        default: {
+          server: (
+            args: ReturnType<typeof makeInput>,
+          ) => Promise<
+            Awaited<
+              ReturnType<
+                typeof import('../../src/lib/opencode-v1.js').createOpenCodeV1Hooks
+              >
+            >
+          >
+        }
       }
       const input = makeInput(tempDir)
-      const result1 = await pluginModule.default(input)
-      const result2 = await pluginModule.default(input)
+      const result1 = await pluginModule.default.server(input)
+      const result2 = await pluginModule.default.server(input)
       const tool1 = expectDefined(
         result1.tool,
         'Expected result1.tool to be defined',
@@ -461,16 +530,18 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: ReturnType<typeof makeInput>) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: ReturnType<typeof makeInput>) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
       const input = makeInput(tempDir)
-      const plugin1 = await pluginModule.default(input)
-      const plugin2 = await pluginModule.default(input)
+      const plugin1 = await pluginModule.default.server(input)
+      const plugin2 = await pluginModule.default.server(input)
 
       const output = { system: ['base system prompt'] }
       await plugin1['experimental.chat.system.transform'](
@@ -497,14 +568,16 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: ReturnType<typeof makeInput>) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: ReturnType<typeof makeInput>) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
-      const plugin = await pluginModule.default(makeInput(tempDir))
+      const plugin = await pluginModule.default.server(makeInput(tempDir))
 
       const output = { system: ['base system prompt'] }
       await plugin['experimental.chat.system.transform'](
@@ -531,12 +604,14 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: ReturnType<typeof makeInput>) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: ReturnType<typeof makeInput>) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
 
       const logCalls: unknown[] = []
@@ -545,8 +620,8 @@ describe('per-invocation plugin registration', () => {
       }
 
       const input = makeInput(tempDir, logSpy)
-      const plugin1 = await pluginModule.default(input)
-      const plugin2 = await pluginModule.default(input)
+      const plugin1 = await pluginModule.default.server(input)
+      const plugin2 = await pluginModule.default.server(input)
 
       const output1 = { system: ['base'] }
       const output2 = { system: ['base'] }
@@ -577,15 +652,17 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: ReturnType<typeof makeInput>) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: ReturnType<typeof makeInput>) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
       const input = makeInput(tempDir)
-      const plugin = await pluginModule.default(input)
+      const plugin = await pluginModule.default.server(input)
 
       const output1 = { system: ['turn one base'] }
       await plugin['experimental.chat.system.transform']({}, output1)
@@ -911,11 +988,13 @@ describe('skill tool output restoration wiring', () => {
   async function loadHooks(tempDir: string): Promise<RestorationTestHooks> {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
     const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-      default: (
-        args: ReturnType<typeof makeInput>,
-      ) => Promise<RestorationTestHooks>
+      default: {
+        server: (
+          args: ReturnType<typeof makeInput>,
+        ) => Promise<RestorationTestHooks>
+      }
     }
-    return pluginModule.default(makeInput(tempDir))
+    return pluginModule.default.server(makeInput(tempDir))
   }
 
   function asString(result: unknown): string {
@@ -1294,9 +1373,9 @@ describe('the messages transform', () => {
   ): Promise<{ transform: MessagesTransform }> {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
     const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-      default: (args: object) => Promise<Record<string, unknown>>
+      default: { server: (args: object) => Promise<Record<string, unknown>> }
     }
-    const hooks = await pluginModule.default({
+    const hooks = await pluginModule.default.server({
       client: { app: { log: async () => {} } },
       directory: tempDir,
     })
@@ -1433,17 +1512,19 @@ describe('worktree placement rule in the OpenCode bootstrap', () => {
       const pluginModule = (await import(
         pathToFileURL(path.join(SRC_DIR, 'index.ts')).href
       )) as {
-        default: (args: {
-          client: { app: { log: (entry: unknown) => Promise<void> } }
-          directory: string
-        }) => Promise<{
-          'experimental.chat.system.transform': (
-            input: unknown,
-            output: { system: string[] },
-          ) => Promise<void>
-        }>
+        default: {
+          server: (args: {
+            client: { app: { log: (entry: unknown) => Promise<void> } }
+            directory: string
+          }) => Promise<{
+            'experimental.chat.system.transform': (
+              input: unknown,
+              output: { system: string[] },
+            ) => Promise<void>
+          }>
+        }
       }
-      const plugin = await pluginModule.default({
+      const plugin = await pluginModule.default.server({
         client: { app: { log: async () => {} } },
         directory: tempDir,
       })

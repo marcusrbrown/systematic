@@ -1,0 +1,10 @@
+{
+  "hookKeys": [
+    "config",
+    "tool",
+    "tool.execute.after",
+    "experimental.chat.messages.transform",
+    "experimental.chat.system.transform"
+  ],
+  "toolKeys": ["systematic_skill"]
+}

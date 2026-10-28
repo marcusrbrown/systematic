@@ -1,183 +1,50 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Config, Hooks, Plugin, PluginInput } from '@opencode-ai/plugin'
-import {
-  applyBootstrapContent,
-  getBootstrapContent,
-  INTERNAL_AGENT_SIGNATURES,
-  readHarnessProfile,
-  readWorktreePlacementRule,
-} from './lib/bootstrap.js'
-import { loadConfig } from './lib/config.js'
-import { createConfigHandler } from './lib/config-handler.js'
-import {
-  createSkillOutputStore,
-  createSkillTool,
-  restoreCompactedSkillResults,
-  restoreSkillOutput,
-} from './lib/skill-tool.js'
-import { isRecord } from './lib/validation.js'
-
-// Keep this local because OpenCode's plugin loader requires a default export
-// only. The content-integrity gate reads this typed inventory instead of
-// inferring hooks from the returned object shape.
-const REGISTERED_PLUGIN_HOOKS = [
-  'config',
-  'tool',
-  'tool.execute.after',
-  'experimental.chat.messages.transform',
-  'experimental.chat.system.transform',
-] as const satisfies readonly (keyof Hooks)[]
-
-type RegisteredPluginHooks = Required<
-  Pick<Hooks, (typeof REGISTERED_PLUGIN_HOOKS)[number]>
->
+import type { Plugin as OpenCodeV2 } from '@opencode/plugin'
+import type { PluginModule } from '@opencode-ai/plugin'
+import { createOpenCodeV1Hooks } from './lib/opencode-v1.js'
+import { setupOpenCodeV2 } from './lib/opencode-v2.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Resolved here, not in the adapter: this entry (and the bundled `dist/*.js`
+// chunks it builds into) sits one level below the package root, while
+// `src/lib/` sits two levels below it.
 const packageRoot = path.resolve(__dirname, '..')
-const bundledSkillsDir = path.join(packageRoot, 'skills')
-const bundledAgentsDir = path.join(packageRoot, 'agents')
-const bundledCommandsDir = path.join(packageRoot, 'commands')
-const packageJsonPath = path.join(packageRoot, 'package.json')
 
-const getPackageVersion = (): string => {
-  try {
-    if (!fs.existsSync(packageJsonPath)) return 'unknown'
-    const content = fs.readFileSync(packageJsonPath, 'utf8')
-    const parsed = JSON.parse(content) as { version?: string }
-    return parsed.version ?? 'unknown'
-  } catch {
-    return 'unknown'
-  }
+// One object serves both hosts. A v2 host calls `setup` and ignores `server`.
+// A v1 host calls `server`. Both type imports above are erased by the build,
+// so the shipped entry has no runtime dependency on either OpenCode package.
+type SystematicPluginModule = OpenCodeV2.Plugin & PluginModule
+
+// OpenCode's plugin loader requires a default export only. The hooks, the
+// `REGISTERED_PLUGIN_HOOKS` inventory and the shared-core wiring live in
+// `src/lib/opencode-v1.ts`.
+const systematicPlugin = {
+  id: 'systematic',
+  async setup(ctx) {
+    // A v1 host that receives an object default also calls `setup`, with a
+    // reduced bridge that has no `location` or `session`. Do nothing there.
+    if (!ctx.location || !ctx.session) return
+    // Invalid config rejects here, as it throws on v1: the v2 host logs that
+    // the plugin failed to load and carries on without it.
+    await setupOpenCodeV2(ctx, { packageRoot })
+  },
+  server: async (input) => createOpenCodeV1Hooks(input, { packageRoot }),
+} satisfies SystematicPluginModule
+
+// What the declaration file shows. The object above is checked against both
+// hosts' plugin types, but naming those types in the public declaration would
+// put an import of each peer into `dist/index.d.ts`, and a consumer with only
+// one of the two optional peers installed (and `skipLibCheck` off) would fail
+// to resolve the other. Each host passes its own context to the entry it calls,
+// so the public shape takes `unknown`.
+interface SystematicPluginEntry {
+  readonly id: string
+  setup(ctx: unknown): Promise<void>
+  server(input: unknown): Promise<unknown>
 }
 
-const initializePlugin = async ({ client, directory }: PluginInput) => {
-  let hasLoggedInit = false
-  let userOutputLimitSet = false
-  const skillOutputStore = createSkillOutputStore()
-  const config = loadConfig(directory)
-  // Snapshot bootstrap once per plugin init so the cached system prefix stays
-  // stable across requests. Custom bootstrap file edits take effect on restart.
-  // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
-  const bootstrapContent = getBootstrapContent(config, {
-    bundledSkillsDir,
-    // Always supplied; getBootstrapContent omits it when git-worktree is disabled.
-    worktreePlacementRule:
-      readWorktreePlacementRule(bundledSkillsDir) ?? undefined,
-    profileBlock: readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
-  })
+const entry: SystematicPluginEntry = systematicPlugin
 
-  const configHandler = createConfigHandler({
-    directory,
-    bundledSkillsDir,
-    bundledAgentsDir,
-    bundledCommandsDir,
-  })
-
-  const hooks: RegisteredPluginHooks = {
-    config: async (incomingConfig: Config): Promise<void> => {
-      // Host doesn't type tool_output in Config yet; recompute on every call.
-      const configUnknown: unknown = incomingConfig
-      userOutputLimitSet =
-        isRecord(configUnknown) &&
-        isRecord(configUnknown.tool_output) &&
-        (configUnknown.tool_output.max_lines !== undefined ||
-          configUnknown.tool_output.max_bytes !== undefined)
-      return configHandler(incomingConfig)
-    },
-
-    tool: {
-      systematic_skill: createSkillTool({
-        bundledSkillsDir,
-        disabledSkills: config.disabled_skills,
-        outputStore: skillOutputStore,
-      }),
-    },
-
-    'tool.execute.after': async (input: unknown, output: unknown) => {
-      try {
-        restoreSkillOutput(skillOutputStore, input, output, {
-          userOutputLimitSet,
-        })
-      } catch {
-        // Output restoration is best-effort and never blocks the host.
-      }
-    },
-
-    // Request-only: clears the prune placeholder flag on skill results so the
-    // model sees the stored body. Best effort; a throw would fail the turn.
-    'experimental.chat.messages.transform': async (
-      _input: unknown,
-      output: unknown,
-    ) => {
-      try {
-        restoreCompactedSkillResults(output)
-      } catch {
-        // Never blocks the host.
-      }
-    },
-
-    'experimental.chat.system.transform': async (
-      _input: unknown,
-      output: { system: string[] },
-    ) => {
-      if (!hasLoggedInit) {
-        hasLoggedInit = true
-        const packageVersion = getPackageVersion()
-        try {
-          await client.app.log({
-            body: {
-              service: 'systematic',
-              level: 'info',
-              message: 'Systematic plugin initialized',
-              extra: {
-                version: packageVersion,
-                bootstrapEnabled: config.bootstrap.enabled,
-                disabledSkillsCount: config.disabled_skills.length,
-                disabledAgentsCount: config.disabled_agents.length,
-                disabledCommandsCount: config.disabled_commands.length,
-              },
-            },
-          })
-        } catch {
-          // ignore logging failures to avoid blocking the hook
-        }
-      }
-
-      // Skip for title generation requests
-      const existingSystem = output.system.join('\n').toLowerCase()
-      if (
-        INTERNAL_AGENT_SIGNATURES.some((sig) =>
-          existingSystem.includes(sig.toLowerCase()),
-        )
-      ) {
-        try {
-          await client.app.log({
-            body: {
-              service: 'systematic',
-              level: 'info',
-              message: 'Skipping bootstrap prompt injection for internal agent',
-            },
-          })
-        } catch {
-          // ignore logging failures to avoid blocking the hook
-        }
-        return
-      }
-
-      if (bootstrapContent) {
-        applyBootstrapContent(output, bootstrapContent)
-      }
-    },
-  }
-
-  return hooks
-}
-
-const SystematicPlugin: Plugin = async (input) => {
-  return initializePlugin(input)
-}
-
-export default SystematicPlugin
+export default entry

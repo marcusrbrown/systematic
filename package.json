@@ -39,7 +39,7 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox --external jsonc-parser && tsc --emitDeclarationOnly && bun scripts/build-pi-package-agents.ts",
+    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external @opencode/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox --external jsonc-parser && tsc --emitDeclarationOnly && bun scripts/build-pi-package-agents.ts",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
@@ -95,12 +95,16 @@
     "node": ">=18"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.1.30",
+    "@opencode-ai/plugin": ">=1.18.29",
+    "@opencode/plugin": ">=2.2.0",
     "@earendil-works/pi-coding-agent": "^1.0.0",
     "typebox": "^1.1.38"
   },
   "peerDependenciesMeta": {
     "@opencode-ai/plugin": {
+      "optional": true
+    },
+    "@opencode/plugin": {
       "optional": true
     },
     "@earendil-works/pi-coding-agent": {
@@ -115,6 +119,9 @@
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@opencode-ai/plugin": "1.19.4",
     "@opencode-ai/sdk": "1.19.4",
+    "@opencode/client": "2.2.0",
+    "@opencode/plugin": "2.2.0",
+    "@opencode/sdk": "2.2.0",
     "@semantic-release/exec": "7.1.0",
     "@tintinweb/pi-subagents": "0.22.0",
     "@types/bun": "latest",

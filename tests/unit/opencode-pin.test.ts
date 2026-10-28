@@ -4,8 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  findOpencodePinMismatches,
+  parseOpencodeHost,
   readOpencodeDevDependencyPins,
+  readOpencodeHostPin,
+  readOpencodeHostPins,
   readOpencodeSdkPin,
+  readOpencodeV2DevDependencyPins,
 } from '../../scripts/lib/opencode-pin.ts'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -76,25 +81,90 @@ describe('readPackageJson error branches (via readOpencodeSdkPin)', () => {
 // A realistic-looking literal here would collide with this very file's own
 // R1 guard the moment a Renovate bump reached it -- see
 // tests/unit/opencode-availability.test.ts for the full rationale.
-describe('readOpencodeSdkPin', () => {
-  test('returns the exact @opencode-ai/sdk devDependency from the real package.json', () => {
-    const realPackageJson = JSON.parse(
-      fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'),
-    ) as { devDependencies?: Record<string, unknown> }
-    const expected = realPackageJson.devDependencies?.['@opencode-ai/sdk']
-    if (typeof expected !== 'string') {
-      throw new Error(
-        'expected package.json devDependencies["@opencode-ai/sdk"] to be a string',
-      )
-    }
-    expect(readOpencodeSdkPin()).toBe(expected)
+function writePinFile(dir: string, contents: unknown): string {
+  const full = path.join(dir, 'opencode-host-pins.json')
+  fs.writeFileSync(full, JSON.stringify(contents), 'utf-8')
+  return full
+}
+
+/** A pin file made only of sentinel versions, with room to override one field. */
+function sentinelPins(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { v2: '9999.2.0', v1: '9999.1.1', v1Floor: '9999.1.0', ...overrides }
+}
+
+describe('readOpencodeHostPins', () => {
+  test('returns the three exact versions from the real pin file', () => {
+    const pins = readOpencodeHostPins()
+    const exact = /^\d+\.\d+\.\d+$/
+    expect(pins.v2).toMatch(exact)
+    expect(pins.v1).toMatch(exact)
+    expect(pins.v1Floor).toMatch(exact)
   })
 
+  test('reads each field from a temp pin file', () => {
+    const pinFile = writePinFile(makeTempDir(), sentinelPins())
+
+    expect(readOpencodeHostPins(pinFile)).toEqual({
+      v2: '9999.2.0',
+      v1: '9999.1.1',
+      v1Floor: '9999.1.0',
+    })
+  })
+
+  test('readOpencodeHostPin returns the current pin for each host line, never the floor', () => {
+    const pinFile = writePinFile(makeTempDir(), sentinelPins())
+
+    expect(readOpencodeHostPin('v2', pinFile)).toBe('9999.2.0')
+    expect(readOpencodeHostPin('v1', pinFile)).toBe('9999.1.1')
+    expect(readOpencodeSdkPin(pinFile)).toBe('9999.1.1')
+  })
+
+  test('throws naming the field when one is missing', () => {
+    const { v1Floor: _omitted, ...withoutFloor } = sentinelPins()
+    const pinFile = writePinFile(makeTempDir(), withoutFloor)
+
+    expect(() => readOpencodeHostPins(pinFile)).toThrow(
+      /"v1Floor" is missing from/,
+    )
+  })
+
+  test('throws "must be an exact version" when a field is a range', () => {
+    const pinFile = writePinFile(
+      makeTempDir(),
+      sentinelPins({ v2: '^9999.2.0' }),
+    )
+
+    expect(() => readOpencodeHostPins(pinFile)).toThrow(
+      /"v2".*must be an exact version/,
+    )
+  })
+
+  test('throws when the floor is newer than the current v1 pin', () => {
+    const pinFile = writePinFile(
+      makeTempDir(),
+      sentinelPins({ v1Floor: '9999.1.2' }),
+    )
+
+    expect(() => readOpencodeHostPins(pinFile)).toThrow(
+      /"v1Floor".*newer than "v1"/,
+    )
+  })
+
+  test('parseOpencodeHost accepts the two host lines and rejects anything else', () => {
+    expect(parseOpencodeHost('v1')).toBe('v1')
+    expect(parseOpencodeHost('v2')).toBe('v2')
+    expect(() => parseOpencodeHost('v3')).toThrow(/Unknown OpenCode host "v3"/)
+  })
+})
+
+describe('readOpencodeDevDependencyPins', () => {
   test('throws when devDependencies is missing entirely', () => {
     const dir = makeTempDir()
     const pkgPath = writePackageJson(dir, {})
 
-    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+    expect(() => readOpencodeDevDependencyPins(pkgPath)).toThrow(
       /is missing a devDependencies object/,
     )
   })
@@ -103,7 +173,7 @@ describe('readOpencodeSdkPin', () => {
     const dir = makeTempDir()
     const pkgPath = writePackageJson(dir, { devDependencies: [] })
 
-    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+    expect(() => readOpencodeDevDependencyPins(pkgPath)).toThrow(
       /is missing a devDependencies object/,
     )
   })
@@ -114,7 +184,9 @@ describe('readOpencodeSdkPin', () => {
       '@opencode-ai/plugin': '9999.0.0',
     })
 
-    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(/not listed in/)
+    expect(() => readOpencodeDevDependencyPins(pkgPath)).toThrow(
+      /not listed in/,
+    )
   })
 
   test('throws "must be an exact version" when the sdk entry is a range', () => {
@@ -124,14 +196,12 @@ describe('readOpencodeSdkPin', () => {
       '@opencode-ai/plugin': '9999.0.0',
     })
 
-    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+    expect(() => readOpencodeDevDependencyPins(pkgPath)).toThrow(
       /must be an exact version/,
     )
   })
-})
 
-describe('readOpencodeDevDependencyPins', () => {
-  test('returns matching sdk and plugin devDependency versions', () => {
+  test('returns the sdk and plugin devDependency versions', () => {
     const dir = makeTempDir()
     const pkgPath = writeDevDependencies(dir, {
       '@opencode-ai/sdk': '9999.0.1',
@@ -143,32 +213,113 @@ describe('readOpencodeDevDependencyPins', () => {
       plugin: '9999.0.1',
     })
   })
+})
 
-  test('the equality check fails when sdk and plugin devDependencies disagree', () => {
+describe('readOpencodeV2DevDependencyPins', () => {
+  test('returns the sdk, plugin and client devDependency versions', () => {
     const dir = makeTempDir()
     const pkgPath = writeDevDependencies(dir, {
-      '@opencode-ai/sdk': '9999.0.1',
-      '@opencode-ai/plugin': '9999.0.0',
+      '@opencode/sdk': '9999.2.0',
+      '@opencode/plugin': '9999.2.0',
+      '@opencode/client': '9999.2.0',
     })
 
-    const { sdk, plugin } = readOpencodeDevDependencyPins(pkgPath)
-    expect(sdk).not.toBe(plugin)
+    expect(readOpencodeV2DevDependencyPins(pkgPath)).toEqual({
+      sdk: '9999.2.0',
+      plugin: '9999.2.0',
+      client: '9999.2.0',
+    })
+  })
+
+  test('throws "not listed in" when the client entry is missing', () => {
+    const dir = makeTempDir()
+    const pkgPath = writeDevDependencies(dir, {
+      '@opencode/sdk': '9999.2.0',
+      '@opencode/plugin': '9999.2.0',
+    })
+
+    expect(() => readOpencodeV2DevDependencyPins(pkgPath)).toThrow(
+      /@opencode\/client is not listed in/,
+    )
+  })
+})
+
+describe('lockstep: each CLI pin equals the dev dependencies that move with it', () => {
+  const LOCKSTEP_PACKAGES = {
+    '@opencode-ai/sdk': '9999.1.1',
+    '@opencode-ai/plugin': '9999.1.1',
+    '@opencode/sdk': '9999.2.0',
+    '@opencode/plugin': '9999.2.0',
+    '@opencode/client': '9999.2.0',
+  }
+
+  function lockstepFixture(devDependencies: Record<string, unknown>): {
+    pinFilePath: string
+    packageJsonPath: string
+  } {
+    const dir = makeTempDir()
+    return {
+      pinFilePath: writePinFile(dir, sentinelPins()),
+      packageJsonPath: writeDevDependencies(dir, devDependencies),
+    }
+  }
+
+  test('the real package.json and the real pin file agree', () => {
+    expect(findOpencodePinMismatches()).toEqual([])
+  })
+
+  test('a temp copy in lockstep reports no mismatch', () => {
+    expect(
+      findOpencodePinMismatches(lockstepFixture(LOCKSTEP_PACKAGES)),
+    ).toEqual([])
+  })
+
+  test.each(Object.keys(LOCKSTEP_PACKAGES))(
+    'bumping only %s in a temp copy of package.json fails the equality',
+    (name) => {
+      const options = lockstepFixture({
+        ...LOCKSTEP_PACKAGES,
+        [name]: '9999.9.9',
+      })
+
+      const mismatches = findOpencodePinMismatches(options)
+
+      expect(mismatches).toHaveLength(1)
+      expect(mismatches[0]).toContain(name)
+    },
+  )
+
+  test('bumping a pin in the pin file without the dev dependencies fails the equality', () => {
+    const dir = makeTempDir()
+    const options = {
+      pinFilePath: writePinFile(dir, sentinelPins({ v2: '9999.3.0' })),
+      packageJsonPath: writeDevDependencies(dir, LOCKSTEP_PACKAGES),
+    }
+
+    const mismatches = findOpencodePinMismatches(options)
+
+    expect(mismatches).toHaveLength(3)
+    expect(mismatches.every((message) => message.includes('v2 CLI pin'))).toBe(
+      true,
+    )
   })
 })
 
 describe('re-exports stay in sync with the helper', () => {
-  test('scripts/run-evals.ts EXPECTED_OPENCODE_VERSION equals the helper value', async () => {
+  test('scripts/run-evals.ts EXPECTED_OPENCODE_VERSION equals the v1 pin', async () => {
     const { EXPECTED_OPENCODE_VERSION } = await import(
       '../../scripts/run-evals.ts'
     )
     expect(EXPECTED_OPENCODE_VERSION).toBe(readOpencodeSdkPin())
   })
 
-  test('tests/integration/fixtures/receipt-workflow-host.ts EXACT_OPENCODE_VERSION equals the helper value', async () => {
-    const { EXACT_OPENCODE_VERSION } = await import(
-      '../integration/fixtures/receipt-workflow-host.ts'
+  test('tests/integration/fixtures/opencode-host.ts EXACT_OPENCODE_VERSION equals the targeted host pin', async () => {
+    const { EXACT_OPENCODE_VERSION, TARGET_OPENCODE_HOST } = await import(
+      '../integration/fixtures/opencode-host.ts'
     )
-    expect(EXACT_OPENCODE_VERSION).toBe(readOpencodeSdkPin())
+    expect(EXACT_OPENCODE_VERSION).toBe(
+      readOpencodeHostPin(TARGET_OPENCODE_HOST),
+    )
   })
 })
 
@@ -198,28 +349,46 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
     return results
   }
 
-  test('the pinned version string appears nowhere under scripts/ or tests/', () => {
-    const pin = readOpencodeSdkPin()
+  /**
+   * The files in `files` that contain any of `pins` as a whole version
+   * (not inside a longer dotted number). The pin file is JSON, so it is the
+   * only place all three versions may live.
+   */
+  function findPinLiteralOffenders(
+    files: readonly FixtureFileContent[],
+    pins: Readonly<Record<string, string>>,
+  ): { file: string; pin: string; name: string }[] {
+    return Object.entries(pins).flatMap(([name, pin]) => {
+      const pinPattern = new RegExp(`(?<![\\d.])${escapeRegExp(pin)}(?![\\d.])`)
+      return files
+        .filter(({ content }) => pinPattern.test(content))
+        .map(({ file }) => ({ file, pin, name }))
+    })
+  }
+
+  test('no pinned version (v2, v1 current, or the v1 floor) appears under scripts/ or tests/', () => {
+    const pins = readOpencodeHostPins()
     const files = [
       ...collectTsFiles(path.join(REPO_ROOT, 'scripts')),
       ...collectTsFiles(path.join(REPO_ROOT, 'tests')),
-    ]
+    ].map((file) => ({
+      file: path.relative(REPO_ROOT, file),
+      content: fs.readFileSync(file, 'utf8'),
+    }))
 
     expect(files.length).toBeGreaterThan(0)
 
-    const pinPattern = new RegExp(`(?<![\\d.])${escapeRegExp(pin)}(?![\\d.])`)
-    const offenders = files.filter((file) =>
-      pinPattern.test(fs.readFileSync(file, 'utf8')),
-    )
+    const offenders = findPinLiteralOffenders(files, { ...pins })
 
     if (offenders.length > 0) {
       const offenderList = offenders
-        .map((file) => path.relative(REPO_ROOT, file))
+        .map(({ file, name, pin }) => `${file} (${name} "${pin}")`)
         .join(', ')
       throw new Error(
-        `Found the hardcoded OpenCode pin "${pin}" in: ${offenderList}. ` +
-          'If this code genuinely needs the real pin, read it via ' +
-          'readOpencodeSdkPin() / readOpencodeDevDependencyPins() from ' +
+        `Found a hardcoded OpenCode pin in: ${offenderList}. ` +
+          'The pin file scripts/opencode-host-pins.json is the only allowed ' +
+          'home for all three. If this code genuinely needs a real pin, read ' +
+          'it via readOpencodeHostPins() / readOpencodeSdkPin() from ' +
           'scripts/lib/opencode-pin.ts instead of hardcoding it. If this is ' +
           'an arbitrary fixture value that never needed to be the real pin (e.g. ' +
           "a parameterised test helper's `pin` argument), use an unpinnable " +
@@ -227,6 +396,58 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
           'version literal.',
       )
     }
+
+    expect(offenders).toEqual([])
+  })
+
+  test('the pin file is the one place all three versions are written', () => {
+    const pins = readOpencodeHostPins()
+    const raw = fs.readFileSync(
+      path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
+      'utf8',
+    )
+
+    const homes = findPinLiteralOffenders(
+      [{ file: 'scripts/opencode-host-pins.json', content: raw }],
+      { ...pins },
+    )
+
+    expect(homes.map(({ name }) => name).sort()).toEqual(
+      ['v1', 'v1Floor', 'v2'].sort(),
+    )
+  })
+
+  test.each([
+    ['v2', '9999.2.0'],
+    ['v1', '9999.1.1'],
+    ['v1Floor', '9999.1.0'],
+  ])('a planted %s literal in a script or a test is reported', (name, pin) => {
+    const pins = readOpencodeHostPins(
+      writePinFile(makeTempDir(), sentinelPins()),
+    )
+    const offenders = findPinLiteralOffenders(
+      [
+        { file: 'scripts/planted.ts', content: `const host = '${pin}'\n` },
+        {
+          file: 'tests/planted.test.ts',
+          content: `expect(v).toBe('>=${pin}')\n`,
+        },
+        { file: 'scripts/clean.ts', content: "const host = '9999.0.0'\n" },
+      ],
+      { ...pins },
+    )
+
+    expect(offenders.filter((offender) => offender.name === name)).toEqual([
+      { file: 'scripts/planted.ts', pin, name },
+      { file: 'tests/planted.test.ts', pin, name },
+    ])
+  })
+
+  test('a pin inside a longer dotted number is not a literal hit', () => {
+    const offenders = findPinLiteralOffenders(
+      [{ file: 'scripts/longer.ts', content: "const v = '9999.2.0.1'\n" }],
+      { v2: '9999.2.0' },
+    )
 
     expect(offenders).toEqual([])
   })

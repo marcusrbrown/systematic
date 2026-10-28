@@ -1,0 +1,36 @@
+{
+  "case": "internal-agent-skipped",
+  "results": [
+    {
+      "before": ["You are a title generator. Output a short title."],
+      "after": ["You are a title generator. Output a short title."]
+    }
+  ],
+  "logs": [
+    {
+      "body": {
+        "service": "systematic",
+        "level": "info",
+        "message": "Systematic plugin initialized",
+        "extra": {
+          "version": "0.0.0-golden",
+          "bootstrapEnabled": true,
+          "disabledSkillsCount": 0,
+          "disabledAgentsCount": 0,
+          "disabledCommandsCount": 0
+        }
+      }
+    },
+    {
+      "body": {
+        "service": "systematic",
+        "level": "info",
+        "message": "Skipping bootstrap prompt injection for internal agent"
+      }
+    }
+  ],
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}

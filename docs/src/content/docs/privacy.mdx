@@ -45,6 +45,10 @@ No raw IP addresses or personal identifiers are stored. Visitors are counted usi
 
 The Systematic plugin itself — the code that runs inside OpenCode on your machine — **transmits no telemetry of any kind**. It does not phone home, does not report usage, and does not collect or send any data anywhere. Analytics are strictly limited to this documentation website.
 
+### Bootstrap text on OpenCode v2
+
+On OpenCode v2, the plugin hands its bootstrap text to OpenCode, which stores it as an instruction entry in OpenCode's own local session database. The plugin itself sends nothing off your machine; the text reaches your model provider as part of each request, as the bootstrap always has. The entry is part of the session's stored state, and it stays there after you remove the plugin. If you point `bootstrap.file` at a file that holds sensitive text, that text is stored the same way, so keep sensitive text out of that file.
+
 ## Contact
 
 If you have questions about privacy on this site, open an issue on [GitHub](https://github.com/marcusrbrown/systematic/issues).

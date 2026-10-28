@@ -9,9 +9,7 @@ Create a single, well-crafted git commit from the current working tree changes.
 
 ## Context
 
-**If you are not OpenCode**, skip to the "Context fallback" section below and run the command there to gather context.
-
-**If you are OpenCode**, the five labeled sections below (Git status, Working tree diff, Current branch, Recent commits, Remote default branch) contain pre-populated data. Use them directly throughout this skill -- do not re-run these commands.
+The five labeled sections below (Git status, Working tree diff, Current branch, Recent commits, Remote default branch) may be filled in by the host before you read them. If any section is empty, or still shows its raw command line instead of output, the host did not run the commands: run the command in the "Context fallback" section below and use its output instead. Otherwise, use the data directly throughout this skill and do not re-run these commands.
 
 **Git status:**
 !`git status`
@@ -30,7 +28,7 @@ Create a single, well-crafted git commit from the current working tree changes.
 
 ### Context fallback
 
-**If you are OpenCode, skip this section — the data above is already available.**
+**Run this only when the sections above are empty or still show raw command lines.**
 
 Run this single command to gather all context:
 
@@ -44,7 +42,7 @@ printf '=== STATUS ===\n'; git status; printf '\n=== DIFF ===\n'; git diff HEAD;
 
 ### Step 1: Gather context
 
-Use the context above (git status, working tree diff, current branch, recent commits, remote default branch). All data needed for this step is already available -- do not re-run those commands.
+Use the context above (git status, working tree diff, current branch, recent commits, remote default branch), or the output of the Context fallback command if the sections were empty. Do not re-run commands whose output you already have.
 
 The remote default branch value returns something like `origin/main`. Strip the `origin/` prefix to get the branch name. If it returned `__DEFAULT_BRANCH_UNRESOLVED__` or a bare `HEAD`, try:
 

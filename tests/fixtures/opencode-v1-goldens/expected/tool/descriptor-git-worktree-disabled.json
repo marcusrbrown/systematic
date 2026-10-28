@@ -1,0 +1,18 @@
+{
+  "description": "Load a specialized skill that provides domain-specific instructions and workflows.\n\nWhen you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.\n\nThe skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.\n\nTool output includes a `<skill_content name=\"...\">` block with the loaded content.\n\n## Available Systematic Skills\n\n- systematic:10: Integer-like fixture skill ten\n- systematic:2: Integer-like fixture skill two\n- systematic:fixture-alpha: Alpha fixture skill\n- systematic:fixture-args: Argument-substitution fixture skill\n- systematic:fixture-beta: Beta fixture skill\n- systematic:fixture-hidden: Tool-only fixture skill, not a command\n- systematic:fixture-routed: Routed fixture skill\n- ns:fixture-gamma: Namespaced fixture skill\n- systematic:using-systematic: Synthetic bootstrap skill",
+  "argNames": ["name", "arguments"],
+  "args": {
+    "name": {
+      "description": "The name of the skill from available_skills (e.g., 'systematic:10', 'systematic:2', 'systematic:fixture-alpha', ...)",
+      "acceptsString": true,
+      "acceptsUndefined": false,
+      "acceptsNumber": false
+    },
+    "arguments": {
+      "description": "Raw argument text the user explicitly supplied for this skill, substituted for $ARGUMENTS and $1..$N. Omit to leave those placeholders as written; an explicit empty string substitutes them with nothing. Only pass text the user explicitly supplied; never infer it.",
+      "acceptsString": true,
+      "acceptsUndefined": true,
+      "acceptsNumber": false
+    }
+  }
+}

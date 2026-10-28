@@ -13,7 +13,7 @@ This guide is designed for AI agents and automated systems to install and verify
 
 Before proceeding, ensure the following environment requirements are met:
 
-- **OpenCode** is installed and configured.
+- **OpenCode** is installed and configured: v1 version 1.18.29 or later, or v2 version 2.2.0 or later. Older versions are not supported.
 - **Node.js 18+** or the **Bun** runtime is available in the path.
 
 ## Installation Steps
@@ -22,7 +22,7 @@ Follow these steps to enable Systematic in your environment:
 
 <Steps>
 1. **Add plugin to configuration**
-   Append `@fro.bot/systematic@latest` to the `plugin` array in `~/.config/opencode/opencode.json`.
+   Run `opencode --version`. On v1 (1.18.29 or later), append `@fro.bot/systematic@latest` to the `plugin` array in `~/.config/opencode/opencode.json`.
 
    ```json
    {
@@ -30,8 +30,18 @@ Follow these steps to enable Systematic in your environment:
    }
    ```
 
+   On v2 (2.2.0 or later), append it to the `plugins` array instead. It is the same package.
+
+   ```json
+   {
+     "plugins": ["@fro.bot/systematic@latest"]
+   }
+   ```
+
+   `systematic setup --harness opencode` writes only the v1 `plugin` key and refuses to edit a file that has `plugins`.
+
 2. **Restart OpenCode**
-   Restart the OpenCode session to trigger the `config` hook, which automatically discovers and registers all bundled assets.
+   Restart the OpenCode session. On v1 this triggers the `config` hook; on v2 it runs the plugin's `setup`. Either way, all bundled assets are discovered and registered automatically.
 
 3. **Verify bootstrap loading**
    Run the following command to confirm the plugin is active and teaching your assistant:

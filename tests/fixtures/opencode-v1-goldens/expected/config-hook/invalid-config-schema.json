@@ -1,0 +1,11 @@
+{
+  "scenario": "invalid-config-schema",
+  "systematicConfig": "{ \"disabled_skills\": \"not-an-array\" }",
+  "outcome": {
+    "startThrew": "Invalid Systematic config in <TMP>/custom/config-invalid-config-schema/systematic.json: disabled_skills Invalid input: expected array, received string"
+  },
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}

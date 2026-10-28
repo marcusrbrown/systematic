@@ -59,7 +59,7 @@ return {
 }
 ```
 
-Refs: `createIsolatedFixture` and `buildChildEnv`, `tests/integration/pi.test.ts:128-230`; the child spawn, `tests/integration/pi.test.ts:553-565`; shared OpenCode pattern: `assertFixtureEnvironmentRoots`, `tests/integration/opencode.test.ts:213-227`.
+Refs: `createIsolatedFixture` and `buildChildEnv`, `tests/integration/pi.test.ts:128-230`; the child spawn, `tests/integration/pi.test.ts:553-565`; shared OpenCode pattern: `assertFixtureEnvironmentRoots`, `tests/integration/opencode.test.ts:195-209`.
 
 ### 2) Install packaged code offline
 

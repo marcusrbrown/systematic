@@ -3133,10 +3133,16 @@ function extractClaimedHookNames(section: string): string[] {
   return [...claimed].sort()
 }
 
+// `REGISTERED_PLUGIN_HOOKS` lives with the hooks it describes, in the OpenCode
+// v1 adapter. `src/index.ts` only wires the default export.
+export const OPENCODE_V1_ADAPTER_PATH = 'src/lib/opencode-v1.ts'
+
 function extractRegisteredPluginHooks(rootDir: string): string[] {
-  const source = readFileSafe(path.join(rootDir, 'src', 'index.ts'))
+  const source = readFileSafe(path.join(rootDir, OPENCODE_V1_ADAPTER_PATH))
   if (source === null) {
-    throw new Error('Unable to read plugin entry point at src/index.ts')
+    throw new Error(
+      `Unable to read plugin entry point at ${OPENCODE_V1_ADAPTER_PATH}`,
+    )
   }
 
   const inventoryMatch = source.match(
@@ -3144,7 +3150,7 @@ function extractRegisteredPluginHooks(rootDir: string): string[] {
   )
   if (!inventoryMatch) {
     throw new Error(
-      'Unable to locate REGISTERED_PLUGIN_HOOKS in src/index.ts while checking hook parity',
+      `Unable to locate REGISTERED_PLUGIN_HOOKS in ${OPENCODE_V1_ADAPTER_PATH} while checking hook parity`,
     )
   }
 
@@ -3157,7 +3163,7 @@ function extractRegisteredPluginHooks(rootDir: string): string[] {
 
   if (hooks.size === 0) {
     throw new Error(
-      'Unable to derive plugin hooks from REGISTERED_PLUGIN_HOOKS in src/index.ts',
+      `Unable to derive plugin hooks from REGISTERED_PLUGIN_HOOKS in ${OPENCODE_V1_ADAPTER_PATH}`,
     )
   }
   return [...hooks].sort()
@@ -3208,7 +3214,7 @@ export function checkHookParity(
       missingHooks,
       unregisteredHooks,
       message:
-        `${file} claims hooks [${claimedHooks.join(', ')}], but src/index.ts ` +
+        `${file} claims hooks [${claimedHooks.join(', ')}], but ${OPENCODE_V1_ADAPTER_PATH} ` +
         `registers [${actualHooks.join(', ')}]; ${problems.join('; ')}`,
     })
   }

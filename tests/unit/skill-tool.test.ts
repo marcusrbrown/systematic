@@ -7,6 +7,7 @@ import { buildCatalogEntries } from '../../src/lib/skill-catalog.ts'
 import {
   createSkillOutputStore,
   createSkillTool,
+  createSkillToolDescriptor,
   restoreCompactedSkillResults,
   restoreSkillOutput,
 } from '../../src/lib/skill-tool.ts'
@@ -1220,5 +1221,163 @@ describe('restoreCompactedSkillResults', () => {
     restoreCompactedSkillResults(messagesOf(part))
 
     expect(part.state.time).toBe(time)
+  })
+})
+
+describe('createSkillOutputStore peek', () => {
+  test('returns the stored output without consuming it', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c', 'full-text')
+
+    expect(store.peek('s', 'c')).toBe('full-text')
+    expect(store.peek('s', 'c')).toBe('full-text')
+    expect(store.take('s', 'c')).toBe('full-text')
+    expect(store.peek('s', 'c')).toBeUndefined()
+  })
+
+  test('does not return an expired entry', () => {
+    let currentTime = 0
+    const store = createSkillOutputStore({
+      ttlMs: 1000,
+      now: () => currentTime,
+    })
+    store.put('s', 'c', 'full-text')
+    currentTime = 2000
+
+    expect(store.peek('s', 'c')).toBeUndefined()
+  })
+
+  test('is keyed by session and call together', () => {
+    const store = createSkillOutputStore()
+    store.put('s1', 'c', 'one')
+    store.put('s2', 'c', 'two')
+
+    expect(store.peek('s1', 'c')).toBe('one')
+    expect(store.peek('s2', 'c')).toBe('two')
+    expect(store.peek('s1', 'other')).toBeUndefined()
+  })
+})
+
+describe('createSkillToolDescriptor', () => {
+  let testDir: string
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-descriptor-'))
+    for (const [name, body] of [
+      ['alpha', '# Alpha\n\nTarget: $ARGUMENTS'],
+      ['beta', '# Beta\n\nPlain body.'],
+      ['ns:gamma', '# Gamma'],
+    ] as const) {
+      const dir = path.join(testDir, name.replace(':', '-'))
+      fs.mkdirSync(dir)
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${name} skill\n---\n${body}\n`,
+      )
+    }
+  })
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  test('describes the tool with the shared catalog description and a JSON Schema input', () => {
+    const descriptor = createSkillToolDescriptor({
+      bundledSkillsDir: testDir,
+      disabledSkills: ['beta'],
+    })
+    const v1 = createSkillTool({
+      bundledSkillsDir: testDir,
+      disabledSkills: ['beta'],
+    })
+
+    expect(descriptor.name).toBe('systematic_skill')
+    expect(descriptor.description).toBe(v1.description)
+    expect(descriptor.description).toContain('systematic:alpha')
+    expect(descriptor.description).not.toContain('systematic:beta')
+    expect(descriptor.input).toMatchObject({
+      type: 'object',
+      required: ['name'],
+      additionalProperties: false,
+    })
+    expect(Object.keys(descriptor.input.properties)).toEqual([
+      'name',
+      'arguments',
+    ])
+    expect(descriptor.input.properties.name.type).toBe('string')
+    expect(descriptor.input.properties.arguments.type).toBe('string')
+    // The name hint and the arguments hint are the ones the v1 tool shows.
+    expect(JSON.stringify(descriptor.input)).toContain('available_skills')
+    expect(JSON.stringify(descriptor.input)).toContain('$ARGUMENTS')
+  })
+
+  test('loads a skill by bare or prefixed name with the same output as the v1 tool', async () => {
+    const options = { bundledSkillsDir: testDir, disabledSkills: [] }
+    const descriptor = createSkillToolDescriptor(options)
+    const v1 = createSkillTool(options)
+
+    const bare = descriptor.load({ name: 'alpha' })
+    const prefixed = descriptor.load({ name: 'systematic:alpha' })
+    const expected = await v1.execute({ name: 'alpha' }, mockContext)
+
+    expect(bare.output).toBe(expected as string)
+    expect(prefixed.output).toBe(bare.output)
+    // The permission resource is the bare skill name, whichever form was asked.
+    expect(bare.skillName).toBe('alpha')
+    expect(prefixed.skillName).toBe('alpha')
+    expect(bare.title).toBe('Loaded skill: systematic:alpha')
+    expect(bare.dir).toBe(path.join(testDir, 'alpha'))
+  })
+
+  test('a skill name that already has a colon keeps it', () => {
+    const descriptor = createSkillToolDescriptor({
+      bundledSkillsDir: testDir,
+      disabledSkills: [],
+    })
+
+    const loaded = descriptor.load({ name: 'ns:gamma' })
+
+    expect(loaded.skillName).toBe('ns:gamma')
+    expect(loaded.output).toContain('<skill_content name="ns:gamma">')
+  })
+
+  test('substitutes arguments exactly as the v1 tool does', async () => {
+    const options = { bundledSkillsDir: testDir, disabledSkills: [] }
+    const descriptor = createSkillToolDescriptor(options)
+    const v1 = createSkillTool(options)
+
+    const loaded = descriptor.load({ name: 'alpha', arguments: 'the-thing' })
+
+    expect(loaded.output).toContain('Target: the-thing')
+    expect(loaded.output).toBe(
+      (await v1.execute(
+        { name: 'alpha', arguments: 'the-thing' },
+        mockContext,
+      )) as string,
+    )
+    // Omitting arguments leaves the placeholder, as the native tool does.
+    expect(descriptor.load({ name: 'alpha' }).output).toContain('$ARGUMENTS')
+  })
+
+  test('a disabled skill is not found, with the v1 message listing what is available', () => {
+    const descriptor = createSkillToolDescriptor({
+      bundledSkillsDir: testDir,
+      disabledSkills: ['beta'],
+    })
+
+    expect(() => descriptor.load({ name: 'systematic:beta' })).toThrow(
+      'Skill "systematic:beta" not found. Available systematic skills: systematic:alpha, ns:gamma',
+    )
+  })
+
+  test('an unknown skill throws the not-found message', () => {
+    const descriptor = createSkillToolDescriptor({
+      bundledSkillsDir: testDir,
+      disabledSkills: [],
+    })
+
+    expect(() => descriptor.load({ name: 'nope' })).toThrow(
+      'Skill "nope" not found.',
+    )
   })
 })

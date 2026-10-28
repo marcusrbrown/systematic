@@ -11,7 +11,7 @@ This page gets you from zero to your first Systematic workflow in under five min
 
 ## Prerequisites
 
-You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime, and Pi itself needs **Node.js 22.19+**. No API keys, no accounts, no extra tooling.
+You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. Systematic supports OpenCode v1 from **1.18.29** and OpenCode v2 from **2.2.0**. Older versions of either are not supported, and there is no compatibility shim. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime, and Pi itself needs **Node.js 22.19+**. No API keys, no accounts, no extra tooling.
 
 The `pr-attachments` skill, which `git-commit-push-pr` uses to attach screenshots to a pull request, also needs **Node.js 18+** on your `PATH`. An OpenCode install that runs on Bun alone does not have it. Without Node.js, the skill stops and publishes nothing; every other skill works as before.
 
@@ -19,10 +19,12 @@ The `pr-attachments` skill, which `git-commit-push-pr` uses to attach screenshot
 
 The OpenCode plugin is the recommended installation path. It provides the full experience: slash commands, the `systematic_skill` tool, agent registration, and automatic bootstrap.
 
+It is one npm package for both OpenCode lines. The only difference is the config key: OpenCode v1 reads `plugin`, and OpenCode v2 reads `plugins`.
+
 <Steps>
 1. **Add the plugin to your OpenCode config**
 
-   Open your global OpenCode config (typically `~/.config/opencode/opencode.json`) and add Systematic to the `plugin` array:
+   Open your global OpenCode config (typically `~/.config/opencode/opencode.json`, or `opencode.jsonc`). On OpenCode v1 (1.18.29 or later), add Systematic to the `plugin` array:
 
    ```json
    {
@@ -30,11 +32,21 @@ The OpenCode plugin is the recommended installation path. It provides the full e
    }
    ```
 
+   On OpenCode v2 (2.2.0 or later), add it to the `plugins` array:
+
+   ```json
+   {
+     "plugins": ["@fro.bot/systematic@latest"]
+   }
+   ```
+
    If you already have other plugins, add it to the existing array.
+
+   `systematic setup --harness opencode` and OCX installs write the v1 `plugin` key. For OpenCode v2, add the `plugins` entry by hand.
 
 2. **Restart OpenCode**
 
-   Close and reopen your OpenCode session. Systematic uses OpenCode's `config` hook to register all bundled skills and agents automatically on startup. No manual wiring, no scaffolding commands.
+   Close and reopen your OpenCode session. Systematic registers all bundled skills, agents and commands automatically on startup: through OpenCode's `config` hook on v1, and through the plugin's `setup` function on v2. No manual wiring, no scaffolding commands. On v2, Systematic reads `systematic.json` once at startup, so restart OpenCode after you change it.
 
 3. **Verify it's working**
 
@@ -51,7 +63,8 @@ The OpenCode plugin is the recommended installation path. It provides the full e
 
 | Harness | Install | Skill loading |
 |---|---|---|
-| OpenCode | `opencode.json` plugins array | `systematic_skill` tool + skills-as-commands |
+| OpenCode v1 (1.18.29+) | `opencode.json` `plugin` array | `systematic_skill` tool + skills-as-commands |
+| OpenCode v2 (2.2.0+) | `opencode.json` `plugins` array | `systematic_skill` tool + native `skill` tool + skills-as-commands |
 | Pi | `setup --harness pi` | `systematic_skill` tool |
 | Claude Code | plugin marketplace | native Skill tool |
 

@@ -151,7 +151,10 @@ describe('setupHarness', () => {
         const filePath = path.join(cwd, 'opencode.json')
         const original = JSON.stringify({ plugins: ['foo'] })
         fs.writeFileSync(filePath, original)
-        expectSetupError(() => setupHarness('opencode', cwd))
+        expectSetupErrorMessage(
+          () => setupHarness('opencode', cwd),
+          'is the OpenCode v2 key',
+        )
         expect(fs.readFileSync(filePath, 'utf8')).toBe(original)
       } finally {
         fs.rmSync(cwd, { recursive: true, force: true })

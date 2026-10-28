@@ -106,11 +106,19 @@ import StatsBanner from '../../components/StatsBanner.astro'
       <h3 class="install-title">OpenCode Plugin <span>(Recommended)</span></h3>
       <span class="install-cue">OpenCode, full runtime</span>
     </div>
-    <p>Add Systematic to your configuration:</p>
+    <p>Add Systematic to your configuration. OpenCode v1 (1.18.29 or later) reads <code>plugin</code>:</p>
     
     ```json
     {
       "plugin": ["@fro.bot/systematic@latest"]
+    }
+    ```
+    
+    <p>OpenCode v2 (2.2.0 or later) reads <code>plugins</code>. It is the same package:</p>
+    
+    ```json
+    {
+      "plugins": ["@fro.bot/systematic@latest"]
     }
     ```
     

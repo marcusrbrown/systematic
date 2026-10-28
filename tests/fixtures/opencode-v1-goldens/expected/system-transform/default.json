@@ -1,0 +1,31 @@
+{
+  "case": "default",
+  "results": [
+    {
+      "before": ["Base system prompt"],
+      "after": [
+        "Base system prompt\n\n<SYSTEMATIC_WORKFLOWS>\nYou have access to structured engineering workflows via the Systematic plugin.\n\n**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load \"using-systematic\" again - that would be redundant.**\n\n# Using Fixture Systematic\n\nSynthetic bootstrap body for the v1 goldens.\n\n**Skills naming:**\n- Systematic bundled skills use the `systematic:` prefix (e.g., `systematic:onboarding`)\n- Workflow skills with their own namespace keep it (e.g., `ce:brainstorm`)\n- Skills can also be invoked without prefix if unambiguous\n\n**Skills usage:**\n- Use `systematic_skill` to load Systematic bundled skills\n- Use the `skill` tool for non-Systematic skills\n\n**Skills location:**\nBundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.\n\nFIXTURE-WORKTREE-RULE-MARKER: create worktrees under the fixture path.\n\n# Fixture OpenCode Profile\n\nFIXTURE-OPENCODE-PROFILE-MARKER\n\n</SYSTEMATIC_WORKFLOWS>"
+      ]
+    }
+  ],
+  "logs": [
+    {
+      "body": {
+        "service": "systematic",
+        "level": "info",
+        "message": "Systematic plugin initialized",
+        "extra": {
+          "version": "0.0.0-golden",
+          "bootstrapEnabled": true,
+          "disabledSkillsCount": 0,
+          "disabledAgentsCount": 0,
+          "disabledCommandsCount": 0
+        }
+      }
+    }
+  ],
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}

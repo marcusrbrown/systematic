@@ -1,6 +1,6 @@
 // CHARACTERIZATION test against the real pinned OpenCode host: records how
 // the pinned OpenCode host version (`EXACT_OPENCODE_VERSION`, exported by
-// ./fixtures/receipt-workflow-host.ts) handles `!`-backtick shell snippets
+// ./fixtures/opencode-host.ts) handles `!`-backtick shell snippets
 // embedded in a discovered skill's slash-command template, and whether
 // Systematic's own
 // command registration for that skill shadows OpenCode's native
@@ -103,7 +103,7 @@ import {
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
-} from './fixtures/receipt-workflow-host.js'
+} from './fixtures/opencode-host.js'
 
 requireOpencodeAvailable(getOpencodeAvailability())
 if (!isOpencodeAvailable()) {

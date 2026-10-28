@@ -1,12 +1,20 @@
 /**
  * Guards the host contract suite's skip/pass floor.
  *
- * The suite runs as several shards, each writing a JUnit report and a log. The
- * guard reads one report/log pair per shard, given on the command line as
- * alternating paths (`<junit> <log> [<junit> <log> ...]`), merges them, and
- * judges the union: every expected file must appear in some shard's report,
- * every skip must be exempt, and the pass counts summed across the logs must
- * clear the floor. A single pair is the one-shard case of the same rule.
+ * The contract runs as three profiles: the full contract on the v2 host (in
+ * several shards) and a smoke subset on the v1 host at its floor and at its
+ * current pin. Each profile has its own file list, pass floor and exempt
+ * skips. The guard judges one profile per run: it reads one report/log pair
+ * per job or shard, given on the command line as alternating paths
+ * (`--profile <p> <junit> <log> [<junit> <log> ...]`), merges them, and judges
+ * the union: every expected file must appear in some report, every skip must
+ * be exempt for that profile, and the pass counts summed across the logs must
+ * clear that profile's floor. A single pair is the one-shard case of the same
+ * rule.
+ *
+ * `files --profile <p>` prints a profile's file list, one path per line. Every
+ * host job passes that output to `bun test`, so the lists below are the single
+ * source for what each job runs.
  *
  * The module-scope throw (`SYSTEMATIC_REQUIRE_OPENCODE=1`) already covers a
  * missing or mismatched host. This guard covers what it cannot: a per-test
@@ -28,7 +36,9 @@ import { readFileSync } from 'node:fs'
 /**
  * The only test allowed to skip today: the mixed-version test stays opt-in
  * because enabling it would put a fetch of a published `@fro.bot/systematic`
- * release on the path that gates publishing the next one.
+ * release on the path that gates publishing the next one. That release only
+ * loads on a v1 host, so the exemption belongs to the v1 profiles alone (see
+ * {@link PROFILE_EXEMPT_SKIPS}); a skip in the v2 profile is always unexpected.
  *
  * This set is bidirectional: {@link evaluate} fails both when an
  * unlisted test skips (`unexpectedSkips`) and when a listed entry is
@@ -48,36 +58,126 @@ export const EXEMPT_SKIPS: readonly {
 ]
 
 /**
- * Every test file under `tests/integration/`, enumerated by hand and
- * verified against `ls tests/integration/*.test.ts`. A file producing zero
- * JUnit `<testsuite>` entries means `bun test` never actually ran it — the
- * exact failure mode a mass-skip or an early crash would produce while the
- * console summary and pass floor alone could still look plausible.
+ * The host contract runs as three profiles: the full contract on the v2 host,
+ * and a smoke subset on the v1 host at its floor and at its current pin. Each
+ * profile lists the integration files it must run.
  */
-export const EXPECTED_SUITE_FILES: readonly string[] = [
-  'tests/integration/ce-review-return-validation.test.ts',
+export const HOST_CONTRACT_PROFILES = ['v2', 'v1-floor', 'v1-current'] as const
+
+export type HostContractProfile = (typeof HOST_CONTRACT_PROFILES)[number]
+
+/**
+ * What the v2 profile runs. Host-neutral files (the Pi and Claude Code
+ * bundles, release tooling, the eval fixtures) run here once and nowhere else.
+ * `opencode.test.ts` takes its host from the harness, so it runs on both hosts.
+ * `opencode-v2.test.ts` is the v2 host contract: load, agents, skills, the
+ * `systematic_skill` port, output restoration, commands and the bootstrap.
+ */
+const V2_SUITE_FILES: readonly string[] = [
   'tests/integration/claude-code.test.ts',
   'tests/integration/eval-artifact.test.ts',
   'tests/integration/eval-fixture.test.ts',
-  'tests/integration/eval-runner.test.ts',
+  'tests/integration/opencode-v2.test.ts',
   'tests/integration/opencode.test.ts',
   'tests/integration/pi.test.ts',
   'tests/integration/release-notes-ci.test.ts',
-  'tests/integration/skill-command-probe.test.ts',
-  'tests/integration/skill-delivery.test.ts',
   'tests/integration/validate-release-target.test.ts',
 ]
 
 /**
- * The floor catches a mass collapse of the suite: a run that passes far fewer
- * tests than it should. It does not prove that any host-touching file ran, so
- * it is not the host-coverage check. Host coverage rests on
- * {@link EXPECTED_SUITE_FILES} (every listed file must appear in some shard's
- * report), the per-file results, and the exempt-skip check. The suite passes
- * 179 tests (one exempt skip) across the eleven listed files. Raise the floor as
- * the suite grows, and do not lower it without a documented reason.
+ * What both v1 profiles run: the behaviors a v1 user relies on.
+ *
+ * - `opencode.test.ts`: load and bootstrap, registration and enabled skill
+ *   loads.
+ * - `opencode-v1.test.ts`: the packaged catalog, a rejected config and the
+ *   mixed-version run. v2 covers these in `opencode-v2.test.ts`; the
+ *   mixed-version run loads a published release that only loads on v1.
+ * - `ce-review-return-validation.test.ts`: per-agent permissions and the skill
+ *   scripts, driven through the v1 session client and tool-part readback.
+ * - `skill-delivery.test.ts`: output restoration, the `tool_output` override,
+ *   prune and the discovered-skill slash command, all of which read the v1
+ *   session API. v2 covers restoration, arguments and discovered-skill
+ *   commands in `opencode-v2.test.ts`; the override and prune have no v2
+ *   counterpart.
+ * - `skill-command-probe.test.ts`: the `!`-backtick command probe observes
+ *   v1-only behavior that v2 never reproduces.
  */
-export const PASS_FLOOR = 120
+const V1_SMOKE_FILES: readonly string[] = [
+  'tests/integration/ce-review-return-validation.test.ts',
+  'tests/integration/opencode-v1.test.ts',
+  'tests/integration/opencode.test.ts',
+  'tests/integration/skill-command-probe.test.ts',
+  'tests/integration/skill-delivery.test.ts',
+]
+
+/**
+ * `eval-runner.test.ts` drives the eval runner, which launches the current v1
+ * CLI through its own pin whatever host a job targets. It belongs to the
+ * current-pin profile only: the floor job would run it against the wrong host,
+ * and the v2 job would need a v1 install it does not otherwise have.
+ */
+const V1_CURRENT_ONLY_FILES: readonly string[] = [
+  'tests/integration/eval-runner.test.ts',
+]
+
+/**
+ * The per-profile file lists, the single source for what each host job runs.
+ * Every test file under `tests/integration/` must appear in at least one list,
+ * so a new file cannot silently go unrun; `host-contract-guard.test.ts` checks
+ * that against the directory.
+ */
+export const PROFILE_SUITE_FILES: Readonly<
+  Record<HostContractProfile, readonly string[]>
+> = {
+  v2: V2_SUITE_FILES,
+  'v1-floor': V1_SMOKE_FILES,
+  'v1-current': [...V1_SMOKE_FILES, ...V1_CURRENT_ONLY_FILES],
+}
+
+/**
+ * Every integration test file any profile runs, sorted. The guard judges each
+ * profile against its own list in {@link PROFILE_SUITE_FILES}; this union is
+ * what the directory-drift test compares with `tests/integration/`. A file
+ * producing zero JUnit `<testsuite>` entries means `bun test` never actually
+ * ran it — the exact failure mode a mass-skip or an early crash would produce
+ * while the console summary and pass floor alone could still look plausible.
+ */
+export const EXPECTED_SUITE_FILES: readonly string[] = [
+  ...new Set(Object.values(PROFILE_SUITE_FILES).flat()),
+].sort()
+
+/**
+ * The skips each profile tolerates. The v2 profile tolerates none. The v1
+ * profiles tolerate the opt-in mixed-version test (see {@link EXEMPT_SKIPS}).
+ */
+export const PROFILE_EXEMPT_SKIPS: Readonly<
+  Record<HostContractProfile, typeof EXEMPT_SKIPS>
+> = {
+  v2: [],
+  'v1-floor': EXEMPT_SKIPS,
+  'v1-current': EXEMPT_SKIPS,
+}
+
+/**
+ * The floor catches a mass collapse of a profile: a run that passes far fewer
+ * tests than it should. It does not prove that any host-touching file ran, so
+ * it is not the host-coverage check. Host coverage rests on the profile's file
+ * list (every listed file must appear in some report), the per-file results,
+ * and the exempt-skip check.
+ *
+ * Each floor sits well under what its profile passes, so a normal change in
+ * test count does not trip it but a mass collapse does. The first CI runs on
+ * Linux passed 163 (v2), 32 (v1 floor) and 72 (v1 current), all green, which
+ * puts the floors at roughly 86%, 88% and 83% of those counts. Raise a floor
+ * as its suite grows, and do not lower it without a documented reason.
+ */
+export const PROFILE_PASS_FLOORS: Readonly<
+  Record<HostContractProfile, number>
+> = {
+  v2: 140,
+  'v1-floor': 28,
+  'v1-current': 60,
+}
 
 export interface SkippedTestCase {
   readonly classname: string
@@ -247,14 +347,18 @@ function skipKey(s: SkippedTestCase): string {
 
 /**
  * Evaluates a parsed JUnit report plus a parsed pass count against the
- * five failure conditions the guard enforces. Pure: takes already-parsed
- * data in, returns violations out, performs no I/O.
+ * five failure conditions the guard enforces for one profile. Pure: takes
+ * already-parsed data in, returns violations out, performs no I/O.
  */
-export function evaluate(input: EvaluateInput): GuardViolation[] {
+export function evaluate(
+  input: EvaluateInput,
+  profile: HostContractProfile,
+): GuardViolation[] {
   const { parsed, passCount } = input
   const violations: GuardViolation[] = []
+  const passFloor = PROFILE_PASS_FLOORS[profile]
 
-  const missingFiles = EXPECTED_SUITE_FILES.filter(
+  const missingFiles = PROFILE_SUITE_FILES[profile].filter(
     (f) => !parsed.producedFiles.has(f),
   )
   if (missingFiles.length > 0) {
@@ -266,7 +370,7 @@ export function evaluate(input: EvaluateInput): GuardViolation[] {
     })
   }
 
-  const exemptKeys = new Set(EXEMPT_SKIPS.map(skipKey))
+  const exemptKeys = new Set(PROFILE_EXEMPT_SKIPS[profile].map(skipKey))
   const actualKeys = parsed.skipped.map(skipKey)
 
   const unexpected = actualKeys.filter((k) => !exemptKeys.has(k))
@@ -295,10 +399,10 @@ export function evaluate(input: EvaluateInput): GuardViolation[] {
         'Could not find a "<N> pass" summary line in the captured test output.',
       details: [],
     })
-  } else if (passCount < PASS_FLOOR) {
+  } else if (passCount < passFloor) {
     violations.push({
       kind: 'below-pass-floor',
-      message: `Pass count ${passCount} is below the floor of ${PASS_FLOOR}.`,
+      message: `Pass count ${passCount} is below the ${profile} floor of ${passFloor}.`,
       details: [],
     })
   }
@@ -342,8 +446,54 @@ export function readArtifact(path: string): ArtifactRead {
   }
 }
 
-const USAGE =
-  'Usage: bun scripts/host-contract-guard.ts <junit-path> <log-path> [<junit-path> <log-path> ...]'
+const USAGE = [
+  'Usage: bun scripts/host-contract-guard.ts --profile <profile> <junit-path> <log-path> [<junit-path> <log-path> ...]',
+  '       bun scripts/host-contract-guard.ts files --profile <profile>',
+  `Profiles: ${HOST_CONTRACT_PROFILES.join(', ')}`,
+].join('\n')
+
+/** Narrows a command-line value to a profile name. */
+export function parseProfile(value: string): HostContractProfile | undefined {
+  return HOST_CONTRACT_PROFILES.find((profile) => profile === value)
+}
+
+export interface ParsedCommandLine {
+  readonly command: 'files' | 'check'
+  readonly profile: HostContractProfile
+  /** The arguments left once the command word and the profile flag are taken. */
+  readonly rest: readonly string[]
+}
+
+/**
+ * Splits the command line into a command (`files`, or the default check), the
+ * required `--profile <p>` flag, and the remaining arguments. `undefined` for a
+ * missing flag, a missing or unknown profile, or a repeated flag: the guard
+ * never guesses a profile, since the wrong one would judge the wrong list.
+ */
+export function parseCommandLine(
+  args: readonly string[],
+): ParsedCommandLine | undefined {
+  const command = args[0] === 'files' ? 'files' : 'check'
+  const rest: string[] = []
+  let profile: HostContractProfile | undefined
+  let profileSeen = false
+  const tokens = command === 'files' ? args.slice(1) : args
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token === undefined) return undefined
+    if (token !== '--profile') {
+      rest.push(token)
+      continue
+    }
+    if (profileSeen) return undefined
+    profileSeen = true
+    const value = tokens[index + 1]
+    profile = value === undefined ? undefined : parseProfile(value)
+    index += 1
+  }
+  if (profile === undefined) return undefined
+  return { command, profile, rest }
+}
 
 interface ShardRead {
   readonly junit: ArtifactRead
@@ -381,13 +531,20 @@ function reportReadErrors(read: ShardRead): boolean {
   return read.junit.readError !== undefined || read.log.readError !== undefined
 }
 
-function main(): void {
-  const pairs = pairArguments(process.argv.slice(2))
-  if (pairs === undefined) {
-    console.error(USAGE)
-    process.exit(1)
-  }
+function usageError(): never {
+  console.error(USAGE)
+  process.exit(1)
+}
 
+interface CollectedShards {
+  readonly shards: readonly EvaluateInput[]
+  readonly hadReadError: boolean
+}
+
+/** Reads every report/log pair, printing a per-pair pass count when there are several. */
+function collectShards(
+  pairs: readonly { readonly junitPath: string; readonly logPath: string }[],
+): CollectedShards {
   let hadReadError = false
   const shards: EvaluateInput[] = []
   for (const { junitPath, logPath } of pairs) {
@@ -404,15 +561,22 @@ function main(): void {
     }
     shards.push({ parsed: parseJUnitXml(read.junit.content), passCount })
   }
+  return { shards, hadReadError }
+}
 
+function runCheck(
+  profile: HostContractProfile,
+  pairs: readonly { readonly junitPath: string; readonly logPath: string }[],
+): void {
+  const { shards, hadReadError } = collectShards(pairs)
   const merged = mergeEvidence(shards)
   if (merged.passCount !== undefined) {
     console.log(
-      `Observed pass count: ${merged.passCount} (floor: ${PASS_FLOOR})`,
+      `Observed ${profile} pass count: ${merged.passCount} (floor: ${PROFILE_PASS_FLOORS[profile]})`,
     )
   }
 
-  const violations = evaluate(merged)
+  const violations = evaluate(merged, profile)
 
   for (const violation of violations) {
     console.error(violation.message)
@@ -420,7 +584,23 @@ function main(): void {
   }
 
   if (hadReadError || violations.length > 0) process.exit(1)
-  console.log('host-contract skip/pass guard passed.')
+  console.log(`host-contract skip/pass guard passed for ${profile}.`)
+}
+
+function main(): void {
+  const parsedLine = parseCommandLine(process.argv.slice(2))
+  if (parsedLine === undefined) usageError()
+  const { command, profile, rest } = parsedLine
+
+  if (command === 'files') {
+    if (rest.length > 0) usageError()
+    console.log(PROFILE_SUITE_FILES[profile].join('\n'))
+    return
+  }
+
+  const pairs = pairArguments(rest)
+  if (pairs === undefined) usageError()
+  runCheck(profile, pairs)
 }
 
 if (import.meta.main) {

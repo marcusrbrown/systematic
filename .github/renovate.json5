@@ -11,6 +11,29 @@
   // in CI — Renovate must not try to manage them. Preserves Renovate's default
   // node_modules/bower ignores since setting this key replaces the default.
   ignorePaths: ['**/node_modules/**', '**/bower_components/**', 'tests/**'],
+  customManagers: [
+    {
+      // scripts/opencode-host-pins.json is the single home of the CLI pins the
+      // host contract tests run against. Renovate ignores tests/**, so the pins
+      // live under scripts/. Each manager tracks one moving pin. The v1 floor
+      // ("v1Floor") is the oldest supported release, not a version to bump, and
+      // neither pattern can match it: each anchors on its own quoted key.
+      description: ['Track the current v1 CLI pin (opencode-ai) in the host pin file'],
+      customType: 'regex',
+      managerFilePatterns: ['/^scripts/opencode-host-pins\\.json$/'],
+      matchStrings: ['"v1"\\s*:\\s*"(?<currentValue>\\d+\\.\\d+\\.\\d+)"'],
+      depNameTemplate: 'opencode-ai',
+      datasourceTemplate: 'npm',
+    },
+    {
+      description: ['Track the v2 CLI pin (@opencode/cli) in the host pin file'],
+      customType: 'regex',
+      managerFilePatterns: ['/^scripts/opencode-host-pins\\.json$/'],
+      matchStrings: ['"v2"\\s*:\\s*"(?<currentValue>\\d+\\.\\d+\\.\\d+)"'],
+      depNameTemplate: '@opencode/cli',
+      datasourceTemplate: 'npm',
+    },
+  ],
   packageRules: [
     {
       // bfra-me/renovate-action sets RENOVATE_BINARY_SOURCE=install, so
@@ -55,8 +78,18 @@
       semanticCommitType: 'feat',
     },
     {
-      matchPackageNames: ['@opencode-ai/{/,}**'],
+      // `opencode-ai` is the unscoped v1 CLI package, which `@opencode-ai/{/,}**`
+      // does not match. Listing it here puts the pin file's v1 bump in the same
+      // PR as the `@opencode-ai/sdk` and `@opencode-ai/plugin` devDependencies.
+      matchPackageNames: ['@opencode-ai/{/,}**', 'opencode-ai'],
       groupName: 'OpenCode',
+      semanticCommitType: 'build',
+    },
+    {
+      // The v2 CLI pin and the `@opencode/sdk`, `@opencode/plugin` and
+      // `@opencode/client` devDependencies bump together, apart from v1.
+      matchPackageNames: ['@opencode/{/,}**'],
+      groupName: 'OpenCode v2',
       semanticCommitType: 'build',
     },
     {

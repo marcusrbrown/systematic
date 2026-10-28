@@ -15,7 +15,7 @@ The plugin is divided into two main parts:
 
 ## How It Works
 
-Systematic registers these OpenCode plugin hooks:
+On OpenCode v1 (1.18.29 and later), Systematic registers these plugin hooks. OpenCode v2 works differently; see [OpenCode v2](#opencode-v2) below.
 
 ```mermaid
 flowchart TB
@@ -70,13 +70,41 @@ This hook allows Systematic to inject a "bootstrap" instruction into the AI's sy
 - Follow the "invoke before response" discipline.
 - Create git worktrees at `.worktrees/<branch>` under the main repository root with the `git-worktree` skill, unless you or a project instruction name a different location or tool. This rule is left out when `git-worktree` is in `disabled_skills`.
 
+## OpenCode v2
+
+The same npm package runs on OpenCode v2 (2.2.0 and later). v2 has no `config` hook and no string-keyed hooks. Instead, the plugin's `setup` function loads your configuration once and registers four things through v2's own APIs:
+
+- **Agents.** The bundled agents are created with the same names, descriptions, prompts and modes as on v1. Systematic's permission rules are added after OpenCode's default rules for the agent, so a tool the rules do not mention keeps the host default. A skill list that limits an agent to certain skills still refuses every other skill, including inside subagents.
+- **Skills and the `systematic_skill` tool.** Each enabled bundled skill is added to OpenCode, so the native `skill` tool lists and loads it. `systematic_skill` is still registered, because the native tool cannot pass arguments. OpenCode cuts tool output at 2,000 lines or 50 KB after the plugin returns it, so Systematic keeps the full text and puts it back in the request. Three bundled skills (`ce:review`, `ce:plan` and `ce:compound-refresh`) are over that limit.
+- **Commands.** Each command keeps its `systematic:` name and `(Systematic) ` description. Systematic expands `$ARGUMENTS` and `$1`, `$2`, and so on itself and sends one prompt on your session, as it is. A plugin command on v2 cannot choose an agent or a model, so a Systematic command that declares `agent`, `model` or `subtask` is refused with an error that says so; define such a command as an OpenCode command in Markdown or JSON instead. No bundled skill declares these fields. A skill discovered in your project or home directory registers as a command under its bare name, unless that name belongs to a built-in OpenCode command.
+- **Bootstrap.** The `using-systematic` instructions are stored once per session as an instruction entry that OpenCode adds to the system prompt. Title requests do not carry it.
+
+What differs from v1:
+
+| Behavior | OpenCode v1 | OpenCode v2 |
+|---|---|---|
+| Config changes | Re-read each time OpenCode loads its config | Read once when the plugin loads; restart OpenCode to apply a change |
+| Invalid `systematic.json` | The plugin fails to load | The same: the plugin fails to load, OpenCode logs it and keeps running |
+| `!` followed by a backtick block in a command | Run by OpenCode before the prompt is sent | Never run; the text stays in the prompt as written |
+| Skill names that are whole numbers | Move ahead of the `*` deny rule | Keep their listed order |
+| Bootstrap | Added to the system prompt on each request | Stored with the session; stays after the plugin is removed, and a changed bootstrap adds a `<system-update>` message to sessions that already have the old one |
+| Compaction pruning placeholder | Cleared for `systematic_skill` results | Not applicable; v2 has no such placeholder, so nothing is cleared |
+| `tool_output` limits in your config | Honored: Systematic skips the restore | Systematic always restores the full skill text |
+| Color tokens such as `info` | Passed through | Left off; v2 accepts only `#RRGGBB` |
+| `temperature` and `top_p` | Applied | Stored; v2 does not send them yet |
+
+Invalid configuration is the one failure that stops the plugin. Any other failure inside a v2 callback is logged to the OpenCode server's standard error with a `systematic:` prefix and does not stop the session.
+
 ## Code Map
 
 For developers looking to contribute or understand the implementation, here are the key modules:
 
 | Symbol | Role | Location |
 |--------|------|----------|
-| `SystematicPlugin` | Main plugin factory | `src/index.ts` |
+| default export | Plugin object with `id`, `setup` (OpenCode v2) and `server` (OpenCode v1) | `src/index.ts` |
+| `createOpenCodeV1Hooks` | Registers the v1 hooks | `src/lib/opencode-v1.ts` |
+| `setupOpenCodeV2` | Loads config once and runs the v2 installers (agents, skills, commands, bootstrap) | `src/lib/opencode-v2.ts` and `src/lib/opencode-v2-*.ts` |
+| `buildAssetPlan` | Host-neutral agents, commands, skills and permission rules | `src/lib/asset-plan.ts` |
 | `createConfigHandler` | Implements the `config` hook logic | `src/lib/config-handler.ts` |
 | `createSkillTool` | Implements the `systematic_skill` tool | `src/lib/skill-tool.ts` |
 | `getBootstrapContent` | Handles system prompt injection | `src/lib/bootstrap.ts` |

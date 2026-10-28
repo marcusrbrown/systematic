@@ -61,7 +61,7 @@ import {
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
-} from './fixtures/receipt-workflow-host.js'
+} from './fixtures/opencode-host.js'
 
 requireOpencodeAvailable(getOpencodeAvailability())
 if (!isOpencodeAvailable()) {
@@ -146,7 +146,7 @@ interface ScriptedModel {
  * non-empty `tools` array -- the background title-generation turn (which
  * carries `tools: {}`, an object rather than an array) never consumes a
  * step, matching `startScriptedSkillModelServer`'s documented dispatch
- * strategy in fixtures/receipt-workflow-host.ts.
+ * strategy in fixtures/opencode-host.ts.
  */
 function startScriptedModel(steps: readonly ScriptedStep[]): ScriptedModel {
   let stepIndex = 0

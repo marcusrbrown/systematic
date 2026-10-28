@@ -48,7 +48,7 @@ export const OPENCODE_AVAILABLE = (() => {
 })()
 ```
 
-`tests/integration/fixtures/receipt-workflow-host.ts:7-10`
+`tests/integration/fixtures/opencode-host.ts:7-10`
 
 Result: `bun test` starts the real-host receipt and eval-runner suites, which wait on a host that will never come up. There is no failure message — the run simply stops making progress, and the whole suite becomes unusable locally.
 

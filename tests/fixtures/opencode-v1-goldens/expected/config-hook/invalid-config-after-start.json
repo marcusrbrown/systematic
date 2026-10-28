@@ -1,0 +1,44 @@
+{
+  "scenario": "invalid-config-after-start",
+  "systematicConfig": {
+    "disabled_skills": ["git-worktree"]
+  },
+  "outcome": {
+    "hookThrew": "Invalid Systematic config in <TMP>/custom/config-invalid-config-after-start/systematic.json: disabled_skills Invalid input: expected array, received string"
+  },
+  "repeat": {
+    "hookThrew": "Invalid Systematic config in <TMP>/custom/config-invalid-config-after-start/systematic.json: disabled_skills Invalid input: expected array, received string"
+  },
+  "config": {
+    "agent": {
+      "repo-research-analyst": {
+        "description": "Stale (Fixture-Planner - Systematic)",
+        "prompt": "stale planner"
+      },
+      "security-reviewer": {
+        "description": "User native agent",
+        "prompt": "native"
+      }
+    },
+    "command": {
+      "native-command": {
+        "description": "Native command",
+        "template": "native"
+      },
+      "systematic:fixture-alpha": {
+        "description": "(Systematic) stale alpha",
+        "template": "stale"
+      }
+    },
+    "skills": {
+      "paths": [
+        "/fixture-user/.config/opencode/systematic/skills",
+        "/fixture-user/own/skills"
+      ]
+    }
+  },
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}
