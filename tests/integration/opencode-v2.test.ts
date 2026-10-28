@@ -219,17 +219,6 @@ function startToolModelServer(): ToolScriptedModel {
   return model
 }
 
-/** Adds a second model to the scripted provider, so a command can switch to it. */
-function withAltModel(configContent: string): string {
-  const parsed = JSON.parse(configContent) as {
-    providers: Record<string, { models: Record<string, unknown> }>
-  }
-  const provider = parsed.providers[SCRIPTED_PROVIDER]
-  if (provider === undefined) throw new Error('scripted provider missing')
-  provider.models[ALT_MODEL] = { name: 'Alternate Model' }
-  return JSON.stringify(parsed)
-}
-
 async function waitFor(
   check: () => boolean | Promise<boolean>,
   what: string,
@@ -258,7 +247,6 @@ function systemText(body: ChatRequestBody): string {
     .join('\n')
 }
 
-const ALT_MODEL = 'alternate-model'
 const AGENT_PROMPT_MARKER = 'You are an expert repository research analyst'
 
 describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
@@ -376,14 +364,12 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       pluginSpec: string,
       toolModel: ToolScriptedModel,
       extraConfig: Record<string, unknown> = {},
-      options: { altModel?: boolean } = {},
     ) {
-      const scripted = withScriptedProvider(
+      const configContent = withScriptedProvider(
         JSON.stringify({ plugins: [pluginSpec], ...extraConfig }),
         toolModel.url,
         HOST,
       )
-      const configContent = options.altModel ? withAltModel(scripted) : scripted
       const server = await startOpencodeServer(
         fixture,
         configContent,
@@ -920,14 +906,6 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       return names
     }
 
-    /** Lets the bundled agent run as a primary agent, which its own mode does not. */
-    function allowAgentAsPrimary(agent: string): void {
-      fs.writeFileSync(
-        path.join(fixture.configDir, 'systematic.json'),
-        JSON.stringify({ agents: { [agent]: { mode: 'primary' } } }),
-      )
-    }
-
     async function newSession(host: AgentHost, agent = 'build') {
       return host.client.session.create({
         location: { directory: fixture.projectDir },
@@ -941,14 +919,13 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     }
 
     test(
-      'a command with $ARGUMENTS reaches the model expanded, on its configured agent, and the session goes back afterwards',
+      'a command with $ARGUMENTS reaches the model expanded, on the invoking session as it is',
       async () => {
         const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
-        allowAgentAsPrimary('repo-research-analyst')
         writeBundledSkill(
           packageDir,
           'probe-args',
-          { agent: 'repo-research-analyst' },
+          {},
           'Investigate carefully: $ARGUMENTS',
         )
         const toolModel = startToolModelServer()
@@ -970,23 +947,14 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             '<user-request>\nARG-MARKER-9\n</user-request>',
           )
           expect(prompt).not.toContain('$ARGUMENTS')
-          // The turn ran on the command's agent: its prompt is the system prompt.
-          expect(systemText(turn)).toContain(AGENT_PROMPT_MARKER)
-
-          // The session is put back on its own agent once the turn is done.
-          await waitFor(
-            async () =>
-              (await sessionState(host, session.id)).agent === 'build',
-            'the session to return to its agent',
-          )
-          await host.client.session.prompt({
-            sessionID: session.id,
-            text: 'A plain follow-up.',
-          })
+          // Nothing was switched: the turn ran on the session's own model and
+          // the session keeps its agent and model.
+          expect(turn.model).toBe(SCRIPTED_MODEL)
+          expect(systemText(turn)).not.toContain(AGENT_PROMPT_MARKER)
           await host.client.session.wait({ sessionID: session.id })
-          const followUp = toolModel.turns.at(-1)
-          if (followUp === undefined) throw new Error('no follow-up turn')
-          expect(systemText(followUp)).not.toContain(AGENT_PROMPT_MARKER)
+          const state = await sessionState(host, session.id)
+          expect(state.agent).toBe('build')
+          expect(state.model?.id).toBe(SCRIPTED_MODEL)
         } finally {
           toolModel.stop()
           await host.server.stop()
@@ -1040,225 +1008,52 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       TIMEOUT_MS,
     )
 
-    test(
-      'a command with a model runs the turn on that model and the session returns to its own',
-      async () => {
+    test.each([
+      ['agent', { agent: 'repo-research-analyst' }],
+      ['model', { model: `${SCRIPTED_PROVIDER}/${SCRIPTED_MODEL}` }],
+      ['subtask', { subtask: 'true' }],
+    ] as const)(
+      'a command that declares %s is refused with a message and nothing is prompted',
+      async (field, frontmatter) => {
         const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
         writeBundledSkill(
           packageDir,
-          'probe-model',
-          { model: `${SCRIPTED_PROVIDER}/${ALT_MODEL}` },
-          'Use the other model for: $ARGUMENTS',
-        )
-        const toolModel = startToolModelServer()
-        const host = await startAgentHost(
-          pluginSpec,
-          toolModel,
-          {},
-          {
-            altModel: true,
-          },
-        )
-        try {
-          const session = await newSession(host)
-          await host.client.session.command({
-            sessionID: session.id,
-            name: 'systematic:probe-model',
-            text: 'MODEL-ARG',
-          })
-          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
-
-          expect(toolModel.turns[0]?.model).toBe(ALT_MODEL)
-          await waitFor(
-            async () =>
-              (await sessionState(host, session.id)).model?.id ===
-              SCRIPTED_MODEL,
-            'the session to return to its model',
-          )
-          await host.client.session.prompt({
-            sessionID: session.id,
-            text: 'A plain follow-up.',
-          })
-          await host.client.session.wait({ sessionID: session.id })
-          expect(toolModel.turns.at(-1)?.model).toBe(SCRIPTED_MODEL)
-        } finally {
-          toolModel.stop()
-          await host.server.stop()
-        }
-      },
-      TIMEOUT_MS,
-    )
-
-    test(
-      'a command with a model, run in a fresh session, leaves the next plain turn on the original model',
-      async () => {
-        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
-        writeBundledSkill(
-          packageDir,
-          'probe-model-fresh',
-          { model: `${SCRIPTED_PROVIDER}/${ALT_MODEL}` },
-          'Use the other model for: $ARGUMENTS',
-        )
-        const toolModel = startToolModelServer()
-        const host = await startAgentHost(
-          pluginSpec,
-          toolModel,
-          {},
-          { altModel: true },
-        )
-        try {
-          // No agent and no model: the host picks its defaults per turn.
-          const session = await host.client.session.create({
-            location: { directory: fixture.projectDir },
-          })
-          expect((await sessionState(host, session.id)).model).toBeUndefined()
-
-          await host.client.session.command({
-            sessionID: session.id,
-            name: 'systematic:probe-model-fresh',
-            text: 'FRESH-ARG',
-          })
-          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
-          expect(toolModel.turns[0]?.model).toBe(ALT_MODEL)
-
-          await waitFor(
-            async () =>
-              (await sessionState(host, session.id)).model?.id ===
-              SCRIPTED_MODEL,
-            'the session to return to the default model',
-          )
-          await host.client.session.prompt({
-            sessionID: session.id,
-            text: 'A plain follow-up.',
-          })
-          await host.client.session.wait({ sessionID: session.id })
-          expect(toolModel.turns.at(-1)?.model).toBe(SCRIPTED_MODEL)
-        } finally {
-          toolModel.stop()
-          await host.server.stop()
-        }
-      },
-      TIMEOUT_MS,
-    )
-
-    test(
-      'a command that arrives mid-turn lets that turn finish on its own model before it switches',
-      async () => {
-        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
-        writeBundledSkill(
-          packageDir,
-          'probe-model-busy',
-          { model: `${SCRIPTED_PROVIDER}/${ALT_MODEL}` },
-          'Use the other model for: $ARGUMENTS',
-        )
-        const toolModel = startToolModelServer()
-        const host = await startAgentHost(
-          pluginSpec,
-          toolModel,
-          {},
-          { altModel: true },
-        )
-        try {
-          const session = await newSession(host)
-          // A turn that spends a few seconds in a tool call, then needs one
-          // more model request to finish.
-          await host.client.session.prompt({
-            sessionID: session.id,
-            text: '@@TOOL shell {"command":"sleep 4; echo done"}',
-          })
-          await waitFor(() => toolModel.turns.length >= 1, 'the first request')
-          await Bun.sleep(500)
-
-          const running = host.client.session.command({
-            sessionID: session.id,
-            name: 'systematic:probe-model-busy',
-            text: 'BUSY-ARG',
-          })
-          await host.client.session.wait({ sessionID: session.id })
-          await running
-          await waitFor(
-            () => toolModel.turns.length >= 3,
-            'the command turn',
-            60_000,
-          )
-          await host.client.session.wait({ sessionID: session.id })
-
-          // The first turn's second request still ran on the session's model;
-          // only the command's own turn used the other one.
-          expect(toolModel.turns.map((turn) => turn.model)).toEqual([
-            SCRIPTED_MODEL,
-            SCRIPTED_MODEL,
-            ALT_MODEL,
-          ])
-          expect(lastUserText(toolModel.turns[2] as ChatRequestBody)).toContain(
-            'BUSY-ARG',
-          )
-        } finally {
-          toolModel.stop()
-          await host.server.stop()
-        }
-      },
-      TIMEOUT_MS,
-    )
-
-    test(
-      'a subagent-mode command runs in a child session and its result comes back to the parent',
-      async () => {
-        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
-        writeBundledSkill(
-          packageDir,
-          'probe-sub',
-          { agent: 'repo-research-analyst' },
-          'Audit for the parent: $ARGUMENTS',
+          'probe-refused',
+          frontmatter,
+          'Never sent: $ARGUMENTS',
         )
         const toolModel = startToolModelServer()
         const host = await startAgentHost(pluginSpec, toolModel)
         try {
           const session = await newSession(host)
-          await host.client.session.command({
+          for (const text of ['ONE', 'TWO']) {
+            await expect(
+              host.client.session.command({
+                sessionID: session.id,
+                name: 'systematic:probe-refused',
+                text,
+              }),
+            ).rejects.toThrow()
+          }
+          expect(toolModel.turns).toHaveLength(0)
+
+          // The session is unharmed and still answers.
+          await host.client.session.prompt({
             sessionID: session.id,
-            name: 'systematic:probe-sub',
-            text: 'SUB-ARG-5',
+            text: 'A plain turn.',
           })
-          await waitFor(
-            () =>
-              toolModel.turns.some((turn) =>
-                lastUserText(turn).includes(
-                  'Result of command systematic:probe-sub',
-                ),
-              ),
-            'the result to reach the parent',
-          )
+          await host.client.session.wait({ sessionID: session.id })
+          expect(toolModel.turns).toHaveLength(1)
+          expect(toolModel.turns[0]?.model).toBe(SCRIPTED_MODEL)
 
-          // The child ran the expanded prompt on the command's agent.
-          const childTurn = toolModel.turns.find(
-            (turn) =>
-              lastUserText(turn).includes('Audit for the parent: SUB-ARG-5') &&
-              !lastUserText(turn).includes('Result of command'),
-          )
-          expect(childTurn).toBeDefined()
-          expect(systemText(childTurn as ChatRequestBody)).toContain(
-            AGENT_PROMPT_MARKER,
-          )
-
-          // The parent saw the child's reply, and kept its own agent.
-          const parentTurn = toolModel.turns.find((turn) =>
-            lastUserText(turn).includes(
-              'Result of command systematic:probe-sub',
-            ),
-          ) as ChatRequestBody
-          expect(lastUserText(parentTurn)).toContain('Scripted reply to:')
-          expect(lastUserText(parentTurn)).toContain('(subagent session ses_')
-          expect(systemText(parentTurn)).not.toContain(AGENT_PROMPT_MARKER)
-          expect((await sessionState(host, session.id)).agent).toBe('build')
-
-          // The child is a session of its own, attached to the parent.
-          const listed = await host.client.session.list({
-            parentID: session.id,
-          })
-          const children = listed.data
-          expect(children).toHaveLength(1)
-          expect(children[0]?.agent).toBe('repo-research-analyst')
+          const notes = host.server
+            .output()
+            .split('\n')
+            .filter((line) => line.includes(`declares ${field}`))
+          expect(notes).toHaveLength(1)
+          expect(notes[0]).toContain('systematic: ')
+          expect(notes[0]).toContain('"systematic:probe-refused"')
+          expect(notes[0]).toContain('cannot route')
         } finally {
           toolModel.stop()
           await host.server.stop()
@@ -1294,54 +1089,6 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           )
           // Nothing ran the block.
           expect(fs.existsSync(marker)).toBe(false)
-        } finally {
-          toolModel.stop()
-          await host.server.stop()
-        }
-      },
-      TIMEOUT_MS,
-    )
-
-    test(
-      'a command whose agent is not registered runs on the current agent, with one diagnostic',
-      async () => {
-        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
-        writeBundledSkill(
-          packageDir,
-          'probe-ghost',
-          { agent: 'ghost-agent' },
-          'Run anyway: $ARGUMENTS',
-        )
-        const toolModel = startToolModelServer()
-        const host = await startAgentHost(pluginSpec, toolModel)
-        try {
-          const session = await newSession(host)
-          for (const text of ['ONE', 'TWO']) {
-            const before = toolModel.turns.length
-            await host.client.session.command({
-              sessionID: session.id,
-              name: 'systematic:probe-ghost',
-              text,
-            })
-            await waitFor(
-              () => toolModel.turns.length > before,
-              `the turn for ${text}`,
-            )
-            await host.client.session.wait({ sessionID: session.id })
-            expect(
-              lastUserText(toolModel.turns.at(-1) as ChatRequestBody),
-            ).toContain(`Run anyway: ${text}`)
-          }
-
-          // The turns worked, on the session's own agent.
-          expect((await sessionState(host, session.id)).agent).toBe('build')
-          const notes = host.server
-            .output()
-            .split('\n')
-            .filter((line) => line.includes('names agent "ghost-agent"'))
-          expect(notes).toHaveLength(1)
-          expect(notes[0]).toContain('systematic: ')
-          expect(notes[0]).toContain('"systematic:probe-ghost"')
         } finally {
           toolModel.stop()
           await host.server.stop()

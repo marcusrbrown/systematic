@@ -14,32 +14,13 @@ import type { Plugin } from '@opencode/plugin'
 
 import type { PlannedCommand } from '../../src/lib/asset-plan.js'
 import { createConfigHandler } from '../../src/lib/config-handler.js'
-import { createSafeGuard, setupOpenCodeV2 } from '../../src/lib/opencode-v2.js'
+import { setupOpenCodeV2 } from '../../src/lib/opencode-v2.js'
 import {
   buildCommand,
   createCommandRuntime,
-  parseModelRef,
 } from '../../src/lib/opencode-v2-commands.js'
 
 const PACKAGE_ROOT = path.resolve(import.meta.dir, '../..')
-
-interface ModelRef {
-  providerID: string
-  id: string
-  variant?: string
-}
-
-interface SessionState {
-  agent?: string
-  model?: ModelRef
-  outcome?: 'succeeded' | 'failed' | 'interrupted'
-}
-
-interface HostAgent {
-  id: string
-  mode: 'primary' | 'subagent' | 'all'
-  model?: ModelRef
-}
 
 interface CommandDefinitionStub {
   name: string
@@ -60,56 +41,28 @@ interface InvocationStub {
 
 type Call = { fn: string; args: Record<string, unknown> }
 
-const BUILD_MODEL: ModelRef = {
-  providerID: 'prov',
-  id: 'base-model',
-  variant: 'default',
-}
-
 /**
- * A stand-in host with just the session, agent and command members the
- * command installer uses. Every session call is logged in order, and sessions
- * keep an agent and a model the way the host's `switchAgent`/`switchModel` do.
+ * A stand-in host with just the members the command installer uses. Every
+ * session call is logged, so a test can assert what a command did and did not
+ * ask of the session.
  */
 function createHost(
   options: {
-    agents?: HostAgent[]
     native?: string[]
-    childReply?: string
-    childOutcome?: SessionState['outcome']
     promptFails?: boolean
-    waitHook?: (sessionID: string) => void
-    waitGate?: Promise<void>
-    waitFails?: boolean
-    /** The session is mid-turn when the command arrives, so a wait blocks on the gate. */
-    busyAtStart?: boolean
-    /** What the host resolves for a session with no model. `null` is no default at all. */
-    defaultModel?: ModelRef | null
-    defaultModelFails?: boolean
-    getFails?: boolean
     listFails?: boolean
     directory?: string
   } = {},
 ) {
   const calls: Call[] = []
-  const sessions = new Map<string, SessionState>([
-    ['parent', { agent: 'build', model: BUILD_MODEL }],
-  ])
-  // A wait on an idle session returns at once; only a session with a turn in
-  // flight blocks on the gate, the way the host's wait does.
-  const busy = new Set<string>(options.busyAtStart ? ['parent'] : [])
-  const agents: HostAgent[] = options.agents ?? [
-    { id: 'build', mode: 'primary' },
-    { id: 'plan', mode: 'primary' },
-    { id: 'helper', mode: 'subagent' },
-    { id: 'modelled', mode: 'primary', model: { providerID: 'p', id: 'm' } },
-  ]
   const transforms: ((editor: {
     add(c: CommandDefinitionStub): void
   }) => void)[] = []
-  let childCount = 0
   const log = (fn: string, args: Record<string, unknown>) => {
     calls.push({ fn, args })
+  }
+  const spy = (fn: string) => async (input: Record<string, unknown>) => {
+    log(fn, input)
   }
   const ctx = {
     location: { directory: options.directory ?? '/unused' },
@@ -122,102 +75,25 @@ function createHost(
         transforms.push(callback)
       },
     },
-    agent: {
-      async list() {
-        return { data: agents }
-      },
-      async transform() {},
-    },
+    agent: { async transform() {} },
     skill: { async transform() {} },
     tool: { async transform() {} },
     permission: { async assert() {} },
-    model: {
-      async default() {
-        log('modelDefault', {})
-        if (options.defaultModelFails) throw new Error('default exploded')
-        const found =
-          options.defaultModel === undefined
-            ? { providerID: 'prov', id: 'default-model' }
-            : options.defaultModel
-        return {
-          data:
-            found === null
-              ? undefined
-              : {
-                  providerID: found.providerID,
-                  id: found.id,
-                  modelID: found.id,
-                },
-        }
-      },
-    },
     session: {
       async hook() {},
-      async get(input: { sessionID: string }) {
-        log('get', input)
-        if (options.getFails) throw new Error('session lookup failed')
-        const state = sessions.get(input.sessionID)
-        if (state === undefined) throw new Error('no such session')
-        return { id: input.sessionID, ...state }
-      },
-      async switchAgent(input: { sessionID: string; agent: string }) {
-        log('switchAgent', input)
-        const state = sessions.get(input.sessionID)
-        if (state) state.agent = input.agent
-      },
-      async switchModel(input: { sessionID: string; model: ModelRef }) {
-        log('switchModel', input)
-        const state = sessions.get(input.sessionID)
-        if (state) state.model = { variant: 'default', ...input.model }
-      },
       async prompt(input: Record<string, unknown>) {
         log('prompt', input)
         if (options.promptFails) throw new Error('prompt exploded')
-        busy.add(String(input.sessionID))
       },
-      async wait(input: { sessionID: string }) {
-        log('wait', input)
-        if (options.waitFails) throw new Error('wait exploded')
-        if (!busy.has(input.sessionID)) return
-        await options.waitGate
-        busy.delete(input.sessionID)
-        options.waitHook?.(input.sessionID)
-      },
-      async create(input: {
-        parentID?: string
-        agent?: string
-        model?: ModelRef
-        title?: string
-      }) {
-        log('create', input)
-        childCount += 1
-        const id = `child-${childCount}`
-        sessions.set(id, {
-          agent: input.agent ?? 'build',
-          model: input.model ?? BUILD_MODEL,
-          outcome: options.childOutcome ?? 'succeeded',
-        })
-        return { id }
-      },
-      async context(input: { sessionID: string }) {
-        log('context', input)
-        return [
-          { type: 'user', content: [{ type: 'text', text: 'task' }] },
-          {
-            type: 'assistant',
-            content: [
-              { type: 'reasoning', text: 'hidden thoughts' },
-              { type: 'text', text: options.childReply ?? 'CHILD-REPLY' },
-            ],
-          },
-        ]
-      },
-      async synthetic(input: Record<string, unknown>) {
-        log('synthetic', input)
-      },
+      // Routing is gone: none of these may be called.
+      switchAgent: spy('switchAgent'),
+      switchModel: spy('switchModel'),
+      create: spy('create'),
+      wait: spy('wait'),
+      get: spy('get'),
     },
   } as unknown as Plugin.Context
-  return { ctx, calls, sessions, transforms }
+  return { ctx, calls, transforms }
 }
 
 type Host = ReturnType<typeof createHost>
@@ -239,23 +115,10 @@ function errorMessages(): string[] {
   return errorSpy.mock.calls.map((call) => String(call[0]))
 }
 
-/** A promise a test settles by hand, to hold a session wait open. */
-function gate() {
-  let release: () => void = () => {}
-  const promise = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  return { promise, release }
-}
-
 function makeRuntime(host: Host) {
-  return createCommandRuntime(host.ctx, createSafeGuard(), (message) => {
+  return createCommandRuntime(host.ctx, (message) => {
     console.error(`systematic: ${message}`)
   })
-}
-
-async function settle(runtime: ReturnType<typeof makeRuntime>) {
-  await Promise.all([...runtime.background])
 }
 
 function command(
@@ -283,58 +146,6 @@ function invocation(
 function callsOf(host: Host, fn: string): Call[] {
   return host.calls.filter((call) => call.fn === fn)
 }
-
-function order(host: Host): string[] {
-  return host.calls
-    .filter(
-      (call) =>
-        call.fn !== 'get' &&
-        call.fn !== 'context' &&
-        call.fn !== 'modelDefault',
-    )
-    .map((call) => {
-      const detail =
-        call.fn === 'switchAgent'
-          ? `:${String(call.args.agent)}`
-          : call.fn === 'switchModel'
-            ? `:${String((call.args.model as ModelRef).id)}`
-            : call.fn === 'create'
-              ? `:${String(call.args.agent)}`
-              : ''
-      return `${call.fn}${detail}`
-    })
-}
-
-describe('parseModelRef', () => {
-  test('splits provider and model', () => {
-    expect(parseModelRef('anthropic/claude-sonnet-5-5')).toEqual({
-      providerID: 'anthropic',
-      id: 'claude-sonnet-5-5',
-    })
-  })
-
-  test('reads a variant after #', () => {
-    expect(parseModelRef('openai/gpt-6#high')).toEqual({
-      providerID: 'openai',
-      id: 'gpt-6',
-      variant: 'high',
-    })
-  })
-
-  test('keeps further slashes in the model id', () => {
-    expect(parseModelRef('openrouter/anthropic/claude')).toEqual({
-      providerID: 'openrouter',
-      id: 'anthropic/claude',
-    })
-  })
-
-  test.each(['', 'no-provider', '/model', 'provider/', 'p/m#'])(
-    'rejects %p',
-    (value) => {
-      expect(parseModelRef(value)).toBeUndefined()
-    },
-  )
-})
 
 describe('prompt expansion', () => {
   test('substitutes $ARGUMENTS and submits one prompt with the delivery', async () => {
@@ -426,549 +237,89 @@ describe('prompt expansion', () => {
   })
 })
 
-describe('agent and model routing in the current session', () => {
-  test('switches to the configured agent, prompts, and puts the session back after the turn', async () => {
-    const turn = gate()
-    const host = createHost({ waitGate: turn.promise })
-    const { runtime, definition } = command(host, { agent: 'plan' })
+describe('a command that declares routing', () => {
+  const REFUSAL = (name: string, field: string) =>
+    `Systematic command "${name}" declares ${field}, which OpenCode v2 plugin commands cannot route. Define it as an OpenCode command in Markdown or JSON to choose its agent or model.`
 
-    await definition.execute(invocation('go'))
-    // While the turn runs, the session is on the command's agent.
-    expect(order(host).slice(0, 3)).toEqual([
-      'wait',
-      'switchAgent:plan',
-      'prompt',
-    ])
-    expect(host.sessions.get('parent')?.agent).toBe('plan')
+  test.each([
+    ['agent', { agent: 'plan' }],
+    ['model', { model: 'other/special' }],
+    ['subtask', { subtask: true }],
+  ] as const)(
+    '%s is refused with the documented message and nothing is prompted',
+    async (field, planned) => {
+      const host = createHost()
+      const { definition } = command(host, planned)
 
-    turn.release()
-    await settle(runtime)
-    expect(order(host)).toEqual([
-      'wait',
-      'switchAgent:plan',
-      'prompt',
-      'wait',
-      'switchAgent:build',
-    ])
-    expect(host.sessions.get('parent')?.agent).toBe('build')
-  })
+      await expect(definition.execute(invocation('go'))).rejects.toThrow(
+        REFUSAL('systematic:probe', field),
+      )
 
-  test('no switch and no restore when the session already runs the agent', async () => {
+      expect(callsOf(host, 'prompt')).toHaveLength(0)
+      expect(callsOf(host, 'switchAgent')).toHaveLength(0)
+      expect(callsOf(host, 'switchModel')).toHaveLength(0)
+      expect(callsOf(host, 'create')).toHaveLength(0)
+    },
+  )
+
+  test('subtask false is a declaration too', async () => {
     const host = createHost()
-    host.sessions.set('parent', { agent: 'plan', model: BUILD_MODEL })
-    const { runtime, definition } = command(host, { agent: 'plan' })
+    const { definition } = command(host, { subtask: false })
 
-    await definition.execute(invocation('go'))
-    await settle(runtime)
-
-    expect(order(host)).toEqual(['prompt'])
+    await expect(definition.execute(invocation('go'))).rejects.toThrow(
+      REFUSAL('systematic:probe', 'subtask'),
+    )
+    expect(callsOf(host, 'prompt')).toHaveLength(0)
   })
 
-  test('a command with no agent and no model touches neither', async () => {
+  test('the refusal is logged once per run with the systematic prefix', async () => {
     const host = createHost()
-    const { runtime, definition } = command(host)
+    const { definition } = command(host, { agent: 'plan' })
 
-    await definition.execute(invocation('go'))
-    await settle(runtime)
+    await definition.execute(invocation('a')).catch(() => {})
+    await definition.execute(invocation('b')).catch(() => {})
 
-    expect(order(host)).toEqual(['prompt'])
-  })
-
-  test('switches to the configured model before the prompt and restores the previous one', async () => {
-    const turn = gate()
-    const host = createHost({ waitGate: turn.promise })
-    const { runtime, definition } = command(host, {
-      model: 'other/special#high',
-    })
-
-    await definition.execute(invocation('go'))
-    expect(callsOf(host, 'switchModel')[0]?.args.model).toEqual({
-      providerID: 'other',
-      id: 'special',
-      variant: 'high',
-    })
-    expect(order(host).slice(0, 3)).toEqual([
-      'wait',
-      'switchModel:special',
-      'prompt',
-    ])
-    expect(host.sessions.get('parent')?.model).toMatchObject({ id: 'special' })
-
-    turn.release()
-    await settle(runtime)
-    expect(host.sessions.get('parent')?.model).toMatchObject({
-      providerID: 'prov',
-      id: 'base-model',
-    })
-  })
-
-  test('a model string that is not provider/model is skipped with one diagnostic across runs', async () => {
-    const host = createHost()
-    const { runtime, definition } = command(host, { model: 'nonsense' })
-
-    await definition.execute(invocation('a'))
-    await definition.execute(invocation('b'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchModel')).toHaveLength(0)
-    expect(callsOf(host, 'prompt')).toHaveLength(2)
-    const notes = errorMessages().filter((m) => m.includes('"nonsense"'))
+    const notes = errorMessages().filter((message) =>
+      message.includes('declares agent'),
+    )
     expect(notes).toHaveLength(1)
     expect(notes[0]).toStartWith('systematic: ')
   })
 
-  test('a configured agent that is not registered runs on the current agent with exactly one diagnostic', async () => {
+  test('the first declared field is named when several are declared', async () => {
     const host = createHost()
-    const { runtime, definition } = command(host, { agent: 'ghost' })
-
-    await definition.execute(invocation('a'))
-    await definition.execute(invocation('b'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchAgent')).toHaveLength(0)
-    expect(callsOf(host, 'prompt')).toHaveLength(2)
-    expect(host.sessions.get('parent')?.agent).toBe('build')
-    const notes = errorMessages().filter((m) => m.includes('"ghost"'))
-    expect(notes).toHaveLength(1)
-    expect(notes[0]).toStartWith('systematic: ')
-    expect(notes[0]).toContain('systematic:probe')
-  })
-
-  test('does not undo an agent switch made while the turn ran', async () => {
-    const host = createHost({
-      waitHook: (sessionID) => {
-        const state = host.sessions.get(sessionID)
-        if (state) state.agent = 'modelled'
-      },
-    })
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    await definition.execute(invocation('go'))
-    await settle(runtime)
-
-    expect(host.sessions.get('parent')?.agent).toBe('modelled')
-    expect(callsOf(host, 'switchAgent')).toHaveLength(1)
-  })
-
-  test('a prompt that fails restores the session at once, reports, and rethrows', async () => {
-    const host = createHost({ promptFails: true })
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    await expect(definition.execute(invocation('go'))).rejects.toThrow(
-      'prompt exploded',
-    )
-    await settle(runtime)
-
-    expect(host.sessions.get('parent')?.agent).toBe('build')
-    expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" failed: prompt exploded',
-    ])
-  })
-
-  test('a restore that also fails is reported once and the prompt error is still the one thrown', async () => {
-    const host = createHost({ promptFails: true })
-    const switchAgent = host.ctx.session.switchAgent.bind(host.ctx.session)
-    host.ctx.session.switchAgent = async (input) => {
-      // The switch to the command's agent works; the put-back does not.
-      if (input.agent === 'build') throw new Error('switch back exploded')
-      return switchAgent(input)
-    }
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    await expect(definition.execute(invocation('go'))).rejects.toThrow(
-      'prompt exploded',
-    )
-    await settle(runtime)
-
-    const restoreNotes = errorMessages().filter((message) =>
-      message.includes('could not restore the session'),
-    )
-    expect(restoreNotes).toEqual([
-      'systematic: command "systematic:probe" could not restore the session: switch back exploded',
-    ])
-    // The prompt failure is still reported on its own, after the restore note.
-    expect(errorMessages()).toEqual([
-      restoreNotes[0] as string,
-      'systematic: command "systematic:probe" failed: prompt exploded',
-    ])
-  })
-
-  test('a second run waits for the first run to put the session back before it reads the state', async () => {
-    const host = createHost()
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    await definition.execute(invocation('one'))
-    await definition.execute(invocation('two'))
-    await settle(runtime)
-
-    // Two full cycles: neither run mistakes the switched agent for the original.
-    expect(
-      order(host).filter((step) => step === 'switchAgent:build'),
-    ).toHaveLength(2)
-    expect(host.sessions.get('parent')?.agent).toBe('build')
-  })
-})
-
-describe('a turn already running when the command arrives', () => {
-  test('the switch and the prompt wait for that turn to end', async () => {
-    const turn = gate()
-    const host = createHost({ busyAtStart: true, waitGate: turn.promise })
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    const running = definition.execute(invocation('go'))
-    await Bun.sleep(20)
-    // The host reads a session's agent for every model request, so nothing
-    // may change while the earlier turn is still going.
-    expect(order(host)).toEqual(['wait'])
-    expect(host.sessions.get('parent')?.agent).toBe('build')
-
-    turn.release()
-    await running
-    await settle(runtime)
-    expect(order(host)).toEqual([
-      'wait',
-      'switchAgent:plan',
-      'prompt',
-      'wait',
-      'switchAgent:build',
-    ])
-  })
-
-  test('a model switch waits too', async () => {
-    const turn = gate()
-    const host = createHost({ busyAtStart: true, waitGate: turn.promise })
-    const { runtime, definition } = command(host, { model: 'other/special' })
-
-    const running = definition.execute(invocation('go'))
-    await Bun.sleep(20)
-    expect(callsOf(host, 'switchModel')).toHaveLength(0)
-
-    turn.release()
-    await running
-    await settle(runtime)
-    expect(order(host).slice(0, 3)).toEqual([
-      'wait',
-      'switchModel:special',
-      'prompt',
-    ])
-  })
-
-  test('the session is read after the wait, so a switch made during the earlier turn is the one restored to', async () => {
-    const turn = gate()
-    let waits = 0
-    const host = createHost({
-      busyAtStart: true,
-      waitGate: turn.promise,
-      waitHook: (sessionID) => {
-        // Only the earlier turn changes the agent, as it ends.
-        waits += 1
-        const state = host.sessions.get(sessionID)
-        if (state && waits === 1) state.agent = 'modelled'
-      },
-    })
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    const running = definition.execute(invocation('go'))
-    turn.release()
-    await running
-    await settle(runtime)
-
-    expect(host.sessions.get('parent')?.agent).toBe('modelled')
-  })
-
-  test('a command that switches nothing does not wait', async () => {
-    const host = createHost({ busyAtStart: true })
-    const { runtime, definition } = command(host)
-
-    await definition.execute(invocation('go'))
-    await settle(runtime)
-
-    expect(order(host)).toEqual(['prompt'])
-  })
-})
-
-describe('a session with no agent or model of its own', () => {
-  const DEFAULT_MODEL: ModelRef = { providerID: 'prov', id: 'default-model' }
-
-  test('a model switch is undone to the host default model', async () => {
-    const host = createHost()
-    host.sessions.set('parent', {})
-    const { runtime, definition } = command(host, { model: 'other/special' })
-
-    await definition.execute(invocation('go'))
-    expect(host.sessions.get('parent')?.model).toMatchObject({ id: 'special' })
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchModel').map((c) => c.args.model)).toEqual([
-      { providerID: 'other', id: 'special' },
-      DEFAULT_MODEL,
-    ])
-    expect(host.sessions.get('parent')?.model).toMatchObject(DEFAULT_MODEL)
-    expect(errorMessages()).toEqual([])
-  })
-
-  test('a session that names a model never asks for the default', async () => {
-    const host = createHost()
-    const { runtime, definition } = command(host, { model: 'other/special' })
-
-    await definition.execute(invocation('go'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'modelDefault')).toHaveLength(0)
-  })
-
-  test('with no default model either, the model is not switched and one diagnostic says why', async () => {
-    const host = createHost({ defaultModel: null })
-    host.sessions.set('parent', { agent: 'build' })
-    const { runtime, definition } = command(host, { model: 'other/special' })
-
-    await definition.execute(invocation('a'))
-    await definition.execute(invocation('b'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchModel')).toHaveLength(0)
-    expect(callsOf(host, 'prompt')).toHaveLength(2)
-    expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" could not switch model: the session has no model to restore',
-    ])
-  })
-
-  test('a default model lookup that fails is reported and the model is not switched', async () => {
-    const host = createHost({ defaultModelFails: true })
-    host.sessions.set('parent', { agent: 'build' })
-    const { runtime, definition } = command(host, { model: 'other/special' })
-
-    await definition.execute(invocation('go'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchModel')).toHaveLength(0)
-    expect(callsOf(host, 'prompt')).toHaveLength(1)
-    expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" could not read the default model: default exploded',
-      'systematic: command "systematic:probe" could not switch model: the session has no model to restore',
-    ])
-  })
-
-  test('the agent is not switched, the turn runs on the current agent and one diagnostic says why', async () => {
-    const host = createHost()
-    host.sessions.set('parent', { model: BUILD_MODEL })
-    const { runtime, definition } = command(host, { agent: 'plan' })
-
-    await definition.execute(invocation('a'))
-    await definition.execute(invocation('b'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchAgent')).toHaveLength(0)
-    expect(callsOf(host, 'prompt')).toHaveLength(2)
-    expect(host.sessions.get('parent')?.agent).toBeUndefined()
-    expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" could not switch agent: the session has no agent to restore',
-    ])
-  })
-
-  test('with neither, the agent is skipped and the model still switches and returns', async () => {
-    const host = createHost()
-    host.sessions.set('parent', {})
-    const { runtime, definition } = command(host, {
+    const { definition } = command(host, {
       agent: 'plan',
       model: 'other/special',
     })
 
-    await definition.execute(invocation('go'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'switchAgent')).toHaveLength(0)
-    expect(host.sessions.get('parent')?.agent).toBeUndefined()
-    expect(host.sessions.get('parent')?.model).toMatchObject(DEFAULT_MODEL)
-    expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" could not switch agent: the session has no agent to restore',
-    ])
+    await expect(definition.execute(invocation('go'))).rejects.toThrow(
+      REFUSAL('systematic:probe', 'agent'),
+    )
   })
 
-  test('a command with no agent and no model does not look anything up', async () => {
+  test('a plain command still prompts once on the invoking session', async () => {
     const host = createHost()
-    host.sessions.set('parent', {})
-    const { runtime, definition } = command(host)
+    const { definition } = command(host)
 
     await definition.execute(invocation('go'))
-    await settle(runtime)
 
-    expect(callsOf(host, 'modelDefault')).toHaveLength(0)
-    expect(order(host)).toEqual(['prompt'])
-  })
-})
-
-describe('subagent mode', () => {
-  test('runs in a child session and posts the result back to the parent', async () => {
-    const host = createHost({ childReply: 'THE-CHILD-ANSWER' })
-    const { runtime, definition } = command(host, {
-      agent: 'helper',
-      template: 'Audit $ARGUMENTS',
-    })
-
-    await definition.execute(invocation('pkg-x'))
-    await settle(runtime)
-
-    const create = callsOf(host, 'create')[0]?.args
-    expect(create).toMatchObject({
-      parentID: 'parent',
-      agent: 'helper',
-    })
-    const childPrompt = callsOf(host, 'prompt')[0]?.args
-    expect(childPrompt).toMatchObject({
-      sessionID: 'child-1',
-      text: 'Audit pkg-x',
-    })
-    const synthetic = callsOf(host, 'synthetic')[0]?.args
-    expect(synthetic?.sessionID).toBe('parent')
-    expect(String(synthetic?.text)).toContain('THE-CHILD-ANSWER')
-    expect(String(synthetic?.text)).toContain('systematic:probe')
-    expect(String(synthetic?.text)).not.toContain('hidden thoughts')
-    // The parent keeps its agent and model.
-    expect(callsOf(host, 'switchAgent')).toHaveLength(0)
-    expect(callsOf(host, 'switchModel')).toHaveLength(0)
-    expect(order(host)).toEqual([
-      'create:helper',
-      'prompt',
-      'wait',
-      'synthetic',
-    ])
-  })
-
-  test('execute returns before the child finishes', async () => {
-    const turn = gate()
-    const host = createHost({ waitGate: turn.promise })
-    const { runtime, definition } = command(host, { subtask: true })
-
-    await definition.execute(invocation('x'))
-    expect(callsOf(host, 'synthetic')).toHaveLength(0)
-
-    turn.release()
-    await settle(runtime)
-    expect(callsOf(host, 'synthetic')).toHaveLength(1)
-  })
-
-  test('subtask true uses a child even for a primary agent, and subtask false stays inline for a subagent', async () => {
-    const forced = createHost()
-    const forcedCommand = command(forced, { agent: 'plan', subtask: true })
-    await forcedCommand.definition.execute(invocation('x'))
-    await settle(forcedCommand.runtime)
-    expect(callsOf(forced, 'create')).toHaveLength(1)
-
-    const inline = createHost()
-    const inlineCommand = command(inline, { agent: 'helper', subtask: false })
-    await inlineCommand.definition.execute(invocation('x'))
-    await settle(inlineCommand.runtime)
-    expect(callsOf(inline, 'create')).toHaveLength(0)
-    expect(callsOf(inline, 'switchAgent')[0]?.args.agent).toBe('helper')
-  })
-
-  test('with subtask unset, a subagent-mode agent runs as a child and a primary agent does not', async () => {
-    const child = createHost()
-    const childCommand = command(child, { agent: 'helper' })
-    await childCommand.definition.execute(invocation('x'))
-    await settle(childCommand.runtime)
-    expect(callsOf(child, 'create')).toHaveLength(1)
-
-    const plain = createHost()
-    const plainCommand = command(plain, { agent: 'plan' })
-    await plainCommand.definition.execute(invocation('x'))
-    await settle(plainCommand.runtime)
-    expect(callsOf(plain, 'create')).toHaveLength(0)
-  })
-
-  test('the child uses the command model, else the agent model, else the parent model', async () => {
-    const withModel = createHost()
-    const a = command(withModel, { agent: 'helper', model: 'x/y' })
-    await a.definition.execute(invocation('q'))
-    await settle(a.runtime)
-    expect(callsOf(withModel, 'create')[0]?.args.model).toEqual({
-      providerID: 'x',
-      id: 'y',
-    })
-
-    const agentModel = createHost({
-      agents: [
-        { id: 'build', mode: 'primary' },
-        { id: 'helper', mode: 'subagent', model: { providerID: 'p', id: 'm' } },
-      ],
-    })
-    const b = command(agentModel, { agent: 'helper' })
-    await b.definition.execute(invocation('q'))
-    await settle(b.runtime)
-    // The agent's own model applies only when the session names none.
-    expect(callsOf(agentModel, 'create')[0]?.args.model).toBeUndefined()
-
-    const parentModel = createHost()
-    const c = command(parentModel, { agent: 'helper' })
-    await c.definition.execute(invocation('q'))
-    await settle(c.runtime)
-    expect(callsOf(parentModel, 'create')[0]?.args.model).toMatchObject({
-      providerID: 'prov',
-      id: 'base-model',
-    })
-  })
-
-  test('files and the other attachments go to the child prompt', async () => {
-    const host = createHost()
-    const { runtime, definition } = command(host, { subtask: true })
-    const files = [{ uri: 'file:///tmp/a.md' }]
-
-    await definition.execute(invocation('x', { files }))
-    await settle(runtime)
-
-    expect(callsOf(host, 'prompt')[0]?.args.files).toBe(files)
-  })
-
-  test('a child that failed still reports back to the parent', async () => {
-    const host = createHost({ childOutcome: 'failed', childReply: '' })
-    const { runtime, definition } = command(host, { subtask: true })
-
-    await definition.execute(invocation('x'))
-    await settle(runtime)
-
-    const synthetic = callsOf(host, 'synthetic')[0]?.args
-    expect(String(synthetic?.text)).toContain('failed')
-  })
-
-  test('a child run that throws is reported and does not escape', async () => {
-    const host = createHost({ waitFails: true })
-    const { runtime, definition } = command(host, { subtask: true })
-
-    await definition.execute(invocation('x'))
-    await expect(settle(runtime)).resolves.toBeUndefined()
-
-    expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" subagent failed: wait exploded',
-    ])
-  })
-
-  test('an agent that is not registered runs the child on the parent agent with one diagnostic', async () => {
-    const host = createHost()
-    const { runtime, definition } = command(host, {
-      agent: 'ghost',
-      subtask: true,
-    })
-
-    await definition.execute(invocation('x'))
-    await settle(runtime)
-
-    expect(callsOf(host, 'create')[0]?.args.agent).toBe('build')
-    expect(errorMessages().filter((m) => m.includes('"ghost"'))).toHaveLength(1)
+    expect(callsOf(host, 'prompt')).toHaveLength(1)
+    expect(errorMessages()).toEqual([])
   })
 })
 
 describe('a command that throws', () => {
   test('is reported with the systematic prefix and rethrown for the invoker', async () => {
-    const host = createHost({ getFails: true })
-    const { definition } = command(host, { agent: 'plan' })
+    const host = createHost({ promptFails: true })
+    const { definition } = command(host)
 
     await expect(definition.execute(invocation('x'))).rejects.toThrow(
-      'session lookup failed',
+      'prompt exploded',
     )
 
     expect(errorMessages()).toEqual([
-      'systematic: command "systematic:probe" failed: session lookup failed',
+      'systematic: command "systematic:probe" failed: prompt exploded',
     ])
   })
 })

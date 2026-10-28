@@ -47,7 +47,7 @@ Requirements and acceptance examples are those of the origin document.
 **v2 behavior**
 - R7. Every v2 session receives the bootstrap, with the same content rules as v1. (U3, U12)
 - R8. Agents and skills register through v2 domain transforms with v1-equal names, prompts and permissions. (U3, U9, U10)
-- R9. Commands keep v1 names and descriptions, expand `$ARGUMENTS` and positionals, route to agent, model and subagent, and never run `!`-backtick blocks. (U3, U11, U13)
+- R9. Commands keep v1 names and descriptions, expand `$ARGUMENTS` and positionals, and never run `!`-backtick blocks. A command that declares `agent`, `model` or `subtask` is refused on v2, which cannot route a plugin command. (U3, U11, U13)
 - R10. An agent loads any enabled skill by name with equal permission enforcement. `systematic_skill` is dropped on v2 only if the native tool has parity. (U3, U10)
 - R11. Output restoration exists on v2 only if a probe shows truncation or pruning. (U3, U10)
 - R12. The v2 adapter never throws out of registration. (U3, U8)
@@ -295,10 +295,12 @@ Each constraint is re-verified on v2 by a probe or a contract test.
 
 - The plugin `id` is `systematic`.
 - Host selection uses `SYSTEMATIC_OPENCODE_HOST` (`v1` or `v2`), the v2 binary path `SYSTEMATIC_OPENCODE_V2_BIN`, and for the v1 line `SYSTEMATIC_OPENCODE_V1_LINE`.
-- The first guard floors were set from local runs: 140 for v2, 28 for the v1 floor and 60 for the v1 current pin. They are to be adjusted after the first CI run.
+- The first guard floors were set from local runs: 140 for v2, 28 for the v1 floor and 60 for the v1 current pin.
 - The v2 adapter did split: `opencode-v2-permissions.ts`, `opencode-v2-skills.ts`, `opencode-v2-commands.ts` and `opencode-v2-bootstrap.ts` are separate modules.
 - `ctx.tool.transform` takes a JSON Schema input, so no schema-builder runtime import is needed.
 - There is no ownership marker. The agent editor strips unknown properties, so a marker does not survive. Existence is checked with `editor.get(id)`, which sees the host's agents and earlier plugins' agents only.
+- The pass floors stay at 140, 28 and 60. CI on Linux passed 163 (v2), 32 (v1 floor) and 72 (v1 current).
+- Command routing was removed after review. See the U11 approach and the Probe outcomes above.
 
 ### Edge-case coverage
 
@@ -353,7 +355,7 @@ The v2 adapter's mechanism per concern is decided by probes in U3. Each row name
 | P-SKILL | Does the native skill tool load transformed skills, refuse disabled or denied skills per agent, and carry arguments? | `systematic_skill` is not registered on v2 | Port `systematic_skill` through the tool domain | U10 |
 | P-TRUNC | Does a skill body above the host limit reach the model intact, and is there a prune placeholder? | No restoration on v2 | Build restoration on the structured signal; marker text only if no signal exists, recorded in `HARNESSES.md` | U10 |
 | P-TOOL | Which input schema form does the tool domain take, and is a runtime import needed? | Run only when P-SKILL fails | n/a | U10 |
-| P-CMD | Does `ctx.session.prompt` route a prompt to a named agent, model and subagent, and is `systematic:<n>` a legal command name? | Commands execute through it | Adjust naming or routing; record the gap | U11 |
+| P-CMD | Does `ctx.session.prompt` route a prompt to a named agent, model and subagent, and is `systematic:<n>` a legal command name? | Commands execute through it | Plugin commands do their own expansion and cannot route; a command that declares routing is refused | U11 |
 | P-ORDER | Do Systematic transforms run before or after user config, and is replay fresh? | Build as designed | Re-order or make transforms idempotent | U8 |
 | P-ERR | How does v2 treat a throw in setup, a transform or a hook, and where does `console.error` surface? | Keep the safe wrapper and the `systematic` prefix | Add a stricter wrapper | U8 |
 | P-TRUST | Does `ctx` provide the project directory, and what happens under one shared service for several projects? | Use project config | `includeProject: false` | U8 |
@@ -380,7 +382,7 @@ Recorded on OpenCode 2.2.0 (macOS, Bun 1.4.4 driver) on 2026-10-27. `HARNESSES.m
 | P-SKILL | Partial | The native tool takes only an id, so `systematic_skill` is ported |
 | P-TOOL | Passed | JSON Schema input, `options: {codemode: false}` |
 | P-TRUNC | Truncates | Capture by call id, restore in the `context` hook; no prune placeholder on v2 |
-| P-CMD | Passed with constraints | Plugin does its own expansion; `switchAgent` and `switchModel` then `prompt` |
+| P-CMD | Passed with constraints | Plugin does its own expansion and submits one prompt; it cannot route, so a command that declares `agent`, `model` or `subtask` is refused |
 | P-ORDER | Documented | User config applies after all plugin transforms; `reload()` replays transforms and does not re-run `setup` |
 | P-ERR | Documented | A rejected `setup` leaves the plugin unloaded; a throwing transform disables the plugin; a throwing hook breaks the turn; so everything is guarded |
 | P-TRUST | Documented | `ctx.location.directory` is the project directory; one fresh instance per location |
@@ -388,10 +390,10 @@ Recorded on OpenCode 2.2.0 (macOS, Bun 1.4.4 driver) on 2026-10-27. `HARNESSES.m
 **Built differently from the plan text**
 - Invalid config mirrors v1: v1 throws at load and in the `config` hook, and v2 rejects `setup` with the same message. Neither is fail-open.
 - Managed permissions are appended to the host's default rules instead of replacing them. Integer-like skill names keep their order on v2, which v1 does not.
-- Commands put the session's agent and model back after the turn, because v2 switches persist.
+- Commands do not route. A v2 plugin command cannot choose an agent or model, so a command that declares `agent`, `model` or `subtask` is refused with a message. Switching the session around the turn was built first and removed: switches persist, the host reads agent and model per request, and a fresh session has nothing to restore.
 - The bootstrap is about 9.2 KB, far below the 256 KiB entry cap. A changed bootstrap adds a `<system-update>` message, and entries outlive the plugin.
 - `todowrite` is conditional on an experimental host option, so the v2 profile marks task tracking conditional.
-- `dist/index.d.ts` imports types from both plugin packages, so a consumer with `skipLibCheck: false` and one peer installed gets an unresolved-module error. Low impact, because nobody imports the plugin's types.
+- `dist/index.d.ts` names neither plugin package: the default export is typed as a small structural entry (`id`, `setup(ctx: unknown)`, `server(input: unknown)`), checked at build time against both hosts' types. A test type-checks the packed declaration with `skipLibCheck` off in projects that have one, the other, or neither peer.
 
 ---
 
@@ -804,7 +806,7 @@ Test expectation: none -- throwaway probe.
 
 - [x] U11. Commands
 
-**Goal:** Systematic commands run on v2 with v1's names and descriptions, expand arguments, and route to the configured agent, model and subagent.
+**Goal:** Systematic commands run on v2 with v1's names and descriptions and expand arguments. A command that declares routing is refused, because a v2 plugin command cannot route.
 
 **Requirements:** R9
 
@@ -818,28 +820,24 @@ Test expectation: none -- throwaway probe.
 - Test: `tests/integration/opencode-v2.test.ts`
 
 **Approach:**
-- Register one command per planned command through `ctx.command.transform`. Each `execute` expands `$ARGUMENTS` and positionals with `substituteSkillArguments` (the template is already wrapped by the plan), then submits through `ctx.session.prompt`. A v2 plugin command receives only the typed text, and `prompt` takes no agent or model, so an inline command calls `switchAgent` and `switchModel` first.
+- Register one command per planned command through `ctx.command.transform`. Each `execute` expands `$ARGUMENTS` and positionals with `substituteSkillArguments` (the template is already wrapped by the plan), then submits one `ctx.session.prompt` on the invoking session with the invocation's `delivery`, `files`, `agents` and `skills`.
 - `execute` never runs `!`-backtick blocks. The text stays literal in the prompt.
 - Names are `systematic:<n>` with the "(Systematic) " description prefix, subject to the P-CMD colon finding. Discovered skills register under their bare name, gated by `skills_as_commands`, and skip any name a native command already owns.
-- Pass `delivery`, `@file` and attachments through. If a command's configured agent is not registered on v2 (checked with `ctx.agent.list()` first, because `switchAgent` to an unknown agent succeeds and then every turn fails), the command runs on the session's current agent and logs one diagnostic with the `systematic` prefix.
-- Model strings are converted to whatever shape P-CMD found.
-- v2 agent and model switches persist, so after the turn the command puts the session's agent and model back, but only while the session still shows what the command set. `execute` returns once the prompt is submitted and the put-back runs in the background. A run that overlaps a pending put-back waits for it. This differs from v1, where a command's agent applied to that turn only.
-- Subagent mode follows the host rule: `subtask: true`, or an agent whose mode is `subagent` unless `subtask` is false. The command creates a child session with `parentID`, prompts it, waits, and posts the child's last reply to the parent with `synthetic`. A throwing `execute` is logged and rethrown, and the host reports it to the invoker as a command error without unloading the plugin. A name that matches a built-in command (read once from `ctx.command.list()` at setup) is skipped with one diagnostic, because a plugin command would replace the built-in.
+- Routing is not offered. `prompt` takes no agent or model, switches persist in the session, the host reads a session's agent and model for every request (so a switch mid-turn changes that turn), a fresh session has no agent or model to restore, and there is no call that clears one. A command whose plan declares `agent`, `model` or `subtask` is therefore refused: `execute` throws `Systematic command "<name>" declares <field>, which OpenCode v2 plugin commands cannot route. Define it as an OpenCode command in Markdown or JSON to choose its agent or model.` and logs it once with the `systematic` prefix. Only bundled skills can declare those fields (discovered skills drop them on both hosts), and no bundled skill does.
+- A throwing `execute` is logged and rethrown, and the host reports it to the invoker as a command error without unloading the plugin. A name that matches a built-in command (read once from `ctx.command.list()` at setup) is skipped with one diagnostic, because a plugin command would replace the built-in.
 
 **Patterns to follow:**
 - `src/lib/skill-loader.ts` for the template.
 - `tests/integration/skill-command-probe.test.ts` for how the v1 command path is observed.
 
 **Test scenarios:**
-- Happy path (AE7): a command with `$ARGUMENTS` submits the expanded prompt to its configured agent.
-- Happy path (P-CMD format): a command with a configured model submits with that model.
-- Happy path (P-CMD format): a subagent-mode command runs as a subagent and returns its result to the session.
+- Happy path (AE7): a command with `$ARGUMENTS` submits the expanded prompt on the invoking session, which keeps its agent and model.
+- Error path: a command that declares `agent`, `model` or `subtask` is refused with the documented message, nothing is prompted, and one diagnostic is logged.
 - Happy path: positional arguments `$1` and `$2` expand, and the last positional takes the rest.
 - Edge case: no placeholders and non-blank arguments appends the arguments after a blank line.
 - Edge case (F3): `@file` references and attachments reach the prompt input unchanged.
 - Edge case (F3): a discovered skill whose bare name collides with a native command is skipped.
 - Error path (AE7): a `!`-backtick block in a template is not executed, and the literal text is in the prompt.
-- Error path (F3): a command whose configured agent is not registered runs on the session's current agent and logs exactly one `systematic`-prefixed diagnostic.
 - Integration: on the pinned v2 host, running a command with arguments reaches the scripted provider with the expanded text.
 
 **Verification:**

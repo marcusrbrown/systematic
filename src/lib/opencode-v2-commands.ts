@@ -1,22 +1,23 @@
 import type { Plugin } from '@opencode/plugin'
 import type { PlannedCommand } from './asset-plan.js'
-import type { SafeGuard, V2Installer } from './opencode-v2.js'
+import type { V2Installer } from './opencode-v2.js'
 import { substituteSkillArguments } from './skill-resolver.js'
-import { isRecord } from './validation.js'
 
 /**
  * Systematic commands on OpenCode v2.
  *
  * A v2 plugin command receives the text typed after its name, untouched, and
  * submits its own prompt. So this module does what OpenCode's own command path
- * does for a stored command: expand `$ARGUMENTS` and `$1..$N`, route to the
- * command's agent and model, and run as a child session in subagent mode. It
- * never runs `!`-backtick blocks; their text stays literal in the prompt.
+ * does for a stored command's text: expand `$ARGUMENTS` and `$1..$N`, then
+ * submit one prompt on the invoking session with the invocation's delivery and
+ * attachments. It never runs `!`-backtick blocks; their text stays literal in
+ * the prompt.
  *
- * `prompt` takes no agent or model, so routing switches the session and
- * switches it back once the turn ends. Both the turn and a subagent run
- * continue after `execute` returns, so the invoker is not held for their whole
- * length.
+ * It does not route. A v2 plugin command cannot choose an agent or a model for
+ * its prompt, and switching the session around the turn leaves the user's
+ * session changed. A command that declares `agent`, `model` or `subtask` is
+ * refused with a message instead; OpenCode commands written in Markdown or JSON
+ * can do that routing.
  */
 
 type CommandEditor = Parameters<
@@ -24,49 +25,19 @@ type CommandEditor = Parameters<
 >[0]
 export type V2CommandDefinition = Parameters<CommandEditor['add']>[0]
 type Invocation = Parameters<V2CommandDefinition['execute']>[0]
-type PromptAttachments = Pick<
-  Invocation['prompt'],
-  'files' | 'agents' | 'skills'
->
-
-export interface V2ModelRef {
-  providerID: string
-  id: string
-  variant?: string
-}
-
-/** The agents a command can name: what `ctx.agent.list()` reports. */
-interface HostAgent {
-  id: string
-  mode: 'primary' | 'subagent' | 'all'
-  model?: V2ModelRef
-}
 
 export interface CommandRuntime {
   ctx: Plugin.Context
-  guard: SafeGuard
   report: (message: string) => void
   /** Diagnostics already written, so a command run twice reports once. */
   reported: Set<string>
-  /** Turns and subagent runs still going after their `execute` returned. */
-  background: Set<Promise<unknown>>
-  /** Per session: the pending put-back of a command's agent and model. */
-  restoring: Map<string, Promise<unknown>>
 }
 
 export function createCommandRuntime(
   ctx: Plugin.Context,
-  guard: SafeGuard,
   report: (message: string) => void,
 ): CommandRuntime {
-  return {
-    ctx,
-    guard,
-    report,
-    reported: new Set(),
-    background: new Set(),
-    restoring: new Map(),
-  }
+  return { ctx, report, reported: new Set() }
 }
 
 function reportOnce(runtime: CommandRuntime, key: string, message: string) {
@@ -75,354 +46,22 @@ function reportOnce(runtime: CommandRuntime, key: string, message: string) {
   runtime.report(message)
 }
 
-/** `provider/model` or `provider/model#variant` to the v2 model reference. */
-export function parseModelRef(value: string): V2ModelRef | undefined {
-  const hash = value.indexOf('#')
-  const base = hash === -1 ? value : value.slice(0, hash)
-  const variant = hash === -1 ? undefined : value.slice(hash + 1)
-  if (variant === '') return undefined
-  const slash = base.indexOf('/')
-  if (slash <= 0 || slash === base.length - 1) return undefined
-  const providerID = base.slice(0, slash)
-  const id = base.slice(slash + 1)
-  return variant === undefined
-    ? { providerID, id }
-    : { providerID, id, variant }
-}
-
-function sameModel(a: V2ModelRef, b: V2ModelRef): boolean {
-  return (
-    a.providerID === b.providerID &&
-    a.id === b.id &&
-    (a.variant ?? 'default') === (b.variant ?? 'default')
-  )
-}
-
-interface Route {
-  agent: HostAgent | undefined
-  model: V2ModelRef | undefined
-  subagent: boolean
-}
-
-async function resolveRoute(
-  runtime: CommandRuntime,
-  name: string,
+/** The first routing field a command declares, which v2 cannot honor. */
+function declaredRouting(
   planned: PlannedCommand,
-): Promise<Route> {
-  let agent: HostAgent | undefined
-  if (planned.agent !== undefined) {
-    // `switchAgent` to an id nobody registered succeeds, and then every turn
-    // of the session fails. Look the agent up first.
-    const listed = await runtime.ctx.agent.list()
-    agent = listed.data.find((candidate) => candidate.id === planned.agent)
-    if (agent === undefined) {
-      reportOnce(
-        runtime,
-        `agent:${name}`,
-        `command "${name}" names agent "${planned.agent}", which is not registered; running on the current agent`,
-      )
-    }
-  }
-
-  let model: V2ModelRef | undefined
-  if (planned.model !== undefined) {
-    model = parseModelRef(planned.model)
-    if (model === undefined) {
-      reportOnce(
-        runtime,
-        `model:${name}`,
-        `command "${name}" has model "${planned.model}", which is not provider/model; ignoring the model`,
-      )
-    }
-  }
-
-  // The rule OpenCode applies to a stored command: a child when asked for, or
-  // when the agent is a subagent and the command did not opt out.
-  const subagent =
-    planned.subtask === true ||
-    (planned.subtask !== false && agent?.mode === 'subagent')
-  return { agent, model, subagent }
+): 'agent' | 'model' | 'subtask' | undefined {
+  if (planned.agent !== undefined) return 'agent'
+  if (planned.model !== undefined) return 'model'
+  if (planned.subtask !== undefined) return 'subtask'
+  return undefined
 }
 
-function attachmentsOf(invocation: Invocation): PromptAttachments {
-  const { files, agents, skills } = invocation.prompt
-  return { files, agents, skills }
+function refusalMessage(name: string, field: string): string {
+  return `Systematic command "${name}" declares ${field}, which OpenCode v2 plugin commands cannot route. Define it as an OpenCode command in Markdown or JSON to choose its agent or model.`
 }
 
-/** Runs `task` after `execute` has returned and keeps it reachable until it ends. */
-function startBackground(
+async function submit(
   runtime: CommandRuntime,
-  label: string,
-  task: () => Promise<void>,
-): Promise<void> {
-  const running = runtime.guard.async(label, task)()
-  const tracked = running.then(() => undefined)
-  runtime.background.add(tracked)
-  void tracked.finally(() => runtime.background.delete(tracked))
-  return tracked
-}
-
-interface SessionSnapshot {
-  agent: string | undefined
-  model: V2ModelRef | undefined
-}
-
-async function readSession(
-  runtime: CommandRuntime,
-  sessionID: string,
-): Promise<SessionSnapshot> {
-  const info = await runtime.ctx.session.get({ sessionID })
-  return { agent: info.agent, model: info.model }
-}
-
-interface Switched {
-  /** The agent the command switched to, when it did. */
-  agent: string | undefined
-  /** The model the command switched to, when it did. */
-  model: V2ModelRef | undefined
-}
-
-/**
- * Put back what the command switched, but only while the session still shows
- * what the command set. A switch made by the user in the meantime stays.
- */
-async function restoreSession(
-  runtime: CommandRuntime,
-  sessionID: string,
-  before: SessionSnapshot,
-  switched: Switched,
-): Promise<void> {
-  const { session } = runtime.ctx
-  let agentRestored = false
-  const current = await readSession(runtime, sessionID)
-  if (
-    switched.agent !== undefined &&
-    before.agent !== undefined &&
-    current.agent === switched.agent
-  ) {
-    await session.switchAgent({ sessionID, agent: before.agent })
-    agentRestored = true
-  }
-  if (before.model === undefined) return
-  const now = agentRestored ? await readSession(runtime, sessionID) : current
-  if (now.model === undefined || sameModel(now.model, before.model)) return
-  // An explicit model is undone while it is still the one in place. Switching
-  // the agent back can also bring the previous agent's model along, which
-  // is undone when the agent was ours to put back.
-  const stillOurs =
-    switched.model !== undefined && sameModel(now.model, switched.model)
-  if (stillOurs || (agentRestored && switched.agent !== undefined)) {
-    await session.switchModel({ sessionID, model: before.model })
-  }
-}
-
-/**
- * The model the host runs a session on when the session names none, so a
- * switch can be undone to something. Unreadable counts as none.
- */
-async function hostDefaultModel(
-  runtime: CommandRuntime,
-  name: string,
-): Promise<V2ModelRef | undefined> {
-  try {
-    const { data } = await runtime.ctx.model.default()
-    return data ? { providerID: data.providerID, id: data.modelID } : undefined
-  } catch (error) {
-    runtime.report(
-      `command "${name}" could not read the default model: ${error instanceof Error ? error.message : 'unknown error'}`,
-    )
-    return undefined
-  }
-}
-
-/**
- * What the command may switch, and what the session goes back to. A session
- * with no agent or model of its own runs on the host's defaults, and v2 has no
- * way to clear a session's agent or model once one is set. The default model
- * can be read, so a model switch is undone to it. The default agent cannot
- * be read, so a session with no agent is left on its current agent.
- */
-async function planSwitch(
-  runtime: CommandRuntime,
-  name: string,
-  observed: SessionSnapshot,
-  route: Route,
-): Promise<{ before: SessionSnapshot; switched: Switched }> {
-  let agent: string | undefined
-  if (route.agent !== undefined && observed.agent !== route.agent.id) {
-    if (observed.agent === undefined) {
-      reportOnce(
-        runtime,
-        `switch-agent:${name}`,
-        `command "${name}" could not switch agent: the session has no agent to restore`,
-      )
-    } else {
-      agent = route.agent.id
-    }
-  }
-
-  let model: V2ModelRef | undefined
-  let modelBefore = observed.model
-  if (route.model !== undefined) {
-    modelBefore ??= await hostDefaultModel(runtime, name)
-    if (modelBefore === undefined) {
-      reportOnce(
-        runtime,
-        `switch-model:${name}`,
-        `command "${name}" could not switch model: the session has no model to restore`,
-      )
-    } else {
-      model = route.model
-    }
-  }
-  return {
-    before: { agent: observed.agent, model: modelBefore },
-    switched: { agent, model },
-  }
-}
-
-function mayswitch(observed: SessionSnapshot, route: Route): boolean {
-  return (
-    route.model !== undefined ||
-    (route.agent !== undefined && observed.agent !== route.agent.id)
-  )
-}
-
-async function runInline(
-  runtime: CommandRuntime,
-  name: string,
-  invocation: Invocation,
-  text: string,
-  route: Route,
-): Promise<void> {
-  const { ctx } = runtime
-  const sessionID = invocation.sessionID
-  // A run that overlaps the previous one would read its switched state as the
-  // original. Wait for that run to put the session back first.
-  await runtime.restoring.get(sessionID)
-  let observed = await readSession(runtime, sessionID)
-  // The host reads a session's agent and model for every model request, not
-  // once when a turn starts: a switch made mid-turn changes that turn's later
-  // steps. A command that will switch lets the running turn end first, then
-  // reads the session again because that turn may have changed it.
-  if (mayswitch(observed, route)) {
-    await ctx.session.wait({ sessionID })
-    observed = await readSession(runtime, sessionID)
-  }
-
-  const { before, switched } = await planSwitch(runtime, name, observed, route)
-
-  try {
-    if (switched.agent !== undefined) {
-      await ctx.session.switchAgent({ sessionID, agent: switched.agent })
-    }
-    if (switched.model !== undefined) {
-      await ctx.session.switchModel({ sessionID, model: switched.model })
-    }
-    await ctx.session.prompt({
-      sessionID,
-      text,
-      ...attachmentsOf(invocation),
-      delivery: invocation.delivery,
-    })
-  } catch (error) {
-    // The prompt error is the one the invoker needs; a failed put-back is
-    // reported on its own and never replaces it.
-    await restoreSession(runtime, sessionID, before, switched).catch(
-      (restoreError: unknown) => {
-        runtime.report(
-          `command "${name}" could not restore the session: ${restoreError instanceof Error ? restoreError.message : 'unknown error'}`,
-        )
-      },
-    )
-    throw error
-  }
-
-  if (switched.agent === undefined && switched.model === undefined) return
-  const restore = startBackground(
-    runtime,
-    `command "${name}" restore`,
-    async () => {
-      await ctx.session.wait({ sessionID })
-      await restoreSession(runtime, sessionID, before, switched)
-    },
-  )
-  runtime.restoring.set(sessionID, restore)
-  void restore.finally(() => {
-    if (runtime.restoring.get(sessionID) === restore) {
-      runtime.restoring.delete(sessionID)
-    }
-  })
-}
-
-function lastAssistantText(messages: unknown): string {
-  if (!Array.isArray(messages)) return ''
-  for (const message of [...messages].reverse()) {
-    if (!isRecord(message) || message.type !== 'assistant') continue
-    if (!Array.isArray(message.content)) return ''
-    return message.content
-      .filter(
-        (part): part is { type: 'text'; text: string } =>
-          isRecord(part) &&
-          part.type === 'text' &&
-          typeof part.text === 'string',
-      )
-      .map((part) => part.text)
-      .join('\n')
-  }
-  return ''
-}
-
-async function startSubagent(
-  runtime: CommandRuntime,
-  name: string,
-  invocation: Invocation,
-  text: string,
-  route: Route,
-): Promise<void> {
-  const { ctx } = runtime
-  const parentID = invocation.sessionID
-  const parent = await readSession(runtime, parentID)
-  const agent = route.agent?.id ?? parent.agent
-  // The command's model, else the agent's own, else the parent's. A model set
-  // on the child would hide the agent's own, so it is left off in that case.
-  const model =
-    route.model ?? (route.agent?.model === undefined ? parent.model : undefined)
-
-  const child = await ctx.session.create({
-    parentID,
-    ...(agent === undefined ? {} : { agent }),
-    ...(model === undefined ? {} : { model }),
-    title: name,
-  })
-  await ctx.session.prompt({
-    sessionID: child.id,
-    text,
-    ...attachmentsOf(invocation),
-  })
-
-  void startBackground(runtime, `command "${name}" subagent`, async () => {
-    await ctx.session.wait({ sessionID: child.id })
-    const outcome = (await ctx.session.get({ sessionID: child.id })).outcome
-    const reply = lastAssistantText(
-      await ctx.session.context({ sessionID: child.id }),
-    )
-    const finished = outcome === undefined || outcome === 'succeeded'
-    const body = reply === '' ? '(the subagent returned no text)' : reply
-    await ctx.session.synthetic({
-      sessionID: parentID,
-      text: finished
-        ? `Result of command ${name} (subagent session ${child.id}):\n\n${body}`
-        : `Command ${name} did not finish: its subagent session ${child.id} ${outcome}.${reply === '' ? '' : `\n\n${reply}`}`,
-      description: `Result of ${name}`,
-      delivery: invocation.delivery,
-    })
-  })
-}
-
-async function runCommand(
-  runtime: CommandRuntime,
-  name: string,
   planned: PlannedCommand,
   invocation: Invocation,
 ): Promise<void> {
@@ -431,10 +70,15 @@ async function runCommand(
     planned.template,
     invocation.prompt.text,
   )
-  const route = await resolveRoute(runtime, name, planned)
-  await (route.subagent
-    ? startSubagent(runtime, name, invocation, text, route)
-    : runInline(runtime, name, invocation, text, route))
+  const { files, agents, skills } = invocation.prompt
+  await runtime.ctx.session.prompt({
+    sessionID: invocation.sessionID,
+    text,
+    files,
+    agents,
+    skills,
+    delivery: invocation.delivery,
+  })
 }
 
 /**
@@ -453,8 +97,14 @@ export function buildCommand(
       ? {}
       : { description: planned.description }),
     async execute(invocation) {
+      const field = declaredRouting(planned)
+      if (field !== undefined) {
+        const message = refusalMessage(name, field)
+        reportOnce(runtime, `refused:${name}`, message)
+        throw new Error(message)
+      }
       try {
-        await runCommand(runtime, name, planned, invocation)
+        await submit(runtime, planned, invocation)
       } catch (error) {
         runtime.report(
           `command "${name}" failed: ${error instanceof Error ? error.message : 'unknown error'}`,
@@ -481,7 +131,7 @@ export const installCommands: V2Installer = async ({
         new Set((await ctx.command.list()).data.map((entry) => entry.name)),
     )()) ?? new Set<string>()
 
-  const runtime = createCommandRuntime(ctx, guard, report)
+  const runtime = createCommandRuntime(ctx, report)
   const transform = guard.sync('command transform', (editor: CommandEditor) => {
     for (const [name, planned] of Object.entries(snapshot.plan.commands)) {
       if (builtIns.has(name)) {
