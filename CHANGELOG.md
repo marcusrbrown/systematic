@@ -4,6 +4,27 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.27.0](https://github.com/marcusrbrown/systematic/compare/v3.26.4...v3.27.0) (2026-10-28)
+
+### Features
+
+* support OpenCode v2 alongside OpenCode v1 ([#1239](https://github.com/marcusrbrown/systematic/issues/1239)) ([73fdd01](https://github.com/marcusrbrown/systematic/commit/73fdd019431a7a0e4e869da6522b5b5b69656f44))
+
+### Tests
+
+* clean up temp directories that unit tests create ([#1236](https://github.com/marcusrbrown/systematic/issues/1236)) ([21b5f29](https://github.com/marcusrbrown/systematic/commit/21b5f295784ee308ef54f77666a39dab1fed458f))
+
+### Continuous Integration
+
+* check every generated surface with one list and one drift command ([#1233](https://github.com/marcusrbrown/systematic/issues/1233)) ([4ec4c4c](https://github.com/marcusrbrown/systematic/commit/4ec4c4cbc3dfb60849f41c5cc7d90bc4d911676a))
+* remove omo-providers from fro-bot.yaml ([#1238](https://github.com/marcusrbrown/systematic/issues/1238)) ([73ebc5a](https://github.com/marcusrbrown/systematic/commit/73ebc5ac937163a789daac177ab5d9734364fdfa))
+
+### Miscellaneous Chores
+
+* **deps:** update dependency @biomejs/biome to v2.6.3 ([#1235](https://github.com/marcusrbrown/systematic/issues/1235)) ([22444fc](https://github.com/marcusrbrown/systematic/commit/22444fc608eca982fcdb486d5c8c6cdb9f539307))
+* **deps:** update fro-bot/agent to v0.126.0 ([#1234](https://github.com/marcusrbrown/systematic/issues/1234)) ([da61c20](https://github.com/marcusrbrown/systematic/commit/da61c20b2fe3123c7d70e986202cdb995f83ec4c))
+* **deps:** update fro-bot/agent to v0.127.0 ([#1237](https://github.com/marcusrbrown/systematic/issues/1237)) ([bc2f272](https://github.com/marcusrbrown/systematic/commit/bc2f272063386eeecbecea1b715200e147671336))
+
 ## [3.26.4](https://github.com/marcusrbrown/systematic/compare/v3.26.3...v3.26.4) (2026-10-26)
 
 ### Bug Fixes
