@@ -355,6 +355,96 @@ describe('setupOpenCodeV2', () => {
     )
   })
 
+  test('a bootstrap file that cannot be read leaves every other installer running, with one diagnostic', async () => {
+    // A directory exists, so the reader tries it and fails.
+    writeProjectConfig({ bootstrap: { file: tempRoot } })
+    const seen: Record<string, V2Snapshot> = {}
+    const record =
+      (slot: string): V2Installer =>
+      ({ snapshot }) => {
+        seen[slot] = snapshot
+      }
+    const { ctx } = createFakeContext(projectDir)
+
+    await setupOpenCodeV2(
+      ctx,
+      deps({
+        installers: {
+          agents: record('agents'),
+          skills: record('skills'),
+          commands: record('commands'),
+          bootstrap: record('bootstrap'),
+        },
+      }),
+    )
+
+    expect(Object.keys(seen).sort()).toEqual([
+      'agents',
+      'bootstrap',
+      'commands',
+      'skills',
+    ])
+    expect(seen.agents?.bootstrapContent).toBeNull()
+    expect(Object.keys(seen.agents?.plan.agents ?? {}).length).toBeGreaterThan(
+      0,
+    )
+    const notes = errorMessages()
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toStartWith('systematic: bootstrap could not be read: ')
+    expect(notes[0]).toContain('EISDIR')
+  })
+
+  test('an asset plan that cannot be built resolves setup with one diagnostic and installs nothing', async () => {
+    // `agents` is a file where the discovery step expects a directory.
+    const brokenRoot = path.join(tempRoot, 'broken-package')
+    fs.mkdirSync(path.join(brokenRoot, 'skills'), { recursive: true })
+    fs.writeFileSync(path.join(brokenRoot, 'agents'), 'not a directory')
+    const installed: string[] = []
+    const { ctx } = createFakeContext(projectDir)
+
+    await expect(
+      setupOpenCodeV2(
+        ctx,
+        deps({
+          packageRoot: brokenRoot,
+          installers: {
+            agents: () => {
+              installed.push('agents')
+            },
+            skills: () => {
+              installed.push('skills')
+            },
+            commands: () => {
+              installed.push('commands')
+            },
+            bootstrap: () => {
+              installed.push('bootstrap')
+            },
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(installed).toEqual([])
+    const notes = errorMessages()
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toStartWith('systematic: ')
+    expect(notes[0]).toContain('asset plan could not be built')
+    expect(notes[0]).toContain('ENOTDIR')
+  })
+
+  test('invalid config still rejects setup when the bundle is also broken', async () => {
+    const configPath = writeProjectConfig('{ "bootstrap": ')
+    const brokenRoot = path.join(tempRoot, 'broken-package')
+    fs.mkdirSync(path.join(brokenRoot, 'skills'), { recursive: true })
+    fs.writeFileSync(path.join(brokenRoot, 'agents'), 'not a directory')
+    const { ctx } = createFakeContext(projectDir)
+
+    await expect(
+      setupOpenCodeV2(ctx, deps({ packageRoot: brokenRoot })),
+    ).rejects.toThrow(`Invalid Systematic config in ${configPath}`)
+  })
+
   test('a throwing installer is caught and later installers still run', async () => {
     const order: string[] = []
     const { ctx } = createFakeContext(projectDir)

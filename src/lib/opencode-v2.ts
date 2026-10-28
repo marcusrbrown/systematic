@@ -306,7 +306,45 @@ function resolveProjectDirectory(ctx: Plugin.Context): string | undefined {
     : undefined
 }
 
-function buildSnapshot(ctx: Plugin.Context, deps: OpenCodeV2Deps): V2Snapshot {
+function reportDiagnostic(message: string): void {
+  console.error(`${DIAGNOSTIC_PREFIX} ${message}`)
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error'
+}
+
+/**
+ * The composed bootstrap, or `null` when it cannot be read (an unreadable
+ * `bootstrap.file`, for one). Bootstrap is one feature of several, so its
+ * failure costs only the bootstrap.
+ */
+function composeBootstrapOrNull(
+  config: SystematicConfig,
+  bundledSkillsDir: string,
+): string | null {
+  try {
+    return composeBootstrapContent(config, {
+      bundledSkillsDir,
+      profile: 'opencode-v2',
+      usageTemplate: OPENCODE_V2_USAGE_TEMPLATE,
+    })
+  } catch (error) {
+    reportDiagnostic(`bootstrap could not be read: ${messageOf(error)}`)
+    return null
+  }
+}
+
+/**
+ * The snapshot every installer reads, or `undefined` when the asset plan
+ * cannot be built. Invalid config still throws: that is the one failure that
+ * stops the plugin, as it does on v1. Anything else is reported, and the host
+ * keeps the plugin loaded.
+ */
+function buildSnapshot(
+  ctx: Plugin.Context,
+  deps: OpenCodeV2Deps,
+): V2Snapshot | undefined {
   const { packageRoot } = deps
   const homeDir = deps.homeDir ?? os.homedir()
   const opencodeConfigDir =
@@ -318,8 +356,8 @@ function buildSnapshot(ctx: Plugin.Context, deps: OpenCodeV2Deps): V2Snapshot {
 
   const projectDirectory = resolveProjectDirectory(ctx)
   if (projectDirectory === undefined) {
-    console.error(
-      `${DIAGNOSTIC_PREFIX} the host gave no project directory; loading user-level config only`,
+    reportDiagnostic(
+      'the host gave no project directory; loading user-level config only',
     )
   }
   // Without a project directory, discovery is rooted at the home directory so
@@ -334,26 +372,28 @@ function buildSnapshot(ctx: Plugin.Context, deps: OpenCodeV2Deps): V2Snapshot {
     includeProject: projectDirectory !== undefined,
   })
 
-  const plan = buildAssetPlan({
-    config,
-    overlays,
-    // A user agent of the same name overlays ours after every plugin
-    // transform runs, so there is nothing to check for ahead of time.
-    nativeAgentNames: [],
-    directory,
-    bundledSkillsDir,
-    bundledAgentsDir: path.join(packageRoot, 'agents'),
-    bundledCommandsDir: path.join(packageRoot, 'commands'),
-    homeDir,
-    opencodeConfigDir,
-    opencodeConfigDirOverride,
-  })
+  let plan: AssetPlan
+  try {
+    plan = buildAssetPlan({
+      config,
+      overlays,
+      // A user agent of the same name overlays ours after every plugin
+      // transform runs, so there is nothing to check for ahead of time.
+      nativeAgentNames: [],
+      directory,
+      bundledSkillsDir,
+      bundledAgentsDir: path.join(packageRoot, 'agents'),
+      bundledCommandsDir: path.join(packageRoot, 'commands'),
+      homeDir,
+      opencodeConfigDir,
+      opencodeConfigDirOverride,
+    })
+  } catch (error) {
+    reportDiagnostic(`asset plan could not be built: ${messageOf(error)}`)
+    return undefined
+  }
 
-  const bootstrapContent = composeBootstrapContent(config, {
-    bundledSkillsDir,
-    profile: 'opencode-v2',
-    usageTemplate: OPENCODE_V2_USAGE_TEMPLATE,
-  })
+  const bootstrapContent = composeBootstrapOrNull(config, bundledSkillsDir)
 
   return Object.freeze({
     config,
@@ -374,10 +414,9 @@ export async function setupOpenCodeV2(
   deps: OpenCodeV2Deps,
 ): Promise<void> {
   const snapshot = buildSnapshot(ctx, deps)
+  if (snapshot === undefined) return
   const guard = createSafeGuard()
-  const report = (message: string): void => {
-    console.error(`${DIAGNOSTIC_PREFIX} ${message}`)
-  }
+  const report = reportDiagnostic
   const installers: V2Installers = { ...DEFAULT_INSTALLERS, ...deps.installers }
 
   for (const slot of INSTALLER_ORDER) {
