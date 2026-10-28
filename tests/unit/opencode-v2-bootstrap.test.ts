@@ -197,7 +197,8 @@ describe('bootstrap entry', () => {
     // None of the v1 profile's mechanisms.
     expect(value).not.toContain('# OpenCode Capability Profile')
     expect(value).not.toContain('task({')
-    expect(value).not.toContain('subagent_type')
+    // The delegation names appear only in the line that maps them to v2.
+    expect(value).not.toContain('subagent_type: ')
     // The profile is inlined once.
     expect(value.split('# OpenCode v2 Capability Profile')).toHaveLength(2)
   })

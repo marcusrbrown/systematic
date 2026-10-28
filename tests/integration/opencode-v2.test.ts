@@ -704,6 +704,47 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
+      'a skill deny written with the systematic: prefix refuses the skill, as it does on v1',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({
+            agents: {
+              'repo-research-analyst': {
+                mode: 'primary',
+                permission: { skill: { 'systematic:git-worktree': 'deny' } },
+              },
+            },
+          }),
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const denied = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'git-worktree' },
+            agent: 'repo-research-analyst',
+          })
+          const other = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'git-clean-gone-branches' },
+            agent: 'repo-research-analyst',
+          })
+
+          expect(denied).not.toContain('<skill_content')
+          expect(denied.toLowerCase()).toContain('permission')
+          // The deny names one skill, so a skill it does not name still loads.
+          expect(other).toContain('<skill_content')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
       'arguments are substituted into the skill the model receives',
       async () => {
         const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
@@ -1049,6 +1090,118 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
+      'a command with a model, run in a fresh session, leaves the next plain turn on the original model',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        writeBundledSkill(
+          packageDir,
+          'probe-model-fresh',
+          { model: `${SCRIPTED_PROVIDER}/${ALT_MODEL}` },
+          'Use the other model for: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(
+          pluginSpec,
+          toolModel,
+          {},
+          { altModel: true },
+        )
+        try {
+          // No agent and no model: the host picks its defaults per turn.
+          const session = await host.client.session.create({
+            location: { directory: fixture.projectDir },
+          })
+          expect((await sessionState(host, session.id)).model).toBeUndefined()
+
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'systematic:probe-model-fresh',
+            text: 'FRESH-ARG',
+          })
+          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
+          expect(toolModel.turns[0]?.model).toBe(ALT_MODEL)
+
+          await waitFor(
+            async () =>
+              (await sessionState(host, session.id)).model?.id ===
+              SCRIPTED_MODEL,
+            'the session to return to the default model',
+          )
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: 'A plain follow-up.',
+          })
+          await host.client.session.wait({ sessionID: session.id })
+          expect(toolModel.turns.at(-1)?.model).toBe(SCRIPTED_MODEL)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a command that arrives mid-turn lets that turn finish on its own model before it switches',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        writeBundledSkill(
+          packageDir,
+          'probe-model-busy',
+          { model: `${SCRIPTED_PROVIDER}/${ALT_MODEL}` },
+          'Use the other model for: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(
+          pluginSpec,
+          toolModel,
+          {},
+          { altModel: true },
+        )
+        try {
+          const session = await newSession(host)
+          // A turn that spends a few seconds in a tool call, then needs one
+          // more model request to finish.
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: '@@TOOL shell {"command":"sleep 4; echo done"}',
+          })
+          await waitFor(() => toolModel.turns.length >= 1, 'the first request')
+          await Bun.sleep(500)
+
+          const running = host.client.session.command({
+            sessionID: session.id,
+            name: 'systematic:probe-model-busy',
+            text: 'BUSY-ARG',
+          })
+          await host.client.session.wait({ sessionID: session.id })
+          await running
+          await waitFor(
+            () => toolModel.turns.length >= 3,
+            'the command turn',
+            60_000,
+          )
+          await host.client.session.wait({ sessionID: session.id })
+
+          // The first turn's second request still ran on the session's model;
+          // only the command's own turn used the other one.
+          expect(toolModel.turns.map((turn) => turn.model)).toEqual([
+            SCRIPTED_MODEL,
+            SCRIPTED_MODEL,
+            ALT_MODEL,
+          ])
+          expect(lastUserText(toolModel.turns[2] as ChatRequestBody)).toContain(
+            'BUSY-ARG',
+          )
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
       'a subagent-mode command runs in a child session and its result comes back to the parent',
       async () => {
         const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
@@ -1330,7 +1483,11 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           expect(system).toContain('systematic_skill({ name:')
           // The v1 profile's mechanisms are not what this host offers.
           expect(system).not.toContain('# OpenCode Capability Profile')
-          expect(system).not.toContain('subagent_type')
+          // Its delegation names appear only in the line that maps them to v2.
+          expect(system).not.toContain('subagent_type: ')
+          expect(system).toContain(
+            "Skill text that names OpenCode's `task` tool with `subagent_type` means the `subagent` tool",
+          )
           // The worktree rule is there by default.
           expect(system).toContain(WORKTREE_RULE_LINE)
           expect(await entryKeys(host, sessionID)).toEqual([BOOTSTRAP_KEY])

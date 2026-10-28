@@ -491,10 +491,40 @@ describe('getBootstrapContent', () => {
       },
     ) as string
 
-    // v1's delegation call and its argument name do not exist on v2.
+    // v1's delegation call does not exist on v2, and the profile gives no
+    // example of it. The names appear only in the mapping line below.
     expect(v2).not.toContain('task({')
-    expect(v2).not.toContain('subagent_type')
-    expect(v2).not.toContain('task_id')
+    expect(v2).not.toContain('subagent_type: ')
+  })
+
+  test('the v2 bootstrap maps the delegation names skill text uses onto the v2 tool', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const compose = (profile: 'opencode' | 'opencode-v2') =>
+      composeBootstrapContent(
+        { bootstrap: { enabled: true }, disabled_skills: [] },
+        {
+          bundledSkillsDir,
+          profile,
+          ...(profile === 'opencode-v2'
+            ? { usageTemplate: OPENCODE_V2_USAGE_TEMPLATE }
+            : {}),
+        },
+      ) as string
+
+    // Bundled skills say `task` with `subagent_type` and `task_id`; this host
+    // calls the tool `subagent` with `agent` and `sessionID`.
+    expect(compose('opencode-v2')).toContain(
+      "Skill text that names OpenCode's `task` tool with `subagent_type` means the `subagent` tool with `agent` on this host, and `task_id` means `sessionID`.",
+    )
+    expect(compose('opencode')).not.toContain('means the `subagent` tool')
+  })
+
+  test('the v2 profile claims only what was observed about background runs', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const profile = readHarnessProfile(bundledSkillsDir, 'opencode-v2') ?? ''
+
+    expect(profile).toContain('returns immediately')
+    expect(profile).not.toMatch(/notif/i)
   })
 
   test('preserves marker-shaped profile text during Pi-style composition', () => {

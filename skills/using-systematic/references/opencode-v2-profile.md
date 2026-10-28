@@ -20,7 +20,7 @@ subagent({
   prompt: "Implement the auth module and return the changed files.",
 })
 
-// Background dispatch (run independent work concurrently; you are notified on completion):
+// Background dispatch (a background run returns immediately; its result is available later):
 subagent({
   agent: "repo-research-analyst",
   description: "Map fixture patterns",
@@ -31,6 +31,8 @@ subagent({
 // Resume a prior specialist session:
 subagent({ agent: "systematic-implementer", sessionID: "<prior-session-id>", description: "Resume the implementation task", prompt: "…" })
 ```
+
+Skill text that names OpenCode's `task` tool with `subagent_type` means the `subagent` tool with `agent` on this host, and `task_id` means `sessionID`.
 
 `agent` takes a bare agent stem — OpenCode registers bundled agents under
 their filename stem, not a namespaced identifier. Prose that *refers* to an agent
