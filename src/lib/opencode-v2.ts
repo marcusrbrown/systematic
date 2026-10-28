@@ -1,9 +1,18 @@
 import os from 'node:os'
 import path from 'node:path'
 import type { Plugin } from '@opencode/plugin'
-import { type AssetPlan, buildAssetPlan } from './asset-plan.js'
+import {
+  type AssetPlan,
+  buildAssetPlan,
+  type PlannedAgent,
+} from './asset-plan.js'
 import { composeBootstrapContent } from './bootstrap.js'
 import { loadConfigWithSources, type SystematicConfig } from './config.js'
+import {
+  permissionMapToTriples,
+  translatePermissionRules,
+  type V2PermissionRule,
+} from './opencode-v2-permissions.js'
 
 /**
  * OpenCode v2 adapter scaffold.
@@ -107,11 +116,154 @@ export interface V2Installers {
   bootstrap: V2Installer
 }
 
+/**
+ * The part of a v2 agent this module reads and writes. The host's own agent
+ * type is wider; it is assignable to this one, so no cast is needed.
+ */
+export interface V2AgentRecord {
+  system?: string
+  description?: string
+  mode: 'primary' | 'subagent' | 'all'
+  hidden: boolean
+  color?: string
+  steps?: number
+  model?: { providerID: string; id: string; variant?: string }
+  request: { body: Record<string, unknown> }
+  permissions: V2PermissionRule[]
+}
+
+export interface V2AgentEditor {
+  get(id: string): unknown
+  update(id: string, update: (agent: V2AgentRecord) => void): void
+}
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
+/** `provider/model` to the v2 model shape. The model id may contain further slashes. */
+function parseModel(
+  model: string,
+  variant: string | undefined,
+): V2AgentRecord['model'] {
+  const slash = model.indexOf('/')
+  if (slash <= 0 || slash === model.length - 1) return undefined
+  const providerID = model.slice(0, slash)
+  const id = model.slice(slash + 1)
+  return variant === undefined
+    ? { providerID, id }
+    : { providerID, id, variant }
+}
+
+function writeAgentModel(
+  agent: V2AgentRecord,
+  planned: PlannedAgent,
+  reported: Set<string>,
+): void {
+  const { model, variant } = planned.config
+  if (model === undefined) return
+  const parsed = parseModel(
+    model,
+    typeof variant === 'string' ? variant : undefined,
+  )
+  if (parsed !== undefined) {
+    agent.model = parsed
+    return
+  }
+  const key = `model:${planned.name}`
+  if (reported.has(key)) return
+  reported.add(key)
+  console.error(
+    `${DIAGNOSTIC_PREFIX} agent "${planned.name}" has model "${model}", which is not provider/model; leaving its model unset`,
+  )
+}
+
+/** The rules to append: a managed list, or the agent's own `permission` map. */
+function agentPermissionRules(planned: PlannedAgent): V2PermissionRule[] {
+  return translatePermissionRules(
+    planned.permission.kind === 'managed'
+      ? planned.permission.rules
+      : permissionMapToTriples(planned.config.permission),
+  )
+}
+
+/**
+ * Fill a new v2 agent from its plan. Fields the plan leaves out keep the
+ * host's defaults, so a bundled agent without a model inherits the session's.
+ */
+function writeAgentFields(
+  agent: V2AgentRecord,
+  planned: PlannedAgent,
+  reported: Set<string>,
+): void {
+  const { config } = planned
+  if (config.prompt !== undefined) agent.system = config.prompt
+  if (config.description !== undefined) agent.description = config.description
+  // v1 defaults an agent without a mode to `all`; the v2 default is `primary`.
+  agent.mode = config.mode ?? 'all'
+  if (typeof config.hidden === 'boolean') agent.hidden = config.hidden
+  if (typeof config.steps === 'number') agent.steps = config.steps
+  // v2 colors are six-digit hex; a v1 color token has no v2 spelling.
+  if (config.color !== undefined && HEX_COLOR.test(config.color)) {
+    agent.color = config.color
+  }
+  if (config.temperature !== undefined) {
+    agent.request.body.temperature = config.temperature
+  }
+  if (config.top_p !== undefined) agent.request.body.top_p = config.top_p
+  writeAgentModel(agent, planned, reported)
+  // Appended after the host's default rules, so the last match still wins and
+  // a tool the plan says nothing about keeps the host default.
+  agent.permissions.push(...agentPermissionRules(planned))
+}
+
+/**
+ * Create one planned agent on a transform editor. An id that already exists
+ * belongs to the host or another plugin and is left alone. A same-named user
+ * agent needs no check: user config applies after every plugin transform and
+ * overlays what is created here.
+ */
+export function applyPlannedAgent(
+  editor: V2AgentEditor,
+  planned: PlannedAgent,
+  reported: Set<string> = new Set(),
+): void {
+  if (planned.config.disable === true) return
+  if (editor.get(planned.name) !== undefined) {
+    const key = `clash:${planned.name}`
+    if (reported.has(key)) return
+    reported.add(key)
+    console.error(
+      `${DIAGNOSTIC_PREFIX} agent "${planned.name}" is already defined by the host or another plugin; skipping the bundled agent`,
+    )
+    return
+  }
+  editor.update(planned.name, (agent) => {
+    writeAgentFields(agent, planned, reported)
+  })
+}
+
+/**
+ * Registers the planned agents through one transform. Each agent runs under
+ * its own guard, so one failing `update` leaves the others registered. The
+ * diagnostic set belongs to this `setup`; it only keeps a replay from
+ * repeating a message and never changes what a replay produces.
+ */
+export const installAgents: V2Installer = async ({ ctx, snapshot, guard }) => {
+  const reported = new Set<string>()
+  await ctx.agent.transform(
+    guard.sync('agent transform', (editor) => {
+      for (const planned of Object.values(snapshot.plan.agents)) {
+        const apply = guard.sync(`agent "${planned.name}"`, applyPlannedAgent)
+        apply(editor, planned, reported)
+      }
+    }),
+  )
+}
+
 const noopInstaller: V2Installer = () => {}
 
-/** Empty slots. Each domain replaces its own entry when it lands. */
+/** Slots not yet filled stay empty. Each domain replaces its own entry when it lands. */
 const DEFAULT_INSTALLERS: V2Installers = {
-  agents: noopInstaller,
+  agents: installAgents,
   skills: noopInstaller,
   commands: noopInstaller,
   bootstrap: noopInstaller,
