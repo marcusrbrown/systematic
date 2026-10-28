@@ -18,7 +18,7 @@ import {
   wrapSkillTemplate,
 } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
-import { isRecord, type PermissionSetting } from './validation.js'
+import { isAgentMode, isRecord, type PermissionSetting } from './validation.js'
 
 /**
  * Host-neutral asset plan: which agents, commands and enabled skills the
@@ -389,26 +389,22 @@ function overlayControlsPermission(
 }
 
 // `model`/`variant` are no longer read from here — see `applyAgentOverlayPass`
-// and `resolveRouting`. Every other overlay-assignable field keeps its
-// original direct-copy path, unchanged by the model-config-profiles feature.
-const OVERLAY_ASSIGN_FIELDS = [
-  'temperature',
-  'top_p',
-  'mode',
-  'color',
-  'steps',
-  'hidden',
-] as const
-
+// and `resolveRouting`. Every other overlay-assignable field is copied by its
+// own guarded assignment, in this order, so key insertion order is unchanged.
+// The config schema already types each field, so the guards drop nothing a
+// validated overlay can hold.
 function applyOverlayObjectFields(
   target: AgentConfig,
   overlay: Record<string, unknown>,
 ): void {
-  for (const field of OVERLAY_ASSIGN_FIELDS) {
-    if (Object.hasOwn(overlay, field)) {
-      ;(target as Record<string, unknown>)[field] = overlay[field]
-    }
+  if (typeof overlay.temperature === 'number') {
+    target.temperature = overlay.temperature
   }
+  if (typeof overlay.top_p === 'number') target.top_p = overlay.top_p
+  if (isAgentMode(overlay.mode)) target.mode = overlay.mode
+  if (typeof overlay.color === 'string') target.color = overlay.color
+  if (typeof overlay.steps === 'number') target.steps = overlay.steps
+  if (typeof overlay.hidden === 'boolean') target.hidden = overlay.hidden
 }
 
 /**

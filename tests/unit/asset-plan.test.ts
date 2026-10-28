@@ -266,6 +266,35 @@ describe('buildAssetPlan: agent set', () => {
   })
 })
 
+describe('buildAssetPlan: agent overlay fields', () => {
+  // The config schema rejects a wrongly-typed value for any of these fields
+  // when the config loads, so a bad value never reaches the planner and there
+  // is no negative case to pin here.
+  test('an exact overlay setting all six fields reaches the planned agent config', () => {
+    const plan = planWith({
+      agents: {
+        'adversarial-reviewer': {
+          temperature: 0.3,
+          top_p: 0.8,
+          steps: 7,
+          mode: 'primary',
+          color: '#112233',
+          hidden: true,
+        },
+      },
+    })
+
+    const { config } = agentNamed(plan, 'adversarial-reviewer')
+    expect(config.temperature).toBe(0.3)
+    expect(config.top_p).toBe(0.8)
+    expect(config.steps).toBe(7)
+    // The bundled agent's own frontmatter says `subagent`; the overlay wins.
+    expect(config.mode).toBe('primary')
+    expect(config.color).toBe('#112233')
+    expect(config.hidden).toBe(true)
+  })
+})
+
 describe('buildAssetPlan: ordered permission triples', () => {
   test('an agent without a permission overlay is unmanaged and keeps its own permission', () => {
     const plan = planWith(undefined)

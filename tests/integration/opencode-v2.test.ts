@@ -610,6 +610,9 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           )
           expect(plain).toContain('Base directory for this skill:')
           expect(colon).toContain('<skill_content name="ce:brainstorm">')
+          // The host's own refusal for an id it does not know, not a bare
+          // absence of the skill body.
+          expect(disabled).toContain('Unable to load skill git-worktree')
           expect(disabled).not.toContain('<skill_content')
         } finally {
           toolModel.stop()
@@ -746,6 +749,15 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           // The host drops the bundled copy without telling the plugin, so the
           // replacement is silent. The user's copy is what the native tool loads.
           expect(native).toContain('USER-SKILL-BODY')
+          const output = host.server.output()
+          expect(output.length).toBeGreaterThan(0)
+          const notes = output
+            .split('\n')
+            .filter(
+              (line) =>
+                line.includes('systematic:') && line.includes('git-worktree'),
+            )
+          expect(notes).toEqual([])
         } finally {
           toolModel.stop()
           await host.server.stop()

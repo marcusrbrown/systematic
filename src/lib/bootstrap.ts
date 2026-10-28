@@ -308,7 +308,7 @@ export function composeBootstrapContent(
     // Always supplied; getBootstrapContent omits it when git-worktree is disabled.
     worktreePlacementRule:
       readWorktreePlacementRule(bundledSkillsDir) ?? undefined,
-    // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
+    // Profile files owned by skills/using-systematic/references/.
     profileBlock: readHarnessProfile(bundledSkillsDir, profile) ?? undefined,
   })
 }
