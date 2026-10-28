@@ -327,6 +327,38 @@ describe('server announcement', () => {
     ).toEqual({ url: 'http://127.0.0.1:4096', password: 's3cret' })
   })
 
+  test('a password is taken only once its whole line has arrived, however the stream is chunked', () => {
+    const line = 'server listening on http://127.0.0.1:4096\n'
+    const password = 'pa55-w0rd_with.mixed~chars'
+    for (const terminator of ['\n', '\r\n']) {
+      const stream = `${line}server password ${password}${terminator}`
+      for (const size of [1, 3, 7, 16]) {
+        let buffer = ''
+        let announced: ReturnType<typeof parseServerAnnouncement>
+        for (
+          let at = 0;
+          at < stream.length && announced === undefined;
+          at += size
+        ) {
+          buffer += stream.slice(at, at + size)
+          announced = parseServerAnnouncement(buffer, true)
+        }
+        expect(announced, `chunks of ${size}`).toEqual({
+          url: 'http://127.0.0.1:4096',
+          password,
+        })
+      }
+    }
+  })
+
+  test('a password with no line ending yet is not announced', () => {
+    const partial =
+      'server listening on http://127.0.0.1:4096\nserver password pa55'
+
+    expect(parseServerAnnouncement(partial, true)).toBeUndefined()
+    expect(parseServerAnnouncement(`${partial}\r`, true)).toBeUndefined()
+  })
+
   test('nothing is announced before a URL appears', () => {
     expect(parseServerAnnouncement('starting...', false)).toBeUndefined()
     expect(parseServerAnnouncement('server password abc', true)).toBeUndefined()

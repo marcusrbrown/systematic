@@ -165,13 +165,11 @@ export const PROFILE_EXEMPT_SKIPS: Readonly<
  * list (every listed file must appear in some report), the per-file results,
  * and the exempt-skip check.
  *
- * Each floor is set from a measured local run of that profile's files against
- * its host, leaving margin for tests that vary by environment. The runs
- * passed 160 (v2), 32 (v1 floor) and 69 (v1 current, which includes three
- * eval-runner installed-mode tests that fail on the macOS machine of the
- * measurement and are expected to pass in CI). They are starting values: the
- * first CI run on Linux may move them. Raise a floor as its suite grows, and do
- * not lower it without a documented reason.
+ * Each floor sits well under what its profile passes, so a normal change in
+ * test count does not trip it but a mass collapse does. The first CI runs on
+ * Linux passed 163 (v2), 32 (v1 floor) and 72 (v1 current), all green, which
+ * puts the floors at roughly 86%, 88% and 83% of those counts. Raise a floor
+ * as its suite grows, and do not lower it without a documented reason.
  */
 export const PROFILE_PASS_FLOORS: Readonly<
   Record<HostContractProfile, number>

@@ -1239,7 +1239,9 @@ export function parseServerAnnouncement(
   const url = /(http:\/\/[\d.:]+)/.exec(output)?.[1]
   if (url === undefined) return undefined
   if (!awaitPassword) return { url }
-  const password = /server password (\S+)/.exec(output)?.[1]
+  // The output arrives in chunks. A password cut off mid-token would be taken
+  // for the whole of it, so it counts only once its line has ended.
+  const password = /server password (\S+)\r?\n/.exec(output)?.[1]
   return password === undefined ? undefined : { url, password }
 }
 
