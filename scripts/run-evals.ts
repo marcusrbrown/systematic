@@ -3182,7 +3182,15 @@ async function executeInstalledArtifactCase(input: {
     const installedModule = (await import(
       pathToFileURL(input.artifact.moduleEntry).href
     )) as { default?: unknown }
-    if (typeof installedModule.default !== 'function') {
+    // The plugin's default export is an object whose `server` member is what
+    // an OpenCode v1 host calls.
+    const entry = installedModule.default
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      !('server' in entry) ||
+      typeof entry.server !== 'function'
+    ) {
       return { runtime, execution: failedExecution('artifact_resolution') }
     }
   } catch {
