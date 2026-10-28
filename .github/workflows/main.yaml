@@ -45,13 +45,16 @@ jobs:
             const exportKeys = Object.keys(m).sort();
             const expected = ['default'];
             if (JSON.stringify(exportKeys) !== JSON.stringify(expected)) {
-              throw new Error('Plugin entry must export only \`default\`. Got: ' + JSON.stringify(exportKeys) + '. Extra named exports break OpenCode plugin loading (the loader treats them as additional plugin factories and crashes when invoking them with no input). Move helpers to src/lib/.');
+              throw new Error('Plugin entry must export only \`default\`. Got: ' + JSON.stringify(exportKeys) + '. Extra named exports break OpenCode plugin loading (the loader treats them as additional plugins and crashes when invoking them with no input). Move helpers to src/lib/.');
             }
-            const pluginFactory = m.default;
-            if (typeof pluginFactory !== 'function') {
-              throw new Error('Default export must be a function. Got: ' + typeof pluginFactory);
+            const systematicPlugin = m.default;
+            if (typeof systematicPlugin !== 'object' || systematicPlugin === null) {
+              throw new Error('Default export must be a plugin object. Got: ' + typeof systematicPlugin);
             }
-            const plugin = await pluginFactory({
+            if (typeof systematicPlugin.id !== 'string' || typeof systematicPlugin.setup !== 'function' || typeof systematicPlugin.server !== 'function') {
+              throw new Error('Default export must have a string id and function setup and server members. Got: ' + JSON.stringify(Object.keys(systematicPlugin)));
+            }
+            const plugin = await systematicPlugin.server({
               client: { app: { log: async () => {} } },
               directory: process.cwd()
             });

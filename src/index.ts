@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Plugin } from '@opencode-ai/plugin'
+import type { Plugin as OpenCodeV2 } from '@opencode/plugin'
+import type { PluginModule } from '@opencode-ai/plugin'
 import { createOpenCodeV1Hooks } from './lib/opencode-v1.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -10,11 +11,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // `src/lib/` sits two levels below it.
 const packageRoot = path.resolve(__dirname, '..')
 
+// One object serves both hosts. A v2 host calls `setup` and ignores `server`.
+// A v1 host calls `server`. Both type imports above are erased by the build,
+// so the shipped entry has no runtime dependency on either OpenCode package.
+type SystematicPluginModule = OpenCodeV2.Plugin & PluginModule
+
 // OpenCode's plugin loader requires a default export only. The hooks, the
 // `REGISTERED_PLUGIN_HOOKS` inventory and the shared-core wiring live in
 // `src/lib/opencode-v1.ts`.
-const SystematicPlugin: Plugin = async (input) => {
-  return createOpenCodeV1Hooks(input, { packageRoot })
+const systematicPlugin: SystematicPluginModule = {
+  id: 'systematic',
+  setup(ctx) {
+    // A v1 host that receives an object default also calls `setup`, with a
+    // reduced bridge that has no `location` or `session`. Do nothing there.
+    if (!ctx.location || !ctx.session) return
+  },
+  server: async (input) => createOpenCodeV1Hooks(input, { packageRoot }),
 }
 
-export default SystematicPlugin
+export default systematicPlugin

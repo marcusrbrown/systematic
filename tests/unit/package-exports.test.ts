@@ -30,9 +30,57 @@ function expectedPackagedPersonas(): string[] {
 }
 const OPTIONAL_PEERS = [
   '@opencode-ai/plugin',
+  '@opencode/plugin',
   '@earendil-works/pi-coding-agent',
   'typebox',
 ] as const
+
+/**
+ * Problems with a loaded OpenCode entry module: it must export only `default`,
+ * and that default must be a plain object with a string `id` and function
+ * `setup` and `server` members. Empty means the shape is right.
+ */
+function entryShapeProblems(mod: Record<string, unknown>): string[] {
+  const problems: string[] = []
+  const keys = Object.keys(mod).sort()
+  if (keys.join(',') !== 'default') {
+    problems.push(`exports must be exactly [default], got [${keys.join(', ')}]`)
+  }
+  const plugin = mod.default
+  if (typeof plugin !== 'object' || plugin === null) {
+    problems.push(`default must be an object, got ${typeof plugin}`)
+    return problems
+  }
+  const members = plugin as Record<string, unknown>
+  if (typeof members.id !== 'string')
+    problems.push('default.id must be a string')
+  if (typeof members.setup !== 'function') {
+    problems.push('default.setup must be a function')
+  }
+  if (typeof members.server !== 'function') {
+    problems.push('default.server must be a function')
+  }
+  return problems
+}
+
+const OPENCODE_SPECIFIER = '@opencode(?:-ai)?/[^\'"`\\s]+'
+const RUNTIME_IMPORT_PATTERNS = [
+  // `import x from '...'`, `export { x } from '...'`, `import '...'`. A
+  // type-only form is erased by the build, so it is skipped.
+  new RegExp(
+    `(?:^|[;\\n}])\\s*(?:import(?!\\s+type\\b)|export(?!\\s+type\\b))[^;'"\`]*?['"](${OPENCODE_SPECIFIER})['"]`,
+    'g',
+  ),
+  new RegExp(`\\bimport\\(\\s*['"](${OPENCODE_SPECIFIER})['"]`, 'g'),
+  new RegExp(`\\brequire\\(\\s*['"](${OPENCODE_SPECIFIER})['"]`, 'g'),
+]
+
+/** Runtime import specifiers of either OpenCode package scope found in emitted JavaScript. */
+function runtimeOpenCodeImports(source: string): string[] {
+  return RUNTIME_IMPORT_PATTERNS.flatMap((pattern) =>
+    [...source.matchAll(pattern)].map((match) => match[1] as string),
+  )
+}
 
 function listJavaScriptFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -109,9 +157,70 @@ describe('package.json Pi manifest', () => {
       pkg.peerDependenciesMeta?.['@earendil-works/pi-coding-agent']?.optional,
     ).toBe(true)
     expect(pkg.peerDependenciesMeta?.typebox?.optional).toBe(true)
+  })
+
+  test('declares both OpenCode plugin packages as optional peers from their floors', () => {
+    const pkg = readPackageJson()
+    expect(pkg.peerDependencies?.['@opencode-ai/plugin']).toBe('>=1.18.29')
+    expect(pkg.peerDependencies?.['@opencode/plugin']).toBe('>=2.2.0')
     expect(pkg.peerDependenciesMeta?.['@opencode-ai/plugin']?.optional).toBe(
       true,
     )
+    expect(pkg.peerDependenciesMeta?.['@opencode/plugin']?.optional).toBe(true)
+  })
+})
+
+describe('entry shape and runtime-import checks', () => {
+  const goodEntry = {
+    default: { id: 'systematic', setup: () => {}, server: async () => ({}) },
+  }
+
+  test('accepts an object default with a string id and function setup and server', () => {
+    expect(entryShapeProblems(goodEntry)).toEqual([])
+  })
+
+  test('rejects a planted named export', () => {
+    expect(entryShapeProblems({ ...goodEntry, helper: () => {} })).toEqual([
+      'exports must be exactly [default], got [default, helper]',
+    ])
+  })
+
+  test('rejects a planted function default', () => {
+    const problems = entryShapeProblems({ default: async () => ({}) })
+    expect(problems).toEqual(['default must be an object, got function'])
+  })
+
+  test('rejects an object default that lacks a member', () => {
+    const problems = entryShapeProblems({
+      default: { id: 'systematic', server: async () => ({}) },
+    })
+    expect(problems).toEqual(['default.setup must be a function'])
+  })
+
+  test('flags a planted runtime import from either OpenCode scope', () => {
+    expect(
+      runtimeOpenCodeImports("import { define } from '@opencode/plugin';"),
+    ).toEqual(['@opencode/plugin'])
+    expect(
+      runtimeOpenCodeImports('const m = await import("@opencode-ai/plugin")'),
+    ).toEqual(['@opencode-ai/plugin'])
+    expect(
+      runtimeOpenCodeImports("var x = require('@opencode/client/promise');"),
+    ).toEqual(['@opencode/client/promise'])
+    expect(
+      runtimeOpenCodeImports("var a = 1;\nexport { z } from '@opencode/sdk';"),
+    ).toEqual(['@opencode/sdk'])
+  })
+
+  test('ignores type-only imports and unrelated packages', () => {
+    expect(
+      runtimeOpenCodeImports(
+        "import type { Plugin } from '@opencode/plugin';\nimport type { Hooks } from '@opencode-ai/plugin';\nexport type { X } from '@opencode/sdk';",
+      ),
+    ).toEqual([])
+    expect(
+      runtimeOpenCodeImports("import yaml from 'js-yaml';\nimport 'node:fs';"),
+    ).toEqual([])
   })
 })
 
@@ -133,6 +242,7 @@ describe('src/pi.ts entry', () => {
   test('does not statically import OpenCode plugin SDK', () => {
     const source = fs.readFileSync(path.join(SRC_DIR, 'pi.ts'), 'utf8')
     expect(source).not.toContain('@opencode-ai/plugin')
+    expect(source).not.toContain('@opencode/')
   })
 })
 
@@ -178,20 +288,20 @@ describe('build output and packaging', () => {
     }
   })
 
-  test('dist/index.js exports exactly [default]', async () => {
+  test('dist/index.js exports exactly [default], an object with an id, setup and server', async () => {
     const mod = (await import(pathToFileURL(DIST_INDEX).href)) as Record<
       string,
       unknown
     >
-    expect(Object.keys(mod).sort()).toEqual(['default'])
-    expect(typeof mod.default).toBe('function')
+    expect(entryShapeProblems(mod)).toEqual([])
   })
 
-  test('emitted JavaScript contains no OpenCode plugin runtime imports', () => {
+  test('emitted JavaScript contains no OpenCode runtime imports', () => {
     for (const filePath of listJavaScriptFiles(DIST_DIR)) {
-      expect(fs.readFileSync(filePath, 'utf8')).not.toContain(
-        '@opencode-ai/plugin',
-      )
+      expect(
+        runtimeOpenCodeImports(fs.readFileSync(filePath, 'utf8')),
+        filePath,
+      ).toEqual([])
     }
   })
 
@@ -227,11 +337,6 @@ describe('build output and packaging', () => {
         install.status,
         `npm install failed (exit ${install.status})\n--- stdout ---\n${install.stdout}\n--- stderr ---\n${install.stderr}`,
       ).toBe(0)
-      expect(
-        fs.existsSync(
-          path.join(projectDir, 'node_modules/@opencode-ai/plugin'),
-        ),
-      ).toBe(false)
       for (const peer of OPTIONAL_PEERS) {
         expect(
           fs.existsSync(path.join(projectDir, 'node_modules', peer)),
@@ -244,7 +349,7 @@ describe('build output and packaging', () => {
         [
           '--input-type=module',
           '-e',
-          "const m = await import('@fro.bot/systematic'); if (typeof m.default !== 'function') process.exit(1); if (Object.keys(m).join(',') !== 'default') process.exit(2)",
+          "const m = await import('@fro.bot/systematic'); if (Object.keys(m).join(',') !== 'default') process.exit(2); const p = m.default; if (typeof p !== 'object' || p === null || typeof p.id !== 'string' || typeof p.setup !== 'function' || typeof p.server !== 'function') process.exit(1)",
         ],
         { cwd: projectDir, encoding: 'utf8', timeout: 30_000 },
       )
@@ -256,9 +361,10 @@ describe('build output and packaging', () => {
       for (const filePath of listJavaScriptFiles(
         path.join(projectDir, 'node_modules/@fro.bot/systematic/dist'),
       )) {
-        expect(fs.readFileSync(filePath, 'utf8')).not.toContain(
-          '@opencode-ai/plugin',
-        )
+        expect(
+          runtimeOpenCodeImports(fs.readFileSync(filePath, 'utf8')),
+          filePath,
+        ).toEqual([])
       }
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true })

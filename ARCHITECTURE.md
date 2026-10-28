@@ -12,8 +12,9 @@ Systematic ships as an npm package with two distinct parts:
 1. **TypeScript source** (`src/`) — plugin logic, tools, config handling
 2. **Bundled assets** (`skills/`, `agents/`) — Markdown content shipped alongside the compiled code
 
-At runtime, OpenCode loads the plugin via its default export (`src/index.ts`). The plugin registers
-these hooks:
+At runtime, OpenCode loads the plugin via its default export (`src/index.ts`): a plain object with a
+string `id` and `setup` and `server` functions. A v2 host calls `setup`, which currently does nothing.
+A v1 host calls `server`, and the plugin registers these hooks:
 
 - **`config`** — discovers bundled agents, skills, and commands, then merges them into the OpenCode
   config. Existing user config wins; Systematic fills in what's missing.
@@ -138,7 +139,7 @@ Key symbols:
 
 | Symbol | Location | Role |
 |--------|----------|------|
-| `SystematicPlugin` | `src/index.ts` | Main plugin factory — the default export |
+| `systematicPlugin` | `src/index.ts` | The default export: a plain object with `id`, `setup` (v2 entry) and `server` (v1 entry) |
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
 | `buildAssetPlan` | `src/lib/asset-plan.ts` | Host-neutral agents, commands, enabled skills and ordered permission triples |
 | `createConfigHandler` | `src/lib/config-handler.ts` | Config hook implementation |
@@ -160,8 +161,10 @@ Key symbols:
 
 These must hold at all times. CI enforces them via the content-integrity gate.
 
-1. **Single default export.** `src/index.ts` exports only `default`. Named exports break OpenCode's
-   plugin loader.
+1. **Single default export, and it is an object.** `src/index.ts` exports only `default`: a plain
+   object with a string `id` and function `setup` and `server` members, not a function. Named
+   exports break OpenCode's plugin loader. The v1 hooks live in `src/lib/opencode-v1.ts`. The built
+   entry has no runtime import of `@opencode-ai/*` or `@opencode/*`; both are type-only.
 
 2. **Bundled agent markdown omits `model`.** Agent `.md` files in `agents/` must not set `model` in
    frontmatter. OpenCode subagents inherit the invoking agent's model when `model` is absent. The
@@ -182,7 +185,7 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 
 ```
 OpenCode loads plugin
-  └─ SystematicPlugin (src/index.ts)
+  └─ default export (src/index.ts) — v1 host calls server
        └─ createOpenCodeV1Hooks (src/lib/opencode-v1.ts)
        │
        ├─ config hook fires

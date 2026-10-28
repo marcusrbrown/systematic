@@ -436,8 +436,8 @@ describe('SystematicPlugin config hook integration', () => {
     // Exercise the duplicate plugin-factory path that happens when multiple
     // OpenCode config sources reference Systematic in the same process. Both
     // invocations must expose the real config hook surface.
-    const firstHooks = await SystematicPlugin(input)
-    const hooks = await SystematicPlugin(input)
+    const firstHooks = await SystematicPlugin.server(input)
+    const hooks = await SystematicPlugin.server(input)
 
     expect(firstHooks.config).toBeDefined()
     expect(hooks.config).toBeDefined()

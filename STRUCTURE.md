@@ -41,8 +41,9 @@ systematic/
 subdirectory of core modules.
 
 **Key files:**
-- `src/index.ts` — plugin factory (`SystematicPlugin`), registers every OpenCode hook Systematic
-  provides (config, tool, the after hook, the messages transform, and the system transform)
+- `src/index.ts` — plugin entry: a default-export object with `id`, `setup` (v2 host) and `server`
+  (v1 host). `server` registers every OpenCode hook Systematic provides (config, tool, the after
+  hook, the messages transform, and the system transform) through `src/lib/opencode-v1.ts`
 - `src/pi.ts` — Pi extension factory (`systematicPiExtension`), registers `before_agent_start` for
   bootstrap injection plus the `systematic_skill` and `systematic_delegate` tools.
 - `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,
@@ -224,7 +225,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 
 | File | Role |
 |------|------|
-| `src/index.ts` | OpenCode plugin entry — `SystematicPlugin` default export |
+| `src/index.ts` | OpenCode plugin entry — default-export object with `id`, `setup` and `server` |
 | `src/pi.ts` | Pi extension entry — `systematicPiExtension` default export |
 | `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, `pi-subagents` commands |
 | `src/claude-code-validator.ts` | Claude Code bundled validator entry — review-artifact validation with isolated dependencies |

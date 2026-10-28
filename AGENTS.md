@@ -88,6 +88,7 @@ bun run surfaces:drift   # Check every surface and name each failure (CI runs th
 - `any` — use `unknown` with type guards
 - `@ts-ignore` or `@ts-expect-error`
 - Non-null assertions (`!`) — Biome warns
+- Runtime imports of `@opencode-ai/*` or `@opencode/*` in `src/` — they must be `import type`; the OpenCode entry exports only `default`, a plain object (`id`, `setup`, `server`)
 
 ## Cloned Dependency Source
 

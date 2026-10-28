@@ -128,7 +128,7 @@ import { vi } from 'vitest'
 
 ## Plugin Architecture
 
-The plugin exposes these hooks. Changes to any of these are high-risk:
+The plugin entry (`src/index.ts`) is a default-export object with `id`, `setup` and `server`. On a v1 host, `server` exposes these hooks. Changes to any of these are high-risk:
 
 - **`config`** — merges bundled skills/agents/commands into OpenCode config
 - **`tool`** — registers the `systematic_skill` tool
@@ -136,7 +136,7 @@ The plugin exposes these hooks. Changes to any of these are high-risk:
 - **`experimental.chat.messages.transform`** — clears the prune placeholder flag on `systematic_skill` results in the request
 - **`experimental.chat.system.transform`** — injects bootstrap prompt into conversations
 
-Treat modifications to `src/index.ts` hook implementations as breaking-change candidates.
+Treat modifications to the hook implementations in `src/lib/opencode-v1.ts`, and to the shape of the default export in `src/index.ts`, as breaking-change candidates.
 
 ## Bundled Content
 
