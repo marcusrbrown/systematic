@@ -520,6 +520,34 @@ describe('agent and model routing in the current session', () => {
     ])
   })
 
+  test('a restore that also fails is reported once and the prompt error is still the one thrown', async () => {
+    const host = createHost({ promptFails: true })
+    const switchAgent = host.ctx.session.switchAgent.bind(host.ctx.session)
+    host.ctx.session.switchAgent = async (input) => {
+      // The switch to the command's agent works; the put-back does not.
+      if (input.agent === 'build') throw new Error('switch back exploded')
+      return switchAgent(input)
+    }
+    const { runtime, definition } = command(host, { agent: 'plan' })
+
+    await expect(definition.execute(invocation('go'))).rejects.toThrow(
+      'prompt exploded',
+    )
+    await settle(runtime)
+
+    const restoreNotes = errorMessages().filter((message) =>
+      message.includes('could not restore the session'),
+    )
+    expect(restoreNotes).toEqual([
+      'systematic: command "systematic:probe" could not restore the session: switch back exploded',
+    ])
+    // The prompt failure is still reported on its own, after the restore note.
+    expect(errorMessages()).toEqual([
+      restoreNotes[0] as string,
+      'systematic: command "systematic:probe" failed: prompt exploded',
+    ])
+  })
+
   test('a second run waits for the first run to put the session back before it reads the state', async () => {
     const host = createHost()
     const { runtime, definition } = command(host, { agent: 'plan' })

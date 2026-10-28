@@ -251,7 +251,15 @@ async function runInline(
       delivery: invocation.delivery,
     })
   } catch (error) {
-    await restoreSession(runtime, sessionID, before, switched).catch(() => {})
+    // The prompt error is the one the invoker needs; a failed put-back is
+    // reported on its own and never replaces it.
+    await restoreSession(runtime, sessionID, before, switched).catch(
+      (restoreError: unknown) => {
+        runtime.report(
+          `command "${name}" could not restore the session: ${restoreError instanceof Error ? restoreError.message : 'unknown error'}`,
+        )
+      },
+    )
     throw error
   }
 
