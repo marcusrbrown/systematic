@@ -782,7 +782,6 @@ jobs:
           # .github, scripts, package.json and lockfiles stay denied by the action.
           brokered-push-extra-paths: skills,agents,tests,registry
           model: ${{ vars.FRO_BOT_MODEL }}
-          omo-providers: ${{ secrets.OMO_PROVIDERS }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}
           # branch-pr only for the daily autoheal schedule and autoheal-mode
           # dispatch runs, so the agent's file changes land on a branch instead
