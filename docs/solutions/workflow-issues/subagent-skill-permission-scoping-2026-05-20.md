@@ -1,6 +1,7 @@
 ---
 title: Subagent skill tool permissions require explicit per-agent configuration
 date: 2026-05-20
+last_updated: 2026-10-28
 category: workflow-issues
 module: plugin-permissions
 problem_type: workflow_issue
@@ -22,7 +23,7 @@ tags:
 
 ## Context
 
-OpenCode subagents do not inherit the parent agent's tool permission allow-rules. When using a plugin configuration layer like OMO Slim (`oh-my-opencode-slim.jsonc`) that restricts agent tool access via explicit `skills` arrays, each subagent that needs to invoke `systematic_skill` must have the tool explicitly permitted in its own agent configuration.
+This applies when a configuration layer restricts agent tool access per agent. With a plugin layer like OMO Slim (`oh-my-opencode-slim.jsonc`) that restricts agents via explicit `skills` arrays, a subagent does not pick up its parent agent's allow-rules, so each subagent that needs to invoke `systematic_skill` must have the tool explicitly permitted in its own agent configuration. The rest of this doc describes that restrictive-layer case on OpenCode v1; [OpenCode v2](#opencode-v2) has its own per-agent rules.
 
 This was discovered when `@designer` failed to load `systematic:frontend-design` during a GREEN verification test. The orchestrator had `skills: ["*"]` but designer only had `skills: ["agent-browser"]`, so `systematic_skill` tool calls were denied.
 
@@ -82,6 +83,12 @@ A subagent that cannot load its domain skill falls back to general knowledge, pr
 grep -A 10 '"designer"' ~/.config/opencode/oh-my-opencode-slim.jsonc
 # Look for "skills" array — must include "systematic:*" or the specific skill name
 ```
+
+## OpenCode v2
+
+On v2, Systematic translates permissions per agent (HARNESSES.md OC2-PERM), and the host's skill tool enforces them per agent, including in subagents (OC2-SKILL; local probe, OpenCode 2.2.0). A subagent still needs its own allow per skill.
+
+- **Not probed.** Whether a third-party layer such as OMO Slim manages permissions on a v2 host was not checked. Treat the OMO Slim steps above as v1 guidance until it is.
 
 ## Related
 

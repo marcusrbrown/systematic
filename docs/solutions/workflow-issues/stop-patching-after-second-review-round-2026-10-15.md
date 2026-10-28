@@ -1,6 +1,7 @@
 ---
 title: Stop patching after a second review round breaks the first round's fixes; cut scope instead
 date: 2026-10-15
+last_updated: 2026-10-28
 category: workflow-issues
 module: workflow-system
 problem_type: workflow_issue
@@ -50,6 +51,8 @@ The scope cut hands off three things, and the PR links all three:
 
 A narrow PR still gets full code review, and findings in the deterministic subset are fixed in that PR. They do not reopen the deferred design.
 
+When the scope cut is an emulation of state the host owns, check production use first. If nothing uses the emulation, delete it and refuse visibly, with a message that points to the supported route, rather than ignoring the unsupported input in silence.
+
 ## Why This Matters
 
 When the root cause is structural, each patch adds surface the next round can attack. The plan grows and the merged result does not get safer. A documented limit also prevents a false sense of closure: without it, a reader of "fixed" assumes every listed vector is handled.
@@ -77,11 +80,14 @@ Proving absence, server-verified first pushes, fork exclusion and drift handling
 
 **#1095.** The deterministic subset was larger caps, a separate remote item cap, and a recorded cause on every hook path. The rejected designs stayed rejected, and read-race hardening became part of #1099.
 
+**#1239.** OpenCode v2 plugin commands cannot route to an agent or model. The adapter emulated routing by switching the session's agent and model, prompting, then restoring both. Each patch exposed another edge (concurrent turns, restore races, id mix-ups). Nothing in production used the routing, because discovered skills drop those fields and no bundled skill declares them. The emulation was deleted. A command that declares `agent`, `model` or `subtask` now fails with a message that points to an OpenCode command in Markdown or JSON (`src/lib/opencode-v2-commands.ts:49-61`, thrown at `src/lib/opencode-v2-commands.ts:101-104`). `HARNESSES.md` OC2-CMD records the host behavior behind the cut.
+
 ## Related
 
 - [Truth Reset: document-review convergence is a scope signal](../workflow-issues/truth-reset-scope-split-20260417.md). That doc covers splitting a plan when reviewers agree up front that it is overscoped. This doc covers the later signal: fixes from the first round breaking in the second.
 - [Iterative Oracle plan review loop](../workflow-issues/iterative-oracle-plan-review.md). Iterating until reviews are clean fits independent findings. When round 2 breaks round 1's mechanisms for a shared reason, stop there instead of iterating further.
 - Issues: #1005, #1081, #1082, #1095, #1099, #1126, #1129.
+- Pull request: #1239.
 - Plans:
   - `docs/plans/2026-10-11-002-fix-remote-seeding-deferral-plan.md`
   - `docs/plans/2026-10-12-001-fix-operation-snapshot-limits-plan.md`

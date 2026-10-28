@@ -2,6 +2,7 @@
 title: "A real-host CI job catches launcher, stdin, and signal bugs that every offline gate passes"
 module: integration-test-harness
 date: 2026-09-06
+last_updated: 2026-10-28
 problem_type: workflow_issue
 component: testing_framework
 severity: medium
@@ -24,6 +25,8 @@ applies_when:
 
 # A real-host CI job catches launcher, stdin, and signal bugs that every offline gate passes
 
+> **Historical v1 evidence.** The fixture is now `tests/integration/fixtures/opencode-host.ts`.
+
 ## Context
 
 The host-contract plan (`docs/plans/2026-09-04-001-refactor-ci-owned-host-contract-suite-plan.md`)
@@ -43,14 +46,14 @@ bugs no offline gate could reach; one of them had passed a full local real-host 
 ## Guidance
 
 1. **Never assert a launcher pid equals the in-process pid.** That relationship belongs to the
-   launcher and the platform. Measured for `bunx opencode-ai@1.18.27 serve`: on macOS it is one
+   launcher and the platform. Measured on v1 for `bunx opencode-ai@1.18.27 serve`: on macOS it is one
    process (pid 44691, ppid 1, pgid 44691 — `bunx` execs in place); on Ubuntu `bunx` forks
    `opencode-ai` as a child, so the in-process pid is the launcher pid plus one. The fixture spawns
    with `detached: true`, so the launcher is the process-group leader and the durable claim is
    membership, captured before the host is stopped:
 
    ```ts
-   // tests/integration/receipt-workflow-recovery.test.ts
+   // tests/integration/receipt-workflow-recovery.test.ts (deleted; the technique is what matters)
    const firstHostGroup = processGroupMemberPids(firstPid) // captured BEFORE firstHost.stop()
    ...
    expect(firstHostGroup).toContain(loadedPids[0])
@@ -61,7 +64,7 @@ bugs no offline gate could reach; one of them had passed a full local real-host 
    shell-free alternative. Leave `host.pid` meaning the group leader — reaping depends on it.
 
 2. **Close stdin for any spawned CLI that might read it.** An open, unwritten pipe never reaches
-   EOF. `spawnOpencodeChild` in `tests/integration/fixtures/receipt-workflow-host.ts` now passes
+   EOF. `spawnOpencodeChild` in `tests/integration/fixtures/opencode-host.ts` now passes
    `stdio: ['ignore', 'pipe', 'pipe']`; with the default stdio the same command hangs to the
    timeout, with `'ignore'` it completes in about 24 s.
 
@@ -84,10 +87,10 @@ bugs no offline gate could reach; one of them had passed a full local real-host 
 
 5. **When the real-host job finds a bug, pin it with a host-free test where the mechanism is
    reachable without a host.** The host job proves the integration; a unit test protects `main`
-   without one. The stdin hang is pinned that way in `tests/unit/receipt-workflow-host.test.ts`,
+   without one. The stdin hang is pinned that way in `tests/unit/opencode-host.test.ts`,
    alongside pins for two hazards the same fixture work surfaced (a `Bun.serve` + sync-spawn
    deadlock on the test thread, and group reaping on timeout) and, in
-   `tests/unit/receipt-workflow-host-no-spawn.test.ts`, the invariant that importing the fixture
+   `tests/unit/opencode-host-no-spawn.test.ts`, the invariant that importing the fixture
    spawns nothing. The other three bugs are guarded only by the integration tests that fixed
    them; the bare-binary and `process.emit` classes are pinnable host-free by a source scan over
    `tests/integration/` and `scripts/` (no argv beginning with bare `opencode`; no `process.emit`
@@ -146,6 +149,10 @@ expect(secondHostGroup).toContain(loadedPids[1])
 **signal — call the listener, not the emitter**: capture the listener installed by the code
 under test (Guidance 3) and invoke it directly instead of `process.emit('SIGINT')`.
 
+## OpenCode v2
+
+Keep asserting process-group membership, never pid identity, on a v2 host too.
+
 ## Related
 
 - [Host-contract evidence is CI-owned](./host-contract-evidence-is-ci-owned-2026-09-04.md) — the
@@ -161,5 +168,5 @@ under test (Guidance 3) and invoke it directly instead of `process.emit('SIGINT'
   — a positive local result does not identify the mechanism; the macOS pass here is an instance.
 - [Verify installed artifacts, not just build gates](./verify-installed-artifacts-not-just-build-gates-2026-07-18.md)
   — probe runtime channels empirically before designing around them.
-- [#935](https://github.com/marcusrbrown/systematic/issues/935) — open follow-up: move the job's
-  inline guard script into `scripts/` under lint, typecheck, and unit tests.
+- [#935](https://github.com/marcusrbrown/systematic/issues/935) — closed: the job's guard script now lives at
+  `scripts/host-contract-guard.ts` under lint, typecheck, and unit tests.

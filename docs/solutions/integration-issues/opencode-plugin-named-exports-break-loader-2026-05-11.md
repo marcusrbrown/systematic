@@ -1,7 +1,7 @@
 ---
 title: OpenCode plugin loader treats named exports as additional plugin factories — load failure
 date: 2026-05-11
-last_updated: 2026-05-11
+last_updated: 2026-10-28
 category: integration-issues
 module: systematic-plugin
 problem_type: integration_issue
@@ -27,6 +27,8 @@ tags:
 ---
 
 # OpenCode plugin loader treats named exports as additional plugin factories — load failure
+
+> **Current default shape.** The incident and its loader behavior are OpenCode v1. The default-only rule still holds, but the default is no longer a function. Since the OpenCode v2 adapter, `src/index.ts` exports one default object, `{ id, setup, server }` (`src/index.ts:23-34,50`): a v2 host calls `setup(ctx)` and a v1 host calls `server(input)`. The CI gate now checks that `Object.keys(m)` is exactly `['default']`, that the default is a non-null object, and that it has a string `id` and function `setup` and `server` members (`.github/workflows/main.yaml:41-56`). The `typeof m.default !== 'function'` checks in the snippets below describe the original function default. `HARNESSES.md` (`OC2-LOADER`) records which hosts load the object default and what each does with a function default.
 
 ## Problem
 
@@ -157,6 +159,8 @@ The cross-repo evidence reinforces both points. In Systematic, helpers live at `
        "
    ```
 
+   The `typeof m.default` check in this reference gate is for a function default. A plugin whose default is an object validates the object and its callable members instead, as Systematic's gate does (`.github/workflows/main.yaml:41-56`).
+
 4. **For published-package regressions, check `npm view <pkg> version` and `dist/index.js` exports before the user's bug report.** When a release ships and behavior changes, `node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"` against the installed copy answers "did our export surface change" in seconds.
 
 5. **Audit related plugin repos when a new entry-shape rule is established.** v2.12.1's hotfix established the rule; the same-day audit of `opencode-copilot-delegate` caught a latent third instance before it shipped. Any time a plugin authoring rule is hardened in one repo, the other plugin repos in the org get a quick `grep -n '^export' src/index.ts` to check for the same pattern. The audit is cheap; the production regression isn't.
@@ -172,3 +176,4 @@ The cross-repo evidence reinforces both points. In Systematic, helpers live at `
 - PR #355 (the v2.12.1 → v2.12.2 hotfix that this doc originally captured).
 - `marcusrbrown/opencode-copilot-delegate` PR #123 — the cross-repo proactive fix. Same anti-pattern caught latent; same structural solution applied (helper to `src/lib/rpc-cleanup.ts`, CI export-shape gate, plugin entry build target switched to `node`). The cross-repo evidence is what elevated this from a Systematic-specific gotcha to an OpenCode plugin authoring rule.
 - `marcusrbrown/opencode-copilot-delegate` PR #121 — the precursor that established the test-driven dual-path pattern in the sister repo. Set the stage for PR #123's structural follow-ups.
+- [A default-export shape change missed the installed-mode eval consumer](../test-failures/export-shape-change-missed-the-installed-eval-consumer-2026-10-28.md): a consumer outside the loader that checked the old default shape.
