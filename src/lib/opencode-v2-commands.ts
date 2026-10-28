@@ -216,6 +216,78 @@ async function restoreSession(
   }
 }
 
+/**
+ * The model the host runs a session on when the session names none, so a
+ * switch can be undone to something. Unreadable counts as none.
+ */
+async function hostDefaultModel(
+  runtime: CommandRuntime,
+  name: string,
+): Promise<V2ModelRef | undefined> {
+  try {
+    const { data } = await runtime.ctx.model.default()
+    return data ? { providerID: data.providerID, id: data.modelID } : undefined
+  } catch (error) {
+    runtime.report(
+      `command "${name}" could not read the default model: ${error instanceof Error ? error.message : 'unknown error'}`,
+    )
+    return undefined
+  }
+}
+
+/**
+ * What the command may switch, and what the session goes back to. A session
+ * with no agent or model of its own runs on the host's defaults, and v2 has no
+ * way to clear a session's agent or model once one is set. The default model
+ * can be read, so a model switch is undone to it. The default agent cannot
+ * be read, so a session with no agent is left on its current agent.
+ */
+async function planSwitch(
+  runtime: CommandRuntime,
+  name: string,
+  observed: SessionSnapshot,
+  route: Route,
+): Promise<{ before: SessionSnapshot; switched: Switched }> {
+  let agent: string | undefined
+  if (route.agent !== undefined && observed.agent !== route.agent.id) {
+    if (observed.agent === undefined) {
+      reportOnce(
+        runtime,
+        `switch-agent:${name}`,
+        `command "${name}" could not switch agent: the session has no agent to restore`,
+      )
+    } else {
+      agent = route.agent.id
+    }
+  }
+
+  let model: V2ModelRef | undefined
+  let modelBefore = observed.model
+  if (route.model !== undefined) {
+    modelBefore ??= await hostDefaultModel(runtime, name)
+    if (modelBefore === undefined) {
+      reportOnce(
+        runtime,
+        `switch-model:${name}`,
+        `command "${name}" could not switch model: the session has no model to restore`,
+      )
+    } else {
+      model = route.model
+    }
+  }
+  return {
+    before: { agent: observed.agent, model: modelBefore },
+    switched: { agent, model },
+  }
+}
+
+function mayswitch(observed: SessionSnapshot, route: Route): boolean {
+  return (
+    route.model !== undefined ||
+    (route.agent !== undefined && observed.agent !== route.agent.id)
+  )
+}
+
 async function runInline(
   runtime: CommandRuntime,
   name: string,
@@ -228,14 +300,17 @@ async function runInline(
   // A run that overlaps the previous one would read its switched state as the
   // original. Wait for that run to put the session back first.
   await runtime.restoring.get(sessionID)
-
-  const before = await readSession(runtime, sessionID)
-  const agentID = route.agent?.id
-  const switched: Switched = {
-    agent:
-      agentID !== undefined && before.agent !== agentID ? agentID : undefined,
-    model: route.model,
+  let observed = await readSession(runtime, sessionID)
+  // The host reads a session's agent and model for every model request, not
+  // once when a turn starts: a switch made mid-turn changes that turn's later
+  // steps. A command that will switch lets the running turn end first, then
+  // reads the session again because that turn may have changed it.
+  if (mayswitch(observed, route)) {
+    await ctx.session.wait({ sessionID })
+    observed = await readSession(runtime, sessionID)
   }
+
+  const { before, switched } = await planSwitch(runtime, name, observed, route)
 
   try {
     if (switched.agent !== undefined) {
