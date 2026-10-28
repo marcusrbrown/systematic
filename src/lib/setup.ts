@@ -281,6 +281,12 @@ function parseOpenCodeJsonc(rawText: string, targetPath: string): unknown {
   return parsed
 }
 
+/**
+ * Writes the OpenCode v1 `plugin` key. The package loads on v1 (1.18.29 and
+ * later) and on v2 (2.2.0 and later), but v2 reads `plugins`. Setup cannot tell
+ * which host a project uses, so it never edits `plugins` (the call fails closed
+ * with a message that says how to add the package by hand).
+ */
 function setupOpenCode(cwd: string, ops: SetupFsOps): SetupResult {
   const targetPath = resolveOpenCodeTargetPath(cwd)
   assertParentTrusted(path.dirname(targetPath), cwd)
@@ -308,7 +314,7 @@ function setupOpenCode(cwd: string, ops: SetupFsOps): SetupResult {
 
   if (Object.hasOwn(parsed, 'plugins')) {
     throw createSetupError(
-      `Invalid OpenCode config in ${targetPath}: \`plugins\` (plural) is not supported by OpenCode's schema; use singular \`plugin\``,
+      `Invalid OpenCode config in ${targetPath}: \`plugins\` (plural) is the OpenCode v2 key. Setup writes only the OpenCode v1 \`plugin\` key and left this file unchanged. For OpenCode v2 (2.2.0 or later), add "${SYSTEMATIC_PACKAGE_NAME}" to \`plugins\` by hand`,
     )
   }
 

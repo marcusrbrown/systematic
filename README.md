@@ -35,13 +35,19 @@ The workflow runs on three harnesses from one source: [OpenCode](https://opencod
 
 ## Quick Install
 
-**OpenCode**:
+**OpenCode**: one npm package runs on both OpenCode lines. OpenCode v1 (1.18.29 or later) reads the `plugin` key:
 
 ```json
 { "plugin": ["@fro.bot/systematic@latest"] }
 ```
 
-Add that to `~/.config/opencode/opencode.json` and restart OpenCode.
+OpenCode v2 (2.2.0 or later) reads the `plugins` key:
+
+```json
+{ "plugins": ["@fro.bot/systematic@latest"] }
+```
+
+Add the one that matches your OpenCode to `~/.config/opencode/opencode.json` and restart OpenCode. Older OpenCode versions are not supported. `systematic setup --harness opencode` and OCX installs write the v1 `plugin` key only.
 
 **Pi**:
 

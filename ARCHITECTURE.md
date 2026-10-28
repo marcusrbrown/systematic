@@ -13,7 +13,11 @@ Systematic ships as an npm package with two distinct parts:
 2. **Bundled assets** (`skills/`, `agents/`) — Markdown content shipped alongside the compiled code
 
 At runtime, OpenCode loads the plugin via its default export (`src/index.ts`): a plain object with a
-string `id` and `setup` and `server` functions. A v2 host calls `setup`, which currently does nothing.
+string `id` and `setup` and `server` functions. One npm package serves both hosts: OpenCode v1
+(1.18.29 and later) reads the `plugin` config key and calls `server`; OpenCode v2 (2.2.0 and later)
+reads the `plugins` key and calls `setup`. A shared core (config loading, `buildAssetPlan`,
+bootstrap composition, the skill resolver) feeds both adapters, and neither adapter imports the other.
+
 A v1 host calls `server`, and the plugin registers these hooks:
 
 - **`config`** — discovers bundled agents, skills, and commands, then merges them into the OpenCode
@@ -31,6 +35,34 @@ A v1 host calls `server`, and the plugin registers these hooks:
 
 The registered set is authoritative in `REGISTERED_PLUGIN_HOOKS` in `src/lib/opencode-v1.ts` (the OpenCode v1 adapter that `src/index.ts` calls); do not restate a count here.
 
+A v2 host calls `setup(ctx)`. A v1 host also calls `setup` on an object default, with a reduced bridge
+that has no `ctx.location` or `ctx.session`; `setup` returns at once there. On a real v2 context,
+`setupOpenCodeV2` (`src/lib/opencode-v2.ts`) loads config once for `ctx.location.directory`, builds one
+frozen snapshot (the asset plan plus the composed bootstrap), and runs four installers in order. Each
+installer lives in its own module and registers through a native v2 domain, not a mutable config object:
+
+- **agents** (`opencode-v2.ts`) — one `ctx.agent.transform` creates the planned agents. Permissions go
+  through `opencode-v2-permissions.ts`, which turns the plan's ordered triples into v2
+  `{action, resource, effect}` rules and appends them to the host defaults.
+- **skills** (`opencode-v2-skills.ts`) — `ctx.skill.transform` registers the enabled bundled skills so the
+  host's own `skill` tool lists and loads them. `systematic_skill` is ported through `ctx.tool.transform`
+  because the host tool takes only an id and cannot pass `$ARGUMENTS`. The host cuts tool output at 2000
+  lines or 50 KiB after the plugin returns it, so the full text is kept by call id and put back in the
+  `context` hook.
+- **commands** (`opencode-v2-commands.ts`) — `ctx.command.transform` registers the planned commands. A v2
+  command receives only the typed text, so the module expands `$ARGUMENTS` and positionals itself, routes
+  to the command's agent and model (and puts the session back after the turn), and runs subagent-mode
+  commands in a child session. It never runs `!`-backtick blocks.
+- **bootstrap** (`opencode-v2-bootstrap.ts`) — one instruction entry (`systematic.bootstrap`) per session,
+  put from the `prompt` hook.
+
+Two rules hold across the v2 adapter. Invalid `systematic.json` rejects `setup` with the same
+`Invalid Systematic config in <path>` message v1 throws, and the host then logs that the plugin failed
+to load and carries on without it. Everything else is guarded: a throwing transform disables the whole
+plugin and a throwing hook breaks the turn it runs in, so every installer and every registered
+callback runs through `createSafeGuard`, which reports to `console.error` with a `systematic:` prefix and
+never throws.
+
 The plugin builds no workflow guard: it registers no workflow tools and no guard hooks, and takes no
 repository snapshot. A `workflow_guard` key in config is still accepted and has no effect, and each file
 that carries it logs one warning per load.
@@ -46,6 +78,9 @@ Systematic is delivered to three harnesses from this same source tree, with diff
 harness:
 
 - **OpenCode** — the npm package itself is the OpenCode plugin, loaded directly via its default export.
+  On v1 (1.18.29 and later) it goes in the `plugin` array; on v2 (2.2.0 and later) it goes in the
+  `plugins` array. Older v1 and v2 versions are unsupported and get no shim. `setup --harness opencode`
+  writes only the v1 key; OCX installs also write v1 config.
 - **Pi** — the same npm package, loaded as a Pi extension via `setup --harness pi`, which writes an
   entry into `.pi/settings.json`. The package also declares `pi.subagents.agents`, pointing at
   `dist/pi-subagents/agents/`. `scripts/build-pi-package-agents.ts` generates that directory at build
@@ -173,10 +208,11 @@ Key symbols:
 
 These must hold at all times. CI enforces them via the content-integrity gate.
 
-1. **Single default export, and it is an object.** `src/index.ts` exports only `default`: a plain
+1. **One default export, and it is an object.** `src/index.ts` exports only `default`: a plain
    object with a string `id` and function `setup` and `server` members, not a function. Named
-   exports break OpenCode's plugin loader. The v1 hooks live in `src/lib/opencode-v1.ts`. The built
-   entry has no runtime import of `@opencode-ai/*` or `@opencode/*`; both are type-only.
+   exports break OpenCode's plugin loader. The v1 hooks live in `src/lib/opencode-v1.ts` and the v2
+   installers in `src/lib/opencode-v2*.ts`. The built entry has no runtime import of
+   `@opencode-ai/*` or `@opencode/*`; both are type-only.
 
 2. **Bundled agent markdown omits `model`.** Agent `.md` files in `agents/` must not set `model` in
    frontmatter. OpenCode subagents inherit the invoking agent's model when `model` is absent. The
@@ -192,6 +228,10 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 
 4. **No phantom skill references.** Any `systematic:*` name referenced in skill or agent content
    must correspond to a real bundled skill. The content-integrity gate catches dangling references.
+
+5. **Nothing throws into the v2 host, except invalid config.** `setup` rejects on invalid
+   `systematic.json` (mirroring v1's throw at load); every other v2 callback is wrapped by
+   `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
 
 ## Data Flow
 
@@ -218,6 +258,19 @@ OpenCode loads plugin
                  └─ INTERNAL_AGENT_SIGNATURES — skip heuristic for internal agents
 ```
 
+```
+OpenCode v2 loads plugin
+  └─ default export (src/index.ts) — v2 host calls setup(ctx)
+       ├─ guard: no ctx.location / ctx.session → v1 bridge, return
+       └─ setupOpenCodeV2 (src/lib/opencode-v2.ts)
+            ├─ loadConfigWithSources(ctx.location.directory)  — once; invalid config rejects here
+            ├─ buildAssetPlan + composeBootstrapContent       — one frozen snapshot
+            ├─ installAgents     → ctx.agent.transform   (+ opencode-v2-permissions.ts)
+            ├─ installSkills     → ctx.skill.transform, ctx.tool.transform, session.hook('context')
+            ├─ installCommands   → ctx.command.transform
+            └─ installBootstrap  → session.hook('prompt') → instructions.entry.put
+```
+
 ## Skill Discovery and Fallbacks
 
 Skill discovery is harness-owned and does not depend on the bootstrap prompt carrying a catalog:
@@ -226,6 +279,11 @@ Skill discovery is harness-owned and does not depend on the bootstrap prompt car
   skills directory in native `skills.paths`. OpenCode's native `skill` tool then discovers and
   loads those skills. If `systematic_skill` is unavailable or denied, discovery is degraded but
   not lost because the host path remains available.
+- **OpenCode v2** — `ctx.skill.transform` adds each enabled bundled skill (id, path, body) to the
+  host, so the native `skill` tool and its `<available_skills>` list see them, with the agent's
+  permission rules applied. Disabled skills are never added. A user or on-disk skill with the same id
+  replaces the bundled one silently for the native tool. `systematic_skill` stays registered because
+  it passes arguments.
 - **Pi** — the `systematic_skill` tool description is the only discovery surface. Pi has no
   equivalent `registerSkillsPaths()` call or host-rendered catalog. If `systematic_skill` is
   absent or denied, Pi has no remaining discovery surface. This is a knowingly accepted reduction
@@ -240,7 +298,9 @@ absolute machine paths into the prompt.
 The bootstrap does carry one short worktree placement rule, read from
 `skills/using-systematic/references/worktree-placement.md` and placed after the usage template and
 before the harness profile. OpenCode and Pi omit it when `git-worktree` is in `disabled_skills`.
-On OpenCode, a user-supplied `bootstrap.file` is returned verbatim and gets no rule. Pi reads
+On OpenCode, a user-supplied `bootstrap.file` is returned verbatim and gets no rule. On v2 the bootstrap
+is stored as an instruction entry in OpenCode's session database, so it persists after the plugin is
+removed, and a changed bootstrap adds a `<system-update>` message to sessions that already have the old one. Pi reads
 neither `bootstrap.file` nor `bootstrap.enabled`, so it carries the rule unless the skill is
 disabled. The Claude Code output style is static and always carries the rule.
 

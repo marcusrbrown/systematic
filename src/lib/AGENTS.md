@@ -11,6 +11,13 @@ loadConfig() → createConfigHandler() → buildAssetPlan() → {
   findCommandsInDir() → loadCommandAsConfig() → plan.commands
 } → foldPermissionRulesToV1Map() → OpenCode config
 
+setupOpenCodeV2() → loadConfigWithSources() (once; invalid config rejects) → buildAssetPlan() + composeBootstrapContent() → frozen snapshot → {
+  installAgents()    → ctx.agent.transform   (permissions via translatePermissionRules())
+  installSkills()    → ctx.skill.transform + ctx.tool.transform (systematic_skill) + session.hook('context') (full-output restore)
+  installCommands()  → ctx.command.transform (argument expansion, agent/model routing, subagent mode)
+  installBootstrap() → session.hook('prompt') → instructions.entry.put (key systematic.bootstrap)
+} — every installer and callback runs through createSafeGuard() (never throws; reports with the systematic: prefix)
+
 createSkillTool() → buildSkillToolDescription()/buildSkillToolParameterHint()/buildSkillContentOutput()/resolveSkill() → OpenCode tool
 getBootstrapContent() → reads using-systematic SKILL.md (+ worktree placement rule unless git-worktree is disabled) → system prompt
 buildCapabilitySnapshot() → normalized capability/config-observation snapshot → CLI output
@@ -106,5 +113,7 @@ No `src/lib` modules are intentionally excluded from these tables.
 - `SKILL_PREFIX` = `'systematic:'` — all skills registered with this prefix
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
+- `src/index.ts` exports one default object (`id`, `setup`, `server`). `server` is the v1 entry (`opencode-v1.ts`); `setup` is the v2 entry (`opencode-v2.ts`) and returns at once when `ctx.location` or `ctx.session` is missing, which is the reduced context a v1 host passes
+- `setup.ts` writes only the OpenCode v1 `plugin` key and fails closed on a `plugins` (v2) key with a message saying how to add the package by hand
 - `asset-plan.ts` contains internal `loadAgentAsConfig`/`loadCommandAsConfig`/`loadSkillAsCommand` — the glue between discovery and the host-neutral plan; `config-handler.ts` is the v1 half that writes the plan into OpenCode config
 - The plugin builds no workflow guard. A `workflow_guard` key in config is still accepted, warns once per file per load, and has no effect

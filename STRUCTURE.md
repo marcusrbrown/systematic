@@ -43,7 +43,9 @@ subdirectory of core modules.
 **Key files:**
 - `src/index.ts` — plugin entry: a default-export object with `id`, `setup` (v2 host) and `server`
   (v1 host). `server` registers every OpenCode hook Systematic provides (config, tool, the after
-  hook, the messages transform, and the system transform) through `src/lib/opencode-v1.ts`
+  hook, the messages transform, and the system transform) through `src/lib/opencode-v1.ts`.
+  `setup` returns at once for the reduced context a v1 host passes, and otherwise runs
+  `setupOpenCodeV2` (`src/lib/opencode-v2.ts`)
 - `src/pi.ts` — Pi extension factory (`systematicPiExtension`), registers `before_agent_start` for
   bootstrap injection plus the `systematic_skill` and `systematic_delegate` tools.
 - `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,
@@ -57,7 +59,18 @@ subdirectory of core modules.
 - `src/lib/config-protected-fields.ts` — `CONFIG_PROTECTED_FIELD_PATHS`, dependency-free list shared
   by `config.ts` and `capability-snapshot.ts`
 - `src/lib/config-handler.ts` — `createConfigHandler`: merges bundled assets into OpenCode config
-- `src/lib/skill-tool.ts` — `createSkillTool`: `systematic_skill` tool factory
+  (the v1 half of the shared asset plan)
+- `src/lib/asset-plan.ts` — `buildAssetPlan`: host-neutral agents, commands, enabled skills and
+  ordered permission triples; both OpenCode adapters read it
+- `src/lib/opencode-v1.ts` — `createOpenCodeV1Hooks`: the v1 adapter, pinned byte for byte by the
+  v1 golden tests
+- `src/lib/opencode-v2.ts` — `setupOpenCodeV2`: the v2 adapter (one config load, one frozen
+  snapshot, the agents installer, and the never-throw `createSafeGuard`)
+- `src/lib/opencode-v2-permissions.ts`, `opencode-v2-skills.ts`, `opencode-v2-commands.ts`,
+  `opencode-v2-bootstrap.ts` — the v2 permission translation and the skills, commands and
+  bootstrap installers
+- `src/lib/skill-tool.ts` — `createSkillTool`: `systematic_skill` tool factory (and
+  `createSkillToolDescriptor`, its zod-free form for v2)
 - `src/lib/skill-loader.ts` — `loadSkill`: content loading + XML wrapping
 - `src/lib/bootstrap.ts` — `getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`
 - `src/lib/skills.ts` — `findSkillsInDir`, `SKILL_FRONTMATTER_FIELDS`
@@ -193,9 +206,13 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
   `docs/scripts/` generation scripts, and bundled skill helper scripts under `skills/*/scripts/`
   (e.g. `ce-review-cleanup-*.test.ts`, `ce-review-ensure-ignore.test.ts`)
 - `tests/integration/` — integration tests (skip automatically if deps unavailable locally;
-  `SYSTEMATIC_REQUIRE_OPENCODE=1` in the `host-contract-shard` CI jobs, behind the required
-  `Host Contract` check, turns those skips into failures against a real, pinned OpenCode host);
-  `host-contract-timings.json` holds the per-file durations that balance the four shards
+  `SYSTEMATIC_REQUIRE_OPENCODE=1` in the host-contract CI jobs, behind the required
+  `Host Contract` check, turns those skips into failures against a real, pinned OpenCode host).
+  The contract runs as three profiles listed in `scripts/host-contract-guard.ts`: the full contract
+  on OpenCode v2 (four shards; `opencode-v2.test.ts` is its host test), and a v1 smoke subset at the
+  v1 floor and at the current v1 pin. `scripts/opencode-host-pins.json` holds the three CLI
+  versions, and `SYSTEMATIC_OPENCODE_HOST` selects the host line for a local run.
+  `host-contract-timings.json` holds the per-file durations that balance the v2 shards
 
 **Pattern:** Tests use `bun:test` with `describe`/`it`. Filesystem tests use real temp directories;
 no mocking libraries.
@@ -249,7 +266,10 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 |------|------|
 | `src/lib/skill-tool.ts` | `systematic_skill` tool registration |
 | `src/lib/skill-loader.ts` | Skill content loading + XML wrapping |
-| `src/lib/bootstrap.ts` | Bootstrap prompt injection |
+| `src/lib/bootstrap.ts` | Bootstrap composition (body, usage template, worktree rule, harness profile) |
+| `src/lib/asset-plan.ts` | Host-neutral asset plan shared by both OpenCode adapters |
+| `src/lib/opencode-v1.ts` | OpenCode v1 adapter (`server`) |
+| `src/lib/opencode-v2.ts` | OpenCode v2 adapter (`setup`) and its installer modules |
 | `src/lib/frontmatter.ts` | YAML frontmatter parsing |
 | `src/lib/walk-dir.ts` | Recursive directory walker |
 | `src/lib/validation.ts` | Agent config validation |
