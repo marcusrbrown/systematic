@@ -279,3 +279,36 @@ ${content}
 ${skillUsage}${ruleSection}${profileSection}
 </SYSTEMATIC_WORKFLOWS>`
 }
+
+export interface BootstrapCompositionOptions {
+  bundledSkillsDir: string
+  /** Harness profile name, read from `using-systematic/references/<profile>-profile.md`. */
+  profile: string
+  /** Skill usage block. Omit to use the OpenCode v1 default. */
+  usageTemplate?: string
+}
+
+/**
+ * Host-neutral bootstrap composition: reads the placement rule and the named
+ * harness profile from the packaged references, then composes the block.
+ *
+ * A host selects its profile and skill usage template here without touching
+ * another host's wiring. Read failures are logged by the readers and leave the
+ * section out, as before. Reading order (rule, then profile) is kept because
+ * it decides the order of any logged errors.
+ */
+export function composeBootstrapContent(
+  config: BootstrapContentConfig,
+  options: BootstrapCompositionOptions,
+): string | null {
+  const { bundledSkillsDir, profile, usageTemplate } = options
+  return getBootstrapContent(config, {
+    bundledSkillsDir,
+    usageTemplate,
+    // Always supplied; getBootstrapContent omits it when git-worktree is disabled.
+    worktreePlacementRule:
+      readWorktreePlacementRule(bundledSkillsDir) ?? undefined,
+    // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
+    profileBlock: readHarnessProfile(bundledSkillsDir, profile) ?? undefined,
+  })
+}

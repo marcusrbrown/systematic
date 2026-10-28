@@ -103,6 +103,9 @@ function writeMigratedSkill(root: string, name: string, body: string): void {
   )
 }
 
+// The hook inventory lives with the v1 adapter, not the entry point.
+const OPENCODE_V1_ADAPTER = 'src/lib/opencode-v1.ts'
+
 function writePluginEntryPoint(root: string, hooks: readonly string[]): void {
   const properties = hooks
     .map((hook) => {
@@ -112,7 +115,7 @@ function writePluginEntryPoint(root: string, hooks: readonly string[]): void {
     .join('\n')
   writeFile(
     root,
-    'src/index.ts',
+    OPENCODE_V1_ADAPTER,
     `const REGISTERED_PLUGIN_HOOKS = [\n${hooks.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n\nconst initializePlugin = async () => {\n  return {\n${properties}\n  }\n}\n`,
   )
 }
@@ -458,7 +461,7 @@ describe('checkHookParity', () => {
     try {
       writeFile(
         root,
-        'src/index.ts',
+        OPENCODE_V1_ADAPTER,
         `const REGISTERED_PLUGIN_HOOKS = [\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n\nconst hooks = {\n  config: async () => {},\n}\n\nconst initializePlugin = async () => {\n  return { ...hooks }\n}\n`,
       )
       writeFile(
@@ -584,6 +587,70 @@ describe('checkHookParity', () => {
       )
 
       expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('fails parity when a hook is deleted from the v1 adapter inventory', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(
+        root,
+        FIXTURE_PLUGIN_HOOKS.filter((hook) => hook !== 'event'),
+      )
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `The plugin registers these hooks:\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `- **\`${hook}\`**`).join('\n')}\n`,
+      )
+
+      const violations = checkHookParity(root, ['ARCHITECTURE.md'])
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.unregisteredHooks).toEqual(['event'])
+      expect(violations[0]?.message).toContain(OPENCODE_V1_ADAPTER)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reads the inventory from the v1 adapter, never from src/index.ts', () => {
+    const root = makeFixtureRepo()
+    try {
+      // A stale inventory in the entry point must not satisfy the parser.
+      writeFile(
+        root,
+        'src/index.ts',
+        `const REGISTERED_PLUGIN_HOOKS = [\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n`,
+      )
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers these hooks:\n- **`config`**\n',
+      )
+
+      expect(() => checkHookParity(root, ['ARCHITECTURE.md'])).toThrow(
+        `Unable to read plugin entry point at ${OPENCODE_V1_ADAPTER}`,
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('names the adapter when its file has no inventory', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, OPENCODE_V1_ADAPTER, 'export const nothing = true\n')
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers these hooks:\n- **`config`**\n',
+      )
+
+      expect(() => checkHookParity(root, ['ARCHITECTURE.md'])).toThrow(
+        `Unable to locate REGISTERED_PLUGIN_HOOKS in ${OPENCODE_V1_ADAPTER}`,
+      )
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -734,7 +801,13 @@ describe('checkContentIntegrity — codemap completeness wiring', () => {
     try {
       writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
       writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
-      writeFile(root, 'ARCHITECTURE.md', '## Codemap\n\n## Invariants\n')
+      // The hook inventory now lives in a lib module, so register it and leave
+      // only `alpha.ts` missing from the codemap.
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `## Codemap\n- \`${OPENCODE_V1_ADAPTER}\` — v1 adapter\n\n## Invariants\n`,
+      )
 
       const result = checkContentIntegrity(root)
 

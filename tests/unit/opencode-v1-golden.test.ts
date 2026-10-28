@@ -1,10 +1,10 @@
 /**
- * Characterization goldens for the OpenCode v1 plugin (plan unit U4).
+ * Characterization goldens for the OpenCode v1 plugin.
  *
  * These pin today's v1 output (the `config` hook result, the `systematic_skill`
  * descriptor and execution, the system transform, and the restore behavior of
  * the after-hook and the messages transform) so the shared-core extraction
- * (U5) and the export-shape change (U6) can prove v1 stays byte-identical.
+ * and the export-shape change can prove v1 stays byte-identical.
  *
  * How it stays synthetic: the plugin derives its bundled asset directories
  * from its own file location (`<package root>/src/index.ts` -> `<root>/skills`).
@@ -27,7 +27,7 @@
  * Regeneration is an explicit opt-in: set `OPENCODE_V1_GOLDENS_UPDATE=1`
  * (refused when `CI` is set), then run `bunx biome format --write
  * tests/fixtures/opencode-v1-goldens`. Goldens come from the pre-refactor code
- * and must not be regenerated to make U5 or U6 pass.
+ * and must not be regenerated to make a refactor pass.
  */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
@@ -50,7 +50,7 @@ const UPDATE_ENV = 'OPENCODE_V1_GOLDENS_UPDATE'
 
 const tempDirs = createTempDirTracker()
 
-// --- Plugin surface (structural, so the test survives the U6 export change) --
+// --- Plugin surface (structural, so the test survives an export-shape change) --
 
 interface ZodLike {
   description?: string
@@ -95,7 +95,7 @@ interface PluginInputStub {
 type PluginFactory = (input: PluginInputStub) => Promise<PluginHooks>
 
 /**
- * Today the default export is the plugin function. After U6 it is an object
+ * Today the default export is the plugin function. After the export-shape change it is an object
  * whose `server` is that function. Accept both so the goldens run unchanged
  * through the same hooks on either side of the shape change.
  */
@@ -586,7 +586,7 @@ describe('opencode v1 goldens: config hook', () => {
     // Characterization, not endorsement: JS objects enumerate integer-like keys
     // first in ascending numeric order, so today's v1 map lists '2' and '10'
     // before '*'. Under last-match-wins that places the deny after the allows.
-    // U5's ordered list must fold into exactly this map for v1.
+    // The shared ordered rule list must fold into exactly this map for v1.
     const captured = await captureConfigScenario(
       pick(CONFIG_SCENARIOS, 'integer-skills'),
     )

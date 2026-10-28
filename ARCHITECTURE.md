@@ -28,7 +28,7 @@ these hooks:
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 
-The registered set is authoritative in `src/index.ts`; do not restate a count here.
+The registered set is authoritative in `REGISTERED_PLUGIN_HOOKS` in `src/lib/opencode-v1.ts` (the OpenCode v1 adapter that `src/index.ts` calls); do not restate a count here.
 
 The plugin builds no workflow guard: it registers no workflow tools and no guard hooks, and takes no
 repository snapshot. A `workflow_guard` key in config is still accepted and has no effect, and each file
@@ -82,15 +82,21 @@ Supporting utilities
   src/lib/agent-colors.ts    — isValidAgentColor, OPENCODE_AGENT_COLOR_TOKENS
   src/lib/validation.ts      — agent config validation + type guards
 
+Shared asset plan (host-neutral)
+  src/lib/asset-plan.ts      — buildAssetPlan: agents, commands, enabled skills and ordered permission triples from loaded config + bundled assets; never touches a host config object
+
+OpenCode v1 adapter
+  src/lib/opencode-v1.ts     — createOpenCodeV1Hooks: the five v1 hooks and the REGISTERED_PLUGIN_HOOKS inventory; takes the package root from the entry point
+
 Config handling (plugin config hook)
-  src/lib/config-handler.ts  — createConfigHandler: merges discovered assets into OpenCode config
+  src/lib/config-handler.ts  — createConfigHandler: builds the asset plan, folds its ordered permission triples into the v1 map, merges the result into OpenCode config
 
 Skill tool (plugin tool hook)
   src/lib/skill-loader.ts    — loadSkill: content loading + XML wrapping
   src/lib/skill-tool.ts      — createSkillTool: systematic_skill tool factory
 
 Bootstrap injection (plugin transform hook)
-  src/lib/bootstrap.ts       — getBootstrapContent (body, usage template, worktree placement rule, harness profile), readWorktreePlacementRule, INTERNAL_AGENT_SIGNATURES
+  src/lib/bootstrap.ts       — getBootstrapContent (body, usage template, worktree placement rule, harness profile), composeBootstrapContent (host-neutral entry taking a profile name and usage template), readWorktreePlacementRule, INTERNAL_AGENT_SIGNATURES
 
 Config overlays and validation
   src/lib/agent-overlays.ts — buildBundledAgentInventory, validateAgentOverlays, resolveAgentOverlaySet
@@ -133,6 +139,8 @@ Key symbols:
 | Symbol | Location | Role |
 |--------|----------|------|
 | `SystematicPlugin` | `src/index.ts` | Main plugin factory — the default export |
+| `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
+| `buildAssetPlan` | `src/lib/asset-plan.ts` | Host-neutral agents, commands, enabled skills and ordered permission triples |
 | `createConfigHandler` | `src/lib/config-handler.ts` | Config hook implementation |
 | `createSkillTool` | `src/lib/skill-tool.ts` | `systematic_skill` tool factory |
 | `getBootstrapContent` | `src/lib/bootstrap.ts` | System prompt injection |
@@ -175,10 +183,12 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 ```
 OpenCode loads plugin
   └─ SystematicPlugin (src/index.ts)
+       └─ createOpenCodeV1Hooks (src/lib/opencode-v1.ts)
        │
        ├─ config hook fires
-       │    └─ createConfigHandler
-       │         ├─ loadConfig          — reads systematic.json from 3 sources
+        │    └─ createConfigHandler
+        │         ├─ buildAssetPlan      — host-neutral agents, commands, skills, permission triples
+        │         ├─ loadConfig          — reads systematic.json from 3 sources
        │         ├─ findSkillsInDir     — discovers skills/
        │         ├─ findAgentsInDir     — discovers agents/
        │         ├─ findCommandsInDir   — discovers .opencode/commands/

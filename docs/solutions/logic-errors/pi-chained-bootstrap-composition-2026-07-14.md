@@ -122,8 +122,10 @@ alongside `usageTemplate`; `getBootstrapContent` appends it inside the
 - Harness capability profiles are plain markdown under
   `skills/using-systematic/references/{opencode,pi}-profile.md`, read by
   `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:122-139`).
-- Per-harness population at the entry points: OpenCode passes
-  `readHarnessProfile(..., 'opencode')` (`src/index.ts:65`); Pi passes the
+- Per-harness population at the entry points: the OpenCode v1 adapter
+  (`src/lib/opencode-v1.ts`) passes the `'opencode'` profile through
+  `composeBootstrapContent`, which calls
+  `readHarnessProfile` (`src/lib/bootstrap.ts:312`); Pi passes the
   `'pi'` profile through `computeBootstrapContentSafe` (`computeBootstrapContentSafe`, `src/pi.ts:188-196`).
 - The seam is nullable and fail-soft: any read failure emits one stderr
   diagnostic and returns `null`, so the bootstrap composes without the profile
