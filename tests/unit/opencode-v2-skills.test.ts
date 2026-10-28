@@ -70,6 +70,12 @@ function createSkillsContext(
       },
     },
     agent: { async transform() {} },
+    command: {
+      async list() {
+        return { data: [] }
+      },
+      async transform() {},
+    },
     skill: {
       async transform(callback: (editor: FakeSkillEditor) => void) {
         skillTransforms.push(callback)

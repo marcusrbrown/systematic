@@ -1254,9 +1254,11 @@ async function startOpencodeProcess(
   const pid = server.pid
   if (!pid) throw new Error('opencode server did not expose a process id')
 
+  // Everything the server has written to stdout and stderr so far, for tests
+  // that look for a diagnostic. The listeners stay attached after startup.
+  let buffer = ''
   const announcement = await new Promise<ServerAnnouncement>(
     (resolve, reject) => {
-      let buffer = ''
       const timeout = setTimeout(() => {
         void stopOpencodeProcess(server).then(() => {
           reject(
@@ -1295,6 +1297,7 @@ async function startOpencodeProcess(
       ? {}
       : { password: announcement.password }),
     pid,
+    output: () => buffer,
     async stop(): Promise<void> {
       if (stopped) return
       stopped = true
@@ -1343,6 +1346,8 @@ export interface OpencodeServer {
   /** The Basic-auth password of a v2 server; absent for v1. */
   password?: string
   pid: number
+  /** The server's stdout and stderr so far. */
+  output(): string
   stop(): Promise<void>
 }
 

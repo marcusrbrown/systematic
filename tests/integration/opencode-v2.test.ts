@@ -12,6 +12,7 @@ import path from 'node:path'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import { findAgentsInDir } from '../../src/lib/agents.js'
+import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
   buildIsolatedOpencodeEnv,
@@ -97,6 +98,8 @@ interface ToolScriptedModel extends ScriptedModelServer {
   toolNames: Set<string>
   /** The text of every tool result in the latest request that offered tools, history included. */
   latestToolHistory: string[]
+  /** Every request that offered tools, which is every model turn but not the title request. */
+  turns: ChatRequestBody[]
 }
 
 function messageText(message: unknown): string {
@@ -110,6 +113,7 @@ function messageText(message: unknown): string {
 }
 
 interface ChatRequestBody {
+  model?: string
   tools?: unknown[]
   messages?: unknown[]
 }
@@ -150,7 +154,7 @@ function scriptResponse(
   )
   const call = /@@TOOL (\S+) (.*)$/m.exec(lastUser)
   if (call?.[1] === undefined || call[2] === undefined) {
-    return { text: 'No tool requested.' }
+    return { text: `Scripted reply to: ${lastUser.slice(0, 120)}` }
   }
   return {
     toolCalls: [
@@ -173,6 +177,7 @@ function startToolModelServer(): ToolScriptedModel {
     toolResults: [] as string[],
     toolNames: new Set<string>(),
     latestToolHistory: [] as string[],
+    turns: [] as ChatRequestBody[],
   }
   const server = Bun.serve({
     port: 0,
@@ -186,6 +191,7 @@ function startToolModelServer(): ToolScriptedModel {
       const body = (await request.json()) as ChatRequestBody
       if (Array.isArray(body.tools) && body.tools.length > 0) {
         recordRequest(model, body)
+        model.turns.push(body)
       }
       const chunks = scriptedResponseChunks(
         scriptResponse(model, body),
@@ -208,6 +214,48 @@ function startToolModelServer(): ToolScriptedModel {
   }
   return model
 }
+
+/** Adds a second model to the scripted provider, so a command can switch to it. */
+function withAltModel(configContent: string): string {
+  const parsed = JSON.parse(configContent) as {
+    providers: Record<string, { models: Record<string, unknown> }>
+  }
+  const provider = parsed.providers[SCRIPTED_PROVIDER]
+  if (provider === undefined) throw new Error('scripted provider missing')
+  provider.models[ALT_MODEL] = { name: 'Alternate Model' }
+  return JSON.stringify(parsed)
+}
+
+async function waitFor(
+  check: () => boolean | Promise<boolean>,
+  what: string,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return
+    await Bun.sleep(100)
+  }
+  throw new Error(`timed out waiting for ${what}`)
+}
+
+/** The text of the last user message in a recorded model request. */
+function lastUserText(body: ChatRequestBody): string {
+  const user = [...(body.messages ?? [])]
+    .reverse()
+    .find((message) => roleOf(message) === 'user')
+  return messageText(user)
+}
+
+function systemText(body: ChatRequestBody): string {
+  return (body.messages ?? [])
+    .filter((message) => roleOf(message) === 'system')
+    .map((message) => messageText(message))
+    .join('\n')
+}
+
+const ALT_MODEL = 'alternate-model'
+const AGENT_PROMPT_MARKER = 'You are an expert repository research analyst'
 
 describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
   'OpenCode v2 adapter scaffold on the pinned host',
@@ -324,12 +372,14 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       pluginSpec: string,
       toolModel: ToolScriptedModel,
       extraConfig: Record<string, unknown> = {},
+      options: { altModel?: boolean } = {},
     ) {
-      const configContent = withScriptedProvider(
+      const scripted = withScriptedProvider(
         JSON.stringify({ plugins: [pluginSpec], ...extraConfig }),
         toolModel.url,
         HOST,
       )
+      const configContent = options.altModel ? withAltModel(scripted) : scripted
       const server = await startOpencodeServer(
         fixture,
         configContent,
@@ -738,6 +788,433 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           })
           await host.client.session.wait({ sessionID: session.id })
           expect(toolModel.latestToolHistory).toEqual([expected])
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    /**
+     * A skill file under `root`. A discovered project skill becomes a command
+     * under its bare name, with a template and a description only. A skill in
+     * the bundled directory becomes `systematic:<name>` and can also name an
+     * `agent`, a `model` and `subtask`, so the routing tests add theirs to the
+     * extracted copy of the package.
+     */
+    function writeSkill(
+      root: string,
+      name: string,
+      frontmatter: Record<string, string>,
+      body: string,
+    ): void {
+      const dir = path.join(root, name)
+      fs.mkdirSync(dir, { recursive: true })
+      const lines = Object.entries({
+        name,
+        description: `Probe command ${name}`,
+        ...frontmatter,
+      }).map(([key, value]) => `${key}: ${value}`)
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\n${lines.join('\n')}\n---\n${body}\n`,
+      )
+    }
+
+    function writeCommandSkill(
+      name: string,
+      frontmatter: Record<string, string>,
+      body: string,
+    ): void {
+      writeSkill(
+        path.join(fixture.projectDir, '.claude/skills'),
+        name,
+        frontmatter,
+        body,
+      )
+    }
+
+    function writeBundledSkill(
+      packageDir: string,
+      name: string,
+      frontmatter: Record<string, string>,
+      body: string,
+    ): void {
+      writeSkill(path.join(packageDir, 'skills'), name, frontmatter, body)
+    }
+
+    /** The command list, once `ready` accepts it: plugin commands arrive after the built-ins. */
+    async function listCommands(
+      host: AgentHost,
+      ready: (entries: { name: string }[]) => boolean,
+    ) {
+      let names: { name: string; description: string | undefined }[] = []
+      await waitFor(async () => {
+        const listed = await host.client.command.list({
+          location: { directory: fixture.projectDir },
+        })
+        names = listed.data.map((entry) => ({
+          name: String(entry.name),
+          description: entry.description,
+        }))
+        return ready(names)
+      }, 'the command list')
+      return names
+    }
+
+    /** Lets the bundled agent run as a primary agent, which its own mode does not. */
+    function allowAgentAsPrimary(agent: string): void {
+      fs.writeFileSync(
+        path.join(fixture.configDir, 'systematic.json'),
+        JSON.stringify({ agents: { [agent]: { mode: 'primary' } } }),
+      )
+    }
+
+    async function newSession(host: AgentHost, agent = 'build') {
+      return host.client.session.create({
+        location: { directory: fixture.projectDir },
+        agent,
+        model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+      })
+    }
+
+    async function sessionState(host: AgentHost, sessionID: string) {
+      return host.client.session.get({ sessionID })
+    }
+
+    test(
+      'a command with $ARGUMENTS reaches the model expanded, on its configured agent, and the session goes back afterwards',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        allowAgentAsPrimary('repo-research-analyst')
+        writeBundledSkill(
+          packageDir,
+          'probe-args',
+          { agent: 'repo-research-analyst' },
+          'Investigate carefully: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const session = await newSession(host)
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'systematic:probe-args',
+            text: 'ARG-MARKER-9',
+          })
+          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
+
+          const turn = toolModel.turns[0]
+          if (turn === undefined) throw new Error('no turn recorded')
+          const prompt = lastUserText(turn)
+          expect(prompt).toContain('Investigate carefully: ARG-MARKER-9')
+          expect(prompt).toContain(
+            '<user-request>\nARG-MARKER-9\n</user-request>',
+          )
+          expect(prompt).not.toContain('$ARGUMENTS')
+          // The turn ran on the command's agent: its prompt is the system prompt.
+          expect(systemText(turn)).toContain(AGENT_PROMPT_MARKER)
+
+          // The session is put back on its own agent once the turn is done.
+          await waitFor(
+            async () =>
+              (await sessionState(host, session.id)).agent === 'build',
+            'the session to return to its agent',
+          )
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: 'A plain follow-up.',
+          })
+          await host.client.session.wait({ sessionID: session.id })
+          const followUp = toolModel.turns.at(-1)
+          if (followUp === undefined) throw new Error('no follow-up turn')
+          expect(systemText(followUp)).not.toContain(AGENT_PROMPT_MARKER)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a command with a model runs the turn on that model and the session returns to its own',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        writeBundledSkill(
+          packageDir,
+          'probe-model',
+          { model: `${SCRIPTED_PROVIDER}/${ALT_MODEL}` },
+          'Use the other model for: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(
+          pluginSpec,
+          toolModel,
+          {},
+          {
+            altModel: true,
+          },
+        )
+        try {
+          const session = await newSession(host)
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'systematic:probe-model',
+            text: 'MODEL-ARG',
+          })
+          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
+
+          expect(toolModel.turns[0]?.model).toBe(ALT_MODEL)
+          await waitFor(
+            async () =>
+              (await sessionState(host, session.id)).model?.id ===
+              SCRIPTED_MODEL,
+            'the session to return to its model',
+          )
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: 'A plain follow-up.',
+          })
+          await host.client.session.wait({ sessionID: session.id })
+          expect(toolModel.turns.at(-1)?.model).toBe(SCRIPTED_MODEL)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a subagent-mode command runs in a child session and its result comes back to the parent',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        writeBundledSkill(
+          packageDir,
+          'probe-sub',
+          { agent: 'repo-research-analyst' },
+          'Audit for the parent: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const session = await newSession(host)
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'systematic:probe-sub',
+            text: 'SUB-ARG-5',
+          })
+          await waitFor(
+            () =>
+              toolModel.turns.some((turn) =>
+                lastUserText(turn).includes(
+                  'Result of command systematic:probe-sub',
+                ),
+              ),
+            'the result to reach the parent',
+          )
+
+          // The child ran the expanded prompt on the command's agent.
+          const childTurn = toolModel.turns.find(
+            (turn) =>
+              lastUserText(turn).includes('Audit for the parent: SUB-ARG-5') &&
+              !lastUserText(turn).includes('Result of command'),
+          )
+          expect(childTurn).toBeDefined()
+          expect(systemText(childTurn as ChatRequestBody)).toContain(
+            AGENT_PROMPT_MARKER,
+          )
+
+          // The parent saw the child's reply, and kept its own agent.
+          const parentTurn = toolModel.turns.find((turn) =>
+            lastUserText(turn).includes(
+              'Result of command systematic:probe-sub',
+            ),
+          ) as ChatRequestBody
+          expect(lastUserText(parentTurn)).toContain('Scripted reply to:')
+          expect(lastUserText(parentTurn)).toContain('(subagent session ses_')
+          expect(systemText(parentTurn)).not.toContain(AGENT_PROMPT_MARKER)
+          expect((await sessionState(host, session.id)).agent).toBe('build')
+
+          // The child is a session of its own, attached to the parent.
+          const listed = await host.client.session.list({
+            parentID: session.id,
+          })
+          const children = listed.data
+          expect(children).toHaveLength(1)
+          expect(children[0]?.agent).toBe('repo-research-analyst')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a !-backtick block in a command stays literal text in the prompt',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const marker = path.join(fixture.tmpDir, 'bang-ran.txt')
+        writeCommandSkill(
+          'probe-bang',
+          {},
+          `Before !\`echo BANG-LITERAL-77 > ${marker}\` after $ARGUMENTS`,
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const session = await newSession(host)
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'probe-bang',
+            text: 'x',
+          })
+          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
+
+          const turn = toolModel.turns[0] as ChatRequestBody
+          expect(lastUserText(turn)).toContain(
+            `!\`echo BANG-LITERAL-77 > ${marker}\``,
+          )
+          // Nothing ran the block.
+          expect(fs.existsSync(marker)).toBe(false)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a command whose agent is not registered runs on the current agent, with one diagnostic',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        writeBundledSkill(
+          packageDir,
+          'probe-ghost',
+          { agent: 'ghost-agent' },
+          'Run anyway: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const session = await newSession(host)
+          for (const text of ['ONE', 'TWO']) {
+            const before = toolModel.turns.length
+            await host.client.session.command({
+              sessionID: session.id,
+              name: 'systematic:probe-ghost',
+              text,
+            })
+            await waitFor(
+              () => toolModel.turns.length > before,
+              `the turn for ${text}`,
+            )
+            await host.client.session.wait({ sessionID: session.id })
+            expect(
+              lastUserText(toolModel.turns.at(-1) as ChatRequestBody),
+            ).toContain(`Run anyway: ${text}`)
+          }
+
+          // The turns worked, on the session's own agent.
+          expect((await sessionState(host, session.id)).agent).toBe('build')
+          const notes = host.server
+            .output()
+            .split('\n')
+            .filter((line) => line.includes('names agent "ghost-agent"'))
+          expect(notes).toHaveLength(1)
+          expect(notes[0]).toContain('systematic: ')
+          expect(notes[0]).toContain('"systematic:probe-ghost"')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'the command names and descriptions match the v1 set',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const v2 = new Map(
+            (
+              await listCommands(host, (entries) =>
+                entries.some((entry) => entry.name.startsWith('systematic:')),
+              )
+            )
+              .filter((entry) => entry.name.startsWith('systematic:'))
+              .map((entry) => [entry.name, entry.description]),
+          )
+
+          const root = fs.realpathSync(packageDir)
+          const v1Config: {
+            command?: Record<string, { description?: string }>
+          } = {}
+          await createConfigHandler({
+            directory: fixture.projectDir,
+            bundledSkillsDir: path.join(root, 'skills'),
+            bundledAgentsDir: path.join(root, 'agents'),
+            bundledCommandsDir: path.join(root, 'commands'),
+            homeDir: fixture.homeDir,
+          })(v1Config as never)
+          const v1 = new Map(
+            Object.entries(v1Config.command ?? {})
+              .filter(([name]) => name.startsWith('systematic:'))
+              .map(([name, command]) => [name, command.description]),
+          )
+
+          expect(v2.size).toBeGreaterThan(10)
+          expect([...v2.keys()].sort()).toEqual([...v1.keys()].sort())
+          for (const [name, description] of v2) {
+            expect(description).toBe(v1.get(name))
+            expect(description?.startsWith('(Systematic) ')).toBe(true)
+          }
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a discovered skill named like a built-in command is skipped and the built-in stays',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeCommandSkill(
+          'review',
+          {},
+          'A skill that would replace the built-in.',
+        )
+        writeCommandSkill('probe-neighbour', {}, 'Registers beside it.')
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const byName = new Map(
+            (
+              await listCommands(host, (entries) =>
+                entries.some((entry) => entry.name === 'probe-neighbour'),
+              )
+            ).map((entry) => [entry.name, entry.description]),
+          )
+
+          expect(byName.has('probe-neighbour')).toBe(true)
+          // The built-in's own description, not the skill's.
+          expect(byName.get('review')).not.toContain('Probe command review')
+          expect(byName.get('review')).toContain('review changes')
+          const notes = host.server
+            .output()
+            .split('\n')
+            .filter((line) => line.includes('name of a built-in command'))
+          expect(notes).toHaveLength(1)
+          expect(notes[0]).toContain('"review"')
         } finally {
           toolModel.stop()
           await host.server.stop()

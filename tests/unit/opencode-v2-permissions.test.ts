@@ -266,6 +266,12 @@ async function registeredAgents(
     location: { directory: projectDir },
     session: { async hook() {} },
     skill: { async transform() {} },
+    command: {
+      async list() {
+        return { data: [] }
+      },
+      async transform() {},
+    },
     tool: { async transform() {} },
     agent: {
       async transform(callback: (editor: unknown) => void) {

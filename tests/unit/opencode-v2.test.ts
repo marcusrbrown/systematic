@@ -56,6 +56,12 @@ function createFakeContext(directory: string | undefined): FakeContext {
     location: directory === undefined ? {} : { directory },
     session: { async hook() {} },
     skill: { async transform() {} },
+    command: {
+      async list() {
+        return { data: [] }
+      },
+      async transform() {},
+    },
     tool: { async transform() {} },
     agent: {
       transform(callback: (editor: FakeEditor) => unknown) {

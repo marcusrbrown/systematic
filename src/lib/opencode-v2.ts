@@ -8,6 +8,7 @@ import {
 } from './asset-plan.js'
 import { composeBootstrapContent } from './bootstrap.js'
 import { loadConfigWithSources, type SystematicConfig } from './config.js'
+import { installCommands } from './opencode-v2-commands.js'
 import {
   permissionMapToTriples,
   translatePermissionRules,
@@ -268,7 +269,7 @@ const noopInstaller: V2Installer = () => {}
 const DEFAULT_INSTALLERS: V2Installers = {
   agents: installAgents,
   skills: installSkills,
-  commands: noopInstaller,
+  commands: installCommands,
   bootstrap: noopInstaller,
 }
 

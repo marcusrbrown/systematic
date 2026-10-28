@@ -92,6 +92,7 @@ OpenCode v1 adapter
 OpenCode v2 adapter
   src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the per-domain installer slots through createSafeGuard; installAgents registers the planned agents through one ctx.agent.transform; invalid config rejects
   src/lib/opencode-v2-skills.ts — installSkills: registers the enabled bundled skills via ctx.skill.transform, ports systematic_skill through ctx.tool.transform, and restores the host-truncated skill output in the context hook
+  src/lib/opencode-v2-commands.ts — installCommands: registers the planned commands through ctx.command.transform; expands arguments, routes to the command's agent and model (and puts the session back after the turn), runs subagent-mode commands in a child session and posts the result to the parent; never runs !-backtick blocks
   src/lib/opencode-v2-permissions.ts — translatePermissionRules: ordered permission triples to v2 {action, resource, effect} rules (bash to shell, task to subagent, doom_loop and lsp dropped)
 
 Config handling (plugin config hook)
@@ -148,6 +149,7 @@ Key symbols:
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
 | `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots behind a never-throw guard |
 | `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration |
+| `installCommands` | `src/lib/opencode-v2-commands.ts` | OpenCode v2 commands: argument expansion, agent and model routing, subagent mode |
 | `translatePermissionRules` | `src/lib/opencode-v2-permissions.ts` | Ordered permission triples to the v2 rule list, one rule per triple in the same order |
 | `buildAssetPlan` | `src/lib/asset-plan.ts` | Host-neutral agents, commands, enabled skills and ordered permission triples |
 | `createConfigHandler` | `src/lib/config-handler.ts` | Config hook implementation |
