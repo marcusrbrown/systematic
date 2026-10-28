@@ -57,6 +57,13 @@ ocx add systematic/document-review
 ocx add systematic/orchestrating-subagents
 ```
 
+### The Plugin
+Add the `@fro.bot/systematic` plugin to an existing OpenCode config:
+
+```bash
+ocx add systematic/plugin
+```
+
 ## Bundles
 
 Bundles allow you to install entire categories of Systematic assets in one command:
@@ -74,9 +81,10 @@ ocx add systematic/agents
 Profiles provide a complete, "opinionated" configuration for Systematic. They can be installed as standalone projects or merged into existing ones.
 
 :::caution
-Profile installation requires the registry to be configured **globally** (not just in the project). Add the `--global` flag when adding the registry:
+Profile installation requires the registry to be configured **globally** (not just in the project). Initialize the global OCX config once, then add the registry with the `--global` flag:
 
 ```bash
+ocx init --global
 ocx registry add https://fro.bot/systematic --name systematic --global
 ```
 :::
@@ -85,14 +93,14 @@ ocx registry add https://fro.bot/systematic --name systematic --global
 The `standalone` profile provides a minimal Systematic setup with only the `@fro.bot/systematic` plugin and all bundled assets.
 
 ```bash
-ocx profile add sys --from systematic/standalone
+ocx profile add sys --source systematic/standalone --global
 ```
 
 ### OMO Profile
 The `omo` profile harmonizes Systematic with [Oh My OpenAgent (OMO)](https://github.com/code-yeongyu/oh-my-openagent). It configures both plugins to work together, disabling redundant OMO features in favor of Systematic's structured workflows.
 
 ```bash
-ocx profile add omo-sys --from systematic/omo
+ocx profile add omo-sys --source systematic/omo --global
 ```
 
 ## npm vs OCX Comparison
@@ -175,7 +183,7 @@ If you have the npm plugin installed AND have added OCX components, Systematic w
 ### Profile not working
 If a profile installation fails or doesn't seem to apply:
 1. Verify the registry is configured **globally**: `ocx registry list --global`
-2. If missing, add it: `ocx registry add https://fro.bot/systematic --name systematic --global`
+2. If missing, run `ocx init --global` once, then add it: `ocx registry add https://fro.bot/systematic --name systematic --global`
 3. Check existing profiles: `ocx profile list`
 4. If the profile already exists, remove it first: `ocx profile rm <name>`
 
