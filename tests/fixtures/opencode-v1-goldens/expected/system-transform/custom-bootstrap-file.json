@@ -1,0 +1,29 @@
+{
+  "case": "custom-bootstrap-file",
+  "results": [
+    {
+      "before": ["Base system prompt"],
+      "after": ["Base system prompt\n\nCUSTOM BOOTSTRAP FILE CONTENT"]
+    }
+  ],
+  "logs": [
+    {
+      "body": {
+        "service": "systematic",
+        "level": "info",
+        "message": "Systematic plugin initialized",
+        "extra": {
+          "version": "0.0.0-golden",
+          "bootstrapEnabled": true,
+          "disabledSkillsCount": 0,
+          "disabledAgentsCount": 0,
+          "disabledCommandsCount": 0
+        }
+      }
+    }
+  ],
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}

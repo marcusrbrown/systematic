@@ -1,0 +1,160 @@
+{
+  "case": "only-completed-skill-parts-change",
+  "before": {
+    "messages": [
+      {
+        "parts": [
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "running",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "error",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "bash",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 0
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 9
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "messages": [
+      {
+        "parts": [
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "running",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "error",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "bash",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 0
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

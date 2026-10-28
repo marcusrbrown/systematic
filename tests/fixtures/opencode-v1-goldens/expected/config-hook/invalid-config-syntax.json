@@ -1,0 +1,11 @@
+{
+  "scenario": "invalid-config-syntax",
+  "systematicConfig": "{ this is not json",
+  "outcome": {
+    "startThrew": "Invalid Systematic config in <TMP>/custom/config-invalid-config-syntax/systematic.json: JSONC parse error: InvalidSymbol at offset 2"
+  },
+  "diagnostics": {
+    "warn": [],
+    "error": []
+  }
+}

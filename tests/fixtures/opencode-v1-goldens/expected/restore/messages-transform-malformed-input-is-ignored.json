@@ -1,0 +1,65 @@
+{
+  "case": "malformed-input-is-ignored",
+  "before": {
+    "messages": [
+      null,
+      "text",
+      {
+        "parts": "not-an-array"
+      },
+      {
+        "parts": [
+          null,
+          7,
+          {
+            "type": "tool",
+            "tool": "systematic_skill"
+          }
+        ]
+      },
+      {
+        "parts": [
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": [1, 2]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "messages": [
+      null,
+      "text",
+      {
+        "parts": "not-an-array"
+      },
+      {
+        "parts": [
+          null,
+          7,
+          {
+            "type": "tool",
+            "tool": "systematic_skill"
+          }
+        ]
+      },
+      {
+        "parts": [
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": [1, 2]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

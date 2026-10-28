@@ -1,0 +1,24 @@
+{
+  "case": "missing-call-id-left-alone",
+  "input": {
+    "tool": "systematic_skill",
+    "sessionID": "ses_restore"
+  },
+  "fullSkillOutput": "<skill_content name=\"systematic:fixture-alpha\">\n# Skill: systematic:fixture-alpha\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-alpha/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Alpha\n\nAlpha body.\n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-alpha\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n  <file><TMP>/pkg/skills/fixture-alpha/notes.txt</file>\n</skill_files>\n</skill_content>",
+  "before": {
+    "output": "<skill_content name=\"systematic:fixture-alpha\">\n# Skill: systematic:fixture-alpha\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-alpha/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Alpha\n\n...12 lines truncated...\n\nHOST-TAIL",
+    "metadata": {
+      "truncated": true,
+      "outputPath": "/host/spill/output.txt"
+    }
+  },
+  "afterEachCall": [
+    {
+      "output": "<skill_content name=\"systematic:fixture-alpha\">\n# Skill: systematic:fixture-alpha\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-alpha/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Alpha\n\n...12 lines truncated...\n\nHOST-TAIL",
+      "metadata": {
+        "truncated": true,
+        "outputPath": "/host/spill/output.txt"
+      }
+    }
+  ]
+}

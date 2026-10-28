@@ -1,0 +1,158 @@
+[
+  {
+    "request": {
+      "name": "fixture-alpha"
+    },
+    "ask": [
+      {
+        "permission": "skill",
+        "patterns": ["systematic:fixture-alpha"],
+        "always": ["systematic:fixture-alpha"],
+        "metadata": {}
+      }
+    ],
+    "metadata": [
+      {
+        "title": "Loaded skill: systematic:fixture-alpha",
+        "metadata": {
+          "name": "systematic:fixture-alpha",
+          "dir": "<TMP>/pkg/skills/fixture-alpha"
+        }
+      }
+    ],
+    "output": "<skill_content name=\"systematic:fixture-alpha\">\n# Skill: systematic:fixture-alpha\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-alpha/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Alpha\n\nAlpha body.\n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-alpha\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n  <file><TMP>/pkg/skills/fixture-alpha/notes.txt</file>\n</skill_files>\n</skill_content>"
+  },
+  {
+    "request": {
+      "name": "systematic:fixture-alpha"
+    },
+    "ask": [
+      {
+        "permission": "skill",
+        "patterns": ["systematic:fixture-alpha"],
+        "always": ["systematic:fixture-alpha"],
+        "metadata": {}
+      }
+    ],
+    "metadata": [
+      {
+        "title": "Loaded skill: systematic:fixture-alpha",
+        "metadata": {
+          "name": "systematic:fixture-alpha",
+          "dir": "<TMP>/pkg/skills/fixture-alpha"
+        }
+      }
+    ],
+    "output": "<skill_content name=\"systematic:fixture-alpha\">\n# Skill: systematic:fixture-alpha\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-alpha/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Alpha\n\nAlpha body.\n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-alpha\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n  <file><TMP>/pkg/skills/fixture-alpha/notes.txt</file>\n</skill_files>\n</skill_content>"
+  },
+  {
+    "request": {
+      "name": "ns:fixture-gamma"
+    },
+    "ask": [
+      {
+        "permission": "skill",
+        "patterns": ["ns:fixture-gamma"],
+        "always": ["ns:fixture-gamma"],
+        "metadata": {}
+      }
+    ],
+    "metadata": [
+      {
+        "title": "Loaded skill: ns:fixture-gamma",
+        "metadata": {
+          "name": "ns:fixture-gamma",
+          "dir": "<TMP>/pkg/skills/fixture-gamma"
+        }
+      }
+    ],
+    "output": "<skill_content name=\"ns:fixture-gamma\">\n# Skill: ns:fixture-gamma\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-gamma/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Gamma\n\nGamma body.\n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-gamma\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n</skill_content>"
+  },
+  {
+    "request": {
+      "name": "fixture-args"
+    },
+    "ask": [
+      {
+        "permission": "skill",
+        "patterns": ["systematic:fixture-args"],
+        "always": ["systematic:fixture-args"],
+        "metadata": {}
+      }
+    ],
+    "metadata": [
+      {
+        "title": "Loaded skill: systematic:fixture-args",
+        "metadata": {
+          "name": "systematic:fixture-args",
+          "dir": "<TMP>/pkg/skills/fixture-args"
+        }
+      }
+    ],
+    "output": "<skill_content name=\"systematic:fixture-args\">\n# Skill: systematic:fixture-args\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-args/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Args\n\nFirst: $1\nEverything: $ARGUMENTS\n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-args\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n</skill_content>"
+  },
+  {
+    "request": {
+      "name": "fixture-args",
+      "arguments": "one \"two words\" three"
+    },
+    "ask": [
+      {
+        "permission": "skill",
+        "patterns": ["systematic:fixture-args"],
+        "always": ["systematic:fixture-args"],
+        "metadata": {}
+      }
+    ],
+    "metadata": [
+      {
+        "title": "Loaded skill: systematic:fixture-args",
+        "metadata": {
+          "name": "systematic:fixture-args",
+          "dir": "<TMP>/pkg/skills/fixture-args"
+        }
+      }
+    ],
+    "output": "<skill_content name=\"systematic:fixture-args\">\n# Skill: systematic:fixture-args\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-args/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Args\n\nFirst: one two words three\nEverything: one \"two words\" three\n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-args\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n</skill_content>"
+  },
+  {
+    "request": {
+      "name": "fixture-args",
+      "arguments": ""
+    },
+    "ask": [
+      {
+        "permission": "skill",
+        "patterns": ["systematic:fixture-args"],
+        "always": ["systematic:fixture-args"],
+        "metadata": {}
+      }
+    ],
+    "metadata": [
+      {
+        "title": "Loaded skill: systematic:fixture-args",
+        "metadata": {
+          "name": "systematic:fixture-args",
+          "dir": "<TMP>/pkg/skills/fixture-args"
+        }
+      }
+    ],
+    "output": "<skill_content name=\"systematic:fixture-args\">\n# Skill: systematic:fixture-args\n\nBase directory for this skill: <TMP>/pkg/skills/fixture-args/\nFile references (@path) in this skill are relative to this directory.\n\n# Fixture Args\n\nFirst: \nEverything: \n\nBase directory for this skill: file://<TMP>/pkg/skills/fixture-args\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n</skill_content>"
+  },
+  {
+    "request": {
+      "name": "git-worktree"
+    },
+    "ask": [],
+    "metadata": [],
+    "threw": "Skill \"git-worktree\" not found. Available systematic skills: systematic:10, systematic:2, systematic:fixture-alpha, systematic:fixture-args, systematic:fixture-beta, systematic:fixture-hidden, systematic:fixture-routed, ns:fixture-gamma, systematic:using-systematic"
+  },
+  {
+    "request": {
+      "name": "does-not-exist"
+    },
+    "ask": [],
+    "metadata": [],
+    "threw": "Skill \"does-not-exist\" not found. Available systematic skills: systematic:10, systematic:2, systematic:fixture-alpha, systematic:fixture-args, systematic:fixture-beta, systematic:fixture-hidden, systematic:fixture-routed, ns:fixture-gamma, systematic:using-systematic"
+  }
+]

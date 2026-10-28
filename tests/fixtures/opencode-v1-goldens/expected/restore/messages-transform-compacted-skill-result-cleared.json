@@ -1,0 +1,56 @@
+{
+  "case": "compacted-skill-result-cleared",
+  "before": {
+    "messages": [
+      {
+        "info": {
+          "role": "assistant"
+        },
+        "parts": [
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2,
+                "compacted": 3
+              }
+            }
+          },
+          {
+            "type": "text",
+            "text": "untouched text"
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "messages": [
+      {
+        "info": {
+          "role": "assistant"
+        },
+        "parts": [
+          {
+            "type": "tool",
+            "tool": "systematic_skill",
+            "state": {
+              "status": "completed",
+              "time": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          },
+          {
+            "type": "text",
+            "text": "untouched text"
+          }
+        ]
+      }
+    ]
+  }
+}
