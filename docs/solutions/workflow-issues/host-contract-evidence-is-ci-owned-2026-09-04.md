@@ -229,10 +229,12 @@ definition that pins the exact environment.
   `scripts/host-contract-guard.ts` (every file under `tests/integration/` must
   be on at least one list, which `tests/unit/host-contract-guard.test.ts`
   checks). A file on the v2 list also belongs in a refreshed timings file;
-  only the v2 shards use it. Regenerate it locally with `bun test
-  tests/integration --timings=tests/integration/host-contract-timings.json
-  --update-timings` (with the require flag set for the host you run, on an
-  idle machine); CI never writes it.
+  only the v2 shards use it. Regenerate it locally the way CI selects the
+  suite, on an idle machine: run `bun test` on the files from
+  `bun scripts/host-contract-guard.ts files --profile v2` with
+  `--timings=tests/integration/host-contract-timings.json --update-timings`,
+  and set `SYSTEMATIC_OPENCODE_HOST=v2`, `SYSTEMATIC_OPENCODE_V2_BIN` and
+  `SYSTEMATIC_REQUIRE_OPENCODE_V2=1`. CI never writes it.
 - Shard times drifting apart — one shard running well past the others means
   the committed timings no longer match the suite; refresh them the same way.
 
