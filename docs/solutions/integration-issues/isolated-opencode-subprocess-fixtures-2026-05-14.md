@@ -1,7 +1,7 @@
 ---
 title: Isolate harness subprocess and packaged-runtime fixtures
 date: 2026-05-14
-last_updated: 2026-07-31
+last_updated: 2026-10-28
 category: integration-issues
 module: harness integration tests
 problem_type: integration_issue
@@ -20,6 +20,8 @@ tags: [opencode, pi, integration-tests, fixture-isolation, subprocess, npm-pack,
 ---
 
 # Isolate harness subprocess and packaged-runtime fixtures
+
+> **Two hosts.** The recipe below is for OpenCode v1. The fixture also drives a v2 host; see [OpenCode v2](#opencode-v2).
 
 ## Problem
 
@@ -162,6 +164,10 @@ Add a probe plugin when asserting hook behavior. For OpenCode v1.14.41, normal c
 
 Finally, protect the real repo by snapshotting `.opencode` recursively with content hashes and symlink targets. Compare sorted snapshot entries after the subprocess run. If `.opencode` did not exist before the test, assert it still does not exist afterward.
 
+### OpenCode v2
+
+The same fixture module (`tests/integration/fixtures/opencode-host.ts`) drives both hosts, chosen by `SYSTEMATIC_OPENCODE_HOST`. The v2 isolation recipe is in HARNESSES.md: OC2-HOST for the config channel, `TMPDIR` and `run --standalone`, and OC2-LOADER for how the packed plugin loads.
+
 ## Why This Works
 
 OpenCode subprocesses inherit their filesystem and plugin identity from environment variables. Isolating only one config variable leaves fallback paths open through `HOME`, XDG directories, cache directories, or project `.opencode` state. A complete fixture makes the subprocess operate inside a disposable sandbox while still allowing authentication variables required by the selected test model.
@@ -200,6 +206,7 @@ Pi splits install from load. A raw tarball can install successfully while persis
 ## Related Issues
 
 - `tests/integration/opencode.test.ts`
+- `tests/integration/opencode-v1.test.ts`, `tests/integration/opencode-v2.test.ts` and `tests/integration/fixtures/opencode-host.ts`
 - `docs/plans/2026-05-14-001-fix-isolated-opencode-integration-plan.md`
 - `docs/plans/2026-07-06-002-feat-v3-cleanup-release-plan.md`
 - `docs/plans/2026-07-06-003-feat-pi-harness-support-plan.md`

@@ -1,7 +1,7 @@
 ---
 title: Verify installed artifacts, not just build gates
 date: 2026-07-18
-last_updated: 2026-08-24
+last_updated: 2026-10-28
 category: workflow-issues
 module: claude-code-harness
 problem_type: workflow_issue
@@ -14,6 +14,8 @@ tags:
   - claude-code
   - empirical-probing
   - generated-output
+  - opencode-v2
+  - decision-rules
 applies_when:
   - A build or codegen step emits an artifact consumed in a different context than the source repo
   - A design rests on unverified external runtime/host behavior
@@ -43,6 +45,11 @@ Concretely, for a generated/published artifact:
 - Add gates that model the *target* contract: an integrity check over the generated namespace, not just a build-succeeds check.
 
 **Probe unproven runtime channels empirically before designing around them.** Don't assume a host honors a mechanism. In this arc, probing the real Claude Desktop revealed that **imperative `SessionStart` hook content is refused as prompt injection**, while **declarative facts and the plugin output-style are honored** — which directly shaped the design (declarative hook, output-style enforcement). Verify the channel behaves as assumed before building on it.
+
+Two practices make a probe worth its cost:
+
+- **Write the decision rule before you run the probe.** For each probe, record what you will do for each outcome, including which outcomes mean stop and ask. A rule written after the result bends to fit it.
+- **Bracket the version range.** Probe the floor and the current version on each host line, not one version. Two points show whether a floor is a real loader limit or only a support decision, and whether a behavior is stable across the range.
 
 A probe that comes back positive has not finished the job. It shows the capability is reachable; it does not show what made it reachable, and an ambient cause looks identical to the one you intended. See [A capability that works has not yet named its cause](./a-capability-that-works-has-not-named-its-cause-2026-08-24.md) for the negative control that separates them — and for what it cost when this rule was available here and went unconsulted.
 
@@ -74,6 +81,10 @@ Evidence registry: see [HARNESSES.md](../../../HARNESSES.md)   # fix: strip from
 ```
 
 Empirical channel finding that shaped the design: imperative hook content refused as prompt injection; declarative facts + output-style honored — verified in the real host before committing to the enforcement model.
+
+### Second example: the OpenCode v2 port (#1239)
+
+Throwaway probes against the real host overturned premises the plan had carried in: how each host loads the object default, where truncation and restore happen, and what a throw costs. HARNESSES.md holds the results as OC2-LOADER, OC2-TRUNC and OC2-ERR; do not repeat them here. Only the loader shape was probed on both 2.1.4 and 2.2.0; the rest ran on 2.2.0.
 
 ## Related
 

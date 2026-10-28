@@ -1,7 +1,7 @@
 ---
 title: OpenCode truncates plugin tool output before any hook runs
 date: 2026-09-26
-last_updated: 2026-10-20
+last_updated: 2026-10-28
 category: integration-issues
 module: systematic-plugin
 problem_type: integration_issue
@@ -19,6 +19,8 @@ tags: [opencode, plugin-tool, truncation, tool-execute-after, systematic-skill, 
 > **Note (2026-10-19):** The workflow guard mentioned below was removed ([#1153](https://github.com/marcusrbrown/systematic/issues/1153)). The output restore described here is unchanged.
 
 # OpenCode truncates plugin tool output before any hook runs
+
+> **OpenCode v1.** The mechanism, solution and pruning notes below are for the v1 host. A v2 host truncates too and needs a different restore; see [OpenCode v2](#opencode-v2).
 
 ## Problem
 
@@ -75,7 +77,7 @@ output.metadata.truncated = false
 delete output.metadata.outputPath
 ```
 
-In `src/index.ts`, the after-hook wrapper restores the output inside a `try` and never blocks the host. (When this was written the same wrapper ran the workflow guard first and the restore second, each in its own `try`; the guard has since been removed.) The config hook recomputes the user-limit flag on every call:
+In `src/lib/opencode-v1.ts` (`createOpenCodeV1Hooks`, called from the entry's `server` member), the after-hook wrapper restores the output inside a `try` and never blocks the host. (When this was written the same wrapper ran the workflow guard first and the restore second, each in its own `try`; the guard has since been removed.) The config hook recomputes the user-limit flag on every call:
 
 ```ts
 config: async (incomingConfig: Config): Promise<void> => {
@@ -112,6 +114,10 @@ Slash-command templates don't go through this path: `SessionPrompt.command` turn
 - **Recompute config-derived flags on every config hook call.** The first version only ever set the flag to `true`, so removing a limit never re-enabled restoration.
 - **Mutate host-owned objects in place.** Merge metadata keys; never replace the object.
 - **Re-check after every OpenCode pin bump.** The suite is listed in `scripts/host-contract-guard.ts`, so the required `host-contract` job catches marker or ordering changes.
+
+## OpenCode v2
+
+A v2 host also truncates after `execute.after` has seen the full text (HARNESSES.md OC2-TRUNC; local probe, OpenCode 2.2.0), so the restore moved to the `context` hook, which runs before each model request. The tool keeps the full text by session and call id when it executes (`src/lib/opencode-v2-skills.ts:208`). `restoreSkillResults` puts it back by matching those ids and never reads the marker text (`src/lib/opencode-v2-skills.ts:139-169`). The store is read, not consumed, because the host rebuilds each request from history. v2 has no runtime prune placeholder, so the Pruning section below has no v2 counterpart (OC2-TRUNC).
 
 ## Pruning
 

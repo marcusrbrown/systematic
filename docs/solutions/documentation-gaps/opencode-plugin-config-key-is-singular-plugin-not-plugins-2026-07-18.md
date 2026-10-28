@@ -1,6 +1,7 @@
 ---
-title: OpenCode plugin config key is singular plugin, not plugins
+title: OpenCode plugin config key is `plugin` on v1 and `plugins` on v2
 date: 2026-07-18
+last_updated: 2026-10-28
 category: documentation-gaps
 module: opencode-plugin-config
 problem_type: documentation_gap
@@ -18,15 +19,17 @@ tags:
   - registry
 ---
 
-# OpenCode plugin config key is singular plugin, not plugins
+# OpenCode plugin config key is `plugin` on v1 and `plugins` on v2
+
+> **OpenCode v2 reads a different key.** The incident below is OpenCode v1. A v2 host (2.2.0 and later) reads a plural `plugins` array, and Systematic supports both hosts from one package. The key is a property of the host line, so check which line a doc or config targets before choosing it. See [OpenCode v2](#opencode-v2).
 
 ## Context
 
-Systematic's install docs and both shipped registry profiles told users to add the plugin under a plural `plugins` array in `opencode.json`. OpenCode's config schema only reads a **singular** `plugin` array, so the plural key is silently ignored — the plugin never loads, with no error. This shipped in the README, three docs pages, and the `standalone`/`omo` registry profiles that users install directly, so anyone following the instructions got a config that silently did nothing.
+Systematic's install docs and both shipped registry profiles told users to add the plugin under a plural `plugins` array in `opencode.json`. OpenCode v1's config schema only reads a **singular** `plugin` array, so the plural key is silently ignored on v1 — the plugin never loads, with no error. This shipped in the README, three docs pages, and the `standalone`/`omo` registry profiles that users install directly, so anyone following the instructions got a config that silently did nothing.
 
 ## Guidance
 
-Use the singular `plugin` key for OpenCode plugin config, everywhere:
+On OpenCode v1 (1.18.29 and later), use the singular `plugin` key:
 
 ```json
 { "plugin": ["@fro.bot/systematic@latest"] }
@@ -43,6 +46,16 @@ Not `"plugins"`. The fix (PR #665) swept every user-facing occurrence to singula
 
 The repo's own `opencode.json` and the integration tests already used the singular form correctly — only the human-facing docs and registry profiles had drifted to the plural.
 
+### OpenCode v2
+
+On OpenCode v2 (2.2.0 and later), the key is the plural `plugins`:
+
+```json
+{ "plugins": ["@fro.bot/systematic@latest"] }
+```
+
+The key is `plugins` on v2 (HARNESSES.md, OpenCode v2 section). `systematic setup --harness opencode` writes only `plugin` and refuses an existing `plugins` (`src/lib/setup.ts:315-319`). What OCX writes to `opencode.json` comes from OCX and is not verified here.
+
 ## Why This Matters
 
 The failure is **silent**: OpenCode does not warn on an unknown `plugins` key, the docs build stays green, and tests pass (they exercise the correct singular form). A user following the docs sees no error — the plugin just isn't there. Broken install instructions in the README and shipped registry profiles are among the highest-blast-radius docs bugs, because they are the literal first thing a new user copies.
@@ -50,18 +63,18 @@ The failure is **silent**: OpenCode does not warn on an unknown `plugins` key, t
 ## When to Apply
 
 - Any time you write or review OpenCode plugin install config.
-- Whenever documenting a third-party tool's config key — verify against that tool's actual schema/source, not memory or naming intuition. Plural "plugins" is the intuitive guess and it is wrong here.
+- Whenever documenting a third-party tool's config key — verify against that tool's actual schema/source, not memory or naming intuition. Plural "plugins" is the intuitive guess; it was wrong on v1 and is right on v2, so the host line decides.
 
 ## Examples
 
-Ground truth confirming the singular key:
+Ground truth confirming the singular key on v1:
 
 - OpenCode runtime reads `config.plugin` — [`config.ts` lines 101–108 at v1.18.8](https://github.com/anomalyco/opencode/blob/v1.18.8/packages/opencode/src/config/config.ts#L101-L108).
 - OpenCode's config schema: `plugin: Schema.optional(Schema.Array(PluginSpec))` — [`index.tsx` lines 53–58 at v1.18.8](https://github.com/anomalyco/opencode/blob/v1.18.8/packages/tui/src/config/index.tsx#L53-L58).
-- Systematic's own setup code **already rejects** the plural at runtime — `src/lib/setup.ts:296-316`: *"`plugins` (plural) is not supported by OpenCode's schema; use singular `plugin`."*
-- Systematic's OpenCode integration test uses `{ plugin: [pluginPath] }` — `tests/integration/opencode.test.ts:751-759`.
+- Systematic's setup code writes only the v1 `plugin` key and refuses an existing `plugins` entry — `src/lib/setup.ts:315-319`: *"`plugins` (plural) is the OpenCode v2 key. Setup writes only the OpenCode v1 `plugin` key and left this file unchanged."* When this doc was written the same check rejected the plural as unsupported; it now names it as the v2 key.
+- Systematic's v1 OpenCode integration tests build `{ plugin: [pluginPath] }` — `tests/integration/opencode.test.ts:327,332`.
 
-The clinching signal: the project's own code enforced the singular key while its docs taught the plural. When your runtime already validates a shape, the docs must match the shape the code enforces.
+The clinching signal: the project's own code enforced the singular key while its docs taught the plural. When your runtime already validates a shape, the docs must match the shape the code enforces. That still holds with two hosts: the code and the docs both have to name the key for the host line they describe.
 
 ## Related
 

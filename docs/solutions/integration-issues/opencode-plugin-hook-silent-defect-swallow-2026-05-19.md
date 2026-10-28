@@ -2,6 +2,7 @@
 title: OpenCode plugin hooks silently swallow synchronous throws as Effect defects
 module: tests/manual (observability hooks)
 date: 2026-05-19
+last_updated: 2026-10-28
 problem_type: integration_issue
 component: tooling
 category: integration-issues
@@ -26,6 +27,8 @@ related_components:
 ---
 
 # OpenCode plugin hooks silently swallow synchronous throws as Effect defects
+
+> **OpenCode v1.** The swallowing behavior below was observed on v1. A v2 host does not swallow a throwing hook; it fails loudly, which makes an unguarded callback a different hazard. See [OpenCode v2](#opencode-v2).
 
 ## Problem
 
@@ -86,11 +89,20 @@ Adding `try/catch` inside the hook converts the defect-emitter (synchronous thro
 
 For OpenCode plugin authors: treat every side-effecting call inside a hook as a potential silent-failure surface. Filesystem writes, network calls, IPC pipes, and external-process invocations all need defensive error handling at the hook boundary. The plugin runtime will not surface them for you.
 
+## OpenCode v2
+
+On a v2 host (2.2.0 and later) a throw from plugin code is not invisible, and it can cost more than a missing side effect: a throwing transform disables the whole plugin, and a throwing hook breaks the request or the turn. Per-host throw behaviour: HARNESSES.md OC2-ERR (local probe, OpenCode 2.2.0).
+
+The requirement that follows is a safe wrapper, not only a `try/catch` around a side effect. Systematic's v2 adapter builds one guard, `createSafeGuard`. Every installer and every hook or transform callback runs through it. Tool and command `execute` throw on purpose, so the host reports the error to the caller (`src/lib/opencode-v2-skills.ts:183-188`, `src/lib/opencode-v2-commands.ts:99-113`). A guarded throw or rejection is reported on the server's standard error, the only channel OC2-ERR probed, as `systematic: <label> failed: <message>`, and the call returns `undefined` (`src/lib/opencode-v2.ts:44-96`). The report carries only an `Error`'s message, because any other thrown value could carry user data. One failing agent update leaves the other agents registered (`tests/unit/opencode-v2.test.ts` › "an update that throws is caught and the other agents still register"), and a failing bootstrap put does not break the request (`src/lib/opencode-v2-bootstrap.ts:89-111`). Invalid config is the one deliberate exception: it rejects `setup`, as it throws on v1, and the host logs the load failure and keeps running.
+
+CI job `Host Contract v2 shard N/4` covers the load failure (`tests/integration/opencode-v2.test.ts` › "invalid systematic.json fails the plugin load, is logged, and the session still answers"). The guard itself is covered by `tests/unit/opencode-v2.test.ts` › `createSafeGuard`. The v1 adapter still swallows by design: its hook wrappers catch and ignore errors so that output restoration never blocks the host (`src/lib/opencode-v1.ts:108-129`).
+
 ## Prevention
 
 - **Wrap every side effect inside an OpenCode plugin hook in `try/catch`** with a synchronous diagnostic channel (stderr write, console.error, or an in-process counter that the test driver reads after teardown). Do not rely on Effect's runtime to surface failures from a plugin hook.
 - **Add a RED-gate sanity probe for any longer behavioral probe that depends on hook side effects.** The sanity gate should run in under a minute, assert the expected side effect within a deadline, and fail loudly with a JSONL dump on miss. Pay back the 5-minute authoring cost the first time infrastructure fails.
 - **Type generated plugin source.** When emitting plugin code as a string (the `counterPluginSource` pattern in manual probes), give the inner functions explicit `Record<string, unknown>` or domain-specific types instead of leaving parameters implicitly typed. Bun's embedded runtime compiles these strings as TypeScript; tighter types catch mismatched shapes at load time instead of at the silent-failure boundary.
+- **On v2, guard every hook and transform callback, not only side effects.** Run each installer and hook or transform callback through a shared never-throw wrapper that writes a prefixed line to standard error. Let tool and command `execute` throw, so the host reports the error to the caller. An unguarded throw in a transform disables the plugin and one in a hook breaks the turn or the request.
 - **Reference the Plugin type from the cloned upstream** (`.slim/clonedeps/repos/anomalyco__opencode/packages/plugin/src/index.ts`) when authoring hooks. The canonical signatures are the source of truth and surface mismatches before runtime.
 
 ### Concrete probe artifact

@@ -1,7 +1,7 @@
 ---
 title: 'OpenCode plugin multi-source loading: per-load registration with marker-based bootstrap'
 date: 2026-05-04
-last_refreshed: 2026-05-16
+last_refreshed: 2026-10-28
 category: integration-issues
 module: systematic-plugin
 problem_type: integration_issue
@@ -33,6 +33,8 @@ related_components:
 ---
 
 # OpenCode plugin multi-source loading: per-load registration with marker-based bootstrap
+
+> **OpenCode v1.** Unless a section says v2, this doc describes the v1 host. The v1 factory body is no longer in `src/index.ts`: the entry exports an object whose `server` member calls `createOpenCodeV1Hooks` in `src/lib/opencode-v1.ts`, which loads config, composes the bootstrap and registers the hooks on every call. `initializePlugin` in the snippets is that body as it was written. The marker-based `applyBootstrapContent` is unchanged and still runs from the v1 `experimental.chat.system.transform` hook (`src/lib/opencode-v1.ts:131-182`). A v2 host does not use any of this; see `## OpenCode v2`.
 
 ## Problem
 
@@ -166,6 +168,16 @@ content wins. The contributor's local changes are visible.
 For single-source consumers: per-load registration is transparent. One invocation, one registration, one
 bootstrap block — identical to the pre-singleton behavior.
 
+## OpenCode v2
+
+A v2 host (2.2.0 and later) calls the entry's `setup(ctx)` instead of `server`, and it removes the problem this doc is about rather than solving it again.
+
+- **No shared prompt array.** The bootstrap is not appended to the system prompt, so there is nothing to strip or mark. The adapter puts one keyed instruction entry, `systematic.bootstrap`, per session. The host puts the entry in the first system message as `<context key="...">` (OC2-INSTR; local probe, OpenCode 2.2.0), and putting the same key and value again changes nothing (`src/lib/opencode-v2-bootstrap.ts:1-30`). The stable key plays the part the `<SYSTEMATIC_WORKFLOWS>` sentinel plays on v1: it names the one entry that may exist. A bootstrap that changes between runs is not replaced silently. The host keeps the old text in the system block and adds a `<system-update>` message with the new text (OC2-INSTR; local probe, OpenCode 2.2.0).
+- **Trigger.** The entry is put from `ctx.session.hook('prompt')`, which fires for new, resumed and subagent sessions (`src/lib/opencode-v2-bootstrap.ts:113-124`). The adapter does not use the `session.created` event, because the first session after a service start never sees it (OC2-INSTR; local probe, OpenCode 2.2.0). The adapter keeps a bounded set of sessions already done (512) only to skip redundant puts; the host owns the idempotency.
+- **One instance per location.** The host creates one plugin instance per location, with a fresh module instance and its own `setup` (OC2-TRUST; local probe, OpenCode 2.2.0). `setup` builds one frozen snapshot, passes it to every installer, and keeps no module-scope state (`src/lib/opencode-v2.ts:398-404,416-425`). That is the same per-load independence as v1 without a process-level slot.
+- **Both hosts, one object.** A v1 host that receives the object default also calls `setup`, with a reduced context that has no `location` or `session`. The entry returns without doing anything there, so only `server` registers on v1 (`src/index.ts:25-33`).
+- **Evidence.** CI job `Host Contract v2 shard N/4` (OpenCode 2.2.0) runs `tests/integration/opencode-v2.test.ts` › "the first request of a new session carries the bootstrap with the v2 profile, once" and "a second turn does not duplicate the bootstrap or announce a change". The unit test `tests/unit/opencode-v2.test.ts` › "default export wiring" › "setup does nothing for the reduced context a v1 host passes" covers the no-op. `HARNESSES.md` records the probes as `OC2-INSTR` and `OC2-TRUST`.
+
 ## Prevention
 
 - **Trust the system prompt array as a coordination point.** Don't reach for `globalThis` or
@@ -225,8 +237,8 @@ node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"
 - `docs/solutions/developer-experience/local-systematic-overrides-global-2026-05-14.md` — applies the
   per-load registration model to the project-overrides-user case
 - `docs/solutions/documentation-gaps/opencode-plugin-config-key-is-singular-plugin-not-plugins-2026-07-18.md` —
-  the config key that feeds this loader is singular `plugin`; docs/registry that used plural `plugins`
-  silently failed to load the plugin at all
+  the config key that feeds this loader is `plugin` on v1 and `plugins` on v2; v1 docs/registry that used
+  plural `plugins` silently failed to load the plugin at all
 - `docs/brainstorms/2026-05-10-multi-load-plugin-registration-requirements.md` — design rationale
   (per-load registration; bootstrap idempotency via `<SYSTEMATIC_WORKFLOWS>` marker; system prompt array
   as coordination point; no global state)
@@ -234,5 +246,6 @@ node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"
   process-wide once-only output uses a `globalThis` flag
 - PR #335 — introduced `plugInOnce` singleton (later removed by PR #352)
 - PR #352 (v2.13.0) — removed `plugInOnce`, introduced marker-based bootstrap idempotency
-- `src/index.ts` — per-invocation `initializePlugin(input)`
+- `src/lib/opencode-v1.ts:createOpenCodeV1Hooks` — the v1 per-invocation factory body (called from `server` in `src/index.ts`)
+- `src/lib/opencode-v2-bootstrap.ts:installBootstrap` — the v2 keyed instruction entry
 - `src/lib/bootstrap.ts:applyBootstrapContent` — marker-based strip-and-replace
