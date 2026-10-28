@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin as OpenCodeV2 } from '@opencode/plugin'
 import type { PluginModule } from '@opencode-ai/plugin'
 import { createOpenCodeV1Hooks } from './lib/opencode-v1.js'
+import { setupOpenCodeV2 } from './lib/opencode-v2.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -21,10 +22,13 @@ type SystematicPluginModule = OpenCodeV2.Plugin & PluginModule
 // `src/lib/opencode-v1.ts`.
 const systematicPlugin: SystematicPluginModule = {
   id: 'systematic',
-  setup(ctx) {
+  async setup(ctx) {
     // A v1 host that receives an object default also calls `setup`, with a
     // reduced bridge that has no `location` or `session`. Do nothing there.
     if (!ctx.location || !ctx.session) return
+    // Invalid config rejects here, as it throws on v1: the v2 host logs that
+    // the plugin failed to load and carries on without it.
+    await setupOpenCodeV2(ctx, { packageRoot })
   },
   server: async (input) => createOpenCodeV1Hooks(input, { packageRoot }),
 }

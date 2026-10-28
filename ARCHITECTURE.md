@@ -89,6 +89,9 @@ Shared asset plan (host-neutral)
 OpenCode v1 adapter
   src/lib/opencode-v1.ts     — createOpenCodeV1Hooks: the five v1 hooks and the REGISTERED_PLUGIN_HOOKS inventory; takes the package root from the entry point
 
+OpenCode v2 adapter
+  src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the empty per-domain installer slots through createSafeGuard; invalid config rejects
+
 Config handling (plugin config hook)
   src/lib/config-handler.ts  — createConfigHandler: builds the asset plan, folds its ordered permission triples into the v1 map, merges the result into OpenCode config
 
@@ -141,6 +144,7 @@ Key symbols:
 |--------|----------|------|
 | `systematicPlugin` | `src/index.ts` | The default export: a plain object with `id`, `setup` (v2 entry) and `server` (v1 entry) |
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
+| `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots behind a never-throw guard |
 | `buildAssetPlan` | `src/lib/asset-plan.ts` | Host-neutral agents, commands, enabled skills and ordered permission triples |
 | `createConfigHandler` | `src/lib/config-handler.ts` | Config hook implementation |
 | `createSkillTool` | `src/lib/skill-tool.ts` | `systematic_skill` tool factory |

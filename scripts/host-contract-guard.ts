@@ -67,6 +67,7 @@ const V2_SUITE_FILES: readonly string[] = [
   'tests/integration/claude-code.test.ts',
   'tests/integration/eval-artifact.test.ts',
   'tests/integration/eval-fixture.test.ts',
+  'tests/integration/opencode-v2.test.ts',
   'tests/integration/opencode.test.ts',
   'tests/integration/pi.test.ts',
   'tests/integration/release-notes-ci.test.ts',
