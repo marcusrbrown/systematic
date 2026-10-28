@@ -8,6 +8,10 @@ import {
 } from './asset-plan.js'
 import { composeBootstrapContent } from './bootstrap.js'
 import { loadConfigWithSources, type SystematicConfig } from './config.js'
+import {
+  installBootstrap,
+  OPENCODE_V2_USAGE_TEMPLATE,
+} from './opencode-v2-bootstrap.js'
 import { installCommands } from './opencode-v2-commands.js'
 import {
   permissionMapToTriples,
@@ -17,12 +21,12 @@ import {
 import { installSkills } from './opencode-v2-skills.js'
 
 /**
- * OpenCode v2 adapter scaffold.
+ * OpenCode v2 adapter.
  *
  * `setup` runs once per location. It loads config once, builds one frozen
  * snapshot (the asset plan plus the bootstrap content) and passes that same
- * object to each domain installer. The installers for agents, skills, commands
- * and bootstrap are empty slots here; each domain fills its own slot.
+ * object to each domain installer: agents, skills, commands and bootstrap.
+ * Each domain lives in its own module.
  *
  * Two failure rules shape the module:
  *
@@ -263,14 +267,12 @@ export const installAgents: V2Installer = async ({ ctx, snapshot, guard }) => {
   )
 }
 
-const noopInstaller: V2Installer = () => {}
-
-/** Slots not yet filled stay empty. Each domain replaces its own entry when it lands. */
+/** One installer per domain. Tests replace single entries through `deps.installers`. */
 const DEFAULT_INSTALLERS: V2Installers = {
   agents: installAgents,
   skills: installSkills,
   commands: installCommands,
-  bootstrap: noopInstaller,
+  bootstrap: installBootstrap,
 }
 
 /** Installers run in this order. */
@@ -292,7 +294,7 @@ export interface OpenCodeV2Deps {
   homeDir?: string
   /** User-level OpenCode config directory. Defaults to `<homeDir>/.config/opencode`. */
   opencodeConfigDir?: string
-  /** Replaces individual installer slots. Slots left out stay empty. */
+  /** Replaces individual installer slots. Slots left out use the domain's own installer. */
   installers?: Partial<V2Installers>
 }
 
@@ -349,7 +351,8 @@ function buildSnapshot(ctx: Plugin.Context, deps: OpenCodeV2Deps): V2Snapshot {
 
   const bootstrapContent = composeBootstrapContent(config, {
     bundledSkillsDir,
-    profile: 'opencode',
+    profile: 'opencode-v2',
+    usageTemplate: OPENCODE_V2_USAGE_TEMPLATE,
   })
 
   return Object.freeze({

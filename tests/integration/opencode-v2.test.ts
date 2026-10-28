@@ -100,6 +100,8 @@ interface ToolScriptedModel extends ScriptedModelServer {
   latestToolHistory: string[]
   /** Every request that offered tools, which is every model turn but not the title request. */
   turns: ChatRequestBody[]
+  /** Every request, in arrival order, including the title request that offers no tools. */
+  requests: ChatRequestBody[]
 }
 
 function messageText(message: unknown): string {
@@ -178,6 +180,7 @@ function startToolModelServer(): ToolScriptedModel {
     toolNames: new Set<string>(),
     latestToolHistory: [] as string[],
     turns: [] as ChatRequestBody[],
+    requests: [] as ChatRequestBody[],
   }
   const server = Bun.serve({
     port: 0,
@@ -189,6 +192,7 @@ function startToolModelServer(): ToolScriptedModel {
         return new Response('not found', { status: 404 })
       }
       const body = (await request.json()) as ChatRequestBody
+      model.requests.push(body)
       if (Array.isArray(body.tools) && body.tools.length > 0) {
         recordRequest(model, body)
         model.turns.push(body)
@@ -1215,6 +1219,241 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             .filter((line) => line.includes('name of a built-in command'))
           expect(notes).toHaveLength(1)
           expect(notes[0]).toContain('"review"')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    const BOOTSTRAP_KEY = 'systematic.bootstrap'
+    const BOOTSTRAP_ENTRY = `<context key="${BOOTSTRAP_KEY}">`
+    const WORKTREE_RULE_LINE =
+      'create it at `.worktrees/<branch>` under the main repository root'
+
+    function occurrences(text: string, needle: string): number {
+      return text.split(needle).length - 1
+    }
+
+    /** One prompt in a fresh session, run to the end. Returns the session id. */
+    async function promptNewSession(
+      host: AgentHost,
+      text: string,
+    ): Promise<string> {
+      const session = await newSession(host)
+      await host.client.session.prompt({ sessionID: session.id, text })
+      await host.client.session.wait({ sessionID: session.id })
+      return session.id
+    }
+
+    async function entryKeys(host: AgentHost, sessionID: string) {
+      const entries = await host.client.session.instructions.entry.list({
+        sessionID,
+      })
+      return entries.map((entry) => entry.key)
+    }
+
+    test(
+      'the first request of a new session carries the bootstrap with the v2 profile, once',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const sessionID = await promptNewSession(host, 'Say hello.')
+
+          const first = toolModel.turns[0]
+          if (first === undefined) throw new Error('no turn recorded')
+          const system = systemText(first)
+          expect(occurrences(system, BOOTSTRAP_ENTRY)).toBe(1)
+          expect(occurrences(system, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
+          expect(system).toContain('# OpenCode v2 Capability Profile')
+          expect(system).toContain('subagent({')
+          expect(system).toContain('systematic_skill({ name:')
+          // The v1 profile's mechanisms are not what this host offers.
+          expect(system).not.toContain('# OpenCode Capability Profile')
+          expect(system).not.toContain('subagent_type')
+          // The worktree rule is there by default.
+          expect(system).toContain(WORKTREE_RULE_LINE)
+          expect(await entryKeys(host, sessionID)).toEqual([BOOTSTRAP_KEY])
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'the title request does not carry the bootstrap',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          await promptNewSession(host, 'Say hello.')
+          // The title is generated beside the first turn; it offers no tools.
+          await waitFor(
+            () =>
+              toolModel.requests.some(
+                (request) => (request.tools ?? []).length === 0,
+              ),
+            'the title request',
+          )
+
+          const titles = toolModel.requests.filter(
+            (request) => (request.tools ?? []).length === 0,
+          )
+          expect(titles.length).toBeGreaterThan(0)
+          for (const title of titles) {
+            expect(systemText(title)).not.toContain(BOOTSTRAP_ENTRY)
+            expect(systemText(title)).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+          }
+          // The turn that did run had it, so the absence above is not a bad probe.
+          expect(systemText(toolModel.turns[0] as ChatRequestBody)).toContain(
+            BOOTSTRAP_ENTRY,
+          )
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a subagent request carries the bootstrap once, and so does the parent request that follows it',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const call = JSON.stringify({
+            agent: 'general',
+            description: 'Child task',
+            prompt: 'CHILD-BOOT-MARK',
+          })
+          const parentID = await promptNewSession(
+            host,
+            `@@TOOL subagent ${call}`,
+          )
+
+          const childTurns = toolModel.turns.filter((turn) => {
+            const user = lastUserText(turn)
+            return user.includes('CHILD-BOOT-MARK') && !user.includes('@@TOOL')
+          })
+          expect(childTurns).toHaveLength(1)
+          expect(
+            occurrences(
+              systemText(childTurns[0] as ChatRequestBody),
+              BOOTSTRAP_ENTRY,
+            ),
+          ).toBe(1)
+
+          // The parent's continuation, after the tool result, is not doubled.
+          const continuation = toolModel.turns.find(
+            (turn) => roleOf(turn.messages?.at(-1)) === 'tool',
+          )
+          expect(continuation).toBeDefined()
+          expect(
+            occurrences(
+              systemText(continuation as ChatRequestBody),
+              BOOTSTRAP_ENTRY,
+            ),
+          ).toBe(1)
+
+          // The child has an entry of its own.
+          const children = await host.client.session.list({ parentID })
+          expect(children.data).toHaveLength(1)
+          expect(await entryKeys(host, children.data[0]?.id as string)).toEqual(
+            [BOOTSTRAP_KEY],
+          )
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'git-worktree in disabled_skills leaves the worktree rule out of the bootstrap',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeProjectSystematicConfig(
+          JSON.stringify({ disabled_skills: ['git-worktree'] }),
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          await promptNewSession(host, 'Say hello.')
+
+          const system = systemText(toolModel.turns[0] as ChatRequestBody)
+          expect(occurrences(system, BOOTSTRAP_ENTRY)).toBe(1)
+          expect(system).toContain('# OpenCode v2 Capability Profile')
+          expect(system).not.toContain(WORKTREE_RULE_LINE)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'bootstrap.enabled false puts no entry and nothing reaches the model',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeProjectSystematicConfig(
+          JSON.stringify({ bootstrap: { enabled: false } }),
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const sessionID = await promptNewSession(host, 'Say hello.')
+
+          for (const request of toolModel.requests) {
+            expect(systemText(request)).not.toContain(BOOTSTRAP_KEY)
+            expect(systemText(request)).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+          }
+          expect(toolModel.turns.length).toBeGreaterThan(0)
+          expect(await entryKeys(host, sessionID)).toEqual([])
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a second turn does not duplicate the bootstrap or announce a change',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const sessionID = await promptNewSession(host, 'First turn.')
+          const turnsAfterFirst = toolModel.turns.length
+          await host.client.session.prompt({
+            sessionID,
+            text: 'Second turn.',
+          })
+          await host.client.session.wait({ sessionID })
+
+          expect(toolModel.turns.length).toBeGreaterThan(turnsAfterFirst)
+          const second = toolModel.turns.at(-1) as ChatRequestBody
+          expect(lastUserText(second)).toContain('Second turn.')
+          expect(occurrences(systemText(second), BOOTSTRAP_ENTRY)).toBe(1)
+          expect(
+            occurrences(systemText(second), '<SYSTEMATIC_WORKFLOWS>'),
+          ).toBe(1)
+          // The same value put again is no change: no update notice anywhere.
+          for (const message of second.messages ?? []) {
+            expect(messageText(message)).not.toContain('<system-update>')
+          }
+          expect(await entryKeys(host, sessionID)).toEqual([BOOTSTRAP_KEY])
         } finally {
           toolModel.stop()
           await host.server.stop()

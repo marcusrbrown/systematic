@@ -93,6 +93,7 @@ OpenCode v2 adapter
   src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the per-domain installer slots through createSafeGuard; installAgents registers the planned agents through one ctx.agent.transform; invalid config rejects
   src/lib/opencode-v2-skills.ts — installSkills: registers the enabled bundled skills via ctx.skill.transform, ports systematic_skill through ctx.tool.transform, and restores the host-truncated skill output in the context hook
   src/lib/opencode-v2-commands.ts — installCommands: registers the planned commands through ctx.command.transform; expands arguments, routes to the command's agent and model (and puts the session back after the turn), runs subagent-mode commands in a child session and posts the result to the parent; never runs !-backtick blocks
+  src/lib/opencode-v2-bootstrap.ts — installBootstrap: puts the composed bootstrap as one keyed instruction entry per session from the prompt hook; OPENCODE_V2_USAGE_TEMPLATE names only tools registered on v2; an entry over 256 KiB is skipped with a diagnostic
   src/lib/opencode-v2-permissions.ts — translatePermissionRules: ordered permission triples to v2 {action, resource, effect} rules (bash to shell, task to subagent, doom_loop and lsp dropped)
 
 Config handling (plugin config hook)
@@ -150,6 +151,7 @@ Key symbols:
 | `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots behind a never-throw guard |
 | `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration |
 | `installCommands` | `src/lib/opencode-v2-commands.ts` | OpenCode v2 commands: argument expansion, agent and model routing, subagent mode |
+| `installBootstrap` | `src/lib/opencode-v2-bootstrap.ts` | OpenCode v2 bootstrap: one instruction entry per session, put from the prompt hook |
 | `translatePermissionRules` | `src/lib/opencode-v2-permissions.ts` | Ordered permission triples to the v2 rule list, one rule per triple in the same order |
 | `buildAssetPlan` | `src/lib/asset-plan.ts` | Host-neutral agents, commands, enabled skills and ordered permission triples |
 | `createConfigHandler` | `src/lib/config-handler.ts` | Config hook implementation |

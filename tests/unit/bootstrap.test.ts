@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   applyBootstrapContent,
+  composeBootstrapContent,
   composeSystemPromptWithBootstrap,
   computeBootstrapContentSafe,
   getBootstrapContent,
@@ -26,6 +27,7 @@ import {
   serializeCapabilitySnapshot,
 } from '../../src/lib/capability-snapshot.ts'
 import { loadConfig } from '../../src/lib/config.ts'
+import { OPENCODE_V2_USAGE_TEMPLATE } from '../../src/lib/opencode-v2-bootstrap.ts'
 import { resolveSkill } from '../../src/lib/skill-resolver.ts'
 
 /**
@@ -416,7 +418,7 @@ describe('getBootstrapContent', () => {
       process.cwd(),
       'skills/using-systematic/references',
     )
-    for (const name of ['opencode', 'pi', 'claude-code']) {
+    for (const name of ['opencode', 'opencode-v2', 'pi', 'claude-code']) {
       const profile = fs.readFileSync(
         path.join(profilesDir, `${name}-profile.md`),
         'utf8',
@@ -446,6 +448,53 @@ describe('getBootstrapContent', () => {
     expect(
       normalizeBootstrapSnapshot(content as string, bundledSkillsDir),
     ).toMatchSnapshot()
+  })
+
+  test('resolves the OpenCode v2 harness profile', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const profile = readHarnessProfile(bundledSkillsDir, 'opencode-v2')
+    if (profile === null) {
+      throw new Error('Expected opencode-v2 harness profile to be found')
+    }
+    expect(profile).toContain('OpenCode v2 Capability Profile')
+  })
+
+  test('pins the production-shaped OpenCode v2 bootstrap with its profile, usage template and placement rule inlined', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    // Same call the v2 adapter makes: composition picks the profile and the
+    // usage template; the v1 bootstrap above stays as it was.
+    const content = composeBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      {
+        bundledSkillsDir,
+        profile: 'opencode-v2',
+        usageTemplate: OPENCODE_V2_USAGE_TEMPLATE,
+      },
+    )
+    expect(content).not.toBeNull()
+    expect(content).toContain(OPENCODE_V2_USAGE_TEMPLATE)
+    expect(content).toContain('# OpenCode v2 Capability Profile')
+    expect(content).not.toContain('# OpenCode Capability Profile')
+    expect(
+      normalizeBootstrapSnapshot(content as string, bundledSkillsDir),
+    ).toMatchSnapshot()
+  })
+
+  test('the v2 composition names no tool the v1 composition names and v2 lacks', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const v2 = composeBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      {
+        bundledSkillsDir,
+        profile: 'opencode-v2',
+        usageTemplate: OPENCODE_V2_USAGE_TEMPLATE,
+      },
+    ) as string
+
+    // v1's delegation call and its argument name do not exist on v2.
+    expect(v2).not.toContain('task({')
+    expect(v2).not.toContain('subagent_type')
+    expect(v2).not.toContain('task_id')
   })
 
   test('preserves marker-shaped profile text during Pi-style composition', () => {
