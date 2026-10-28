@@ -13,6 +13,7 @@ import {
   translatePermissionRules,
   type V2PermissionRule,
 } from './opencode-v2-permissions.js'
+import { installSkills } from './opencode-v2-skills.js'
 
 /**
  * OpenCode v2 adapter scaffold.
@@ -105,6 +106,8 @@ export interface V2InstallInput {
   readonly snapshot: V2Snapshot
   /** Wrap every callback registered with the host in this guard. */
   readonly guard: SafeGuard
+  /** Writes one `systematic:`-prefixed diagnostic line. */
+  readonly report: (message: string) => void
 }
 
 export type V2Installer = (input: V2InstallInput) => Promise<void> | void
@@ -264,7 +267,7 @@ const noopInstaller: V2Installer = () => {}
 /** Slots not yet filled stay empty. Each domain replaces its own entry when it lands. */
 const DEFAULT_INSTALLERS: V2Installers = {
   agents: installAgents,
-  skills: noopInstaller,
+  skills: installSkills,
   commands: noopInstaller,
   bootstrap: noopInstaller,
 }
@@ -368,10 +371,13 @@ export async function setupOpenCodeV2(
 ): Promise<void> {
   const snapshot = buildSnapshot(ctx, deps)
   const guard = createSafeGuard()
+  const report = (message: string): void => {
+    console.error(`${DIAGNOSTIC_PREFIX} ${message}`)
+  }
   const installers: V2Installers = { ...DEFAULT_INSTALLERS, ...deps.installers }
 
   for (const slot of INSTALLER_ORDER) {
     const install = guard.async(`${slot} installer`, installers[slot])
-    await install({ ctx, snapshot, guard })
+    await install({ ctx, snapshot, guard, report })
   }
 }

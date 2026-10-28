@@ -264,7 +264,9 @@ async function registeredAgents(
   const transforms: ((editor: unknown) => void)[] = []
   const ctx = {
     location: { directory: projectDir },
-    session: {},
+    session: { async hook() {} },
+    skill: { async transform() {} },
+    tool: { async transform() {} },
     agent: {
       async transform(callback: (editor: unknown) => void) {
         transforms.push(callback)

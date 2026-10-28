@@ -15,7 +15,10 @@ export const SKILL_TOOL_NAME = 'systematic_skill'
 
 export interface SkillOutputStore {
   put(sessionID: string, callID: string, output: string): void
+  /** Returns the entry and removes it. */
   take(sessionID: string, callID: string): string | undefined
+  /** Returns the entry and keeps it, for hosts that read the same output on every request. */
+  peek(sessionID: string, callID: string): string | undefined
 }
 
 interface SkillOutputStoreOptions {
@@ -59,6 +62,11 @@ export function createSkillOutputStore(
       entries.delete(key) // take always consumes the entry
       if (!entry) return undefined
       if (now() > entry.expiresAt) return undefined
+      return entry.output
+    },
+    peek(sessionID, callID) {
+      const entry = entries.get(toKey(sessionID, callID))
+      if (!entry || now() > entry.expiresAt) return undefined
       return entry.output
     },
   }
@@ -125,6 +133,10 @@ function restoreCompactedPart(part: unknown): void {
   state.time = rest
 }
 
+/** The `arguments` parameter text. One string for every adapter, so the tool reads the same on each host. */
+const SKILL_ARGUMENTS_DESCRIPTION =
+  'Raw argument text the user explicitly supplied for this skill, substituted for $ARGUMENTS and $1..$N. Omit to leave those placeholders as written; an explicit empty string substitutes them with nothing. Only pass text the user explicitly supplied; never infer it.'
+
 export interface SkillToolOptions {
   bundledSkillsDir: string
   disabledSkills: string[]
@@ -158,12 +170,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
           return cachedParameterHint
         })(),
       ),
-      arguments: z
-        .string()
-        .optional()
-        .describe(
-          'Raw argument text the user explicitly supplied for this skill, substituted for $ARGUMENTS and $1..$N. Omit to leave those placeholders as written; an explicit empty string substitutes them with nothing. Only pass text the user explicitly supplied; never infer it.',
-        ),
+      arguments: z.string().optional().describe(SKILL_ARGUMENTS_DESCRIPTION),
       // Double-cast is required, not stylistic: the SDK types its args
       // against its own bundled zod, whose Zod types are nominally
       // incompatible with this package's zod (v4-vs-v1 internal version
@@ -218,6 +225,90 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       }
 
       return output
+    },
+  }
+}
+
+export interface SkillToolInput {
+  name: string
+  arguments?: string
+}
+
+export interface LoadedSkillOutput {
+  /** The bare skill name: the permission resource, whichever form was asked for. */
+  skillName: string
+  /** The `systematic:`-prefixed form, as shown to the user and the model. */
+  prefixedName: string
+  /** `Loaded skill: <prefixed name>`, for progress reporting. */
+  title: string
+  /** The `<skill_content>` text the model receives. */
+  output: string
+  /** The skill's base directory. */
+  dir: string
+}
+
+/**
+ * A host-neutral description of the skill tool, with no zod and no host import.
+ * An adapter whose host takes JSON Schema (OpenCode v2) registers `input`
+ * as is and calls `load` from its own `execute`. `load` throws the shared
+ * not-found error, which is also what a disabled skill gets.
+ */
+export interface SkillToolDescriptor {
+  name: typeof SKILL_TOOL_NAME
+  description: string
+  input: {
+    type: 'object'
+    properties: {
+      name: { type: 'string'; description: string }
+      arguments: { type: 'string'; description: string }
+    }
+    required: ['name']
+    additionalProperties: false
+  }
+  load(args: SkillToolInput): LoadedSkillOutput
+}
+
+export function createSkillToolDescriptor(
+  options: Pick<SkillToolOptions, 'bundledSkillsDir' | 'disabledSkills'>,
+): SkillToolDescriptor {
+  const { bundledSkillsDir, disabledSkills } = options
+  return {
+    name: SKILL_TOOL_NAME,
+    description: buildSkillToolDescription({
+      bundledSkillsDir,
+      disabledSkills,
+    }),
+    input: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: buildSkillToolParameterHint({
+            bundledSkillsDir,
+            disabledSkills,
+          }),
+        },
+        arguments: {
+          type: 'string',
+          description: SKILL_ARGUMENTS_DESCRIPTION,
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    load(args) {
+      const matched = resolveSkill(
+        { bundledSkillsDir, disabledSkills },
+        args.name,
+      )
+      const { output, dir } = buildSkillContentOutput(matched, args.arguments)
+      return {
+        skillName: matched.name,
+        prefixedName: matched.prefixedName,
+        title: `Loaded skill: ${matched.prefixedName}`,
+        output,
+        dir,
+      }
     },
   }
 }

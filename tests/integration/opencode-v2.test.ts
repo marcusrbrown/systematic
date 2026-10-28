@@ -12,6 +12,7 @@ import path from 'node:path'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import { findAgentsInDir } from '../../src/lib/agents.js'
+import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
   buildIsolatedOpencodeEnv,
   buildOpencodeRunArgv,
@@ -92,6 +93,10 @@ const SCRIPTED_MODEL = 'systematic-host-contract-model'
 interface ToolScriptedModel extends ScriptedModelServer {
   /** The text of every tool result the model was shown, in order. */
   toolResults: string[]
+  /** Every tool name the model was offered, across all requests. */
+  toolNames: Set<string>
+  /** The text of every tool result in the latest request that offered tools, history included. */
+  latestToolHistory: string[]
 }
 
 function messageText(message: unknown): string {
@@ -104,13 +109,71 @@ function messageText(message: unknown): string {
     .join('\n')
 }
 
+interface ChatRequestBody {
+  tools?: unknown[]
+  messages?: unknown[]
+}
+
+function roleOf(message: unknown): string | undefined {
+  return (message as { role?: string } | undefined)?.role
+}
+
+/** Notes which tools a request offered and which tool results its history carries. */
+function recordRequest(model: ToolScriptedModel, body: ChatRequestBody): void {
+  for (const tool of body.tools ?? []) {
+    const name = (tool as { function?: { name?: unknown } }).function?.name
+    if (typeof name === 'string') model.toolNames.add(name)
+  }
+  model.latestToolHistory.length = 0
+  for (const message of body.messages ?? []) {
+    if (roleOf(message) === 'tool') {
+      model.latestToolHistory.push(messageText(message))
+    }
+  }
+}
+
+function scriptResponse(
+  model: ToolScriptedModel,
+  body: ChatRequestBody,
+): ScriptedResponse {
+  const messages = body.messages ?? []
+  const hasTools = Array.isArray(body.tools) && body.tools.length > 0
+  // A request that offers no tools is the title request.
+  if (!hasTools) return { text: 'Scripted title' }
+  const last = messages.at(-1)
+  if (roleOf(last) === 'tool') {
+    model.toolResults.push(messageText(last))
+    return { text: 'Tool call finished.' }
+  }
+  const lastUser = messageText(
+    [...messages].reverse().find((m) => roleOf(m) === 'user'),
+  )
+  const call = /@@TOOL (\S+) (.*)$/m.exec(lastUser)
+  if (call?.[1] === undefined || call[2] === undefined) {
+    return { text: 'No tool requested.' }
+  }
+  return {
+    toolCalls: [
+      {
+        id: `call-${model.toolResults.length + 1}`,
+        name: call[1],
+        arguments: JSON.parse(call[2]) as Record<string, unknown>,
+      },
+    ],
+  }
+}
+
 /**
  * A scripted model that turns a `@@TOOL <name> <json>` line in the latest user
  * message into one tool call, and answers plain text once it has seen the
  * result. Title requests (no tools offered) get a fixed title.
  */
 function startToolModelServer(): ToolScriptedModel {
-  const toolResults: string[] = []
+  const state = {
+    toolResults: [] as string[],
+    toolNames: new Set<string>(),
+    latestToolHistory: [] as string[],
+  }
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -120,40 +183,12 @@ function startToolModelServer(): ToolScriptedModel {
       ) {
         return new Response('not found', { status: 404 })
       }
-      const body = (await request.json()) as {
-        tools?: unknown[]
-        messages?: unknown[]
+      const body = (await request.json()) as ChatRequestBody
+      if (Array.isArray(body.tools) && body.tools.length > 0) {
+        recordRequest(model, body)
       }
-      const messages = body.messages ?? []
-      const last = messages.at(-1) as { role?: string } | undefined
-      const hasTools = Array.isArray(body.tools) && body.tools.length > 0
-      const lastUser = messageText(
-        [...messages]
-          .reverse()
-          .find((m) => (m as { role?: string }).role === 'user'),
-      )
-      const call = /@@TOOL (\S+) (.*)$/m.exec(lastUser)
-
-      let response: ScriptedResponse = { text: 'Scripted title' }
-      if (hasTools && last?.role === 'tool') {
-        toolResults.push(messageText(last))
-        response = { text: 'Tool call finished.' }
-      } else if (hasTools && call?.[1] !== undefined && call[2] !== undefined) {
-        response = {
-          toolCalls: [
-            {
-              id: `call-${toolResults.length + 1}`,
-              name: call[1],
-              arguments: JSON.parse(call[2]) as Record<string, unknown>,
-            },
-          ],
-        }
-      } else if (hasTools) {
-        response = { text: 'No tool requested.' }
-      }
-
       const chunks = scriptedResponseChunks(
-        response,
+        scriptResponse(model, body),
         'v2-agents-response',
         Math.floor(Date.now() / 1000),
       )
@@ -166,11 +201,12 @@ function startToolModelServer(): ToolScriptedModel {
       })
     },
   })
-  return {
+  const model: ToolScriptedModel = {
     url: `http://localhost:${server.port}/v1`,
     stop: () => server.stop(true),
-    toolResults,
+    ...state,
   }
+  return model
 }
 
 describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
@@ -434,6 +470,277 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         } finally {
           toolModel.stop()
           await server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    type AgentHost = Awaited<ReturnType<typeof startAgentHost>>
+
+    /** Runs one scripted tool call in a fresh session and returns the tool result the model saw. */
+    async function callTool(
+      host: AgentHost,
+      toolModel: ToolScriptedModel,
+      call: { tool: string; args: Record<string, unknown>; agent?: string },
+    ): Promise<string> {
+      const before = toolModel.toolResults.length
+      const session = await host.client.session.create({
+        location: { directory: fixture.projectDir },
+        ...(call.agent === undefined ? {} : { agent: call.agent }),
+        model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+      })
+      await host.client.session.prompt({
+        sessionID: session.id,
+        text: `@@TOOL ${call.tool} ${JSON.stringify(call.args)}`,
+      })
+      await host.client.session.wait({ sessionID: session.id })
+      return toolModel.toolResults.slice(before).join('\n')
+    }
+
+    test(
+      'systematic_skill is offered to the model and loads an enabled skill by bare and prefixed name',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const bare = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'git-clean-gone-branches' },
+          })
+          const prefixed = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'systematic:git-clean-gone-branches' },
+          })
+
+          expect([...toolModel.toolNames]).toContain('systematic_skill')
+          expect(bare).toContain(
+            '<skill_content name="systematic:git-clean-gone-branches">',
+          )
+          expect(bare).toContain('Base directory for this skill:')
+          expect(prefixed).toBe(bare)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'the native skill tool sees the registered bundled skills, and not a disabled one',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeProjectSystematicConfig(
+          JSON.stringify({ disabled_skills: ['git-worktree'] }),
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const plain = await callTool(host, toolModel, {
+            tool: 'skill',
+            args: { id: 'git-clean-gone-branches' },
+          })
+          // A skill whose name carries a colon keeps it as its id.
+          const colon = await callTool(host, toolModel, {
+            tool: 'skill',
+            args: { id: 'ce:brainstorm' },
+          })
+          const disabled = await callTool(host, toolModel, {
+            tool: 'skill',
+            args: { id: 'git-worktree' },
+          })
+
+          expect(plain).toContain(
+            '<skill_content name="git-clean-gone-branches">',
+          )
+          expect(plain).toContain('Base directory for this skill:')
+          expect(colon).toContain('<skill_content name="ce:brainstorm">')
+          expect(disabled).not.toContain('<skill_content')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a skill in disabled_skills is refused by systematic_skill',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeProjectSystematicConfig(
+          JSON.stringify({ disabled_skills: ['git-worktree'] }),
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const refused = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'systematic:git-worktree' },
+          })
+          const control = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'git-clean-gone-branches' },
+          })
+
+          expect(refused).toContain('not found')
+          expect(refused).not.toContain('<skill_content')
+          expect(control).toContain('<skill_content')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'systematic_skill refuses a skill a managed agent may not load while a sibling agent loads it',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({
+            agents: {
+              'repo-research-analyst': {
+                mode: 'primary',
+                skills: ['git-worktree'],
+              },
+              'correctness-reviewer': { mode: 'primary' },
+            },
+          }),
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const denied = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'systematic:git-clean-gone-branches' },
+            agent: 'repo-research-analyst',
+          })
+          const allowed = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'systematic:git-worktree' },
+            agent: 'repo-research-analyst',
+          })
+          const sibling = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'systematic:git-clean-gone-branches' },
+            agent: 'correctness-reviewer',
+          })
+
+          expect(denied).not.toContain('<skill_content')
+          expect(denied.toLowerCase()).toContain('permission')
+          expect(allowed).toContain(
+            '<skill_content name="systematic:git-worktree">',
+          )
+          expect(sibling).toContain(
+            '<skill_content name="systematic:git-clean-gone-branches">',
+          )
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'arguments are substituted into the skill the model receives',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const result = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'reproduce-bug', arguments: 'ISSUE-ARG-MARKER-4471' },
+          })
+
+          expect(result).toContain('ISSUE-ARG-MARKER-4471')
+          expect(result).not.toContain('$ARGUMENTS')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'an on-disk skill with the same id replaces the registered one in the native tool, with no diagnostic',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const dir = path.join(
+          fixture.projectDir,
+          '.opencode/skills/git-worktree',
+        )
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(
+          path.join(dir, 'SKILL.md'),
+          '---\nname: git-worktree\ndescription: User copy\n---\n# User copy\n\nUSER-SKILL-BODY\n',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const native = await callTool(host, toolModel, {
+            tool: 'skill',
+            args: { id: 'git-worktree' },
+          })
+
+          // The host drops the bundled copy without telling the plugin, so the
+          // replacement is silent. The user's copy is what the native tool loads.
+          expect(native).toContain('USER-SKILL-BODY')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a skill above the host output limit reaches the model in full on the continuation request and later turns',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        const expected = createSkillToolDescriptor({
+          // The packed copy by its real path, which is what the host loads, so the
+          // base directory in the text matches.
+          bundledSkillsDir: path.join(fs.realpathSync(packageDir), 'skills'),
+          disabledSkills: [],
+        }).load({ name: 'ce:review' }).output
+        // The premise: this skill is over the host's 51200 byte limit.
+        expect(Buffer.byteLength(expected)).toBeGreaterThan(51_200)
+
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const session = await host.client.session.create({
+            location: { directory: fixture.projectDir },
+            model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+          })
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: '@@TOOL systematic_skill {"name":"ce:review"}',
+          })
+          await host.client.session.wait({ sessionID: session.id })
+
+          // The continuation request carried the whole skill, no cut marker.
+          expect(toolModel.toolResults).toHaveLength(1)
+          expect(toolModel.toolResults[0]).toBe(expected)
+          expect(toolModel.toolResults[0]).not.toContain('[showing lines')
+
+          // A later turn rebuilds the request from history: still whole.
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: 'Carry on.',
+          })
+          await host.client.session.wait({ sessionID: session.id })
+          expect(toolModel.latestToolHistory).toEqual([expected])
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
         }
       },
       TIMEOUT_MS,

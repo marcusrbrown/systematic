@@ -54,7 +54,9 @@ function createFakeContext(directory: string | undefined): FakeContext {
   const transforms: ((editor: FakeEditor) => unknown)[] = []
   const fake = {
     location: directory === undefined ? {} : { directory },
-    session: {},
+    session: { async hook() {} },
+    skill: { async transform() {} },
+    tool: { async transform() {} },
     agent: {
       transform(callback: (editor: FakeEditor) => unknown) {
         transforms.push(callback)
@@ -493,7 +495,7 @@ describe('setupOpenCodeV2', () => {
     expect(attempted).toBe(true)
   })
 
-  test('the default installers register only the agent transform and stay silent', async () => {
+  test('the default installers register the agent transform and stay silent', async () => {
     const fake = createFakeContext(projectDir)
 
     await setupOpenCodeV2(fake.ctx, deps())
