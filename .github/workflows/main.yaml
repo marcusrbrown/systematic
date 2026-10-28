@@ -155,10 +155,14 @@ jobs:
       - name: Run tests
         run: bun test tests/unit
 
-  # The host contract suite runs in three jobs. The gate decides whether the
-  # suite is required, the shards run it, and the aggregator (`Host Contract`)
-  # is the one required status check: it always reports, and it is red unless
-  # the suite was either not required or fully passed.
+  # The host contract runs as a gate, three host jobs and an aggregator
+  # (`Host Contract`). The gate decides whether the contract is required. The
+  # v2 shards run the full contract on the pinned v2 CLI, and two v1 jobs run a
+  # smoke subset at the v1 floor and at the current v1 pin. The aggregator is
+  # the one required status check: it always reports, and it is red unless the
+  # contract was either not required or every host job passed. Each job's file
+  # list comes from scripts/host-contract-guard.ts (`files --profile <p>`), and
+  # the aggregator judges each profile's reports separately.
   host-contract-gate:
     name: Host Contract gate
     runs-on: ubuntu-latest
@@ -210,14 +214,13 @@ jobs:
           fi
 
   host-contract-shard:
-    name: Host Contract shard ${{ matrix.shard }}/4
+    name: Host Contract v2 shard ${{ matrix.shard }}/4
     needs: host-contract-gate
     if: needs.host-contract-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
-    # The committed timings split the suite by measured duration; the longest
-    # shard is about a third of the old 8-11 minute serial run. 20 minutes
-    # leaves wide margin for setup and a slow host, and still fails a hung
-    # one well before the old 30-minute ceiling.
+    # The committed timings split the suite by measured duration. 20 minutes
+    # leaves wide margin for setup, the CLI install and a slow host, and still
+    # fails a hung one well before the old 30-minute ceiling.
     timeout-minutes: 20
     strategy:
       # Let every shard finish: the aggregator needs all four reports to
@@ -245,17 +248,50 @@ jobs:
       - name: Build
         run: bun run build
 
+      # The v2 CLI needs its install scripts, so `bunx` cannot launch it. It goes
+      # into a local prefix and is called by absolute path: v1 and v2 both
+      # expose `opencode`, so neither is ever installed globally. npm 12 blocks
+      # install scripts unless told otherwise; an older npm runs them and does
+      # not know the flag, so the flag is passed only where it exists. A wrong or
+      # broken install fails here, with the CLI's own output, before any test.
+      - name: Install the OpenCode v2 CLI at its pin
+        id: opencode
+        run: |
+          pin="$(jq -r '.v2' scripts/opencode-host-pins.json)"
+          prefix="$RUNNER_TEMP/opencode-v2"
+          flags=(--no-audit --no-fund)
+          if (( $(npm --version | cut -d. -f1) >= 12 )); then
+            flags+=(--dangerously-allow-all-scripts)
+          fi
+          echo "npm $(npm --version), installing @opencode/cli@${pin} into $prefix"
+          npm install --prefix "$prefix" "@opencode/cli@${pin}" "${flags[@]}"
+          bin="$prefix/node_modules/.bin/opencode"
+          if ! reported="$("$bin" --version 2>&1)"; then
+            echo "::error::$bin --version failed: $reported"
+            exit 1
+          fi
+          echo "$bin --version: $reported"
+          if [[ "$reported" != "opencode v${pin}" ]]; then
+            echo "::error::Expected 'opencode v${pin}' but the installed CLI reported '$reported'"
+            exit 1
+          fi
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
       - name: Run host contract suite
         id: suite
         env:
-          SYSTEMATIC_REQUIRE_OPENCODE: "1"
+          SYSTEMATIC_OPENCODE_HOST: v2
+          SYSTEMATIC_OPENCODE_V2_BIN: ${{ steps.opencode.outputs.bin }}
+          SYSTEMATIC_REQUIRE_OPENCODE_V2: "1"
         run: |
           set -o pipefail
-          bun test tests/integration \
+          files="$(bun scripts/host-contract-guard.ts files --profile v2)"
+          readarray -t file_list <<< "$files"
+          bun test "${file_list[@]}" \
             --shard=${{ matrix.shard }}/4 \
             --timings=tests/integration/host-contract-timings.json \
-            --reporter=junit --reporter-outfile=host-contract-junit-${{ matrix.shard }}.xml \
-            2>&1 | tee host-contract-log-${{ matrix.shard }}.txt
+            --reporter=junit --reporter-outfile=host-contract-v2-junit-${{ matrix.shard }}.xml \
+            2>&1 | tee host-contract-v2-log-${{ matrix.shard }}.txt
 
       # `!cancelled()` keeps this running after a failed suite, which is when
       # the aggregator most needs the reports. A missing report fails the step.
@@ -263,15 +299,143 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: host-contract-shard-${{ matrix.shard }}
+          name: host-contract-v2-shard-${{ matrix.shard }}
           path: |
-            host-contract-junit-${{ matrix.shard }}.xml
-            host-contract-log-${{ matrix.shard }}.txt
+            host-contract-v2-junit-${{ matrix.shard }}.xml
+            host-contract-v2-log-${{ matrix.shard }}.txt
+          if-no-files-found: error
+
+  host-contract-v1-floor:
+    name: Host Contract v1 floor
+    needs: host-contract-gate
+    if: needs.host-contract-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # v1 launches through `bunx` at the floor pin. Reporting the version here
+      # puts it in the log and fails before any test if it is not the pin.
+      - name: Report the OpenCode v1 floor version
+        run: |
+          pin="$(jq -r '.v1Floor' scripts/opencode-host-pins.json)"
+          if ! reported="$(bunx "opencode-ai@${pin}" --version 2>&1)"; then
+            echo "::error::bunx opencode-ai@${pin} --version failed: $reported"
+            exit 1
+          fi
+          echo "opencode-ai@${pin} reports: $reported"
+          echo "OpenCode v1 floor: $reported" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$(tail -n 1 <<< "$reported")" != "$pin" ]]; then
+            echo "::error::Expected '${pin}' but the floor CLI reported '$reported'"
+            exit 1
+          fi
+
+      - name: Run host contract suite
+        id: suite
+        env:
+          SYSTEMATIC_OPENCODE_HOST: v1
+          SYSTEMATIC_OPENCODE_V1_LINE: floor
+          SYSTEMATIC_REQUIRE_OPENCODE_V1: "1"
+        run: |
+          set -o pipefail
+          files="$(bun scripts/host-contract-guard.ts files --profile v1-floor)"
+          readarray -t file_list <<< "$files"
+          bun test "${file_list[@]}" \
+            --reporter=junit --reporter-outfile=host-contract-v1-floor-junit.xml \
+            2>&1 | tee host-contract-v1-floor-log.txt
+
+      - name: Upload v1 floor results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-contract-v1-floor-results
+          path: |
+            host-contract-v1-floor-junit.xml
+            host-contract-v1-floor-log.txt
+          if-no-files-found: error
+
+  host-contract-v1-current:
+    name: Host Contract v1 current
+    needs: host-contract-gate
+    if: needs.host-contract-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Report the OpenCode v1 current version
+        run: |
+          pin="$(jq -r '.v1' scripts/opencode-host-pins.json)"
+          if ! reported="$(bunx "opencode-ai@${pin}" --version 2>&1)"; then
+            echo "::error::bunx opencode-ai@${pin} --version failed: $reported"
+            exit 1
+          fi
+          echo "opencode-ai@${pin} reports: $reported"
+          echo "OpenCode v1 current: $reported" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$(tail -n 1 <<< "$reported")" != "$pin" ]]; then
+            echo "::error::Expected '${pin}' but the current CLI reported '$reported'"
+            exit 1
+          fi
+
+      - name: Run host contract suite
+        id: suite
+        env:
+          SYSTEMATIC_OPENCODE_HOST: v1
+          SYSTEMATIC_OPENCODE_V1_LINE: current
+          SYSTEMATIC_REQUIRE_OPENCODE_V1: "1"
+        run: |
+          set -o pipefail
+          files="$(bun scripts/host-contract-guard.ts files --profile v1-current)"
+          readarray -t file_list <<< "$files"
+          bun test "${file_list[@]}" \
+            --reporter=junit --reporter-outfile=host-contract-v1-current-junit.xml \
+            2>&1 | tee host-contract-v1-current-log.txt
+
+      - name: Upload v1 current results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-contract-v1-current-results
+          path: |
+            host-contract-v1-current-junit.xml
+            host-contract-v1-current-log.txt
           if-no-files-found: error
 
   host-contract:
     name: Host Contract
-    needs: [host-contract-gate, host-contract-shard]
+    needs:
+      - host-contract-gate
+      - host-contract-shard
+      - host-contract-v1-floor
+      - host-contract-v1-current
     # The required status check. `always()` makes it report whatever the jobs
     # it needs did: a skipped required check reads as success, so this job
     # must never be skipped, and it states its own verdict below.
@@ -310,46 +474,115 @@ jobs:
         if: steps.verdict.outputs.run == 'true'
         run: bun install --frozen-lockfile
 
-      # Runs after a failed shard too: a shard that failed after writing its
-      # reports still gets the guard's diagnosis.
-      - name: Download shard results
+      # Each profile's reports land in their own directory, so one job's files
+      # can never overwrite another's. These run after a failed job too: a job
+      # that failed after writing its reports still gets the guard's diagnosis.
+      - name: Download v2 shard results
         if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: host-contract-shard-*
+          pattern: host-contract-v2-shard-*
           merge-multiple: true
-          path: host-contract-shards
+          path: host-contract-results/v2
 
-      # The module-scope throw (SYSTEMATIC_REQUIRE_OPENCODE=1) already covers
-      # a missing or mismatched host. This guard covers what it cannot: a
-      # per-test gate skipping for an unexpected reason while the job stays
+      - name: Download v1 floor results
+        if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host-contract-v1-floor-results
+          path: host-contract-results/v1-floor
+
+      - name: Download v1 current results
+        if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host-contract-v1-current-results
+          path: host-contract-results/v1-current
+
+      # The module-scope throw (SYSTEMATIC_REQUIRE_OPENCODE_V1 or _V2) already
+      # covers a missing or mismatched host. This guard covers what it cannot:
+      # a per-test gate skipping for an unexpected reason while the job stays
       # green, or a whole-file collapse that still leaves the console summary
-      # and pass floor looking plausible. It judges the union of the four
-      # shards. The exempt set, the expected-file list, and the floor all live
-      # in scripts/host-contract-guard.ts, so widening any of them is a
-      # reviewed change.
+      # and pass floor looking plausible. It judges one profile at a time.
+      # The file list, exempt skips and floor of each profile live in
+      # scripts/host-contract-guard.ts, so widening any of them is a reviewed
+      # change.
       #
-      # `!cancelled()`, not the implicit `success()`, so a failed shard still
-      # gets its diagnosis. A missing report is a violation, not a skip.
-      - name: Guard skipped tests and pass floor
+      # `!cancelled()`, not the implicit `success()`, so a failed job still
+      # gets its diagnosis, and each profile gets its own step so one red
+      # profile does not hide another. A missing report is a violation, not a
+      # skip.
+      - name: Guard v2 skipped tests and pass floor
         if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
         run: |
-          bun scripts/host-contract-guard.ts \
-            host-contract-shards/host-contract-junit-1.xml host-contract-shards/host-contract-log-1.txt \
-            host-contract-shards/host-contract-junit-2.xml host-contract-shards/host-contract-log-2.txt \
-            host-contract-shards/host-contract-junit-3.xml host-contract-shards/host-contract-log-3.txt \
-            host-contract-shards/host-contract-junit-4.xml host-contract-shards/host-contract-log-4.txt
+          bun scripts/host-contract-guard.ts --profile v2 \
+            host-contract-results/v2/host-contract-v2-junit-1.xml host-contract-results/v2/host-contract-v2-log-1.txt \
+            host-contract-results/v2/host-contract-v2-junit-2.xml host-contract-results/v2/host-contract-v2-log-2.txt \
+            host-contract-results/v2/host-contract-v2-junit-3.xml host-contract-results/v2/host-contract-v2-log-3.txt \
+            host-contract-results/v2/host-contract-v2-junit-4.xml host-contract-results/v2/host-contract-v2-log-4.txt
 
-      # The check is red unless every shard succeeded. `always()` so it
-      # decides even after the steps above failed or were skipped; a skipped
-      # or cancelled shard is not a pass.
-      - name: Require every shard to have succeeded
-        if: ${{ always() && steps.verdict.outputs.run == 'true' }}
-        env:
-          SHARD_RESULT: ${{ needs.host-contract-shard.result }}
+      - name: Guard v1 floor skipped tests and pass floor
+        if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
         run: |
-          if [[ "$SHARD_RESULT" != "success" ]]; then
-            echo "::error::The host contract shards ended '$SHARD_RESULT', not 'success'"
+          bun scripts/host-contract-guard.ts --profile v1-floor \
+            host-contract-results/v1-floor/host-contract-v1-floor-junit.xml host-contract-results/v1-floor/host-contract-v1-floor-log.txt
+
+      - name: Guard v1 current skipped tests and pass floor
+        if: ${{ !cancelled() && steps.verdict.outputs.run == 'true' }}
+        run: |
+          bun scripts/host-contract-guard.ts --profile v1-current \
+            host-contract-results/v1-current/host-contract-v1-current-junit.xml host-contract-results/v1-current/host-contract-v1-current-log.txt
+
+      # The check is red unless every host job succeeded. Each job has its own
+      # variable and step. `always()` so each decides even after the steps
+      # above failed or were skipped; a skipped or cancelled job is not a pass
+      # when the suite was required, and is reported as not required when it
+      # was not.
+      - name: Require the v2 shards to have succeeded
+        if: ${{ always() }}
+        env:
+          SUITE_REQUIRED: ${{ steps.verdict.outputs.run }}
+          V2_SHARDS_RESULT: ${{ needs.host-contract-shard.result }}
+        run: |
+          if [[ "$SUITE_REQUIRED" == "false" ]]; then
+            echo "::notice::The v2 shards were not required for this run"
+          elif [[ "$SUITE_REQUIRED" != "true" ]]; then
+            echo "::error::The host contract verdict is '$SUITE_REQUIRED', not 'true' or 'false'"
+            exit 1
+          elif [[ "$V2_SHARDS_RESULT" != "success" ]]; then
+            echo "::error::The v2 shards ended '$V2_SHARDS_RESULT', not 'success'"
+            exit 1
+          fi
+
+      - name: Require the v1 floor job to have succeeded
+        if: ${{ always() }}
+        env:
+          SUITE_REQUIRED: ${{ steps.verdict.outputs.run }}
+          V1_FLOOR_RESULT: ${{ needs.host-contract-v1-floor.result }}
+        run: |
+          if [[ "$SUITE_REQUIRED" == "false" ]]; then
+            echo "::notice::The v1 floor job was not required for this run"
+          elif [[ "$SUITE_REQUIRED" != "true" ]]; then
+            echo "::error::The host contract verdict is '$SUITE_REQUIRED', not 'true' or 'false'"
+            exit 1
+          elif [[ "$V1_FLOOR_RESULT" != "success" ]]; then
+            echo "::error::The v1 floor job ended '$V1_FLOOR_RESULT', not 'success'"
+            exit 1
+          fi
+
+      - name: Require the v1 current job to have succeeded
+        if: ${{ always() }}
+        env:
+          SUITE_REQUIRED: ${{ steps.verdict.outputs.run }}
+          V1_CURRENT_RESULT: ${{ needs.host-contract-v1-current.result }}
+        run: |
+          if [[ "$SUITE_REQUIRED" == "false" ]]; then
+            echo "::notice::The v1 current job was not required for this run"
+          elif [[ "$SUITE_REQUIRED" != "true" ]]; then
+            echo "::error::The host contract verdict is '$SUITE_REQUIRED', not 'true' or 'false'"
+            exit 1
+          elif [[ "$V1_CURRENT_RESULT" != "success" ]]; then
+            echo "::error::The v1 current job ended '$V1_CURRENT_RESULT', not 'success'"
             exit 1
           fi
 

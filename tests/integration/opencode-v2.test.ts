@@ -943,6 +943,51 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
+      'a discovered project skill above the host output limit reaches the model whole as a command, with its arguments',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const tailSentinel = 'DISCOVERED_SKILL_TAIL_SENTINEL_4C7E'
+        const argSentinel = 'DISCOVERED_SKILL_ARG_SENTINEL_9F3B'
+        // Above the host's 51200 byte output limit, with the sentinel last.
+        const filler = Array.from(
+          { length: 700 },
+          (_unused, index) => `Filler line ${index} ${'.'.repeat(80)}`,
+        ).join('\n')
+        writeCommandSkill(
+          'probe-large',
+          {},
+          `${filler}\nInvestigate: $ARGUMENTS\n${tailSentinel}`,
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          await listCommands(host, (entries) =>
+            entries.some((entry) => entry.name === 'probe-large'),
+          )
+          const session = await newSession(host)
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'probe-large',
+            text: argSentinel,
+          })
+          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
+
+          const turn = toolModel.turns[0]
+          if (turn === undefined) throw new Error('no turn recorded')
+          const prompt = lastUserText(turn)
+          expect(Buffer.byteLength(prompt, 'utf8')).toBeGreaterThan(51_200)
+          expect(prompt).toContain(tailSentinel)
+          expect(prompt).toContain(`Investigate: ${argSentinel}`)
+          expect(prompt).not.toContain('$ARGUMENTS')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
       'a command with a model runs the turn on that model and the session returns to its own',
       async () => {
         const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)

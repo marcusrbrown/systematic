@@ -47,7 +47,7 @@ on `PATH` and never `npx` (#928). `probeOpencodeAvailability()`
 `--version` under a caller-built, isolated env and classifies the result as
 `available`, `mismatch`, or `unavailable` — it never throws and never
 memoizes. Every fixture-consuming suite wraps it in a memoizing
-`isOpencodeAvailable()` (`tests/integration/fixtures/opencode-host.ts:271`).
+`isOpencodeAvailable()` (`tests/integration/fixtures/opencode-host.ts:273`).
 
 The evidence itself is three jobs in `.github/workflows/main.yaml`:
 
@@ -109,7 +109,7 @@ consequence differs by design:
   development requires a live host.
 - **In CI**, `SYSTEMATIC_REQUIRE_OPENCODE=1` is set only by the
   `host-contract-shard` jobs. Every fixture-consuming suite calls `requireOpencodeAvailable()`
-  (`scripts/lib/opencode-availability.ts:320-329`) at module scope right after
+  (`scripts/lib/opencode-availability.ts:345-354`) at module scope right after
   `isOpencodeAvailable()`. When the classification is not `available`, that
   call throws — a module-scope throw fails the file to load, Bun reports it as
   a suite error, that shard goes red, the aggregator goes red with it, and the

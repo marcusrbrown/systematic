@@ -217,6 +217,8 @@ describe('main workflow: no publish path', () => {
       'host-contract',
       'host-contract-gate',
       'host-contract-shard',
+      'host-contract-v1-current',
+      'host-contract-v1-floor',
       'lint',
       'registry',
       'release',

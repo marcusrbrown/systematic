@@ -8,9 +8,12 @@ import {
   evaluate,
   type GuardViolation,
   HOST_CONTRACT_PROFILES,
+  type HostContractProfile,
   mergeEvidence,
-  PASS_FLOOR,
+  PROFILE_EXEMPT_SKIPS,
+  PROFILE_PASS_FLOORS,
   PROFILE_SUITE_FILES,
+  parseCommandLine,
   parseJUnitXml,
   parseLogPassCount,
   readArtifact,
@@ -19,12 +22,33 @@ import {
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
 const GUARD_SCRIPT = path.join(REPO_ROOT, 'scripts/host-contract-guard.ts')
 
+/** The profile most of this file judges: it has the exempt skip and the most files. */
+const PROFILE: HostContractProfile = 'v1-current'
+const PASS_FLOOR = PROFILE_PASS_FLOORS[PROFILE]
+const PROFILE_FILES = PROFILE_SUITE_FILES[PROFILE]
+
+/** `evaluate` for the default profile unless another is named. */
+function judge(
+  input: Parameters<typeof evaluate>[0],
+  profile: HostContractProfile = PROFILE,
+): GuardViolation[] {
+  return evaluate(input, profile)
+}
+
 function runGuard(...paths: string[]): {
   exitCode: number
   stdout: string
   stderr: string
 } {
-  const result = Bun.spawnSync(['bun', GUARD_SCRIPT, ...paths], {
+  return runGuardArgs('--profile', PROFILE, ...paths)
+}
+
+function runGuardArgs(...args: string[]): {
+  exitCode: number
+  stdout: string
+  stderr: string
+} {
+  const result = Bun.spawnSync(['bun', GUARD_SCRIPT, ...args], {
     cwd: REPO_ROOT,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -123,6 +147,39 @@ describe('PROFILE_SUITE_FILES', () => {
     )
   })
 
+  test('each profile lists the files that carry its host contract', () => {
+    const anchors: Record<HostContractProfile, readonly string[]> = {
+      v2: [
+        'tests/integration/opencode-v2.test.ts',
+        'tests/integration/opencode.test.ts',
+      ],
+      'v1-floor': [
+        'tests/integration/ce-review-return-validation.test.ts',
+        'tests/integration/opencode-v1.test.ts',
+        'tests/integration/opencode.test.ts',
+        'tests/integration/skill-command-probe.test.ts',
+        'tests/integration/skill-delivery.test.ts',
+      ],
+      'v1-current': [
+        'tests/integration/ce-review-return-validation.test.ts',
+        'tests/integration/opencode-v1.test.ts',
+        'tests/integration/opencode.test.ts',
+        'tests/integration/skill-command-probe.test.ts',
+        'tests/integration/skill-delivery.test.ts',
+      ],
+    }
+    for (const profile of HOST_CONTRACT_PROFILES) {
+      for (const file of anchors[profile]) {
+        expect(PROFILE_SUITE_FILES[profile], `${profile}: ${file}`).toContain(
+          file,
+        )
+      }
+    }
+    expect(PROFILE_SUITE_FILES.v2).not.toContain(
+      'tests/integration/opencode-v1.test.ts',
+    )
+  })
+
   test('the two v1 profiles run the same smoke set, and the current pin adds only the eval runner', () => {
     const floor = PROFILE_SUITE_FILES['v1-floor']
     const current = PROFILE_SUITE_FILES['v1-current']
@@ -169,7 +226,7 @@ function testsuite(file: string, cases: string): string {
  * exempt skip in its own suite. This is the "everything present and
  * healthy" baseline every mutated fixture starts from. */
 function buildHealthyJUnit(): string {
-  const suites = EXPECTED_SUITE_FILES.map((file) =>
+  const suites = PROFILE_FILES.map((file) =>
     testsuite(file, testcase(`${file} suite`, 'passes')),
   )
   suites.push(
@@ -208,7 +265,7 @@ describe('parseJUnitXml', () => {
   test('does not match the closing </testsuite> tag or the plural <testsuites>', () => {
     const xml = buildHealthyJUnit()
     const parsed = parseJUnitXml(xml)
-    expect(parsed.producedFiles.size).toBe(EXPECTED_SUITE_FILES.length)
+    expect(parsed.producedFiles.size).toBe(PROFILE_FILES.length)
   })
 
   test('collects skipped testcases with classname and name', () => {
@@ -270,21 +327,21 @@ describe('parseLogPassCount', () => {
 describe('evaluate', () => {
   test('healthy fixture at the pass floor produces no violations', () => {
     const parsed = parseJUnitXml(buildHealthyJUnit())
-    const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+    const violations = judge({ parsed, passCount: PASS_FLOOR })
     expect(violations).toEqual([])
   })
 
   test('healthy fixture above the pass floor produces no violations', () => {
     const parsed = parseJUnitXml(buildHealthyJUnit())
-    const violations = evaluate({ parsed, passCount: PASS_FLOOR + 18 })
+    const violations = judge({ parsed, passCount: PASS_FLOOR + 18 })
     expect(violations).toEqual([])
   })
 
   describe('condition 1: missingFiles', () => {
     test('trips when an expected suite file produced no testsuite entry', () => {
-      const firstFile = EXPECTED_SUITE_FILES[0]
+      const firstFile = PROFILE_FILES[0]
       if (firstFile === undefined) throw new Error('expected at least one file')
-      const remaining = EXPECTED_SUITE_FILES.filter((f) => f !== firstFile)
+      const remaining = PROFILE_FILES.filter((f) => f !== firstFile)
       const suites = remaining.map((file) =>
         testsuite(file, testcase(`${file} suite`, 'passes')),
       )
@@ -296,7 +353,7 @@ describe('evaluate', () => {
       )
       const xml = `<testsuites>${suites.join('')}</testsuites>`
       const parsed = parseJUnitXml(xml)
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       const missing = violations.find((v) => v.kind === 'missing-files')
       expect(missing).toBeDefined()
       expect(missing?.details).toEqual([firstFile])
@@ -304,7 +361,7 @@ describe('evaluate', () => {
 
     test('near-miss: all expected files present does not trip', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       expect(violations.some((v) => v.kind === 'missing-files')).toBe(false)
     })
   })
@@ -316,7 +373,7 @@ describe('evaluate', () => {
         `${testsuite('tests/integration/pi.test.ts', testcase('pi suite', 'some other test', { skipped: true }))}</testsuites>`,
       )
       const parsed = parseJUnitXml(xml)
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       const unexpected = violations.find((v) => v.kind === 'unexpected-skips')
       expect(unexpected).toBeDefined()
       expect(unexpected?.details).toEqual(['pi suite::some other test'])
@@ -324,19 +381,19 @@ describe('evaluate', () => {
 
     test('near-miss: only the exempt skip present does not trip', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       expect(violations.some((v) => v.kind === 'unexpected-skips')).toBe(false)
     })
   })
 
   describe('condition 3: missing exempt skips (bidirectional)', () => {
     test('trips when the known-exempt skip is absent from this run', () => {
-      const suites = EXPECTED_SUITE_FILES.map((file) =>
+      const suites = PROFILE_FILES.map((file) =>
         testsuite(file, testcase(`${file} suite`, 'passes')),
       )
       const xml = `<testsuites>${suites.join('')}</testsuites>`
       const parsed = parseJUnitXml(xml)
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       const missingExempt = violations.find(
         (v) => v.kind === 'missing-exempt-skips',
       )
@@ -347,7 +404,7 @@ describe('evaluate', () => {
     })
 
     test('near-miss: a differently-named skip does not satisfy the exempt entry (rename fails loudly)', () => {
-      const suites = EXPECTED_SUITE_FILES.map((file) =>
+      const suites = PROFILE_FILES.map((file) =>
         testsuite(file, testcase(`${file} suite`, 'passes')),
       )
       suites.push(
@@ -360,7 +417,7 @@ describe('evaluate', () => {
       )
       const xml = `<testsuites>${suites.join('')}</testsuites>`
       const parsed = parseJUnitXml(xml)
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       // The rename shows up as BOTH an unexpected skip (the new key isn't
       // exempt) and a missing exempt skip (the old key never matched) --
       // proving the exempt set has no rename-tolerance gap, per issue item 4.
@@ -372,7 +429,7 @@ describe('evaluate', () => {
 
     test('near-miss: exempt skip present does not trip', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       expect(violations.some((v) => v.kind === 'missing-exempt-skips')).toBe(
         false,
       )
@@ -382,13 +439,13 @@ describe('evaluate', () => {
   describe('condition 4: no pass line parseable', () => {
     test('trips when passCount is undefined', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: undefined })
+      const violations = judge({ parsed, passCount: undefined })
       expect(violations.some((v) => v.kind === 'no-pass-line')).toBe(true)
     })
 
     test('near-miss: a parseable pass count at the floor does not trip', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       expect(violations.some((v) => v.kind === 'no-pass-line')).toBe(false)
     })
   })
@@ -396,7 +453,7 @@ describe('evaluate', () => {
   describe('condition 5: below pass floor', () => {
     test('trips when passCount is below PASS_FLOOR', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR - 1 })
+      const violations = judge({ parsed, passCount: PASS_FLOOR - 1 })
       const belowFloor = violations.find((v) => v.kind === 'below-pass-floor')
       expect(belowFloor).toBeDefined()
       expect(belowFloor?.message).toContain(String(PASS_FLOOR - 1))
@@ -404,14 +461,14 @@ describe('evaluate', () => {
 
     test('near-miss: exactly at the floor does not trip', () => {
       const parsed = parseJUnitXml(buildHealthyJUnit())
-      const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+      const violations = judge({ parsed, passCount: PASS_FLOOR })
       expect(violations.some((v) => v.kind === 'below-pass-floor')).toBe(false)
     })
   })
 
   test('multiple simultaneous violations are all reported', () => {
     const parsed = parseJUnitXml('<testsuites></testsuites>')
-    const violations = evaluate({ parsed, passCount: 1 })
+    const violations = judge({ parsed, passCount: 1 })
     const kinds = violations.map((v) => v.kind).sort()
     const expectedKinds: GuardViolation['kind'][] = [
       'missing-files',
@@ -468,7 +525,7 @@ describe('parseJUnitXml entity decoding', () => {
       }),
     )
     const parsed = parseJUnitXml(xml)
-    const violations = evaluate({ parsed, passCount: PASS_FLOOR })
+    const violations = judge({ parsed, passCount: PASS_FLOOR })
     expect(violations.some((v) => v.kind === 'unexpected-skips')).toBe(true)
     expect(violations.some((v) => v.kind === 'missing-exempt-skips')).toBe(true)
   })
@@ -596,8 +653,12 @@ describe('CLI wrapper', () => {
     try {
       const result = runGuard(junitPath, logPath)
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain(`Observed pass count: ${PASS_FLOOR}`)
-      expect(result.stdout).toContain('host-contract skip/pass guard passed.')
+      expect(result.stdout).toContain(
+        `Observed ${PROFILE} pass count: ${PASS_FLOOR}`,
+      )
+      expect(result.stdout).toContain(
+        `host-contract skip/pass guard passed for ${PROFILE}.`,
+      )
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
@@ -666,7 +727,7 @@ describe('CLI wrapper', () => {
     })
     expect(result.exitCode).toBe(1)
     expect(result.stderr.toString()).toContain(
-      'Usage: bun scripts/host-contract-guard.ts <junit-path> <log-path>',
+      'Usage: bun scripts/host-contract-guard.ts --profile <profile> <junit-path> <log-path>',
     )
   })
 
@@ -680,7 +741,7 @@ describe('CLI wrapper', () => {
       const result = runGuard(junitPath, logPath)
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toContain(
-        `Pass count ${PASS_FLOOR - 1} is below the floor`,
+        `Pass count ${PASS_FLOOR - 1} is below the ${PROFILE} floor`,
       )
       expect(result.stderr).not.toContain('Could not read')
     } finally {
@@ -699,7 +760,7 @@ const SHARD_COUNT = 4
 /** Splits the expected suite files round-robin into `SHARD_COUNT` groups. */
 function partitionFiles(): string[][] {
   const groups: string[][] = Array.from({ length: SHARD_COUNT }, () => [])
-  for (const [index, file] of EXPECTED_SUITE_FILES.entries()) {
+  for (const [index, file] of PROFILE_FILES.entries()) {
     groups[index % SHARD_COUNT]?.push(file)
   }
   return groups
@@ -748,22 +809,22 @@ describe('mergeEvidence', () => {
     const merged = mergeEvidence(healthyShardEvidence())
 
     expect([...merged.parsed.producedFiles].sort()).toEqual(
-      [...EXPECTED_SUITE_FILES].sort(),
+      [...PROFILE_FILES].sort(),
     )
-    expect(evaluate(merged)).toEqual([])
+    expect(judge(merged)).toEqual([])
   })
 
   test('judged alone, a single shard misses the files the others ran', () => {
     const [first] = healthyShardEvidence()
     if (!first) throw new Error('no shard evidence')
 
-    const kinds = evaluate(first).map((violation) => violation.kind)
+    const kinds = judge(first).map((violation) => violation.kind)
 
     expect(kinds).toContain('missing-files')
   })
 
   test('an expected file produced by no shard is reported missing', () => {
-    const dropped = 'tests/integration/pi.test.ts'
+    const dropped = 'tests/integration/skill-delivery.test.ts'
     const counts = shardPassCounts()
     const shards = partitionFiles().map((files, index) =>
       evidenceOf(
@@ -772,7 +833,7 @@ describe('mergeEvidence', () => {
       ),
     )
 
-    const violations = evaluate(mergeEvidence(shards))
+    const violations = judge(mergeEvidence(shards))
 
     const missing = violations.find((v) => v.kind === 'missing-files')
     expect(missing?.details).toEqual([dropped])
@@ -792,7 +853,7 @@ describe('mergeEvidence', () => {
       ),
     )
 
-    const violations = evaluate(mergeEvidence(shards))
+    const violations = judge(mergeEvidence(shards))
 
     expect(violations.map((v) => v.kind)).toEqual(['below-pass-floor'])
   })
@@ -807,14 +868,14 @@ describe('mergeEvidence', () => {
     const merged = mergeEvidence(shards)
 
     expect(merged.passCount).toBeUndefined()
-    expect(evaluate(merged).map((v) => v.kind)).toContain('no-pass-line')
+    expect(judge(merged).map((v) => v.kind)).toContain('no-pass-line')
   })
 
   test('the exempt skip may sit in any one shard', () => {
     const merged = mergeEvidence(healthyShardEvidence())
 
     expect(merged.parsed.skipped).toHaveLength(1)
-    expect(evaluate(merged)).toEqual([])
+    expect(judge(merged)).toEqual([])
   })
 
   test('an unexpected skip in any shard fails the union', () => {
@@ -836,13 +897,13 @@ describe('mergeEvidence', () => {
       )
     })
 
-    const kinds = evaluate(mergeEvidence(shards)).map((v) => v.kind)
+    const kinds = judge(mergeEvidence(shards)).map((v) => v.kind)
 
     expect(kinds).toEqual(['unexpected-skips'])
   })
 
   test('merging nothing yields an empty union that fails every check', () => {
-    const kinds = evaluate(mergeEvidence([])).map((v) => v.kind)
+    const kinds = judge(mergeEvidence([])).map((v) => v.kind)
 
     expect(kinds).toContain('missing-files')
     expect(kinds).toContain('no-pass-line')
@@ -872,8 +933,12 @@ describe('CLI wrapper with several shards', () => {
       const result = runGuard(...writeShardPairs(dir))
 
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain(`Observed pass count: ${PASS_FLOOR}`)
-      expect(result.stdout).toContain('host-contract skip/pass guard passed.')
+      expect(result.stdout).toContain(
+        `Observed ${PROFILE} pass count: ${PASS_FLOOR}`,
+      )
+      expect(result.stdout).toContain(
+        `host-contract skip/pass guard passed for ${PROFILE}.`,
+      )
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
@@ -926,10 +991,322 @@ describe('CLI wrapper with several shards', () => {
 
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toContain(
-        'Usage: bun scripts/host-contract-guard.ts <junit-path> <log-path>',
+        'Usage: bun scripts/host-contract-guard.ts --profile <profile> <junit-path> <log-path>',
       )
       expect(result.stderr).toContain('[<junit-path> <log-path> ...]')
       expect(result.stderr).not.toContain('Could not read')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Profiles: each host job is judged against its own files, floor and skips.
+// ---------------------------------------------------------------------------
+
+function exemptSkipSuite(
+  profile: HostContractProfile,
+  { omit }: { omit?: string } = {},
+): string[] {
+  const [exempt] = PROFILE_EXEMPT_SKIPS[profile]
+  if (exempt === undefined) return []
+  if (omit === 'tests/integration/opencode-v1.test.ts') return []
+  return [
+    testsuite(
+      'tests/integration/opencode-v1.test.ts',
+      testcase(exempt.classname, exempt.name, { skipped: true }),
+    ),
+  ]
+}
+
+/** A complete, healthy report for one profile: its files, plus its exempt skip if it has one. */
+function healthyReport(
+  profile: HostContractProfile,
+  { without }: { without?: string } = {},
+): string {
+  const suites = PROFILE_SUITE_FILES[profile]
+    .filter((file) => file !== without)
+    .map((file) => testsuite(file, testcase(`${file} suite`, 'passes')))
+  return `<?xml version="1.0"?><testsuites>${[...suites, ...exemptSkipSuite(profile, { omit: without })].join('')}</testsuites>`
+}
+
+function judgeReport(
+  report: string,
+  profile: HostContractProfile,
+  passCount = PROFILE_PASS_FLOORS[profile],
+): GuardViolation[] {
+  return evaluate({ parsed: parseJUnitXml(report), passCount }, profile)
+}
+
+describe('profile configuration', () => {
+  test.each([...HOST_CONTRACT_PROFILES])(
+    '%s has a positive whole-number pass floor',
+    (profile) => {
+      const floor = PROFILE_PASS_FLOORS[profile]
+      expect(Number.isInteger(floor)).toBe(true)
+      expect(floor).toBeGreaterThan(0)
+    },
+  )
+
+  test('the v2 profile exempts no skip, and both v1 profiles exempt the mixed-version test', () => {
+    expect(PROFILE_EXEMPT_SKIPS.v2).toEqual([])
+    expect(PROFILE_EXEMPT_SKIPS['v1-floor']).toEqual(EXEMPT_SKIPS)
+    expect(PROFILE_EXEMPT_SKIPS['v1-current']).toEqual(EXEMPT_SKIPS)
+  })
+
+  test('the exempt test lives in a file both v1 profiles run and the v2 profile does not', () => {
+    const exemptFile = 'tests/integration/opencode-v1.test.ts'
+    const source = fs.readFileSync(path.join(REPO_ROOT, exemptFile), 'utf8')
+
+    for (const exempt of EXEMPT_SKIPS) {
+      expect(source).toContain(exempt.classname)
+    }
+    expect(PROFILE_SUITE_FILES['v1-floor']).toContain(exemptFile)
+    expect(PROFILE_SUITE_FILES['v1-current']).toContain(exemptFile)
+    expect(PROFILE_SUITE_FILES.v2).not.toContain(exemptFile)
+  })
+})
+
+describe('evaluate per profile', () => {
+  test.each([...HOST_CONTRACT_PROFILES])(
+    'a complete report set at the %s floor passes',
+    (profile) => {
+      expect(judgeReport(healthyReport(profile), profile)).toEqual([])
+    },
+  )
+
+  test('a file missing from the v2 report fails the v2 profile only', () => {
+    const file = 'tests/integration/opencode-v2.test.ts'
+    const violations = (profile: HostContractProfile) =>
+      judgeReport(healthyReport(profile, { without: file }), profile)
+
+    const missing = violations('v2').find((v) => v.kind === 'missing-files')
+    expect(missing?.details).toEqual([file])
+    expect(violations('v1-floor')).toEqual([])
+    expect(violations('v1-current')).toEqual([])
+  })
+
+  test('a file missing from a v1 report fails the v1 profiles and names it', () => {
+    const file = 'tests/integration/opencode-v1.test.ts'
+    for (const profile of ['v1-floor', 'v1-current'] as const) {
+      const missing = judgeReport(
+        healthyReport(profile, { without: file }),
+        profile,
+      ).find((v) => v.kind === 'missing-files')
+      expect(missing?.details).toEqual([file])
+    }
+    expect(judgeReport(healthyReport('v2'), 'v2')).toEqual([])
+  })
+
+  test('a report that has every file of another profile but not its own fails', () => {
+    const v1Report = healthyReport('v1-current')
+    const kinds = judgeReport(v1Report, 'v2').map((v) => v.kind)
+
+    expect(kinds).toContain('missing-files')
+  })
+
+  test.each<HostContractProfile>(['v1-floor', 'v1-current'])(
+    'an unexpected skip in %s fails',
+    (profile) => {
+      const extra = testsuite(
+        'tests/integration/opencode.test.ts',
+        testcase('some suite', 'some test', { skipped: true }),
+      )
+      const report = healthyReport(profile).replace(
+        '</testsuites>',
+        `${extra}</testsuites>`,
+      )
+
+      const unexpected = judgeReport(report, profile).find(
+        (v) => v.kind === 'unexpected-skips',
+      )
+
+      expect(unexpected?.details).toEqual(['some suite::some test'])
+    },
+  )
+
+  test('the mixed-version skip passes on the v1 profiles and fails on v2', () => {
+    for (const profile of ['v1-floor', 'v1-current'] as const) {
+      expect(judgeReport(healthyReport(profile), profile)).toEqual([])
+    }
+
+    const v2WithSkip = healthyReport('v2').replace(
+      '</testsuites>',
+      `${exemptSkipSuite('v1-current').join('')}</testsuites>`,
+    )
+    const kinds = judgeReport(v2WithSkip, 'v2').map((v) => v.kind)
+
+    expect(kinds).toEqual(['unexpected-skips'])
+  })
+
+  test('a v1 report without the mixed-version skip reports a stale exempt set', () => {
+    const suites = PROFILE_SUITE_FILES['v1-floor'].map((file) =>
+      testsuite(file, testcase(`${file} suite`, 'passes')),
+    )
+    const report = `<testsuites>${suites.join('')}</testsuites>`
+
+    const kinds = judgeReport(report, 'v1-floor').map((v) => v.kind)
+
+    expect(kinds).toEqual(['missing-exempt-skips'])
+  })
+
+  test.each([...HOST_CONTRACT_PROFILES])(
+    'a pass count one under the %s floor fails, naming the profile',
+    (profile) => {
+      const floor = PROFILE_PASS_FLOORS[profile]
+
+      const violations = judgeReport(healthyReport(profile), profile, floor - 1)
+
+      expect(violations.map((v) => v.kind)).toEqual(['below-pass-floor'])
+      expect(violations[0]?.message).toContain(profile)
+      expect(violations[0]?.message).toContain(String(floor))
+    },
+  )
+
+  test('a count that clears the smaller floor can still fail the larger one', () => {
+    const [low, high] = [...HOST_CONTRACT_PROFILES].sort(
+      (a, b) => PROFILE_PASS_FLOORS[a] - PROFILE_PASS_FLOORS[b],
+    )
+    if (low === undefined || high === undefined) throw new Error('no profiles')
+    if (PROFILE_PASS_FLOORS[low] === PROFILE_PASS_FLOORS[high]) return
+    const count = PROFILE_PASS_FLOORS[low]
+
+    expect(judgeReport(healthyReport(low), low, count)).toEqual([])
+    expect(
+      judgeReport(healthyReport(high), high, count).map((v) => v.kind),
+    ).toEqual(['below-pass-floor'])
+  })
+
+  test('four v2 shards that together hold every v2 file, with no skips, pass', () => {
+    const files = PROFILE_SUITE_FILES.v2
+    const shards = Array.from({ length: SHARD_COUNT }, (_, shard) => {
+      const own = files.filter((_file, index) => index % SHARD_COUNT === shard)
+      const suites = own.map((file) =>
+        testsuite(file, testcase(`${file} suite`, 'passes')),
+      )
+      return {
+        parsed: parseJUnitXml(`<testsuites>${suites.join('')}</testsuites>`),
+        passCount: Math.ceil(PROFILE_PASS_FLOORS.v2 / SHARD_COUNT),
+      }
+    })
+
+    expect(evaluate(mergeEvidence(shards), 'v2')).toEqual([])
+  })
+})
+
+describe('parseCommandLine', () => {
+  test('reads the profile flag in front of or behind the paths', () => {
+    expect(parseCommandLine(['--profile', 'v2', 'a.xml', 'b.txt'])).toEqual({
+      command: 'check',
+      profile: 'v2',
+      rest: ['a.xml', 'b.txt'],
+    })
+    expect(
+      parseCommandLine(['a.xml', 'b.txt', '--profile', 'v1-floor']),
+    ).toEqual({
+      command: 'check',
+      profile: 'v1-floor',
+      rest: ['a.xml', 'b.txt'],
+    })
+  })
+
+  test('reads the files command with its profile', () => {
+    expect(parseCommandLine(['files', '--profile', 'v1-current'])).toEqual({
+      command: 'files',
+      profile: 'v1-current',
+      rest: [],
+    })
+  })
+
+  test.each([
+    { label: 'no profile', args: ['a.xml', 'b.txt'] },
+    { label: 'an unknown profile', args: ['--profile', 'v3', 'a', 'b'] },
+    { label: 'a flag with no value', args: ['a', 'b', '--profile'] },
+    {
+      label: 'a repeated flag',
+      args: ['--profile', 'v2', '--profile', 'v2', 'a', 'b'],
+    },
+    { label: 'files with no profile', args: ['files'] },
+  ])('rejects $label', ({ args }) => {
+    expect(parseCommandLine(args)).toBeUndefined()
+  })
+})
+
+describe('CLI profiles', () => {
+  test.each([...HOST_CONTRACT_PROFILES])(
+    "files --profile %s prints exactly that profile's expected files",
+    (profile) => {
+      const result = runGuardArgs('files', '--profile', profile)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.trim().split('\n')).toEqual([
+        ...PROFILE_SUITE_FILES[profile],
+      ])
+    },
+  )
+
+  test('the files output names real test files, one per line, with nothing else', () => {
+    for (const profile of HOST_CONTRACT_PROFILES) {
+      const lines = runGuardArgs('files', '--profile', profile)
+        .stdout.trim()
+        .split('\n')
+      for (const line of lines) {
+        expect(line).toMatch(/^tests\/integration\/[\w-]+\.test\.ts$/)
+        expect(fs.existsSync(path.join(REPO_ROOT, line))).toBe(true)
+      }
+    }
+  })
+
+  test.each([
+    { label: 'no arguments', args: [] },
+    { label: 'files with no profile', args: ['files'] },
+    { label: 'an unknown profile', args: ['files', '--profile', 'v3'] },
+    {
+      label: 'files with extra arguments',
+      args: ['files', '--profile', 'v2', 'x'],
+    },
+    { label: 'a check with no profile', args: ['junit.xml', 'log.txt'] },
+  ])('$label is a usage error', ({ args }) => {
+    const result = runGuardArgs(...args)
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('Usage: bun scripts/host-contract-guard.ts')
+    expect(result.stderr).toContain('files --profile <profile>')
+  })
+
+  test.each([...HOST_CONTRACT_PROFILES])(
+    'a healthy %s report pair passes under its own profile',
+    (profile) => {
+      const dir = makeTempDir()
+      const junitPath = path.join(dir, 'junit.xml')
+      const logPath = path.join(dir, 'log.txt')
+      fs.writeFileSync(junitPath, healthyReport(profile), 'utf8')
+      fs.writeFileSync(logPath, buildLog(PROFILE_PASS_FLOORS[profile]), 'utf8')
+      try {
+        const result = runGuardArgs('--profile', profile, junitPath, logPath)
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(
+          `host-contract skip/pass guard passed for ${profile}.`,
+        )
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('a v1 report pair judged as the v2 profile fails with the v2 files named', () => {
+    const dir = makeTempDir()
+    const junitPath = path.join(dir, 'junit.xml')
+    const logPath = path.join(dir, 'log.txt')
+    fs.writeFileSync(junitPath, healthyReport('v1-current'), 'utf8')
+    fs.writeFileSync(logPath, buildLog(PROFILE_PASS_FLOORS.v2), 'utf8')
+    try {
+      const result = runGuardArgs('--profile', 'v2', junitPath, logPath)
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('tests/integration/opencode-v2.test.ts')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

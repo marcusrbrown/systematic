@@ -23,6 +23,7 @@ import {
   OPENCODE_CLI_PACKAGES,
   type OpencodeHost,
   parseOpencodeHost,
+  readOpencodeHostPins,
 } from './opencode-pin.js'
 
 /** Classification returned by {@link probeOpencodeAvailability}. */
@@ -59,6 +60,30 @@ export function resolveOpencodeHost(
   const value = env[OPENCODE_HOST_ENV]
   if (value === undefined || value === '') return DEFAULT_OPENCODE_HOST
   return parseOpencodeHost(value)
+}
+
+/** Env var that picks which v1 pin a v1 run targets: `floor` or `current`. */
+export const OPENCODE_V1_LINE_ENV = 'SYSTEMATIC_OPENCODE_V1_LINE'
+
+/**
+ * The exact CLI version a run targets for `host`. A v2 run targets the v2 pin.
+ * A v1 run targets the current v1 pin, or the v1 floor when
+ * {@link OPENCODE_V1_LINE_ENV} is `floor`. The variable only chooses between
+ * the two committed pins; it never carries a version of its own.
+ */
+export function resolveTargetOpencodePin(
+  host: OpencodeHost,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  pinFilePath?: string,
+): string {
+  const pins = readOpencodeHostPins(pinFilePath)
+  if (host === 'v2') return pins.v2
+  const line = env[OPENCODE_V1_LINE_ENV]
+  if (line === undefined || line === '' || line === 'current') return pins.v1
+  if (line === 'floor') return pins.v1Floor
+  throw new Error(
+    `Unknown v1 line "${line}" in ${OPENCODE_V1_LINE_ENV}. Expected "floor" or "current".`,
+  )
 }
 
 /** Env var that points at an installed CLI binary for one host line. */

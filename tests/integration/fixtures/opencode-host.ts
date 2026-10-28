@@ -11,11 +11,11 @@ import {
   resolveBunInstallCacheDir,
   resolveOpencodeBinary,
   resolveOpencodeHost,
+  resolveTargetOpencodePin,
 } from '../../../scripts/lib/opencode-availability.js'
 import {
   OPENCODE_CLI_PACKAGES,
   type OpencodeHost,
-  readOpencodeHostPin,
 } from '../../../scripts/lib/opencode-pin.js'
 import { stopProcessGroup } from '../../../scripts/lib/process-group.js'
 
@@ -27,7 +27,9 @@ export const TIMEOUT_MS = 180_000
 // host runs unchanged until a caller passes a host explicitly.
 export const TARGET_OPENCODE_HOST: OpencodeHost = resolveOpencodeHost()
 // `string`, read from the pin file at import time; throws if the pin is missing or not exact.
-export const EXACT_OPENCODE_VERSION = readOpencodeHostPin(TARGET_OPENCODE_HOST)
+// A v1 run targets the current v1 pin, or the v1 floor when `SYSTEMATIC_OPENCODE_V1_LINE=floor`.
+export const EXACT_OPENCODE_VERSION =
+  resolveTargetOpencodePin(TARGET_OPENCODE_HOST)
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
 export const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
@@ -179,7 +181,7 @@ export function buildChildEnv(
     host === 'v1'
       ? {
           BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
-            pin: readOpencodeHostPin('v1'),
+            pin: resolveTargetOpencodePin('v1'),
           }),
         }
       : {}
@@ -237,7 +239,7 @@ function computeOpencodeAvailability(
     // A v2 host also keeps its scratch space under TMPDIR, which the probe
     // redirects too.
     return probeOpencodeAvailability({
-      pin: readOpencodeHostPin(host),
+      pin: resolveTargetOpencodePin(host),
       host,
       binary: resolveOpencodeBinary(host),
       env: buildChildEnv(
@@ -750,10 +752,13 @@ export function opencodeLauncherArgv(host: OpencodeHost): string[] {
   const binary = resolveOpencodeBinary(host)
   if (binary !== undefined) return [binary]
   if (host === 'v1') {
-    return ['bunx', `${OPENCODE_CLI_PACKAGES.v1}@${readOpencodeHostPin('v1')}`]
+    return [
+      'bunx',
+      `${OPENCODE_CLI_PACKAGES.v1}@${resolveTargetOpencodePin('v1')}`,
+    ]
   }
   throw new Error(
-    `no ${host} binary configured: set ${opencodeBinaryEnvName(host)} to the absolute path of an installed ${OPENCODE_CLI_PACKAGES[host]}@${readOpencodeHostPin(host)}`,
+    `no ${host} binary configured: set ${opencodeBinaryEnvName(host)} to the absolute path of an installed ${OPENCODE_CLI_PACKAGES[host]}@${resolveTargetOpencodePin(host)}`,
   )
 }
 
