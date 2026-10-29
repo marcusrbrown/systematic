@@ -37,7 +37,7 @@ Requirements R1 to R18 and the acceptance examples are those of the origin docum
 - R2. Every document has a kind, and search takes an optional kind filter. Release 1 has one kind, `solution`. (U2, U3)
 - R3. A lexical lane always runs with no setup, over frontmatter and body. Title, tags, module, symptoms, `applies_when`, component and problem type outrank body text. (U1, U3)
 - R4. With an endpoint configured, a semantic lane also runs and the two rankings fuse. Each hit names its lanes and the result names the lanes that ran. (U3, U9)
-- R5. Search follows the solution lifecycle: successor replaces superseded, stale carries a caution, a dangling or cyclic link does not resolve, malformed frontmatter is skipped with a named warning. (U2, U3)
+- R5. Search follows the solution lifecycle: a successor replaces a superseded doc, a stale doc carries a caution, a superseded doc whose successor is unresolved is returned with `Caution: successor unresolved`, and malformed frontmatter is skipped with a named warning. (U2, U3)
 - R6. Each hit shows path, title, kind, rank, matched lanes, snippet, module, tags and status. (U3)
 
 **Embeddings and privacy**
@@ -66,7 +66,7 @@ Requirements R1 to R18 and the acceptance examples are those of the origin docum
 |---------|--------|-------------|
 | AE1 | R4, R12 | U9: Ollama configured and unreachable gives lexical hits plus an unreachable note |
 | AE2 | R8 | U4: a project `systematic.json` embeddings block is dropped with a warning; the user value, if any, is used |
-| AE3 | R5 | U2 and U3: a superseded best match is replaced by its successor, labelled `Supersedes:` |
+| AE3 | R5 | U2 and U3: a superseded best match is replaced by its successor, labelled `Supersedes:`. If the successor is missing, malformed, cyclic or past the hop cap, the matched doc is returned with `Caution: successor unresolved` |
 | AE4 | R15 | U3 and U7: a repo with no `docs/solutions/` returns `corpus: none`, and the researcher returns no matches |
 | AE5 | R14 | U5 and U6: v1, v2, Pi, the bin and the CLI return the same hits in the same order |
 | AE6 | R9, R12 | U8: a 401 gives a rejected-request note, and no output holds the key or the URL |
@@ -104,7 +104,7 @@ Flows: F1 (agent retrieves learnings) is covered by R1, R3, R5 and R14 in U3, U5
 - **Tool registration.** v1: the `tool:` map in `src/lib/opencode-v1.ts`, built by `src/lib/skill-tool.ts` (zod args, `execute(args, context)`). v2: `ctx.tool.transform` in `src/lib/opencode-v2-skills.ts` with a JSON-Schema `input`, `codemode:false`, and keyed installers in `src/lib/opencode-v2.ts`. Pi: `pi.registerTool` in `src/pi.ts`, with typebox parameters. The host truncates tool output at 51,200 bytes or 2,000 lines, and the restore path is keyed to `systematic_skill`, so search caps its own output.
 - **Config.** `loadConfig` (v1), `loadConfigWithSources` (Pi at init, CLI) and `buildSnapshot` (v2) all read config once. Load order is user, custom (`OPENCODE_CONFIG_DIR`), project. `profiles` is the protected-field precedent: `collectProjectProtectedFields`, `stripProjectProtectedFields` and `emitTopLevelProtectedFieldWarning` in `src/lib/config.ts`, with the path list in the import-free `src/lib/config-protected-fields.ts`. `trustProtected()` in `src/lib/config-schema.ts` tags a field but enforces nothing.
 - **Reusable.** `parseFrontmatter` (js-yaml JSON_SCHEMA, returns `parseError`), `walkDir` (readdir order, does not descend symlinked directories, `isDiscoverableMarkdown` skips README), `isRecord`, and the private `findGitWorktreeRoot` in `src/lib/discovered-skills.ts`.
-- **Lifecycle spec.** `agents/research/learnings-researcher.md` Step 4 (5 hops, visited set, form rule, literal `Supersedes:`, `Caution:` and `Skipped:` lines). `scripts/content-integrity.ts` `classifySupersededBy` is stricter (no chains), resolves nothing and is not shippable.
+- **Lifecycle spec.** `agents/research/learnings-researcher.md` Step 4 (5 hops, visited set, form rule, literal `Supersedes:` and `Caution:` lines, and an omit-and-`Skipped:` rule for unresolved chains that this plan replaces). `scripts/content-integrity.ts` `classifySupersededBy` is stricter (no chains), resolves nothing and is not shippable.
 - **Cache and fetch patterns.** `scripts/run-evals.ts` (mode `0o700` directory, temp file with `wx` and `0o600`, then rename). `docs/scripts/generate-release-notes.ts` and `scripts/release/gather-publish-facts.ts` (injectable `fetchImpl`, `AbortSignal.timeout`). Nothing in `src/` caches or fetches today.
 - **Node precedent.** `tests/unit/claude-code-validator.test.ts` bundles with `Bun.build target node` and runs the result under `node` from a foreign temp dir. `src/ce-review-validator.ts` holds the realpath `isMainModule` guard.
 - **Pi delegates.** `src/lib/pi-delegate-session.ts` passes `customTools: []` and loads with `noExtensions:true`. `src/lib/agent-resolver.ts` holds `DEFAULT_READONLY_TOOLS` and `OPENCODE_TO_PI_TOOL`. A custom tool is active only if its name is also in `tools`, and naming a tool with no definition does nothing and raises no error (Pi 1.4.0 `agent-session.js`).
@@ -196,8 +196,8 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 **Lifecycle**
 - **Rules.** The researcher's, not content-integrity's: at most 5 hops, a visited set, and the form rule (`docs/solutions/…md`, no `..`, no README, not under `_archived/`, the file exists in the loaded corpus). Existence means the doc was loaded, so a skipped or oversize successor is unresolvable.
 - **Mechanics.** Fetch about twice the limit before resolving. A successor takes the best rank among itself and the docs it replaces. Duplicates merge and `Supersedes:` lists every replaced path. Superseded docs stay indexed so they can match.
-- **Unresolvable chain.** The doc is omitted and `Skipped: superseded, successor unresolved: <path>` is emitted. This follows the researcher and narrows R5's "returns the matched doc with a caution" (see Open Questions).
-- **Drift guard.** `src/lib/search-lifecycle.ts` exports the hop cap, the path prefix and the three literal labels. A content-integrity check asserts the researcher prose contains each. A fixture corpus pins the behaviour.
+- **Unresolvable chain.** A successor is unresolved when it is missing, fails the form rule, forms a cycle, or lies past the hop cap. The matched superseded doc is returned at its own rank, with status `superseded` and `Caution: successor unresolved`. Nothing is dropped, and the `Skipped:` label is retired from search output and from the researcher prose. This matches R5 and changes the researcher's current omit-and-skip rule (decided by Marcus, 2026-10-29).
+- **Drift guard.** `src/lib/search-lifecycle.ts` exports the hop cap, the path prefix, the `Supersedes:` and `Caution:` labels and the unresolved-caution text. A content-integrity check asserts the researcher prose contains each, and fails if the retired `Skipped: superseded, successor unresolved` text is still there. A fixture corpus pins the behaviour.
 
 **Output**
 - Default 8 hits, max 20. Snippet at most 240 characters on one line, centred on the densest window of query terms. Title at most 160. At most 8 tags. At most 5 warnings plus `+N more`.
@@ -263,6 +263,8 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 - Plans, brainstorms and ideation as kinds (origin, R2): not researched here. The `kind` table is the seam, and the follow-up owns the frontmatter fit.
 - Pi researcher: without `customTools` a delegate cannot call a registered tool, so U5 passes the shared definition and the researcher detects it by tool list.
 - Hyphens and underscores: a joined run emits the whole identifier plus its components.
+- Dangling or cyclic successor (Marcus, 2026-10-29): follow R5. The matched doc is returned with `Caution: successor unresolved`, and `Skipped:` is retired.
+- Release workflow guard (Marcus, 2026-10-29): approved. U6 adds the new bin to the required-artifact check in `.github/workflows/publish-claude-code-plugin.yaml` and to its pinning test.
 - Where the shared root helper lives: a new `src/lib/project-root.ts`, so the bin bundle stays small.
 
 ### Deferred to Implementation
@@ -274,11 +276,6 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 - The #820 issue text that seeds the held-out query. U0 reads it from the issue.
 - Whether a symlinked file under `docs/solutions/` needs an explicit `lstat` filter or `walkDir` already hides it. U2 tests both.
 - Exact tuned weights. U3 sets them from the tune split.
-
-### Needs Marcus
-
-- **Dangling and cyclic links.** R5 says such a link "returns the matched doc with a caution". The researcher omits the doc and emits `Skipped:`. Marcus's lifecycle decision (2026-10-29) says follow the researcher, so this plan omits the doc and emits `Skipped:`, which names it. If R5's wording must stand, U2 returns the matched doc with a `Caution:` instead and the researcher prose changes to match.
-- **Release workflow guard.** `.github/workflows/publish-claude-code-plugin.yaml` and its test list `claude-code/bin/systematic-validate-review-artifact` as a required artifact. The new bin needs the same guard, which edits a release workflow and is ask-first. U6 asserts the bin in the build tests and leaves the workflow alone until Marcus approves.
 
 ---
 
@@ -340,7 +337,9 @@ Notes: semantic lane unreachable.
    Snippet: ...
    Supersedes: docs/solutions/...
    Caution: ...
-Skipped: superseded, successor unresolved: docs/solutions/...
+2. docs/solutions/...
+   Title: ... | Kind: solution | Status: superseded | Lanes: lexical
+   Caution: successor unresolved
 ```
 
 ---
@@ -456,7 +455,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 - [ ] U2. Project root, corpus loader and lifecycle resolver
 
-**Goal:** Resolve the project root, load `docs/solutions/` safely from disk, and resolve supersession exactly as the researcher does.
+**Goal:** Resolve the project root, load `docs/solutions/` safely from disk, and resolve supersession by the researcher's rules, except that an unresolved successor keeps the matched doc with a caution.
 
 **Requirements:** R1, R2, R5
 
@@ -472,7 +471,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Approach:**
 - `project-root.ts` holds the moved `findGitWorktreeRoot` and `resolveProjectRoot` (realpath, falling back to the start directory). `discovered-skills.ts` imports it and its tests stay green.
 - `search-corpus.ts` holds the `kind` table, the loader and the frontmatter wrapper described in Key Technical Decisions. It uses `walkDir` with `maxDepth` 6, sorts by relative path in code-unit order, applies the caps, and returns documents plus bounded, sanitised warnings. It never throws.
-- `search-lifecycle.ts` exports the hop cap, the `docs/solutions/` prefix and the `Supersedes:`, `Caution:` and `Skipped: superseded, successor unresolved:` labels, and a resolver over a ranked list and the loaded corpus.
+- `search-lifecycle.ts` exports the hop cap, the `docs/solutions/` prefix, the `Supersedes:` and `Caution:` labels and the unresolved-caution text `successor unresolved`, and a resolver over a ranked list and the loaded corpus. It has no `Skipped:` label. A successor is unresolved when it is missing, fails the form rule, forms a cycle, or lies past the hop cap, and the resolver then keeps the matched doc.
 
 **Execution note:** Characterization-first for `discovered-skills.ts`: run its existing tests before and after the move.
 
@@ -487,10 +486,11 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Edge case: no frontmatter indexes body-only with no warning. A BOM, and a closing `---` at end of file with no newline, still parse.
 - Error path: invalid YAML skips the doc with a warning naming its path. `tags: &t [*t]` (cyclic alias) and non-string tag entries do not crash and are never stringified. A control character in a title is stripped from the warning.
 - Happy path: AE3 chain A to B where B is active resolves to B with A in `Supersedes:`. A 5-hop chain resolves. A 6-hop chain does not.
-- Error path: a cycle, a self link, a missing file, `../x.md`, an absolute path, a README, an `_archived/` path, a bare filename, a list value, an empty value, and a successor skipped by the loader each emit `Skipped: superseded, successor unresolved: <path>` and omit the doc.
+- Error path: a cycle, a self link, a missing file, `../x.md`, an absolute path, a README, an `_archived/` path, a bare filename, a list value, an empty value, a 6-hop chain, and a successor skipped by the loader each return the matched superseded doc itself, at its own rank, with status `superseded` and `Caution: successor unresolved`. None is dropped and no output contains `Skipped:`.
+- Edge case: an unresolved superseded doc and a resolvable one in the same result keep their own ranks. A doc that is a successor for one chain and unresolved for another appears once.
 - Edge case: a stale doc yields a `Caution:` carrying its sanitised, truncated `stale_reason`. An unrecognised status counts as active.
 - Integration: two superseded docs sharing a successor merge into one entry whose `Supersedes:` lists both in path order. The merged rank is the best of the successor and the replaced docs.
-- Integration: the exported constants equal the literals in `agents/research/learnings-researcher.md` (the same assertion U7's gate makes).
+- Integration: the lifecycle fixture corpus (chain, 5-hop, 6-hop, cycle, dangling, malformed-target, stale, merge cases) has one expected-output file that pins every case above. U3 reuses it.
 
 **Verification:**
 - `discovered-skills` tests are unchanged and green. The corpus loader runs over this repo's real `docs/solutions/` with no warnings.
@@ -512,7 +512,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Modify: `src/lib/search-lexical.ts` (tuned constants only), `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 
 **Approach:**
-- The core validates the query, kind and limit, resolves the root, loads the corpus, builds the index, scores, sorts by score then path, takes about twice the limit, resolves the lifecycle, and truncates to the limit. A hit needs a score above zero.
+- The core validates the query, kind and limit, resolves the root, loads the corpus, builds the index, scores, sorts by score then path, takes about twice the limit, resolves the lifecycle, and truncates to the limit. A hit needs a score above zero. Unresolved superseded docs stay in the list with their caution.
 - It returns a structured result: hits, lanes that ran, notes, warnings and a corpus state of `none` (no `docs/solutions/`), `empty` (the directory holds no indexable docs) or `docs` (N docs, M hits). The renderer turns the result into text. Adapters never format text themselves.
 - The core accepts an optional injected semantic stage, absent until U9. Lanes read `lexical` alone until then.
 - The renderer owns sanitisation, field caps, the snippet window, the warning cap and the 16 KB cut with Systematic's own marker. The snippet picks the window with the most distinct query terms (integer counts), earliest on a tie, and falls back to the symptoms or title when the body has no match.
@@ -529,7 +529,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Test scenarios:**
 - Happy path: a query matching a doc's title ranks it first. A symptoms-only match surfaces the doc. Each hit carries path, title, kind, 1-based rank, lanes, snippet, module, tags and status.
-- Happy path: AE3, a superseded best match is replaced by its successor with `Supersedes:`. A stale hit carries `Caution:`. An unresolvable chain yields a `Skipped:` line.
+- Happy path: AE3, a superseded best match is replaced by its successor with `Supersedes:`. A stale hit carries `Caution:`. An unresolvable chain returns the matched superseded doc with `Caution: successor unresolved`.
 - Edge case: over-fetch keeps the result at `limit` hits when merging collapses duplicates. A doc that loses a merge never appears twice.
 - Edge case: AE4, no `docs/solutions/` renders `corpus: none`. An empty directory renders 0 docs. A populated corpus with no matching term renders `N docs, 0 hits`. The three texts differ.
 - Error path: an empty or whitespace query, a query over 2,000 characters and an unknown kind return their fixed errors. A 70-term query is cut to 64 terms with a note. Limit 0, `"x"` and 50 follow the rules above.
@@ -637,6 +637,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Files:**
 - Create: `src/lib/search-cli.ts`, `src/claude-code-search.ts`, `src/lib/main-module.ts`
 - Modify: `src/cli.ts` (dispatch, `HELP`, entry guard), `src/claude-code-validator.ts` (entry guard), `scripts/build-claude-code-plugin.ts` (bin map, search bundle), `package.json` (`engines.node`)
+- Modify: `.github/workflows/publish-claude-code-plugin.yaml` (required-artifact guard), with its pinning test `tests/unit/publish-claude-code-plugin-workflow.test.ts`
 - Modify: `docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md` (the "one bin" detail)
 - Test: `tests/unit/search-cli.test.ts`, `tests/unit/claude-code-search.test.ts`, `tests/unit/main-module.test.ts`; extend `tests/unit/search-adapters-parity.test.ts`; update `tests/unit/cli.test.ts`, `tests/unit/build-claude-code-plugin.test.ts`
 - Regenerate if triggered: `skills/ce-review/scripts/validate-review.mjs` (the validator surface lists `src/claude-code-validator.ts`)
@@ -647,7 +648,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Bin: the same flags minus config warnings, reading settings through the U4 reader. `disabled` and `config unreadable` follow the rules in Key Technical Decisions.
 - Build: `generatePluginFiles` takes a map of bin names to bundles, and each gets the shebang and mode `0o755`. The search bundle builds with an `onResolve` alias sending `jsonc-parser` to its ESM build. The validator bundle is unchanged byte for byte.
 - Node floor: `src/lib/main-module.ts` holds the realpath guard, and `src/cli.ts`, `src/claude-code-validator.ts` and the new bin use it in place of `import.meta.main`. To pick the floor, inventory the newest Node API used under `src/` (`import.meta.dirname` is 20.11) and set `engines.node` to that. Where a Node at the floor can be fetched into a temp prefix, run the built CLI help and the bin under it. Otherwise record that the floor rests on API documentation only.
-- Do not edit `.github/workflows/publish-claude-code-plugin.yaml` (see Needs Marcus). The build tests assert both bins exist and are executable.
+- Publish guard (approved by Marcus, 2026-10-29): add `claude-code/bin/systematic-search` to the required-artifact list of the `Guard built bundle` step and give it the same executable check as the validator bin. The step's other checks are unchanged. The build tests also assert both bins exist and are executable.
 
 **Patterns to follow:**
 - `src/ce-review-validator.ts` for the realpath guard. `tests/unit/claude-code-validator.test.ts` for the foreign-directory run. `tests/unit/pr-attachments-packaging.test.ts` for resolving `node`.
@@ -660,6 +661,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Happy path: the CLI prints the project-config strip warning on stderr (AE2). The bin does not read a project config that carries an endpoint.
 - Integration: build both bins with the production function and run `systematic-search` under `node` from a foreign temp directory with no `node_modules`, stdin closed, bounded by a timeout. Its output equals the CLI, v1, v2 and Pi text for one query (the full AE5).
 - Integration: a user JSONC config with comments and trailing commas is read by the bundled bin. An unparseable one still yields lexical results and exit 0.
+- Integration: the workflow test asserts the guard step lists `claude-code/bin/systematic-search` and checks it is executable, alongside every check it already makes for the validator bin and the other required artifacts.
 - Happy path: `generatePluginFiles` writes both bins with the shebang and mode `0o755`, and the validator bytes match the old output. An empty bundle throws.
 - Integration: the entry guard fires when the built CLI is invoked through a symlink and through a relative path, under Node and Bun. Importing the module runs nothing. A missing `argv[1]` runs nothing.
 - Edge case: no `import.meta.main` remains in `src/`. `package.json` `engines.node` equals the verified floor.
@@ -684,13 +686,16 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Modify: `docs/solutions/best-practices/lifecycle-validator-runs-only-in-ci-so-agent-prose-must-enforce-it-2026-10-26.md`
 - Test: `tests/unit/content-integrity.test.ts`, `tests/integration/claude-code.test.ts` (the profile assertions), the bootstrap snapshot under `tests/unit/__snapshots__/`
 - Regenerate: `registry/registry.jsonc`, the schema outputs, `tests/fixtures/pi-subagents-personas/**`, the Claude Code output style
+- Modify (deliberate regeneration of the researcher entry only): `tests/fixtures/config-corpus/*/expected.opencode.json`, checked by `tests/unit/config-corpus.test.ts`
 
 **Approach:**
-- Researcher: add a search-first step before the grep steps. Detection is a tool-list check for `systematic_search` on OpenCode and Pi, and `command -v systematic-search` on Claude Code. With search available it calls once with the problem description and `kind` solution. `corpus: none` returns No Matches. `N docs, 0 hits` runs one grep pass with synonyms. Hits skip Steps 2 to 4 and go straight to reading the top hits. `Supersedes:`, `Caution:` and `Skipped:` lines are copied literally. Step 3b is untouched. A `disabled` or error reply, or no tool, takes the existing path unchanged. Overlap mode drops the doc under comparison from the results and scores the five dimensions as today, never from the search score.
-- Gate: a content-integrity check imports the lifecycle constants and fails when the researcher prose lacks the hop cap, the path prefix or any of the three literal labels.
+- Researcher: add a search-first step before the grep steps. Detection is a tool-list check for `systematic_search` on OpenCode and Pi, and `command -v systematic-search` on Claude Code. With search available it calls once with the problem description and `kind` solution. `corpus: none` returns No Matches. `N docs, 0 hits` runs one grep pass with synonyms. Hits skip Steps 2 to 4 and go straight to reading the top hits. `Supersedes:` and `Caution:` lines are copied literally, including `Caution: successor unresolved` on a superseded doc whose successor does not resolve. Step 3b is untouched. A `disabled` or error reply, or no tool, takes the existing path unchanged. Overlap mode drops the doc under comparison from the results and scores the five dimensions as today, never from the search score.
+- Lifecycle rule change: Step 4 and the grep fallback follow the same rule as search. A superseded doc with an unresolvable successor is returned with `Caution: successor unresolved` instead of being omitted. The Step 4 result table row, the unresolvable-successor bullet, the `Skipped:` line in the Output Format and the "return its successor, or skip it" line in the DON'T list all change together, so the retired label appears nowhere.
+- Gate: a content-integrity check imports the lifecycle constants and fails when the researcher prose lacks the hop cap, the path prefix, the `Supersedes:` and `Caution:` labels or the unresolved-caution text, or still contains the retired `Skipped: superseded, successor unresolved` text.
+- The edit changes the bundled prompt text that `tests/fixtures/config-corpus/*/expected.opencode.json` serialise (the corpus runs against the real `agents/`). Regenerate the `learnings-researcher` entry in each file deliberately, as that corpus's README requires, and confirm nothing else in them changed.
 - Profiles list `systematic_search` (OpenCode, v2, Pi) and the `systematic-search` command (Claude Code). The Claude Code profile still says there is no `systematic_skill`.
 - `HARNESSES.md` records the new tool surface as host-free contract evidence, with no real-host claim. `ARCHITECTURE.md` gains the search module map and invariants (read from disk every call, config protected as a whole, no `Math.log`). `STRUCTURE.md` says where search code lives.
-- Update the lifecycle-validator learning: the search tool resolves the lifecycle in code, the researcher prose is the fallback, and the drift check pins both.
+- Update the lifecycle-validator learning: the search tool resolves the lifecycle in code, the researcher prose is the fallback, an unresolved successor now keeps the doc with a caution, and the drift check pins both.
 
 **Checkpoint B (lexical cut).** Before U8 starts, all of these hold with no semantic code present: typecheck, `typecheck:scripts`, `typecheck:all`, lint, the full test run, build, `bun scripts/content-integrity.ts`, `bun run surfaces:affected --run`, then `bun run surfaces:drift`. Record the per-split found counts for lexical search beside the grep baseline in the PR description. If any gate fails, fix it before moving on.
 
@@ -699,7 +704,8 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Test scenarios:**
 - Happy path: the gate passes on the real researcher prose.
-- Error path: the gate fails on prose with the `Skipped:` label removed, and on a hop cap that disagrees with the constant (synthetic fixtures).
+- Error path: the gate fails on prose missing `Caution: successor unresolved`, on prose that still carries the `Skipped:` text, and on a hop cap that disagrees with the constant (synthetic fixtures).
+- Integration: `tests/unit/config-corpus.test.ts` passes after the deliberate regeneration, and the fixture diff touches only the researcher prompt string.
 - Happy path: the prose names `systematic_search`, `command -v systematic-search`, `corpus: none` and the one-grep-pass fallback. The Step 3b block is byte-identical to before.
 - Integration: the Claude Code integration test asserts the profile names the bin and still asserts no `systematic_skill`. The bootstrap snapshot carries the new tool rows on each harness.
 - Integration: the generated surfaces (registry, schema, Pi persona fixtures) match their sources after regeneration.
@@ -870,7 +876,8 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 | An API key or endpoint leaks through errors, config output or the cache | Fixed reason strings only, `api_key_env` is a name not a value, `base_url` prints as an origin, and a canary test asserts absence from output, stderr and cache files. |
 | Pi delegates gain a tool that reads project files | The tool is read-only, scoped to `ctx.cwd`, skips symlinks, and is the only parent tool passed. A persona with an explicit `tools:` list must opt in. |
 | The `engines.node` bump reads as breaking | The floor already held in practice (`import.meta.dirname`). The release notes say so, and the commit stays `feat`. Marcus can overrule. |
-| The new bin is not in the publish workflow's artifact guard | Flagged under Needs Marcus. Build tests assert the bin until the workflow is approved for edit. |
+| The new bin is built but never checked by the publish workflow | U6 adds it to the guard step and to the test that pins that step. |
+| The researcher edit changes pinned prompt text in the config corpus | U7 regenerates only the researcher entry in each expected file and confirms the diff is limited to it. |
 | Semantic-only hits add noise when lexical hits are few | R18 measures it. A cosine floor is the follow-up if the data shows noise. |
 | An unreachable but blackholed endpoint costs `timeout_ms` per call | The timeout is user-tunable and the failure note says why. A negative cache is out of scope and documented. |
 | The 16 KB cap hides hits | Default 8 hits fit well inside the cap, and the marker is explicit when the cap trims. |
