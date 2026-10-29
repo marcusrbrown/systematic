@@ -596,13 +596,7 @@ function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): PlannedCommand {
   }
 }
 
-/**
- * Collect discovered (non-bundled) user/project skills as command entries.
- * Never throws: `discoverSkills` is defect-swallowing by contract,
- * and any unexpected error reading/parsing an individual skill degrades to
- * skipping that skill rather than aborting emission (hook-defect-swallow
- * learning — config hook code must not throw).
- */
+/** The `agent`, `model` and `subtask` a discovered skill declares, omitting absent ones. */
 function declaredRoutingOf(skill: DiscoveredSkill): DeclaredRouting {
   const { agent, model, subtask } = skill.frontmatter
   return {
@@ -612,6 +606,13 @@ function declaredRoutingOf(skill: DiscoveredSkill): DeclaredRouting {
   }
 }
 
+/**
+ * Collect discovered (non-bundled) user/project skills as command entries.
+ * Never throws: `discoverSkills` is defect-swallowing by contract,
+ * and any unexpected error reading/parsing an individual skill degrades to
+ * skipping that skill rather than aborting emission (hook-defect-swallow
+ * learning — config hook code must not throw).
+ */
 function collectDiscoveredSkillsAsCommands(
   startDir: string,
   homeDir: string,
