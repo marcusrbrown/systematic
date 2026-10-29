@@ -1858,6 +1858,148 @@ model: gpt-4
         expect(topLevelSkill(config)).toEqual({ 'git-worktree': 'deny' })
       })
 
+      test('a hand-written bare allow that beats a category list is not mirrored over an explicit prefixed deny', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          categories: { review: { skills: ['skill-a'] } },
+          agents: {
+            'security-reviewer': {
+              permission: {
+                skill: { 'systematic:skill-a': 'deny', 'skill-a': 'allow' },
+              },
+            },
+          },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'security-reviewer')).toEqual([
+          ['*', 'deny'],
+          ['systematic:skill-a', 'deny'],
+          ['skill-a', 'allow'],
+        ])
+      })
+
+      test('an explicit prefixed deny set before the list is not mirrored over', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          categories: {
+            review: { permission: { skill: { 'systematic:skill-a': 'deny' } } },
+          },
+          agents: { 'security-reviewer': { skills: ['skill-a'] } },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'security-reviewer')).toEqual([
+          ['systematic:skill-a', 'deny'],
+          ['*', 'deny'],
+          ['skill-a', 'allow'],
+        ])
+      })
+
+      test('a list allow followed by a hand-written prefixed deny keeps the deny', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          categories: { review: { skills: ['skill-a'] } },
+          agents: {
+            'security-reviewer': {
+              permission: { skill: { 'systematic:skill-a': 'deny' } },
+            },
+          },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'security-reviewer')).toEqual([
+          ['*', 'deny'],
+          ['skill-a', 'allow'],
+          ['systematic:skill-a', 'deny'],
+        ])
+      })
+
+      test('a hand-written prefixed allow is kept as written and not duplicated', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({
+          categories: { review: { skills: ['skill-a'] } },
+          agents: {
+            'security-reviewer': {
+              permission: { skill: { 'systematic:skill-a': 'allow' } },
+            },
+          },
+        })
+
+        const config: Config = {}
+        await newHandler()(config)
+
+        expect(skillRulesOf(config, 'security-reviewer')).toEqual([
+          ['*', 'deny'],
+          ['skill-a', 'allow'],
+          ['systematic:skill-a', 'allow'],
+        ])
+      })
+
+      test('replacing permission.skill between runs does not let re-enabling delete the new deny', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+        const handler = newHandler()
+
+        const config: Config = {}
+        await handler(config)
+        ;(config as { permission: Record<string, unknown> }).permission.skill =
+          {
+            'git-worktree': 'deny',
+          }
+
+        writeCustomSystematicConfig({ disabled_skills: [] })
+        await handler(config)
+
+        expect(topLevelSkill(config)).toEqual({ 'git-worktree': 'deny' })
+      })
+
+      test('replacing the whole permission between runs does not let re-enabling delete the new deny', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+        const handler = newHandler()
+
+        const config: Config = {}
+        await handler(config)
+        ;(config as { permission: unknown }).permission = {
+          skill: { 'git-worktree': 'deny', 'systematic:git-worktree': 'deny' },
+        }
+
+        writeCustomSystematicConfig({ disabled_skills: [] })
+        await handler(config)
+
+        expect(topLevelSkill(config)).toEqual({
+          'git-worktree': 'deny',
+          'systematic:git-worktree': 'deny',
+        })
+      })
+
+      test('after a replacement, a skill that is still disabled does not get a second copy of its denies', async () => {
+        seedReviewers()
+        writeCustomSystematicConfig({ disabled_skills: ['git-worktree'] })
+        const handler = newHandler()
+
+        const config: Config = {}
+        await handler(config)
+        ;(config as { permission: Record<string, unknown> }).permission.skill =
+          {
+            'my-skill': 'allow',
+          }
+        await handler(config)
+
+        expect(Object.entries(topLevelSkill(config) as object)).toEqual([
+          ['my-skill', 'allow'],
+          ['git-worktree', 'deny'],
+          ['systematic:git-worktree', 'deny'],
+        ])
+      })
+
       test('a managed skills list that names a disabled skill is rejected', async () => {
         createSkill(path.join(bundledDir, 'skills'), 'git-worktree', 'Worktree')
         createCategorizedAgent('review', 'correctness-reviewer', {

@@ -356,6 +356,47 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
     )
 
     test(
+      'an explicit systematic: deny is kept when a hand-written bare allow wins over a category skills list',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({
+            categories: { review: { skills: ['git-worktree'] } },
+            agents: {
+              'correctness-reviewer': {
+                mode: 'primary',
+                permission: {
+                  skill: {
+                    'systematic:git-worktree': 'deny',
+                    'git-worktree': 'allow',
+                  },
+                },
+              },
+            },
+          }),
+        )
+
+        const viaSystematic = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_skill',
+          args: { name: 'git-worktree' },
+          agent: 'correctness-reviewer',
+        })
+        const viaNative = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'skill',
+          args: { name: 'git-worktree' },
+          agent: 'correctness-reviewer',
+        })
+
+        // The user's prefixed deny still refuses systematic_skill ...
+        expect(viaSystematic).not.toContain('<skill_content')
+        expect(viaSystematic.toLowerCase()).toContain('rule')
+        // ... and the bare allow still lets the native tool load the skill.
+        expect(viaNative).toContain('<skill_content name="git-worktree">')
+      },
+      TIMEOUT_MS * 2,
+    )
+    test(
       'the native skill tool refuses a skill in disabled_skills, and still loads an enabled one',
       async () => {
         const { pluginUrl } = extractPackagedPlugin(fixture)

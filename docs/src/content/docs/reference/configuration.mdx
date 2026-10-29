@@ -97,6 +97,8 @@ Systematic writes both forms where it writes the rules itself:
 
 A managed `skills` list that names a disabled skill is rejected when the config loads, with an error that names the skill.
 
+The `systematic:` allow that Systematic adds for a `skills` list is only a default. A rule you write yourself for the `systematic:` name always wins: if you wrote one, anywhere in your overlays, Systematic does not add its own for that skill. It also adds none when a rule you wrote for the bare name is the one that takes effect.
+
 Rules you write yourself in `permission.skill` are not copied to the other name form. To block a skill completely with a hand-written rule, write both forms:
 
 ```json

@@ -43,6 +43,14 @@ export interface PermissionRuleTriple {
   permission: string
   pattern: string
   setting: PermissionSetting
+  /**
+   * Set only when the rule that wins for this pattern was written by a managed
+   * `skills` list, not by a permission the user wrote. An adapter can then tell
+   * a generated allow from a hand-written one. Only the OpenCode v1 adapter
+   * reads it, because only v1 has two skill tools that ask under two names;
+   * the other adapters ignore it.
+   */
+  fromSkillsList?: true
 }
 
 /**
@@ -52,18 +60,10 @@ export interface PermissionRuleTriple {
  *   `config.permission` (from its frontmatter) applies untouched.
  * - `managed`: overlays control permissions. `rules` replaces
  *   `config.permission` entirely; an empty list means "no permission".
- *   `skillsListNames` is the skill names a managed `skills` list named, so an
- *   adapter can tell the allows that list wrote from allows a user wrote by
- *   hand. Only the OpenCode v1 adapter reads it, because only v1 has two
- *   skill tools that ask under two names; `rules` itself is unchanged.
  */
 export type PlannedAgentPermission =
   | { kind: 'unmanaged' }
-  | {
-      kind: 'managed'
-      rules: readonly PermissionRuleTriple[]
-      skillsListNames?: readonly string[]
-    }
+  | { kind: 'managed'; rules: readonly PermissionRuleTriple[] }
 
 export interface PlannedAgent {
   /** Emitted agent key (the bare agent name, category dropped). */
@@ -337,29 +337,9 @@ function applyAgentOverlays(
     name: agentInfo.name,
     config: result,
     permission: hasPermissionOverlay
-      ? {
-          kind: 'managed',
-          rules: permissionRulesToTriples(permissionRules),
-          skillsListNames: skillsListNames([
-            categoryOverlay?.value,
-            exactOverlay?.value,
-          ]),
-        }
+      ? { kind: 'managed', rules: permissionRulesToTriples(permissionRules) }
       : { kind: 'unmanaged' },
   }
-}
-
-function skillsListNames(
-  overlays: readonly (Record<string, unknown> | undefined)[],
-): string[] {
-  const names = new Set<string>()
-  for (const overlay of overlays) {
-    if (!Array.isArray(overlay?.skills)) continue
-    for (const skill of overlay.skills) {
-      if (typeof skill === 'string') names.add(skill)
-    }
-  }
-  return [...names]
 }
 
 /**
@@ -441,10 +421,13 @@ function applyOverlayObjectFields(
  * ordered list the plan exposes: permissions in first-appearance order, each
  * permission's rules in last-set order.
  */
-type PermissionRuleAccumulator = Map<string, Map<string, PermissionSetting>>
+type PermissionRuleAccumulator = Map<
+  string,
+  Map<string, { setting: PermissionSetting; fromSkillsList: boolean }>
+>
 
 function createPermissionRuleAccumulator(): PermissionRuleAccumulator {
-  return new Map<string, Map<string, PermissionSetting>>()
+  return new Map()
 }
 
 function addPermissionRules(
@@ -469,10 +452,10 @@ function addManagedSkillRules(
   accumulator: PermissionRuleAccumulator,
   skills: unknown[],
 ): void {
-  setPermissionRule(accumulator, 'skill', '*', 'deny')
+  setPermissionRule(accumulator, 'skill', '*', 'deny', true)
   for (const skill of skills) {
     if (typeof skill === 'string') {
-      setPermissionRule(accumulator, 'skill', skill, 'allow')
+      setPermissionRule(accumulator, 'skill', skill, 'allow', true)
     }
   }
 }
@@ -482,8 +465,13 @@ function permissionRulesToTriples(
 ): PermissionRuleTriple[] {
   const triples: PermissionRuleTriple[] = []
   for (const [permission, rules] of accumulator) {
-    for (const [pattern, setting] of rules) {
-      triples.push({ permission, pattern, setting })
+    for (const [pattern, { setting, fromSkillsList }] of rules) {
+      triples.push({
+        permission,
+        pattern,
+        setting,
+        ...(fromSkillsList && { fromSkillsList: true as const }),
+      })
     }
   }
   return triples
@@ -494,13 +482,16 @@ function setPermissionRule(
   tool: string,
   pattern: string,
   setting: PermissionSetting,
+  fromSkillsList = false,
 ): void {
-  const rules = accumulator.get(tool) ?? new Map<string, PermissionSetting>()
+  const rules = accumulator.get(tool) ?? new Map()
   // OpenCode permission evaluation uses the last matching rule. Map insertion
   // order is therefore intentional here: delete before set moves same-pattern
   // overrides to the end so stronger exact overlays beat weaker category rules.
+  // The provenance is replaced with the rule, so a hand-written rule that
+  // overrides a list's rule for the same pattern is no longer marked.
   if (rules.has(pattern)) rules.delete(pattern)
-  rules.set(pattern, setting)
+  rules.set(pattern, { setting, fromSkillsList })
   accumulator.set(tool, rules)
 }
 

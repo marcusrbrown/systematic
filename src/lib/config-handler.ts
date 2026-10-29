@@ -123,17 +123,23 @@ export function readEmittedAgentPermission(
  *
  * v1 has two skill tools that ask permission under two names: the native
  * `skill` tool with the bare name, `systematic_skill` with `systematic:<name>`.
- * A rule reaches only the tool whose form it uses. `skillsListNames` is the
- * skills a managed `skills` list named; each such bare allow is followed by
- * the same allow for the prefixed form, so the list reaches both tools. A skill
- * rule the user wrote by hand is never mirrored: copying it could undo an
- * explicit rule for the other name.
+ * A rule reaches only the tool whose form it uses. A bare allow whose winning
+ * rule came from a managed `skills` list (`fromSkillsList`) is followed by the
+ * same allow for the prefixed form, so the list reaches both tools. A rule the
+ * user wrote by hand is never mirrored, and a mirror never replaces a deny or
+ * ask the user wrote for the prefixed name, wherever it sits in the list:
+ * explicit rules beat generated ones. A hand-written prefixed allow agrees with
+ * the mirror, so the mirror still moves it after the list's `*` deny.
  */
 export function foldPermissionRulesToV1Map(
   rules: readonly PermissionRuleTriple[],
-  skillsListNames: readonly string[] = [],
 ): Record<string, Record<string, PermissionSetting>> | undefined {
-  const mirrored = new Set(skillsListNames)
+  const explicitSkillSettings = new Map<string, PermissionSetting>()
+  for (const rule of rules) {
+    if (rule.permission === 'skill' && !rule.fromSkillsList) {
+      explicitSkillSettings.set(rule.pattern, rule.setting)
+    }
+  }
   const byPermission = new Map<string, Map<string, PermissionSetting>>()
   const setRule = (
     permission: string,
@@ -146,15 +152,15 @@ export function foldPermissionRulesToV1Map(
     patterns.set(pattern, setting)
     byPermission.set(permission, patterns)
   }
-  for (const { permission, pattern, setting } of rules) {
+  for (const { permission, pattern, setting, fromSkillsList } of rules) {
     setRule(permission, pattern, setting)
-    if (
-      permission === 'skill' &&
-      setting === 'allow' &&
-      mirrored.has(pattern)
-    ) {
-      const prefixed = formatSkillCommandName(pattern)
-      if (prefixed !== pattern) setRule(permission, prefixed, setting)
+    if (permission !== 'skill' || setting !== 'allow' || !fromSkillsList) {
+      continue
+    }
+    const prefixed = formatSkillCommandName(pattern)
+    const explicit = explicitSkillSettings.get(prefixed)
+    if (prefixed !== pattern && (explicit ?? 'allow') === 'allow') {
+      setRule(permission, prefixed, setting)
     }
   }
 
@@ -174,10 +180,7 @@ export function toV1AgentConfig(planned: PlannedAgent): AgentConfig {
   const result: AgentConfig = { ...planned.config }
   if (planned.permission.kind === 'unmanaged') return result
 
-  const permission = foldPermissionRulesToV1Map(
-    planned.permission.rules,
-    planned.permission.skillsListNames,
-  )
+  const permission = foldPermissionRulesToV1Map(planned.permission.rules)
   if (permission) {
     result.permission = permission as AgentConfig['permission']
   } else {
@@ -276,11 +279,20 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
 }
 
 /**
- * The deny rules this hook added to a config object, by config object. A deny
- * on a bare name looks the same as one the user wrote, so the hook remembers
- * which it added and removes only those when a skill is enabled again.
+ * The deny rules this hook added to a config object, and the rule maps it wrote
+ * them into. A deny on a bare name looks the same as one the user wrote, so the
+ * hook remembers which it added and removes only those when a skill is enabled
+ * again. The record is trusted only while `permission` and `permission.skill`
+ * are still the same objects: if either was replaced, the user's map is not
+ * ours and nothing in it is removed.
  */
-const ownedSkillDenies = new WeakMap<object, string[]>()
+interface OwnedSkillDenies {
+  permission: RuleMap
+  skill: RuleMap
+  patterns: readonly string[]
+}
+
+const ownedSkillDenies = new WeakMap<object, OwnedSkillDenies>()
 
 type RuleMap = Record<string, unknown>
 
@@ -309,17 +321,28 @@ function skillDenyPatterns(skills: readonly string[]): string[] {
  * Re-running refreshes the denies: the ones added last time are removed first,
  * so a skill that is enabled again loses its denies and a repeat run changes
  * nothing. A rule the user already wrote for the same name is left alone, and
- * is not removed later. A config with nothing disabled is not touched.
+ * is not removed later. If the user replaced `permission` or `permission.skill`
+ * since the last run, nothing is removed from the new map. A config with
+ * nothing disabled is not touched.
  */
 function denyDisabledSkills(
   config: Config,
   disabledSkills: readonly string[],
 ): void {
-  const previous = ownedSkillDenies.get(config) ?? []
-  const wanted = skillDenyPatterns(disabledSkills)
-  if (previous.length === 0 && wanted.length === 0) return
-
   const host = config as RuleMap
+  const owned = ownedSkillDenies.get(config)
+  const current = isRecord(host.permission) ? host.permission : undefined
+  const stillOurs =
+    owned !== undefined &&
+    owned.permission === current &&
+    owned.skill === current.skill
+  const previous = stillOurs ? owned.patterns : []
+  const wanted = skillDenyPatterns(disabledSkills)
+  if (previous.length === 0 && wanted.length === 0) {
+    ownedSkillDenies.delete(config)
+    return
+  }
+
   const permission = readPermissionMap(host)
   const skill = readSkillRuleMap(permission)
 
@@ -328,12 +351,17 @@ function denyDisabledSkills(
   }
   const added = wanted.filter((pattern) => !Object.hasOwn(skill, pattern))
   for (const pattern of added) skill[pattern] = 'deny'
-  ownedSkillDenies.set(config, added)
 
   if (Object.keys(skill).length > 0) permission.skill = skill
   else delete permission.skill
   if (Object.keys(permission).length > 0) host.permission = permission
   else delete host.permission
+
+  if (added.length > 0) {
+    ownedSkillDenies.set(config, { permission, skill, patterns: added })
+  } else {
+    ownedSkillDenies.delete(config)
+  }
 }
 
 // Config.skills exists in v2 SDK types but not v1 — bridge until import upgrade
