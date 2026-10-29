@@ -685,9 +685,7 @@
       "description": "Systematic plugin — registers skills, agents, commands, and bootstrap prompt",
       "files": [],
       "opencode": {
-        "plugins": {
-          "@fro.bot/systematic": {}
-        }
+        "plugin": ["@fro.bot/systematic@latest"]
       }
     }
   ]

@@ -391,7 +391,7 @@ describe('generateRegistryContent — curated preservation', () => {
         type: 'ocx:plugin',
         description: 'A plugin.',
         files: [],
-        opencode: { plugins: { '@x/y': {} } },
+        opencode: { plugin: ['@x/y'] },
       },
     ])
 
@@ -407,7 +407,7 @@ describe('generateRegistryContent — curated preservation', () => {
     const plugin = output.components.find((c) => c.name === 'plugin')
     expect(plugin).toBeDefined()
     expect(plugin?.type).toBe('plugin')
-    expect(plugin?.opencode).toEqual({ plugins: { '@x/y': {} } })
+    expect(plugin?.opencode).toEqual({ plugin: ['@x/y'] })
   })
 
   test('auto-populates skills bundle dependencies from generated skills', () => {
@@ -598,5 +598,27 @@ describe('real registry: ce:review validator inventory', () => {
     )
     expect(committed).not.toMatch(/from\s+['"]\.{1,2}\//)
     expect(committed.startsWith('#!')).toBe(false)
+  })
+})
+
+describe('real registry: plugin component', () => {
+  test("declares its opencode block as a 'plugin' string array (OCX 2.x shape)", () => {
+    const parsed: unknown = parseJsonc(
+      fs.readFileSync(path.join(REPO_ROOT, 'registry/registry.jsonc'), 'utf8'),
+    )
+    const components = (parsed as { components: ComponentEntry[] }).components
+    const plugin = components.find((c) => c.name === 'plugin')
+
+    expect(plugin).toBeDefined()
+    const block = plugin?.opencode as Record<string, unknown> | undefined
+    expect(block).toBeDefined()
+    // OCX 2.x rejects any other key (e.g. the old `plugins` map) at install time.
+    expect(Object.keys(block ?? {})).toEqual(['plugin'])
+    const entries = block?.plugin
+    expect(Array.isArray(entries)).toBe(true)
+    expect(entries).toContain('@fro.bot/systematic@latest')
+    for (const entry of entries as unknown[]) {
+      expect(typeof entry).toBe('string')
+    }
   })
 })
