@@ -4,6 +4,27 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.27.2](https://github.com/marcusrbrown/systematic/compare/v3.27.1...v3.27.2) (2026-10-29)
+
+### Bug Fixes
+
+* pass valid routing fields from discovered skills to OpenCode v1 commands ([#1254](https://github.com/marcusrbrown/systematic/issues/1254)) ([af08f14](https://github.com/marcusrbrown/systematic/commit/af08f1499ac865867ca8d5adc4079c78c37e57a8))
+
+### Documentation
+
+* add a security policy ([#1250](https://github.com/marcusrbrown/systematic/issues/1250)) ([b8d6c51](https://github.com/marcusrbrown/systematic/commit/b8d6c513dcb8756de0624111aa90045666fe7677))
+* **solutions:** record the OCX registry type gap and v1 skill permission names ([#1249](https://github.com/marcusrbrown/systematic/issues/1249)) ([d5e6c64](https://github.com/marcusrbrown/systematic/commit/d5e6c646f48803776a4deb418dc21d981fbd1e40))
+
+### Continuous Integration
+
+* keep only the preview plugins in .releaserc.yaml ([#1252](https://github.com/marcusrbrown/systematic/issues/1252)) ([2bb51b8](https://github.com/marcusrbrown/systematic/commit/2bb51b80c9e7eb061835eca4d6901482bee3a8de))
+* protect v* release tags with rulesets ([#1251](https://github.com/marcusrbrown/systematic/issues/1251)) ([7d92f0d](https://github.com/marcusrbrown/systematic/commit/7d92f0ddcc1cc8c93b7a78cd5124e605e46e6f20))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.129.0 ([#1248](https://github.com/marcusrbrown/systematic/issues/1248)) ([8358a16](https://github.com/marcusrbrown/systematic/commit/8358a1633bda0fc50fddfa726706bacb5e14d8c5))
+* **dev:** update dependency agent-browser to v0.39.3 ([#1255](https://github.com/marcusrbrown/systematic/issues/1255)) ([639eaec](https://github.com/marcusrbrown/systematic/commit/639eaecd94f743568f4fe97d4bf0ff8d8fe89249))
+
 ## [3.27.1](https://github.com/marcusrbrown/systematic/compare/v3.27.0...v3.27.1) (2026-10-29)
 
 ### Bug Fixes
