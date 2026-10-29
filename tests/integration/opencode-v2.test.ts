@@ -13,6 +13,7 @@ import path from 'node:path'
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import { findAgentsInDir } from '../../src/lib/agents.js'
 import { createConfigHandler } from '../../src/lib/config-handler.js'
+import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
   buildIsolatedOpencodeEnv,
@@ -53,8 +54,10 @@ if (!isOpencodeAvailable(HOST)) {
 const REPLY_TEXT = 'Systematic v2 scaffold reply'
 
 /**
- * A scripted OpenAI-compatible model that always answers with plain text: the
- * scaffold registers no tools, so no scenario here needs a tool call.
+ * A scripted OpenAI-compatible model that always answers with plain text, for
+ * the scenarios that need no tool call. The plugin registers `systematic_skill`
+ * and `systematic_search`; the scenarios that call them use
+ * `startToolModelServer`.
  */
 function startTextModelServer(text: string): ScriptedModelServer {
   const server = Bun.serve({
@@ -559,6 +562,48 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           )
           expect(bare).toContain('Base directory for this skill:')
           expect(prefixed).toBe(bare)
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'systematic_search is offered to the model, finds a document under the project, and limit 0 and 21 reach the core',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        fs.mkdirSync(path.join(fixture.projectDir, 'docs/solutions'), {
+          recursive: true,
+        })
+        fs.writeFileSync(
+          path.join(fixture.projectDir, 'docs/solutions/zebra-flake.md'),
+          '---\ntitle: Zebra crossing flake\nsymptoms:\n  - zebra flake on retry\n---\n\nThe zebra flake appears when retries overlap.\n',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const found = await callTool(host, toolModel, {
+            tool: 'systematic_search',
+            args: { query: 'zebra flake retry' },
+          })
+          const zero = await callTool(host, toolModel, {
+            tool: 'systematic_search',
+            args: { query: 'zebra flake retry', limit: 0 },
+          })
+          const tooMany = await callTool(host, toolModel, {
+            tool: 'systematic_search',
+            args: { query: 'zebra flake retry', limit: 21 },
+          })
+
+          expect([...toolModel.toolNames]).toContain('systematic_search')
+          expect(found).toContain('docs/solutions/zebra-flake.md')
+          expect(found).toContain('Zebra crossing flake')
+          // Recorded behavior: the v2 host passes an out-of-range integer
+          // through, so the core's fixed error is what the model sees.
+          expect(zero).toContain(SEARCH_ERRORS.limitInvalid)
+          expect(tooMany).toContain(SEARCH_ERRORS.limitInvalid)
         } finally {
           toolModel.stop()
           await host.server.stop()

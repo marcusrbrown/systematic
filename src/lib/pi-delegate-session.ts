@@ -3,6 +3,7 @@ import type {
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
   ResourceLoader,
+  ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import {
   createAgentSession,
@@ -68,6 +69,8 @@ export function buildDelegateAgentSessionOptions(options: {
   /** Omitted (not `undefined`-valued) when unset, so the child inherits Pi's default thinking level instead of an explicit `undefined` overriding it. */
   thinkingLevel?: CreateAgentSessionOptions['thinkingLevel']
   allowedToolNames: string[]
+  /** Definitions the child may call. A definition is active only when its name is also in `allowedToolNames`. */
+  customTools: ToolDefinition[]
   resourceLoader: ResourceLoader
   sessionManager: ReturnType<typeof SessionManager.inMemory>
 }): CreateAgentSessionOptions {
@@ -77,6 +80,7 @@ export function buildDelegateAgentSessionOptions(options: {
     model,
     thinkingLevel,
     allowedToolNames,
+    customTools,
     resourceLoader,
     sessionManager,
   } = options
@@ -86,7 +90,7 @@ export function buildDelegateAgentSessionOptions(options: {
     model,
     ...(thinkingLevel !== undefined && { thinkingLevel }),
     tools: allowedToolNames,
-    customTools: [],
+    customTools,
     resourceLoader,
     sessionManager,
   }
@@ -102,11 +106,17 @@ export function createDelegateSessionWith(
       cwd,
       systemPromptOverride,
       allowedToolNames,
+      customTools = [],
     } = options
 
     if (allowedToolNames.includes(DELEGATE_TOOL_NAME)) {
       throw new Error(
         `Refusing to construct delegate child session: allowedToolNames included ${DELEGATE_TOOL_NAME} (fail-closed re-entry guard).`,
+      )
+    }
+    if (customTools.some((tool) => tool.name === DELEGATE_TOOL_NAME)) {
+      throw new Error(
+        `Refusing to construct delegate child session: customTools included ${DELEGATE_TOOL_NAME} (fail-closed re-entry guard).`,
       )
     }
 
@@ -131,6 +141,7 @@ export function createDelegateSessionWith(
         model,
         thinkingLevel,
         allowedToolNames,
+        customTools,
         resourceLoader,
         sessionManager,
       }),

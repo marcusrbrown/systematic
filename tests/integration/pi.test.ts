@@ -2,7 +2,7 @@
  * Pi coding-agent subprocess integration harness (Unit 7 of the Pi harness plan).
  *
  * Spawns the REAL `@earendil-works/pi-coding-agent` CLI (exact devDependency,
- * v0.80.6) in `--mode rpc`, loads Systematic's PACKAGED Pi extension from an
+ * v1.4.0) in `--mode rpc`, loads Systematic's PACKAGED Pi extension from an
  * `npm pack` tarball (not src/), drives it over JSONL/RPC with a MOCKED
  * OpenAI-completions-compatible local HTTP model, and asserts the parity
  * capabilities end-to-end: extension load, skill discovery, systematic_skill
@@ -15,8 +15,8 @@
  * plan's original `PI_AVAILABLE` skip-guard premise, which predates Pi
  * becoming an exact devDependency.
  *
- * Env var names verified against installed source (v0.80.6):
- *   node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398
+ * Env var names verified against installed source (v1.4.0):
+ *   node_modules/@earendil-works/pi-coding-agent/dist/config.js:476-477
  *     ENV_AGENT_DIR    = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`    = "PI_CODING_AGENT_DIR"
  *     ENV_SESSION_DIR  = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR` = "PI_CODING_AGENT_SESSION_DIR"
  *   (APP_NAME defaults to "pi" — package.json has no piConfig.name override.)
@@ -830,7 +830,7 @@ describe('Pi subprocess integration', () => {
       await client.waitFor((msg) => msg.type === 'agent_settled')
 
       // The system prompt itself isn't exposed via a dedicated RPC command in
-      // v0.80.6 (verified: rpc-mode.js has no such case); the mock model
+      // v1.4.0 (verified: rpc-mode.js has no such case); the mock model
       // request payload IS the ground truth for what was actually sent to
       // the "provider", so assert the bootstrap marker there instead.
       expect(mockModel.requests.length).toBeGreaterThan(0)

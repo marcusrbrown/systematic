@@ -113,14 +113,15 @@ function findToolByName(tools: ToolDefinition[], name: string): ToolDefinition {
 }
 
 describe('src/pi.ts systematic_skill tool registration', () => {
-  test('registers exactly two tools: systematic_skill and systematic_delegate', async () => {
+  test('registers exactly three tools: systematic_skill, systematic_delegate and systematic_search', async () => {
     const api = createFakeExtensionApi()
 
     await piExtension(api)
 
-    expect(api.registeredTools).toHaveLength(2)
+    expect(api.registeredTools).toHaveLength(3)
     expect(api.registeredTools.map((t) => t.name).sort()).toEqual([
       'systematic_delegate',
+      'systematic_search',
       'systematic_skill',
     ])
     const registered = api.registeredTools.find(
@@ -377,7 +378,7 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
     )
     expect(api.handlers.before_agent_start).toBeDefined()
-    expect(api.registeredTools).toHaveLength(2)
+    expect(api.registeredTools).toHaveLength(3)
 
     readFileSyncSpy.mockRestore()
     stderrSpy.mockRestore()
@@ -399,9 +400,10 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       ).resolves.toBeUndefined()
 
       expect(api.handlers.before_agent_start).toBeDefined()
-      expect(api.registeredTools).toHaveLength(1)
+      expect(api.registeredTools).toHaveLength(2)
       expect(api.registeredTools.map((tool) => tool.name)).toEqual([
         'systematic_skill',
+        'systematic_search',
       ])
       expect(
         findToolByName(api.registeredTools, 'systematic_skill'),
@@ -1295,7 +1297,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     expect(disableWarnings(stderr)).toHaveLength(1)
   })
 
-  test('init still registers both tools and the bootstrap handler when warnings fire', async () => {
+  test('init still registers every tool and the bootstrap handler when warnings fire', async () => {
     const { api, stderr } = await initWithUserConfig({
       agents: { [CURATED_KEY]: { model: SECRET_MODEL } },
       disabled_agents: ['adversarial-reviewer'],
@@ -1304,6 +1306,7 @@ describe('src/pi.ts warnings for settings packaged personas cannot receive', () 
     expect(stderr.length).toBeGreaterThan(0)
     expect(api.registeredTools.map((tool) => tool.name).sort()).toEqual([
       'systematic_delegate',
+      'systematic_search',
       'systematic_skill',
     ])
     expect(typeof api.handlers.before_agent_start).toBe('function')

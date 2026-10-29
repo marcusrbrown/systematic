@@ -158,8 +158,8 @@ Skill discovery and resolution
   src/lib/skill-resolver.ts    — resolve bundled skills and build shared skill-tool output
 
 Pi adapter
-  src/lib/agent-resolver.ts        — flatten bundled agent personas into Pi's runtime catalog and resolve tool allowlists
-  src/lib/pi-delegate-session.ts   — construct isolated in-memory Pi delegate child sessions
+  src/lib/agent-resolver.ts        — flatten bundled agent personas into Pi's runtime catalog and resolve tool allowlists (read-only built-ins plus `systematic_search`)
+  src/lib/pi-delegate-session.ts   — construct isolated in-memory Pi delegate child sessions (parent-supplied `customTools` pass through; re-entry guarded)
   src/lib/pi-delegate-tool.ts      — create the bounded sequential `systematic_delegate` tool
   src/lib/pi-subagents-personas.ts — curate, screen, and generate Pi-subagents persona content
   src/lib/pi-subagents-export.ts   — manage transactional export, refresh, and cleanup of Pi personas
@@ -171,6 +171,7 @@ Durable-output search
   src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns
   src/lib/search-core.ts           — host-neutral search composition: validate, lexical lane, optional semantic stage, lifecycle resolver, render
   src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a reader that never touches project config (imports only zod, jsonc-parser and node builtins)
+  src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
 
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact

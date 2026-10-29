@@ -58,6 +58,26 @@ export const DEFAULT_LIMIT = 8
 export const MIN_LIMIT = 1
 export const MAX_LIMIT = 20
 export const MAX_QUERY_CHARS = 2000
+
+/**
+ * The tool text every host surface shows the model. `limit` is a plain integer
+ * in every host schema, so its range is stated here and nowhere else: the core
+ * owns the out-of-range error and a host never pre-empts it.
+ */
+export const SEARCH_TOOL_DESCRIPTION =
+  "Search this project's durable outputs (the docs/solutions learnings) by symptom, error text, module or topic. Returns ranked hits with path, title, snippet, tags and status. A superseded learning is replaced by its successor, and a stale one carries a caution. Read a hit's path for the full text. Use it before debugging a failure or planning work a past learning may already cover."
+export const SEARCH_ARG_DESCRIPTIONS = {
+  query: `What to look for: a symptom, error message, module or topic, in plain words. At most ${MAX_QUERY_CHARS} characters.`,
+  kind: 'Optional. The kind of durable output to search. Only "solution" (docs/solutions/) exists today, and it is the default.',
+  limit: `Optional. How many hits to return, an integer from ${MIN_LIMIT} to ${MAX_LIMIT}. Defaults to ${DEFAULT_LIMIT}.`,
+} as const
+
+/** One-line texts an adapter returns when it cannot reach the core. They carry no detail from the failure. */
+export const SEARCH_NOTICES = {
+  failed: 'Error: search failed.',
+  noProject:
+    'No project directory is available for this session, so there is nothing to search.',
+} as const
 /** The lexical lane returns about this many times the limit, because merges shrink the list. */
 export const OVERFETCH_FACTOR = 2
 

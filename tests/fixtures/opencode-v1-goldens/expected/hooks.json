@@ -6,5 +6,5 @@
     "experimental.chat.messages.transform",
     "experimental.chat.system.transform"
   ],
-  "toolKeys": ["systematic_skill"]
+  "toolKeys": ["systematic_skill", "systematic_search"]
 }

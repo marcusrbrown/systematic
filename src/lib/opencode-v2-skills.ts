@@ -48,10 +48,18 @@ export interface V2ToolContext {
   progress(update: Record<string, unknown>): Promise<void>
 }
 
+/** The JSON Schema shape of a tool's input: an object of described properties. */
+export type V2ToolInputSchema = {
+  type: 'object'
+  properties: Record<string, { type: string; description: string }>
+  required: readonly string[]
+  additionalProperties: false
+}
+
 export interface V2ToolDefinition {
   name: string
   description: string
-  input: SkillToolDescriptor['input']
+  input: V2ToolInputSchema
   options: { codemode: false }
   execute(
     input: unknown,

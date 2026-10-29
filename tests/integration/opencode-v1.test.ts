@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
+import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import {
   assertMixedVersionProbeEvents,
   assertOk,
@@ -424,6 +425,46 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
         )
       },
       TIMEOUT_MS * 2,
+    )
+
+    // A successful call proves the tool registered, so this leg does not
+    // assert the offered tool names (the helper returns only the result text).
+    // It is also the proof that the host's tool context carries `directory`,
+    // on the floor lane too: the adapter has no other directory to use, so the
+    // tool finds the document only when `context.directory` is the project.
+    test(
+      'systematic_search finds a document under the host project, and limit 0 and 21 reach the core',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.mkdirSync(path.join(fixture.projectDir, 'docs/solutions'), {
+          recursive: true,
+        })
+        fs.writeFileSync(
+          path.join(fixture.projectDir, 'docs/solutions/zebra-flake.md'),
+          '---\ntitle: Zebra crossing flake\nsymptoms:\n  - zebra flake on retry\n---\n\nThe zebra flake appears when retries overlap.\n',
+        )
+
+        const found = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_search',
+          args: { query: 'zebra flake retry' },
+        })
+        const zero = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_search',
+          args: { query: 'zebra flake retry', limit: 0 },
+        })
+        const tooMany = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_search',
+          args: { query: 'zebra flake retry', limit: 21 },
+        })
+
+        expect(found).toContain('docs/solutions/zebra-flake.md')
+        expect(found).toContain('Zebra crossing flake')
+        // Recorded behavior: the v1 host passes an out-of-range integer
+        // through, so the core's fixed error is what the model sees.
+        expect(zero).toContain(SEARCH_ERRORS.limitInvalid)
+        expect(tooMany).toContain(SEARCH_ERRORS.limitInvalid)
+      },
+      TIMEOUT_MS * 3,
     )
   },
 )

@@ -22,6 +22,7 @@ import {
   CURATED_PERSONAS,
   parseSourceCategoryAndKey,
 } from './lib/pi-subagents-personas.js'
+import { createPiSearchTool, isSearchEnabled } from './lib/search-tool.js'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
@@ -235,6 +236,13 @@ export default async function systematicPiExtension(
     },
   })
 
+  // One definition serves the parent session and every delegate. Absent when
+  // `search.enabled` is false, which leaves a delegate's allowlist entry inert.
+  const searchTool = isSearchEnabled(piConfig.search)
+    ? createPiSearchTool({ settings: piConfig.search, Type })
+    : undefined
+  if (searchTool !== undefined) pi.registerTool(searchTool)
+
   try {
     // Filtered after building so `buildAgentCatalog` keeps checking the full
     // inventory for duplicate names; one filter covers the tool's description,
@@ -256,6 +264,7 @@ export default async function systematicPiExtension(
         overlays: piRoutingOverlays,
         piSubagentsOverlays: piConfig.pi_subagents,
         activeProfile: piConfigMetadata.activeProfile,
+        ...(searchTool !== undefined && { customTools: [searchTool] }),
       }),
     )
   } catch (error) {

@@ -40,7 +40,7 @@ OpenCode and Pi parse that identical line into opposite outcomes. OpenCode disca
 - `src/lib/agents.ts:30` types `tools` as `Record<string, boolean>`.
 - `isToolsMap()` rejects any non-object value, so the string form fails the guard and `src/lib/agents.ts:80` assigns `undefined`. An undefined `tools` means no restriction.
 - `src/lib/agent-resolver.ts:151-158` maps `Read`, `Grep`, `Glob`, and `Bash` to Pi's `read`, `grep`, `find`, and `bash`.
-- `resolveToolAllowlist` fails closed on anything unrecognized (`src/lib/agent-resolver.ts:174-199`).
+- `resolveToolAllowlist` fails closed on anything unrecognized (`src/lib/agent-resolver.ts:203-228`).
 
 Every persona under `agents/review/` declares the string form. All of them are unrestricted on OpenCode and write-incapable on Pi.
 

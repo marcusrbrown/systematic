@@ -8,6 +8,7 @@ import {
 } from './bootstrap.js'
 import { loadConfig } from './config.js'
 import { createConfigHandler } from './config-handler.js'
+import { createSearchTool, isSearchEnabled } from './search-tool.js'
 import {
   createSkillOutputStore,
   createSkillTool,
@@ -102,6 +103,10 @@ export const createOpenCodeV1Hooks = async (
         bundledSkillsDir,
         disabledSkills: config.disabled_skills,
         outputStore: skillOutputStore,
+      }),
+      // Absent when `search.enabled` is false.
+      ...(isSearchEnabled(config.search) && {
+        systematic_search: createSearchTool({ settings: config.search }),
       }),
     },
 

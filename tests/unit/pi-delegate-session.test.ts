@@ -6,6 +6,7 @@ import type {
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
 } from '@earendil-works/pi-coding-agent'
+import { Type } from 'typebox'
 import { buildAgentCatalog } from '../../src/lib/agent-resolver.js'
 import {
   buildDelegateAgentSessionOptions,
@@ -14,6 +15,8 @@ import {
   type PiDelegateSessionRuntime,
 } from '../../src/lib/pi-delegate-session.js'
 import { DELEGATE_TOOL_NAME } from '../../src/lib/pi-delegate-tool.js'
+import { SEARCH_TOOL_NAME } from '../../src/lib/search-core.js'
+import { createPiSearchTool } from '../../src/lib/search-tool.js'
 
 const tempDirs: string[] = []
 
@@ -85,7 +88,7 @@ describe('buildDelegateResourceLoaderOptions', () => {
 })
 
 describe('buildDelegateAgentSessionOptions', () => {
-  test('requests parent model/cwd, exact mapped tools, empty customTools, and the given loader/session manager', () => {
+  test('requests parent model/cwd, exact mapped tools, the given customTools, and the given loader/session manager', () => {
     const model = createModelFixture({ provider: 'anthropic', id: 'claude' })
     const resourceLoader = { marker: 'resource-loader' } as never
     const sessionManager = { marker: 'session-manager' } as never
@@ -95,6 +98,7 @@ describe('buildDelegateAgentSessionOptions', () => {
       agentDir: '/agent/dir',
       model,
       allowedToolNames: ['read', 'grep'],
+      customTools: [],
       resourceLoader,
       sessionManager,
     })
@@ -115,6 +119,7 @@ describe('buildDelegateAgentSessionOptions', () => {
       model: createModelFixture(),
       thinkingLevel: 'high',
       allowedToolNames: ['read'],
+      customTools: [],
       resourceLoader: {} as never,
       sessionManager: {} as never,
     })
@@ -128,6 +133,7 @@ describe('buildDelegateAgentSessionOptions', () => {
       agentDir: '/agent/dir',
       model: createModelFixture(),
       allowedToolNames: ['read'],
+      customTools: [],
       resourceLoader: {} as never,
       sessionManager: {} as never,
     })
@@ -296,6 +302,50 @@ describe('createDelegateSessionWith: live adapter contract, no provider required
     ).rejects.toThrow(/fail-closed re-entry guard/)
 
     expect(calls.getAgentDirCalls).toBe(0)
+    expect(calls.createResourceLoaderArgs).toHaveLength(0)
+    expect(calls.createAgentSessionArgs).toHaveLength(0)
+  })
+
+  test('passes the parent-supplied custom tools to the child session, and only those', async () => {
+    const { runtime, calls } = createFakeRuntime()
+    const createSession = createDelegateSessionWith(runtime)
+    const searchTool = createPiSearchTool({ settings: undefined, Type })
+
+    await createSession({
+      agentName: 'git-analyzer',
+      model: createModelFixture(),
+      cwd: '/parent/cwd',
+      systemPromptOverride: 'Persona body.',
+      allowedToolNames: ['read', SEARCH_TOOL_NAME],
+      customTools: [searchTool],
+    })
+
+    const sessionOptions = calls
+      .createAgentSessionArgs[0] as CreateAgentSessionOptions
+    expect(sessionOptions.tools).toEqual(['read', SEARCH_TOOL_NAME])
+    expect(sessionOptions.customTools).toHaveLength(1)
+    expect(sessionOptions.customTools?.[0]).toBe(searchTool)
+  })
+
+  test('fails closed when the custom tools include the delegate tool', async () => {
+    const { runtime, calls } = createFakeRuntime()
+    const createSession = createDelegateSessionWith(runtime)
+    const delegateLookalike = {
+      ...createPiSearchTool({ settings: undefined, Type }),
+      name: DELEGATE_TOOL_NAME,
+    }
+
+    await expect(
+      createSession({
+        agentName: 'malicious',
+        model: createModelFixture(),
+        cwd: '/cwd',
+        systemPromptOverride: 'x',
+        allowedToolNames: ['read'],
+        customTools: [delegateLookalike],
+      }),
+    ).rejects.toThrow(/fail-closed re-entry guard/)
+
     expect(calls.createResourceLoaderArgs).toHaveLength(0)
     expect(calls.createAgentSessionArgs).toHaveLength(0)
   })
