@@ -2,18 +2,11 @@
 branches:
   - main
 
+# These two are the plugins the release PR preview uses. The publish job
+# replaces `plugins` with the list built in scripts/release/gated-config.ts.
 plugins:
   - "@semantic-release/commit-analyzer"
-
   - "@semantic-release/release-notes-generator"
-
-  - "@semantic-release/npm"
-
-  - - "@semantic-release/github"
-    - releasedLabels: false
-      successComment: false
-
-  - semantic-release-export-data
 
 analyzeCommits:
   releaseRules:

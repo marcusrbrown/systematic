@@ -1,7 +1,7 @@
 ---
 title: "feat: Gate releases behind an approved release PR"
 type: feat
-status: active
+status: completed
 date: 2026-10-11
 origin: docs/brainstorms/2026-10-11-gated-release-pr-requirements.md
 ---
@@ -779,7 +779,7 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 
 - [x] **Unit 14: Tag rulesets, immutable releases, policy**
 
-> **Shipped in the repo; two one-time API calls follow the merge.** The `release-tags-create` and `release-tags-protect` rulesets are declared in `.github/settings.yml` and pinned by `tests/unit/repo-settings.test.ts`, and `RELEASING.md` documents them and the break-glass steps they change. Immutable releases and `sha_pinning_required` are repository settings that the settings applier cannot manage, so an admin enables them once through the API after the merge. `SECURITY.md` shipped in #1250. None of these changes a Scorecard score: Security-Policy is already 10, and Branch-Protection is limited by the single-approver design.
+> **Shipped (#1251).** The `release-tags-create` and `release-tags-protect` rulesets are declared in `.github/settings.yml` and pinned by `tests/unit/repo-settings.test.ts`, and `RELEASING.md` documents them and the break-glass steps they change. Immutable releases and `sha_pinning_required` are repository settings that the settings applier cannot manage, so they were enabled once through the API on 2026-10-29. `SECURITY.md` shipped in #1250. None of these changes a Scorecard score: Security-Policy is already 10, and Branch-Protection is limited by the single-approver design.
 
 **Goal:** The tag and release end state, plus a security policy.
 
@@ -804,9 +804,9 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 - Another identity cannot create a `v*` tag.
 - Security-Policy stays at 10. Branch-Protection is not expected to change.
 
-- [ ] **Unit 15: Remove the legacy path and `NPM_TOKEN`**
+- [x] **Unit 15: Remove the legacy path and `NPM_TOKEN`**
 
-> **Partly shipped (#1100, `15eca8fb`); open: `.releaserc.yaml`.** Done at HEAD: `legacy-release` and the mode guard are gone, no workflow references `NPM_TOKEN`, `NODE_AUTH_TOKEN` or `RELEASE_MODE` (locked by `tests/unit/release-publish-path.test.ts` and `tests/unit/main-release-workflow.test.ts`), the repo has no `NPM_TOKEN` secret and no `RELEASE_MODE` variable, and `RELEASING.md` holds the runbook. Still open: `.releaserc.yaml` keeps `@semantic-release/release-notes-generator` and omits `@semantic-release/exec`, so it does not match the plugin list in `scripts/release/gated-config.ts`, and no test pins that match. This unit stays unticked until that lands. Unit 14, which this unit depends on, is shipped: see its status note.
+> **Shipped (#1100, `15eca8fb`, and the `.releaserc.yaml` trim).** #1100 removed the legacy path and `NPM_TOKEN`: `legacy-release` and the mode guard are gone, no workflow references `NPM_TOKEN`, `NODE_AUTH_TOKEN` or `RELEASE_MODE` (locked by `tests/unit/release-publish-path.test.ts` and `tests/unit/main-release-workflow.test.ts`), the repo has no `NPM_TOKEN` secret and no `RELEASE_MODE` variable, and `RELEASING.md` holds the runbook. `.releaserc.yaml` now declares only the two plugins the release PR preview uses, `@semantic-release/commit-analyzer` and `@semantic-release/release-notes-generator`; the publish job replaces `plugins` with the per-release list that `scripts/release/gated-config.ts` builds. The original step "adopt the gated plugin list" could not be met, because that list is built per release with the approved version and notes path. The test `.releaserc.yaml plugins > declares exactly the plugins the preview keeps, in order` in `tests/unit/release-preview.test.ts` pins the declared names to `KEPT_PLUGINS` in `scripts/release/preview.ts`. Unit 14, which this unit depends on, is shipped: see its status note.
 
 **Goal:** One publish path, with no long-lived npm token.
 
@@ -815,15 +815,15 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 **Dependencies:** Unit 14
 
 **Files:**
-- Modify: `.github/workflows/main.yaml` (delete `legacy-release`), `.github/workflows/release.yaml` (drop the mode guard), `.releaserc.yaml` (adopt the gated plugin list, so the checkout config matches what publishes)
-- Test: `tests/unit/main-release-workflow.test.ts`, `tests/unit/release-workflow.test.ts`
+- Modify: `.github/workflows/main.yaml` (delete `legacy-release`), `.github/workflows/release.yaml` (drop the mode guard), `.releaserc.yaml` (declare only the two plugins the preview uses; publish replaces them with the list from `gated-config.ts`)
+- Test: `tests/unit/main-release-workflow.test.ts`, `tests/unit/release-workflow.test.ts`, `tests/unit/release-preview.test.ts` (pins the `.releaserc.yaml` plugin names to `KEPT_PLUGINS`)
 
 **Approach:** After the merge, delete `NPM_TOKEN` from the environment and the repo, and delete the `RELEASE_MODE` variable. Move the runbook into the contributor docs.
 
 **Test scenarios:**
 - No workflow references `NPM_TOKEN` or `RELEASE_MODE`.
 - No job publishes outside `release.yaml`.
-- `.releaserc.yaml` matches the gated plugin list.
+- `.releaserc.yaml` declares exactly the plugins the preview keeps (`KEPT_PLUGINS`), in order.
 
 **Verification:** The tests pass, the next release publishes through OIDC alone, and `gh secret list` shows no `NPM_TOKEN`.
 

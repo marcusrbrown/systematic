@@ -92,7 +92,7 @@ Every sentence in the after-state traces to the commit log. The PR body for #425
 
 - Run the skill on every release immediately after `semantic-release` publishes. The procedure is currently manual; CI automation is planned for a future release. Until then, the skill invocation is the last step of the release workflow.
 - Watch for `closes [...] (...issues/<non-numeric>...)` patterns in commit bodies during PR review. These are the inputs that trigger the misparse. Rewriting the cross-reference as plain text or a non-`closes`-prefixed link before merge prevents the autolink from appearing in the release body at all.
-- If the bucket map in `.releaserc.yaml` (lines 46–70) changes, update the bucket map table in `.agents/skills/release-notes-narrative/SKILL.md` in the same PR. The skill's bucket map is a mirror of the preset config; drift between the two causes commits to land in the wrong section or be silently dropped into `Miscellaneous Chores`.
+- If the bucket map in `.releaserc.yaml` (lines 39–63) changes, update the bucket map table in `.agents/skills/release-notes-narrative/SKILL.md` in the same PR. The skill's bucket map is a mirror of the preset config; drift between the two causes commits to land in the wrong section or be silently dropped into `Miscellaneous Chores`.
 
 ## Related
 

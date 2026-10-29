@@ -36,7 +36,7 @@ interface ReleaseConfig {
   [key: string]: unknown
 }
 
-const KEPT_PLUGINS = [
+export const KEPT_PLUGINS = [
   '@semantic-release/commit-analyzer',
   '@semantic-release/release-notes-generator',
 ]
