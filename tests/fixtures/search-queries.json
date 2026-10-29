@@ -1,0 +1,232 @@
+{
+  "header": {
+    "description": "Labelled query set for durable output search (R16). Queries are phrased from symptoms, issue text or a paraphrase, not doc titles. Recall test counts a query as found when at least one path in `relevant` is in the top 5 hits.",
+    "authored": "2026-10-29",
+    "fields": {
+      "id": "unique string; #820 is `issue-820-prose-dedup`",
+      "query": "text a searcher would type; the only input any ranker or baseline run sees",
+      "relevant": "repo-relative paths under docs/solutions/ (never README or _archived/). A superseded doc's successor is labelled too.",
+      "split": "`tune` (tuning may read it) or `heldout` (report only); fixed before any ranker existed",
+      "lexical_reachable": "true when a relevant doc's title, symptoms, tags or module shares a query token of 3 or more characters (frontmatter, not body text). false means no such shared token.",
+      "source": "`issue` (wording from a real GitHub issue), `paraphrase` (how someone would describe the problem, not the doc's words) or `symptoms` (taken from a doc's symptoms)",
+      "token_overlap": "present on the #820 entry only: overlap of the query with the target's title, tags, module and component"
+    },
+    "authoring_rules": [
+      "The #820 query was written from the issue wording and saved before the target doc's frontmatter was opened. Its token overlap was recorded afterwards and `lexical_reachable` is pinned true.",
+      "The #820 overlap is stopwords only (a, not, the), with zero content words. It tests the symptom-vocabulary gap, not tag matching.",
+      "Splits were fixed before any ranker existed: 5 heldout (including #820), 14 tune.",
+      "Source mix: 7 issue, 10 paraphrase, 2 symptoms. 13 of 14 tune queries are issue or paraphrase.",
+      "3 queries are lexical_reachable false (q03, q12, q16).",
+      "Authored blind to any ranker. Labels were kept outside the repo until the R17 grep baseline finished. No query or label was changed after the baseline run."
+    ]
+  },
+  "queries": [
+    {
+      "id": "issue-820-prose-dedup",
+      "query": "reviewers found the same defect but anchored at different lines in a prose file, so the duplicate findings are not merged and the agreement boost never fires",
+      "relevant": [
+        "docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md"
+      ],
+      "split": "heldout",
+      "lexical_reachable": true,
+      "source": "issue",
+      "token_overlap": {
+        "tokenizer": "lowercase ASCII [a-z0-9] runs; underscore/hyphen-joined runs also emit the whole identifier and each part",
+        "query_tokens": 25,
+        "shared_by_field": {
+          "title": ["a", "not", "the"],
+          "tags": [],
+          "module": [],
+          "component": []
+        },
+        "shared_union": ["a", "not", "the"],
+        "shared_len3plus": ["not", "the"],
+        "shared_content_words": [],
+        "content_overlap_count": 0,
+        "note": "Overlap is stopwords only (a, not, the). No content word of the query appears in the target title, tags, module or component, so the query tests the symptom-vocabulary gap, not tag matching. Pinned lexical_reachable=true per plan."
+      }
+    },
+    {
+      "id": "q02-discovered-skill-fields-lost",
+      "query": "Discovered user skills lose their agent, model and subtask fields on OpenCode v1",
+      "relevant": [
+        "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md"
+      ],
+      "split": "heldout",
+      "lexical_reachable": true,
+      "source": "issue"
+    },
+    {
+      "id": "q03-old-links-subpath",
+      "query": "old links go to a missing document after deploying under a subpath",
+      "relevant": [
+        "docs/solutions/integration-issues/astro-redirect-destinations-missing-base-prefix-2026-05-22.md"
+      ],
+      "split": "heldout",
+      "lexical_reachable": false,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q04-which-succeeds-version-fails",
+      "query": "`which opencode` succeeds while `opencode --version` fails and real-host integration tests run instead of skipping",
+      "relevant": [
+        "docs/solutions/integration-issues/availability-guards-must-check-executability-2026-08-16.md"
+      ],
+      "split": "heldout",
+      "lexical_reachable": true,
+      "source": "symptoms"
+    },
+    {
+      "id": "q05-slow-regex-repeated-openers",
+      "query": "a regular expression hangs on input with many repeated opening markers and no end marker",
+      "relevant": [
+        "docs/solutions/security-issues/redos-after-plugin-trust-boundary-inversion-2026-05-11.md"
+      ],
+      "split": "heldout",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q06-merge-internal-error-32",
+      "query": "ce:review merge fails with \"internal error in merge\" when surviving findings exceed 32",
+      "relevant": [
+        "docs/solutions/logic-errors/per-reviewer-cap-reused-as-run-level-cap-2026-10-22.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "issue"
+    },
+    {
+      "id": "q07-managed-skills-list-denies",
+      "query": "A managed `skills` list on v1 denies the allowed skills when they are loaded through `systematic_skill`",
+      "relevant": [
+        "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "issue"
+    },
+    {
+      "id": "q08-typecheck-never-covers",
+      "query": "Typecheck never covers tests/ or scripts/",
+      "relevant": [
+        "docs/solutions/developer-experience/typecheck-does-not-cover-ci-gate-scripts-2026-08-17.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "issue"
+    },
+    {
+      "id": "q09-large-args-guard-unavailable",
+      "query": "Large edit or write arguments make the workflow guard unavailable",
+      "relevant": [
+        "docs/solutions/logic-errors/workflow-guard-digest-collapse-long-identities-2026-10-14.md",
+        "docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "issue"
+    },
+    {
+      "id": "q10-compaction-prune-clears-skill",
+      "query": "OpenCode compaction.prune can clear loaded systematic_skill output",
+      "relevant": [
+        "docs/solutions/best-practices/testing-host-prune-from-a-plugin-2026-10-20.md",
+        "docs/solutions/integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "issue"
+    },
+    {
+      "id": "q11-bot-ignores-same-repo-prs",
+      "query": "bot comments on pull requests in my own repo get ignored and the run claims it is a fork",
+      "relevant": [
+        "docs/solutions/logic-errors/jq-alternative-operator-treats-false-as-missing-2026-09-26.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q12-pipeline-finished-nothing-shipped",
+      "query": "automation finished happily yet customers cannot obtain what got shipped",
+      "relevant": [
+        "docs/solutions/integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": false,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q13-mdx-acorn-expression",
+      "query": "Could not parse expression with acorn, and the error points at a heading line",
+      "relevant": [
+        "docs/solutions/build-errors/mdx-heading-anchor-crashes-astro-build-2026-05-22.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "symptoms"
+    },
+    {
+      "id": "q14-fix-keeps-reverting",
+      "query": "my one-line docs fix keeps getting undone after I run the tests",
+      "relevant": [
+        "docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q15-gate-crash-bad-metadata",
+      "query": "the integrity report crashes instead of listing problems because one document has a self-referencing metadata value",
+      "relevant": [
+        "docs/solutions/runtime-errors/circular-yaml-alias-aborts-content-integrity-report-2026-10-26.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q16-stray-slashes-in-posted-text",
+      "query": "pull request text posted from a shell script has stray slashes in front of code formatting marks",
+      "relevant": [
+        "docs/solutions/developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": false,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q17-worktree-beside-wrong-gitdir",
+      "query": "new worktree helper creates its folder beside the wrong git directory when the repository uses a separate git dir",
+      "relevant": [
+        "docs/solutions/logic-errors/infer-main-worktree-root-from-git-common-dir-2026-10-25.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q18-plugin-key-ignored-new-major",
+      "query": "I added the plugin to my opencode config but the new major version silently ignores it",
+      "relevant": [
+        "docs/solutions/documentation-gaps/opencode-plugin-config-key-is-singular-plugin-not-plugins-2026-07-18.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    },
+    {
+      "id": "q19-dependency-bump-fails-test",
+      "query": "dependency bot upgrade PRs fail the required test because an assertion hardcodes a commit hash",
+      "relevant": [
+        "docs/solutions/test-failures/release-workflow-test-pins-action-sha-2026-10-14.md"
+      ],
+      "split": "tune",
+      "lexical_reachable": true,
+      "source": "paraphrase"
+    }
+  ]
+}
