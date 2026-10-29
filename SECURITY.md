@@ -30,13 +30,26 @@ Only the most recent release receives security fixes.
 
 ## Verifying a Release
 
-Every npm release is published from this repository by GitHub Actions, through npm trusted publishing (OIDC), with SLSA provenance. No npm token exists. To check that a version came from this repository:
+GitHub Actions publishes every npm release from this repository's `release.yaml` workflow on `main`. It uses npm trusted publishing (OIDC) and attaches SLSA provenance. No npm token exists.
+
+To check a version, first verify its signatures and provenance in a project that has it installed:
 
 ```bash
-npm view @fro.bot/systematic@<version> _npmUser.email
-# npm-oidc-no-reply@github.com
-npm view @fro.bot/systematic@<version> dist.attestations.provenance.predicateType
-# https://slsa.dev/provenance/v1
+npm audit signatures
 ```
+
+`@fro.bot/systematic` must be counted under "verified attestations". That confirms the provenance is signed and bound to the package you installed.
+
+Then read the build source the provenance records:
+
+```bash
+curl -s "https://registry.npmjs.org/-/npm/v1/attestations/@fro.bot%2fsystematic@<version>" \
+  | jq -r '.attestations[] | select(.predicateType == "https://slsa.dev/provenance/v1")
+      | .bundle.dsseEnvelope.payload' | base64 -d \
+  | jq -r '.predicate.buildDefinition.externalParameters.workflow | "\(.repository) \(.path) \(.ref)"'
+# https://github.com/marcusrbrown/systematic .github/workflows/release.yaml refs/heads/main
+```
+
+The package page on npmjs.com shows the same source under Provenance. A version without verified provenance, or with a different repository or workflow, was not published by this project.
 
 [RELEASING.md](RELEASING.md) describes the release process. The project's supply-chain posture is tracked publicly by [OpenSSF Scorecard](https://securityscorecards.dev/viewer/?uri=github.com/marcusrbrown/systematic).
