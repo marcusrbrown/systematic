@@ -4,6 +4,17 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.27.1](https://github.com/marcusrbrown/systematic/compare/v3.27.0...v3.27.1) (2026-10-29)
+
+### Bug Fixes
+
+* let managed skill lists and disabled skills apply to both skill tools on OpenCode v1 ([#1246](https://github.com/marcusrbrown/systematic/issues/1246)) ([ef2acec](https://github.com/marcusrbrown/systematic/commit/ef2acec36cf6aa658d1f15753dbb28a75a0621fc))
+* make the OCX plugin component install on OCX 2.x ([#1245](https://github.com/marcusrbrown/systematic/issues/1245)) ([ccd87c7](https://github.com/marcusrbrown/systematic/commit/ccd87c768781771201ff21e57028b8346c74d30d))
+
+### Documentation
+
+* **solutions:** record OpenCode v2 port lessons and refresh v1-only docs ([#1244](https://github.com/marcusrbrown/systematic/issues/1244)) ([aedf744](https://github.com/marcusrbrown/systematic/commit/aedf744adaffd3e83344d2e8a69a5f733318b2cb))
+
 ## [3.27.0](https://github.com/marcusrbrown/systematic/compare/v3.26.4...v3.27.0) (2026-10-28)
 
 ### Features
