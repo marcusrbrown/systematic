@@ -22,7 +22,7 @@
         "@types/bun": "latest",
         "@types/js-yaml": "4.0.9",
         "@types/node": "26.6.5",
-        "agent-browser": "0.39.3",
+        "agent-browser": "0.39.4",
         "ajv": "8.20.0",
         "ajv-formats": "3.0.1",
         "conventional-changelog-conventionalcommits": "10.4.1",
@@ -1003,7 +1003,7 @@
 
     "agent-base": ["agent-base@9.0.0", "", {}, "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA=="],
 
-    "agent-browser": ["agent-browser@0.39.3", "", { "bin": { "agent-browser": "./bin/agent-browser.js" } }, "sha512-e1bd/qpS5OE1HzOZDqUHpiy3eHAncUbUvQPbsB7EJYZsigIZ5LhXd4qGr+LgCkbyyf1kf38I2S2GKSKTAtjwZg=="],
+    "agent-browser": ["agent-browser@0.39.4", "", { "bin": { "agent-browser": "./bin/agent-browser.js" } }, "sha512-R0ue5CWlpkGtbcXeq3ZKM96zLrCXkNKEGyttgWhi0eSNKoNSvxglvv1/D9NhKxe+MI+djiCFepPd4PYOM0H2Rg=="],
 
     "aggregate-error": ["aggregate-error@3.1.0", "", { "dependencies": { "clean-stack": "^2.0.0", "indent-string": "^4.0.0" } }, "sha512-4I7Td01quW/RpocfNayFdFVk1qSuoh0E7JrbRJ16nH01HhKFQ88INq9Sd+nd72zqRySlr9BmDA8xlEJ6vJMrYA=="],
 
