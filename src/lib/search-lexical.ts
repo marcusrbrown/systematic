@@ -38,9 +38,12 @@ export interface Bm25fParams {
 }
 
 /**
- * Starting values from the plan's Key Technical Decisions. This is the one
- * table the recall tuning edits. Metadata fields do not length-normalise;
- * the body does.
+ * The one table the recall tuning edits. Metadata fields do not
+ * length-normalise; the body does. Frozen at Checkpoint A: the 27-cell retune
+ * grid in `tests/unit/search-recall.test.ts` scored 11 of 12 on the tune
+ * split for every cell with body b of 0.75 or 0.9 and 10 of 12 for b of 0.5,
+ * so the tie went to the starting values from the plan's Key Technical
+ * Decisions, unchanged.
  */
 export const BM25F_PARAMS = {
   k1: 1.2,

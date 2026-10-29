@@ -1,0 +1,333 @@
+{
+  "_about": "Pins the resolver outcome for each lifecycle fixture document when it is the only candidate. Keys are file names under docs/solutions/lifecycle/ without .md. `target` is the document shown, `supersedes` the paths it replaces, `lines` the exact Supersedes:/Caution: lines. broken-target is skipped by the loader and has no case. Regenerate by hand: a change here is a change in lifecycle behaviour.",
+  "cases": {
+    "bad-absolute": {
+      "target": "docs/solutions/lifecycle/bad-absolute.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-archived": {
+      "target": "docs/solutions/lifecycle/bad-archived.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-bare": {
+      "target": "docs/solutions/lifecycle/bad-bare.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-critical": {
+      "target": "docs/solutions/lifecycle/bad-critical.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-empty": {
+      "target": "docs/solutions/lifecycle/bad-empty.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-list": {
+      "target": "docs/solutions/lifecycle/bad-list.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-null": {
+      "target": "docs/solutions/lifecycle/bad-null.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-number": {
+      "target": "docs/solutions/lifecycle/bad-number.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-parent-dir": {
+      "target": "docs/solutions/lifecycle/bad-parent-dir.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "bad-readme": {
+      "target": "docs/solutions/lifecycle/bad-readme.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "chain-a": {
+      "target": "docs/solutions/lifecycle/chain-b.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/chain-a.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/chain-a.md"
+      ]
+    },
+    "chain-b": {
+      "target": "docs/solutions/lifecycle/chain-b.md",
+      "status": "active",
+      "supersedes": [],
+      "lines": []
+    },
+    "comment-a": {
+      "target": "docs/solutions/lifecycle/chain-b.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/comment-a.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/comment-a.md"
+      ]
+    },
+    "cycle-a": {
+      "target": "docs/solutions/lifecycle/cycle-a.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "cycle-b": {
+      "target": "docs/solutions/lifecycle/cycle-b.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "dangling": {
+      "target": "docs/solutions/lifecycle/dangling.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "dual-unresolved": {
+      "target": "docs/solutions/lifecycle/dual-unresolved.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "five-0": {
+      "target": "docs/solutions/lifecycle/five-5.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/five-0.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/five-0.md"
+      ]
+    },
+    "five-1": {
+      "target": "docs/solutions/lifecycle/five-5.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/five-1.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/five-1.md"
+      ]
+    },
+    "five-2": {
+      "target": "docs/solutions/lifecycle/five-5.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/five-2.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/five-2.md"
+      ]
+    },
+    "five-3": {
+      "target": "docs/solutions/lifecycle/five-5.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/five-3.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/five-3.md"
+      ]
+    },
+    "five-4": {
+      "target": "docs/solutions/lifecycle/five-5.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/five-4.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/five-4.md"
+      ]
+    },
+    "five-5": {
+      "target": "docs/solutions/lifecycle/five-5.md",
+      "status": "active",
+      "supersedes": [],
+      "lines": []
+    },
+    "into-dual": {
+      "target": "docs/solutions/lifecycle/into-dual.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "merge-a": {
+      "target": "docs/solutions/lifecycle/merge-successor.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/merge-a.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/merge-a.md"
+      ]
+    },
+    "merge-b": {
+      "target": "docs/solutions/lifecycle/merge-successor.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/merge-b.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/merge-b.md"
+      ]
+    },
+    "merge-successor": {
+      "target": "docs/solutions/lifecycle/merge-successor.md",
+      "status": "active",
+      "supersedes": [],
+      "lines": []
+    },
+    "no-status": {
+      "target": "docs/solutions/lifecycle/no-status.md",
+      "status": "active",
+      "supersedes": [],
+      "lines": []
+    },
+    "self-link": {
+      "target": "docs/solutions/lifecycle/self-link.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "six-0": {
+      "target": "docs/solutions/lifecycle/six-0.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "six-1": {
+      "target": "docs/solutions/lifecycle/six-6.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/six-1.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/six-1.md"
+      ]
+    },
+    "six-2": {
+      "target": "docs/solutions/lifecycle/six-6.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/six-2.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/six-2.md"
+      ]
+    },
+    "six-3": {
+      "target": "docs/solutions/lifecycle/six-6.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/six-3.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/six-3.md"
+      ]
+    },
+    "six-4": {
+      "target": "docs/solutions/lifecycle/six-6.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/six-4.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/six-4.md"
+      ]
+    },
+    "six-5": {
+      "target": "docs/solutions/lifecycle/six-6.md",
+      "status": "active",
+      "supersedes": [
+        "docs/solutions/lifecycle/six-5.md"
+      ],
+      "lines": [
+        "Supersedes: docs/solutions/lifecycle/six-5.md"
+      ]
+    },
+    "six-6": {
+      "target": "docs/solutions/lifecycle/six-6.md",
+      "status": "active",
+      "supersedes": [],
+      "lines": []
+    },
+    "skipped-target": {
+      "target": "docs/solutions/lifecycle/skipped-target.md",
+      "status": "superseded",
+      "supersedes": [],
+      "lines": [
+        "Caution: successor unresolved"
+      ]
+    },
+    "stale-doc": {
+      "target": "docs/solutions/lifecycle/stale-doc.md",
+      "status": "stale",
+      "supersedes": [],
+      "lines": [
+        "Caution: marked stale: The retry budget was removed in 2026-09."
+      ]
+    },
+    "unknown-status": {
+      "target": "docs/solutions/lifecycle/unknown-status.md",
+      "status": "active",
+      "supersedes": [],
+      "lines": []
+    }
+  }
+}
