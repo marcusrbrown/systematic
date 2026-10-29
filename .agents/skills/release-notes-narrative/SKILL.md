@@ -49,7 +49,7 @@ $ARGUMENTS
 
 ## Bucket Map
 
-The following map is mirrored from `.releaserc.yaml:46-70`. If the preset config changes, update this table in the same PR.
+The following map is mirrored from `.releaserc.yaml:39-63`. If the preset config changes, update this table in the same PR.
 
 | Conventional type | Section heading |
 |-------------------|----------------|

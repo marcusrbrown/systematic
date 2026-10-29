@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
-import { previewRelease } from '../../scripts/release/preview.ts'
+import { KEPT_PLUGINS, previewRelease } from '../../scripts/release/preview.ts'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
 const RELEASERC = path.join(REPO_ROOT, '.releaserc.yaml')
@@ -70,6 +70,19 @@ afterEach(() => {
   for (const dir of fixtures.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+describe('.releaserc.yaml plugins', () => {
+  test('declares exactly the plugins the preview keeps, in order', () => {
+    const config = yaml.load(fs.readFileSync(RELEASERC, 'utf8')) as {
+      plugins: Array<string | [string, ...unknown[]]>
+    }
+    const names = config.plugins.map((entry) =>
+      Array.isArray(entry) ? entry[0] : entry,
+    )
+
+    expect(names).toEqual([...KEPT_PLUGINS])
+  })
 })
 
 describe('previewRelease', () => {
