@@ -30,6 +30,7 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
+import * as searchUserConfig from '../../src/lib/search-user-config.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
@@ -6445,5 +6446,296 @@ describe('isAgentDisabled', () => {
   test('a persona without a category is matched by its bare key only', () => {
     expect(isAgentDisabled(new Set(['loose']), {}, '', 'loose')).toBe(true)
     expect(isAgentDisabled(new Set(['/loose']), {}, '', 'loose')).toBe(false)
+  })
+})
+
+describe('search config field', () => {
+  const tracker = createTempDirTracker()
+  const EMBEDDINGS = {
+    provider: 'ollama',
+    base_url: 'http://localhost:11434',
+    model: 'nomic-embed-text',
+  } as const
+
+  afterEach(() => {
+    tracker.cleanup()
+  })
+
+  function setup() {
+    const root = tracker.track(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-search-config-')),
+    )
+    const homeDir = path.join(root, 'home')
+    const projectDir = path.join(root, 'project')
+    const customDir = path.join(root, 'custom')
+    const userDir = path.join(homeDir, '.config/opencode')
+    for (const dir of [
+      userDir,
+      customDir,
+      path.join(projectDir, '.opencode'),
+    ]) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    const write = (file: string, config: unknown) =>
+      fs.writeFileSync(file, JSON.stringify(config))
+    const warnings: string[] = []
+    return {
+      warnings,
+      user: (config: unknown) =>
+        write(path.join(userDir, 'systematic.json'), config),
+      project: (config: unknown) =>
+        write(path.join(projectDir, '.opencode/systematic.json'), config),
+      custom: (config: unknown) =>
+        write(path.join(customDir, 'systematic.json'), config),
+      load: (withCustom = false) =>
+        loadConfigWithSources(projectDir, {
+          homeDir,
+          customConfigDir: withCustom ? customDir : null,
+          warningSink: (message) => warnings.push(message),
+        }),
+      paths: { homeDir, projectDir, customDir, userDir },
+    }
+  }
+
+  test('a user config with embeddings loads and enabled:false survives the merge', () => {
+    const t = setup()
+    t.user({ search: { enabled: false, embeddings: EMBEDDINGS } })
+    const { config } = t.load()
+    expect(config.search).toEqual({ enabled: false, embeddings: EMBEDDINGS })
+    expect(config.searchUnreadable).toBeUndefined()
+    expect(t.warnings).toEqual([])
+  })
+
+  test('with no search anywhere there is no search key and no warning', () => {
+    const t = setup()
+    t.user({ disabled_skills: [] })
+    const { config } = t.load()
+    expect(config).not.toHaveProperty('search')
+    expect(config).not.toHaveProperty('searchUnreadable')
+    expect(t.warnings).toEqual([])
+  })
+
+  test('custom overrides user enabled, and its embeddings replace the user block whole', () => {
+    const t = setup()
+    t.user({
+      search: {
+        enabled: false,
+        embeddings: { ...EMBEDDINGS, timeout_ms: 900, api_key_env: 'USER_KEY' },
+      },
+    })
+    t.custom({
+      search: {
+        enabled: true,
+        embeddings: { ...EMBEDDINGS, model: 'custom-model' },
+      },
+    })
+    const { config } = t.load(true)
+    expect(config.search?.enabled).toBe(true)
+    expect(config.search?.embeddings).toEqual({
+      ...EMBEDDINGS,
+      model: 'custom-model',
+    })
+  })
+
+  test('custom without a search block leaves the user enabled:false in force', () => {
+    const t = setup()
+    t.user({ search: { enabled: false } })
+    t.custom({ disabled_skills: [] })
+    expect(t.load(true).config.search).toEqual({ enabled: false })
+  })
+
+  test('the loader merges through mergeSearchSettings', () => {
+    const t = setup()
+    t.user({ search: { enabled: false } })
+    const spy = spyOn(searchUserConfig, 'mergeSearchSettings')
+    try {
+      t.load()
+      expect(spy).toHaveBeenCalledTimes(1)
+      const sources = spy.mock.calls[0]?.[0] ?? []
+      expect(sources).toEqual([
+        { settings: { enabled: false }, unreadable: false },
+      ])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  describe('project config can never set it', () => {
+    test('AE2: a project embeddings block is stripped with one warning and the user value is used', () => {
+      const t = setup()
+      t.user({ search: { embeddings: EMBEDDINGS } })
+      t.project({
+        search: {
+          embeddings: {
+            provider: 'openai-compatible',
+            base_url: 'https://attacker.example/v1',
+            model: 'evil',
+          },
+        },
+      })
+      const { config, metadata } = t.load()
+      expect(config.search?.embeddings).toEqual(EMBEDDINGS)
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('`search`')
+      expect(t.warnings[0]).toContain('project config')
+      expect(t.warnings[0]).not.toContain('attacker')
+      expect(metadata.protectedFields).toContainEqual({
+        fieldPath: 'search',
+        outcome: 'blocked',
+        sourceKind: 'project',
+      })
+    })
+
+    test.each([
+      ['a string', 'on'],
+      ['an array', [1, 2]],
+      ['a number', 7],
+    ])(
+      'a malformed project search (%s) is stripped and the load succeeds',
+      (_label, value) => {
+        const t = setup()
+        t.project({ search: value, disabled_skills: [] })
+        const { config } = t.load()
+        expect(config).not.toHaveProperty('search')
+        expect(t.warnings).toHaveLength(1)
+      },
+    )
+
+    test('a project search:{enabled:false} cannot disable the user search', () => {
+      const t = setup()
+      t.user({ search: { enabled: true, embeddings: EMBEDDINGS } })
+      t.project({ search: { enabled: false } })
+      const { config } = t.load()
+      expect(config.search).toEqual({ enabled: true, embeddings: EMBEDDINGS })
+      expect(t.warnings).toHaveLength(1)
+    })
+
+    test.each([
+      ['search: null', null],
+      ['search: {}', {}],
+      ['an embeddings block', { embeddings: { ...EMBEDDINGS, model: 'p' } }],
+    ])(
+      'erase attempt (%s) keeps the user value and emits exactly one warning',
+      (_label, value) => {
+        const t = setup()
+        t.user({ search: { enabled: false, embeddings: EMBEDDINGS } })
+        t.project({ search: value })
+        const { config } = t.load()
+        expect(config.search).toEqual({
+          enabled: false,
+          embeddings: EMBEDDINGS,
+        })
+        expect(t.warnings).toHaveLength(1)
+      },
+    )
+
+    test('a project with no search emits no search warning', () => {
+      const t = setup()
+      t.project({ disabled_skills: [] })
+      t.load()
+      expect(t.warnings).toEqual([])
+    })
+  })
+
+  describe('an invalid block in user or custom config is dropped alone', () => {
+    const BAD: ReadonlyArray<
+      readonly [string, string, Record<string, unknown>]
+    > = [
+      ['timeout_ms', '987654321', { ...EMBEDDINGS, timeout_ms: 987_654_321 }],
+      ['provider', 'pinecone', { ...EMBEDDINGS, provider: 'pinecone' }],
+      ['api_key_env', 'bad key!', { ...EMBEDDINGS, api_key_env: 'bad key!' }],
+    ]
+
+    for (const source of ['user', 'custom'] as const) {
+      test.each(BAD)(
+        `${source}: a bad %s leaves the rest of the file loaded and marks search unreadable`,
+        (field, badValue, embeddings) => {
+          const t = setup()
+          t[source]({
+            disabled_skills: ['ce:plan'],
+            search: { enabled: false, embeddings },
+          })
+          const { config } = t.load(true)
+          expect(config.disabled_skills).toEqual(['ce:plan'])
+          expect(config).not.toHaveProperty('search')
+          expect(config.searchUnreadable).toBe(true)
+          expect(t.warnings).toHaveLength(1)
+          expect(t.warnings[0]).toContain(`search.embeddings.${field}`)
+          expect(t.warnings[0]).not.toContain(badValue)
+        },
+      )
+    }
+
+    test('an invalid custom block does not discard a valid user block, and the result is flagged', () => {
+      const t = setup()
+      t.user({ search: { embeddings: EMBEDDINGS } })
+      t.custom({ search: { embeddings: { ...EMBEDDINGS, timeout_ms: 1 } } })
+      const { config } = t.load(true)
+      expect(config.search?.embeddings).toEqual(EMBEDDINGS)
+      expect(config.searchUnreadable).toBe(true)
+    })
+
+    test('the warning never carries a base_url userinfo, query string or env var value', () => {
+      const t = setup()
+      t.user({
+        search: {
+          embeddings: {
+            ...EMBEDDINGS,
+            base_url: 'https://me:hunter2@example.com/v1?key=abc#frag',
+            timeout_ms: 1,
+          },
+        },
+      })
+      t.load()
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).not.toMatch(/hunter2|key=abc|frag|example\.com/)
+    })
+
+    test('the load does not throw over search, even with invalidSource throw', () => {
+      const t = setup()
+      t.user({ search: 'definitely not an object' })
+      expect(() =>
+        loadConfigWithSources(t.paths.projectDir, {
+          homeDir: t.paths.homeDir,
+          customConfigDir: null,
+          invalidSource: 'throw',
+          warningSink: () => {},
+        }),
+      ).not.toThrow()
+    })
+  })
+
+  describe('file selection is shared with the search reader', () => {
+    test('getConfigPaths prefers .jsonc, and a blank OPENCODE_CONFIG_DIR is unset', () => {
+      const t = setup()
+      fs.writeFileSync(path.join(t.paths.userDir, 'systematic.json'), '{}')
+      fs.writeFileSync(path.join(t.paths.userDir, 'systematic.jsonc'), '{}')
+      const paths = getConfigPaths(t.paths.projectDir, {
+        homeDir: t.paths.homeDir,
+        customConfigDir: '   ',
+      })
+      expect(paths.userConfig).toBe(
+        path.join(t.paths.userDir, 'systematic.jsonc'),
+      )
+      expect(paths).not.toHaveProperty('customConfig')
+    })
+
+    test('getConfigPaths and resolveConfigPath call the shared helpers', () => {
+      const t = setup()
+      const selectSpy = spyOn(searchUserConfig, 'selectConfigFile')
+      const dirsSpy = spyOn(searchUserConfig, 'resolveUserLevelConfigDirs')
+      try {
+        getConfigPaths(t.paths.projectDir, {
+          homeDir: t.paths.homeDir,
+          customConfigDir: t.paths.customDir,
+        })
+        expect(dirsSpy).toHaveBeenCalledTimes(1)
+        // user, project and custom files all go through the one selector.
+        expect(selectSpy).toHaveBeenCalledTimes(3)
+      } finally {
+        selectSpy.mockRestore()
+        dirsSpy.mockRestore()
+      }
+    })
   })
 })

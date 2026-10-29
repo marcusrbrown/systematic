@@ -25,6 +25,7 @@ import {
   REMOVED_BUNDLED_AGENT_NAMES,
   REMOVED_BUNDLED_SKILL_NAMES,
 } from './removed-names.js'
+import { SearchSettingsSchema } from './search-user-config.js'
 
 const permissionSettingSchema = z.enum(['ask', 'allow', 'deny'] as const)
 
@@ -600,6 +601,7 @@ export function createSystematicConfigSchema(
           examples: [true, false],
         }),
       ).default(false),
+      search: trustProtected(SearchSettingsSchema).optional(),
       disabled_skills: z
         // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
         // by the sanity check in generateBundledNamesContent. Removed names are

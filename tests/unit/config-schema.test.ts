@@ -203,6 +203,48 @@ describe('SystematicConfigSchema', () => {
     })
   })
 
+  describe('search', () => {
+    test('is optional with no default: an omitted block leaves no search key', () => {
+      const result = SystematicConfigSchema.safeParse({})
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data).not.toHaveProperty('search')
+    })
+
+    test('accepts a block and applies no defaults inside it', () => {
+      const result = SystematicConfigSchema.safeParse({
+        search: {
+          embeddings: {
+            provider: 'ollama',
+            base_url: 'http://localhost:11434',
+            model: 'nomic-embed-text',
+          },
+        },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.search?.embeddings).not.toHaveProperty('timeout_ms')
+        expect(result.data.search).not.toHaveProperty('enabled')
+      }
+    })
+
+    test('rejects a bad block at the search path', () => {
+      const result = SystematicConfigSchema.safeParse({
+        search: { embeddings: { provider: 'nope', base_url: 'x', model: 'y' } },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(firstIssue(result.error.issues).path[0]).toBe('search')
+      }
+    })
+
+    test('is tagged project-or-higher in the schema metadata', () => {
+      const shape = SystematicConfigSchema.shape
+      expect(z.globalRegistry.get(unwrapForMeta(shape.search))?.trust).toBe(
+        'project-or-higher',
+      )
+    })
+  })
+
   describe('allow_project_profiles', () => {
     test('defaults to false when omitted', () => {
       const result = SystematicConfigSchema.safeParse({})
