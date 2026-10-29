@@ -777,7 +777,9 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 
 ### PR 3: Hardening after a clean OIDC release
 
-- [ ] **Unit 14: Tag rulesets, immutable releases, policy**
+- [x] **Unit 14: Tag rulesets, immutable releases, policy**
+
+> **Shipped in the repo; two one-time API calls follow the merge.** The `release-tags-create` and `release-tags-protect` rulesets are declared in `.github/settings.yml` and pinned by `tests/unit/repo-settings.test.ts`, and `RELEASING.md` documents them and the break-glass steps they change. Immutable releases and `sha_pinning_required` are repository settings that the settings applier cannot manage, so an admin enables them once through the API after the merge. `SECURITY.md` shipped in #1250. None of these changes a Scorecard score: Security-Policy is already 10, and Branch-Protection is limited by the single-approver design.
 
 **Goal:** The tag and release end state, plus a security policy.
 
@@ -787,7 +789,7 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 
 **Files:**
 - Modify: `.github/settings.yml`
-- Create: `SECURITY.md`
+- Create: `SECURITY.md` (done in #1250)
 
 **Approach:**
 - Tag ruleset for `v*` creation, with the release App as bypass.
@@ -800,11 +802,11 @@ If `_npmUser` shows the token, OIDC failed. Investigate before you continue.
 **Verification:**
 - `gh api` shows the rulesets and settings.
 - Another identity cannot create a `v*` tag.
-- On the next Scorecard run, Branch-Protection is scored and Security-Policy is 10.
+- Security-Policy stays at 10. Branch-Protection is not expected to change.
 
 - [ ] **Unit 15: Remove the legacy path and `NPM_TOKEN`**
 
-> **Partly shipped (#1100, `15eca8fb`); open: `.releaserc.yaml`.** Done at HEAD: `legacy-release` and the mode guard are gone, no workflow references `NPM_TOKEN`, `NODE_AUTH_TOKEN` or `RELEASE_MODE` (locked by `tests/unit/release-publish-path.test.ts` and `tests/unit/main-release-workflow.test.ts`), the repo has no `NPM_TOKEN` secret and no `RELEASE_MODE` variable, and `RELEASING.md` holds the runbook. Still open: `.releaserc.yaml` keeps `@semantic-release/release-notes-generator` and omits `@semantic-release/exec`, so it does not match the plugin list in `scripts/release/gated-config.ts`, and no test pins that match. This unit stays unticked until that lands. Unit 14, which this unit depends on, is open: live rulesets are only `main` and `release-branch` (no `v*` tag rulesets), immutable releases and `sha_pinning_required` are off, and `SECURITY.md` does not exist.
+> **Partly shipped (#1100, `15eca8fb`); open: `.releaserc.yaml`.** Done at HEAD: `legacy-release` and the mode guard are gone, no workflow references `NPM_TOKEN`, `NODE_AUTH_TOKEN` or `RELEASE_MODE` (locked by `tests/unit/release-publish-path.test.ts` and `tests/unit/main-release-workflow.test.ts`), the repo has no `NPM_TOKEN` secret and no `RELEASE_MODE` variable, and `RELEASING.md` holds the runbook. Still open: `.releaserc.yaml` keeps `@semantic-release/release-notes-generator` and omits `@semantic-release/exec`, so it does not match the plugin list in `scripts/release/gated-config.ts`, and no test pins that match. This unit stays unticked until that lands. Unit 14, which this unit depends on, is shipped: see its status note.
 
 **Goal:** One publish path, with no long-lived npm token.
 

@@ -35,6 +35,16 @@ The follow-on workflows (`release-notes.yaml`, `docs.yaml`, `publish-claude-code
 - Fro Bot approves the maintainer's PRs, the maintainer approves Renovate PRs, and the maintainer or the gate approves the release PR.
 - Escape hatch: an admin can edit or disable the `main` ruleset under Settings → Rules.
 
+## Tag rulesets
+
+`.github/settings.yml` defines two rulesets on `refs/tags/v*`.
+
+- `release-tags-create`: only the release App can create a `v*` tag.
+- `release-tags-protect`: no one, including the release App, can update or delete a `v*` tag.
+- Releases are immutable once published. The tag and the assets are locked. The title and notes stay editable, so `release-notes.yaml` can still rewrite the notes.
+
+The settings workflow deletes any ruleset that `settings.yml` does not list, and it restores a disabled one on its next run. Immutable releases are a repository setting that `settings.yml` cannot manage, so an admin turns them on once through the API.
+
 ## Release entry on main with no publish
 
 The `Refresh release PR` job fails with `Rendered CHANGELOG.md matches main; a release entry is already on main without a publish`. It never opens an empty release PR.
@@ -109,7 +119,7 @@ Admin only. semantic-release runs in this order: `verifyConditions` (the npm OID
 The tag exists, but npm has no `X.Y.Z` and there is no GitHub release. A re-run or dispatch refuses this state rather than publish over an existing tag.
 
 1. Confirm npm has no such version: `npm view @fro.bot/systematic@X.Y.Z version` must fail with a 404. If it returns the version, this is the next state; stop.
-2. Delete the stranded tag: `git push origin :refs/tags/vX.Y.Z`.
+2. Disable the `release-tags-protect` ruleset under Settings → Rules, then delete the stranded tag: `git push origin :refs/tags/vX.Y.Z`. Re-enable the ruleset afterwards. The settings workflow restores it on its next run anyway.
 3. Re-run the failed `release.yaml` run, or land a new commit so the refresh opens a new release PR.
 
 Never delete a tag whose version is on npm.
@@ -128,9 +138,9 @@ npm accepted the package and creating the GitHub release then failed. The versio
 
    If `gh release view` finds a release, this is not the partial state; stop.
 
-2. If the tag is missing, create it on the `chore(release): vX.Y.Z` merge commit and push it.
+2. If the tag is missing, create it on the `chore(release): vX.Y.Z` merge commit and push it. Disable the `release-tags-create` ruleset under Settings → Rules first, then re-enable it afterwards. The settings workflow restores it on its next run anyway.
 
-3. Create the release from the existing tag, using the `X.Y.Z` entry of `CHANGELOG.md` as the notes:
+3. Check the tag's commit before you create the release: `git rev-parse vX.Y.Z^{commit}` must be the `chore(release): vX.Y.Z` merge commit. An immutable release locks the tag, so a wrong tag cannot be corrected afterwards. Then create the release from the existing tag, using the `X.Y.Z` entry of `CHANGELOG.md` as the notes:
 
    ```bash
    gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <notes>
