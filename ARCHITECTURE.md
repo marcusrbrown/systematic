@@ -167,6 +167,7 @@ Pi adapter
 
 Durable-output search
   src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
+  src/lib/search-corpus.ts         — project root walk-up, `kind` table and bounded, symlink-safe loader for `docs/solutions/`, with a narrowing frontmatter wrapper
 
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
