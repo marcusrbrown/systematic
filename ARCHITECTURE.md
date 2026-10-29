@@ -52,8 +52,9 @@ installer lives in its own module and registers through a native v2 domain, not 
 - **commands** (`opencode-v2-commands.ts`) — `ctx.command.transform` registers the planned commands. A v2
   command receives only the typed text, so the module expands `$ARGUMENTS` and positionals itself and
   submits one prompt on the invoking session. It never runs `!`-backtick blocks. A v2 plugin command cannot
-  choose an agent or model, so a command that declares `agent`, `model` or `subtask` is refused with an
-  error instead of being half-honored.
+  choose an agent or model, so a bundled command that declares `agent`, `model` or `subtask` is refused with
+  an error instead of being half-honored. A discovered skill's fields are dropped with a note and the skill
+  is never refused.
 - **bootstrap** (`opencode-v2-bootstrap.ts`) — one instruction entry (`systematic.bootstrap`) per session,
   put from the `prompt` hook.
 

@@ -41,10 +41,10 @@ A skill can set `agent`, `model` and `subtask` in its frontmatter, and `context:
 On OpenCode v1:
 
 - `subtask` passes through as written. `subtask: false` stays `false`.
-- `agent` passes through only when the skill runs as a subtask and the name is an agent OpenCode has. That means `build`, `plan`, `general` or `explore`, or any agent in your config or from a plugin, matched exactly and with the same capitalization. A disabled agent does not count.
+- `agent` passes through only when the skill runs as a subtask and the name is an agent OpenCode has. That means `build`, `plan`, `general`, `explore`, an agent in your config, one a plugin added before Systematic's config hook runs, or one of Systematic's bundled agents. Matching is exact, with the same capitalization. A disabled agent does not count, and an agent that a plugin adds later is dropped with a warning.
 - `model` passes through only in the form `provider/model`, such as `anthropic/claude-sonnet-4-5`. Systematic does not check that the provider exists.
 
-A field that fails its check is left off, and the command still runs. Systematic prints one warning for each skill and field, for example `skill "review" sets agent "Explore", which is not an OpenCode agent; it is ignored.` The warning is not repeated if the config loads again. To route such a skill, write an OpenCode command for it.
+A field that fails its check is left off, and the command still runs. Systematic prints one warning for each skill and field, for example `[systematic] skill "review" sets agent "Explore", which is not an OpenCode agent; it is ignored. Write an OpenCode command to route it.` The warning is not repeated if the config loads again. To route such a skill, write an OpenCode command for it.
 
 On OpenCode v2, a plugin command cannot choose an agent or a model, so Systematic leaves all three fields off every discovered skill. The skill is never refused. Its command runs on your current session, and Systematic writes one note per skill that says which fields it ignored. Bundled Systematic commands that declare these fields are still refused on v2.
 
