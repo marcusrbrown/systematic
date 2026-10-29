@@ -1,7 +1,7 @@
 ---
 title: Subagent skill tool permissions require explicit per-agent configuration
 date: 2026-05-20
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 category: workflow-issues
 module: plugin-permissions
 problem_type: workflow_issue
@@ -56,6 +56,8 @@ The wildcard `"systematic:*"` covers all Systematic-namespaced skills. For tight
 }
 ```
 
+On OpenCode v1, Systematic's own managed `skills` lists now reach both the native `skill` tool and `systematic_skill`, because the v1 fold mirrors list allows to the prefixed name unless you wrote a prefixed `deny` or `ask` for that skill. Rules written by hand in `permission.skill` are not mirrored, so they still need the name form of the tool they target: the bare name for `skill`, `systematic:<name>` for `systematic_skill`. See [v1 skill permission names](../logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md).
+
 ## Why This Matters
 
 A subagent that cannot load its domain skill falls back to general knowledge, producing significantly lower-quality output for specialized tasks. The failure is silent from the orchestrator's perspective — the subagent simply proceeds without the skill's guidance, and the quality gap only surfaces during verification.
@@ -92,5 +94,6 @@ On v2, Systematic translates permissions per agent (HARNESSES.md OC2-PERM), and 
 
 ## Related
 
+- `docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md` — why one skill has two permission names on v1 and how managed lists cover both.
 - Oracle troubleshooting session on PR #418 — root cause analysis
 - OMO Slim documentation for agent permission configuration

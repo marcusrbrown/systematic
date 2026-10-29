@@ -1,7 +1,7 @@
 ---
 title: OpenCode plugin config key is `plugin` on v1 and `plugins` on v2
 date: 2026-07-18
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 category: documentation-gaps
 module: opencode-plugin-config
 problem_type: documentation_gap
@@ -54,7 +54,7 @@ On OpenCode v2 (2.2.0 and later), the key is the plural `plugins`:
 { "plugins": ["@fro.bot/systematic@latest"] }
 ```
 
-The key is `plugins` on v2 (HARNESSES.md, OpenCode v2 section). `systematic setup --harness opencode` writes only `plugin` and refuses an existing `plugins` (`src/lib/setup.ts:315-319`). What OCX writes to `opencode.json` comes from OCX and is not verified here.
+The key is `plugins` on v2 (HARNESSES.md, OpenCode v2 section). `systematic setup --harness opencode` writes only `plugin` and refuses an existing `plugins` (`src/lib/setup.ts:315-319`). With OCX 2.0.15, both the `systematic/plugin` component and the `standalone` and `omo` profiles write the singular `plugin` key (local `ocx@2.0.15` probe, #1245), and OCX rejects `plugins` in a component manifest. OCX against an OpenCode v2 host is still unprobed.
 
 ## Why This Matters
 
@@ -78,6 +78,7 @@ The clinching signal: the project's own code enforced the singular key while its
 
 ## Related
 
+- `docs/solutions/integration-issues/registry-validator-passthrough-hid-ocx-schema-mismatch-2026-10-29.md` — the registry component that declared the plural key, and why the registry checks passed.
 - `docs/solutions/integration-issues/opencode-plugin-factory-duplicate-registration-2026-05-04.md` — plugin config/loader semantics (how OpenCode resolves the `plugin` array across sources).
 - `docs/solutions/developer-experience/local-systematic-overrides-global-2026-05-14.md` — OpenCode config source precedence.
 - `docs/solutions/integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md` — verifying real OpenCode loader behavior rather than assuming.
