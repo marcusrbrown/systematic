@@ -27,7 +27,9 @@
           "skill": {
             "*": "deny",
             "fixture-alpha": "allow",
-            "fixture-beta": "allow"
+            "systematic:fixture-alpha": "allow",
+            "fixture-beta": "allow",
+            "systematic:fixture-beta": "allow"
           }
         }
       },
@@ -42,8 +44,10 @@
           },
           "skill": {
             "fixture-alpha": "allow",
+            "systematic:fixture-alpha": "allow",
             "*": "deny",
-            "fixture-beta": "allow"
+            "fixture-beta": "allow",
+            "systematic:fixture-beta": "allow"
           }
         }
       },

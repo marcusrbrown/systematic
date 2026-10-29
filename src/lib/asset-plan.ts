@@ -43,6 +43,14 @@ export interface PermissionRuleTriple {
   permission: string
   pattern: string
   setting: PermissionSetting
+  /**
+   * Set only when the rule that wins for this pattern was written by a managed
+   * `skills` list, not by a permission the user wrote. An adapter can then tell
+   * a generated allow from a hand-written one. Only the OpenCode v1 adapter
+   * reads it, because only v1 has two skill tools that ask under two names;
+   * the other adapters ignore it.
+   */
+  fromSkillsList?: true
 }
 
 /**
@@ -413,10 +421,13 @@ function applyOverlayObjectFields(
  * ordered list the plan exposes: permissions in first-appearance order, each
  * permission's rules in last-set order.
  */
-type PermissionRuleAccumulator = Map<string, Map<string, PermissionSetting>>
+type PermissionRuleAccumulator = Map<
+  string,
+  Map<string, { setting: PermissionSetting; fromSkillsList: boolean }>
+>
 
 function createPermissionRuleAccumulator(): PermissionRuleAccumulator {
-  return new Map<string, Map<string, PermissionSetting>>()
+  return new Map()
 }
 
 function addPermissionRules(
@@ -441,10 +452,10 @@ function addManagedSkillRules(
   accumulator: PermissionRuleAccumulator,
   skills: unknown[],
 ): void {
-  setPermissionRule(accumulator, 'skill', '*', 'deny')
+  setPermissionRule(accumulator, 'skill', '*', 'deny', true)
   for (const skill of skills) {
     if (typeof skill === 'string') {
-      setPermissionRule(accumulator, 'skill', skill, 'allow')
+      setPermissionRule(accumulator, 'skill', skill, 'allow', true)
     }
   }
 }
@@ -454,8 +465,13 @@ function permissionRulesToTriples(
 ): PermissionRuleTriple[] {
   const triples: PermissionRuleTriple[] = []
   for (const [permission, rules] of accumulator) {
-    for (const [pattern, setting] of rules) {
-      triples.push({ permission, pattern, setting })
+    for (const [pattern, { setting, fromSkillsList }] of rules) {
+      triples.push({
+        permission,
+        pattern,
+        setting,
+        ...(fromSkillsList && { fromSkillsList: true as const }),
+      })
     }
   }
   return triples
@@ -466,13 +482,16 @@ function setPermissionRule(
   tool: string,
   pattern: string,
   setting: PermissionSetting,
+  fromSkillsList = false,
 ): void {
-  const rules = accumulator.get(tool) ?? new Map<string, PermissionSetting>()
+  const rules = accumulator.get(tool) ?? new Map()
   // OpenCode permission evaluation uses the last matching rule. Map insertion
   // order is therefore intentional here: delete before set moves same-pattern
   // overrides to the end so stronger exact overlays beat weaker category rules.
+  // The provenance is replaced with the rule, so a hand-written rule that
+  // overrides a list's rule for the same pattern is no longer marked.
   if (rules.has(pattern)) rules.delete(pattern)
-  rules.set(pattern, setting)
+  rules.set(pattern, { setting, fromSkillsList })
   accumulator.set(tool, rules)
 }
 

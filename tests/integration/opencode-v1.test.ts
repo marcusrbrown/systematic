@@ -26,6 +26,7 @@ import {
   assertOk,
   assertProbeCapturedEvents,
   buildIsolatedOpencodeEnv,
+  buildOpencodeRunArgv,
   cleanupPackedTarball,
   createIsolatedFixture,
   createProbePlugin,
@@ -42,8 +43,12 @@ import {
   packTarballOnce,
   REPO_ROOT,
   runOpencode,
+  type ScriptedModelServer,
+  scriptedResponseChunks,
   spawnOpencodeChild,
+  TARGET_OPENCODE_HOST,
   TIMEOUT_MS,
+  withScriptedProvider,
 } from './fixtures/opencode-host.js'
 
 // This call lives here rather than in the fixture module, so importing the
@@ -63,6 +68,113 @@ function expectSetupSkillLoaded(result: OpencodeResult): void {
   expect(result.stderr).toMatch(
     /(?:Skill\s+"?git-clean-gone-branches"?|systematic_skill\s*\{"name":"(?:systematic:)?git-clean-gone-branches"\})/i,
   )
+}
+
+interface ScriptedToolRun {
+  tool: string
+  args: Record<string, unknown>
+  /** Runs the call as this agent; omitted runs the host's default agent. */
+  agent?: string
+}
+
+function toolMessageText(message: unknown): string {
+  const content = (message as { content?: unknown }).content
+  return typeof content === 'string' ? content : JSON.stringify(content)
+}
+
+/**
+ * A scripted model that makes one tool call and reads the answer. The text of
+ * the first tool result the host sent back is `result()`; it is empty when the
+ * host never ran the call.
+ */
+function startToolCallModel(call: ScriptedToolRun): ScriptedModelServer & {
+  result(): string
+} {
+  let issued = false
+  let toolResult = ''
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (
+        request.method !== 'POST' ||
+        !request.url.endsWith('/chat/completions')
+      ) {
+        return new Response('not found', { status: 404 })
+      }
+      const body = (await request.json()) as {
+        tools?: unknown[]
+        messages?: { role?: string }[]
+      }
+      const toolMessage = body.messages?.find((m) => m.role === 'tool')
+      if (toolMessage !== undefined && toolResult === '') {
+        toolResult = toolMessageText(toolMessage)
+      }
+      const offersTools = Array.isArray(body.tools) && body.tools.length > 0
+      const response =
+        offersTools && !issued && toolMessage === undefined
+          ? {
+              toolCalls: [
+                { id: 'v1-skill-call', name: call.tool, arguments: call.args },
+              ],
+            }
+          : { text: 'done' }
+      if (response.toolCalls) issued = true
+      const chunks = scriptedResponseChunks(
+        response,
+        'v1-skill-response',
+        Math.floor(Date.now() / 1000),
+      )
+      const encoder = new TextEncoder()
+      const sse = [
+        ...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`),
+        'data: [DONE]\n\n',
+      ].join('')
+      return new Response(encoder.encode(sse), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+  return {
+    url: `http://localhost:${server.port}/v1`,
+    stop: () => server.stop(true),
+    result: () => toolResult,
+  }
+}
+
+/**
+ * Runs one scripted tool call through a real v1 host with the packaged plugin
+ * and returns what the tool answered. The host's own permission check sits in
+ * front of the tool, so a refusal comes back as the host's refusal text.
+ */
+async function callToolOnHost(
+  fixture: IsolatedFixture,
+  pluginUrl: string,
+  call: ScriptedToolRun,
+): Promise<string> {
+  const model = startToolCallModel(call)
+  try {
+    const configContent = withScriptedProvider(
+      JSON.stringify({ plugin: [pluginUrl], snapshot: false }),
+      model.url,
+    )
+    const argv = buildOpencodeRunArgv(
+      TARGET_OPENCODE_HOST,
+      'run the scripted call',
+    )
+    const prompt = argv.pop()
+    if (prompt === undefined) throw new Error('run argv has no prompt')
+    if (call.agent !== undefined) argv.push('--agent', call.agent)
+    argv.push(prompt)
+    const result = await spawnOpencodeChild(argv, {
+      cwd: fixture.projectDir,
+      env: buildIsolatedOpencodeEnv(fixture, configContent),
+      timeoutMs: TIMEOUT_MS,
+    })
+    assertOk(result)
+    return model.result()
+  } finally {
+    model.stop()
+  }
 }
 
 /**
@@ -186,6 +298,132 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
         expect(result.stderr).toContain('Invalid Systematic config in')
       },
       TIMEOUT_MS,
+    )
+
+    // The two skill tools ask for permission under different names on v1: the
+    // native `skill` tool asks with the bare name, `systematic_skill` with
+    // `systematic:<name>`. These two tests run both through the real host.
+    test(
+      'systematic_skill refuses a skill a managed agent may not load while the listed skill and a sibling agent load',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({
+            agents: {
+              'repo-research-analyst': {
+                mode: 'primary',
+                skills: ['git-worktree'],
+              },
+              'correctness-reviewer': { mode: 'primary' },
+            },
+          }),
+        )
+
+        const allowed = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_skill',
+          args: { name: 'git-worktree' },
+          agent: 'repo-research-analyst',
+        })
+        const denied = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_skill',
+          args: { name: 'git-clean-gone-branches' },
+          agent: 'repo-research-analyst',
+        })
+        const native = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'skill',
+          args: { name: 'git-worktree' },
+          agent: 'repo-research-analyst',
+        })
+        const sibling = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_skill',
+          args: { name: 'git-clean-gone-branches' },
+          agent: 'correctness-reviewer',
+        })
+
+        expect(allowed).toContain(
+          '<skill_content name="systematic:git-worktree">',
+        )
+        expect(denied).not.toContain('<skill_content')
+        expect(denied.toLowerCase()).toContain('rule')
+        // The native tool keeps working for the listed skill.
+        expect(native).toContain('<skill_content name="git-worktree">')
+        expect(sibling).toContain(
+          '<skill_content name="systematic:git-clean-gone-branches">',
+        )
+      },
+      TIMEOUT_MS * 4,
+    )
+
+    test(
+      'an explicit systematic: deny is kept when a hand-written bare allow wins over a category skills list',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({
+            categories: { review: { skills: ['git-worktree'] } },
+            agents: {
+              'correctness-reviewer': {
+                mode: 'primary',
+                permission: {
+                  skill: {
+                    'systematic:git-worktree': 'deny',
+                    'git-worktree': 'allow',
+                  },
+                },
+              },
+            },
+          }),
+        )
+
+        const viaSystematic = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'systematic_skill',
+          args: { name: 'git-worktree' },
+          agent: 'correctness-reviewer',
+        })
+        const viaNative = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'skill',
+          args: { name: 'git-worktree' },
+          agent: 'correctness-reviewer',
+        })
+
+        // The user's prefixed deny still refuses systematic_skill ...
+        expect(viaSystematic).not.toContain('<skill_content')
+        expect(viaSystematic.toLowerCase()).toContain('rule')
+        // ... and the bare allow still lets the native tool load the skill.
+        expect(viaNative).toContain('<skill_content name="git-worktree">')
+      },
+      TIMEOUT_MS * 2,
+    )
+    test(
+      'the native skill tool refuses a skill in disabled_skills, and still loads an enabled one',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.mkdirSync(path.join(fixture.projectDir, '.opencode'), {
+          recursive: true,
+        })
+        fs.writeFileSync(
+          path.join(fixture.projectDir, '.opencode/systematic.json'),
+          JSON.stringify({ disabled_skills: ['git-worktree'] }),
+        )
+
+        const refused = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'skill',
+          args: { name: 'git-worktree' },
+        })
+        const control = await callToolOnHost(fixture, pluginUrl, {
+          tool: 'skill',
+          args: { name: 'git-clean-gone-branches' },
+        })
+
+        expect(refused).not.toContain('<skill_content')
+        expect(refused.toLowerCase()).toContain('rule')
+        expect(control).toContain(
+          '<skill_content name="git-clean-gone-branches">',
+        )
+      },
+      TIMEOUT_MS * 2,
     )
   },
 )

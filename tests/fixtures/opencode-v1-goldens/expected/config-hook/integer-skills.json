@@ -29,7 +29,10 @@
             "2": "allow",
             "10": "allow",
             "*": "deny",
-            "fixture-alpha": "allow"
+            "systematic:10": "allow",
+            "fixture-alpha": "allow",
+            "systematic:fixture-alpha": "allow",
+            "systematic:2": "allow"
           }
         }
       },

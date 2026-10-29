@@ -280,6 +280,10 @@ Skill discovery is harness-owned and does not depend on the bootstrap prompt car
   skills directory in native `skills.paths`. OpenCode's native `skill` tool then discovers and
   loads those skills. If `systematic_skill` is unavailable or denied, discovery is degraded but
   not lost because the host path remains available.
+  The native tool asks permission with the bare skill name and `systematic_skill` with
+  `systematic:<name>`, so the config hook writes each managed `skills` allow in both forms. It also
+  adds a top-level `permission.skill` deny, in both forms, for each name in `disabled_skills`,
+  because the registered directory is not filtered.
 - **OpenCode v2** — `ctx.skill.transform` adds each enabled bundled skill (id, path, body) to the
   host, so the native `skill` tool and its `<available_skills>` list see them, with the agent's
   permission rules applied. Disabled skills are never added. A user or on-disk skill with the same id

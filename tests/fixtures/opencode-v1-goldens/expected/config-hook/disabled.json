@@ -80,6 +80,12 @@
     },
     "skills": {
       "paths": ["/fixture-user/own/skills", "<TMP>/pkg/skills"]
+    },
+    "permission": {
+      "skill": {
+        "git-worktree": "deny",
+        "systematic:git-worktree": "deny"
+      }
     }
   },
   "diagnostics": {

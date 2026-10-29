@@ -315,9 +315,43 @@ describe('buildAssetPlan: ordered permission triples', () => {
     })
     expect(managedRules(plan, 'correctness-reviewer')).toEqual([
       { permission: 'edit', pattern: '*', setting: 'deny' },
-      { permission: 'skill', pattern: '*', setting: 'deny' },
-      { permission: 'skill', pattern: 'fixture-beta', setting: 'allow' },
-      { permission: 'skill', pattern: 'fixture-alpha', setting: 'allow' },
+      {
+        permission: 'skill',
+        pattern: '*',
+        setting: 'deny',
+        fromSkillsList: true,
+      },
+      {
+        permission: 'skill',
+        pattern: 'fixture-beta',
+        setting: 'allow',
+        fromSkillsList: true,
+      },
+      {
+        permission: 'skill',
+        pattern: 'fixture-alpha',
+        setting: 'allow',
+        fromSkillsList: true,
+      },
+    ])
+  })
+
+  test('a hand-written rule that overrides a list rule for the same skill is no longer marked as from the list', () => {
+    const plan = planWith({
+      categories: { review: { skills: ['fixture-alpha', 'fixture-beta'] } },
+      agents: {
+        'correctness-reviewer': {
+          permission: { skill: { 'fixture-alpha': 'allow' } },
+        },
+      },
+    })
+    const marked = managedRules(plan, 'correctness-reviewer')
+      .filter((rule) => rule.permission === 'skill')
+      .map((rule) => [rule.pattern, rule.fromSkillsList === true])
+    expect(marked).toEqual([
+      ['*', true],
+      ['fixture-beta', true],
+      ['fixture-alpha', false],
     ])
   })
 
@@ -360,11 +394,15 @@ describe('buildAssetPlan: ordered permission triples', () => {
     // This is today's v1 behavior, pinned by the v1 golden tests; it is a known
     // hazard, deliberately not fixed here.
     const folded = foldPermissionRulesToV1Map(rules)
+    // The list's allows also carry the prefixed form, placed after each bare one.
     expect(Object.entries(folded?.skill ?? {})).toEqual([
       ['2', 'allow'],
       ['10', 'allow'],
       ['*', 'deny'],
+      ['systematic:10', 'allow'],
       ['fixture-alpha', 'allow'],
+      ['systematic:fixture-alpha', 'allow'],
+      ['systematic:2', 'allow'],
     ])
   })
 })
@@ -396,6 +434,29 @@ describe('foldPermissionRulesToV1Map', () => {
     expect(Object.entries(folded?.skill ?? {})).toEqual([
       ['a', 'allow'],
       ['*', 'allow'],
+    ])
+  })
+
+  test('an explicit prefixed allow set before the list still reaches systematic_skill', () => {
+    const folded = foldPermissionRulesToV1Map([
+      { permission: 'skill', pattern: 'systematic:a', setting: 'allow' },
+      {
+        permission: 'skill',
+        pattern: '*',
+        setting: 'deny',
+        fromSkillsList: true,
+      },
+      {
+        permission: 'skill',
+        pattern: 'a',
+        setting: 'allow',
+        fromSkillsList: true,
+      },
+    ])
+    expect(Object.entries(folded?.skill ?? {})).toEqual([
+      ['*', 'deny'],
+      ['a', 'allow'],
+      ['systematic:a', 'allow'],
     ])
   })
 })
