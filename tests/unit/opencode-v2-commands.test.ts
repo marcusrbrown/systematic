@@ -449,6 +449,94 @@ describe('registration', () => {
     )
   })
 
+  describe('a discovered skill that declares routing', () => {
+    function writeRoutedSkill(name: string, routing: string): void {
+      const dir = path.join(projectDir, '.claude/skills', name)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: Routed ${name}\n${routing}---\n# ${name}\n\nDo it: $ARGUMENTS\n`,
+      )
+    }
+
+    test('is not refused: it prompts normally and one diagnostic is reported', async () => {
+      writeRoutedSkill(
+        'routed',
+        'context: fork\nagent: Explore\nmodel: sonnet\n',
+      )
+      const host = createHost({ directory: projectDir })
+      await setup(host)
+      const definition = replay(host).get('routed')
+      if (definition === undefined) throw new Error('routed was not registered')
+
+      await definition.execute(invocation('go'))
+      await definition.execute(invocation('again'))
+
+      expect(callsOf(host, 'prompt')).toHaveLength(2)
+      expect(callsOf(host, 'switchAgent')).toHaveLength(0)
+      expect(callsOf(host, 'switchModel')).toHaveLength(0)
+      expect(callsOf(host, 'create')).toHaveLength(0)
+      const notes = errorMessages().filter((m) => m.includes('"routed"'))
+      expect(notes).toHaveLength(1)
+      expect(notes[0]).toStartWith('systematic: ')
+      expect(notes[0]).toContain('agent')
+      expect(notes[0]).toContain('model')
+      expect(notes[0]).toContain('subtask')
+      expect(notes[0]).toContain('ignored')
+      // The bundled-command refusal wording never appears for a discovered skill.
+      expect(notes[0]).not.toContain('Systematic command')
+    })
+
+    test('is reported once across transform replays, and only for what it declares', async () => {
+      writeRoutedSkill('only-model', 'model: anthropic/claude-sonnet-4-5\n')
+      const host = createHost({ directory: projectDir })
+      await setup(host)
+
+      for (let attempt = 0; attempt < 3; attempt++) replay(host)
+
+      const notes = errorMessages().filter((m) => m.includes('"only-model"'))
+      expect(notes).toHaveLength(1)
+      expect(notes[0]).toContain('model')
+      expect(notes[0]).not.toContain('agent')
+      expect(notes[0]).not.toContain('subtask')
+    })
+
+    test('an explicit subtask: false is dropped with a diagnostic, not refused', async () => {
+      writeRoutedSkill('no-fork', 'subtask: false\n')
+      const host = createHost({ directory: projectDir })
+      await setup(host)
+      const definition = replay(host).get('no-fork')
+      if (definition === undefined) throw new Error('no-fork not registered')
+
+      await definition.execute(invocation('go'))
+
+      expect(callsOf(host, 'prompt')).toHaveLength(1)
+      const notes = errorMessages().filter((m) => m.includes('"no-fork"'))
+      expect(notes).toHaveLength(1)
+      expect(notes[0]).toContain('subtask')
+    })
+
+    test('a skill with no routing fields reports nothing', async () => {
+      writeRoutedSkill('plain', '')
+      const host = createHost({ directory: projectDir })
+      await setup(host)
+
+      expect(replay(host).has('plain')).toBe(true)
+
+      expect(errorMessages()).toEqual([])
+    })
+
+    test('is not reported when a native command owns its name', async () => {
+      writeRoutedSkill('review', 'context: fork\n')
+      const host = createHost({ native: ['review'], directory: projectDir })
+      await setup(host)
+
+      replay(host)
+
+      expect(errorMessages().filter((m) => m.includes('declares'))).toEqual([])
+    })
+  })
+
   test('without the native-command lookup every command still registers, and the failure is reported', async () => {
     const host = createHost({ listFails: true, directory: projectDir })
     await setup(host)

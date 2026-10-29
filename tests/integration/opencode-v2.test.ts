@@ -1063,6 +1063,57 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
+      'a discovered skill that declares routing is not refused: it prompts on the invoking session and one diagnostic is reported',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeCommandSkill(
+          'probe-routed',
+          {
+            context: 'fork',
+            agent: 'Explore',
+            model: 'sonnet',
+          },
+          'Routed body: $ARGUMENTS',
+        )
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          await listCommands(host, (entries) =>
+            entries.some((entry) => entry.name === 'probe-routed'),
+          )
+          const session = await newSession(host)
+          await host.client.session.command({
+            sessionID: session.id,
+            name: 'probe-routed',
+            text: 'ROUTED-ARG-5',
+          })
+          await waitFor(() => toolModel.turns.length > 0, 'the command turn')
+
+          const turn = toolModel.turns[0]
+          if (turn === undefined) throw new Error('no turn recorded')
+          expect(lastUserText(turn)).toContain('Routed body: ROUTED-ARG-5')
+          expect(turn.model).toBe(SCRIPTED_MODEL)
+          await host.client.session.wait({ sessionID: session.id })
+          const state = await sessionState(host, session.id)
+          expect(state.agent).toBe('build')
+
+          const notes = host.server
+            .output()
+            .split('\n')
+            .filter((line) => line.includes('"probe-routed"'))
+          expect(notes).toHaveLength(1)
+          expect(notes[0]).toContain('systematic: ')
+          expect(notes[0]).toContain('ignored')
+          expect(notes[0]).not.toContain('Systematic command')
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
       'a !-backtick block in a command stays literal text in the prompt',
       async () => {
         const { pluginSpec } = extractPackagedPlugin(fixture, HOST)

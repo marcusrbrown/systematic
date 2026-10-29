@@ -45,7 +45,7 @@ Two bugs came from writing rules in one form only:
 
 Three rules.
 
-**1. Cover both names, and mark each generated rule.** `PermissionRuleTriple` carries an optional `fromSkillsList` marker (`src/lib/asset-plan.ts:53`). `addManagedSkillRules` sets it on the list's `* deny` and on each allow (`src/lib/asset-plan.ts:451-459`). `setPermissionRule` replaces the marker along with the rule, so a hand-written rule that overrides a list rule for the same pattern is no longer marked (`src/lib/asset-plan.ts:480-496`). The v1 fold in `foldPermissionRulesToV1Map` mirrors only an allow whose `fromSkillsList` marker survived last-match-wins (`src/lib/config-handler.ts:155-165`):
+**1. Cover both names, and mark each generated rule.** `PermissionRuleTriple` carries an optional `fromSkillsList` marker (`src/lib/asset-plan.ts:53`). `addManagedSkillRules` sets it on the list's `* deny` and on each allow (`src/lib/asset-plan.ts:474-482`). `setPermissionRule` replaces the marker along with the rule, so a hand-written rule that overrides a list rule for the same pattern is no longer marked (`src/lib/asset-plan.ts:503-519`). The v1 fold in `foldPermissionRulesToV1Map` mirrors only an allow whose `fromSkillsList` marker survived last-match-wins (`src/lib/config-handler.ts:155-165`):
 
 ```ts
 if (permission !== 'skill' || setting !== 'allow' || !fromSkillsList) continue
@@ -58,7 +58,7 @@ if (prefixed !== pattern && (explicit ?? 'allow') === 'allow') {
 
 **2. Generated rules never override user rules.** The fold first collects every unmarked skill rule into `explicitSkillSettings` (`src/lib/config-handler.ts:137-142`). The mirror applies only when the prefixed name has no explicit rule, or its explicit rule is `allow` (`src/lib/config-handler.ts:161-164`). A prefixed deny or ask the user wrote stays. A prefixed allow the user wrote agrees with the mirror, so it is moved after the list's `* deny` and not duplicated. The doc comment on `foldPermissionRulesToV1Map` states the rule (`src/lib/config-handler.ts:124-132`).
 
-**3. Bind ownership to the object that was written.** `denyDisabledSkills` adds a bare and a prefixed deny for each disabled skill at the top level of the host config (`src/lib/config-handler.ts:328`, called at `src/lib/config-handler.ts:277`). It records what it added in a `WeakMap` keyed by the config, storing the `permission` map, the `permission.skill` map, and the added patterns (`src/lib/config-handler.ts:295`). On the next run it removes those denies only while both maps are still the same objects (`src/lib/config-handler.ts:335-339`). A rule the user already wrote for the same name is left alone and never recorded.
+**3. Bind ownership to the object that was written.** `denyDisabledSkills` adds a bare and a prefixed deny for each disabled skill at the top level of the host config (`src/lib/config-handler.ts:439`, called at `src/lib/config-handler.ts:388`). It records what it added in a `WeakMap` keyed by the config, storing the `permission` map, the `permission.skill` map, and the added patterns (`src/lib/config-handler.ts:406`). On the next run it removes those denies only while both maps are still the same objects (`src/lib/config-handler.ts:446-450`). A rule the user already wrote for the same name is left alone and never recorded.
 
 Tests in `tests/unit/config-handler.test.ts` pin each rule:
 

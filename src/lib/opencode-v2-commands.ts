@@ -1,5 +1,5 @@
 import type { Plugin } from '@opencode/plugin'
-import type { PlannedCommand } from './asset-plan.js'
+import type { DeclaredRouting, PlannedCommand } from './asset-plan.js'
 import type { V2Installer } from './opencode-v2.js'
 import { substituteSkillArguments } from './skill-resolver.js'
 
@@ -15,9 +15,10 @@ import { substituteSkillArguments } from './skill-resolver.js'
  *
  * It does not route. A v2 plugin command cannot choose an agent or a model for
  * its prompt, and switching the session around the turn leaves the user's
- * session changed. A command that declares `agent`, `model` or `subtask` is
- * refused with a message instead; OpenCode commands written in Markdown or JSON
- * can do that routing.
+ * session changed. A bundled command that declares `agent`, `model` or
+ * `subtask` is refused with a message instead; OpenCode commands written in
+ * Markdown or JSON can do that routing. A discovered skill is never refused: its
+ * routing fields are dropped with a note and it runs on the invoking session.
  */
 
 type CommandEditor = Parameters<
@@ -58,6 +59,23 @@ function declaredRouting(
 
 function refusalMessage(name: string, field: string): string {
   return `Systematic command "${name}" declares ${field}, which OpenCode v2 plugin commands cannot route. Define it as an OpenCode command in Markdown or JSON to choose its agent or model.`
+}
+
+/**
+ * A discovered skill is the user's own, often written for another agent
+ * harness, so its routing fields are not a promise Systematic made. They never reach the
+ * command (the plan keeps them apart), the command runs on the invoking session
+ * as it is, and this note says what was ignored. Only a bundled command that
+ * declares routing is refused.
+ */
+function ignoredRoutingMessage(
+  name: string,
+  declared: DeclaredRouting,
+): string {
+  const fields = (['agent', 'model', 'subtask'] as const).filter(
+    (field) => declared[field] !== undefined,
+  )
+  return `skill "${name}" declares ${fields.join(', ')}, which OpenCode v2 plugin commands cannot route; it is ignored and the skill runs as it is. Write an OpenCode command in Markdown or JSON to route it.`
 }
 
 async function submit(
@@ -145,6 +163,14 @@ export const installCommands: V2Installer = async ({
       guard.sync(`command "${name}"`, () => {
         editor.add(buildCommand(runtime, name, planned))
       })()
+      const declared = snapshot.plan.discoveredRouting[name]
+      if (declared !== undefined) {
+        reportOnce(
+          runtime,
+          `ignored-routing:${name}`,
+          ignoredRoutingMessage(name, declared),
+        )
+      }
     }
   })
   await guard.async('command registration', () =>

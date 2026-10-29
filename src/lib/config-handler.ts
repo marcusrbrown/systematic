@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
 import {
+  type AssetPlan,
   buildAssetPlan,
   type PermissionRuleTriple,
   type PlannedAgent,
@@ -190,6 +191,113 @@ export function toV1AgentConfig(planned: PlannedAgent): AgentConfig {
 }
 
 /**
+ * Agents OpenCode v1 always defines for a command to name: `build`, `plan`,
+ * `general` and `explore` (`packages/opencode/src/agent/agent.ts` at v1.19.4).
+ * The host also keeps three hidden internal agents (`compaction`, `title`,
+ * `summary`); a skill has no reason to route there, so they are left out.
+ */
+const OPENCODE_V1_BUILT_IN_AGENTS = [
+  'build',
+  'plan',
+  'general',
+  'explore',
+] as const
+
+/**
+ * Agent names a command can route to once every plugin has merged its agents:
+ * the built-ins plus every key of `config.agent`, except an agent switched off
+ * with `disable: true`, which the host removes. The host matches names exactly.
+ */
+function knownAgentNames(
+  agents: Record<string, AgentConfig | undefined> | undefined,
+): Set<string> {
+  const known = new Set<string>(OPENCODE_V1_BUILT_IN_AGENTS)
+  for (const [name, agent] of Object.entries(agents ?? {})) {
+    if (agent?.disable === true) known.delete(name)
+    else known.add(name)
+  }
+  return known
+}
+
+/** Why a declared agent cannot be passed on, or `undefined` when it can. */
+function agentProblem(
+  agent: string,
+  isSubtask: boolean,
+  known: ReadonlySet<string>,
+): string | undefined {
+  if (!isSubtask) {
+    return `sets agent "${agent}" but does not run as a subtask (context: fork or subtask: true)`
+  }
+  return known.has(agent)
+    ? undefined
+    : `sets agent "${agent}", which is not an OpenCode agent`
+}
+
+/**
+ * Why a declared model cannot be passed on, or `undefined` when it can. The
+ * shape is `provider/model` with both sides non-empty; whether the provider
+ * exists is the host's call.
+ */
+function modelProblem(model: string): string | undefined {
+  const slash = model.indexOf('/')
+  return slash > 0 && slash < model.length - 1
+    ? undefined
+    : `sets model "${model}", which is not in provider/model form`
+}
+
+const IGNORED_ROUTING_HINT =
+  'it is ignored. Write an OpenCode command to route it.'
+
+/**
+ * Copy the routing a discovered skill declared onto its emitted command, but
+ * only the parts OpenCode v1 can run. A value the host would reject (an unknown
+ * agent, a model that is not `provider/model`) would make the whole command
+ * fail, so it is dropped with one warning instead.
+ *
+ * - `subtask` passes through as declared, `false` included.
+ * - `agent` passes only for a subtask, and only when it names a known agent.
+ * - `model` passes only in `provider/model` form.
+ *
+ * A command that is not the one this hook emitted (a user command of the same
+ * name won the merge) is left alone, and nothing is reported for it.
+ */
+function applyDiscoveredRouting(
+  config: Config,
+  plan: AssetPlan,
+  reported: Set<string>,
+): void {
+  const known = knownAgentNames(
+    config.agent as Record<string, AgentConfig | undefined> | undefined,
+  )
+  const drop = (name: string, field: string, reason: string): void => {
+    const key = `${name}\0${field}`
+    if (reported.has(key)) return
+    reported.add(key)
+    console.warn(
+      `[systematic] skill "${name}" ${reason}; ${IGNORED_ROUTING_HINT}`,
+    )
+  }
+
+  for (const [name, declared] of Object.entries(plan.discoveredRouting)) {
+    const command = config.command?.[name]
+    if (command === undefined || command !== plan.commands[name]) continue
+
+    const { agent, model, subtask } = declared
+    if (agent !== undefined) {
+      const problem = agentProblem(agent, subtask === true, known)
+      if (problem === undefined) command.agent = agent
+      else drop(name, 'agent', problem)
+    }
+    if (model !== undefined) {
+      const problem = modelProblem(model)
+      if (problem === undefined) command.model = model
+      else drop(name, 'model', problem)
+    }
+    if (subtask !== undefined) command.subtask = subtask
+  }
+}
+
+/**
  * Create the config hook handler for the Systematic plugin.
  *
  * This follows the pattern used by oh-my-opencode to inject bundled agents,
@@ -208,6 +316,8 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
   const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
     ? process.env.OPENCODE_CONFIG_DIR
     : undefined
+  // Routing warnings already written, so a repeat run of this hook stays quiet.
+  const reportedRouting = new Set<string>()
 
   return async (config: Config): Promise<void> => {
     // Invalid config throws here, before any plan is built. v1 is not fail-open.
@@ -268,6 +378,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       plan.commands,
       (_key, command) => isSystematicCommandConfig(command),
     )
+    applyDiscoveredRouting(config, plan, reportedRouting)
 
     // skills.paths exists at runtime (v2 SDK types) but not in our v1 import
     registerSkillsPaths(config, plan.skillsDir)

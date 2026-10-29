@@ -81,6 +81,18 @@ export interface PlannedCommand {
   subtask?: boolean
 }
 
+/**
+ * Routing fields a discovered skill declared in its frontmatter, as written.
+ * Discovered skills are the user's own and are often written for other agent
+ * harnesses, so the values are not trusted: each host decides what to do with
+ * them.
+ */
+export interface DeclaredRouting {
+  agent?: string
+  model?: string
+  subtask?: boolean
+}
+
 export interface AssetPlan {
   /** Bundled skills directory, for hosts that register it for native discovery. */
   skillsDir: string
@@ -88,8 +100,19 @@ export interface AssetPlan {
   enabledSkills: readonly string[]
   /** Agents keyed by emitted agent name, in discovery order. */
   agents: Record<string, PlannedAgent>
-  /** Commands keyed by emitted command name: bundled commands, then skills, then discovered skills. */
+  /**
+   * Commands keyed by emitted command name: bundled commands, then skills,
+   * then discovered skills. A discovered command never carries `agent`,
+   * `model` or `subtask`; see `discoveredRouting`.
+   */
   commands: Record<string, PlannedCommand>
+  /**
+   * What each discovered skill declared, keyed by its command name. Only
+   * skills that declare at least one routing field, and whose command is in
+   * `commands`, are listed. A host that can route validates these and applies
+   * what is valid; a host that cannot reports them.
+   */
+  discoveredRouting: Record<string, DeclaredRouting>
 }
 
 export interface AssetPlanInput {
@@ -558,6 +581,10 @@ function collectSkillsAsCommands(
  * command processing (argument substitution and `!`-backtick snippet
  * execution) — the same handling OpenCode's own skill command gets when
  * Systematic doesn't shadow it.
+ *
+ * The command carries no `agent`, `model` or `subtask`. Those values are
+ * unvalidated user input, so they travel in `AssetPlan.discoveredRouting` and
+ * each host decides what it can honor.
  */
 function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): PlannedCommand {
   const description = skill.description || `${skill.name} skill`
@@ -576,14 +603,27 @@ function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): PlannedCommand {
  * skipping that skill rather than aborting emission (hook-defect-swallow
  * learning — config hook code must not throw).
  */
+function declaredRoutingOf(skill: DiscoveredSkill): DeclaredRouting {
+  const { agent, model, subtask } = skill.frontmatter
+  return {
+    ...(agent === undefined ? {} : { agent }),
+    ...(model === undefined ? {} : { model }),
+    ...(subtask === undefined ? {} : { subtask }),
+  }
+}
+
 function collectDiscoveredSkillsAsCommands(
   startDir: string,
   homeDir: string,
   configDir: string,
   opencodeConfigDirOverride: string | undefined,
   disabledCommands: string[],
-): Record<string, PlannedCommand> {
+): {
+  commands: Record<string, PlannedCommand>
+  routing: Record<string, DeclaredRouting>
+} {
   const commands: Record<string, PlannedCommand> = {}
+  const routing: Record<string, DeclaredRouting> = {}
 
   let discovered: DiscoveredSkill[]
   try {
@@ -596,7 +636,7 @@ function collectDiscoveredSkillsAsCommands(
   } catch {
     // Config hook code must not throw (hook-defect-swallow): degrade to no
     // discovered commands this pass rather than aborting the whole config hook.
-    return commands
+    return { commands, routing }
   }
 
   for (const skill of discovered) {
@@ -608,13 +648,15 @@ function collectDiscoveredSkillsAsCommands(
 
     try {
       commands[skill.name] = loadDiscoveredSkillAsCommand(skill)
+      const declared = declaredRoutingOf(skill)
+      if (Object.keys(declared).length > 0) routing[skill.name] = declared
     } catch {
       // Config hook code must not throw (hook-defect-swallow): skip this
       // skill; never let one bad SKILL.md abort emission for the rest.
     }
   }
 
-  return commands
+  return { commands, routing }
 }
 
 function collectEnabledSkillNames(
@@ -671,7 +713,7 @@ export function buildAssetPlan(input: AssetPlanInput): AssetPlan {
     config.disabled_commands,
   )
 
-  const discoveredSkillCommands =
+  const discovered =
     config.skills_as_commands !== false
       ? collectDiscoveredSkillsAsCommands(
           input.directory,
@@ -680,7 +722,7 @@ export function buildAssetPlan(input: AssetPlanInput): AssetPlan {
           input.opencodeConfigDirOverride,
           config.disabled_commands,
         )
-      : {}
+      : { commands: {}, routing: {} }
 
   return {
     skillsDir: bundledSkillsDir,
@@ -689,7 +731,8 @@ export function buildAssetPlan(input: AssetPlanInput): AssetPlan {
     commands: {
       ...bundledCommands,
       ...skillCommands,
-      ...discoveredSkillCommands,
+      ...discovered.commands,
     },
+    discoveredRouting: discovered.routing,
   }
 }
