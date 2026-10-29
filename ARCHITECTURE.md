@@ -165,6 +165,9 @@ Pi adapter
   src/lib/pi-subagents-export.ts   — manage transactional export, refresh, and cleanup of Pi personas
   src/lib/setup.ts                 — atomically configure project-local OpenCode or Pi harness settings
 
+Durable-output search
+  src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
+
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
   src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers

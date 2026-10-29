@@ -81,6 +81,12 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `pi-delegate-session.ts` | `createRealPiDelegateSession` | The real `CreateDelegateSession` implementation: `DefaultResourceLoader` with `noExtensions: true` (depth 1) plus every other resource category suppressed, `systemPromptOverride` replacing the prompt with the persona body, `SessionManager.inMemory()`, `reload()` before session creation. The only module that statically imports the live Pi SDK for delegation |
 | `setup.ts` | `setupHarness`, `isSetupError`, `Harness`, `SetupResult`, `PI_PACKAGE_IDENTIFIER`, `SYSTEMATIC_PACKAGE_NAME` | Backs `systematic setup --harness opencode\|pi` (`src/cli.ts`): project-local-only, single-trusted-read + atomic-no-clobber-backup writes to either OpenCode's singular `plugin` array (v1.17.6 schema; `plugins`/duplicate-keys rejected) or `.pi/settings.json`'s `packages` array (structural JSONC edit, filter-aware tagged-entry idempotency); never touches the other harness's config; discriminated `SetupResult` (`'configured' \| 'already-configured'`), plain-Error `isSetupError()` marker (no custom class) |
 
+### Search
+
+| Module | Key Exports | Role |
+|--------|-------------|------|
+| `search-lexical.ts` | `tokenize`, `uniqueQueryTerms`, `ln`, `buildLexicalIndex`, `searchLexical`, `BM25F_PARAMS`, `LEXICAL_FIELDS`, `MAX_QUERY_TERMS`, `LexicalDocument`, `LexicalIndex`, `LexicalHit` | Pure lexical lane for durable-output search, with no imports and no I/O. ASCII tokenizer (a `_`/`-` joined run also emits its whole identifier), a hand-written `ln` using only + − × ÷ (the runtimes disagree on `Math.log`), and a BM25F scorer over eight fields. Terms are deduplicated and sorted, fields summed in fixed order, and ties break on the code-unit order of the path, so scores are bit-identical on Bun and Node. The weights and `k1`/`b` live in one `BM25F_PARAMS` table. Do not use `Math.log`, `Math.pow`, `**`, `Intl`, `localeCompare`, `Bun.` or `bun:` here; `tests/unit/search-determinism.test.ts` runs the Bun-built bundle under Node and compares float64 bit patterns |
+
 ### Pi Integration
 
 | Module | Key Exports | Role |
