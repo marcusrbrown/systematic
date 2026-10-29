@@ -461,6 +461,32 @@ describe('registration', () => {
     ])
   })
 
+  test.each([
+    ['agent: plan', 'agent'],
+    ['model: fixture/model', 'model'],
+    ['subtask: false', 'subtask'],
+    ['context: fork', 'subtask'],
+  ])(
+    'refuses discovered routing from %s before prompting',
+    async (frontmatter, field) => {
+      const skillDir = path.join(projectDir, '.claude/skills/routed')
+      fs.mkdirSync(skillDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: routed\ndescription: Routed skill\n${frontmatter}\n---\nBody.`,
+      )
+      const host = createHost({ directory: projectDir })
+      await setup(host)
+      const definition = replay(host).get('routed')
+      expect(definition).toBeDefined()
+
+      await expect(definition?.execute(invocation('go'))).rejects.toThrow(
+        `Systematic command "routed" declares ${field}, which OpenCode v2 plugin commands cannot route.`,
+      )
+      expect(host.calls).toEqual([])
+    },
+  )
+
   test('a throwing add is caught and the other commands still register', async () => {
     const host = createHost({ directory: projectDir })
     await setup(host)

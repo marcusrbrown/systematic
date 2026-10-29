@@ -563,10 +563,20 @@ function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): PlannedCommand {
   const description = skill.description || `${skill.name} skill`
 
   // Body was read once at discovery time (DiscoveredSkill.body); no re-read.
-  return {
+  const config: PlannedCommand = {
     template: wrapSkillTemplate(skill.skillPath, skill.body),
     description,
   }
+
+  if (skill.frontmatter.agent !== undefined)
+    config.agent = skill.frontmatter.agent
+  if (skill.frontmatter.model !== undefined)
+    config.model = skill.frontmatter.model
+  if (skill.frontmatter.subtask !== undefined) {
+    config.subtask = skill.frontmatter.subtask
+  }
+
+  return config
 }
 
 /**

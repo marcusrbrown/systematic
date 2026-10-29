@@ -2441,6 +2441,40 @@ Discovered body for ${name}.`,
         expect(command?.template).not.toContain('skill tool')
       })
 
+      test.each([
+        [
+          'agent: plan\nmodel: fixture/model\nsubtask: true',
+          { agent: 'plan', model: 'fixture/model', subtask: true },
+        ],
+        ['subtask: false', { subtask: false }],
+        ['context: fork', { subtask: true }],
+      ])(
+        'preserves discovered routing from %s',
+        async (frontmatter, routing) => {
+          const skillDir = path.join(projectDir, '.claude/skills/routed')
+          fs.mkdirSync(skillDir, { recursive: true })
+          fs.writeFileSync(
+            path.join(skillDir, 'SKILL.md'),
+            `---\nname: routed\ndescription: Routed skill\n${frontmatter}\n---\nBody.`,
+          )
+          const handler = createConfigHandler({
+            directory: projectDir,
+            bundledSkillsDir: path.join(bundledDir, 'skills'),
+            bundledAgentsDir: path.join(bundledDir, 'agents'),
+            bundledCommandsDir: path.join(bundledDir, 'commands'),
+          })
+          const config: Config = {}
+
+          await handler(config)
+
+          expect(config.command?.routed).toMatchObject(routing)
+          expect(config.command?.routed?.template).toContain('Body.')
+          expect(Object.keys(config.command?.routed ?? {}).sort()).toEqual(
+            ['description', 'template', ...Object.keys(routing)].sort(),
+          )
+        },
+      )
+
       test('user-defined command of the same name survives untouched (R4)', async () => {
         writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo')
 
