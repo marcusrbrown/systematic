@@ -6,7 +6,9 @@ import yaml from 'js-yaml'
 /**
  * Locks the repository settings in .github/settings.yml that the gated release
  * pipeline depends on: the `main` ruleset (one approval on the latest push, no
- * bypass) and the `release-branch` ruleset (only the release App bypasses).
+ * bypass), the `release-branch` ruleset (only the release App bypasses), and
+ * the `v*` tag rulesets (only the release App creates a tag; no one moves or
+ * deletes one).
  */
 
 const SETTINGS_PATH = path.resolve(process.cwd(), '.github/settings.yml')
@@ -215,6 +217,56 @@ describe('settings: release-branch ruleset', () => {
     const actors = asArray(getRuleset('release-branch').bypass_actors, 'actors')
     expect(actors).toHaveLength(1)
     expect(asRecord(actors[0], 'actor').actor_id).toBe(RELEASE_APP_ID)
+  })
+})
+
+function ruleTypes(ruleset: RecordValue): readonly unknown[] {
+  return asArray(ruleset.rules, 'rules').map(
+    (rule) => asRecord(rule, 'rule').type,
+  )
+}
+
+describe('settings: release tag rulesets', () => {
+  test.each(['release-tags-create', 'release-tags-protect'])(
+    '%s is an active tag ruleset on refs/tags/v*',
+    (name) => {
+      const ruleset = getRuleset(name)
+      expect(ruleset.target).toBe('tag')
+      expect(ruleset.enforcement).toBe('active')
+      expect(ruleset.conditions).toEqual({
+        ref_name: { include: ['refs/tags/v*'], exclude: [] },
+      })
+    },
+  )
+
+  test('release-tags-create blocks creation and only the release App bypasses', () => {
+    const ruleset = getRuleset('release-tags-create')
+    expect(ruleTypes(ruleset)).toEqual(['creation'])
+    expect(ruleset.bypass_actors).toEqual([
+      {
+        actor_id: RELEASE_APP_ID,
+        actor_type: 'Integration',
+        bypass_mode: 'always',
+      },
+    ])
+  })
+
+  test('release-tags-protect blocks update and deletion with no bypass', () => {
+    const ruleset = getRuleset('release-tags-protect')
+    expect([...ruleTypes(ruleset)].sort()).toEqual(['deletion', 'update'])
+    expect(ruleset.bypass_actors).toEqual([])
+  })
+
+  test('the rulesets array names exactly the rulesets the applier should keep', () => {
+    const names = asArray(readSettings().rulesets, 'rulesets').map(
+      (entry) => asRecord(entry, 'ruleset').name,
+    )
+    expect([...names].sort()).toEqual([
+      'main',
+      'release-branch',
+      'release-tags-create',
+      'release-tags-protect',
+    ])
   })
 })
 

@@ -68,6 +68,35 @@ rulesets:
             - { context: Renovate / Renovate, integration_id: 15368 }
     bypass_actors: []
 
+  # Only the release App can create v* tags.
+  - name: release-tags-create
+    target: tag
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ["refs/tags/v*"]
+        exclude: []
+    rules:
+      - type: creation
+    bypass_actors:
+      # systematic-release GitHub App
+      - actor_id: 5287597
+        actor_type: Integration
+        bypass_mode: always
+
+  # No one, including the release App, can move or delete a v* tag.
+  - name: release-tags-protect
+    target: tag
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ["refs/tags/v*"]
+        exclude: []
+    rules:
+      - type: update
+      - type: deletion
+    bypass_actors: []
+
 branches:
   - name: main
     protection:
