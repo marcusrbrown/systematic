@@ -4,6 +4,7 @@ type: feat
 status: active
 date: 2026-10-29
 origin: docs/brainstorms/2026-10-29-durable-output-search-requirements.md
+deepened: 2026-10-29
 ---
 
 # feat: Search over Systematic's durable outputs
@@ -45,7 +46,7 @@ Requirements R1 to R18 and the acceptance examples are those of the origin docum
 - R8. Endpoint settings come from user-level config only, including `OPENCODE_CONFIG_DIR`. Project values are dropped with a warning. (U4)
 - R9. The API key is read from an environment variable the user config names. It is never a literal value in config, and never appears in config output, logs, search output, failure notes or the cache. (U4, U8, U9)
 - R10. Nothing leaves the machine unless an endpoint is configured. The privacy page and landing page scope their claims to the default setup and say a remote host is a third party. (U4, U10)
-- R11. Each embeddings call has a timeout and the first query has a total budget. Corpus embedding is lazy and resumable. Lexical results always return within the bound. (U9)
+- R11. Each embeddings call has a timeout. The first query never waits on backfill: embedding is lazy and resumable through `--warm`. Lexical results always return within the bound. (U9)
 - R12. Endpoint failure returns lexical results with a note giving a fixed reason. The note never includes the URL, headers or body, and search never errors. (U8, U9)
 - R13. Embeddings are cached outside the repository, keyed by content, model and vector size, readable only by the user, never mixed across models. (U9)
 
@@ -146,6 +147,7 @@ Carried from the origin's success criteria.
 - Ollama `POST /api/embed` (`{model, input, truncate, dimensions?}` returns `{embeddings}`; 404 for an unknown model). OpenAI-compatible `POST /v1/embeddings` (`{model, input, dimensions?}` returns `{data:[{embedding,index}]}`; 2,048 inputs per request; Bearer auth). llama.cpp has ignored `dimensions` (issue #25210), so every response is length-checked.
 - Chunking: split on headings, then paragraphs, at 300 to 400 tokens, with the title and heading breadcrumb prepended (Azure chunking guidance).
 - Magic Context 0.49.25 and AFT 0.62.0, read as design references only.
+- Measured on one machine, 2026-10-29: Ollama 0.40.4 with `nomic-embed-text` (137M, F16, 2,048-token context, 768 dimensions) on an Apple M1 Pro with 16 GB. At this plan's chunker the corpus is 126 docs and 3,011 chunks (mean 401 characters, p95 948). A batch of 8 takes p50 107 ms on GPU and 1,579 ms on CPU. A batch of 32 on CPU takes p50 6.3 s and p95 8.7 s. Per-chunk cost is flat from batch 8 up, about 13 ms on GPU and 197 ms on CPU. A full backfill at batch 8 takes 40 s on GPU and 8.7 min on CPU. A query embed takes about 10 ms on GPU and 27 ms on CPU. Model load takes 0.3 to 0.5 s. The first `ollama serve` launch took about 16 s, and this install unloads the model after 30 s idle (`OLLAMA_KEEP_ALIVE`). Other machines and models will differ.
 - `Math.log` is implementation-approximated in ECMAScript. Measured on arm64 macOS: 5,750 of 80,600 IDF inputs differ in the last bit between Node 24.22.2 and Bun 1.4.4. A hand-written `ln` using only + − × ÷ was bit-identical on both. Linux x64 is unverified, and CI is the check.
 
 ---
@@ -162,7 +164,7 @@ Carried from the origin's success criteria.
   "candidates": [
     { "path_or_symbol": "src/lib/frontmatter.ts:parseFrontmatter", "description": "js-yaml JSON_SCHEMA frontmatter parser returning {data, body, hadFrontmatter, parseError}; parseError is the malformed-frontmatter signal.", "disposition": "reuse" },
     { "path_or_symbol": "src/lib/walk-dir.ts:walkDir", "description": "Synchronous recursive directory walker with depth and filter; readdir order, so callers must sort; isDiscoverableMarkdown skips README.md.", "disposition": "reuse" },
-    { "path_or_symbol": "src/lib/discovered-skills.ts:findGitWorktreeRoot", "description": "Walks up to the first ancestor holding a .git entry, null otherwise, never throws; private today.", "disposition": "extend" },
+    { "path_or_symbol": "src/lib/discovered-skills.ts:findGitWorktreeRoot", "description": "Walks up to the first ancestor holding a .git entry, null otherwise, never throws; private today. Copied into search-corpus (second use).", "disposition": "reuse" },
     { "path_or_symbol": "src/lib/validation.ts:isRecord", "description": "Record type guard; needed to narrow frontmatter data.", "disposition": "reuse" },
     { "path_or_symbol": "agents/research/learnings-researcher.md (Steps 0, 3, 4)", "description": "Prose retrieval path; its Step 4 lifecycle rules are the behavioural spec (5 hops, repo-root form rule, visited set, Skipped and Caution lines).", "disposition": "extend" },
     { "path_or_symbol": "scripts/content-integrity.ts:checkSolutionLifecycle/classifySupersededBy", "description": "Gate that reports malformed superseded_by links; unexported, forbids chains, resolves nothing, unshipped.", "disposition": "insufficient", "insufficiency_reason": "Reports violations instead of resolving a successor; stricter than the researcher (no chains); cannot be imported from shipped src/." },
@@ -199,25 +201,26 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 - **Why not `Math.log`.** ECMAScript leaves it implementation-approximated, and the two runtimes disagree on 7% of measured inputs. Rounding scores does not prove identical order.
 
 **Corpus**
-- **Root.** The nearest ancestor holding `.git` (file or directory), resolved with `realpath`, else the start directory. The ten-line walk-up is copied into `src/lib/search-corpus.ts` from the private `findGitWorktreeRoot`; `src/lib/discovered-skills.ts` stays untouched. This is the second use, so extract it at the third. Importing `discovered-skills.ts` would pull its dependencies into the Claude Code bin.
-- **Files.** Only `docs/solutions/` directly under the root, read from disk on every call with no memo, because `ce:compound` searches right after it writes. Before walking, take the `realpath` of `docs/solutions` and require it to lie inside the `realpath` of the root. If it does not, emit one warning and load nothing, so a committed symlink cannot pull outside text into output. Inside, a wrapper that never throws walks the tree and calls `lstat` explicitly to skip symlinks. Caps: 256 KB per file, 2,000 files, `maxDepth` 6. Excluded: README, `_archived/`, `critical-patterns.md`. Paths are root-relative with `/`.
+- **Root.** The nearest ancestor holding `.git` (file or directory), resolved with `realpath`, else the start directory. The ten-line walk-up is copied into `src/lib/search-corpus.ts` from the private `findGitWorktreeRoot`; `src/lib/discovered-skills.ts` stays untouched. This is the second use, so extract it at the third. The two copies differ on purpose: search falls back to the start directory, while `discovered-skills.ts` returns null. A code comment says so, so nobody unifies them. Importing `discovered-skills.ts` would pull its dependencies into the Claude Code bin.
+- **Files.** Only `docs/solutions/` directly under the root, read from disk on every call with no memo, because `ce:compound` searches right after it writes. Before walking, take the `realpath` of `docs/solutions` and require it to lie inside the `realpath` of the root. If it does not, emit one warning and load nothing, so a committed symlink cannot pull outside text into output. Inside, a wrapper that never throws walks the tree and calls `lstat` explicitly to skip symlinks. Caps: 256 KB per file, 2,000 files, `maxDepth` 6, and 16 MB of text in total. The walk is in sorted path order, stops at the byte budget, and emits one warning with the count of files skipped. Excluded: README, `_archived/`, `critical-patterns.md`. Paths are root-relative with `/`.
+- **Cost of no memo.** Measured on Bun 1.4.4 on an M1 Pro: tokenizing costs about 21 ms/MB, so this repo's 1.0 MB corpus costs about 25 ms per call, and the 16 MB budget bounds a call near 0.35 s warm. A memo would save about 24 ms and is rejected. If one is added later, key it on path, size, mtime, ctime and inode, and re-walk the directory on every call so `ce:compound`'s write-then-search stays correct.
 - **Parsing.** A wrapper around `parseFrontmatter` strips a leading BOM and supplies the newline the regex needs at end of file. It reads only known fields, narrows each (`isRecord`, string, array of strings), and never stringifies an unnarrowed value. No frontmatter means body-only with no warning. A `parseError` skips the doc with a warning naming it.
 - **Kinds.** A `kind` table with one entry, `solution`, carries the directory, the exclusions and whether lifecycle applies.
 
 **Lifecycle**
 - **Rules.** The researcher's, not content-integrity's: at most 5 hops, a visited set, and the form rule (`docs/solutions/…md`, no `..`, no README, not under `_archived/`, the file exists in the loaded corpus). Existence means the doc was loaded, so a skipped or oversize successor is unresolvable.
-- **Mechanics.** Fetch about twice the limit before resolving. A successor takes the best rank among itself and the docs it replaces. Duplicates merge and `Supersedes:` lists every replaced path. Superseded docs stay indexed so they can match.
+- **Mechanics.** Fetch about twice the limit before resolving, because merges shrink the list and 2× is the tolerance. A successor takes the best rank among itself and the docs it replaces. Duplicates merge and `Supersedes:` lists every replaced path. Superseded docs stay indexed so they can match.
 - **Unresolvable chain.** A successor is unresolved when it is missing, fails the form rule, forms a cycle, or lies past the hop cap. The matched superseded doc is returned at its own rank, with status `superseded` and `Caution: successor unresolved`. Nothing is dropped, and the `Skipped:` label is retired from search output and from the researcher prose. This matches R5 and changes the researcher's current omit-and-skip rule (decided by Marcus, 2026-10-29).
-- **Pinning.** The hop cap, path prefix, labels and unresolved-caution text are constants in `search-corpus.ts`. The resolver is tested in code over a lifecycle fixture corpus, and the researcher prose is reviewed by hand once in U7. No content-integrity gate compares prose to constants.
+- **Pinning.** The hop cap, path prefix, labels and unresolved-caution text are constants in `search-core.ts`, next to the resolver. The resolver is tested in code over a lifecycle fixture corpus, and the researcher prose is reviewed by hand once in U7. No content-integrity gate compares prose to constants.
 
 **Output**
-- Default 8 hits when `limit` is absent. `limit` is an integer from 1 to 20: every tool schema declares that range, the CLI rejects anything else with exit 2, and the core returns a fixed validation error for it, so the adapters agree. Snippet at most 240 characters on one line, centred on the densest window of query terms. Title at most 160. At most 8 tags. At most 5 warnings plus `+N more`.
+- Default 8 hits when `limit` is absent. `limit` is an integer from 1 to 20. Host schemas declare a plain integer and state the range in the description only, so a host does not pre-empt the core. The core returns the fixed validation error for anything out of range, with no clamping, and the CLI rejects it with exit 2. U5's real-host tests confirm v1 and v2 pass 0 and 21 through to `execute`. If a host pre-validates, record its behaviour and stop claiming identical errors for out-of-range values. Snippet at most 240 characters on one line, centred on the densest window of query terms. Snippets are extracted only for the hits returned, with a token-position sliding window. Title at most 160. At most 8 tags. At most 5 warnings plus `+N more`.
 - Hard cap 16 KB with a UTF-8-safe cut and Systematic's own marker. Query at most 2,000 characters. Empty queries and unknown kinds return fixed error text. Control and ANSI sequences are stripped from everything echoed.
 - The result header separates `corpus: none` (no `docs/solutions/`), `empty` (the directory exists but holds no indexable docs) and `N docs, 0 hits`, and lists the lanes that ran.
 
 **Config**
 - One top-level `search: { enabled?, embeddings? }`, protected as a whole: stripped from project config with a warning, merged from user and custom only. `enabled` takes the last defining source. `embeddings` is replaced whole by the last defining source.
-- `embeddings` fields: `provider` (`ollama` or `openai-compatible`), `base_url` (SDK-style root), `model`, `dimensions?`, `api_key_env?`, `query_prefix?`, `document_prefix?`, `timeout_ms?`, `first_query_budget_ms?`. The prefixes stay because nomic-embed-text documents require task prefixes.
+- `embeddings` fields: `provider` (`ollama` or `openai-compatible`), `base_url` (SDK-style root), `model`, `dimensions?`, `api_key_env?`, `query_prefix?`, `document_prefix?`, `timeout_ms?`. The prefixes stay because nomic-embed-text documents require task prefixes.
 - The schema checks shape only, including the `api_key_env` pattern. URL semantics (scheme, no userinfo, query or fragment) are checked at use time and give a fixed note.
 - `search.enabled: false` is a plan decision approved by Marcus, not an origin requirement. It removes the tool from v1, v2 and Pi without a note. The CLI and bin print `disabled` and exit 0. The researcher then falls back to grep.
 - Hosts snapshot config at init, so changing the endpoint needs a restart. U10 documents this.
@@ -225,11 +228,16 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 **Claude Code bin**
 - `systematic-search`, built from `src/claude-code-search.ts`. It reads both user-level files, `~/.config/opencode/systematic.{jsonc,json}` and `$OPENCODE_CONFIG_DIR/systematic.{jsonc,json}`, and merges them by the loader's rules: custom overrides user, `enabled` takes the last source that defines it, and `embeddings` is replaced whole. It never reads project config. It parses JSONC through jsonc-parser's ESM build (`jsonc-parser/lib/esm/main.js`) via a `Bun.build` `onResolve` alias, because the UMD build crashes when bundled from a foreign directory (reproduced).
 - The bin validates `search` with the same zod schema piece the config uses, exported from `src/lib/search-user-config.ts`. There is no hand-written narrower, so there is one producer. U6 records the bundle size.
-- A small separate parity test calls the reader and `loadConfigWithSources` on a few `search` inputs under an isolated HOME and compares the merged `search`. The bin cannot emit the AE2 project-config warning, and that asymmetry is accepted.
+- Import rule: `search-user-config.ts` imports only zod, jsonc-parser and node builtins, plus type-only imports from `search-core.ts`. It never imports `config.ts` or `config-schema.ts`. `trustProtected` is applied only in `config-schema.ts`.
+- A pure `mergeSearchSettings(sources)` in `search-user-config.ts` holds the merge rule, and both `config.ts` and the reader call it. That replaces a reader-vs-loader parity test.
+- The foreign-directory bin run is the import guard: if the bin pulled in `config.ts`, its UMD jsonc would crash that run. There is no bundle-graph or metafile assertion.
+- The bin cannot emit the AE2 project-config warning, and that asymmetry is accepted.
 
 **Surfaces**
-- Tool name `systematic_search`, arguments `query` (required), `kind` (optional, `solution`), `limit` (optional integer, 1 to 20).
-- Start directory: Pi uses per-call `ctx.cwd`. v1 uses `context.directory` if present, else the init directory (verify the field). v2 uses `ctx.location?.directory` and returns a no-project note when undefined. The CLI and bin use `--dir` or the cwd.
+- One host-neutral composition in `search-core.ts` does validate, lexical lane, semantic stage, lifecycle and render. Every adapter in `search-tool.ts` and the CLI call it. Adapters do only host I/O: start directory, settings and error mapping. The tool name and argument constants live in `search-core.ts`, so the CLI and bin never import zod or typebox. `search-core.ts` owns the `SearchSettings` type, and the zod schema's output type must be assignable to it, checked at compile time.
+- `runSearchCli` takes an injected settings loader. `cli.ts` passes a `loadConfigWithSources` adapter, and the bin passes the user-level reader.
+- Tool name `systematic_search`, arguments `query` (required), `kind` (optional, `solution`), `limit` (optional plain integer, range stated in the description).
+- Start directory: Pi uses per-call `ctx.cwd`. v1 uses `context.directory`, which the 1.19.4 types require. The init-directory fallback stays only until U5's floor test proves the field on 1.18.29, then it is dropped. v2 uses `ctx.location?.directory` and returns a no-project note when undefined, because `process.cwd()` would search whichever project the editor started in. The CLI and bin use `--dir` or the cwd.
 - One parity test drives each adapter's real entry over one fixture corpus and compares rendered text. Later units add their surfaces (CLI, bin, hybrid) to that same test. They do not write separate parity files.
 
 **Pi delegates**
@@ -237,22 +245,22 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 
 **Researcher**
 - Detection: OpenCode and Pi check whether `systematic_search` is in the tool list. Claude Code probes with `command -v systematic-search`. Step 3b (critical patterns) is unchanged.
-- With hits, the researcher skips Steps 2 and 3 and Step 4's grep, and still runs Step 3b. `corpus: none` and `empty` lead to No Matches. `N docs, 0 hits`, a `disabled` reply, an error and no tool all take the existing grep path. There is no synonym pass.
+- With hits, the researcher skips Steps 2 and 3 and Step 4's grep, and still runs Step 3b. `corpus: none` and `empty` lead to No Matches. `N docs, 0 hits`, a `disabled` reply, an error and no tool all take the existing grep path. There is no new synonym pass, since the existing grep keeps its OR patterns.
 - In overlap mode the search score never maps to High, Moderate or Low, and the doc under comparison is dropped from results.
 
 **Semantic lane**
-- Chunk by headings, then paragraphs, then a hard cut at about 1,200 characters (about 300 tokens) so every chunk fits a small model's context. There is no sentence rule. The title and heading breadcrumb are prepended and count toward the limit. Ollama requests set `truncate: true` explicitly, and the guide documents the truncation. A doc scores the max over its chunks, and candidates are capped at the top 20 by cosine.
-- Fuse with RRF at `k = 60`. A lane that misses a doc contributes nothing. Vectors are stored as Float32, fresh vectors pass through `Math.fround`, and all are pre-normalised. Zero, NaN and Infinity vectors are rejected.
-- The lane contributes only when every indexable doc has valid vectors. Otherwise the result is lexical plus a `semantic index N/M` note. A doc whose embedding fails twice is skipped: the note gives a count, the doc leaves the N/M denominator, and the lane can still fuse. The skip count lives in memory for the process, and each CLI run retries.
-- The query embeds first, then the backfill runs inside the remaining budget and persists per batch. `--warm` on the CLI and bin runs the full backfill with progress on stderr.
-- Transport: `fetch` with `AbortSignal.timeout`, an injectable `fetchImpl`, `redirect:'error'` and a response cap of about 32 MB. The whole batch is validated: count, unique indices, uniform dimensions equal to the header.
-- Starting values, unmeasured: `timeout_ms` 8,000, `first_query_budget_ms` 20,000, 32 chunks per request. U11 revisits them against a real endpoint.
-- Cache: one file per hash of content, chunker version, model, dimensions, prefixes and a hash of provider plus `base_url`. Directory `$XDG_CACHE_HOME/systematic/embeddings/` when that is an absolute path, else `~/.cache/systematic/embeddings/`. Written as a temp file with `wx` and `0600`, then renamed, in a `0700` directory. An exact-length check (dimension × 4 × chunk count) turns any mismatch into a miss, and the content hash in the filename is the key. There is no magic header and no single-flight map. Pruning is by age (30 days, bumped on hit), because the cache is shared across repos and worktrees.
+- Chunk by headings. Inside a section, pack consecutive paragraphs into one chunk up to a hard cut at about 1,200 characters (about 300 tokens), so every chunk fits a small model's context. A heading always starts a new chunk. There is no sentence rule. Measured unpacked, the corpus makes 3,011 chunks. Packing gives roughly 1,000, about 3× fewer requests. The title and heading breadcrumb are prepended and count toward the limit. Ollama requests set `truncate: true` explicitly, and the guide documents the truncation. A doc scores the max over its chunks, and candidates are capped at the top 20 by cosine.
+- Fuse with RRF at `k = 60`. A lane that misses a doc contributes nothing. Vectors are stored as Float32, fresh vectors pass through `Math.fround`, and all are pre-normalised. `Math.sqrt` is correctly rounded under ECMAScript, so normalisation is deterministic. The plan claims no cross-runtime hybrid identity beyond that, and adds no test for it. Zero, NaN and Infinity vectors are rejected.
+- The lane contributes only when every indexable doc has valid vectors. Otherwise the result is lexical plus a `semantic index N/M` note. A doc whose embedding fails twice is skipped: the note gives a count, the doc leaves the N/M denominator, and the lane can still fuse. Only a malformed response, a vector size mismatch, an HTTP 4xx or a 5xx counts toward the two failures. A timeout does not. The skip count lives in memory for the process, and each CLI run retries.
+- **Backfill is warm-only (decided by Marcus, 2026-10-29).** Backfill runs only through `systematic search --warm`, on the CLI and bin, resumable and persisting each batch, with progress on stderr. Tool surfaces never backfill. While the index is incomplete, a search returns lexical results at once with the fixed note `semantic index N/M; run systematic search --warm` and skips the query embedding. Once the index is complete, a search embeds only the query: one request under `timeout_ms`. There is no `first_query_budget_ms`. Measured on CPU, a full backfill takes 8.7 min unpacked, so in-query backfill is not tolerable.
+- Transport: `fetch` with `AbortSignal.timeout`, an injectable `fetchImpl`, `redirect:'error'` and a response cap of about 32 MB. The whole batch is validated: count, unique indices, and uniform dimensions equal to `dimensions` when it is set.
+- Defaults, measured on one machine (see External References): 8 chunks per request and `timeout_ms` 15,000, one setting for document batches and the query embed. Per-chunk cost is flat from batch 8, and a batch of 32 reached 8.7 s at p95 on CPU. The worst observed batch took 2.5 s on CPU, so 15 s leaves room for model load and variance. U11 re-checks them on the user's endpoint.
+- Cache: one file per document, holding all of that document's chunk vectors, named by a hash of content, chunker version, model, dimensions, prefixes and a hash of provider plus `base_url`. Provider and `base_url` are in the key because the same model name on two backends gives different vectors. Directory `$XDG_CACHE_HOME/systematic/embeddings/` when that is an absolute path, else `~/.cache/systematic/embeddings/`. Written as a temp file with `wx` and `0600`, then renamed, in a `0700` directory. An exact-length check (dimension × 4 × chunk count) turns any mismatch into a miss, and the content hash in the filename is the key. There is no magic header and no single-flight map. Pruning is by age (30 days, mtime bumped at most once per process per file), because the cache is shared across repos and worktrees.
 - Failure notes use fixed reasons only: unreachable, timeout, unknown model, HTTP status, vector size mismatch, malformed response, key missing, config unreadable, invalid endpoint. The 401 and 403 text says the endpoint rejected the request. Nothing from `fetch`'s `error.message`, the URL, headers or body is surfaced. `api_key_env` is never echoed. If it is unset or empty, no key is sent and a distinct note says so.
 
 **Quality**
-- `tests/fixtures/search-queries.json` holds 15 to 20 queries shaped `{id, query, relevant[], split, lexical_reachable}`, phrased from symptoms or issue text, not titles. About five are held out, and #820 is one. At least two are `lexical_reachable: false` so R18's win condition is testable.
-- One aggregate integer floor covers all `lexical_reachable: true` queries across both splits. A query counts when at least one relevant path is in the top 5. The floor is the first measured count minus 1. Per-split counts are reported. Tuning reads the tune split only. The query-set shape checks (ids, splits, labelled paths exist, reachability) live inside the recall test, with no separate query-file test.
+- `tests/fixtures/search-queries.json` holds 15 to 20 queries shaped `{id, query, relevant[], split, lexical_reachable}`, phrased from symptoms or issue text, not titles, each with a `source` of `issue`, `paraphrase` or `symptoms`. At least half the tune queries come from issue wording or a paraphrase, so a query copied from a doc's symptoms field cannot inflate the floor. About five are held out, and #820 is one. At least two are `lexical_reachable: false` so R18's win condition is testable.
+- One aggregate integer floor covers all `lexical_reachable: true` queries across both splits. A query counts when at least one relevant path is in the top 5. The floor is the first measured count minus 1. Per-split counts are reported. Tuning reads the tune split only. The query-set shape checks (ids, splits, sources, labelled paths exist, reachability) live inside the recall test, with no separate query-file test. The reachability check requires a shared term from the relevant doc's title, symptoms, tags or module, not body text alone.
 - The #820 query is written as a symptom a searcher would type, before the target doc's frontmatter is read. The fixture records its token overlap with the target's title, tags, module and component, and pins `lexical_reachable: true`.
 - R17: one run of the unmodified researcher per query by a single subagent, before the researcher is edited. Results land in `tests/fixtures/search-baseline-grep.json` with model, commit, date and returned paths. It is not CI.
 
@@ -267,7 +275,7 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 
 - Chunking (origin, R4 and R13): headings first, then paragraphs, a hard cut at about 1,200 characters (about 300 tokens), breadcrumb prepended.
 - Fusion (origin, R4): RRF with `k = 60`, gated on full index coverage.
-- Timeout and budget values (origin, R11): starting values set in Key Technical Decisions. Measurement is U11.
+- Timeout (origin, R11): `timeout_ms` 15,000 and 8 chunks per request, from the measured numbers. There is no first-query budget: backfill is warm-only (decided by Marcus, 2026-10-29). U11 re-checks on the user's endpoint.
 - Tool name and shape (origin, R14): `systematic_search(query, kind?, limit?)`, switchable off with `search.enabled: false`.
 - Cache location and pruning (origin, R13): the XDG cache path above, pruned by age, not by corpus membership.
 - Recall floor (origin, R16): one aggregate integer, the first measured count minus 1 over the `lexical_reachable: true` queries, set in U3.
@@ -284,7 +292,7 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 
 ### Deferred to Implementation
 
-- The exact field name that v1's `ToolContext` uses for the project directory. U5 reads the installed plugin types and falls back to the init directory.
+- Whether `context.directory` exists on the v1 floor (1.18.29). The 1.19.4 types require it. U5's floor-lane test is the proof, and the init-directory fallback is dropped once it passes.
 - Whether the `onResolve` alias builds a bin that runs from a foreign directory. It was not tested end to end; U6 proves it.
 - Linux x64 `Math.log` behaviour. The hand-written `ln` makes it moot, and the first CI run is the check.
 - The #820 issue text that seeds the held-out query. U0 reads it from the issue.
@@ -296,14 +304,14 @@ Decisions carried from the origin: lexical always, embeddings through an endpoin
 
 > *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
 
-Unit dependencies. The two checkpoints gate the lexical cut before any semantic work.
+Unit dependencies. The two checkpoints gate the lexical cut before any semantic work. U4 has no upstream and may land before Checkpoint A, which regenerates the schema and config-reference surfaces early.
 
 ```mermaid
 flowchart TB
   U0["U0 query set + R17 baseline"] --> U3
   U1["U1 lexical primitives"] --> U3
-  U2["U2 root, corpus, lifecycle"] --> U3
-  U3["U3 core, render, recall floor"] --> CPA{{"Checkpoint A: #820 found lexically"}}
+  U2["U2 root, corpus loader"] --> U3
+  U3["U3 core, lifecycle, render, recall floor"] --> CPA{{"Checkpoint A: #820 found lexically"}}
   CPA --> U5
   U4["U4 config field + user reader"] --> U5
   CPA --> U6
@@ -317,6 +325,7 @@ flowchart TB
   U4 --> U8
   U8["U8 embeddings client"] --> U9
   U3 --> U9
+  U6 --> U9
   U9["U9 semantic lane"] --> U10
   U7 --> U10
   U10["U10 docs + privacy rescope"] --> U11
@@ -333,7 +342,7 @@ flowchart TB
   B --> C["lexical BM25F, fetch 2x limit"]
   C --> D{"embeddings configured?"}
   D -->|no| F
-  D -->|yes| E["embed query; backfill within budget; fuse by RRF if index complete"]
+  D -->|yes| E["index complete? embed the query, fuse by RRF; else lexical plus semantic index N/M note"]
   E --> F["resolve lifecycle; merge; take limit"]
   F --> G["render: sanitise, snippet, cap 16 KB"]
   N --> G
@@ -363,11 +372,11 @@ Notes: semantic lane unreachable.
     src/lib/
       main-module.ts           realpath entry guard
       search-lexical.ts        tokenizer, ln, BM25F
-      search-corpus.ts         root walk-up, kinds table, loader, frontmatter wrapper, lifecycle resolver
-      search-render.ts         sanitise, snippet, caps, truncation marker
-      search-core.ts           query validation, lanes, fusion, result
-      search-user-config.ts    search zod schema piece, SearchSettings type, user-level reader
-      search-tool.ts           tool name, description, args, shared execute, v2 installer and Pi tool factories
+      search-corpus.ts         root walk-up, kinds table, loader, frontmatter wrapper
+      search-render.ts         sanitise, snippet, caps, truncation marker (types only from corpus)
+      search-core.ts           the one composition, query validation, lanes, fusion, lifecycle constants and resolver, SearchSettings type, tool constants
+      search-user-config.ts    search zod schema piece, mergeSearchSettings, user-level reader
+      search-tool.ts           v1, v2 and Pi host factories (host I/O only)
       search-embeddings.ts     endpoint client and fixed failure notes
       search-semantic.ts       chunking, vectors, RRF, cache, backfill
       search-cli.ts            runSearchCli
@@ -376,7 +385,7 @@ Notes: semantic lane unreachable.
     tests/fixtures/search-corpus/   lifecycle and hostile-doc fixtures
     docs/src/content/docs/guides/search.mdx
 
-The per-unit `Files` lists are authoritative. Five deep modules carry the design (lexical, corpus with lifecycle, core with render, embeddings, semantic). The rest are thin adapters. That is ten `src/lib` modules, each needing a codemap line and a module-table row.
+The per-unit `Files` lists are authoritative. Four deep modules carry the design: lexical, core (composition, lifecycle and fusion), embeddings and semantic. The corpus module is deep only in its I/O. `search-user-config` does file I/O, JSONC, merge and schema, so it is not an adapter. `search-render`, `search-tool`, `search-cli` and `main-module` are thin. That is ten `src/lib` modules, each needing a codemap line and a module-table row.
 
 ---
 
@@ -400,14 +409,14 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Approach:**
 - Read issue #820 first and write its query as a symptom a searcher would type, from the issue's wording, before opening the target `docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md`. Only then read the target's frontmatter, and record in the fixture the query's token overlap with the target's title, tags, module and component. Pin `lexical_reachable: true` for it. If the overlap is high, the PR description says #820 tests tag matching rather than the symptom-vocabulary gap (see Success Metrics).
-- Author 15 to 20 queries from the `symptoms`, root causes and issue-style wording of `docs/solutions/`. Author blind to any ranker, since none exists yet. Fix the splits up front: about five `heldout` including #820, the rest `tune`. At least two are `lexical_reachable: false`, whose answers share no key terms with the query.
+- Author 15 to 20 queries from the `symptoms`, root causes and issue-style wording of `docs/solutions/`. Record each query's `source` (`issue`, `paraphrase` or `symptoms`), and make at least half the tune queries `issue` or `paraphrase`, so copying a doc's symptoms field cannot inflate the floor. Author blind to any ranker, since none exists yet. Fix the splits up front: about five `heldout` including #820, the rest `tune`. At least two are `lexical_reachable: false`, whose answers share no key terms with the query.
 - Keep the draft fixture outside the repo (a gitignored scratch path) until the baseline run ends, so the researcher cannot read labels.
 - One subagent runs the unmodified learnings-researcher once per query, receiving only the query text as the problem description, in this worktree at the pinned commit. Record the returned paths in the researcher's listed order.
 - Score the baseline with the same metric as U3 (queries with at least one relevant path in the first 5). Write model, commit, date, per-query returned paths and per-split counts to `tests/fixtures/search-baseline-grep.json`. Then move the fixture into `tests/fixtures/`.
 
 **Execution note:** The baseline run is manual and single-shot. Do not re-run it to improve numbers.
 
-**Test expectation:** none -- committed fixtures. Their shape checks (15 to 20 entries, unique ids, valid splits, 4 to 6 held out, #820 present, every `relevant` path exists under `docs/solutions/` and is not a README or `_archived/`, at least two `lexical_reachable: false`, and for each `true` query a relevant doc shares a query token of 3 or more characters) run inside U3's recall test.
+**Test expectation:** none -- committed fixtures. Their shape checks (15 to 20 entries, unique ids, valid splits, 4 to 6 held out, #820 present, every `relevant` path exists under `docs/solutions/` and is not a README or `_archived/`, at least two `lexical_reachable: false`, every query has a `source`, at least half the tune queries are not `symptoms`, and for each `true` query a relevant doc's title, symptoms, tags or module shares a query token of 3 or more characters, not body text alone) run inside U3's recall test.
 
 **Verification:**
 - Both files are committed, and the baseline commit precedes any change to `agents/research/learnings-researcher.md`.
@@ -442,7 +451,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Test scenarios:**
 - Happy path: `foo_bar` yields `foo_bar`, `foo`, `bar`. `A-Perfect-Measurement` yields the whole slug plus three components. `src/lib/x.ts` yields `src`, `lib`, `x`, `ts`. `v2` stays one token.
 - Edge case: empty and whitespace-only input yield no tokens. `_x-` yields `x`. `a__b` yields `a__b`, `a`, `b`. `naïve` yields `na`, `ve`. A 100 KB single token does not hang.
-- Happy path: `ln` matches `Math.log` to within 1e-15 relative error across the IDF input range (about 0.5 to 5,000), is exactly 0 at 1, and is monotonic on a dense sweep.
+- Happy path: `ln` matches `Math.log` to within 1e-15 relative error on a sweep from 1 up to about 2N+2, the range IDF sends (its argument is 1 plus a positive number), is exactly 0 at 1, and is monotonic on a dense sweep.
 - Happy path: a term in the title outranks the same term once in the body. A rarer term scores above a common one. A longer body lowers the score for equal term counts.
 - Edge case: an empty corpus, a one-document corpus and a query term in no document score without error and without NaN.
 - Edge case: permuting the query terms gives bit-identical scores. Equal scores order by code-unit path, so `Z.md` sorts before `a.md`.
@@ -452,11 +461,11 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - The bit-pattern test passes locally on arm64 macOS, and CI on Linux x64 is the cross-platform check.
 - The codemap and AGENTS row exist; `bun scripts/content-integrity.ts` is clean.
 
-- [ ] U2. Corpus loader, project root and lifecycle resolver
+- [ ] U2. Corpus loader and project root
 
-**Goal:** Resolve the project root, load `docs/solutions/` safely from disk, and resolve supersession by the researcher's rules, except that an unresolved successor keeps the matched doc with a caution.
+**Goal:** Resolve the project root and load `docs/solutions/` safely from disk. The lifecycle resolver lives in U3, next to the ranked list it consumes.
 
-**Requirements:** R1, R2, R5
+**Requirements:** R1, R2, R5 (malformed frontmatter)
 
 **Dependencies:** None
 
@@ -468,8 +477,8 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Approach:**
 - `search-corpus.ts` holds the root walk-up (copied from the private helper in `discovered-skills.ts`, which is not edited), with `realpath` and the fallback to the start directory. It also holds the `kind` table, the loader and the frontmatter wrapper described in Key Technical Decisions.
-- The loader first checks that the `realpath` of `docs/solutions` lies inside the `realpath` of the root, then walks with a wrapper that never throws and calls `lstat` explicitly on each entry. It sorts by relative path in code-unit order, applies the caps, and returns documents plus bounded, sanitised warnings. It builds on `walkDir` only if that can be done without its throw-on-unreadable behaviour reaching the caller. Otherwise it uses a small bounded walker of its own.
-- The same module exports the lifecycle constants (hop cap, `docs/solutions/` prefix, `Supersedes:` and `Caution:` labels, the text `successor unresolved`) and a resolver over a ranked list and the loaded corpus. There is no `Skipped:` label. A successor is unresolved when it is missing, fails the form rule, forms a cycle, or lies past the hop cap, and the resolver then keeps the matched doc.
+- The loader first checks that the `realpath` of `docs/solutions` lies inside the `realpath` of the root, then walks with a wrapper that never throws and calls `lstat` explicitly on each entry. It sorts by relative path in code-unit order, applies the file, size and 16 MB total caps, and returns documents plus bounded, sanitised warnings. It builds on `walkDir` only if that can be done without its throw-on-unreadable behaviour reaching the caller. Otherwise it uses a small bounded walker of its own.
+- The module imports no lifecycle logic. Its documents carry the narrowed `status`, `superseded_by` and `stale_reason` that U3's resolver reads. Both walk-up copies keep a code comment saying they differ on purpose (start-directory fallback here, null in `discovered-skills.ts`).
 
 **Patterns to follow:**
 - `agents/research/learnings-researcher.md` Step 4 as the behavioural spec. `src/lib/walk-dir.ts` and `src/lib/validation.ts` for walking and narrowing.
@@ -479,15 +488,10 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Edge case: a symlinked start directory resolves through `realpath` (macOS `/var` to `/private/var`). Paths are root-relative with `/`.
 - Happy path: the loader returns docs sorted by code-unit path, excludes README, `_archived/` and `critical-patterns.md`, and ignores files deeper than 6 levels.
 - Error path: a committed `docs/solutions` symlink pointing outside the repo loads nothing, emits one warning, and no text from the target reaches the result or any output.
-- Edge case: a symlinked file is skipped, and a symlinked directory is not descended. An unreadable subdirectory gives a warning, never a throw. A 256 KB + 1 file is skipped with a warning. The 2,001st file stops loading with one warning.
+- Edge case: a symlinked file is skipped, and a symlinked directory is not descended. An unreadable subdirectory gives a warning, never a throw. A 256 KB + 1 file is skipped with a warning. The 2,001st file stops loading with one warning. Files past a 16 MB total byte budget are skipped in sorted path order, with one warning that gives the skipped count (tested with a fixture corpus built over the budget).
 - Edge case: no frontmatter indexes body-only with no warning. A BOM, and a closing `---` at end of file with no newline, still parse.
 - Error path: invalid YAML skips the doc with a warning naming its path. `tags: &t [*t]` (cyclic alias) and non-string tag entries do not crash and are never stringified. A control character in a title is stripped from the warning.
-- Happy path: AE3 chain A to B where B is active resolves to B with A in `Supersedes:`. A 5-hop chain resolves. A 6-hop chain does not.
-- Error path: a cycle, a self link, a missing file, `../x.md`, an absolute path, a README, an `_archived/` path, a bare filename, a list value, an empty value, a 6-hop chain, and a successor skipped by the loader each return the matched superseded doc itself, at its own rank, with status `superseded` and `Caution: successor unresolved`. None is dropped and no output contains `Skipped:`.
-- Edge case: an unresolved superseded doc and a resolvable one in the same result keep their own ranks. A doc that is a successor for one chain and unresolved for another appears once.
-- Edge case: a stale doc yields a `Caution:` carrying its sanitised, truncated `stale_reason`. An unrecognised status counts as active.
-- Integration: two superseded docs sharing a successor merge into one entry whose `Supersedes:` lists both in path order. The merged rank is the best of the successor and the replaced docs.
-- Integration: the lifecycle fixture corpus (chain, 5-hop, 6-hop, cycle, dangling, malformed-target, stale, merge cases) has one expected-output file that pins every case above. U3 reuses it.
+- Edge case: the lifecycle fixture corpus (chain, 5-hop, 6-hop, cycle, dangling, malformed-target, stale, merge cases) loads with each doc's narrowed lifecycle fields intact. U3 pins the resolver's output over it.
 
 **Verification:**
 - `src/lib/discovered-skills.ts` is untouched. The corpus loader runs over this repo's real `docs/solutions/` with no warnings.
@@ -497,7 +501,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 - [ ] U3. Search core, renderer and recall floor (Checkpoint A)
 
-**Goal:** One `search` function and one renderer that every surface calls, with the lexical lane tuned against the query set.
+**Goal:** One host-neutral composition and one renderer that every surface calls, with the lifecycle resolver and the lexical lane tuned against the query set.
 
 **Requirements:** R1, R2, R3, R5, R6, R15, R16
 
@@ -505,13 +509,14 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Files:**
 - Create: `src/lib/search-render.ts`, `src/lib/search-core.ts`
-- Test: `tests/unit/search-render.test.ts`, `tests/unit/search-core.test.ts`, `tests/unit/search-recall.test.ts`
+- Test: `tests/unit/search-render.test.ts`, `tests/unit/search-core.test.ts`, `tests/unit/search-lifecycle.test.ts`, `tests/unit/search-recall.test.ts`
 - Modify: `src/lib/search-lexical.ts` (tuned constants only), `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 
 **Approach:**
 - The core validates the query, kind and limit, resolves the root, loads the corpus, builds the index, scores, sorts by score then path, takes about twice the limit, resolves the lifecycle, and truncates to the limit. A hit needs a score above zero. Unresolved superseded docs stay in the list with their caution.
+- `search-core.ts` also holds the lifecycle constants (hop cap, `docs/solutions/` prefix, `Supersedes:` and `Caution:` labels, the text `successor unresolved`) and the resolver over a ranked list and the loaded corpus. There is no `Skipped:` label. A successor is unresolved when it is missing, fails the form rule, forms a cycle, or lies past the hop cap, and the resolver then keeps the matched doc. The renderer imports only types from the corpus module, so render tests never load filesystem code.
 - It returns a structured result: hits, lanes that ran, notes, warnings and a corpus state of `none` (no `docs/solutions/`), `empty` (the directory holds no indexable docs) or `docs` (N docs, M hits). The renderer turns the result into text. Adapters never format text themselves.
-- The core accepts an optional injected semantic stage, absent until U9. Lanes read `lexical` alone until then.
+- The core is the one composition (validate, lexical lane, semantic stage, lifecycle, render). It owns the `SearchSettings` type and the tool name and argument constants. It accepts an optional injected semantic stage, absent until U9, so lanes read `lexical` alone until then.
 - The renderer owns sanitisation, field caps, the snippet window, the warning cap and the 16 KB cut with Systematic's own marker. The snippet picks the window with the most distinct query terms (integer counts), earliest on a tie, and falls back to the symptoms or title when the body has no match.
 - A missing limit is 8. A limit that is not an integer from 1 to 20 returns a fixed validation error, so every adapter agrees. Over-long queries and unknown kinds return fixed error text.
 - The recall test also runs the query-set shape checks listed under U0 (a failing shape check fails the test before any ranking). It then counts, across all `lexical_reachable: true` queries in both splits, the queries with a relevant path in the top 5, prints per-split counts, and asserts one aggregate integer floor: the first measured count minus 1. A header comment says to re-measure on purpose if corpus growth trips it.
@@ -528,6 +533,10 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Test scenarios:**
 - Happy path: a query matching a doc's title ranks it first. A symptoms-only match surfaces the doc. Each hit carries path, title, kind, 1-based rank, lanes, snippet, module, tags and status.
 - Happy path: AE3, a superseded best match is replaced by its successor with `Supersedes:`. A stale hit carries `Caution:`. An unresolvable chain returns the matched superseded doc with `Caution: successor unresolved`.
+- Happy path (resolver, over the U2 lifecycle fixture corpus, one expected-output file pinning every case): chain A to B where B is active resolves to B with A in `Supersedes:`. A 5-hop chain resolves. A 6-hop chain does not.
+- Error path (resolver): a cycle, a self link, a missing file, `../x.md`, an absolute path, a README, an `_archived/` path, a bare filename, a list value, an empty value, a 6-hop chain, and a successor skipped by the loader each return the matched superseded doc itself, at its own rank, with status `superseded` and `Caution: successor unresolved`. None is dropped and no output contains `Skipped:`.
+- Edge case (resolver): an unresolved superseded doc and a resolvable one in the same result keep their own ranks. A doc that is a successor for one chain and unresolved for another appears once. A stale doc yields a `Caution:` carrying its sanitised, truncated `stale_reason`. An unrecognised status counts as active.
+- Integration (resolver): two superseded docs sharing a successor merge into one entry whose `Supersedes:` lists both in path order. The merged rank is the best of the successor and the replaced docs.
 - Edge case: over-fetch keeps the result at `limit` hits when merging collapses duplicates. A doc that loses a merge never appears twice.
 - Edge case: AE4, no `docs/solutions/` renders `corpus: none`. An empty directory renders 0 docs. A populated corpus with no matching term renders `N docs, 0 hits`. The three texts differ.
 - Error path: an empty or whitespace query, a query over 2,000 characters and an unknown kind return their fixed errors. A 70-term query is cut to 64 terms with a note. Limit 0, 21, 2.5 and `"x"` return the fixed validation error, and a missing limit gives 8.
@@ -552,15 +561,16 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Files:**
 - Create: `src/lib/search-user-config.ts`, `tests/unit/search-user-config.test.ts`
 - Modify: `src/lib/config-schema.ts`, `src/lib/config-protected-fields.ts`, `src/lib/config.ts`, `docs/scripts/generate-config-reference.ts` (`TOP_LEVEL_KEYS`), `src/lib/capability-snapshot.ts` if it serialises config
-- Modify (tests): `tests/unit/config-schema.test.ts`, `tests/unit/config.test.ts`, `tests/unit/capability-snapshot.test.ts`
+- Modify: `scripts/lib/generated-surfaces.ts`. `config-schema.ts` now imports `search-user-config.ts`, so add that file, and any local module it imports, to the schema and config-reference triggers. Otherwise `surfaces:affected` will not flag a schema change made there.
+- Modify (tests): `tests/unit/config-schema.test.ts` (it pins the parsed key list at lines 114-124, so `search` stays schema-optional with no default), `tests/unit/config.test.ts`, `tests/unit/capability-snapshot.test.ts`. Recheck `tests/unit/generated-surfaces.test.ts` and `generated-surfaces-wiring.test.ts` after the trigger change.
 - Regenerate: `docs/public/schemas/v*/systematic-config.schema.json`, `docs/src/content/docs/reference/configuration.mdx`
 - Modify: `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 
 **Approach:**
-- The `search` zod schema piece (with its `.meta`) is defined in `search-user-config.ts`. The five edits: add the field to `createSystematicConfigSchema` by importing that piece and wrapping it in `trustProtected`; add `search` to `CONFIG_PROTECTED_FIELD_PATHS`; in `config.ts` extend the interface, `DEFAULT_CONFIG`, `PROJECT_ALWAYS_PROTECTED_FIELDS`, collect and strip, the top-level warning call, and the merge (user then custom only; `enabled` last-wins, `embeddings` replaced whole); add `search` to `TOP_LEVEL_KEYS`; regenerate surfaces.
+- The `search` zod schema piece (with its `.meta`) is defined in `search-user-config.ts`. The five edits: add the field to `createSystematicConfigSchema` by importing that piece and wrapping it in `trustProtected`; add `search` to `CONFIG_PROTECTED_FIELD_PATHS`; in `config.ts` extend the interface, `DEFAULT_CONFIG`, `PROJECT_ALWAYS_PROTECTED_FIELDS`, collect and strip, the top-level warning call, and the merge (user then custom only, by calling `mergeSearchSettings`); add `search` to `TOP_LEVEL_KEYS`; regenerate surfaces.
 - The strip runs before `safeParse`, so a malformed project `search` cannot fail the load. The warning names the field, never a value, and passes through `sanitizeDiagnosticText`.
-- The schema checks shape only: provider enum, strings, positive integer `dimensions`, bounded `timeout_ms` (500 to 60,000) and `first_query_budget_ms` (500 to 120,000), and `api_key_env` against `^[A-Za-z_][A-Za-z0-9_]*$`. URL semantics wait for use time (U8).
-- `search-user-config.ts` exports the schema piece, the inferred settings type and the reader. The reader parses both `~/.config/opencode/systematic.{jsonc,json}` and `$OPENCODE_CONFIG_DIR/systematic.{jsonc,json}` and merges them by the loader's rules: custom overrides user, `enabled` takes the last source that defines it, and `embeddings` is replaced whole. It validates with the schema piece, so there is no hand-written narrower. It never reads project config. An unparseable file, or a schema-invalid `search` block, returns an `unreadable` state that U8 turns into the `config unreadable` note.
+- The schema checks shape only: provider enum, strings, positive integer `dimensions`, bounded `timeout_ms` (500 to 60,000, default 15,000), and `api_key_env` against `^[A-Za-z_][A-Za-z0-9_]*$`. URL semantics wait for use time (U8).
+- `search-user-config.ts` exports the schema piece, a pure `mergeSearchSettings(sources)` and the reader. The merge rule is custom over user, `enabled` from the last source that defines it, `embeddings` replaced whole, and both `config.ts` and the reader call the one function. The reader parses `~/.config/opencode/systematic.{jsonc,json}` and `$OPENCODE_CONFIG_DIR/systematic.{jsonc,json}` and feeds them to the merge. It validates with the schema piece, so there is no hand-written narrower. The module imports only zod, jsonc-parser and node builtins, plus type-only imports from `search-core.ts`, which owns the `SearchSettings` type. It never imports `config.ts` or `config-schema.ts`, and `trustProtected` is applied only in `config-schema.ts`. It never reads project config. An unparseable file, or a schema-invalid `search` block, returns an `unreadable` state that U8 turns into the `config unreadable` note.
 - The capability snapshot prints `search.enabled` and, for embeddings, provider, model, dimensions and the `base_url` origin only, never userinfo.
 
 **Patterns to follow:**
@@ -571,10 +581,10 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Happy path: AE2, a project `systematic.json` with an embeddings block is stripped with one warning. The user value, if present, is used.
 - Edge case: a project `search` that is malformed (a string, an array) is stripped and the load succeeds. A project `search: {enabled: false}` is stripped too, so a collaborator cannot disable the user's search.
 - Edge case: project erase attempts, namely `search: null`, `search: {}`, and an embeddings block alongside a user block, each keep the user value and emit one warning.
-- Edge case: custom `OPENCODE_CONFIG_DIR` overrides user `enabled`, and its `embeddings` replaces the user's wholesale. When custom has no `search` and user sets `enabled: false`, `enabled` is false on both the reader (bin) and `loadConfigWithSources` (CLI).
+- Edge case: custom `OPENCODE_CONFIG_DIR` overrides user `enabled`, and its `embeddings` replaces the user's wholesale. When custom has no `search` and user sets `enabled: false`, `mergeSearchSettings` returns `enabled: false`, which both the loader and the reader use.
 - Error path: the schema rejects an unknown provider, `api_key_env` of `1BAD`, `A B` and `$X`, a non-integer `dimensions`, and out-of-range timeouts.
 - Edge case: the warning and the capability snapshot never contain a `base_url` userinfo, a query string or an env var value.
-- Integration: a small separate parity test calls the reader and `loadConfigWithSources` on a few `search` inputs (user only, custom only, both, `enabled: false` only) under an isolated HOME and `OPENCODE_CONFIG_DIR`, and compares the merged `search`. It does not use the agent-only config-corpus harness.
+- Happy path: a unit test on the pure `mergeSearchSettings` covers user only, custom only, both, and `enabled: false` only. One `config.ts` test proves `loadConfigWithSources` uses that function. There is no reader-vs-loader parity test.
 - Integration: the reader ignores a project config carrying an endpoint. It accepts JSONC comments and trailing commas, and falls back to `.json`.
 - Error path: an unparseable user file gives `unreadable`, never a throw.
 
@@ -594,32 +604,36 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Files:**
 - Create: `src/lib/search-tool.ts`
-- Modify: `src/lib/opencode-v1.ts`, `src/lib/opencode-v2.ts` (new installer slot in `V2Installers`, `DEFAULT_INSTALLERS` and `INSTALLER_ORDER`), `src/pi.ts`, `src/lib/pi-delegate-session.ts` (`CreateDelegateSession` options, `runValidatedDelegateSession`, `buildDelegateAgentSessionOptions`), `src/lib/pi-delegate-tool.ts` (`PiDelegateToolDeps`), `src/lib/agent-resolver.ts`
+- Modify: `src/lib/opencode-v1.ts`, `src/lib/opencode-v2.ts` (new installer slot in `V2Installers`, `DEFAULT_INSTALLERS` and `INSTALLER_ORDER`), `src/pi.ts`, `src/lib/pi-delegate-session.ts` (`CreateDelegateSession` options, `runValidatedDelegateSession`, `buildDelegateAgentSessionOptions`), `src/lib/pi-delegate-tool.ts` (`PiDelegateToolDeps`), `src/lib/agent-resolver.ts` (including the `DEFAULT_READONLY_TOOLS` doc comment at line 162, which calls the list Pi built-in names)
 - Test: `tests/unit/search-adapters-parity.test.ts`, `tests/unit/opencode-v2-search.test.ts`
-- Modify (pins, deliberately): `tests/unit/opencode-v1-golden.test.ts` (tool-keys assertion) with `tests/fixtures/opencode-v1-goldens/expected/hooks.json`, `tests/unit/plugin.test.ts` (tool keys), `tests/unit/pi.test.ts` (exactly-two-tools and the two later pins), `tests/unit/pi-delegate-session.test.ts` (`customTools`), `tests/unit/pi-delegate-tool.test.ts` (default tool list), `tests/unit/agent-resolver.test.ts`
+- Test (real host): `tests/integration/opencode-v2.test.ts` and `tests/integration/opencode-v1.test.ts`. The v1 file is already in `V1_SMOKE_FILES`, so it runs on the floor and current jobs. The v2 file is already in `V2_SUITE_FILES`. Neither needs a guard change.
+- Modify (pins, deliberately): `tests/unit/opencode-v1-golden.test.ts` (tool-keys assertion) with `tests/fixtures/opencode-v1-goldens/expected/hooks.json`, `tests/unit/plugin.test.ts` (tool keys), `tests/unit/pi.test.ts` (lines 116-122 exactly two tools, 380 length 2, 402-410 the catalog-failure test that expects only `systematic_skill`, and 1305-1309 both tools in the init test), `tests/unit/pi-delegate-session.test.ts` (`customTools`), `tests/unit/pi-delegate-tool.test.ts` (default tool list), `tests/unit/agent-resolver.test.ts`
+- Modify (stale text): the `opencode-v2.test.ts` comment near line 55 that says the scaffold registers no tools, and the Pi 0.80.6 strings in `tests/integration/pi.test.ts` (lines 5, 18 and 833)
 - Modify: `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 
 **Approach:**
-- `search-tool.ts` holds the tool name, a short description, the argument definitions as plain data, and one execute path: take a start directory and settings, call the core, render. It also exports one factory per host: the v1 tool (zod), the v2 installer (JSON Schema) and the Pi tool definition (typebox). Every schema declares `limit` as an integer from 1 to 20. Any thrown error becomes a fixed one-line failure text with no message.
-- v1 adds the key to the `tool:` map only when `search.enabled` is not false, and takes the start directory from `context.directory` when it is a non-empty string, else the init directory. Verify the field name against the installed plugin types. `REGISTERED_PLUGIN_HOOKS` does not change.
-- v2 adds an installer through `ctx.tool.transform` that skips a name the editor already holds and reports a diagnostic, sets `codemode: false`, and uses `ctx.location?.directory`. When that is undefined, the tool returns a one-line no-project note. It does not call `permission.assert`.
+- `search-tool.ts` is a host adapter and nothing more. The tool name, description and argument constants and the one composition live in `search-core.ts`. The module exports one factory per host: the v1 tool (zod), the v2 installer (JSON Schema) and the Pi tool definition (typebox). Each does host I/O only: pick the start directory, hand over the settings, map any thrown error to a fixed one-line failure text with no message. Every host schema declares `limit` as a plain integer and states the 1 to 20 range in the description only, so the core owns the out-of-range error.
+- v1 adds the key to the `tool:` map only when `search.enabled` is not false, and takes the start directory from `context.directory`, which the 1.19.4 types require, with the init directory as a fallback only until the floor test below proves the field on 1.18.29. `REGISTERED_PLUGIN_HOOKS` does not change.
+- v2 adds an installer through `ctx.tool.transform` that skips a name the editor already holds and reports a diagnostic, sets `codemode: false`, and uses `ctx.location?.directory`. When that is undefined, the tool returns a one-line no-project note rather than falling back to `process.cwd()`. It does not call `permission.assert`.
 - Pi registers the tool in `src/pi.ts` unless disabled, and reads `ctx.cwd` per call. Config is the init-time snapshot.
 - Pi delegates: add `systematic_search` to `DEFAULT_READONLY_TOOLS` and to `OPENCODE_TO_PI_TOOL`. Add a `customTools` field to `PiDelegateToolDeps` and to the `CreateDelegateSession` options. `runValidatedDelegateSession` passes it into `buildDelegateAgentSessionOptions` in place of the literal empty list. `src/pi.ts` supplies the one shared definition (a single-element list), or nothing when `search.enabled` is false. Nothing else from the parent passes. Fix the stale "Installed Pi 0.80.6" comment in `src/lib/pi-delegate-tool.ts` (installed is 1.4.0).
 - The one parity test drives each adapter's real entry (the v1 `execute`, the v2 installer against a fake `ctx.tool.transform`, the Pi `registerTool` execute) over one fixture corpus and compares the rendered text. U6 and U9 add the CLI, the bin and hybrid cases to this same file. Contract tests stay separate from real-host tests.
+- Real-host checks, two tests that reuse existing harness helpers. In `opencode-v2.test.ts`, use `startToolModelServer` and `callTool` with a doc written under `fixture.projectDir` and one scripted `systematic_search` call with a symptom query. Assert that the offered tool names include `systematic_search` and that the result holds the fixture path and title. In `opencode-v1.test.ts`, use `callToolOnHost` for the same assertions. The v1 test is the only proof that `context.directory` exists on the floor. Both also send `limit` 0 or 21 and show whether the host passes it through to `execute`; if a host pre-validates, record its behaviour and drop the identical-error claim for that case. The v2 test also shows whether the host's default permission blocks the tool. If it does, stop and ask Marcus.
 
 **Patterns to follow:**
 - `docs/solutions/best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md`. `src/lib/skill-tool.ts`, `src/lib/opencode-v2-skills.ts` and the `systematic_skill` block of `src/pi.ts`.
 
 **Test scenarios:**
 - Happy path: the same query over one corpus yields byte-identical text from v1, v2 and Pi (the AE5 legs for these three hosts). The corpus includes the ESC-bearing filename and the ESC and OSC 52 body line from U3, and none of those bytes reach any output.
-- Edge case: each tool schema declares `limit` as an integer from 1 to 20, and a call with 0 or 21 gets the core's fixed validation error on all three hosts.
+- Edge case: each tool schema declares `limit` as a plain integer with the range in its description, and a call to each adapter's `execute` with 0 or 21 gets the core's fixed validation error. The real-host tests confirm v1 and v2 pass those values through.
 - Happy path: the v1 tool keys are `systematic_search` and `systematic_skill`. The hook list is unchanged. Pi registers exactly three tools (skill, delegate, search). The pins above are updated with a reason.
-- Edge case: v1 uses `context.directory` when present and the init directory otherwise. Two Pi calls with different `ctx.cwd` search their own projects. v2 with an undefined location returns the no-project note and does not throw.
+- Edge case: v1 uses `context.directory` when present and the init directory otherwise (until the floor test drops the fallback). Two Pi calls with different `ctx.cwd` search their own projects. v2 with an undefined location returns the no-project note and does not throw.
 - Edge case: v2 with a pre-existing `systematic_search` reports a diagnostic and does not add a duplicate.
 - Error path: `search.enabled: false` leaves the tool out of v1, never calls v2 `add`, and never calls Pi `registerTool` for search. Delegates then get `customTools` empty and the name in the allowlist stays inert without throwing.
 - Error path: a core failure becomes the fixed failure text on all three hosts, never an exception.
-- Integration: a persona with no `tools:` line gets `systematic_search` in its allowlist and exactly that one custom tool. A persona with `tools: [read]` gets neither. A persona naming `systematic_search` keeps it. The parent's `systematic_skill` and `systematic_delegate` never reach the delegate.
+- Integration: a persona with no `tools:` line gets `systematic_search` in its allowlist and exactly that one custom tool. A persona with `tools: Read, Grep` (OpenCode names, comma separated) gets neither. A persona with `tools: systematic_search` keeps it through the new `OPENCODE_TO_PI_TOOL` key. The parent's `systematic_skill` and `systematic_delegate` never reach the delegate.
 - Integration: a fake delegate session runs the real search tool over the fixture corpus and returns the same text as the parent.
+- Integration (real host): the v2 and v1 tests above pass on their CI jobs, including the floor lane. Locally the v2 test skips without `SYSTEMATIC_OPENCODE_V2_BIN`, so CI is the gate for it.
 
 **Verification:**
 - Every pin change is explained in the diff and no other host behavior changes.
@@ -635,7 +649,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Files:**
 - Create: `src/lib/search-cli.ts`, `src/claude-code-search.ts`, `src/lib/main-module.ts`
-- Modify: `src/cli.ts` (dispatch, `HELP`, entry guard), `src/claude-code-validator.ts` (entry guard), `scripts/build-claude-code-plugin.ts` (bin map, search bundle), `package.json` (`engines.node`)
+- Modify: `src/cli.ts` (dispatch, `HELP`, entry guard), `src/claude-code-validator.ts` (entry guard), `scripts/build-claude-code-plugin.ts` (optional second input, search bundle), `package.json` (`engines.node`)
 - Modify: `.github/workflows/publish-claude-code-plugin.yaml` (required-artifact guard), with its pinning test `tests/unit/publish-claude-code-plugin-workflow.test.ts`
 - Modify: `docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md` (the "one bin" detail)
 - Test: `tests/unit/search-cli.test.ts`, `tests/unit/claude-code-search.test.ts`, `tests/unit/main-module.test.ts`; extend `tests/unit/search-adapters-parity.test.ts`; update `tests/unit/cli.test.ts`, `tests/unit/build-claude-code-plugin.test.ts`
@@ -643,9 +657,10 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Modify: `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 
 **Approach:**
-- CLI: `systematic search <query...> [--dir] [--kind] [--limit]`, following the flat `runXCli({argv, errorSink, outputSink})` pattern. Config comes from `loadConfigWithSources` for `--dir` or the cwd, and its warnings go to stderr (AE2 on the CLI). The CLI rejects a `--limit` that is not an integer from 1 to 20 with exit 2. Exit 0 for results, no hits and disabled; exit 2 for usage errors. There is no `--json`; U11 parses the text output.
+- CLI: `systematic search <query...> [--dir] [--kind] [--limit]`, following the flat `runXCli({argv, errorSink, outputSink})` pattern. `runSearchCli` takes an injected settings loader and never loads config itself. `cli.ts` passes a `loadConfigWithSources` adapter for `--dir` or the cwd, and its warnings go to stderr (AE2 on the CLI). The bin passes the user-level reader instead. The CLI rejects a `--limit` that is not an integer from 1 to 20 with exit 2. Exit 0 for results, no hits and disabled; exit 2 for usage errors. There is no `--json`; U11 parses the text output.
 - Bin: the same flags minus config warnings, reading settings through the U4 reader (both user-level files, merged by the loader's rules). `disabled` and `config unreadable` follow the rules in Key Technical Decisions.
-- Build: `generatePluginFiles` takes a map of bin names to bundles, and each gets the shebang and mode `0o755`. The search bundle builds with an `onResolve` alias sending `jsonc-parser` to its ESM build. The bundle includes zod through the shared schema piece, so U6 records its size.
+- Build: `generatePluginFiles` keeps its single validator Buffer and gains an optional second input for the search bin bundle, so its other callers stay unchanged: `tests/integration/claude-code.test.ts`, `tests/unit/pr-attachments-packaging.test.ts`, `tests/unit/ce-review-validator-packaging.test.ts` and `tests/unit/ce-review-cleanup-packaging.test.ts`. Each bin gets the shebang and mode `0o755`. `tests/unit/build-claude-code-plugin.test.ts` is where the two-bin output is tested. The search bundle builds with an `onResolve` alias sending `jsonc-parser` to its ESM build. The bundle includes zod through the shared schema piece, so U6 records its size.
+- Import guard: the foreign-directory bin run below is the guard that the bin does not pull in `config.ts`, because that module's UMD jsonc would crash the run. There is no bundle-graph or metafile assertion.
 - Node floor: `src/lib/main-module.ts` holds the realpath guard, and `src/cli.ts`, `src/claude-code-validator.ts` and the new bin use it in place of `import.meta.main`. To pick the floor, inventory the newest Node API used under `src/` (`import.meta.dirname` is 20.11) and set `engines.node` to that. Where a Node at the floor can be fetched into a temp prefix, run the built CLI help and the bin under it. Otherwise record that the floor rests on API documentation only.
 - Publish guard (approved by Marcus, 2026-10-29): add `claude-code/bin/systematic-search` to the required-artifact list of the `Guard built bundle` step and give it the same executable check as the validator bin. The step's other checks are unchanged. The build tests also assert both bins exist and are executable.
 
@@ -663,12 +678,12 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Integration: the workflow test asserts the guard step lists `claude-code/bin/systematic-search` and checks it is executable, alongside every check it already makes for the validator bin and the other required artifacts.
 - Happy path: `generatePluginFiles` writes both bins with the shebang and mode `0o755`. An empty bundle throws.
 - Integration: the entry guard fires when the built CLI is invoked through a symlink and through a relative path, under Node and Bun. Importing the module runs nothing. A missing `argv[1]` runs nothing.
-- Edge case: no `import.meta.main` remains in `src/`. `package.json` `engines.node` equals the verified floor.
+- Edge case: `package.json` `engines.node` equals the verified floor.
 
 **Verification:**
 - The bin runs from a foreign directory with no `node_modules`. All five surfaces return the same lexical text.
 - The search bin bundle size is recorded in the PR description.
-- `bun run surfaces:affected --run` regenerates the validator bundle and `bun run surfaces:drift` is clean.
+- `bun run surfaces:affected --run` regenerates `skills/ce-review/scripts/validate-review.mjs` (the validator surface) and `bun run surfaces:drift` is clean. The Claude Code bin is build output, not a surface.
 - The entry-point-scope learning describes two narrow bins.
 
 - [ ] U7. Researcher, harness profiles and surfaces (Checkpoint B)
@@ -684,20 +699,20 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Modify: `skills/using-systematic/references/opencode-profile.md`, `opencode-v2-profile.md`, `pi-profile.md`, `claude-code-profile.md`
 - Modify: `HARNESSES.md`, `ARCHITECTURE.md`, `STRUCTURE.md`
 - Modify: `docs/solutions/best-practices/lifecycle-validator-runs-only-in-ci-so-agent-prose-must-enforce-it-2026-10-26.md`
-- Test: `tests/integration/claude-code.test.ts` (the profile assertions), the bootstrap snapshot under `tests/unit/__snapshots__/`
+- Test: `tests/integration/claude-code.test.ts` (the profile assertions), the bootstrap snapshot under `tests/unit/__snapshots__/`, and `tests/unit/compound-contract-parity.test.ts` (lines 137-143 pin `Overlap:`, `count=` and `score=` in the researcher's Output Format, so the Overlap block must survive the edit)
 - Regenerate: `registry/registry.jsonc`, the schema outputs, `tests/fixtures/pi-subagents-personas/**`
 - Modify (deliberate regeneration of the researcher entry only): `tests/fixtures/config-corpus/*/expected.opencode.json`, checked by `tests/unit/config-corpus.test.ts`
 
 **Approach:**
-- Researcher: add a search-first step before the grep steps. Detection is a tool-list check for `systematic_search` on OpenCode and Pi, and `command -v systematic-search` on Claude Code. With search available it calls once with the problem description and `kind` solution. `corpus: none` and `empty` return No Matches. With hits, it skips Steps 2 and 3 and Step 4's grep, still runs Step 3b (critical patterns), and goes straight to reading the top hits. `N docs, 0 hits`, a `disabled` or error reply, and no tool all take the existing grep path unchanged. There is no synonym pass. `Supersedes:` and `Caution:` lines are copied literally, including `Caution: successor unresolved` on a superseded doc whose successor does not resolve. Step 3b is untouched. Overlap mode drops the doc under comparison from the results and scores the five dimensions as today, never from the search score.
+- Researcher: add a search-first step before the grep steps. Detection is a tool-list check for `systematic_search` on OpenCode and Pi, and `command -v systematic-search` on Claude Code. With search available it calls once with the problem description and `kind` solution. `corpus: none` and `empty` return No Matches. With hits, it skips Steps 2 and 3 and Step 4's grep, still runs Step 3b (critical patterns), and goes straight to reading the top hits. `N docs, 0 hits`, a `disabled` or error reply, and no tool all take the existing grep path unchanged. There is no new synonym pass, since the existing grep keeps its OR patterns. `Supersedes:` and `Caution:` lines are copied literally, including `Caution: successor unresolved` on a superseded doc whose successor does not resolve. Step 3b is untouched. Overlap mode drops the doc under comparison from the results and scores the five dimensions as today, never from the search score.
 - Lifecycle rule change: Step 4 and the grep fallback follow the same rule as search. A superseded doc with an unresolvable successor is returned with `Caution: successor unresolved` instead of being omitted. The Step 4 result table row, the unresolvable-successor bullet, the `Skipped:` line in the Output Format and the "return its successor, or skip it" line in the DON'T list all change together, so the retired label appears nowhere.
 - The researcher prose is reviewed by hand once against the resolver's constants and fixture corpus. There is no content-integrity gate for it.
 - The edit changes the bundled prompt text that `tests/fixtures/config-corpus/*/expected.opencode.json` serialise (the corpus runs against the real `agents/`). Regenerate the `learnings-researcher` entry in each file deliberately, as that corpus's README requires, and confirm nothing else in them changed.
 - Profiles list `systematic_search` (OpenCode, v2, Pi) and the `systematic-search` command (Claude Code). The Claude Code profile still says there is no `systematic_skill`.
-- `HARNESSES.md` records the new tool surface as host-free contract evidence, with no real-host claim. `ARCHITECTURE.md` gains the search module map and invariants (read from disk every call, config protected as a whole, no `Math.log`). `STRUCTURE.md` says where search code lives.
+- `HARNESSES.md` records the new tool surface as host-free contract evidence, plus one real-host test each on OpenCode v1 (floor and current) and v2, gated by CI. Pi and the Claude Code bin have no real-host check, and the file says so. `ARCHITECTURE.md` gains the search module map and invariants (read from disk every call, config protected as a whole, no `Math.log`). `STRUCTURE.md` says where search code lives.
 - Update the lifecycle-validator learning: the search tool resolves the lifecycle in code, the researcher prose is the fallback, and an unresolved successor now keeps the doc with a caution.
 
-**Checkpoint B (lexical cut).** Before U8 starts, all of these hold with no semantic code present: typecheck, `typecheck:scripts`, `typecheck:all`, lint, the full test run, build, `bun scripts/content-integrity.ts`, `bun run surfaces:affected --run`, then `bun run surfaces:drift`. Record the per-split found counts for lexical search beside the grep baseline in the PR description. If any gate fails, fix it before moving on.
+**Checkpoint B (lexical cut).** Before U8 starts, all of these hold with no semantic code present: typecheck, `typecheck:scripts`, `typecheck:all`, lint, the full test run, build, `bun scripts/content-integrity.ts`, `bun run surfaces:affected --run`, then `bun run surfaces:drift`. CI is the real-host gate: a local v2 run without `SYSTEMATIC_OPENCODE_V2_BIN` goes green with the v2 real-host test skipped, so Checkpoint B waits for the CI v1 floor, v1 current and v2 jobs to pass. Record the per-split found counts for lexical search beside the grep baseline in the PR description. If any gate fails, fix it before moving on.
 
 **Patterns to follow:**
 - `docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md`. `docs/solutions/integration-issues/cross-harness-tools-frontmatter-divergence-2026-08-16.md`.
@@ -710,7 +725,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Verification:**
 - Checkpoint B passes.
-- No file under `src/lib/` mentions embeddings beyond the U4 config shape.
+- No file under `src/lib/` mentions embeddings beyond the settings shape (the `SearchSettings` type and the U4 schema).
 
 ---
 
@@ -754,7 +769,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 - [ ] U9. The semantic lane: chunking, cache, fusion and backfill
 
-**Goal:** Hybrid ranking that returns lexical results within budget, resumes embedding across calls, and fuses only when the index is complete.
+**Goal:** Hybrid ranking that returns lexical results at once, backfills only through `--warm` (resumable), and fuses only when the index is complete.
 
 **Requirements:** R4, R11, R12, R13, R9
 
@@ -762,17 +777,17 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Files:**
 - Create: `src/lib/search-semantic.ts`
-- Modify: `src/lib/search-core.ts` (wire the injected stage), `src/lib/search-render.ts` (index and failure notes), `src/lib/search-cli.ts` and `src/claude-code-search.ts` (`--warm`)
+- Modify: `src/lib/search-core.ts` (wire the semantic stage into the one composition), `src/lib/search-render.ts` (index and failure notes), `src/lib/search-tool.ts` (the v1, v2 and Pi factories pass the settings through; they never backfill), `src/lib/search-cli.ts` and `src/claude-code-search.ts` (`--warm`)
 - Test: `tests/unit/search-semantic.test.ts`, `tests/unit/search-semantic-cache.test.ts`, `tests/unit/search-hybrid.test.ts`; extend `tests/unit/search-adapters-parity.test.ts`
 - Modify: `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 
 **Approach:**
-- Chunker: a pure, versioned function. A metadata chunk (title, symptoms, tags, module, `applies_when`) comes first. Body splits on headings (levels 1 to 4, ignoring fenced code), then packs paragraphs, then hard-cuts anything over about 1,200 characters (about 300 tokens), so no chunk exceeds a small model's context. There is no sentence rule. Every chunk is prefixed with the title and heading breadcrumb, and the prefix counts toward the 1,200. The truncation is documented in the guide (U10).
+- Chunker: a pure, versioned function. A metadata chunk (title, symptoms, tags, module, `applies_when`) comes first. Body splits on headings (levels 1 to 4, ignoring fenced code). Inside a section, consecutive paragraphs pack into one chunk up to the cut, and anything over about 1,200 characters (about 300 tokens) is hard-cut, so no chunk exceeds a small model's context. A heading always starts a new chunk. There is no sentence rule. Every chunk is prefixed with the title and heading breadcrumb, and the prefix counts toward the 1,200. The truncation is documented in the guide (U10).
 - Vectors: `Math.fround` each fresh component, normalise with `Math.sqrt`, store Float32. Cosine accumulates in a fixed order. Reject zero, NaN and Infinity. A doc scores the max over its chunks, and the top 20 docs by cosine (ties by path) are the semantic candidates.
 - Fusion: RRF, `k = 60`, over the full lexical ranking and the semantic candidates. A lane that lacks a doc adds nothing. Lanes per hit are the lanes that placed it.
-- Flow: embed the query first. On failure, return lexical results with the fixed note and stop. Then compute each doc's cache key and read hits. Embed misses in doc-grouped batches of at most 32 chunks until the budget deadline, each request timing out at the smaller of `timeout_ms` and the time left, and persist each doc as soon as it completes. A doc whose embedding fails twice is skipped for the rest of the process, counted in the note and left out of N/M, so one bad doc cannot stall the lane. If every remaining indexable doc has valid vectors, fuse. Otherwise return lexical results plus `semantic index N/M` with a hint to run `--warm`.
-- Cache: the layout in Key Technical Decisions. Read bumps mtime. One prune pass runs per process, bounded to a few thousand entries. There is no single-flight map. Query vectors are never cached.
-- `--warm` on the CLI and bin embeds the whole corpus with no budget (each request still times out), prints `embedded N/M` progress lines to stderr, exits 0 when complete and 1 with the fixed reason when not.
+- Search flow: compute each doc's cache key and read the per-doc vector files. If any non-skipped doc lacks vectors, return the lexical results at once with the fixed note `semantic index N/M; run systematic search --warm`, and skip the query embedding. If every remaining indexable doc has valid vectors, embed the query (one request under `timeout_ms`) and fuse. On failure, return lexical results with the fixed note. No search path, on any surface, embeds documents.
+- `--warm` on the CLI and bin is the only backfill. It embeds the missing docs in doc-grouped batches of at most 8 chunks, each request under `timeout_ms`, persists each doc as soon as it completes so a rerun resumes, prints `embedded N/M` progress lines to stderr, exits 0 when complete and 1 with the fixed reason when not. A doc whose embedding fails twice is skipped for the process, counted in the note and left out of N/M. Only a malformed response, a vector size mismatch, an HTTP 4xx or a 5xx counts toward the two failures. A timeout does not.
+- Cache: the layout in Key Technical Decisions, one file per document holding all its chunk vectors. The length check is dimension × 4 × chunk count. A read bumps mtime at most once per process per file. One prune pass runs per process, bounded to a few thousand entries. There is no single-flight map. Query vectors are never cached.
 
 **Execution note:** Start with a failing end-to-end test against the fake server for the AE1 and resume cases.
 
@@ -780,19 +795,20 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - `scripts/run-evals.ts` cache writes (directory mode, `wx` temp file, `chmod`, rename). `docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md` for temp-only writes.
 
 **Test scenarios:**
-- Happy path: with the fake OpenAI server and a fixture corpus, the first call embeds the query and all docs and returns hits with lanes `lexical` and `semantic`. The second call sends only the query request.
-- Happy path (AE1): an Ollama endpoint on a closed port returns lexical hits and the unreachable note, quickly, without throwing.
-- Edge case: a slow server and a short budget returns lexical plus `semantic index N/M`. The next call embeds only the missing docs.
+- Happy path: with the fake OpenAI server and a fixture corpus, a search before `--warm` sends no request and returns lexical hits with `semantic index 0/M; run systematic search --warm`. `--warm` embeds every doc. The next search sends exactly one request (the query) and returns hits with lanes `lexical` and `semantic`.
+- Happy path (AE1): with the index complete, an Ollama endpoint on a closed port returns lexical hits and the unreachable note, quickly, without throwing.
+- Edge case: `--warm` interrupted midway (server killed) leaves the finished docs cached. A rerun embeds only the missing docs. A search while partial returns lexical plus `semantic index N/M`.
 - Edge case: a doc edit re-embeds that doc alone. A different model, dimensions, prefix, `base_url` or chunker version uses a different file, so vectors never mix.
 - Error path: a cache file with a short or long length, a wrong dimension or garbage counts as a miss (the exact-length check fails) and is rewritten. A failing batch mid-backfill keeps the docs already persisted.
 - Edge case: the cache directory is `0700` and files are `0600`. A relative `XDG_CACHE_HOME` is ignored. Files older than 30 days are pruned and recent or just-read ones are not.
 - Edge case: the chunker handles headings inside fenced code, an empty body, a single oversize paragraph and a doc with only a metadata chunk, deterministically. No chunk, prefix included, exceeds about 1,200 characters, and an Ollama request carries `truncate: true`.
-- Error path: a doc whose embedding fails twice is skipped. The note gives the count, the doc leaves N/M, and the lane still fuses over the rest. A fresh CLI run retries it.
+- Error path: a doc whose embedding fails twice with a malformed response, a vector size mismatch, a 4xx or a 5xx is skipped. The note gives the count, the doc leaves N/M, and the lane still fuses over the rest. A fresh CLI run retries it. A timeout does not count toward the two failures: a slow server that times out repeatedly leaves the doc unskipped.
+- Edge case: a batch carries at most 8 chunks. Consecutive paragraphs in a section pack into one chunk, and a heading always starts a new one.
 - Edge case: RRF gives `1/61 + 1/61` for a doc first in both lanes, nothing for a missing lane, and breaks ties by path. At most 20 semantic candidates enter fusion with a 126-doc corpus.
 - Error path: a zero, NaN or wrong-length vector from the server rejects the batch with the right reason and caches nothing.
 - Integration: a canary key set in the environment appears in no stdout, stderr or file in the cache directory on a 401 run, a success run, a `--warm` run that fails midway, and one run of the bundled bin.
-- Integration: with the fake server returning fixed vectors, the CLI, the bundled bin and one tool adapter return identical hybrid text. These cases extend the one parity test from U5.
-- Integration: `--warm` prints progress to stderr, ignores the first-query budget, and exits 1 when the server dies midway.
+- Integration: with the fake server returning fixed vectors and a complete index, the CLI, the bundled bin and every tool adapter (v1, v2 and Pi) return identical hybrid text. These cases extend the one parity test from U5.
+- Integration: `--warm` prints progress to stderr and exits 1 with the fixed reason when the server dies midway.
 
 **Verification:**
 - Lexical results are unchanged when no endpoint is configured: U3's text fixtures still pass byte for byte, and the Bun-built bundle still runs under Node.
@@ -807,13 +823,13 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Files:**
 - Modify: `docs/src/content/docs/privacy.mdx`, `docs/src/content/docs/index.mdx`
-- Create: `docs/src/content/docs/guides/search.mdx`
-- Modify: the docs sidebar or nav source if it lists guides explicitly, and any CLI reference page that lists subcommands
+- Create: `docs/src/content/docs/guides/search.mdx`. The Guides sidebar autogenerates from the `guides` directory, so no sidebar edit is needed.
+- Modify: any CLI reference page that lists subcommands
 - Modify: `HARNESSES.md`, `STRUCTURE.md` if the guide moves anything they list
 
 **Approach:**
 - Rescope the claims at `privacy.mdx` ("transmits no telemetry of any kind") and `index.mdx` ("No API keys, no accounts, no telemetry" and "Nothing phones home") to the default setup. State that with an endpoint configured, document text and queries go to that host, and a remote host is a third party. Systematic still adds no telemetry.
-- The search guide covers: what is indexed and where, the tool and command names per harness, the `search` config block with each field, the user-level-only rule and the Claude Code bin's reader, `search.enabled`, the restart-on-config-change note, the cache path and contents with an export and deletion story (it is a directory of vectors), `--warm`, the failure notes, the chunk truncation, the starting timeout values, and the unsupported list (cache-directory ownership checks, a negative cache for a down endpoint, refusing `http` for a remote key).
+- The search guide covers: what is indexed and where, the tool and command names per harness, the `search` config block with each field, the user-level-only rule and the Claude Code bin's reader, `search.enabled`, the restart-on-config-change note, the cache path and contents with an export and deletion story (it is a directory of vectors), `--warm` as the only backfill (and what a search says while the index is incomplete), the failure notes, the chunk truncation, the `timeout_ms` default and its measured basis, and the unsupported list (cache-directory ownership checks, a negative cache for a down endpoint, refusing `http` for a remote key).
 - Release notes points for the release PR: the new tool, command and subcommand; the Node floor and why; the `search` config field; the privacy wording change.
 
 **Test expectation:** none -- docs wording, including the privacy scoping and the guide's coverage of every `search.embeddings` field, is checked in review. The docs build proves links and navigation.
@@ -834,7 +850,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 **Approach:**
 - With a local Ollama or other endpoint in user-level config, run each query lexical-only and hybrid through `systematic search`, parsing the text output, after a `--warm` run. Record each query's rank of its first relevant path in both modes, by split.
-- Record per-chunk embedding latency and the first-query time, and adjust the starting `timeout_ms` and `first_query_budget_ms` defaults in the schema and guide if the numbers disagree.
+- Record per-chunk embedding latency (p50 and p95) and the time to a full `--warm` backfill on the user's endpoint, and adjust the 8-chunk batch and the 15,000 ms `timeout_ms` defaults in the schema and guide if the numbers disagree. Note that a first `ollama serve` launch can take about 16 s, and that Ollama unloads the model after 30 s idle by default (`OLLAMA_KEEP_ALIVE`), so the first query after idle pays about 0.3 to 0.5 s to reload.
 - If hybrid is noisy on queries with few lexical hits, note it. A cosine floor chosen from the data is the follow-up, not part of this plan.
 - If no endpoint is available, skip the unit and say in the PR that R18 and the hybrid success criteria are unmeasured.
 
@@ -847,11 +863,11 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 ## System-Wide Impact
 
-- **Interaction graph:** v1, v2, Pi, the CLI and the bin all call `search-core.ts` through `search-tool.ts` or `search-cli.ts`. The researcher calls the tool or the bin. Pi delegates now receive one custom tool. `config.ts` gains one protected field that every host reads at init.
+- **Interaction graph:** v1, v2, Pi, the CLI and the bin all reach the one composition in `search-core.ts`, through the `search-tool.ts` factories or `search-cli.ts`, which do only host I/O. The CLI takes injected settings, so it never loads config itself. The researcher calls the tool or the bin. Pi delegates now receive one custom tool. `config.ts` gains one protected field that every host reads at init.
 - **Error propagation:** the core never throws. An endpoint failure becomes a fixed note on a lexical result. Adapters convert any thrown error to a fixed failure line. Nothing from `fetch` errors reaches output.
 - **State lifecycle risks:** the embedding cache is the only new persistent state. It is machine-local, keyed by content, model and endpoint hash, written atomically, and pruned by age. A half-written or foreign file is a miss. The corpus is never cached, so a doc written a moment ago is searchable.
-- **API surface parity:** all five surfaces return identical lexical text, and hybrid text matches when the endpoint returns the same vectors. The bin lacks the AE2 project-config warning, and that asymmetry is documented.
-- **Integration coverage:** the parity contract test, the foreign-directory bin run, the Bun-vs-Node bit-pattern test and the fake-server tests cover what mocks cannot. No test runs a real host with the tool, and HARNESSES.md says so.
+- **API surface parity:** all five surfaces return identical lexical text, and hybrid text matches when the endpoint returns the same vectors and the index is complete. The bin lacks the AE2 project-config warning, and that asymmetry is documented.
+- **Integration coverage:** the parity contract test, the foreign-directory bin run, the Bun-vs-Node bit-pattern test and the fake-server tests cover what mocks cannot. One real-host test each on OpenCode v2 and v1 (the v1 test runs on the floor and current jobs) proves the tool is offered and returns a fixture doc, and shows whether `context.directory` exists on the floor and whether hosts pre-validate `limit`. CI gates both, because local v2 skips without `SYSTEMATIC_OPENCODE_V2_BIN`. Pi and the Claude Code bin have no real-host check, and HARNESSES.md says so.
 - **Unchanged invariants:** `REGISTERED_PLUGIN_HOOKS` and the v1 hook set are unchanged. `src/lib/frontmatter.ts` is not edited. The bootstrap and the plugin's default export shape are unchanged. A default install makes no network call, downloads no model and adds no dependency. Bundled agent markdown stays model-free. The `systematic_skill` truncation and restore path is untouched.
 
 ---
@@ -865,7 +881,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 | The recall floor trips as the corpus grows | The floor is first measured minus 1, the test header says to re-measure on purpose, and the check covers only `lexical_reachable` queries. |
 | `Math.log` or another primitive differs across platforms | The hand-written `ln` and the bit-pattern test, which runs the Bun-built bundle under Node. Linux x64 is checked by CI. |
 | Bun `onResolve` alias fails to produce a foreign-directory-safe bin | U6 builds and runs the bin from a foreign directory with no `node_modules` before anything depends on it. The fallback is plain JSON config for the bin, which Marcus would need to approve. |
-| A hostile corpus (symlinks, huge files, cyclic YAML, control characters) | A realpath containment check on `docs/solutions`, an explicit `lstat` skip, per-file, count and depth caps, narrowing with no stringify, sanitised output (paths and snippets included), and fixtures for each. |
+| A hostile corpus (symlinks, huge files, cyclic YAML, control characters) | A realpath containment check on `docs/solutions`, an explicit `lstat` skip, per-file, count, depth and 16 MB total caps, narrowing with no stringify, sanitised output (paths and snippets included), and fixtures for each. |
 | Project config redirects document text to an attacker's host | `search` is stripped from project config as a whole, with a warning, before any parse or merge. |
 | An API key or endpoint leaks through errors, config output or the cache | Fixed reason strings only, `api_key_env` is a name not a value, `base_url` prints as an origin, and a canary test asserts absence from output, stderr and cache files. |
 | Pi delegates gain a tool that reads project files | The tool is read-only, scoped to `ctx.cwd`, skips symlinks, and is the only parent tool passed. A persona with an explicit `tools:` list must opt in. |
@@ -873,7 +889,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 | The new bin is built but never checked by the publish workflow | U6 adds it to the guard step and to the test that pins that step. |
 | The researcher edit changes pinned prompt text in the config corpus | U7 regenerates only the researcher entry in each expected file and confirms the diff is limited to it. |
 | Semantic-only hits add noise when lexical hits are few | R18 measures it. A cosine floor is the follow-up if the data shows noise. |
-| An unreachable but blackholed endpoint costs `timeout_ms` per call | The timeout is user-tunable and the failure note says why. A negative cache is out of scope and documented. |
+| An unreachable but blackholed endpoint costs `timeout_ms` per call | The timeout is user-tunable and the failure note says why. Only a search with a complete index makes a request (the query embed). A negative cache is out of scope and documented. |
+| An endpoint that is alive but slow (CPU-only Ollama, a cold model load) | Defaults come from measurement: 8 chunks per request and `timeout_ms` 15,000, against a worst observed CPU batch of 2.5 s. Timeouts do not count toward the skip-after-two-failures rule. Backfill is warm-only, so a search never waits on it. `--warm` prints progress. U11 records p50, p95 and time to a full backfill on the user's endpoint. |
+| Per-call corpus reads grow with the corpus | The 16 MB total budget bounds a call near 0.35 s warm (about 21 ms/MB measured, 25 ms for this repo). The no-memo decision rests on that number. |
 | The 16 KB cap hides hits | Default 8 hits fit well inside the cap, and the marker is explicit when the cap trims. |
 
 Dependencies: no new runtime dependency and no lockfile change. `jsonc-parser` is already a dependency and the bin bundles its ESM build. The semantic lane needs a user-supplied endpoint and is optional.
@@ -884,7 +902,7 @@ Dependencies: no new runtime dependency and no lockfile change. `jsonc-parser` i
 
 - The squash PR title uses the `feat` type so semantic-release cuts a minor. Merging does not publish, because releases go through the gated release PR.
 - Release note points: the `systematic_search` tool, `systematic-search` command and `systematic search` subcommand; the `search` config field and its user-level-only rule; hosts snapshot config, so an endpoint change needs a restart; the privacy wording change; and the Node floor and its reason.
-- Regenerate surfaces before pushing: `bun run surfaces:affected --run`, then `bun run surfaces:drift`. Surfaces this plan touches: schema and config-reference (U4), registry and Pi personas (U7), and the validator bundle (U6). A clone without tags needs `git fetch --tags` first, because the schema and config-reference surfaces read the version from tags.
+- Regenerate surfaces before pushing: `bun run surfaces:affected --run`, then `bun run surfaces:drift`. Surfaces this plan touches: schema and config-reference (U4), registry and Pi personas (U7), and `skills/ce-review/scripts/validate-review.mjs`, the validator surface (U6). A clone without tags needs `git fetch --tags` first, because the schema and config-reference surfaces read the version from tags.
 - Each new `src/lib` module needs an `ARCHITECTURE.md` codemap line and a `src/lib/AGENTS.md` row. `bun scripts/content-integrity.ts` checks both.
 - Telemetry: none added. With no endpoint, the feature makes no network call. With one, only document text and queries go to the host the user chose, and the guide says so.
 - After merge: write the solution docs the learnings review found missing (v1 golden pin, privacy claims, Node floor, and the Bun versus Node `Math.log` finding) with `ce:compound`, and run `ce:compound-refresh` over the layered-trust doc whose throw example is stale.
@@ -895,7 +913,7 @@ Dependencies: no new runtime dependency and no lockfile change. `jsonc-parser` i
 
 - **Origin document:** `docs/brainstorms/2026-10-29-durable-output-search-requirements.md`. This path is untracked and gitignored in this repository. It exists only in the primary checkout, so a reader working from a clone will not find it.
 - Related code: `agents/research/learnings-researcher.md`, `src/lib/frontmatter.ts`, `src/lib/walk-dir.ts`, `src/lib/discovered-skills.ts`, `src/lib/config.ts`, `src/lib/config-schema.ts`, `src/lib/config-protected-fields.ts`, `src/lib/opencode-v1.ts`, `src/lib/opencode-v2-skills.ts`, `src/lib/opencode-v2.ts`, `src/pi.ts`, `src/lib/pi-delegate-session.ts`, `src/lib/pi-delegate-tool.ts`, `src/lib/agent-resolver.ts`, `src/cli.ts`, `src/claude-code-validator.ts`, `src/ce-review-validator.ts`, `scripts/build-claude-code-plugin.ts`, `scripts/content-integrity.ts`, `scripts/lib/generated-surfaces.ts`, `scripts/run-evals.ts`.
-- Related tests: `tests/unit/claude-code-validator.test.ts`, `tests/unit/opencode-v1-golden.test.ts`, `tests/unit/plugin.test.ts`, `tests/unit/pi.test.ts`, `tests/unit/pi-delegate-session.test.ts`, `tests/unit/pi-delegate-tool.test.ts`, `tests/integration/claude-code.test.ts`, `tests/unit/config-corpus.test.ts`.
+- Related tests: `tests/unit/claude-code-validator.test.ts`, `tests/unit/opencode-v1-golden.test.ts`, `tests/unit/plugin.test.ts`, `tests/unit/pi.test.ts`, `tests/unit/pi-delegate-session.test.ts`, `tests/unit/pi-delegate-tool.test.ts`, `tests/integration/claude-code.test.ts`, `tests/integration/opencode-v1.test.ts`, `tests/integration/opencode-v2.test.ts`, `tests/unit/config-corpus.test.ts`.
 - Related plans: `docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md` (v2 tool installer, host-contract evidence), `docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md` (surfaces commands).
 - Related issue: #820, the missed retrieval that motivates the feature. Its target is `docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md`.
 - Ideation: `docs/ideation/2026-10-25-open-ideation.md`, idea 4 and workstream 2.
@@ -923,7 +941,7 @@ Dependencies: no new runtime dependency and no lockfile change. `jsonc-parser` i
 - Land the query set and the grep baseline before any ranker or researcher edit.
 
 ### Phase B: Lexical lane (U1 to U3)
-- Primitives, corpus and lifecycle, then the core and renderer. Checkpoint A decides whether to continue.
+- Primitives, the corpus loader, then the core with lifecycle and the renderer. Checkpoint A decides whether to continue.
 
 ### Phase C: Config and surfaces (U4 to U7)
 - The protected field and reader, then every tool and the CLI and bin, then the researcher and the gate. Checkpoint B is the lexical cut.
