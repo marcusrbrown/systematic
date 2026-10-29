@@ -80,7 +80,7 @@ Proving absence, server-verified first pushes, fork exclusion and drift handling
 
 **#1095.** The deterministic subset was larger caps, a separate remote item cap, and a recorded cause on every hook path. The rejected designs stayed rejected, and read-race hardening became part of #1099.
 
-**#1239.** OpenCode v2 plugin commands cannot route to an agent or model. The adapter emulated routing by switching the session's agent and model, prompting, then restoring both. Each patch exposed another edge (concurrent turns, restore races, id mix-ups). Nothing in production used the routing, because discovered skills drop those fields and no bundled skill declares them. The emulation was deleted. A command that declares `agent`, `model` or `subtask` now fails with a message that points to an OpenCode command in Markdown or JSON (`src/lib/opencode-v2-commands.ts:49-61`, thrown at `src/lib/opencode-v2-commands.ts:101-104`). `HARNESSES.md` OC2-CMD records the host behavior behind the cut.
+**#1239.** OpenCode v2 plugin commands cannot route to an agent or model. The adapter emulated routing by switching the session's agent and model, prompting, then restoring both. Each patch exposed another edge (concurrent turns, restore races, id mix-ups). Nothing in production used the routing, because discovered skills drop those fields and no bundled skill declares them. The emulation was deleted. A command that declares `agent`, `model` or `subtask` now fails with a message that points to an OpenCode command in Markdown or JSON (`src/lib/opencode-v2-commands.ts:51-62`, thrown at `src/lib/opencode-v2-commands.ts:119-122`). `HARNESSES.md` OC2-CMD records the host behavior behind the cut.
 
 ## Related
 

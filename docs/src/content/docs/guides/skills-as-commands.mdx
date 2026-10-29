@@ -34,6 +34,20 @@ OpenCode processes the command the same way it processes its own commands: it su
 
 A skill with `disable-model-invocation: true` in its frontmatter is a manual workflow — you invoke it, the model does not load it on its own. There is one honest limitation here: OpenCode has no mechanism for a plugin to hide a skill from the model's own `skill` tool. Systematic controls the `/command` surface, but a command-only skill remains loadable by the model through OpenCode's skill tool regardless. The `disable-model-invocation` flag shapes the command; it is not a hard guarantee that the model can never reach the skill.
 
+## Agent, model and subtask fields
+
+A skill can set `agent`, `model` and `subtask` in its frontmatter, and `context: fork` counts as `subtask: true`. Many skills were written for Claude Code, where `agent` names a Claude subagent type such as `Explore` and `model` is an alias such as `sonnet` or `inherit`. OpenCode does not understand those values, and one bad value makes the whole command fail. So Systematic checks each field before it passes it on.
+
+On OpenCode v1:
+
+- `subtask` passes through as written. `subtask: false` stays `false`.
+- `agent` passes through only when the skill runs as a subtask and the name is an agent OpenCode has. That means `build`, `plan`, `general` or `explore`, or any agent in your config or from a plugin, matched exactly and with the same capitalization. A disabled agent does not count.
+- `model` passes through only in the form `provider/model`, such as `anthropic/claude-sonnet-4-5`. Systematic does not check that the provider exists.
+
+A field that fails its check is left off, and the command still runs. Systematic prints one warning for each skill and field, for example `skill "review" sets agent "Explore", which is not an OpenCode agent; it is ignored.` The warning is not repeated if the config loads again. To route such a skill, write an OpenCode command for it.
+
+On OpenCode v2, a plugin command cannot choose an agent or a model, so Systematic leaves all three fields off every discovered skill. The skill is never refused. Its command runs on your current session, and Systematic writes one note per skill that says which fields it ignored. Bundled Systematic commands that declare these fields are still refused on v2.
+
 ## Trust model
 
 Systematic does not add a trust gate on discovered skills, and this is deliberate. OpenCode already discovers and registers these same skills — including project-local ones from a cloned repository — without a trust prompt, and a command never runs on its own: a human types it. Adding a Systematic-specific gate would restrict less than what OpenCode already exposes while adding friction. Treat skills in a repository you did not write the same way you treat any other code in it.

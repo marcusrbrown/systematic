@@ -2411,6 +2411,8 @@ Discovered body for ${name}.`,
         expect(command?.template).toContain('Discovered body for foo')
         expect(command?.template).toContain('<user-request>\n$ARGUMENTS')
         expect(command?.template).not.toContain('Load the "')
+        // A skill that declares no routing field gets none. Routing fields
+        // appear only through the validated rule in the routing tests below.
         expect(Object.keys(command ?? {}).sort()).toEqual([
           'description',
           'template',
@@ -2673,6 +2675,216 @@ Discovered body for hidden.`,
 
         expect(config.command?.['ce:review']).toBeDefined()
         expect(config.command?.foo).toBeDefined()
+      })
+
+      describe('routing fields', () => {
+        function writeRouted(name: string, routing: string): void {
+          const skillDir = path.join(projectDir, '.claude/skills', name)
+          fs.mkdirSync(skillDir, { recursive: true })
+          fs.writeFileSync(
+            path.join(skillDir, 'SKILL.md'),
+            `---\nname: ${name}\ndescription: Routed ${name}\n${routing}---\n# ${name}\n\nBody.`,
+          )
+        }
+
+        function newHandler() {
+          return createConfigHandler({
+            directory: projectDir,
+            bundledSkillsDir: path.join(bundledDir, 'skills'),
+            bundledAgentsDir: path.join(bundledDir, 'agents'),
+            bundledCommandsDir: path.join(bundledDir, 'commands'),
+          })
+        }
+
+        async function emitted(
+          name: string,
+          routing: string,
+          incoming: Config = {},
+        ) {
+          writeRouted(name, routing)
+          const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+          try {
+            await newHandler()(incoming)
+            const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
+            return { command: incoming.command?.[name], warnings }
+          } finally {
+            warnSpy.mockRestore()
+          }
+        }
+
+        test('context: fork alone becomes subtask: true', async () => {
+          const { command, warnings } = await emitted('r', 'context: fork\n')
+          expect(command?.subtask).toBe(true)
+          expect(command).not.toHaveProperty('agent')
+          expect(command).not.toHaveProperty('model')
+          expect(warnings).toEqual([])
+        })
+
+        test('an explicit subtask: false survives conversion', async () => {
+          const { command, warnings } = await emitted('r', 'subtask: false\n')
+          expect(command?.subtask).toBe(false)
+          expect(command).not.toHaveProperty('agent')
+          expect(warnings).toEqual([])
+        })
+
+        test('fork with a built-in agent keeps the agent', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: general\n',
+          )
+          expect(command?.subtask).toBe(true)
+          expect(command?.agent).toBe('general')
+          expect(warnings).toEqual([])
+        })
+
+        test('fork with a Claude agent type drops the agent with a diagnostic', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: Explore\n',
+          )
+          expect(command?.subtask).toBe(true)
+          expect(command).not.toHaveProperty('agent')
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'skill "r" sets agent "Explore", which is not an OpenCode agent; it is ignored.',
+          )
+        })
+
+        test('agent matching is exact and case-sensitive', async () => {
+          const { command } = await emitted(
+            'r',
+            'context: fork\nagent: General\n',
+          )
+          expect(command).not.toHaveProperty('agent')
+        })
+
+        test('an agent without a subtask is dropped with a diagnostic', async () => {
+          const { command, warnings } = await emitted('r', 'agent: plan\n')
+          expect(command).not.toHaveProperty('agent')
+          expect(command).not.toHaveProperty('subtask')
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain('skill "r" sets agent "plan"')
+          expect(warnings[0]).toContain('subtask')
+        })
+
+        test('an explicit subtask: false with an agent drops the agent', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'subtask: false\nagent: plan\n',
+          )
+          expect(command?.subtask).toBe(false)
+          expect(command).not.toHaveProperty('agent')
+          expect(warnings).toHaveLength(1)
+        })
+
+        test('fork with a user-configured agent keeps the agent', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: my-reviewer\n',
+            { agent: { 'my-reviewer': { description: 'Mine' } } },
+          )
+          expect(command?.agent).toBe('my-reviewer')
+          expect(warnings).toEqual([])
+        })
+
+        test('fork with a bundled Systematic agent keeps the agent', async () => {
+          createAgent(
+            path.join(bundledDir, 'agents'),
+            'fixture-helper',
+            'Fixture helper agent',
+          )
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: fixture-helper\n',
+          )
+          expect(command?.agent).toBe('fixture-helper')
+          expect(warnings).toEqual([])
+        })
+
+        test('a disabled agent is not a known agent', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: general\n',
+            { agent: { general: { disable: true } } },
+          )
+          expect(command).not.toHaveProperty('agent')
+          expect(warnings).toHaveLength(1)
+        })
+
+        test('a model alias is dropped with a diagnostic', async () => {
+          const { command, warnings } = await emitted('r', 'model: sonnet\n')
+          expect(command).not.toHaveProperty('model')
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'skill "r" sets model "sonnet", which is not in provider/model form; it is ignored.',
+          )
+        })
+
+        test('model: inherit is dropped', async () => {
+          const { command, warnings } = await emitted('r', 'model: inherit\n')
+          expect(command).not.toHaveProperty('model')
+          expect(warnings).toHaveLength(1)
+        })
+
+        test.each(['/model', 'provider/', '/'])(
+          'model "%s" with an empty side is dropped',
+          async (model) => {
+            const { command } = await emitted('r', `model: ${model}\n`)
+            expect(command).not.toHaveProperty('model')
+          },
+        )
+
+        test('a provider/model value is kept', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'model: anthropic/claude-sonnet-4-5\n',
+          )
+          expect(command?.model).toBe('anthropic/claude-sonnet-4-5')
+          expect(warnings).toEqual([])
+        })
+
+        test('a skill that declares nothing gets no routing keys and no diagnostic', async () => {
+          const { command, warnings } = await emitted('r', '')
+          expect(Object.keys(command ?? {}).sort()).toEqual([
+            'description',
+            'template',
+          ])
+          expect(warnings).toEqual([])
+        })
+
+        test('dropping one field keeps the valid ones', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: Explore\nmodel: anthropic/claude-sonnet-4-5\n',
+          )
+          expect(command?.subtask).toBe(true)
+          expect(command?.model).toBe('anthropic/claude-sonnet-4-5')
+          expect(command).not.toHaveProperty('agent')
+          expect(warnings).toHaveLength(1)
+        })
+
+        test('running the hook twice reports each dropped field once', async () => {
+          writeRouted('r', 'agent: plan\nmodel: sonnet\n')
+          const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+          try {
+            const handler = newHandler()
+            await handler({})
+            await handler({})
+            expect(warnSpy.mock.calls).toHaveLength(2)
+          } finally {
+            warnSpy.mockRestore()
+          }
+        })
+
+        test('a same-named user command is neither routed nor reported on', async () => {
+          const { command, warnings } = await emitted(
+            'r',
+            'context: fork\nagent: Explore\n',
+            { command: { r: { template: 'mine', description: 'Mine' } } },
+          )
+          expect(command).toEqual({ template: 'mine', description: 'Mine' })
+          expect(warnings).toEqual([])
+        })
       })
     })
   })

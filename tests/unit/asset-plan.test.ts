@@ -266,6 +266,45 @@ describe('buildAssetPlan: agent set', () => {
   })
 })
 
+describe('buildAssetPlan: routing fields of discovered skills', () => {
+  function writeRoutedSkill(name: string, routing: string): void {
+    const dir = path.join(fixture.project, '.claude/skills', name)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Routed ${name}\n${routing}---\n# ${name}\n\nBody.\n`,
+    )
+  }
+
+  test('a discovered command never carries routing fields; the declared values are listed apart', () => {
+    writeRoutedSkill('routed', 'context: fork\nagent: Explore\nmodel: sonnet\n')
+    const plan = planWith(undefined)
+
+    expect(Object.keys(plan.commands.routed ?? {}).sort()).toEqual([
+      'description',
+      'template',
+    ])
+    expect(plan.discoveredRouting).toEqual({
+      routed: { agent: 'Explore', model: 'sonnet', subtask: true },
+    })
+  })
+
+  test('a discovered skill that declares nothing is not listed', () => {
+    const plan = planWith(undefined)
+
+    expect(plan.commands).toHaveProperty('fixture-discovered')
+    expect(plan.discoveredRouting).toEqual({})
+  })
+
+  test('a routing declaration is dropped from the list when its command is suppressed', () => {
+    writeRoutedSkill('routed', 'context: fork\n')
+    const plan = planWith({ disabled_commands: ['routed'] })
+
+    expect(plan.commands).not.toHaveProperty('routed')
+    expect(plan.discoveredRouting).toEqual({})
+  })
+})
+
 describe('buildAssetPlan: agent overlay fields', () => {
   // The config schema rejects a wrongly-typed value for any of these fields
   // when the config loads, so a bad value never reaches the planner and there
