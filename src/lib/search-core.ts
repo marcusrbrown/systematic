@@ -37,10 +37,12 @@ import {
   type SearchHit,
   type SearchHitStatus,
   type SearchResult,
+  SUPERSEDES_LABEL,
   sanitizeInline,
 } from './search-render.js'
 
 export type { SearchHit, SearchResult } from './search-render.js'
+export { SUPERSEDES_LABEL }
 
 /** Tool name shared by every host surface. */
 export const SEARCH_TOOL_NAME = 'systematic_search'
@@ -82,7 +84,6 @@ export const SEARCH_CONFIG_UNREADABLE_NOTE = 'config unreadable'
 export const MAX_SUCCESSOR_HOPS = 5
 /** A successor path must start with this and name a loaded file. */
 export const SUCCESSOR_PATH_PREFIX = `${KIND_TABLE.solution.dir}/`
-export const SUPERSEDES_LABEL = 'Supersedes:'
 export const CAUTION_LABEL = 'Caution:'
 export const SUCCESSOR_UNRESOLVED_TEXT = 'successor unresolved'
 export const STALE_CAUTION_TEXT = 'marked stale'

@@ -278,6 +278,51 @@ describe('renderSearchResult: hits', () => {
     expect(text).toContain('   Caution: successor unresolved')
   })
 
+  it('keeps every predecessor path in a long Supersedes: line, and caps the Caution: line as a whole', () => {
+    const paths = Array.from(
+      { length: 60 },
+      (_, index) => `docs/solutions/old-${String(index).padStart(2, '0')}.md`,
+    )
+    const text = renderSearchResult(
+      makeResult({
+        hits: [
+          makeHit(1, {
+            lifecycle: [
+              `Supersedes: ${paths.join(', ')}`,
+              `Caution: marked stale: ${'r'.repeat(1000)}`,
+            ],
+          }),
+        ],
+      }),
+    )
+    expect(`Supersedes: ${paths.join(', ')}`.length).toBeGreaterThan(400)
+    expect(text).toContain(`   Supersedes: ${paths.join(', ')}\n`)
+    const caution = text.split('\n').find((l) => l.includes('Caution:')) ?? ''
+    expect(caution.length).toBeLessThanOrEqual(3 + 400)
+    expect(caution.endsWith('…')).toBe(true)
+  })
+
+  it('sanitizes and caps each Supersedes: path on its own', () => {
+    const hostilePath = `docs/solutions/${ESC}[31mbad${NUL}${BEL}.md`
+    const longPath = `docs/solutions/${'x'.repeat(600)}.md`
+    const text = renderSearchResult(
+      makeResult({
+        hits: [
+          makeHit(1, {
+            lifecycle: [
+              `Supersedes: ${hostilePath}, ${longPath}, docs/solutions/last.md`,
+            ],
+          }),
+        ],
+      }),
+    )
+    expect(hasControlCharacter(text)).toBe(false)
+    expect(text).not.toContain(ESC)
+    expect(text).toContain('docs/solutions/bad.md')
+    expect(text).not.toContain('x'.repeat(401))
+    expect(text).toContain('…, docs/solutions/last.md')
+  })
+
   it('omits the module line when there is neither module nor tags', () => {
     const text = renderSearchResult(
       makeResult({

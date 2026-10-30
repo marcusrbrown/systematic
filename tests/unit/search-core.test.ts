@@ -438,6 +438,13 @@ describe('runSearch: lifecycle merges and the limit', () => {
     const supersedes = hits[0]?.lifecycle[0] ?? ''
     expect(supersedes.startsWith('Supersedes: ')).toBe(true)
     expect(supersedes.split(', ')).toHaveLength(oldCount)
+    // The rendered text carries every predecessor in full, not only the
+    // structured result: the line is longer than the 400-character cap.
+    expect(supersedes.length).toBeGreaterThan(400)
+    for (let index = 0; index < oldCount; index += 1) {
+      const name = String(index).padStart(2, '0')
+      expect(response.text).toContain(`docs/solutions/old-${name}.md`)
+    }
   })
 })
 

@@ -132,6 +132,37 @@ function safeRealpath(target: string): string | null {
   }
 }
 
+type Probe<T> =
+  | { readonly kind: 'ok'; readonly value: T }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'failed' }
+
+/** ENOENT and ENOTDIR mean nothing is there; any other error is an access or I/O failure. */
+function isAbsence(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? error.code
+      : undefined
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+function probeRealpath(target: string): Probe<string> {
+  try {
+    return { kind: 'ok', value: fs.realpathSync(target) }
+  } catch (error) {
+    return { kind: isAbsence(error) ? 'absent' : 'failed' }
+  }
+}
+
+function probeLstat(target: string): Probe<fs.Stats> {
+  try {
+    const stat = fs.lstatSync(target, { throwIfNoEntry: false })
+    return stat === undefined ? { kind: 'absent' } : { kind: 'ok', value: stat }
+  } catch (error) {
+    return { kind: isAbsence(error) ? 'absent' : 'failed' }
+  }
+}
+
 function safeReaddir(target: string): string[] | null {
   try {
     return fs.readdirSync(target)
@@ -388,11 +419,23 @@ export function loadCorpus(
   const warnings: string[] = []
   const none: CorpusLoad = { state: 'none', documents: [], warnings }
 
-  const rootReal = safeRealpath(root)
-  const directoryReal = safeRealpath(path.join(root, ...spec.dir.split('/')))
-  if (rootReal === null || directoryReal === null) return none
-  const directoryStat = safeLstat(directoryReal)
-  if (directoryStat === null || !directoryStat.isDirectory()) return none
+  // Absence is a quiet `none`. Any other failure stays `none` too, but says so
+  // once, in fixed text with no error detail.
+  const unreadable = (): CorpusLoad => {
+    warnings.push(`could not read ${spec.dir}; not loaded`)
+    return none
+  }
+  const rootProbe = probeRealpath(root)
+  const directoryProbe = probeRealpath(path.join(root, ...spec.dir.split('/')))
+  if (rootProbe.kind === 'failed' || directoryProbe.kind === 'failed') {
+    return unreadable()
+  }
+  if (rootProbe.kind !== 'ok' || directoryProbe.kind !== 'ok') return none
+  const rootReal = rootProbe.value
+  const directoryReal = directoryProbe.value
+  const statProbe = probeLstat(directoryReal)
+  if (statProbe.kind === 'failed') return unreadable()
+  if (statProbe.kind !== 'ok' || !statProbe.value.isDirectory()) return none
 
   // A committed symlink must not pull text from outside the project into output.
   if (!isInside(rootReal, directoryReal)) {

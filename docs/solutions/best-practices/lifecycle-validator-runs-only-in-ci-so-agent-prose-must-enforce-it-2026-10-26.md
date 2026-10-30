@@ -35,15 +35,15 @@ Both resolvers answer an unresolvable successor the same way. The matched supers
 
 Write each check as a step at the point where the agent acts on a pointer.
 
-1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1942`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:126`, quoted with an elision):
+1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1942`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:127`, quoted with an elision):
 
    ```md
    2. At every hop, before taking the target as the successor, check that it passes the form rule above and that the file exists. [...] A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.
    ```
 
-2. **Read lifecycle fields from parsed frontmatter, and use search only to find files.** Values lifted from matched lines misread `status: superseded # retired`, folded scalars and `status:` lines inside a body example. The researcher's Step 4 uses search only to choose files, then reads each doc's frontmatter (`agents/research/learnings-researcher.md:101-113`).
+2. **Read lifecycle fields from parsed frontmatter, and use search only to find files.** Values lifted from matched lines misread `status: superseded # retired`, folded scalars and `status:` lines inside a body example. The researcher's Step 4 uses search only to choose files, then reads each doc's frontmatter (`agents/research/learnings-researcher.md:102-114`).
 
-3. **Write out the exclusions.** The validator's solution set leaves out every `README.md` (`scripts/content-integrity.ts:2019-2024`). The researcher's form rule names that exclusion and also skips `_archived/` as a defensive check, even though no such directory exists here (`agents/research/learnings-researcher.md:123`).
+3. **Write out the exclusions.** The validator's solution set leaves out every `README.md` (`scripts/content-integrity.ts:2019-2024`). The researcher's form rule names that exclusion and also skips `_archived/` as a defensive check, even though no such directory exists here (`agents/research/learnings-researcher.md:124`).
 
 4. **Delete only after every prerequisite write succeeded.** Refresh retargets `superseded_by` before Replace or Consolidate removes a doc, and it removes the doc only once the survivor exists and every write succeeded. That rule overrides autofix's record-and-continue rule (`skills/ce-compound-refresh/SKILL.md:546`).
 
@@ -76,7 +76,7 @@ if (successor.status === 'superseded') {
 }
 ```
 
-The researcher follows one, for up to 5 hops with a visited set, because a repo that never ran the validator can contain chains (`agents/research/learnings-researcher.md:128`):
+The researcher follows one, for up to 5 hops with a visited set, because a repo that never ran the validator can contain chains (`agents/research/learnings-researcher.md:129`):
 
 ```md
 4. Read the target's frontmatter and take its `status`. If it is `superseded`, follow its `superseded_by` and repeat from step 2.

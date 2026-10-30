@@ -44,7 +44,8 @@ In overlap mode (the caller asks for an overlap assessment against a new doc), d
 
 | Reply | Path |
 |-------|------|
-| The header says `corpus: none` or `corpus: empty` | Stop and return the "No Matches" result, saying the project has no solutions directory yet or no indexable docs. This is not an error. Do not run the grep steps. |
+| The header says `corpus: none` | Stop and return the "No Matches" result, saying the project has no solutions directory yet. This is not an error. Do not run the grep steps. A `could not read docs/solutions` warning under the header means the directory exists but cannot be read; report that warning too. |
+| The header says `corpus: empty` | Run Step 3b first. Search leaves out `critical-patterns.md`, so a project whose only doc is that file reports `empty`. Then return the "No Matches" result, saying the project has no indexable docs, together with any relevant critical patterns in the Critical Patterns section. This is not an error. Do not run the grep steps. |
 | The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular), and at least one hit remains after the overlap-mode drop | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
 | The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`), or in overlap mode no hit remains after the drop | Grep path. Go to Step 2. |
 | The reply says `No project directory is available` | Grep path. Go to Step 2. |

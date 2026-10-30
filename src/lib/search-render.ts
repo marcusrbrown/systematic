@@ -22,6 +22,8 @@ export const MAX_TITLE_CHARS = 160
 export const MAX_TAGS = 8
 export const MAX_SNIPPET_CHARS = 240
 export const MAX_WARNINGS = 5
+/** The lifecycle line that lists the docs a successor replaces. */
+export const SUPERSEDES_LABEL = 'Supersedes:'
 
 const MAX_TAG_CHARS = 64
 const MAX_MODULE_CHARS = 120
@@ -29,6 +31,8 @@ const MAX_QUERY_ECHO_CHARS = 200
 const MAX_WARNING_CHARS = 200
 const MAX_NOTE_CHARS = 200
 const MAX_LIFECYCLE_LINE_CHARS = 400
+/** Cap on one predecessor path in a `Supersedes:` line. */
+const MAX_PATH_CHARS = 400
 const MAX_LABEL_CHARS = 40
 const ELLIPSIS = '…'
 
@@ -312,6 +316,25 @@ function renderHeader(result: SearchResult): string {
   }
 }
 
+/**
+ * One lifecycle line. A `Supersedes:` line lists every predecessor path, so it
+ * is sanitized and capped per path: a successor that replaces many docs keeps
+ * all of them, and only the overall 16 KB cut bounds the total. Any other line
+ * (`Caution:`) keeps one cap for the whole line.
+ */
+function renderLifecycleLine(line: string): string {
+  const prefix = `${SUPERSEDES_LABEL} `
+  if (!line.startsWith(prefix)) {
+    return sanitizeInline(line, MAX_LIFECYCLE_LINE_CHARS)
+  }
+  const paths = line
+    .slice(prefix.length)
+    .split(', ')
+    .map((path) => sanitizeInline(path, MAX_PATH_CHARS))
+    .filter((path) => path !== '')
+  return `${prefix}${paths.join(', ')}`
+}
+
 function renderHit(hit: SearchHit, queryTerms: readonly string[]): string[] {
   const { document } = hit
   const lines = [`${hit.rank}. ${sanitizeInline(document.path)}`]
@@ -337,9 +360,8 @@ function renderHit(hit: SearchHit, queryTerms: readonly string[]): string[] {
   if (meta.length > 0) lines.push(`   ${meta.join(' | ')}`)
 
   lines.push(`   Snippet: ${extractSnippet(document, queryTerms)}`)
-  for (const line of hit.lifecycle) {
-    lines.push(`   ${sanitizeInline(line, MAX_LIFECYCLE_LINE_CHARS)}`)
-  }
+  for (const line of hit.lifecycle)
+    lines.push(`   ${renderLifecycleLine(line)}`)
   return lines
 }
 

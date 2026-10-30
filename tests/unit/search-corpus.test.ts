@@ -323,6 +323,47 @@ describe('loadCorpus: symlinks and containment', () => {
   )
 })
 
+describe('loadCorpus: access failures versus absence', () => {
+  const lockedModes: Array<{ readonly target: string; readonly mode: number }> =
+    []
+  // Restore first: the tracker's cleanup cannot remove a directory it cannot read.
+  afterEach(() => {
+    for (const { target, mode } of lockedModes.splice(0)) {
+      fs.chmodSync(target, mode)
+    }
+  })
+
+  it.skipIf(process.getuid?.() === 0)(
+    'keeps state none but warns, without error text, when docs/ cannot be traversed',
+    () => {
+      const root = makeTemp()
+      writeFile(root, 'docs/solutions/ok.md', doc('Ok'))
+      const docs = path.join(root, 'docs')
+      lockedModes.push({ target: docs, mode: 0o755 })
+      fs.chmodSync(docs, 0o000)
+
+      const result = loadCorpus(root)
+      expect(result.state).toBe('none')
+      expect(result.documents).toEqual([])
+      expect(result.warnings).toEqual([
+        'could not read docs/solutions; not loaded',
+      ])
+      expect(JSON.stringify(result)).not.toMatch(/EACCES|permission|errno/i)
+    },
+  )
+
+  it('gives no warning when docs/solutions does not exist', () => {
+    const root = makeTemp()
+    expect(loadCorpus(root)).toMatchObject({ state: 'none', warnings: [] })
+  })
+
+  it('gives no warning when docs is a plain file', () => {
+    const root = makeTemp()
+    writeFile(root, 'docs', 'not a directory')
+    expect(loadCorpus(root)).toMatchObject({ state: 'none', warnings: [] })
+  })
+})
+
 describe('loadCorpus: caps', () => {
   it('skips a file of 256 KB + 1 with a warning, and loads one of exactly 256 KB', () => {
     const root = makeTemp()
