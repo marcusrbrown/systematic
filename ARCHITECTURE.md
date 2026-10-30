@@ -172,6 +172,8 @@ Durable-output search
   src/lib/search-core.ts           — host-neutral search composition: validate, lexical lane, optional semantic stage, lifecycle resolver, render
   src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a reader that never touches project config (imports only zod, jsonc-parser and node builtins)
   src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
+  src/lib/search-cli.ts            — `systematic search` and the `systematic-search` bin's shared runner: flag parsing, an injected settings loader, exit codes, the core's text unchanged (imports only `search-core.ts`)
+  src/lib/main-module.ts           — the realpath entry guard that replaces `import.meta.main` (Node gained it only in 24.2); used by `cli.ts`, `claude-code-validator-bin.ts` and `claude-code-search.ts`
 
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
@@ -445,9 +447,12 @@ the Demo section through a description rewrite; its narrative excludes `docs/evi
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
 or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
-Entries under the bundle's `bin/` directory are written with executable mode (`0o755`); nothing else
-in the bundle changes mode. The CI pre-publish guard checks that the bundled validator is executable,
-not merely present, before the job pushes to the branch users install from.
+The bundle ships two narrow bins under `bin/`: the review-artifact validator and `systematic-search`
+(`src/claude-code-search.ts`, which reads the two user-level config files and never project config).
+Entries under `bin/` are written with executable mode (`0o755`); nothing else in the bundle changes
+mode. The search bin bundles `jsonc-parser` through its ESM build, because the UMD build crashes when
+bundled and run from a directory with no `node_modules`. The CI pre-publish guard checks that both
+bins are executable, not merely present, before the job pushes to the branch users install from.
 
 **Typed config validation** (`src/lib/config-schema.ts`) — all user-supplied config passes through
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config

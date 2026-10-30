@@ -239,7 +239,11 @@ export default async function systematicPiExtension(
   // One definition serves the parent session and every delegate. Absent when
   // `search.enabled` is false, which leaves a delegate's allowlist entry inert.
   const searchTool = isSearchEnabled(piConfig.search)
-    ? createPiSearchTool({ settings: piConfig.search, Type })
+    ? createPiSearchTool({
+        settings: piConfig.search,
+        unreadable: piConfig.searchUnreadable,
+        Type,
+      })
     : undefined
   if (searchTool !== undefined) pi.registerTool(searchTool)
 

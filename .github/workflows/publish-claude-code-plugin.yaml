@@ -100,6 +100,7 @@ jobs:
             "claude-code/output-styles/systematic.md"
             "claude-code/hooks/hooks.json"
             "claude-code/bin/systematic-validate-review-artifact"
+            "claude-code/bin/systematic-search"
           )
           for f in "${required[@]}"; do
             if [[ ! -f "$f" ]]; then
@@ -111,13 +112,17 @@ jobs:
             echo "::error::Required artifact is not executable: claude-code/bin/systematic-validate-review-artifact"
             exit 1
           fi
+          if [[ ! -x "claude-code/bin/systematic-search" ]]; then
+            echo "::error::Required artifact is not executable: claude-code/bin/systematic-search"
+            exit 1
+          fi
           if ! find claude-code/agents -mindepth 1 -type f | grep -q .; then
             echo "::error::No files found under claude-code/agents/"
             exit 1
           fi
           echo "Guard passed: built bundle looks complete."
 
-      # Artifacts drop file modes; a tar keeps the executable validator bin.
+      # Artifacts drop file modes; a tar keeps the executable bins.
       - name: Pack plugin bundle
         if: ${{ steps.target.outputs.proceed == 'true' }}
         run: tar -C claude-code -cf "$RUNNER_TEMP/claude-code-plugin.tar" .

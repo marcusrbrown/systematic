@@ -7,6 +7,7 @@ import {
   MAX_LIMIT,
   runSearch,
   SEARCH_ARGS,
+  SEARCH_CONFIG_UNREADABLE_NOTE,
   SEARCH_ERRORS,
   SEARCH_TOOL_NAME,
   type SearchOptions,
@@ -249,6 +250,26 @@ describe('runSearch: validation', () => {
     )
     const short = await search(root, 'alpha')
     if (short.ok) expect(short.result.notes).toEqual([])
+  })
+
+  it('shows adapter-supplied notes ahead of its own, in every corpus state', async () => {
+    const root = makeProject()
+    writeDoc(root, 'a.md', 'title: Alpha')
+    const query = Array.from({ length: 70 }, (_, i) => `term${i}`).join(' ')
+    const withDocs = await search(root, query, undefined, {
+      notes: [SEARCH_CONFIG_UNREADABLE_NOTE],
+    })
+    expect(withDocs.ok).toBe(true)
+    if (withDocs.ok) {
+      expect(withDocs.result.notes).toEqual([
+        'config unreadable',
+        'query cut to its first 64 distinct terms',
+      ])
+    }
+    const bare = await search(makeProject(), 'anything', undefined, {
+      notes: [SEARCH_CONFIG_UNREADABLE_NOTE],
+    })
+    expect(bare.text).toContain('Notes: config unreadable')
   })
 })
 

@@ -19,6 +19,8 @@
  *   claude-code/.claude-plugin/plugin.json   — hand-written manifest
  *   claude-code/output-styles/systematic.md  — using-systematic body + CC profile (translated)
  *   claude-code/hooks/hooks.json             — declarative SessionStart state (static printf)
+ *   claude-code/bin/systematic-validate-review-artifact — bundled validator (shebang, executable)
+ *   claude-code/bin/systematic-search        — bundled durable-output search (shebang, executable)
  *   claude-code/skills/<name>/SKILL.md(+subfiles) — copied + translated from skills/
  *   claude-code/agents/<name>.md             — flattened + translated from agents/<category>/<name>.md
  *
@@ -46,7 +48,8 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 /** SessionStart `additionalContext` cap per Claude Code hooks docs. */
 export const HOOK_PAYLOAD_CAP = 10000
 export const CLAUDE_CODE_VALIDATOR_BIN = 'systematic-validate-review-artifact'
-const CLAUDE_CODE_VALIDATOR_SHEBANG = '#!/usr/bin/env node\n'
+export const CLAUDE_CODE_SEARCH_BIN = 'systematic-search'
+const CLAUDE_CODE_BIN_SHEBANG = '#!/usr/bin/env node\n'
 
 /**
  * Tagged error for build-detected failures (missing source, stem collisions).
@@ -523,14 +526,29 @@ export function flattenAgents(rootDir: string): FlattenedAgent[] {
 
 /**
  * Generates the full set of `claude-code/`-relative files in memory. Pure
- * function of `rootDir` and the already-built validator bundle — throws
- * BuildError on missing source or stem collisions, never emits a silent empty
- * bundle.
+ * function of `rootDir` and the already-built bin bundles — throws
+ * BuildError on missing source, stem collisions or an empty bundle, never
+ * emits a silent empty bundle.
+ *
+ * `searchBundle` is optional so every caller that predates the search bin
+ * compiles and behaves unchanged; when given, `bin/systematic-search` is
+ * written next to the validator bin.
  */
 export function generatePluginFiles(
   rootDir: string,
   validatorBundle: Buffer,
+  searchBundle?: Buffer,
 ): Map<string, Buffer> {
+  if (validatorBundle.length === 0) {
+    throw buildError(
+      'The Claude Code validator bundle is empty — refusing to ship an unrunnable bin.',
+    )
+  }
+  if (searchBundle !== undefined && searchBundle.length === 0) {
+    throw buildError(
+      'The Claude Code search bundle is empty — refusing to ship an unrunnable bin.',
+    )
+  }
   const files = new Map<string, Buffer>()
 
   files.set(
@@ -550,11 +568,14 @@ export function generatePluginFiles(
 
   files.set(
     `bin/${CLAUDE_CODE_VALIDATOR_BIN}`,
-    Buffer.concat([
-      Buffer.from(CLAUDE_CODE_VALIDATOR_SHEBANG),
-      validatorBundle,
-    ]),
+    Buffer.concat([Buffer.from(CLAUDE_CODE_BIN_SHEBANG), validatorBundle]),
   )
+  if (searchBundle !== undefined) {
+    files.set(
+      `bin/${CLAUDE_CODE_SEARCH_BIN}`,
+      Buffer.concat([Buffer.from(CLAUDE_CODE_BIN_SHEBANG), searchBundle]),
+    )
+  }
 
   for (const [relPath, content] of collectSkillFiles(rootDir)) {
     files.set(relPath, content)
@@ -650,7 +671,7 @@ export function writePluginFiles(
 
 export async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
   const result = await Bun.build({
-    entrypoints: [path.join(rootDir, 'src/claude-code-validator.ts')],
+    entrypoints: [path.join(rootDir, 'src/claude-code-validator-bin.ts')],
     minify: true,
     target: 'node',
   })
@@ -668,13 +689,60 @@ export async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
   return Buffer.from(await output.arrayBuffer())
 }
 
+/**
+ * Bundles `src/claude-code-search.ts` for Node into one self-contained file.
+ *
+ * `jsonc-parser` is aliased to its ESM build. Its default entry is a UMD file
+ * whose runtime `require` of its own parts crashes once bundled and run from a
+ * directory with no `node_modules` (reproduced). The foreign-directory bin run
+ * in `tests/unit/claude-code-search.test.ts` is also the guard that the bin
+ * never pulls in `config.ts`, whose UMD copy would crash that run.
+ *
+ * The output is an ES module in an extensionless file, exactly like the
+ * validator bin, so `node` needs module-syntax detection to run it: on by
+ * default from Node 20.19 and 22.7. CommonJS output is not an option, because
+ * Bun hard-codes `import.meta.url` to the build machine's path there and the
+ * entry guard would never fire.
+ */
+export async function buildSearchBundle(rootDir: string): Promise<Buffer> {
+  const jsoncEsm = Bun.resolveSync('jsonc-parser/lib/esm/main.js', rootDir)
+  const result = await Bun.build({
+    entrypoints: [path.join(rootDir, 'src/claude-code-search.ts')],
+    minify: true,
+    target: 'node',
+    plugins: [
+      {
+        name: 'jsonc-parser-esm',
+        setup(build) {
+          build.onResolve({ filter: /^jsonc-parser$/ }, () => ({
+            path: jsoncEsm,
+          }))
+        },
+      },
+    ],
+  })
+  if (!result.success) {
+    const diagnostics = result.logs.map((log) => log.message).join('\n')
+    throw new Error(
+      diagnostics || 'Failed to build the Claude Code search bundle.',
+    )
+  }
+
+  const output = result.outputs[0]
+  if (!output) {
+    throw new Error('Claude Code search build produced no output.')
+  }
+  return Buffer.from(await output.arrayBuffer())
+}
+
 async function main(rootDir: string): Promise<void> {
   const claudeCodeDir = path.join(rootDir, 'claude-code')
 
   const validatorBundle = await buildValidatorBundle(rootDir)
+  const searchBundle = await buildSearchBundle(rootDir)
   let files: Map<string, Buffer>
   try {
-    files = generatePluginFiles(rootDir, validatorBundle)
+    files = generatePluginFiles(rootDir, validatorBundle, searchBundle)
   } catch (err) {
     if (isBuildError(err)) {
       console.error(`Error: ${err.message}`)

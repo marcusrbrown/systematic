@@ -78,6 +78,8 @@ export const SEARCH_NOTICES = {
   noProject:
     'No project directory is available for this session, so there is nothing to search.',
 } as const
+/** The note an adapter passes in `SearchOptions.notes` when a settings source could not be read. */
+export const SEARCH_CONFIG_UNREADABLE_NOTE = 'config unreadable'
 /** The lexical lane returns about this many times the limit, because merges shrink the list. */
 export const OVERFETCH_FACTOR = 2
 
@@ -159,6 +161,8 @@ export interface SearchOptions {
   /** The directory the root walk-up starts from. */
   readonly startDir: string
   readonly settings?: SearchSettings | undefined
+  /** Notes an adapter wants shown ahead of the core's own, such as `SEARCH_CONFIG_UNREADABLE_NOTE`. */
+  readonly notes?: readonly string[] | undefined
   readonly semantic?: SemanticStage | undefined
   /** Override the BM25F table. The recall tuning uses this; hosts do not. */
   readonly lexicalParams?: Bm25fParams | undefined
@@ -403,7 +407,7 @@ export async function runSearch(
     queryTerms: terms,
     warnings: load.warnings,
   }
-  const noteList: string[] = []
+  const noteList: string[] = [...(options.notes ?? [])]
   if (truncated) noteList.push('query cut to its first 64 distinct terms')
 
   const finish = (result: SearchResult): SearchResponse => ({

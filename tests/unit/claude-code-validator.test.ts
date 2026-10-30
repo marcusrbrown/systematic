@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { buildValidatorBundle } from '../../scripts/build-claude-code-plugin.js'
 import { runClaudeCodeValidator } from '../../src/claude-code-validator.js'
+import { NODE_BIN } from '../helpers/real-node.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const CONFORMING_FIXTURE = path.join(
@@ -260,4 +261,75 @@ describe('Claude Code bundled validator entry', () => {
       fs.rmSync(foreign, { recursive: true, force: true })
     }
   }, 60_000)
+})
+
+describe('Claude Code bundled validator entry guard', () => {
+  it('runs when the built bundle is reached through a symlink or a relative path, and only then', async () => {
+    const bundle = await buildValidatorBundle(ROOT_DIR)
+    const foreign = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'claude-code-guard-')),
+    )
+    try {
+      const bin = path.join(foreign, 'validator.mjs')
+      fs.writeFileSync(bin, bundle)
+      const link = path.join(foreign, 'linked-validator.mjs')
+      fs.symlinkSync(bin, link)
+      const target = artifactPath(foreign)
+      fs.writeFileSync(target, JSON.stringify({ legacy: true }))
+      const artifact = '.context/systematic/ce-review/review-summary.json'
+
+      // A legacy artifact exits 3, which only the validator itself produces.
+      for (const entry of [link, './validator.mjs', bin]) {
+        const result = spawnSync(NODE_BIN, [entry, artifact], {
+          cwd: foreign,
+          encoding: 'utf8',
+          timeout: 30_000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+        expect(result.status).toBe(3)
+        expect(result.stderr).toBe(
+          'Legacy review artifact: no schema_version field\n',
+        )
+      }
+
+      // Imported rather than run, the bundle does nothing.
+      const importer = path.join(foreign, 'importer.mjs')
+      fs.writeFileSync(
+        importer,
+        `await import('./validator.mjs')\nconsole.log('imported')\n`,
+      )
+      const imported = spawnSync(NODE_BIN, [importer, artifact], {
+        cwd: foreign,
+        encoding: 'utf8',
+        timeout: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      expect(imported.status).toBe(0)
+      expect(imported.stdout).toBe('imported\n')
+      expect(imported.stderr).toBe('')
+    } finally {
+      fs.rmSync(foreign, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('does not run a second validator inside the committed ce-review bundle', () => {
+    // `ce-review-validator.ts` imports `runClaudeCodeValidator`, so a guard
+    // inside `claude-code-validator.ts` would fire in that bundle too. With no
+    // arguments the ce-review entry prints its own one-line usage; a second
+    // run would add the `validate-review-artifact` usage line.
+    const result = spawnSync(
+      NODE_BIN,
+      [path.join(ROOT_DIR, 'skills/ce-review/scripts/validate-review.mjs')],
+      {
+        cwd: os.tmpdir(),
+        encoding: 'utf8',
+        timeout: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    expect(result.status).toBe(2)
+    expect(result.stderr.trimEnd().split('\n')).toHaveLength(1)
+    expect(result.stderr).toContain('node validate-review.mjs')
+    expect(result.stderr).not.toContain('systematic validate-review-artifact')
+  })
 })

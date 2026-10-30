@@ -5,8 +5,10 @@
  * their own start directory and map their own errors.
  *
  * The corpus is the committed lifecycle fixture plus documents written here at
- * run time, because a file name carrying an ESC byte cannot live in git. Later
- * units add the CLI, the bin and the hybrid cases to this same file.
+ * run time, because a file name carrying an ESC byte cannot live in git. The
+ * CLI (`systematic search`), the in-process `systematic-search` bin entry and
+ * the built bin run under real Node join the three hosts here (AE5 in full).
+ * Later units add the hybrid cases to this same file.
  */
 import {
   afterAll,
@@ -19,6 +21,7 @@ import {
   spyOn,
   test,
 } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -30,11 +33,21 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { Plugin } from '@opencode/plugin'
 import type { PluginInput } from '@opencode-ai/plugin'
+import {
+  buildSearchBundle,
+  CLAUDE_CODE_SEARCH_BIN,
+  generatePluginFiles,
+  writePluginFiles,
+} from '../../scripts/build-claude-code-plugin.js'
+import { runClaudeCodeSearch } from '../../src/claude-code-search.js'
+import { loadSearchSettingsForCli } from '../../src/cli.js'
 import { createOpenCodeV1Hooks } from '../../src/lib/opencode-v1.js'
 import { setupOpenCodeV2 } from '../../src/lib/opencode-v2.js'
 import { REAL_PI_DELEGATE_SESSION_RUNTIME } from '../../src/lib/pi-delegate-session.js'
+import { runSearchCli } from '../../src/lib/search-cli.js'
 import { MAX_LIMIT, SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import piExtension from '../../src/pi.js'
+import { NODE_BIN } from '../helpers/real-node.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '../..')
@@ -67,6 +80,7 @@ afterAll(() => {
   if (realConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
   else process.env.OPENCODE_CONFIG_DIR = realConfigDir
   fs.rmSync(isolatedHome, { recursive: true, force: true })
+  fs.rmSync(builtBinHome, { recursive: true, force: true })
 })
 
 beforeEach(() => {
@@ -241,7 +255,8 @@ async function createV2Host(
 }
 
 async function createV2Surface(directory: string): Promise<Surface> {
-  const host = await createV2Host(directory)
+  // The isolated home, so a test's user config reaches v2 like the other surfaces.
+  const host = await createV2Host(directory, isolatedHome)
   const tool = host.tool
   if (tool === undefined) throw new Error('v2 did not register the tool')
   return {
@@ -297,6 +312,7 @@ async function createPiSurface(): Promise<Surface> {
   }
 }
 
+/** The three host tools. Tests that poke a tool's own failure mapping use these. */
 async function allSurfaces(root: string): Promise<Surface[]> {
   return [
     await createV1Surface(),
@@ -305,37 +321,185 @@ async function allSurfaces(root: string): Promise<Surface[]> {
   ]
 }
 
-describe('search adapters parity (AE5: v1, v2, Pi)', () => {
-  test('the same query over one corpus yields byte-identical text on every host', async () => {
+/** Turn a tool-style args record into the argv `systematic search` takes. */
+function toArgv(args: Record<string, unknown>): string[] {
+  const argv = [String(args.query)]
+  if (args.kind !== undefined) argv.push('--kind', String(args.kind))
+  if (args.limit !== undefined) argv.push('--limit', String(args.limit))
+  return argv
+}
+
+/** What a user sees from a CLI run: stdout on success, the stderr message on a usage error. */
+function cliOutput(status: number, stdout: string[], stderr: string[]): string {
+  if (status === 0) return stdout.join('\n')
+  // A usage error prints one fixed message and nothing on stdout.
+  expect(stdout).toEqual([])
+  return stderr.join('\n')
+}
+
+/** `systematic search`: the real runner with the real `cli.ts` settings adapter. */
+function createCliSurface(): Surface {
+  return {
+    name: 'cli',
+    async search(root, args) {
+      const stdout: string[] = []
+      const stderr: string[] = []
+      const status = await runSearchCli({
+        argv: toArgv(args),
+        cwd: root,
+        loadSettings: (dir) =>
+          loadSearchSettingsForCli(dir, {
+            homeDir: isolatedHome,
+            userConfigDir: path.join(isolatedHome, '.config/opencode'),
+            customConfigDir: null,
+          }),
+        outputSink: (message) => stdout.push(message),
+        errorSink: (message) => stderr.push(message),
+      })
+      return cliOutput(status, stdout, stderr)
+    },
+  }
+}
+
+/** The `systematic-search` bin entry, in process, reading the user-level files. */
+function createBinSurface(): Surface {
+  return {
+    name: 'bin',
+    async search(root, args) {
+      const stdout: string[] = []
+      const stderr: string[] = []
+      const status = await runClaudeCodeSearch({
+        argv: toArgv(args),
+        cwd: root,
+        userLevel: { homeDir: isolatedHome, customConfigDir: null },
+        outputSink: (message) => stdout.push(message),
+        errorSink: (message) => stderr.push(message),
+      })
+      return cliOutput(status, stdout, stderr)
+    },
+  }
+}
+
+let builtBinPath: Promise<string> | undefined
+/** Kept for the whole file (the per-test cleanup would remove it), removed in `afterAll`. */
+const builtBinHome = fs.realpathSync(
+  fs.mkdtempSync(path.join(os.tmpdir(), 'search-bin-')),
+)
+
+/** The production-built bin, written once per file the way the plugin build writes it. */
+function installBuiltBin(): Promise<string> {
+  builtBinPath ??= (async () => {
+    const outDir = path.join(builtBinHome, 'plugin')
+    const files = generatePluginFiles(
+      PACKAGE_ROOT,
+      Buffer.from('placeholder validator bundle'),
+      await buildSearchBundle(PACKAGE_ROOT),
+    )
+    writePluginFiles(
+      new Map(
+        [...files].filter(([rel]) => rel === `bin/${CLAUDE_CODE_SEARCH_BIN}`),
+      ),
+      outDir,
+    )
+    return path.join(outDir, 'bin', CLAUDE_CODE_SEARCH_BIN)
+  })()
+  return builtBinPath
+}
+
+/**
+ * The built bin run under real Node from the project directory, which holds no
+ * `node_modules`, with stdin closed and a timeout.
+ */
+async function createBuiltBinSurface(): Promise<Surface> {
+  const bin = await installBuiltBin()
+  return {
+    name: 'built bin (node)',
+    async search(root, args) {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        HOME: isolatedHome,
+        USERPROFILE: isolatedHome,
+      }
+      delete env.OPENCODE_CONFIG_DIR
+      delete env.XDG_CONFIG_HOME
+      const result = spawnSync(NODE_BIN, [bin, ...toArgv(args)], {
+        cwd: root,
+        env,
+        encoding: 'utf8',
+        timeout: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      expect(result.error).toBeUndefined()
+      const out = (result.stdout ?? '').replace(/\n$/, '')
+      const err = (result.stderr ?? '').replace(/\n$/, '')
+      return cliOutput(
+        result.status ?? -1,
+        out === '' ? [] : [out],
+        err === '' ? [] : [err],
+      )
+    },
+  }
+}
+
+/** The three hosts plus the CLI and the in-process bin entry. */
+async function everySurface(root: string): Promise<Surface[]> {
+  return [...(await allSurfaces(root)), createCliSurface(), createBinSurface()]
+}
+
+describe('search adapters parity (AE5: v1, v2, Pi, CLI, bin)', () => {
+  test('the same query over one corpus yields byte-identical text on every surface', async () => {
     const root = makeProject()
-    const surfaces = await allSurfaces(root)
+    const surfaces = await everySurface(root)
     const texts = await Promise.all(
       surfaces.map((surface) => surface.search(root, { query: QUERY })),
     )
 
     expect(texts[0]).toContain('docs/solutions/parity-a.md')
     expect(texts[0]).toContain('Zebra crossing flake')
-    expect(texts[1]).toBe(texts[0])
-    expect(texts[2]).toBe(texts[0])
+    for (const text of texts) expect(text).toBe(texts[0] as string)
   })
 
-  test('kind and limit pass through every adapter to the same result', async () => {
+  test('the built bin, run under real node from a directory with no node_modules, prints the same text as every other surface', async () => {
     const root = makeProject()
-    const surfaces = await allSurfaces(root)
+    const built = await createBuiltBinSurface()
+    const reference = await (await createV1Surface()).search(root, {
+      query: QUERY,
+    })
+    expect(await built.search(root, { query: QUERY })).toBe(reference)
+    expect(
+      await built.search(root, { query: QUERY, kind: 'solution', limit: 1 }),
+    ).toBe(
+      await (await createCliSurface()).search(root, {
+        query: QUERY,
+        kind: 'solution',
+        limit: 1,
+      }),
+    )
+    for (const surface of await everySurface(root)) {
+      expect(await surface.search(root, { query: QUERY })).toBe(reference)
+    }
+  }, 60_000)
+
+  test('kind and limit pass through every surface to the same result', async () => {
+    const root = makeProject()
+    const surfaces = await everySurface(root)
     const texts = await Promise.all(
       surfaces.map((surface) =>
         surface.search(root, { query: QUERY, kind: 'solution', limit: 1 }),
       ),
     )
-    expect(texts[1]).toBe(texts[0])
-    expect(texts[2]).toBe(texts[0])
+    for (const text of texts) expect(text).toBe(texts[0] as string)
     expect(texts[0]).toContain('parity-a.md')
     expect(texts[0]).not.toContain('parity-b.md')
   })
 
-  test('no ESC, BEL or OSC 52 payload reaches any host output', async () => {
+  test('no ESC, BEL or OSC 52 payload reaches any surface output', async () => {
     const root = makeProject()
-    for (const surface of await allSurfaces(root)) {
+    const surfaces = [
+      ...(await everySurface(root)),
+      await createBuiltBinSurface(),
+    ]
+    for (const surface of surfaces) {
       const text = await surface.search(root, {
         query: `zebra evil ${ESC}[31mquery`,
       })
@@ -348,9 +512,9 @@ describe('search adapters parity (AE5: v1, v2, Pi)', () => {
     }
   })
 
-  test('limit 0 and limit 21 get the core fixed error on every adapter', async () => {
+  test('limit 0 and limit 21 get the core fixed error on every surface', async () => {
     const root = makeProject()
-    for (const surface of await allSurfaces(root)) {
+    for (const surface of await everySurface(root)) {
       for (const limit of [0, MAX_LIMIT + 1, 2.5, 'x']) {
         const text = await surface.search(root, { query: QUERY, limit })
         expect(text).toBe(SEARCH_ERRORS.limitInvalid)
@@ -360,7 +524,7 @@ describe('search adapters parity (AE5: v1, v2, Pi)', () => {
 
   test('an empty query and an unknown kind get the core fixed errors', async () => {
     const root = makeProject()
-    for (const surface of await allSurfaces(root)) {
+    for (const surface of await everySurface(root)) {
       expect(await surface.search(root, { query: '   ' })).toBe(
         SEARCH_ERRORS.queryEmpty,
       )
@@ -370,9 +534,9 @@ describe('search adapters parity (AE5: v1, v2, Pi)', () => {
     }
   })
 
-  test('a doc written between two calls appears in the second on every host', async () => {
+  test('a doc written between two calls appears in the second on every surface', async () => {
     const root = makeProject()
-    const surfaces = await allSurfaces(root)
+    const surfaces = await everySurface(root)
     for (const surface of surfaces) {
       expect(await surface.search(root, { query: 'quokkaword' })).not.toContain(
         'quokka-note.md',
@@ -393,6 +557,44 @@ describe('search adapters parity (AE5: v1, v2, Pi)', () => {
     for (const surface of await allSurfaces(root)) {
       const text = await surface.search(root, { query: QUERY })
       expect(text).toContain('parity-a.md')
+    }
+  })
+})
+
+describe('search adapters parity: unreadable config', () => {
+  test('an invalid user search block gives identical text, with the config unreadable note, on all five surfaces', async () => {
+    writeUserConfig({ search: { enabled: 'SECRET-VALUE-no' } })
+    // The loaders warn once per load; this test is about the result text.
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const root = makeProject()
+      const surfaces = await everySurface(root)
+      const texts = await Promise.all(
+        surfaces.map((surface) => surface.search(root, { query: QUERY })),
+      )
+
+      expect(texts[0]).toContain('Notes: config unreadable')
+      expect(texts[0]).toContain('docs/solutions/parity-a.md')
+      expect(texts[0]).toContain('Lanes: lexical')
+      surfaces.forEach((surface, index) => {
+        expect([surface.name, texts[index]]).toEqual([
+          surface.name,
+          texts[0] as string,
+        ])
+      })
+      expect(texts.join('\n')).not.toContain('SECRET-VALUE')
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  test('a readable config adds no note on any surface', async () => {
+    writeUserConfig({ search: { enabled: true } })
+    const root = makeProject()
+    for (const surface of await everySurface(root)) {
+      expect(await surface.search(root, { query: QUERY })).not.toContain(
+        'config unreadable',
+      )
     }
   })
 })

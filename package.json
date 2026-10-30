@@ -92,7 +92,7 @@
     "url": "https://github.com/marcusrbrown/systematic.git"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.11"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.18.29",

@@ -22,6 +22,7 @@ import {
   runSearch,
   SEARCH_ARG_DESCRIPTIONS,
   SEARCH_ARGS,
+  SEARCH_CONFIG_UNREADABLE_NOTE,
   SEARCH_NOTICES,
   SEARCH_TOOL_DESCRIPTION,
   SEARCH_TOOL_NAME,
@@ -43,6 +44,7 @@ async function executeSearch(
   args: unknown,
   startDir: string | undefined,
   settings: SearchSettings | undefined,
+  unreadable: boolean | undefined,
 ): Promise<string> {
   try {
     if (startDir === undefined) return SEARCH_NOTICES.noProject
@@ -53,7 +55,13 @@ async function executeSearch(
         kind: record[SEARCH_ARGS.kind],
         limit: record[SEARCH_ARGS.limit],
       },
-      { startDir, settings },
+      {
+        startDir,
+        settings,
+        // A user `search` block (or its file) that could not be read: lexical
+        // results with the same note the CLI and the bin print.
+        ...(unreadable === true && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
+      },
     )
     return response.text
   } catch {
@@ -70,10 +78,12 @@ function usableDirectory(value: unknown): string | undefined {
 
 export interface SearchToolV1Options {
   readonly settings: SearchSettings | undefined
+  /** `config.searchUnreadable`: adds the `config unreadable` note to every result. */
+  readonly unreadable?: boolean | undefined
 }
 
 export function createSearchTool(options: SearchToolV1Options): ToolDefinition {
-  const { settings } = options
+  const { settings, unreadable } = options
   return {
     description: SEARCH_TOOL_DESCRIPTION,
     // Double-cast for the same reason as the skill tool: the SDK types its args
@@ -97,7 +107,12 @@ export function createSearchTool(options: SearchToolV1Options): ToolDefinition {
       // (the real-host floor lane searches the host project with no other
       // directory to fall back on). A context without it gets the no-project
       // note, never a guess.
-      return executeSearch(args, usableDirectory(context.directory), settings)
+      return executeSearch(
+        args,
+        usableDirectory(context.directory),
+        settings,
+        unreadable,
+      )
     },
   }
 }
@@ -132,6 +147,7 @@ interface V2LocationContext {
 function createV2SearchTool(
   ctx: V2LocationContext,
   settings: SearchSettings | undefined,
+  unreadable: boolean | undefined,
 ): V2ToolDefinition {
   return {
     name: SEARCH_TOOL_NAME,
@@ -144,7 +160,7 @@ function createV2SearchTool(
       // editor happened to start in, so an absent directory is a note.
       const startDir = usableDirectory(ctx.location?.directory)
       return {
-        content: await executeSearch(input, startDir, settings),
+        content: await executeSearch(input, startDir, settings, unreadable),
         metadata: {},
       }
     },
@@ -163,6 +179,7 @@ export const installSearch: V2Installer = async ({
   report,
 }) => {
   const settings = snapshot.config.search
+  const unreadable = snapshot.config.searchUnreadable
   if (!isSearchEnabled(settings)) return
   const reported = new Set<string>()
 
@@ -178,7 +195,7 @@ export const installSearch: V2Installer = async ({
         }
         return
       }
-      editor.add(createV2SearchTool(ctx, settings))
+      editor.add(createV2SearchTool(ctx, settings, unreadable))
     },
   )
 
@@ -205,6 +222,8 @@ function buildPiParameters(Type: typeof TypeBuilder) {
 
 export interface SearchToolPiOptions {
   readonly settings: SearchSettings | undefined
+  /** `config.searchUnreadable`: adds the `config unreadable` note to every result. */
+  readonly unreadable?: boolean | undefined
   /**
    * typebox's `Type` builder, supplied by the Pi entry. This module is also
    * imported by the OpenCode entries, and typebox is an optional peer that only
@@ -225,7 +244,7 @@ export interface SearchToolPiOptions {
 export function createPiSearchTool(
   options: SearchToolPiOptions,
 ): PiToolDefinition {
-  const { settings, Type } = options
+  const { settings, unreadable, Type } = options
   return {
     name: SEARCH_TOOL_NAME,
     label: 'Systematic Search',
@@ -238,6 +257,7 @@ export function createPiSearchTool(
         params,
         usableDirectory(ctx.cwd),
         settings,
+        unreadable,
       )
       return { content: [{ type: 'text', text }], details: undefined }
     },

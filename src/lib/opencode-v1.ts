@@ -106,7 +106,10 @@ export const createOpenCodeV1Hooks = async (
       }),
       // Absent when `search.enabled` is false.
       ...(isSearchEnabled(config.search) && {
-        systematic_search: createSearchTool({ settings: config.search }),
+        systematic_search: createSearchTool({
+          settings: config.search,
+          unreadable: config.searchUnreadable,
+        }),
       }),
     },
 
