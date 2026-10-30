@@ -246,8 +246,8 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
 
 6. **Search reads the disk on every call, protects its config as a whole, and avoids `Math.log`.**
-   `docs/solutions/` is read on each call with no memo, because `ce:compound` searches right after
-   it writes. The `search` config block is stripped whole from project config, so a repository
+   `docs/solutions/` is read on each call with no memo, because a session can write a learning and
+   search again in the same run. The `search` config block is stripped whole from project config, so a repository
    cannot switch it off. The search modules use a hand-written `ln`
    and no `Math.log`, so scores and ranks are identical on Bun and Node. Each host reaches the one
    `search-core.ts` composition, so every surface returns the same text. The learnings-researcher

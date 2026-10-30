@@ -27,7 +27,13 @@ import {
   type SearchSettings,
 } from './search-core.js'
 
-export const SEARCH_CLI_USAGE = `Usage: systematic search <query...> [--dir <path>] [--kind solution] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
+/**
+ * The usage text for one surface. `commandName` is what that surface's users
+ * type (`systematic search` or `systematic-search`), so the text never tells a
+ * bin user to run a command they may not have.
+ */
+export function searchCliUsage(commandName: string): string {
+  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
 
 Searches the project's docs/solutions learnings by symptom, error text, module
 or topic, and prints ranked hits.
@@ -41,6 +47,7 @@ Options:
   -h, --help       Show this help.
 
 Exit statuses: 0 results, no hits, or search disabled; 2 usage error`
+}
 
 /** What `search.enabled: false` prints. The researcher falls back to grep on it. */
 export const SEARCH_CLI_DISABLED_NOTICE =
@@ -64,6 +71,8 @@ export interface SearchCliOptions {
   /** The arguments after the `search` command: query words and flags. */
   readonly argv: readonly string[]
   readonly cwd?: string
+  /** The command the usage text names: `systematic search` or `systematic-search`. */
+  readonly usageName: string
   readonly loadSettings: SearchCliSettingsLoader
   readonly outputSink?: (message: string) => void
   readonly errorSink?: (message: string) => void
@@ -90,8 +99,8 @@ type ParsedArgs =
       readonly flags: Readonly<Partial<Record<ValueFlag, string>>>
     }
 
-function usageError(message: string): ParsedArgs {
-  return { kind: 'error', message: `${message}\n${SEARCH_CLI_USAGE}` }
+function usageError(message: string, usage: string): ParsedArgs {
+  return { kind: 'error', message: `${message}\n${usage}` }
 }
 
 type FlagRead =
@@ -137,7 +146,7 @@ function readValueFlag(
  * `--name=value`; `--` ends flag parsing; a lone `-` is a word. Messages are
  * fixed text: no flag name or value from argv is echoed.
  */
-function parseArgs(argv: readonly string[]): ParsedArgs {
+function parseArgs(argv: readonly string[], usage: string): ParsedArgs {
   const words: string[] = []
   const flags: Partial<Record<ValueFlag, string>> = {}
   let endOfFlags = false
@@ -154,7 +163,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       return { kind: 'help' }
     } else {
       const read = readValueFlag(argv, index, flags)
-      if (read.kind === 'error') return usageError(read.message)
+      if (read.kind === 'error') return usageError(read.message, usage)
       flags[read.name] = read.value
       index += read.consumed
     }
@@ -179,9 +188,10 @@ export async function runSearchCli(options: SearchCliOptions): Promise<number> {
   const errorSink =
     options.errorSink ?? ((message: string) => console.error(message))
 
-  const parsed = parseArgs(options.argv)
+  const usage = searchCliUsage(options.usageName)
+  const parsed = parseArgs(options.argv, usage)
   if (parsed.kind === 'help') {
-    outputSink(SEARCH_CLI_USAGE)
+    outputSink(usage)
     return 0
   }
   if (parsed.kind === 'error') {

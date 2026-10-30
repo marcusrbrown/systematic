@@ -38,13 +38,15 @@ From the feature/task description, identify:
 
 **Call it once**, with the problem description as the query and `kind` set to `solution`. With the tool, call `systematic_search({ query: "<description>", kind: "solution" })`. With the command, run `systematic-search --kind solution -- '<description>'` with single quotes removed from the description first. Write the query as symptoms, error text, module names and the topic, as a person would type them. Use the default limit.
 
-**Read the reply, then pick one path:**
+**Read the reply, then pick one path.** Read the header from the line that starts with `Search "`. On the command path, warnings can print before it.
+
+In overlap mode (the caller asks for an overlap assessment against a new doc), drop the doc under comparison from the hits first, by its repo-root path. If that hit's `Supersedes:` line lists other docs, those docs stay in the comparison. Then route on the hits that remain, not on the count in the header.
 
 | Reply | Path |
 |-------|------|
 | The header says `corpus: none` or `corpus: empty` | Stop and return the "No Matches" result, saying the project has no solutions directory yet or no indexable docs. This is not an error. Do not run the grep steps. |
-| The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular) | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
-| The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`) | Grep path. Go to Step 2. |
+| The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular), and at least one hit remains after the overlap-mode drop | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
+| The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`), or in overlap mode no hit remains after the drop | Grep path. Go to Step 2. |
 | The reply says `No project directory is available` | Grep path. Go to Step 2. |
 | The reply says search is disabled, starts with `Error:`, or the call fails | Grep path. Go to Step 2. |
 
@@ -54,7 +56,7 @@ The grep path keeps its OR patterns for synonyms. A zero-hit search does not add
 - The hits are already ranked and already resolved for lifecycle. Do not run Step 4's resolution again.
 - A hit with a `Supersedes:` line is the successor that stands in for the docs it lists. Copy `Supersedes:` and `Caution:` lines literally into the entry, including `Caution: successor unresolved` on a superseded doc whose successor does not resolve.
 - Read a hit's `Status` and lifecycle lines from the reply. Take the other frontmatter fields in Step 5.
-- In overlap mode (the caller asks for an overlap assessment against a new doc), drop the doc under comparison from the hits by its repo-root path before anything else. If that hit's `Supersedes:` line lists other docs, compare those docs instead of losing them. The search rank and hit count never set the `score=` value. Judge the five dimensions for each remaining doc as described under Output Format.
+- In overlap mode, you already dropped the doc under comparison. Compare the docs its `Supersedes:` line listed, as well as the remaining hits. The search rank and hit count never set the `score=` value. Judge the five dimensions for each remaining doc as described under Output Format.
 
 ### Step 2: Category-Based Narrowing (Optional but Recommended)
 

@@ -77,8 +77,6 @@ export const SEARCH_NOTICES = {
 } as const
 /** The note an adapter passes in `SearchOptions.notes` when a settings source could not be read. */
 export const SEARCH_CONFIG_UNREADABLE_NOTE = 'config unreadable'
-/** Ranking returns about this many times the limit, because lifecycle merges shrink the list. */
-export const OVERFETCH_FACTOR = 2
 
 /** Most `superseded_by` links followed from one candidate. */
 export const MAX_SUCCESSOR_HOPS = 5
@@ -374,7 +372,11 @@ export async function runSearch(
 
   const byPath = new Map(load.documents.map((doc) => [doc.path, doc]))
   const candidates: CorpusDocument[] = []
-  for (const hit of lexical.slice(0, limit * OVERFETCH_FACTOR)) {
+  // Every lexical hit goes through the lifecycle merge, and the limit applies
+  // after it: merges shrink the list, so a window cut first could return fewer
+  // than `limit` hits and leave a `Supersedes:` list incomplete. The corpus is
+  // capped at `MAX_FILES`, so this is bounded.
+  for (const hit of lexical) {
     const document = byPath.get(hit.id)
     if (document !== undefined) candidates.push(document)
   }

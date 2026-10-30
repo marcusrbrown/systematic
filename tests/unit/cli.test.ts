@@ -2752,6 +2752,23 @@ describe('cli search', () => {
     }
   })
 
+  it('names systematic search in the usage of a parse error', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(
+        ['search', 'zebra', '--bogus'],
+        box.project,
+        box.env,
+      )
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain('Usage: systematic search <query...>')
+      expect(result.stderr).not.toContain('systematic-search')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
   it('prints disabled and exits 0 when the user config switches search off', () => {
     const box = mkSearchBox()
     try {
@@ -2809,6 +2826,26 @@ describe('cli search', () => {
     }
   })
 
+  it('stays disabled when the same user file has an invalid sibling key', () => {
+    const box = mkSearchBox()
+    try {
+      writeUserFile(
+        box,
+        'systematic.json',
+        JSON.stringify({
+          search: { enabled: false },
+          disabled_skills: 'not-an-array',
+        }),
+      )
+      const result = runCli(['search', 'zebra'], box.project, box.env)
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Search is disabled')
+      expect(result.stdout).not.toContain('zebra-flake.md')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
   it('help lists the search command and its flags', () => {
     const box = mkSearchBox()
     try {
@@ -2828,7 +2865,8 @@ describe('cli search', () => {
     try {
       const result = runCli(['search', '--help'], box.project, box.env)
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Usage: systematic search')
+      expect(result.stdout).toContain('Usage: systematic search <query...>')
+      expect(result.stdout).not.toContain('systematic-search')
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }
@@ -2932,6 +2970,50 @@ describe('loadSearchSettingsForCli', () => {
       const loaded = box.load(box.project)
       expect(loaded.unreadable).toBe(false)
       expect(loaded.warnings.join('\n')).not.toContain('config unreadable')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a valid search.enabled:false when a sibling key in the same user file is invalid', () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({
+          search: { enabled: false },
+          disabled_skills: 'not-an-array',
+        }),
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.warnings.length).toBeGreaterThan(0)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('takes the search block from the custom file when the user file is invalid', () => {
+    const box = mkBox()
+    try {
+      const customDir = path.join(box.root, 'custom')
+      fs.mkdirSync(customDir)
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        '{ "search": { "enabled": true ',
+      )
+      fs.writeFileSync(
+        path.join(customDir, 'systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const loaded = loadSearchSettingsForCli(box.project, {
+        homeDir: box.home,
+        userConfigDir: path.join(box.home, '.config/opencode'),
+        customConfigDir: customDir,
+      })
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.unreadable).toBe(true)
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }

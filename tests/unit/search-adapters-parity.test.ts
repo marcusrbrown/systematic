@@ -347,6 +347,7 @@ function createCliSurface(): Surface {
       const status = await runSearchCli({
         argv: toArgv(args),
         cwd: root,
+        usageName: 'systematic search',
         loadSettings: (dir) =>
           loadSearchSettingsForCli(dir, {
             homeDir: isolatedHome,

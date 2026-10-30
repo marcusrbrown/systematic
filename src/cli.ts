@@ -55,6 +55,10 @@ import {
 } from './lib/routing-resolver.js'
 import { runSearchCli, type SearchCliSettingsLoad } from './lib/search-cli.js'
 import { resolveSearchRoot } from './lib/search-corpus.js'
+import {
+  loadUserLevelSearchSettings,
+  type UserLevelConfigDirOptions,
+} from './lib/search-user-config.js'
 import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
@@ -494,13 +498,38 @@ export function runValidateReviewReturnCli(
 }
 
 /**
+ * The directory options the user-level search reader takes, from the loader's.
+ * A key left out means "read the environment default", so only set keys pass.
+ */
+function userLevelDirOptions(
+  options: LoadConfigOptions | undefined,
+): UserLevelConfigDirOptions {
+  return {
+    ...(options?.homeDir !== undefined && { homeDir: options.homeDir }),
+    ...(options?.userConfigDir !== undefined && {
+      userConfigDir: options.userConfigDir,
+    }),
+    ...(options !== undefined &&
+      Object.hasOwn(options, 'customConfigDir') && {
+        customConfigDir: options.customConfigDir,
+      }),
+  }
+}
+
+/**
  * The settings loader `systematic search` injects into `runSearchCli`: the
  * full config loader, so the project-config strip warning for a `search` block
  * reaches stderr (AE2). Config is read at the project root, resolved the same
  * way the corpus root is. A thrown load, an invalid user or custom source, or
  * an invalid `search` block all give `unreadable: true`, which makes the core
  * add the `config unreadable` note to the results. A project source never
- * counts: project config has no effect on search. Never throws.
+ * counts: project config has no effect on search.
+ *
+ * The full loader drops a whole file that fails validation, so a valid
+ * `search.enabled: false` next to a bad sibling key would be lost. When a
+ * source is invalid, or the load throws, the settings come from the user-level
+ * reader instead, which validates the `search` block on its own (the same
+ * reader the `systematic-search` bin uses), so the opt-out still holds. Never throws.
  */
 export function loadSearchSettingsForCli(
   startDir: string,
@@ -518,16 +547,24 @@ export function loadSearchSettingsForCli(
     )
     if (invalidSource) {
       warnings.push(
-        '[systematic] A Systematic config file could not be read; its search settings were ignored and results carry a `config unreadable` note. Run `systematic config show` for details.',
+        '[systematic] A Systematic config file could not be read, so search results carry a `config unreadable` note. Run `systematic config show` for details.',
       )
     }
     return {
-      settings: loaded.config.search,
+      settings: invalidSource
+        ? loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
+            .settings
+        : loaded.config.search,
       warnings,
       unreadable: invalidSource || loaded.config.searchUnreadable === true,
     }
   } catch {
-    return { settings: undefined, warnings, unreadable: true }
+    return {
+      settings: loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
+        .settings,
+      warnings,
+      unreadable: true,
+    }
   }
 }
 
@@ -1216,6 +1253,7 @@ function runLegacyCli(args: string[]): void {
         argv: args.slice(1),
         cwd: process.cwd(),
         errorSink: console.error,
+        usageName: 'systematic search',
         loadSettings: loadSearchSettingsForCli,
         outputSink: console.log,
       }).then((status) => {

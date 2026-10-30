@@ -364,6 +364,21 @@ describe('runSearch: lifecycle through the full pipeline', () => {
     )
   })
 
+  it('resolves a superseded doc whose title ends in --- to its successor', async () => {
+    const root = makeProject()
+    writeDoc(
+      root,
+      'old.md',
+      'title: Crash on start---\nstatus: superseded\nsuperseded_by: docs/solutions/new.md',
+    )
+    writeDoc(root, 'new.md', 'title: Startup fix with other words')
+    const response = await search(root, 'crash on start')
+    const paths = pathsOf(response)
+    expect(paths).toEqual(['docs/solutions/new.md'])
+    expect(response.text).toContain('Supersedes: docs/solutions/old.md')
+    expect(response.text).not.toContain('status: superseded')
+  })
+
   it('never prints Skipped: for any lifecycle fixture query', async () => {
     const root = copyFixtureCorpus('lifecycle')
     const response = await search(root, 'lifecycle-fixture', { limit: 20 })
@@ -390,6 +405,39 @@ describe('runSearch: lifecycle through the full pipeline', () => {
     expect(paths).toHaveLength(2)
     expect(paths[0]).toBe('docs/solutions/s.md')
     expect(new Set(paths).size).toBe(2)
+  })
+})
+
+describe('runSearch: lifecycle merges and the limit', () => {
+  it('returns limit hits when many superseded docs share one successor, and lists every one under Supersedes:', async () => {
+    const root = makeProject()
+    const oldCount = 20
+    for (let index = 0; index < oldCount; index += 1) {
+      const name = String(index).padStart(2, '0')
+      writeDoc(
+        root,
+        `old-${name}.md`,
+        'title: Zeta zeta\nstatus: superseded\nsuperseded_by: docs/solutions/successor.md',
+      )
+    }
+    writeDoc(root, 'successor.md', 'title: Successor with other words')
+    for (let index = 0; index < 10; index += 1) {
+      writeDoc(
+        root,
+        `active-${String(index).padStart(2, '0')}.md`,
+        `title: Active ${index}`,
+        'A body that mentions zeta once.',
+      )
+    }
+    const response = await search(root, 'zeta', { limit: 8 })
+    if (!response.ok) throw new Error(response.text)
+    const { hits } = response.result
+    expect(hits).toHaveLength(8)
+    expect(hits[0]?.document.path).toBe('docs/solutions/successor.md')
+    expect(new Set(hits.map((hit) => hit.document.path)).size).toBe(8)
+    const supersedes = hits[0]?.lifecycle[0] ?? ''
+    expect(supersedes.startsWith('Supersedes: ')).toBe(true)
+    expect(supersedes.split(', ')).toHaveLength(oldCount)
   })
 })
 

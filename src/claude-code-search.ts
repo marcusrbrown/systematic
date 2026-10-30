@@ -40,6 +40,7 @@ export function runClaudeCodeSearch(
   return runSearchCli({
     argv: options.argv,
     cwd: options.cwd,
+    usageName: 'systematic-search',
     outputSink: options.outputSink,
     errorSink: options.errorSink,
     loadSettings: () => loadUserLevelSearchSettings(options.userLevel),

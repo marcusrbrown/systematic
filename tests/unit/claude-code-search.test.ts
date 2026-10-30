@@ -96,6 +96,20 @@ describe('runClaudeCodeSearch (in process)', () => {
     expect(result.stderr).toHaveLength(1)
   })
 
+  it('names its own command in --help and in a usage error', async () => {
+    const help = await runInProcess(makeProject(), makeUserDirs(), ['--help'])
+    expect(help.status).toBe(0)
+    expect(help.stdout[0]).toContain('Usage: systematic-search <query...>')
+    expect(help.stdout[0]).not.toContain('systematic search')
+    const bad = await runInProcess(makeProject(), makeUserDirs(), [
+      'zebra',
+      '--bogus',
+    ])
+    expect(bad.status).toBe(2)
+    expect(bad.stderr[0]).toContain('Usage: systematic-search <query...>')
+    expect(bad.stderr[0]).not.toContain('systematic search')
+  })
+
   it('prints disabled and exits 0 when the user config switches search off', async () => {
     const dirs = makeUserDirs()
     fs.writeFileSync(
@@ -326,12 +340,13 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
 
   it('exits 2 with nothing on stdout for a usage error', async () => {
     const bin = await installBin()
-    const result = runBin(bin, ['zebra', '--limit', '0'], {
+    const result = runBin(bin, ['zebra', '--bogus'], {
       cwd: makeProject(),
       home: makeUserDirs().home,
     })
     expect(result.status).toBe(2)
     expect(result.stdout).toBe('')
-    expect(result.stderr.length).toBeGreaterThan(0)
+    expect(result.stderr).toContain('Usage: systematic-search <query...>')
+    expect(result.stderr).not.toContain('systematic search')
   }, 60_000)
 })

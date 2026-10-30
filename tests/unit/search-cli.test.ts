@@ -5,9 +5,9 @@ import path from 'node:path'
 import {
   runSearchCli,
   SEARCH_CLI_DISABLED_NOTICE,
-  SEARCH_CLI_USAGE,
   type SearchCliSettingsLoad,
   type SearchCliSettingsLoader,
+  searchCliUsage,
 } from '../../src/lib/search-cli.js'
 import {
   runSearch,
@@ -39,6 +39,8 @@ function makeProject(): string {
   return root
 }
 
+const USAGE_NAME = 'systematic search'
+
 const CLEAN: SearchCliSettingsLoad = {
   settings: undefined,
   warnings: [],
@@ -57,6 +59,7 @@ async function run(
   options: {
     readonly cwd: string
     readonly load?: SearchCliSettingsLoad | SearchCliSettingsLoader
+    readonly usageName?: string
   },
 ): Promise<Run> {
   const stdout: string[] = []
@@ -66,6 +69,7 @@ async function run(
   const status = await runSearchCli({
     argv,
     cwd: options.cwd,
+    usageName: options.usageName ?? USAGE_NAME,
     loadSettings: (dir) => {
       loadedWith.push(dir)
       return typeof load === 'function' ? load(dir) : load
@@ -191,10 +195,33 @@ describe('runSearchCli: results', () => {
     for (const flag of ['--help', '-h']) {
       const result = await run([flag], { cwd: root })
       expect(result.status).toBe(0)
-      expect(result.stdout).toEqual([SEARCH_CLI_USAGE])
+      expect(result.stdout).toEqual([searchCliUsage(USAGE_NAME)])
       expect(result.stderr).toEqual([])
       expect(result.loadedWith).toEqual([])
     }
+  })
+})
+
+describe('searchCliUsage', () => {
+  it('names the command it is given, and no other', () => {
+    const usage = searchCliUsage('systematic-search')
+    expect(usage.startsWith('Usage: systematic-search <query...>')).toBe(true)
+    expect(usage).not.toContain('systematic search')
+    expect(searchCliUsage('systematic search')).toContain(
+      'Usage: systematic search <query...>',
+    )
+  })
+
+  it('threads usageName into --help and into a usage error', async () => {
+    const root = makeProject()
+    const help = await run(['--help'], { cwd: root, usageName: 'my-bin' })
+    expect(help.stdout).toEqual([searchCliUsage('my-bin')])
+    const bad = await run(['zebra', '--bogus'], {
+      cwd: root,
+      usageName: 'my-bin',
+    })
+    expect(bad.status).toBe(2)
+    expect(bad.stderr[0]).toContain('Usage: my-bin <query...>')
   })
 })
 
@@ -283,7 +310,7 @@ describe('runSearchCli: usage errors', () => {
       expect(result.status).toBe(2)
       expect(result.stdout).toEqual([])
       expect(result.stderr).toHaveLength(1)
-      expect(result.stderr[0]).toContain(SEARCH_CLI_USAGE)
+      expect(result.stderr[0]).toContain(searchCliUsage(USAGE_NAME))
       expect(result.stderr[0]).not.toContain('zebra')
       // Argument errors are decided before any settings load.
       expect(result.loadedWith).toEqual([])
