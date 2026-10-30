@@ -169,7 +169,7 @@ Durable-output search
   src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
   src/lib/search-corpus.ts         — project root walk-up, `kind` table and bounded, symlink-safe loader for `docs/solutions/`, with a narrowing frontmatter wrapper
   src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns
-  src/lib/search-core.ts           — host-neutral search composition: validate, lexical lane, optional semantic stage, lifecycle resolver, render
+  src/lib/search-core.ts           — host-neutral search composition: validate, lexical lane, lifecycle resolver, render
   src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a reader that never touches project config (imports only zod, jsonc-parser and node builtins)
   src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
   src/lib/search-cli.ts            — `systematic search` and the `systematic-search` bin's shared runner: flag parsing, an injected settings loader, exit codes, the core's text unchanged (imports only `search-core.ts`)
@@ -248,7 +248,7 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 6. **Search reads the disk on every call, protects its config as a whole, and avoids `Math.log`.**
    `docs/solutions/` is read on each call with no memo, because `ce:compound` searches right after
    it writes. The `search` config block is stripped whole from project config, so a repository
-   cannot point search at an endpoint or switch it off. The search modules use a hand-written `ln`
+   cannot switch it off. The search modules use a hand-written `ln`
    and no `Math.log`, so scores and ranks are identical on Bun and Node. Each host reaches the one
    `search-core.ts` composition, so every surface returns the same text. The learnings-researcher
    calls search first and falls back to its grep steps when search has no hits, is disabled, errors

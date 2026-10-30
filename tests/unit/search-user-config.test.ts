@@ -28,128 +28,55 @@ function makeTempDir(label: string): string {
   )
 }
 
-const EMBEDDINGS = {
-  provider: 'ollama',
-  base_url: 'http://localhost:11434',
-  model: 'nomic-embed-text',
-} as const
-
 describe('SearchSettingsSchema', () => {
-  test('accepts an empty block and a full block', () => {
+  test('accepts an empty block and an enabled block', () => {
     expect(SearchSettingsSchema.safeParse({}).success).toBe(true)
-    const full = SearchSettingsSchema.safeParse({
-      enabled: true,
-      embeddings: {
-        provider: 'openai-compatible',
-        base_url: 'https://api.example.com/v1',
-        model: 'text-embedding-3-small',
-        dimensions: 512,
-        api_key_env: 'EMBED_KEY_1',
-        query_prefix: 'search_query: ',
-        document_prefix: 'search_document: ',
-        timeout_ms: 20_000,
-      },
-    })
-    expect(full.success).toBe(true)
+    expect(SearchSettingsSchema.safeParse({ enabled: true }).success).toBe(true)
+    expect(SearchSettingsSchema.safeParse({ enabled: false }).success).toBe(
+      true,
+    )
   })
 
-  test('applies no defaults: a block with no timeout_ms parses to no timeout_ms', () => {
-    const result = SearchSettingsSchema.safeParse({ embeddings: EMBEDDINGS })
-    expect(result.success).toBe(true)
-    if (!result.success) return
-    expect(Object.keys(result.data)).toEqual(['embeddings'])
-    expect(Object.keys(result.data.embeddings ?? {}).sort()).toEqual([
-      'base_url',
-      'model',
-      'provider',
-    ])
+  test('applies no defaults: an absent field stays absent', () => {
     expect(SearchSettingsSchema.safeParse({}).data).toEqual({})
+    expect(SearchSettingsSchema.safeParse({ enabled: false }).data).toEqual({
+      enabled: false,
+    })
   })
 
   test('the parsed output is assignable to the core SearchSettings type', () => {
-    const result = SearchSettingsSchema.safeParse({ embeddings: EMBEDDINGS })
+    const result = SearchSettingsSchema.safeParse({ enabled: false })
     if (!result.success) throw new Error('expected success')
     // Compile-time check: a schema output must satisfy the core's type.
     const settings: SearchSettings = result.data
-    expect(settings.embeddings?.model).toBe('nomic-embed-text')
+    expect(settings.enabled).toBe(false)
   })
 
   test.each([
-    ['unknown provider', { embeddings: { ...EMBEDDINGS, provider: 'cohere' } }],
-    [
-      'api_key_env 1BAD',
-      { embeddings: { ...EMBEDDINGS, api_key_env: '1BAD' } },
-    ],
-    [
-      'api_key_env with space',
-      { embeddings: { ...EMBEDDINGS, api_key_env: 'A B' } },
-    ],
-    ['api_key_env $X', { embeddings: { ...EMBEDDINGS, api_key_env: '$X' } }],
-    [
-      'non-integer dimensions',
-      { embeddings: { ...EMBEDDINGS, dimensions: 1.5 } },
-    ],
-    ['zero dimensions', { embeddings: { ...EMBEDDINGS, dimensions: 0 } }],
-    ['timeout below 500', { embeddings: { ...EMBEDDINGS, timeout_ms: 499 } }],
-    [
-      'timeout above 60000',
-      { embeddings: { ...EMBEDDINGS, timeout_ms: 60_001 } },
-    ],
-    [
-      'non-integer timeout',
-      { embeddings: { ...EMBEDDINGS, timeout_ms: 600.5 } },
-    ],
-    [
-      'missing model',
-      { embeddings: { provider: 'ollama', base_url: 'http://x' } },
-    ],
     ['unknown key in search', { enabled: true, extra: 1 }],
-    [
-      'removed first_query_budget_ms',
-      { embeddings: { ...EMBEDDINGS, first_query_budget_ms: 1000 } },
-    ],
+    ['a removed embeddings block', { embeddings: { provider: 'ollama' } }],
+    ['non-boolean enabled', { enabled: 'yes' }],
+    ['null enabled', { enabled: null }],
     ['null block', null],
     ['array block', []],
     ['string block', 'on'],
   ])('rejects %s', (_label, value) => {
     expect(SearchSettingsSchema.safeParse(value).success).toBe(false)
   })
-
-  test('accepts the timeout bounds exactly', () => {
-    for (const timeout_ms of [500, 60_000]) {
-      expect(
-        SearchSettingsSchema.safeParse({
-          embeddings: { ...EMBEDDINGS, timeout_ms },
-        }).success,
-      ).toBe(true)
-    }
-  })
 })
 
 describe('validateSearchBlock', () => {
   test('names field paths and never a value', () => {
-    const result = validateSearchBlock({
-      embeddings: {
-        ...EMBEDDINGS,
-        base_url: 'https://user:hunter2@example.com/?token=abc',
-        api_key_env: 'sk-secret value',
-        timeout_ms: 5,
-      },
-    })
+    const result = validateSearchBlock({ enabled: 'hunter2-secret' })
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.fields).toEqual([
-      'search.embeddings.api_key_env',
-      'search.embeddings.timeout_ms',
-    ])
+    expect(result.fields).toEqual(['search.enabled'])
     const warning = formatSearchBlockWarning(
       '/tmp/systematic.json',
       result.fields,
     )
-    expect(warning).toContain('embeddings.api_key_env')
+    expect(warning).toContain('search.enabled')
     expect(warning).not.toContain('hunter2')
-    expect(warning).not.toContain('sk-secret')
-    expect(warning).not.toContain('token=abc')
   })
 
   test('an unknown key is reported against its parent, not by its name', () => {
@@ -161,18 +88,6 @@ describe('validateSearchBlock', () => {
 })
 
 describe('mergeSearchSettings', () => {
-  const embeddingsA: SearchSettings['embeddings'] = {
-    provider: 'ollama',
-    base_url: 'http://a',
-    model: 'a',
-    timeout_ms: 1000,
-    api_key_env: 'KEY_A',
-  }
-  const embeddingsB: SearchSettings['embeddings'] = {
-    provider: 'openai-compatible',
-    base_url: 'http://b',
-    model: 'b',
-  }
   const src = (
     settings?: SearchSettingsSource['settings'],
     unreadable = false,
@@ -186,39 +101,30 @@ describe('mergeSearchSettings', () => {
   })
 
   test('user only', () => {
-    expect(
-      mergeSearchSettings([src({ enabled: true, embeddings: embeddingsA })]),
-    ).toEqual({
-      settings: { enabled: true, embeddings: embeddingsA },
+    expect(mergeSearchSettings([src({ enabled: true })])).toEqual({
+      settings: { enabled: true },
       unreadable: false,
     })
   })
 
-  test('custom only', () => {
-    expect(mergeSearchSettings([src({ embeddings: embeddingsB })])).toEqual({
-      settings: { embeddings: embeddingsB },
+  test('an empty block contributes no settings', () => {
+    expect(mergeSearchSettings([src({})])).toEqual({
+      settings: undefined,
       unreadable: false,
     })
   })
 
-  test('custom overrides user: enabled is last-defining, embeddings replaced whole', () => {
+  test('custom overrides user: enabled is last-defining', () => {
     const merged = mergeSearchSettings([
-      src({ enabled: true, embeddings: embeddingsA }),
-      src({ enabled: false, embeddings: embeddingsB }),
+      src({ enabled: true }),
+      src({ enabled: false }),
     ])
-    expect(merged.settings?.enabled).toBe(false)
-    // Replaced whole: nothing from A (timeout_ms, api_key_env) leaks in.
-    expect(merged.settings?.embeddings).toEqual(embeddingsB)
-    expect(merged.settings?.embeddings).not.toHaveProperty('timeout_ms')
-    expect(merged.settings?.embeddings).not.toHaveProperty('api_key_env')
+    expect(merged.settings).toEqual({ enabled: false })
   })
 
-  test('custom without enabled keeps the user enabled value, and vice versa for embeddings', () => {
-    const merged = mergeSearchSettings([
-      src({ enabled: false, embeddings: embeddingsA }),
-      src({}),
-    ])
-    expect(merged.settings).toEqual({ enabled: false, embeddings: embeddingsA })
+  test('custom without enabled keeps the user enabled value', () => {
+    const merged = mergeSearchSettings([src({ enabled: false }), src({})])
+    expect(merged.settings).toEqual({ enabled: false })
   })
 
   test('enabled:false only (custom has no search block) stays false', () => {
@@ -234,10 +140,10 @@ describe('mergeSearchSettings', () => {
   test('an unreadable source flags the result and contributes no settings', () => {
     const merged = mergeSearchSettings([
       src(undefined, true),
-      src({ embeddings: embeddingsB }),
+      src({ enabled: false }),
     ])
     expect(merged.unreadable).toBe(true)
-    expect(merged.settings).toEqual({ embeddings: embeddingsB })
+    expect(merged.settings).toEqual({ enabled: false })
     expect(mergeSearchSettings([src(undefined, true)])).toEqual({
       settings: undefined,
       unreadable: true,
@@ -327,25 +233,16 @@ describe('loadUserLevelSearchSettings', () => {
     const { homeDir, userConfigDir, customConfigDir } = layout()
     fs.writeFileSync(
       path.join(userConfigDir, 'systematic.json'),
-      JSON.stringify({
-        search: {
-          enabled: true,
-          embeddings: { ...EMBEDDINGS, timeout_ms: 900 },
-        },
-      }),
+      JSON.stringify({ search: { enabled: true } }),
     )
     fs.writeFileSync(
       path.join(customConfigDir, 'systematic.json'),
-      JSON.stringify({
-        search: { embeddings: { ...EMBEDDINGS, model: 'custom-model' } },
-      }),
+      JSON.stringify({ search: { enabled: false } }),
     )
     const loaded = loadUserLevelSearchSettings({ homeDir, customConfigDir })
     expect(loaded.unreadable).toBe(false)
     expect(loaded.warnings).toEqual([])
-    expect(loaded.settings?.enabled).toBe(true)
-    expect(loaded.settings?.embeddings?.model).toBe('custom-model')
-    expect(loaded.settings?.embeddings).not.toHaveProperty('timeout_ms')
+    expect(loaded.settings).toEqual({ enabled: false })
   })
 
   test('user enabled:false survives a custom file with no search block', () => {
@@ -431,7 +328,7 @@ describe('loadUserLevelSearchSettings', () => {
     fs.mkdirSync(projectDir, { recursive: true })
     fs.writeFileSync(
       path.join(projectDir, 'systematic.json'),
-      JSON.stringify({ search: { embeddings: EMBEDDINGS } }),
+      JSON.stringify({ search: { enabled: false } }),
     )
     const previousCwd = process.cwd()
     process.chdir(path.join(root, 'project'))
@@ -471,27 +368,23 @@ describe('loadUserLevelSearchSettings', () => {
   })
 
   test.each([
-    ['timeout_ms', { ...EMBEDDINGS, timeout_ms: 10 }],
-    ['provider', { ...EMBEDDINGS, provider: 'nope' }],
-    ['api_key_env', { ...EMBEDDINGS, api_key_env: '1BAD' }],
-  ])(
-    'a bad %s drops the block with one warning and no value',
-    (field, embeddings) => {
-      const { homeDir, userConfigDir } = layout()
-      fs.writeFileSync(
-        path.join(userConfigDir, 'systematic.json'),
-        JSON.stringify({ search: { embeddings } }),
-      )
-      const loaded = loadUserLevelSearchSettings({
-        homeDir,
-        customConfigDir: null,
-      })
-      expect(loaded.unreadable).toBe(true)
-      expect(loaded.settings).toBeUndefined()
-      expect(loaded.warnings).toHaveLength(1)
-      expect(loaded.warnings[0]).toContain(`search.embeddings.${field}`)
-      expect(loaded.warnings[0]).not.toContain('nope')
-      expect(loaded.warnings[0]).not.toContain('1BAD')
-    },
-  )
+    ['a removed embeddings block', { embeddings: { provider: 'nope' } }],
+    ['a non-boolean enabled', { enabled: 'nope' }],
+    ['an unknown key', { nope: true }],
+  ])('%s drops the block with one warning and no value', (_label, block) => {
+    const { homeDir, userConfigDir } = layout()
+    fs.writeFileSync(
+      path.join(userConfigDir, 'systematic.json'),
+      JSON.stringify({ search: block }),
+    )
+    const loaded = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.settings).toBeUndefined()
+    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.warnings[0]).toContain('config unreadable')
+    expect(loaded.warnings[0]).not.toContain('nope')
+  })
 })

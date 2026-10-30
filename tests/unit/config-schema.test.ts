@@ -211,30 +211,28 @@ describe('SystematicConfigSchema', () => {
     })
 
     test('accepts a block and applies no defaults inside it', () => {
-      const result = SystematicConfigSchema.safeParse({
-        search: {
-          embeddings: {
-            provider: 'ollama',
-            base_url: 'http://localhost:11434',
-            model: 'nomic-embed-text',
-          },
-        },
-      })
+      const result = SystematicConfigSchema.safeParse({ search: {} })
       expect(result.success).toBe(true)
       if (result.success) {
-        expect(result.data.search?.embeddings).not.toHaveProperty('timeout_ms')
         expect(result.data.search).not.toHaveProperty('enabled')
       }
     })
 
     test('rejects a bad block at the search path', () => {
       const result = SystematicConfigSchema.safeParse({
-        search: { embeddings: { provider: 'nope', base_url: 'x', model: 'y' } },
+        search: { enabled: 'nope' },
       })
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(firstIssue(result.error.issues).path[0]).toBe('search')
       }
+    })
+
+    test('rejects the removed embeddings block', () => {
+      expect(
+        SystematicConfigSchema.safeParse({ search: { embeddings: {} } })
+          .success,
+      ).toBe(false)
     })
 
     test('is tagged project-or-higher in the schema metadata', () => {

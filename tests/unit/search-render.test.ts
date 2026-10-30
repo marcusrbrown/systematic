@@ -248,7 +248,7 @@ describe('renderSearchResult: hits', () => {
         hits: [
           makeHit(
             3,
-            { lanes: ['lexical', 'semantic'], status: 'stale' },
+            { status: 'stale' },
             { body: 'the example query appears here' },
           ),
         ],
@@ -258,7 +258,7 @@ describe('renderSearchResult: hits', () => {
       '3. docs/solutions/best-practices/example-2026-08-16.md',
     )
     expect(text).toContain(
-      'Title: Example title | Kind: solution | Status: stale | Lanes: lexical, semantic',
+      'Title: Example title | Kind: solution | Status: stale | Lanes: lexical',
     )
     expect(text).toContain('Module: example-module | Tags: alpha, beta')
     expect(text).toContain('Snippet: the example query appears here')

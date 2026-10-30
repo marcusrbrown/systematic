@@ -6451,12 +6451,6 @@ describe('isAgentDisabled', () => {
 
 describe('search config field', () => {
   const tracker = createTempDirTracker()
-  const EMBEDDINGS = {
-    provider: 'ollama',
-    base_url: 'http://localhost:11434',
-    model: 'nomic-embed-text',
-  } as const
-
   afterEach(() => {
     tracker.cleanup()
   })
@@ -6497,11 +6491,11 @@ describe('search config field', () => {
     }
   }
 
-  test('a user config with embeddings loads and enabled:false survives the merge', () => {
+  test('a user config with enabled:false loads and survives the merge', () => {
     const t = setup()
-    t.user({ search: { enabled: false, embeddings: EMBEDDINGS } })
+    t.user({ search: { enabled: false } })
     const { config } = t.load()
-    expect(config.search).toEqual({ enabled: false, embeddings: EMBEDDINGS })
+    expect(config.search).toEqual({ enabled: false })
     expect(config.searchUnreadable).toBeUndefined()
     expect(t.warnings).toEqual([])
   })
@@ -6515,26 +6509,11 @@ describe('search config field', () => {
     expect(t.warnings).toEqual([])
   })
 
-  test('custom overrides user enabled, and its embeddings replace the user block whole', () => {
+  test('custom overrides user enabled', () => {
     const t = setup()
-    t.user({
-      search: {
-        enabled: false,
-        embeddings: { ...EMBEDDINGS, timeout_ms: 900, api_key_env: 'USER_KEY' },
-      },
-    })
-    t.custom({
-      search: {
-        enabled: true,
-        embeddings: { ...EMBEDDINGS, model: 'custom-model' },
-      },
-    })
-    const { config } = t.load(true)
-    expect(config.search?.enabled).toBe(true)
-    expect(config.search?.embeddings).toEqual({
-      ...EMBEDDINGS,
-      model: 'custom-model',
-    })
+    t.user({ search: { enabled: false } })
+    t.custom({ search: { enabled: true } })
+    expect(t.load(true).config.search).toEqual({ enabled: true })
   })
 
   test('custom without a search block leaves the user enabled:false in force', () => {
@@ -6561,24 +6540,15 @@ describe('search config field', () => {
   })
 
   describe('project config can never set it', () => {
-    test('AE2: a project embeddings block is stripped with one warning and the user value is used', () => {
+    test('AE2: a project search block is stripped with one warning and the user value is used', () => {
       const t = setup()
-      t.user({ search: { embeddings: EMBEDDINGS } })
-      t.project({
-        search: {
-          embeddings: {
-            provider: 'openai-compatible',
-            base_url: 'https://attacker.example/v1',
-            model: 'evil',
-          },
-        },
-      })
+      t.user({ search: { enabled: false } })
+      t.project({ search: { enabled: true } })
       const { config, metadata } = t.load()
-      expect(config.search?.embeddings).toEqual(EMBEDDINGS)
+      expect(config.search).toEqual({ enabled: false })
       expect(t.warnings).toHaveLength(1)
       expect(t.warnings[0]).toContain('`search`')
       expect(t.warnings[0]).toContain('project config')
-      expect(t.warnings[0]).not.toContain('attacker')
       expect(metadata.protectedFields).toContainEqual({
         fieldPath: 'search',
         outcome: 'blocked',
@@ -6603,28 +6573,25 @@ describe('search config field', () => {
 
     test('a project search:{enabled:false} cannot disable the user search', () => {
       const t = setup()
-      t.user({ search: { enabled: true, embeddings: EMBEDDINGS } })
+      t.user({ search: { enabled: true } })
       t.project({ search: { enabled: false } })
       const { config } = t.load()
-      expect(config.search).toEqual({ enabled: true, embeddings: EMBEDDINGS })
+      expect(config.search).toEqual({ enabled: true })
       expect(t.warnings).toHaveLength(1)
     })
 
     test.each([
       ['search: null', null],
       ['search: {}', {}],
-      ['an embeddings block', { embeddings: { ...EMBEDDINGS, model: 'p' } }],
+      ['search: {enabled: true}', { enabled: true }],
     ])(
       'erase attempt (%s) keeps the user value and emits exactly one warning',
       (_label, value) => {
         const t = setup()
-        t.user({ search: { enabled: false, embeddings: EMBEDDINGS } })
+        t.user({ search: { enabled: false } })
         t.project({ search: value })
         const { config } = t.load()
-        expect(config.search).toEqual({
-          enabled: false,
-          embeddings: EMBEDDINGS,
-        })
+        expect(config.search).toEqual({ enabled: false })
         expect(t.warnings).toHaveLength(1)
       },
     )
@@ -6638,29 +6605,27 @@ describe('search config field', () => {
   })
 
   describe('an invalid block in user or custom config is dropped alone', () => {
-    const BAD: ReadonlyArray<
-      readonly [string, string, Record<string, unknown>]
-    > = [
-      ['timeout_ms', '987654321', { ...EMBEDDINGS, timeout_ms: 987_654_321 }],
-      ['provider', 'pinecone', { ...EMBEDDINGS, provider: 'pinecone' }],
-      ['api_key_env', 'bad key!', { ...EMBEDDINGS, api_key_env: 'bad key!' }],
+    const BAD: ReadonlyArray<readonly [string, string, unknown]> = [
+      ['enabled', 'not-a-boolean-secret', { enabled: 'not-a-boolean-secret' }],
+      [
+        'a removed embeddings block',
+        'ollama-secret',
+        { embeddings: { provider: 'ollama-secret' } },
+      ],
     ]
 
     for (const source of ['user', 'custom'] as const) {
       test.each(BAD)(
         `${source}: a bad %s leaves the rest of the file loaded and marks search unreadable`,
-        (field, badValue, embeddings) => {
+        (_label, badValue, search) => {
           const t = setup()
-          t[source]({
-            disabled_skills: ['ce:plan'],
-            search: { enabled: false, embeddings },
-          })
+          t[source]({ disabled_skills: ['ce:plan'], search })
           const { config } = t.load(true)
           expect(config.disabled_skills).toEqual(['ce:plan'])
           expect(config).not.toHaveProperty('search')
           expect(config.searchUnreadable).toBe(true)
           expect(t.warnings).toHaveLength(1)
-          expect(t.warnings[0]).toContain(`search.embeddings.${field}`)
+          expect(t.warnings[0]).toContain('search')
           expect(t.warnings[0]).not.toContain(badValue)
         },
       )
@@ -6668,27 +6633,11 @@ describe('search config field', () => {
 
     test('an invalid custom block does not discard a valid user block, and the result is flagged', () => {
       const t = setup()
-      t.user({ search: { embeddings: EMBEDDINGS } })
-      t.custom({ search: { embeddings: { ...EMBEDDINGS, timeout_ms: 1 } } })
+      t.user({ search: { enabled: false } })
+      t.custom({ search: { enabled: 'nope' } })
       const { config } = t.load(true)
-      expect(config.search?.embeddings).toEqual(EMBEDDINGS)
+      expect(config.search).toEqual({ enabled: false })
       expect(config.searchUnreadable).toBe(true)
-    })
-
-    test('the warning never carries a base_url userinfo, query string or env var value', () => {
-      const t = setup()
-      t.user({
-        search: {
-          embeddings: {
-            ...EMBEDDINGS,
-            base_url: 'https://me:hunter2@example.com/v1?key=abc#frag',
-            timeout_ms: 1,
-          },
-        },
-      })
-      t.load()
-      expect(t.warnings).toHaveLength(1)
-      expect(t.warnings[0]).not.toMatch(/hunter2|key=abc|frag|example\.com/)
     })
 
     test('the load does not throw over search, even with invalidSource throw', () => {

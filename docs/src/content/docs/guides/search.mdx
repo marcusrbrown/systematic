@@ -1,13 +1,13 @@
 ---
 title: Search your past solutions
-description: Search docs/solutions by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line. Lexical search works with no setup. An optional embeddings endpoint adds a semantic lane.
+description: Search docs/solutions by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line. Search runs on your machine and needs no setup.
 sidebar:
   order: 12
 ---
 
 Systematic can search the learnings you keep in `docs/solutions/`. You type a symptom, an error message, a module name or a topic. You get ranked hits with the path, title, a snippet, tags and status. Agents use the same search, so the `learnings-researcher` finds a past fix before it greps.
 
-Search needs no setup. It ranks documents with a lexical method (BM25F) that runs in the plugin itself. It makes no network call and downloads no model. You can add a semantic lane that uses an embeddings endpoint you choose. That lane is optional and off by default. See [Add a semantic lane](#add-a-semantic-lane).
+Search needs no setup. It ranks documents with a lexical method (BM25F) that runs in the plugin itself. It makes no network call, downloads no model and writes no cache.
 
 ```bash
 npx @fro.bot/systematic search "tests fail only on retry"
@@ -73,7 +73,7 @@ In a monorepo the root is the repository root, not the package you are in.
 | Claude Code | `systematic-search` command | A bin in the plugin's `bin/` directory, run from a shell. Claude Code has no `systematic_search` tool. |
 | Any terminal | `systematic search` | Use `npx @fro.bot/systematic search …` if the package is not installed globally. |
 
-The tool takes these arguments. The command takes the same three as flags, plus `--dir` and `--warm`.
+The tool takes these arguments. The command takes the same three as flags, plus `--dir`.
 
 | Argument | Required | Meaning |
 |---|---|---|
@@ -89,78 +89,30 @@ systematic search --dir ../other-repo "connection pool exhausted"
 systematic search -- "--watch crashes"   # a query that starts with a dash
 ```
 
-Exit statuses: `0` for results, no hits, a disabled search and a finished `--warm`; `1` for a failure, including a `--warm` run that could not finish; `2` for a usage error.
+Exit statuses: `0` for results, no hits and a disabled search; `1` for a failure; `2` for a usage error.
 
 ## Configure search
 
-The `search` block lives in your **user-level** config only. Systematic reads it from these files, in this order, and merges them:
+Search has one setting, `search.enabled`. It lives in your **user-level** config only. Systematic reads it from these files, in this order, and merges them:
 
 1. `~/.config/opencode/systematic.jsonc`, or `systematic.json` if there is no `.jsonc`.
 2. The same file name inside the directory named by `OPENCODE_CONFIG_DIR`, if that variable is set and not blank.
 
-The second file overrides the first. `enabled` takes the last file that sets it. `embeddings` is replaced as a whole by the last file that sets it, so a custom endpoint never inherits an `api_key_env` from your user file.
+The second file overrides the first. `enabled` takes the last file that sets it.
 
-A project config cannot set `search`. If `.opencode/systematic.jsonc` or `.opencode/systematic.json` has a `search` block, Systematic ignores the whole block and prints a warning. This is on purpose. Otherwise a repository you clone could send your documents to a host it chose, or switch search off.
+A project config cannot set `search`. If `.opencode/systematic.jsonc` or `.opencode/systematic.json` has a `search` block, Systematic ignores the whole block and prints a warning. This is on purpose. Otherwise a repository you clone could switch search off.
 
 The `systematic-search` command in Claude Code reads the two user-level files and never opens project config. For that reason it cannot print the project-config warning that `systematic search` prints.
 
 ### Fields
 
-`search` accepts only the fields below. An unknown field makes the whole block invalid.
+`search` accepts only the field below. An unknown field makes the whole block invalid.
 
-| Field | Type and bounds | Default | Meaning |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
 | `search.enabled` | boolean | `true` | `false` removes search. See [Turn search off](#turn-search-off). |
-| `search.embeddings` | object | none | The embeddings endpoint. Without it, search is lexical only. |
-| `search.embeddings.provider` | `ollama` or `openai-compatible` | required | `ollama` calls `<base_url>/api/embed`. `openai-compatible` calls `<base_url>/embeddings`. |
-| `search.embeddings.base_url` | non-empty string | required | The root of the endpoint, such as `http://localhost:11434` or `https://api.openai.com/v1`. A trailing slash is trimmed. It must use `http` or `https`, name a host, and have no user name, password, query string or fragment, or search reports `invalid endpoint`. |
-| `search.embeddings.model` | non-empty string | required | The model name sent to the endpoint. |
-| `search.embeddings.dimensions` | positive integer | unset | The vector length you expect. When set, every response must have exactly this length. With `openai-compatible` it is also sent in the request as `dimensions`. With `ollama` it is a check only. When unset, the first response sets the length. |
-| `search.embeddings.api_key_env` | string matching `^[A-Za-z_][A-Za-z0-9_]*$` | unset | The **name** of the environment variable that holds the API key. The key never goes in config. |
-| `search.embeddings.query_prefix` | string | none | Text put before the query before it is embedded. |
-| `search.embeddings.document_prefix` | string | none | Text put before each document chunk before it is embedded. |
-| `search.embeddings.timeout_ms` | integer from 500 to 60,000 | 15,000 | How long one request may take. |
 
-Some models need task prefixes. `nomic-embed-text` is one: documents start with `search_document:` and queries with `search_query:`, each followed by a space. The Ollama example below sets both.
-
-Config is checked in two steps. The schema checks only the shape of each field. Search checks the URL when it runs.
-
-If the `search` block fails its check, Systematic drops that block, prints one warning that names the field and never its value, and loads the rest of the file. Search then runs lexical only, and each result carries the note `config unreadable`. The `systematic-search` command does the same. It also treats a user-level file it cannot parse as unreadable. Search never stops the plugin from loading.
-
-### Ollama
-
-```jsonc title="~/.config/opencode/systematic.jsonc"
-{
-  "search": {
-    "embeddings": {
-      "provider": "ollama",
-      "base_url": "http://localhost:11434",
-      "model": "nomic-embed-text",
-      "document_prefix": "search_document: ",
-      "query_prefix": "search_query: "
-    }
-  }
-}
-```
-
-Pull the model first with `ollama pull nomic-embed-text`.
-
-### An OpenAI-compatible endpoint
-
-```jsonc title="~/.config/opencode/systematic.jsonc"
-{
-  "search": {
-    "embeddings": {
-      "provider": "openai-compatible",
-      "base_url": "https://api.openai.com/v1",
-      "model": "text-embedding-3-small",
-      "api_key_env": "OPENAI_API_KEY"
-    }
-  }
-}
-```
-
-Set the variable in the shell that starts your harness. If `api_key_env` names a variable that is unset, empty or not plain printable text, search sends no request and reports `key missing`. Leave `api_key_env` out for an endpoint that needs no key.
+If the `search` block fails its check, Systematic drops that block, prints one warning that names the field and never its value, and loads the rest of the file. Search then runs with its defaults, and each result carries the note `config unreadable`. The `systematic-search` command does the same. It also treats a user-level file it cannot parse as unreadable. Search never stops the plugin from loading.
 
 ### Turn search off
 
@@ -176,111 +128,14 @@ This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from 
 
 OpenCode and Pi read config once when they start. Restart the harness after you change `search`. The `systematic search` command and the `systematic-search` command read config on every run, so they need no restart.
 
-## Add a semantic lane
+## Notes
 
-The lexical lane needs matching words. The semantic lane finds a learning that describes the same problem in other words. When you configure `search.embeddings`, Systematic embeds your documents and your query through that endpoint, then merges the two rankings with reciprocal rank fusion. A hit shows which lanes placed it: `Lanes: lexical, semantic`.
-
-A search never embeds your documents. One command does, and you run it yourself.
-
-### Build the index with `--warm`
-
-```bash
-systematic search --warm
-```
-
-Run it once before the semantic lane contributes anything. `--warm` reads every indexable doc, splits it into chunks, embeds the chunks, and saves the vectors to a local cache. It is the only thing that embeds documents.
-
-- It **resumes**. It saves each document once all its chunks are embedded, so a run that stops, or that you interrupt, keeps the finished documents. Run it again to continue.
-- It sends at most 8 chunks per request.
-- It prints `embedded N/M` progress lines on **stderr**. The final line goes to stdout: `Semantic index: N/M docs embedded.`, with `, K skipped after repeated embedding failures` appended when K is not zero.
-- It takes no query and no `--limit`. It accepts `--dir` and `--kind`.
-
-`--warm` exits with status `1` when it could not finish, and prints the reason on stderr and the sentence `Run systematic search --warm again to resume.`. The causes are:
-
-- The endpoint is unreachable, or a request timed out.
-- The endpoint is invalid.
-- The API key is missing.
-- The cache directory is not writable.
-- No `search.embeddings` endpoint is configured.
-- The search config could not be read.
-- Three documents in a row were skipped (see [The skip-after-two rule](#the-skip-after-two-rule)).
-
-When search is disabled, `--warm` prints the disabled notice and exits with status `0`.
-
-Both `systematic search --warm` and `systematic-search --warm` do this. Neither is a tool call, so an agent in a harness does not trigger it.
-
-### What a search does while the index is incomplete
-
-The semantic lane contributes only when every indexable doc has valid vectors, apart from documents that were skipped. Until then a search does two things:
-
-- It returns lexical results at once.
-- It sends **no request** to the endpoint, not even for the query.
-
-It adds the note `semantic index N/M; run systematic search --warm`. N is the number of documents that have vectors. M is the number of indexable documents, minus any skipped ones.
-
-A new or edited document has no vectors until the next `--warm`. So after `ce:compound` writes a learning, the index is incomplete again and searches are lexical only until you run `--warm`. This is the cost of never embedding inside a search.
-
-Once the index is complete, a search sends exactly one request, for the query. The lane takes the 20 documents with the most similar chunk and fuses them with the lexical ranking. There is no similarity threshold, so a hybrid search returns the nearest documents even when none is close. Check the `Lanes:` field of each hit when a result looks noisy.
-
-If that one request fails, the search still returns lexical results, with the note `semantic search unavailable: <reason>`. A blackholed endpoint costs up to `timeout_ms` per search. A refused connection fails fast.
-
-### The skip-after-two rule
-
-One bad document should not block the rest, and a broken endpoint should not mark the whole corpus. `--warm` follows these rules:
-
-- A document that fails twice is **skipped**. Only these failures count: `malformed response`, `vector size mismatch`, `unknown model` and an HTTP error status. When a failure hits a request that carried several documents, `--warm` retries each document alone, and that split does not count.
-- A **timeout** does not count. Neither do `unreachable`, `key missing` and `invalid endpoint`. Any of these stops the run with status 1.
-- A skipped document gets a failure marker in the cache directory. A search treats a marked document as skipped. It leaves the count N/M, so the semantic lane can still contribute, and the result notes how many documents were skipped. A skipped document is found by the lexical lane only.
-- The next `--warm` tries marked documents again and clears a marker when the embedding works.
-- When **three documents in a row** are skipped, `--warm` stops with status 1. The endpoint, not the documents, is probably at fault. For example, a rejected API key would otherwise mark every document.
-
-`--warm` exits with status 0 when every document is either embedded or skipped. It prints the skipped count.
-
-### What makes `--warm` embed again
-
-The cache entry for a document is keyed on its content, the provider, the endpoint (`base_url`), the model, the `dimensions` setting, the `document_prefix` and the way Systematic splits documents into chunks. Change any of these and the vectors no longer match, so the next `--warm` embeds that part of the corpus again:
-
-- Editing a document re-embeds that document.
-- Changing the `model`, the `document_prefix`, the `dimensions`, the `provider` or the `base_url` re-embeds the whole corpus.
-- Changing `query_prefix` does **not** re-embed. The prefix applies only to queries, and the cache holds only document vectors. Query vectors are never cached.
-
-Old entries stay on disk until the 30-day prune.
-
-### Chunk size and truncation
-
-Each document becomes a metadata chunk (title, symptoms, tags, module, `applies_when`), then body chunks split at headings of level 1 to 4. A heading always starts a new chunk. Paragraphs within a section share a chunk. A chunk is at most about 1,200 characters, roughly 300 tokens. The title and heading path come first and count toward that limit. A paragraph longer than the limit is cut into several chunks.
-
-The limit keeps each chunk inside the context of a small embedding model. Ollama requests also send `truncate: true`, so Ollama cuts an input that is still too long for the model instead of failing the request.
-
-### The cache
-
-The cache holds one file per document, with that document's vectors, plus the failure markers. It lives in `$XDG_CACHE_HOME/systematic/embeddings/` when `XDG_CACHE_HOME` is an absolute path, and in `~/.cache/systematic/embeddings/` otherwise. The directory is created with mode `0700` and each file is written with mode `0600`.
-
-It holds no document text and no query text. A vector is derived from the text, though, so treat the directory as private. Systematic shares one cache across all your projects. It deletes an entry after 30 days without a read.
-
-To export your vectors, copy the directory. To delete everything, remove it. The next `--warm` rebuilds it.
-
-## Notes and failure messages
-
-Notes appear on the `Notes:` line of a result, separated by semicolons. They use fixed wording. They never include the endpoint address, a header, a response body or the API key.
+Notes appear on the `Notes:` line of a result, separated by semicolons. They use fixed wording.
 
 | Note | What it means |
 |---|---|
-| `config unreadable` | A `search` block or a user-level config file could not be read. Search ran lexical only. The warning on stderr, or in the host log, names the field. |
+| `config unreadable` | A `search` block or a user-level config file could not be read. The warning on stderr, or in the host log, names the field. |
 | `query cut to its first 64 distinct terms` | The query had more than 64 distinct terms. The extra terms were ignored. |
-| `semantic index N/M; run systematic search --warm` | The index is incomplete. This search was lexical only and sent nothing to the endpoint. |
-| `semantic index: K docs skipped after repeated embedding failures` | K documents have a failure marker. The semantic lane ran without them. |
-| `semantic search unavailable: unreachable` | The request could not reach the endpoint: connection refused, a DNS failure, or a redirect. Redirects are not followed. |
-| `semantic search unavailable: timeout` | The request took longer than `timeout_ms`. |
-| `semantic search unavailable: unknown model` | The endpoint does not know the `model`. For Ollama, pull the model. |
-| `semantic search unavailable: HTTP status 500` | The endpoint answered with a non-success status. The number is the status. |
-| `semantic search unavailable: HTTP status 401: the endpoint rejected the request` | The endpoint refused the request with status 401 or 403. Check the key. |
-| `semantic search unavailable: vector size mismatch` | A vector had a different length than `dimensions`, than the other vectors in the response, or than the index. |
-| `semantic search unavailable: malformed response` | The response was not the expected shape, held an invalid vector (zero, not a number, or not finite), or was larger than 32 MB. |
-| `semantic search unavailable: key missing` | `api_key_env` is set, but the variable is unset, empty or not plain printable text. |
-| `semantic search unavailable: invalid endpoint` | `base_url` is not a plain `http` or `https` root. See the field table. |
-
-When `--warm` stops, it prints `Semantic index warm stopped at N/M docs: <reason>.` on stderr. The reason is one of the notes above, or `cache not writable`, or one of those notes followed by `for 3 documents in a row`.
 
 A result can also carry up to five warnings from the corpus loader, such as a file that was skipped for its size, followed by `+N more`.
 
@@ -292,8 +147,6 @@ The `systematic-search` command in the Claude Code plugin is a single bundled fi
 
 ## What search does not do
 
-- It does not check who owns the cache directory.
-- It does not remember that an endpoint was down. Each search with a complete index tries the endpoint again.
-- It does not refuse `http://` for a remote host. If you name a remote endpoint and an API key, use `https://`. See [Privacy](/systematic/privacy/#optional-embeddings-endpoint-for-search) for what leaves your machine.
-- It does not download or run an embedding model. You supply the endpoint.
+- It does not use embeddings or a semantic index. It matches terms, so a learning that describes the same problem in other words can be missed.
+- It does not send anything off your machine.
 - It searches `docs/solutions/` only. Plans and brainstorms are not indexed.

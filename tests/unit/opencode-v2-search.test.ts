@@ -121,7 +121,7 @@ describe('installSearch', () => {
     expect(host.transforms).toHaveLength(0)
   })
 
-  test('enabled true and an embeddings block still register the tool', async () => {
+  test('enabled true still registers the tool', async () => {
     const host = fakeHost({ directory: '/somewhere' })
     await install(host, { enabled: true })
     expect(host.transforms).toHaveLength(1)

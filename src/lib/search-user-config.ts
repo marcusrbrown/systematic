@@ -27,94 +27,6 @@ import {
 import { z } from 'zod'
 import type { SearchSettings } from './search-core.js'
 
-/** Env var names: a letter or underscore first, then letters, digits or underscores. */
-const API_KEY_ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
-
-/** Bounds on `embeddings.timeout_ms`. The 15,000 ms default is applied at use time in the core. */
-export const SEARCH_TIMEOUT_MS_MIN = 500
-export const SEARCH_TIMEOUT_MS_MAX = 60_000
-
-const embeddingsSchema = z
-  .object({
-    provider: z.enum(['ollama', 'openai-compatible'] as const).meta({
-      description:
-        'Embedding API flavor. `ollama` calls `/api/embed`; `openai-compatible` calls `/embeddings` under `base_url`.',
-      examples: ['ollama', 'openai-compatible'],
-    }),
-    base_url: z
-      .string()
-      .min(1)
-      .meta({
-        description:
-          'SDK-style root of the embedding endpoint, for example `http://localhost:11434` or `https://api.openai.com/v1`. Only the shape is checked here; the scheme, userinfo, query and fragment are checked when search runs.',
-        examples: ['http://localhost:11434', 'https://api.openai.com/v1'],
-      }),
-    model: z
-      .string()
-      .min(1)
-      .meta({
-        description: 'Embedding model name sent to the endpoint.',
-        examples: ['nomic-embed-text', 'text-embedding-3-small'],
-      }),
-    dimensions: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .meta({
-        description:
-          'Expected vector length. When set, every response must match it. When unset, the first response sets the length.',
-        examples: [768, 1536],
-      }),
-    api_key_env: z
-      .string()
-      .regex(API_KEY_ENV_PATTERN)
-      .optional()
-      .meta({
-        description:
-          'Name of the environment variable that holds the API key. The key itself is never stored in config. If the variable is unset or empty, no request is made and search reports `key missing`.',
-        examples: ['OPENAI_API_KEY'],
-      }),
-    query_prefix: z
-      .string()
-      .optional()
-      .meta({
-        description:
-          'Text prepended to the query before embedding, for models that need task prefixes.',
-        examples: ['search_query: '],
-      }),
-    document_prefix: z
-      .string()
-      .optional()
-      .meta({
-        description:
-          'Text prepended to each document chunk before embedding, for models that need task prefixes (nomic-embed-text does).',
-        examples: ['search_document: '],
-      }),
-    timeout_ms: z
-      .number()
-      .int()
-      .min(SEARCH_TIMEOUT_MS_MIN)
-      .max(SEARCH_TIMEOUT_MS_MAX)
-      .optional()
-      .meta({
-        description: `Per-request timeout in milliseconds, from ${SEARCH_TIMEOUT_MS_MIN} to ${SEARCH_TIMEOUT_MS_MAX}. When unset, search uses 15000.`,
-        examples: [15_000],
-      }),
-  })
-  .strict()
-  .meta({
-    description:
-      'Embedding endpoint for the optional semantic lane. Replaced as a whole by the last source that defines it.',
-    examples: [
-      {
-        provider: 'ollama',
-        base_url: 'http://localhost:11434',
-        model: 'nomic-embed-text',
-      },
-    ],
-  })
-
 /**
  * The `search` block. No zod defaults anywhere: an absent `search` stays
  * absent, and the core applies its own defaults at use time.
@@ -129,24 +41,12 @@ export const SearchSettingsSchema = z
           'Set to false to remove the search tool. Defaults to true when unset.',
         examples: [false],
       }),
-    embeddings: embeddingsSchema.optional(),
   })
   .strict()
   .meta({
     description:
-      'Durable-output search settings. Lexical search needs none. Only user config and OPENCODE_CONFIG_DIR config may set this field; a project config that sets it has the whole field ignored with a warning, so a repository cannot point search at an endpoint or switch it off. An invalid block is dropped with a warning and search runs lexical-only; the rest of the file still loads.',
-    examples: [
-      { enabled: false },
-      {
-        embeddings: {
-          provider: 'ollama',
-          base_url: 'http://localhost:11434',
-          model: 'nomic-embed-text',
-          document_prefix: 'search_document: ',
-          query_prefix: 'search_query: ',
-        },
-      },
-    ],
+      'Durable-output search settings. Only user config and OPENCODE_CONFIG_DIR config may set this field; a project config that sets it has the whole field ignored with a warning, so a repository cannot switch search off. An invalid block is dropped with a warning; the rest of the file still loads.',
+    examples: [{ enabled: false }],
   })
 
 /** What a successful parse of the `search` block yields. Assignable to the core's `SearchSettings`. */
@@ -160,7 +60,7 @@ export type SearchBlockValidation =
 
 /**
  * Validate a raw `search` value on its own. A failure lists the offending
- * field paths (`search.embeddings.timeout_ms`) and never a value: a path from
+ * field paths (`search.enabled`) and never a value: a path from
  * a strict object names the parent for an unknown key, so a user-authored key
  * name is not echoed either.
  */
@@ -233,34 +133,20 @@ export interface MergedSearchSettings {
 /**
  * The one merge rule, used by both `config.ts` and the reader. Sources arrive
  * in priority order, user then custom. `enabled` takes the last source that
- * defines it, and `embeddings` is replaced whole by the last source that
- * defines it, so a custom endpoint never inherits a user `api_key_env`.
- * `unreadable` is set when any source was.
+ * defines it. `unreadable` is set when any source was.
  */
 export function mergeSearchSettings(
   sources: readonly SearchSettingsSource[],
 ): MergedSearchSettings {
   let enabled: SearchSettings['enabled']
-  let embeddings: SearchSettings['embeddings']
   let unreadable = false
   for (const source of sources) {
     if (source.unreadable) unreadable = true
     if (source.settings?.enabled !== undefined)
       enabled = source.settings.enabled
-    if (source.settings?.embeddings !== undefined) {
-      embeddings = source.settings.embeddings
-    }
   }
-  if (enabled === undefined && embeddings === undefined) {
-    return { settings: undefined, unreadable }
-  }
-  return {
-    settings: {
-      ...(enabled !== undefined && { enabled }),
-      ...(embeddings !== undefined && { embeddings }),
-    },
-    unreadable,
-  }
+  if (enabled === undefined) return { settings: undefined, unreadable }
+  return { settings: { enabled }, unreadable }
 }
 
 // ── File selection ──────────────────────────────────────────────────────────

@@ -753,9 +753,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 ---
 
-- [x] U8. Embeddings endpoint client
+- [ ] U8. Embeddings endpoint client
 
-**Status:** landed in 7f179183.
+**Status:** moved to a follow-up. This PR ships lexical search only; the code is parked on `feat/search-semantic` (f2cf775e).
 
 **Goal:** Call an Ollama or OpenAI-compatible endpoint safely, validate every response, and report failures with fixed reasons only.
 
@@ -793,9 +793,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Verification:**
 - The set of reasons is closed and each has one fixed note string. No test output holds the canary key or the fake server's address.
 
-- [x] U9. The semantic lane: chunking, cache, fusion and backfill
+- [ ] U9. The semantic lane: chunking, cache, fusion and backfill
 
-**Status:** landed in 4e8df291.
+**Status:** moved to a follow-up. This PR ships lexical search only; the code is parked on `feat/search-semantic` (f2cf775e).
 
 **Goal:** Hybrid ranking that returns lexical results at once, backfills only through `--warm` (resumable), and fuses only when the index is complete.
 
@@ -847,7 +847,7 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 - [x] U10. Docs, privacy rescope and release notes
 
-**Status:** written; commit pending. `HARNESSES.md` citation drift is fixed, and the CLI help text is the only subcommand listing, so no reference page needed an edit.
+**Status:** landed lexical-only. The search guide covers lexical search and the `enabled` setting, the privacy and landing pages keep their original no-telemetry claims because lexical search sends nothing off the machine, and the `HARNESSES.md` citation drift is fixed. The embeddings and `--warm` wording moved to the follow-up with U8 and U9.
 
 **Goal:** Say truthfully what leaves the machine, document search setup, and record the floor change.
 
@@ -871,7 +871,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Verification:**
 - `bun run docs:build` passes. `bun run surfaces:drift` is clean.
 
-- [ ] U11. R18 manual hybrid comparison
+- [x] U11. R18 manual hybrid comparison
+
+**Status:** done. Hybrid did not beat lexical on this corpus (found@8 16 vs 16, top5 16 vs 14, held-out 4 vs 3), so the semantic lane is deferred. See `~/.cache/systematic-scratch/w2a/u11/report.md`.
 
 **Goal:** Measure hybrid against lexical on the query set when a local endpoint is available, and set the timeout defaults from real latency.
 

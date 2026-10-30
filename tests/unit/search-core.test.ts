@@ -11,8 +11,6 @@ import {
   SEARCH_ERRORS,
   SEARCH_TOOL_NAME,
   type SearchOptions,
-  type SearchSettings,
-  type SemanticStage,
 } from '../../src/lib/search-core.js'
 import { type CorpusLoad, loadCorpus } from '../../src/lib/search-corpus.js'
 import { MAX_OUTPUT_BYTES } from '../../src/lib/search-render.js'
@@ -500,67 +498,14 @@ describe('runSearch: hostile content', () => {
   })
 })
 
-describe('runSearch: semantic stage seam', () => {
-  const settings: SearchSettings = { enabled: true }
-
-  it('reads lexical alone when no stage is injected', async () => {
+describe('runSearch: lanes', () => {
+  it('names the lexical lane on the result, every hit and the summary line', async () => {
     const root = makeProject()
     writeDoc(root, 'a.md', 'title: Alpha')
     const response = await search(root, 'alpha')
     if (!response.ok) throw new Error(response.text)
     expect(response.result.lanes).toEqual(['lexical'])
+    expect(response.result.hits.map((h) => h.lanes)).toEqual([['lexical']])
     expect(response.text).toContain('Lanes: lexical.')
-  })
-
-  it('lets an injected stage reorder, name lanes and add notes', async () => {
-    const root = makeProject()
-    writeDoc(root, 'a.md', 'title: Alpha one')
-    writeDoc(root, 'b.md', 'title: Alpha two')
-    let seen: Parameters<SemanticStage>[0] | undefined
-    const stage: SemanticStage = async (input) => {
-      seen = input
-      return {
-        ranked: [
-          { id: 'docs/solutions/b.md', lanes: ['lexical', 'semantic'] },
-          { id: 'docs/solutions/a.md', lanes: ['semantic'] },
-        ],
-        lanes: ['lexical', 'semantic'],
-        notes: ['semantic index 2/2'],
-      }
-    }
-    const response = await search(
-      root,
-      'alpha',
-      {},
-      { semantic: stage, settings },
-    )
-    if (!response.ok) throw new Error(response.text)
-    expect(response.result.hits.map((h) => h.document.path)).toEqual([
-      'docs/solutions/b.md',
-      'docs/solutions/a.md',
-    ])
-    expect(response.result.hits.map((h) => h.lanes)).toEqual([
-      ['lexical', 'semantic'],
-      ['semantic'],
-    ])
-    expect(response.text).toContain('Lanes: lexical, semantic.')
-    expect(response.text).toContain('Notes: semantic index 2/2')
-    expect(seen?.settings).toBe(settings)
-    expect(seen?.terms).toEqual(['alpha'])
-    expect(seen?.documents).toHaveLength(2)
-    expect(seen?.lexical).toHaveLength(2)
-  })
-
-  it('leaves the lexical result alone when the stage returns nothing', async () => {
-    const root = makeProject()
-    writeDoc(root, 'a.md', 'title: Alpha')
-    const plain = await search(root, 'alpha')
-    const withStage = await search(
-      root,
-      'alpha',
-      {},
-      { semantic: async () => undefined },
-    )
-    expect(withStage).toEqual(plain)
   })
 })

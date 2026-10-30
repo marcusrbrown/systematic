@@ -32,7 +32,7 @@ const MAX_LIFECYCLE_LINE_CHARS = 400
 const MAX_LABEL_CHARS = 40
 const ELLIPSIS = '…'
 
-export type SearchLane = 'lexical' | 'semantic'
+export type SearchLane = 'lexical'
 export type SearchHitStatus = 'active' | 'stale' | 'superseded'
 
 export interface SearchHit {

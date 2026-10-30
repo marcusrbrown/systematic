@@ -3,10 +3,10 @@
  *
  * What it measures: a query counts as found when at least one path in its
  * `relevant` list is among the top 5 hits that `runSearch` returns (limit 5,
- * lifecycle resolved) over this repository's real `docs/solutions/`, with no
- * endpoint configured. One aggregate integer floor covers every
- * `lexical_reachable: true` query across both splits. Per-split counts and
- * the recorded grep baseline are printed beside it.
+ * lifecycle resolved) over this repository's real `docs/solutions/`. One
+ * aggregate integer floor covers every `lexical_reachable: true` query across
+ * both splits. Per-split counts and the recorded grep baseline are printed
+ * beside it.
  *
  * CHECKPOINT A RETUNE GRID (fixed before any held-out query was run)
  * ------------------------------------------------------------------

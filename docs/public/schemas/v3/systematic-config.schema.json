@@ -24,25 +24,25 @@
       "$ref": "#/definitions/__schema72"
     },
     "disabled_skills": {
-      "$ref": "#/definitions/__schema89"
+      "$ref": "#/definitions/__schema75"
     },
     "disabled_agents": {
-      "$ref": "#/definitions/__schema91"
+      "$ref": "#/definitions/__schema77"
     },
     "disabled_commands": {
-      "$ref": "#/definitions/__schema93"
+      "$ref": "#/definitions/__schema79"
     },
     "bootstrap": {
-      "$ref": "#/definitions/__schema95"
+      "$ref": "#/definitions/__schema81"
     },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema101"
+      "$ref": "#/definitions/__schema87"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema103"
+      "$ref": "#/definitions/__schema89"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema114"
+      "$ref": "#/definitions/__schema100"
     }
   },
   "additionalProperties": false,
@@ -1907,25 +1907,13 @@
       "properties": {
         "enabled": {
           "$ref": "#/definitions/__schema73"
-        },
-        "embeddings": {
-          "$ref": "#/definitions/__schema75"
         }
       },
       "additionalProperties": false,
-      "description": "Durable-output search settings. Lexical search needs none. Only user config and OPENCODE_CONFIG_DIR config may set this field; a project config that sets it has the whole field ignored with a warning, so a repository cannot point search at an endpoint or switch it off. An invalid block is dropped with a warning and search runs lexical-only; the rest of the file still loads.",
+      "description": "Durable-output search settings. Only user config and OPENCODE_CONFIG_DIR config may set this field; a project config that sets it has the whole field ignored with a warning, so a repository cannot switch search off. An invalid block is dropped with a warning; the rest of the file still loads.",
       "examples": [
         {
           "enabled": false
-        },
-        {
-          "embeddings": {
-            "provider": "ollama",
-            "base_url": "http://localhost:11434",
-            "model": "nomic-embed-text",
-            "document_prefix": "search_document: ",
-            "query_prefix": "search_query: "
-          }
         }
       ],
       "trust": "project-or-higher"
@@ -1943,138 +1931,16 @@
       "type": "boolean"
     },
     "__schema75": {
-      "type": "object",
-      "properties": {
-        "provider": {
-          "$ref": "#/definitions/__schema76"
-        },
-        "base_url": {
-          "$ref": "#/definitions/__schema77"
-        },
-        "model": {
-          "$ref": "#/definitions/__schema78"
-        },
-        "dimensions": {
-          "$ref": "#/definitions/__schema79"
-        },
-        "api_key_env": {
-          "$ref": "#/definitions/__schema81"
-        },
-        "query_prefix": {
-          "$ref": "#/definitions/__schema83"
-        },
-        "document_prefix": {
-          "$ref": "#/definitions/__schema85"
-        },
-        "timeout_ms": {
-          "$ref": "#/definitions/__schema87"
-        }
-      },
-      "required": ["provider", "base_url", "model"],
-      "additionalProperties": false,
-      "description": "Embedding endpoint for the optional semantic lane. Replaced as a whole by the last source that defines it.",
-      "examples": [
-        {
-          "provider": "ollama",
-          "base_url": "http://localhost:11434",
-          "model": "nomic-embed-text"
-        }
-      ]
-    },
-    "__schema76": {
-      "type": "string",
-      "enum": ["ollama", "openai-compatible"],
-      "description": "Embedding API flavor. `ollama` calls `/api/embed`; `openai-compatible` calls `/embeddings` under `base_url`.",
-      "examples": ["ollama", "openai-compatible"]
-    },
-    "__schema77": {
-      "type": "string",
-      "minLength": 1,
-      "description": "SDK-style root of the embedding endpoint, for example `http://localhost:11434` or `https://api.openai.com/v1`. Only the shape is checked here; the scheme, userinfo, query and fragment are checked when search runs.",
-      "examples": ["http://localhost:11434", "https://api.openai.com/v1"]
-    },
-    "__schema78": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Embedding model name sent to the endpoint.",
-      "examples": ["nomic-embed-text", "text-embedding-3-small"]
-    },
-    "__schema79": {
-      "description": "Expected vector length. When set, every response must match it. When unset, the first response sets the length.",
-      "examples": [768, 1536],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema80"
-        }
-      ]
-    },
-    "__schema80": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "__schema81": {
-      "description": "Name of the environment variable that holds the API key. The key itself is never stored in config. If the variable is unset or empty, no request is made and search reports `key missing`.",
-      "examples": ["OPENAI_API_KEY"],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema82"
-        }
-      ]
-    },
-    "__schema82": {
-      "type": "string",
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-    },
-    "__schema83": {
-      "description": "Text prepended to the query before embedding, for models that need task prefixes.",
-      "examples": ["search_query: "],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema84"
-        }
-      ]
-    },
-    "__schema84": {
-      "type": "string"
-    },
-    "__schema85": {
-      "description": "Text prepended to each document chunk before embedding, for models that need task prefixes (nomic-embed-text does).",
-      "examples": ["search_document: "],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema86"
-        }
-      ]
-    },
-    "__schema86": {
-      "type": "string"
-    },
-    "__schema87": {
-      "description": "Per-request timeout in milliseconds, from 500 to 60000. When unset, search uses 15000.",
-      "examples": [15000],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema88"
-        }
-      ]
-    },
-    "__schema88": {
-      "type": "integer",
-      "minimum": 500,
-      "maximum": 60000
-    },
-    "__schema89": {
       "default": [],
       "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
       "examples": [["ce:plan", "ce:review"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema90"
+          "$ref": "#/definitions/__schema76"
         }
       ]
     },
-    "__schema90": {
+    "__schema76": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2133,7 +1999,7 @@
         ]
       }
     },
-    "__schema91": {
+    "__schema77": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -2142,11 +2008,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema92"
+          "$ref": "#/definitions/__schema78"
         }
       ]
     },
-    "__schema92": {
+    "__schema78": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2256,23 +2122,23 @@
         ]
       }
     },
-    "__schema93": {
+    "__schema79": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema94"
+          "$ref": "#/definitions/__schema80"
         }
       ]
     },
-    "__schema94": {
+    "__schema80": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema95": {
+    "__schema81": {
       "default": {
         "enabled": true
       },
@@ -2287,18 +2153,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema96"
+          "$ref": "#/definitions/__schema82"
         }
       ]
     },
-    "__schema96": {
+    "__schema82": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema97"
+          "$ref": "#/definitions/__schema83"
         },
         "file": {
-          "$ref": "#/definitions/__schema99"
+          "$ref": "#/definitions/__schema85"
         }
       },
       "additionalProperties": false,
@@ -2312,42 +2178,42 @@
         }
       ]
     },
-    "__schema97": {
+    "__schema83": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema98"
+          "$ref": "#/definitions/__schema84"
         }
       ]
     },
-    "__schema98": {
+    "__schema84": {
       "type": "boolean"
     },
-    "__schema99": {
+    "__schema85": {
       "description": "Path to a custom bootstrap prompt file",
       "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema100"
+          "$ref": "#/definitions/__schema86"
         }
       ]
     },
-    "__schema100": {
+    "__schema86": {
       "type": "string"
     },
-    "__schema101": {
+    "__schema87": {
       "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
       "deprecated": true,
       "allOf": [
         {
-          "$ref": "#/definitions/__schema102"
+          "$ref": "#/definitions/__schema88"
         }
       ]
     },
-    "__schema102": {},
-    "__schema103": {
+    "__schema88": {},
+    "__schema89": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2369,11 +2235,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema104"
+          "$ref": "#/definitions/__schema90"
         }
       ]
     },
-    "__schema104": {
+    "__schema90": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2389,7 +2255,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema105"
+              "$ref": "#/definitions/__schema91"
             }
           ]
         },
@@ -2406,14 +2272,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema113"
+              "$ref": "#/definitions/__schema99"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema105": {
+    "__schema91": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2427,12 +2293,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema112"
+            "$ref": "#/definitions/__schema98"
           }
         ]
       }
     },
-    "__schema106": {
+    "__schema92": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2440,7 +2306,7 @@
         }
       ]
     },
-    "__schema107": {
+    "__schema93": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2448,48 +2314,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema108": {
+    "__schema94": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema109": {
+    "__schema95": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema110"
+          "$ref": "#/definitions/__schema96"
         },
         {
-          "$ref": "#/definitions/__schema111"
+          "$ref": "#/definitions/__schema97"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema110": {
+    "__schema96": {
       "type": "boolean",
       "const": true
     },
-    "__schema111": {
+    "__schema97": {
       "type": "string",
       "minLength": 1
     },
-    "__schema112": {
+    "__schema98": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema106"
+          "$ref": "#/definitions/__schema92"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema107"
+          "$ref": "#/definitions/__schema93"
         },
         "tools": {
-          "$ref": "#/definitions/__schema108"
+          "$ref": "#/definitions/__schema94"
         },
         "skills": {
-          "$ref": "#/definitions/__schema109"
+          "$ref": "#/definitions/__schema95"
         }
       },
       "additionalProperties": false,
@@ -2501,26 +2367,26 @@
         }
       ]
     },
-    "__schema113": {
+    "__schema99": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema112"
+        "$ref": "#/definitions/__schema98"
       }
     },
-    "__schema114": {
+    "__schema100": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema115"
+          "$ref": "#/definitions/__schema101"
         }
       ]
     },
-    "__schema115": {
+    "__schema101": {
       "type": "boolean"
     }
   }

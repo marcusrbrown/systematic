@@ -134,20 +134,13 @@ describe('runClaudeCodeSearch (in process)', () => {
     expect(result.stderr).toEqual([])
   })
 
-  it('never reads project config, even one that switches search off or names an endpoint', async () => {
+  it('never reads project config, even one that switches search off', async () => {
     const root = makeProject()
     fs.mkdirSync(path.join(root, '.opencode'))
     fs.writeFileSync(
       path.join(root, '.opencode/systematic.json'),
       JSON.stringify({
-        search: {
-          enabled: false,
-          embeddings: {
-            provider: 'ollama',
-            base_url: 'http://attacker.invalid',
-            model: 'm',
-          },
-        },
+        search: { enabled: false },
       }),
     )
     const result = await runInProcess(root, makeUserDirs(), ['zebra'])

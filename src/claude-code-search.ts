@@ -7,7 +7,7 @@
  *
  * It reads search settings from the two user-level files only (through
  * `loadUserLevelSearchSettings`) and never reads project config, so a
- * repository cannot point search at an endpoint or switch it off. Because it
+ * repository cannot switch it off. Because it
  * never reads the project file it also cannot print the project-config strip
  * warning that `systematic search` prints; that asymmetry is accepted.
  *

@@ -2,8 +2,7 @@
  * The one host-neutral composition behind durable-output search.
  *
  * `runSearch` validates the request, resolves the project root, loads the
- * corpus, runs the lexical lane, hands the ranked list to an optional semantic
- * stage, resolves the solution lifecycle, and renders. Every adapter (OpenCode
+ * corpus, runs the lexical lane, resolves the solution lifecycle, and renders. Every adapter (OpenCode
  * v1 and v2, Pi, the CLI and the standalone search bin) calls it and does only host
  * I/O: the start directory, the settings, and mapping the response to its
  * host's return shape. Adapters never format text themselves.
@@ -30,7 +29,6 @@ import {
   type Bm25fParams,
   buildLexicalIndex,
   type LexicalDocument,
-  type LexicalHit,
   searchLexical,
   uniqueQueryTerms,
 } from './search-lexical.js'
@@ -101,21 +99,9 @@ export const SEARCH_ERRORS = {
   limitInvalid: `Error: limit must be an integer from ${MIN_LIMIT} to ${MAX_LIMIT}.`,
 } as const
 
-export interface SearchEmbeddingsSettings {
-  readonly provider: 'ollama' | 'openai-compatible'
-  readonly base_url: string
-  readonly model: string
-  readonly dimensions?: number | undefined
-  readonly api_key_env?: string | undefined
-  readonly query_prefix?: string | undefined
-  readonly document_prefix?: string | undefined
-  readonly timeout_ms?: number | undefined
-}
-
 /** User-level search settings. The zod schema's output type must stay assignable to this. */
 export interface SearchSettings {
   readonly enabled?: boolean | undefined
-  readonly embeddings?: SearchEmbeddingsSettings | undefined
 }
 
 export interface SearchRequest {
@@ -125,45 +111,12 @@ export interface SearchRequest {
   readonly limit?: unknown
 }
 
-/** What the semantic stage sees. */
-export interface SemanticStageInput {
-  readonly query: string
-  readonly terms: readonly string[]
-  readonly root: string
-  readonly kind: DocumentKind
-  readonly documents: readonly CorpusDocument[]
-  readonly lexical: readonly LexicalHit[]
-  readonly settings: SearchSettings | undefined
-}
-
-/**
- * What the semantic stage returns: the final fused order (best first), the
- * lanes that contributed to each document, the lanes that ran, and notes.
- */
-export interface SemanticStageOutput {
-  readonly ranked: ReadonlyArray<{
-    readonly id: string
-    readonly lanes: readonly SearchLane[]
-  }>
-  readonly lanes: readonly SearchLane[]
-  readonly notes: readonly string[]
-}
-
-/**
- * The optional second lane. Absent until the semantic lane lands, and a stage
- * that resolves `undefined` leaves the lexical result alone.
- */
-export type SemanticStage = (
-  input: SemanticStageInput,
-) => Promise<SemanticStageOutput | undefined>
-
 export interface SearchOptions {
   /** The directory the root walk-up starts from. */
   readonly startDir: string
   readonly settings?: SearchSettings | undefined
   /** Notes an adapter wants shown ahead of the core's own, such as `SEARCH_CONFIG_UNREADABLE_NOTE`. */
   readonly notes?: readonly string[] | undefined
-  readonly semantic?: SemanticStage | undefined
   /** Override the BM25F table. The recall tuning uses this; hosts do not. */
   readonly lexicalParams?: Bm25fParams | undefined
   /** Replace the disk loader. Tests use this to control load order. */
@@ -285,25 +238,6 @@ export function resolveLifecycle(
 export function entryStatus(entry: ResolvedEntry): SearchHitStatus {
   if (entry.unresolved) return 'superseded'
   return entry.document.status === 'stale' ? 'stale' : 'active'
-}
-
-/**
- * The lanes behind one hit: those that matched the document itself and, for a
- * successor standing in for matched docs, those that matched the docs it
- * replaces. A successor that matched nothing and replaces nothing falls back
- * to the lanes that ran. Listed in a fixed order.
- */
-function hitLanes(
-  entry: ResolvedEntry,
-  lanesByPath: ReadonlyMap<string, readonly SearchLane[]>,
-  ran: readonly SearchLane[],
-): SearchLane[] {
-  const seen = new Set<SearchLane>()
-  for (const path of [entry.document.path, ...entry.supersedes]) {
-    for (const lane of lanesByPath.get(path) ?? []) seen.add(lane)
-  }
-  if (seen.size === 0) return [...ran]
-  return (['lexical', 'semantic'] as const).filter((lane) => seen.has(lane))
 }
 
 /** The `Supersedes:` and `Caution:` lines for one entry, in print order. */
@@ -440,37 +374,13 @@ export async function runSearch(
     options.lexicalParams ?? BM25F_PARAMS,
   )
   const lexical = searchLexical(index, terms)
-  let ordering: ReadonlyArray<{
-    readonly id: string
-    readonly lanes: readonly SearchLane[]
-  }> = lexical.map((hit) => ({ id: hit.id, lanes: ['lexical'] as const }))
   const lanes: SearchLane[] = ['lexical']
 
-  if (options.semantic !== undefined) {
-    const semantic = await options.semantic({
-      query,
-      terms,
-      root,
-      kind,
-      documents: load.documents,
-      lexical,
-      settings: options.settings,
-    })
-    if (semantic !== undefined) {
-      ordering = semantic.ranked
-      lanes.splice(0, lanes.length, ...semantic.lanes)
-      noteList.push(...semantic.notes)
-    }
-  }
-
   const byPath = new Map(load.documents.map((doc) => [doc.path, doc]))
-  const lanesByPath = new Map<string, readonly SearchLane[]>()
   const candidates: CorpusDocument[] = []
-  for (const entry of ordering.slice(0, limit * OVERFETCH_FACTOR)) {
-    const document = byPath.get(entry.id)
-    if (document === undefined) continue
-    candidates.push(document)
-    lanesByPath.set(document.path, entry.lanes)
+  for (const hit of lexical.slice(0, limit * OVERFETCH_FACTOR)) {
+    const document = byPath.get(hit.id)
+    if (document !== undefined) candidates.push(document)
   }
 
   const hits: SearchHit[] = resolveLifecycle(candidates, load.documents)
@@ -478,7 +388,7 @@ export async function runSearch(
     .map((entry, position) => ({
       rank: position + 1,
       document: entry.document,
-      lanes: hitLanes(entry, lanesByPath, lanes),
+      lanes,
       status: entryStatus(entry),
       lifecycle: lifecycleLines(entry),
     }))
