@@ -266,10 +266,15 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     const bin = await installBin()
     const root = makeProject()
     const dirs = makeUserDirs()
-    expect(fs.statSync(bin).mode & 0o111).toBe(0o111)
-    expect(
-      fs.readFileSync(bin, 'utf8').startsWith('#!/usr/bin/env node\n'),
-    ).toBe(true)
+    const fd = fs.openSync(bin, 'r')
+    try {
+      expect(fs.fstatSync(fd).mode & 0o111).toBe(0o111)
+      expect(
+        fs.readFileSync(fd, 'utf8').startsWith('#!/usr/bin/env node\n'),
+      ).toBe(true)
+    } finally {
+      fs.closeSync(fd)
+    }
     // No node_modules anywhere above the project or the bin.
     expect(fs.existsSync(path.join(path.dirname(root), 'node_modules'))).toBe(
       false,
