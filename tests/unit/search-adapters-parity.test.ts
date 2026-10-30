@@ -575,7 +575,7 @@ describe('search adapters parity: unreadable config', () => {
 
       expect(texts[0]).toContain('Notes: config unreadable')
       expect(texts[0]).toContain('docs/solutions/parity-a.md')
-      expect(texts[0]).toContain('Lanes: lexical')
+      expect(texts[0]).not.toContain('Lanes')
       surfaces.forEach((surface, index) => {
         expect([surface.name, texts[index]]).toEqual([
           surface.name,

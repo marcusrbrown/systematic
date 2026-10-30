@@ -384,7 +384,11 @@ describe('loadUserLevelSearchSettings', () => {
     expect(loaded.unreadable).toBe(true)
     expect(loaded.settings).toBeUndefined()
     expect(loaded.warnings).toHaveLength(1)
-    expect(loaded.warnings[0]).toContain('config unreadable')
+    expect(loaded.warnings[0]).toContain('has been ignored')
+    expect(loaded.warnings[0]).toContain(
+      'results carry a `config unreadable` note',
+    )
+    expect(loaded.warnings[0]).not.toContain('lexical')
     expect(loaded.warnings[0]).not.toContain('nope')
   })
 })

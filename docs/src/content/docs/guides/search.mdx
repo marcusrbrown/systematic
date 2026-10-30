@@ -39,7 +39,7 @@ Search reads these frontmatter fields: `title`, `tags`, `module`, `component`, `
 
 ### How lexical ranking works
 
-The lexical lane matches whole terms. Text is lowercased and split into runs of the ASCII letters and digits `a-z` and `0-9`. A run joined by `_` or `-` also counts as one term, so `foo_bar` matches `foo_bar`, `foo` and `bar`. There is no stemming, so `timeout` does not match `timeouts`. A letter outside ASCII ends a word. Matches in the title, symptoms and tags weigh more than matches in the body. A query is cut to its first 64 distinct terms, and the result says so.
+Search matches whole terms. Text is lowercased and split into runs of the ASCII letters and digits `a-z` and `0-9`. A run joined by `_` or `-` also counts as one term, so `foo_bar` matches `foo_bar`, `foo` and `bar`. There is no stemming, so `timeout` does not match `timeouts`. A letter outside ASCII ends a word. Matches in the title, symptoms and tags weigh more than matches in the body. A query is cut to its first 64 distinct terms, and the result says so.
 
 ### Lifecycle: superseded and stale learnings
 

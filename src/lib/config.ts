@@ -251,8 +251,8 @@ export interface SystematicConfig {
   search?: SearchSettings
   /**
    * Set (to `true`) when a user or custom `search` block, or its file, could
-   * not be read. Search then runs lexical-only with a `config unreadable`
-   * note. Absent otherwise.
+   * not be read. That block is ignored and search results carry a
+   * `config unreadable` note. Absent otherwise.
    */
   searchUnreadable?: boolean
 }
@@ -920,7 +920,7 @@ function loadConfigSource(
  * project source never reaches here with a `search` key, because
  * `PROJECT_ALWAYS_PROTECTED_FIELDS` already removed it. An invalid block is
  * dropped with one warning that names fields and no value, and the source is
- * marked unreadable so search runs lexical-only.
+ * marked unreadable so search results carry a `config unreadable` note.
  */
 function splitSearchBlock(
   config: RawSystematicConfig,

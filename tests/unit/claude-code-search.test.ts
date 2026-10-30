@@ -149,7 +149,7 @@ describe('runClaudeCodeSearch (in process)', () => {
     expect(result.stdout).toEqual([await coreText(root, 'zebra')])
   })
 
-  it('gives lexical results with a config unreadable note for an unparseable file', async () => {
+  it('gives results with a config unreadable note for an unparseable file', async () => {
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.jsonc'),
@@ -165,7 +165,7 @@ describe('runClaudeCodeSearch (in process)', () => {
     expect(result.stderr[0]).not.toContain('enabled')
   })
 
-  it('drops an invalid search block alone: a warning naming the field, lexical results, exit 0', async () => {
+  it('drops an invalid search block alone: a warning naming the field, results, exit 0', async () => {
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.json'),
@@ -309,7 +309,7 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     expect(result.stdout).toBe(`${await coreText(root, 'zebra')}\n`)
   }, 60_000)
 
-  it('still returns lexical results and exit 0 for an unparseable user config', async () => {
+  it('still returns results and exit 0 for an unparseable user config', async () => {
     const bin = await installBin()
     const dirs = makeUserDirs()
     fs.writeFileSync(

@@ -36,12 +36,11 @@ import {
   renderSearchResult,
   type SearchHit,
   type SearchHitStatus,
-  type SearchLane,
   type SearchResult,
   sanitizeInline,
 } from './search-render.js'
 
-export type { SearchHit, SearchLane, SearchResult } from './search-render.js'
+export type { SearchHit, SearchResult } from './search-render.js'
 
 /** Tool name shared by every host surface. */
 export const SEARCH_TOOL_NAME = 'systematic_search'
@@ -78,7 +77,7 @@ export const SEARCH_NOTICES = {
 } as const
 /** The note an adapter passes in `SearchOptions.notes` when a settings source could not be read. */
 export const SEARCH_CONFIG_UNREADABLE_NOTE = 'config unreadable'
-/** The lexical lane returns about this many times the limit, because merges shrink the list. */
+/** Ranking returns about this many times the limit, because lifecycle merges shrink the list. */
 export const OVERFETCH_FACTOR = 2
 
 /** Most `superseded_by` links followed from one candidate. */
@@ -354,7 +353,6 @@ export async function runSearch(
     return finish({
       ...base,
       corpus: { state: 'none', docCount: 0 },
-      lanes: [],
       hits: [],
       notes: noteList,
     })
@@ -363,7 +361,6 @@ export async function runSearch(
     return finish({
       ...base,
       corpus: { state: 'empty', docCount: 0 },
-      lanes: [],
       hits: [],
       notes: noteList,
     })
@@ -374,7 +371,6 @@ export async function runSearch(
     options.lexicalParams ?? BM25F_PARAMS,
   )
   const lexical = searchLexical(index, terms)
-  const lanes: SearchLane[] = ['lexical']
 
   const byPath = new Map(load.documents.map((doc) => [doc.path, doc]))
   const candidates: CorpusDocument[] = []
@@ -388,7 +384,6 @@ export async function runSearch(
     .map((entry, position) => ({
       rank: position + 1,
       document: entry.document,
-      lanes,
       status: entryStatus(entry),
       lifecycle: lifecycleLines(entry),
     }))
@@ -396,7 +391,6 @@ export async function runSearch(
   return finish({
     ...base,
     corpus: { state: 'docs', docCount: load.documents.length },
-    lanes,
     hits,
     notes: noteList,
   })

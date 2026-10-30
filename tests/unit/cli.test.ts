@@ -2789,7 +2789,7 @@ describe('cli search', () => {
     }
   })
 
-  it('an invalid user search block warns, runs lexical-only with a config unreadable note, and exits 0', () => {
+  it('an invalid user search block warns, still searches with a config unreadable note, and exits 0', () => {
     const box = mkSearchBox()
     try {
       writeUserFile(
@@ -2916,6 +2916,22 @@ describe('loadSearchSettingsForCli', () => {
       expect(loaded.unreadable).toBe(true)
       expect(loaded.warnings.length).toBeGreaterThan(0)
       expect(loaded.warnings.join('\n')).not.toContain('enabled')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not mark search unreadable for an invalid project config', () => {
+    const box = mkBox()
+    try {
+      fs.mkdirSync(path.join(box.project, '.opencode'), { recursive: true })
+      fs.writeFileSync(
+        path.join(box.project, '.opencode/systematic.json'),
+        '{ "search": { "enabled": false ',
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.unreadable).toBe(false)
+      expect(loaded.warnings.join('\n')).not.toContain('config unreadable')
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }

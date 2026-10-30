@@ -373,7 +373,7 @@ describe('runSearchCli: settings', () => {
     expect(result.stdout).toEqual([SEARCH_CLI_DISABLED_NOTICE])
   })
 
-  it('adds the config unreadable note and still returns lexical results', async () => {
+  it('adds the config unreadable note and still returns results', async () => {
     const root = makeProject()
     const result = await run(['zebra'], {
       cwd: root,
@@ -382,7 +382,7 @@ describe('runSearchCli: settings', () => {
     expect(result.status).toBe(0)
     expect(result.stdout[0]).toContain('Notes: config unreadable')
     expect(result.stdout[0]).toContain('zebra-flake.md')
-    expect(result.stdout[0]).toContain('Lanes: lexical')
+    expect(result.stdout[0]).not.toContain('Lanes:')
   })
 
   it('treats a throwing loader as unreadable and still searches', async () => {

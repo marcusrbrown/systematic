@@ -104,7 +104,6 @@ describe('runSearch: ranking and hit shape', () => {
     expect(second?.document.path).toBe('docs/solutions/best-practices/other.md')
     expect(first).toMatchObject({
       rank: 1,
-      lanes: ['lexical'],
       status: 'active',
       lifecycle: [],
     })
@@ -120,7 +119,6 @@ describe('runSearch: ranking and hit shape', () => {
     )
     expect(response.text).toContain('Kind: solution')
     expect(response.text).toContain('Module: transport | Tags: networking')
-    expect(response.result.lanes).toEqual(['lexical'])
   })
 
   it('surfaces a doc that matches only in its symptoms', async () => {
@@ -498,14 +496,14 @@ describe('runSearch: hostile content', () => {
   })
 })
 
-describe('runSearch: lanes', () => {
-  it('names the lexical lane on the result, every hit and the summary line', async () => {
+describe('runSearch: output shape', () => {
+  it('prints no Lanes segment on the summary line or any hit, and carries no lanes field', async () => {
     const root = makeProject()
     writeDoc(root, 'a.md', 'title: Alpha')
     const response = await search(root, 'alpha')
     if (!response.ok) throw new Error(response.text)
-    expect(response.result.lanes).toEqual(['lexical'])
-    expect(response.result.hits.map((h) => h.lanes)).toEqual([['lexical']])
-    expect(response.text).toContain('Lanes: lexical.')
+    expect(response.text).not.toContain('Lanes')
+    expect(response.result).not.toHaveProperty('lanes')
+    expect(response.result.hits[0]).not.toHaveProperty('lanes')
   })
 })

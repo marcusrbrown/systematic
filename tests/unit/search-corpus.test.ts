@@ -301,23 +301,26 @@ describe('loadCorpus: symlinks and containment', () => {
     expect(loadCorpus(root).documents.map((d) => d.title)).toEqual(['Real'])
   })
 
-  it('warns and does not throw on an unreadable subdirectory', () => {
-    if (process.getuid?.() === 0) return // root ignores mode bits
-    const root = makeTemp()
-    writeFile(root, 'docs/solutions/ok.md', doc('Ok'))
-    writeFile(root, 'docs/solutions/locked/inner.md', doc('Inner'))
-    const locked = path.join(root, 'docs/solutions/locked')
-    fs.chmodSync(locked, 0o000)
-    try {
-      const result = loadCorpus(root)
-      expect(result.documents.map((d) => d.title)).toEqual(['Ok'])
-      expect(result.warnings).toEqual([
-        'could not read directory docs/solutions/locked',
-      ])
-    } finally {
-      fs.chmodSync(locked, 0o755)
-    }
-  })
+  // Root ignores mode bits, so a root run reports a skip, not a false pass.
+  it.skipIf(process.getuid?.() === 0)(
+    'warns and does not throw on an unreadable subdirectory',
+    () => {
+      const root = makeTemp()
+      writeFile(root, 'docs/solutions/ok.md', doc('Ok'))
+      writeFile(root, 'docs/solutions/locked/inner.md', doc('Inner'))
+      const locked = path.join(root, 'docs/solutions/locked')
+      fs.chmodSync(locked, 0o000)
+      try {
+        const result = loadCorpus(root)
+        expect(result.documents.map((d) => d.title)).toEqual(['Ok'])
+        expect(result.warnings).toEqual([
+          'could not read directory docs/solutions/locked',
+        ])
+      } finally {
+        fs.chmodSync(locked, 0o755)
+      }
+    },
+  )
 })
 
 describe('loadCorpus: caps', () => {

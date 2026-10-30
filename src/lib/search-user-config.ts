@@ -12,8 +12,8 @@
  * Why it exists as one place: the plugin loader (`config.ts`) and the bin both
  * need "validate the `search` block, then merge user and custom". The block is
  * validated on its own, so a bad `search` block drops with one warning and
- * leaves the rest of the file loading. Search then runs lexical-only with an
- * `unreadable` state. Search must never be the reason the plugin fails to load.
+ * leaves the rest of the file loading. Search still runs, and its results
+ * carry a `config unreadable` note (the `unreadable` state). Search must never be the reason the plugin fails to load.
  */
 
 import fs from 'node:fs'
@@ -105,12 +105,12 @@ export function formatSearchBlockWarning(
     fields.length > MAX_WARNING_FIELDS
       ? ` and ${fields.length - MAX_WARNING_FIELDS} more`
       : ''
-  return `[systematic] \`search\` in ${displaySafe(sourcePath)} is invalid (${shown}${more}) and has been ignored; search runs lexical-only (config unreadable). The rest of the file still loads.`
+  return `[systematic] \`search\` in ${displaySafe(sourcePath)} is invalid (${shown}${more}) and has been ignored; search still runs and its results carry a \`config unreadable\` note. The rest of the file still loads.`
 }
 
 /** The one warning for a user-level file the reader could not parse. */
 function formatSearchFileWarning(sourcePath: string, reason: string): string {
-  return `[systematic] search settings in ${displaySafe(sourcePath)} could not be read (${reason}); search runs lexical-only (config unreadable).`
+  return `[systematic] search settings in ${displaySafe(sourcePath)} could not be read (${reason}); the settings were ignored, search still runs and its results carry a \`config unreadable\` note.`
 }
 
 // ── Merging ─────────────────────────────────────────────────────────────────

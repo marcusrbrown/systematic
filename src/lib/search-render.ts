@@ -32,14 +32,12 @@ const MAX_LIFECYCLE_LINE_CHARS = 400
 const MAX_LABEL_CHARS = 40
 const ELLIPSIS = '…'
 
-export type SearchLane = 'lexical'
 export type SearchHitStatus = 'active' | 'stale' | 'superseded'
 
 export interface SearchHit {
   /** 1-based position in the final list. */
   readonly rank: number
   readonly document: CorpusDocument
-  readonly lanes: readonly SearchLane[]
   readonly status: SearchHitStatus
   /** Fully formed `Supersedes:` and `Caution:` lines, in print order. */
   readonly lifecycle: readonly string[]
@@ -55,8 +53,6 @@ export interface SearchResult {
     readonly state: 'none' | 'empty' | 'docs'
     readonly docCount: number
   }
-  /** Lanes that ran. Empty when the corpus was none or empty. */
-  readonly lanes: readonly SearchLane[]
   readonly hits: readonly SearchHit[]
   readonly notes: readonly string[]
   readonly warnings: readonly string[]
@@ -305,20 +301,14 @@ function plural(count: number, singular: string): string {
 
 function renderHeader(result: SearchResult): string {
   const query = sanitizeInline(result.query, MAX_QUERY_ECHO_CHARS)
-  const lanes =
-    result.lanes.length === 0
-      ? 'none'
-      : result.lanes
-          .map((lane) => sanitizeInline(lane, MAX_LABEL_CHARS))
-          .join(', ')
   const prefix = `Search "${query}":`
   switch (result.corpus.state) {
     case 'none':
-      return `${prefix} corpus: none (no docs/solutions/ directory under the project root). Lanes: ${lanes}.`
+      return `${prefix} corpus: none (no docs/solutions/ directory under the project root).`
     case 'empty':
-      return `${prefix} corpus: empty (docs/solutions/ holds no indexable docs). Lanes: ${lanes}.`
+      return `${prefix} corpus: empty (docs/solutions/ holds no indexable docs).`
     case 'docs':
-      return `${prefix} ${plural(result.corpus.docCount, 'doc')}, ${plural(result.hits.length, 'hit')}. Lanes: ${lanes}. Corpus: docs/solutions.`
+      return `${prefix} ${plural(result.corpus.docCount, 'doc')}, ${plural(result.hits.length, 'hit')}. Corpus: docs/solutions.`
   }
 }
 
@@ -330,7 +320,6 @@ function renderHit(hit: SearchHit, queryTerms: readonly string[]): string[] {
       `Title: ${sanitizeInline(document.title, MAX_TITLE_CHARS)}`,
       `Kind: ${sanitizeInline(document.kind, MAX_LABEL_CHARS)}`,
       `Status: ${sanitizeInline(hit.status, MAX_LABEL_CHARS)}`,
-      `Lanes: ${hit.lanes.map((lane) => sanitizeInline(lane, MAX_LABEL_CHARS)).join(', ')}`,
     ].join(' | ')}`,
   )
 

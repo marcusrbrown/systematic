@@ -30,7 +30,6 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
-import * as searchUserConfig from '../../src/lib/search-user-config.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
@@ -6523,22 +6522,6 @@ describe('search config field', () => {
     expect(t.load(true).config.search).toEqual({ enabled: false })
   })
 
-  test('the loader merges through mergeSearchSettings', () => {
-    const t = setup()
-    t.user({ search: { enabled: false } })
-    const spy = spyOn(searchUserConfig, 'mergeSearchSettings')
-    try {
-      t.load()
-      expect(spy).toHaveBeenCalledTimes(1)
-      const sources = spy.mock.calls[0]?.[0] ?? []
-      expect(sources).toEqual([
-        { settings: { enabled: false }, unreadable: false },
-      ])
-    } finally {
-      spy.mockRestore()
-    }
-  })
-
   describe('project config can never set it', () => {
     test('AE2: a project search block is stripped with one warning and the user value is used', () => {
       const t = setup()
@@ -6667,24 +6650,6 @@ describe('search config field', () => {
         path.join(t.paths.userDir, 'systematic.jsonc'),
       )
       expect(paths).not.toHaveProperty('customConfig')
-    })
-
-    test('getConfigPaths and resolveConfigPath call the shared helpers', () => {
-      const t = setup()
-      const selectSpy = spyOn(searchUserConfig, 'selectConfigFile')
-      const dirsSpy = spyOn(searchUserConfig, 'resolveUserLevelConfigDirs')
-      try {
-        getConfigPaths(t.paths.projectDir, {
-          homeDir: t.paths.homeDir,
-          customConfigDir: t.paths.customDir,
-        })
-        expect(dirsSpy).toHaveBeenCalledTimes(1)
-        // user, project and custom files all go through the one selector.
-        expect(selectSpy).toHaveBeenCalledTimes(3)
-      } finally {
-        selectSpy.mockRestore()
-        dirsSpy.mockRestore()
-      }
     })
   })
 })

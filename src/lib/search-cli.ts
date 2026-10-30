@@ -51,7 +51,7 @@ export interface SearchCliSettingsLoad {
   readonly settings?: SearchSettings | undefined
   /** Printed to stderr, one per line, before the search runs. */
   readonly warnings: readonly string[]
-  /** A source could not be read: search runs lexical-only with a `config unreadable` note. */
+  /** A source could not be read: its settings were ignored and results carry a `config unreadable` note. */
   readonly unreadable: boolean
 }
 

@@ -43,8 +43,9 @@ From the feature/task description, identify:
 | Reply | Path |
 |-------|------|
 | The header says `corpus: none` or `corpus: empty` | Stop and return the "No Matches" result, saying the project has no solutions directory yet or no indexable docs. This is not an error. Do not run the grep steps. |
-| The header says `N docs, M hits` and M is 1 or more | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
-| The header says `N docs, 0 hits` | Grep path. Go to Step 2. |
+| The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular) | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
+| The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`) | Grep path. Go to Step 2. |
+| The reply says `No project directory is available` | Grep path. Go to Step 2. |
 | The reply says search is disabled, starts with `Error:`, or the call fails | Grep path. Go to Step 2. |
 
 The grep path keeps its OR patterns for synonyms. A zero-hit search does not add a new synonym pass.

@@ -58,8 +58,8 @@ async function executeSearch(
       {
         startDir,
         settings,
-        // A user `search` block (or its file) that could not be read: lexical
-        // results with the same note the CLI and the bin print.
+        // A user `search` block (or its file) that could not be read: results
+        // carry the same `config unreadable` note the CLI and the bin print.
         ...(unreadable === true && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
       },
     )

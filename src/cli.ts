@@ -497,9 +497,10 @@ export function runValidateReviewReturnCli(
  * The settings loader `systematic search` injects into `runSearchCli`: the
  * full config loader, so the project-config strip warning for a `search` block
  * reaches stderr (AE2). Config is read at the project root, resolved the same
- * way the corpus root is. A thrown load, an invalid source, or an invalid
- * `search` block all give `unreadable: true`, which makes the core add the
- * `config unreadable` note and run lexical-only. Never throws.
+ * way the corpus root is. A thrown load, an invalid user or custom source, or
+ * an invalid `search` block all give `unreadable: true`, which makes the core
+ * add the `config unreadable` note to the results. A project source never
+ * counts: project config has no effect on search. Never throws.
  */
 export function loadSearchSettingsForCli(
   startDir: string,
@@ -513,11 +514,11 @@ export function loadSearchSettingsForCli(
       warningSink: (message) => warnings.push(message),
     })
     const invalidSource = loaded.metadata.sources.some(
-      (source) => source.presence === 'invalid',
+      (source) => source.presence === 'invalid' && source.kind !== 'project',
     )
     if (invalidSource) {
       warnings.push(
-        '[systematic] A Systematic config file could not be read; search runs lexical-only (config unreadable). Run `systematic config show` for details.',
+        '[systematic] A Systematic config file could not be read; its search settings were ignored and results carry a `config unreadable` note. Run `systematic config show` for details.',
       )
     }
     return {

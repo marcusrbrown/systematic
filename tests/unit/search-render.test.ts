@@ -49,7 +49,6 @@ function makeHit(
   return {
     rank,
     document: makeDocument(document),
-    lanes: ['lexical'],
     status: 'active',
     lifecycle: [],
     ...overrides,
@@ -61,7 +60,6 @@ function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
     query: 'example query',
     queryTerms: ['example', 'query'],
     corpus: { state: 'docs', docCount: 126 },
-    lanes: ['lexical'],
     hits: [makeHit(1)],
     notes: [],
     warnings: [],
@@ -191,14 +189,12 @@ describe('renderSearchResult: header', () => {
     const none = renderSearchResult(
       makeResult({
         corpus: { state: 'none', docCount: 0 },
-        lanes: [],
         hits: [],
       }),
     )
     const empty = renderSearchResult(
       makeResult({
         corpus: { state: 'empty', docCount: 0 },
-        lanes: [],
         hits: [],
       }),
     )
@@ -211,13 +207,14 @@ describe('renderSearchResult: header', () => {
     expect(new Set([none, empty, zero]).size).toBe(3)
   })
 
-  it('names the lanes that ran and counts the hits', () => {
+  it('counts the hits and prints no lane segment', () => {
     const text = renderSearchResult(
-      makeResult({ hits: [makeHit(1), makeHit(2)], lanes: ['lexical'] }),
+      makeResult({ hits: [makeHit(1), makeHit(2)] }),
     )
     expect(text.split('\n')[0]).toBe(
-      'Search "example query": 126 docs, 2 hits. Lanes: lexical. Corpus: docs/solutions.',
+      'Search "example query": 126 docs, 2 hits. Corpus: docs/solutions.',
     )
+    expect(text).not.toContain('Lanes')
     expect(
       renderSearchResult(
         makeResult({ corpus: { state: 'docs', docCount: 1 } }),
@@ -242,7 +239,7 @@ describe('renderSearchResult: header', () => {
 })
 
 describe('renderSearchResult: hits', () => {
-  it('shows path, title, kind, rank, lanes, status, module, tags and snippet', () => {
+  it('shows path, title, kind, rank, status, module, tags and snippet', () => {
     const text = renderSearchResult(
       makeResult({
         hits: [
@@ -258,7 +255,7 @@ describe('renderSearchResult: hits', () => {
       '3. docs/solutions/best-practices/example-2026-08-16.md',
     )
     expect(text).toContain(
-      'Title: Example title | Kind: solution | Status: stale | Lanes: lexical',
+      'Title: Example title | Kind: solution | Status: stale',
     )
     expect(text).toContain('Module: example-module | Tags: alpha, beta')
     expect(text).toContain('Snippet: the example query appears here')
@@ -335,7 +332,6 @@ describe('renderSearchResult: sanitising', () => {
           1,
           {
             status: hostile('status') as SearchHit['status'],
-            lanes: [hostile('lane')] as SearchHit['lanes'],
             lifecycle: [hostile('lifecycle')],
           },
           {

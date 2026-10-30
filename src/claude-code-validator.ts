@@ -63,9 +63,3 @@ export function runClaudeCodeValidator(options: ValidatorOptions): number {
   )
   return 0
 }
-
-if (import.meta.main) {
-  process.exitCode = runClaudeCodeValidator({
-    argv: process.argv.slice(2),
-  })
-}
