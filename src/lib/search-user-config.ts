@@ -72,7 +72,7 @@ const embeddingsSchema = z
       .optional()
       .meta({
         description:
-          'Name of the environment variable that holds the API key. The key itself is never stored in config. If the variable is unset or empty, no key is sent.',
+          'Name of the environment variable that holds the API key. The key itself is never stored in config. If the variable is unset or empty, no request is made and search reports `key missing`.',
         examples: ['OPENAI_API_KEY'],
       }),
     query_prefix: z

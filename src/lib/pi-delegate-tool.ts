@@ -35,7 +35,7 @@ export type DelegateParentModel = NonNullable<ExtensionContext['model']>
 /**
  * Derived from the pinned Pi SDK's own `CreateAgentSessionOptions` type
  * (`'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'` as of
- * @earendil-works/pi-coding-agent@0.83.0) rather than hand-declared, so a
+ * @earendil-works/pi-coding-agent@1.4.0) rather than hand-declared, so a
  * future SDK bump that changes the union surfaces as a type error here
  * instead of silently drifting. Value-for-value identical to Systematic's
  * own `piSubagentsThinkingSchema` enum in config-schema.ts today — see

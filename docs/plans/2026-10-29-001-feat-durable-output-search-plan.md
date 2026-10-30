@@ -399,7 +399,9 @@ Phase A is the quality harness (U0). Phase B is the lexical lane (U1 to U3), end
 
 Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap line and its `src/lib/AGENTS.md` row, and verifies them with `bun scripts/content-integrity.ts`. Every unit ends with `bun run surfaces:affected --run` and, from U4 on, `bun run surfaces:drift`.
 
-- [ ] U0. Query set and R17 grep baseline
+- [x] U0. Query set and R17 grep baseline
+
+**Status:** landed in 757a8986.
 
 **Goal:** Commit the labelled query set and the recorded grep baseline, before any edit to the researcher.
 
@@ -426,7 +428,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Both files are committed, and the baseline commit precedes any change to `agents/research/learnings-researcher.md`.
 - The #820 query is `heldout`, its target is labelled relevant, and its recorded token overlap is in the fixture.
 
-- [ ] U1. Lexical primitives and the determinism harness
+- [x] U1. Lexical primitives and the determinism harness
+
+**Status:** landed in 26dd94a1.
 
 **Goal:** A dependency-free tokenizer, natural log and BM25F scorer that return bit-identical scores on Bun and Node.
 
@@ -465,7 +469,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - The bit-pattern test passes locally on arm64 macOS, and CI on Linux x64 is the cross-platform check.
 - The codemap and AGENTS row exist; `bun scripts/content-integrity.ts` is clean.
 
-- [ ] U2. Corpus loader and project root
+- [x] U2. Corpus loader and project root
+
+**Status:** landed in f16ebac0.
 
 **Goal:** Resolve the project root and load `docs/solutions/` safely from disk. The lifecycle resolver lives in U3, next to the ranked list it consumes.
 
@@ -503,7 +509,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 ---
 
-- [ ] U3. Search core, renderer and recall floor (Checkpoint A)
+- [x] U3. Search core, renderer and recall floor (Checkpoint A)
+
+**Status:** landed in 70ecea82.
 
 **Goal:** One host-neutral composition and one renderer that every surface calls, with the lifecycle resolver and the lexical lane tuned against the query set.
 
@@ -554,7 +562,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Checkpoint A is recorded as passed, with the frozen parameters and the measured counts, in the PR description.
 - The renderer never emits more than 16,384 bytes. `bun scripts/content-integrity.ts` is clean.
 
-- [ ] U4. The `search` config field and the user-level reader
+- [x] U4. The `search` config field and the user-level reader
+
+**Status:** landed in 2a2085f5.
 
 **Goal:** A protected top-level `search` field, merged from user and custom config only, plus a user-level reader, built on the same zod schema piece, that the Claude Code bin can bundle.
 
@@ -601,7 +611,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 ---
 
-- [ ] U5. The tool on OpenCode v1, v2 and Pi, plus Pi delegates
+- [x] U5. The tool on OpenCode v1, v2 and Pi, plus Pi delegates
+
+**Status:** landed in 5b5f6df4.
 
 **Goal:** `systematic_search` registered on three hosts over one shared execute path, with per-surface start directories, an off switch, and Pi delegates able to call it.
 
@@ -646,7 +658,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - Every pin change is explained in the diff and no other host behavior changes.
 - `bun run surfaces:affected --run` reports nothing stale. Registration lines exist and the content-integrity gate is clean.
 
-- [ ] U6. CLI, Claude Code bin and the Node floor
+- [x] U6. CLI, Claude Code bin and the Node floor
+
+**Status:** landed in 04f99d1b.
 
 **Goal:** `systematic search` and a self-contained `systematic-search` bin that both print the same text as the tools, and an entry guard that works on every supported Node.
 
@@ -694,7 +708,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 - `bun run surfaces:affected --run` regenerates `skills/ce-review/scripts/validate-review.mjs` (the validator surface) and `bun run surfaces:drift` is clean. The Claude Code bin is build output, not a surface.
 - The entry-point-scope learning describes two narrow bins.
 
-- [ ] U7. Researcher, harness profiles and surfaces (Checkpoint B)
+- [x] U7. Researcher, harness profiles and surfaces (Checkpoint B)
+
+**Status:** landed in c8a4b941.
 
 **Goal:** learnings-researcher uses search first and every harness profile lists it. This is the lexical cut.
 
@@ -737,7 +753,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 
 ---
 
-- [ ] U8. Embeddings endpoint client
+- [x] U8. Embeddings endpoint client
+
+**Status:** landed in 7f179183.
 
 **Goal:** Call an Ollama or OpenAI-compatible endpoint safely, validate every response, and report failures with fixed reasons only.
 
@@ -775,7 +793,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Verification:**
 - The set of reasons is closed and each has one fixed note string. No test output holds the canary key or the fake server's address.
 
-- [ ] U9. The semantic lane: chunking, cache, fusion and backfill
+- [x] U9. The semantic lane: chunking, cache, fusion and backfill
+
+**Status:** landed in 4e8df291.
 
 **Goal:** Hybrid ranking that returns lexical results at once, backfills only through `--warm` (resumable), and fuses only when the index is complete.
 
@@ -825,7 +845,9 @@ Every unit that adds a `src/lib` module also adds its `ARCHITECTURE.md` codemap 
 **Verification:**
 - Lexical results are unchanged when no endpoint is configured: U3's text fixtures still pass byte for byte, and the Bun-built bundle still runs under Node.
 
-- [ ] U10. Docs, privacy rescope and release notes
+- [x] U10. Docs, privacy rescope and release notes
+
+**Status:** written; commit pending. `HARNESSES.md` citation drift is fixed, and the CLI help text is the only subcommand listing, so no reference page needed an edit.
 
 **Goal:** Say truthfully what leaves the machine, document search setup, and record the floor change.
 

@@ -43,7 +43,26 @@ No raw IP addresses or personal identifiers are stored. Visitors are counted usi
 
 ## Plugin runtime
 
-The Systematic plugin itself — the code that runs inside OpenCode on your machine — **transmits no telemetry of any kind**. It does not phone home, does not report usage, and does not collect or send any data anywhere. Analytics are strictly limited to this documentation website.
+The Systematic plugin itself — the code that runs inside your harness on your machine — **transmits no telemetry of any kind**. It does not phone home and does not report usage. In the default setup it makes no network call at all. Analytics are strictly limited to this documentation website.
+
+There is one optional exception, and it is off until you turn it on.
+
+### Optional embeddings endpoint for search
+
+[Search](/systematic/guides/search/) can add a semantic lane. You turn it on by setting `search.embeddings` in your user-level config. Once you do, Systematic sends text to the endpoint you named:
+
+- **Document text.** `systematic search --warm` sends the text of your `docs/solutions` documents to the endpoint, in chunks of at most about 1,200 characters. Each chunk starts with the document title and its heading path. The first chunk of each document holds its title, symptoms, tags, module and `applies_when` fields.
+- **Queries.** Each search sends the query text to the endpoint, but only when the index is complete. While the index is incomplete, a search sends nothing.
+
+The endpoint can be any host you name in `base_url`. A host on your own machine, such as Ollama, keeps the text on that machine. A remote host is a third party. It receives your document text and your queries, and its own privacy terms apply. Systematic does not restrict the host, and it does not refuse `http://` for a remote host. Use `https://` for any host that is not on your machine.
+
+Systematic itself adds no telemetry here. It sends nothing to Systematic's maintainers and nothing to any host you did not name. Only your user-level config can set the endpoint. A project config cannot, so a repository you clone cannot redirect your documents to a host of its choosing.
+
+**The API key.** `api_key_env` holds the name of an environment variable, never the key. Systematic reads the variable when it makes a request and sends the value as a bearer token to the endpoint you named. It never logs the key, never writes it to a file, and never prints it or the variable name in an error.
+
+**The local cache.** Embedding vectors are cached on your machine so a search does not re-embed unchanged documents. The cache is the directory `$XDG_CACHE_HOME/systematic/embeddings/` when `XDG_CACHE_HOME` is an absolute path, and `~/.cache/systematic/embeddings/` otherwise. The directory is created with mode `0700`, and every file in it is written with mode `0600`. The files hold vectors and small failure markers. They hold no document text and no query text, but a vector is derived from the text it came from. To delete everything Systematic cached, delete that directory. Systematic removes entries it has not read for 30 days.
+
+The [search guide](/systematic/guides/search/) lists every setting and shows how to switch the whole feature off.
 
 ### Bootstrap text on OpenCode v2
 
