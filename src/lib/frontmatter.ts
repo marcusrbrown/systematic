@@ -35,7 +35,10 @@ export function extractFrontmatterBlock(content: string): string | null {
 export function parseFrontmatter<T = Record<string, unknown>>(
   content: string,
 ): FrontmatterResult<T> {
-  const frontmatterRegex = /^---\r?\n([\s\S]*?)\r?\n?---\r?\n([\s\S]*)$/
+  // The closing `---` must be a whole line. Group 1 is empty or ends in the
+  // line break before it, so a value line that merely ends in `---` cannot
+  // close the block, and empty frontmatter (`---\n---\n`) still matches.
+  const frontmatterRegex = /^---\r?\n((?:[\s\S]*?\r?\n)?)---\r?\n([\s\S]*)$/
   const match = content.match(frontmatterRegex)
 
   if (!match) {

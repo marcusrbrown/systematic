@@ -15,6 +15,7 @@ import * as commands from './lib/commands.js'
 import {
   collectRoutingTargets,
   getConfigPaths,
+  type LoadConfigOptions,
   type ConfigObservationMetadata as LoaderConfigObservationMetadata,
   loadConfigWithSources,
   type SourceAwareConfigResult,
@@ -23,6 +24,7 @@ import {
   discoverSkills,
   type SkillDiscoveryIssueCode,
 } from './lib/discovered-skills.js'
+import { isMainModule } from './lib/main-module.js'
 import {
   cleanup,
   exportPersonas,
@@ -51,6 +53,12 @@ import {
   type RoutingResolution,
   resolveRouting,
 } from './lib/routing-resolver.js'
+import { runSearchCli, type SearchCliSettingsLoad } from './lib/search-cli.js'
+import { resolveSearchRoot } from './lib/search-corpus.js'
+import {
+  loadUserLevelSearchSettings,
+  type UserLevelConfigDirOptions,
+} from './lib/search-user-config.js'
 import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
@@ -104,6 +112,13 @@ Commands:
                                CI, issues, or fixtures. Not for the ce:review parent's own run artifact.
                                Exit statuses: 0 valid artifact, 1 validation failure,
                                2 operational failure, 3 legacy artifact with no schema_version
+  search <query...> [--dir <path>] [--kind solution] [--limit <1-20>]
+                               Search the project's docs/solutions learnings by symptom, error text,
+                               module or topic, and print ranked hits. The project root is the nearest
+                               ancestor of --dir (default: the current directory) that holds .git.
+                               Reads user-level search settings; a project config cannot change them.
+                               Exit statuses: 0 results, no hits, or search disabled; 2 usage error
+                               Use -- to end options, for a query that starts with a dash
   validate-review-return       Validate one raw ce:review persona return read from stdin
                                Reads exactly one JSON document (max 1 MiB) and checks it against the
                                raw reviewer return schema. No files are read or written; accepts no
@@ -130,6 +145,8 @@ Examples:
   systematic validate-review-artifact .context/systematic/ce-review/review-summary.json
   systematic validate-review-artifact --allow-outside-artifact-root /path/to/external-artifact.json
   systematic validate-review-return < reviewer-return.json
+  systematic search "tests fail only on retry"
+  systematic search flaky retry --limit 5
   systematic list agents
   systematic config show
   systematic config show --json
@@ -478,6 +495,77 @@ export function runValidateReviewReturnCli(
   options: ValidateReviewReturnCliOptions,
 ): number {
   return runValidateReviewReturn(options)
+}
+
+/**
+ * The directory options the user-level search reader takes, from the loader's.
+ * A key left out means "read the environment default", so only set keys pass.
+ */
+function userLevelDirOptions(
+  options: LoadConfigOptions | undefined,
+): UserLevelConfigDirOptions {
+  return {
+    ...(options?.homeDir !== undefined && { homeDir: options.homeDir }),
+    ...(options?.userConfigDir !== undefined && {
+      userConfigDir: options.userConfigDir,
+    }),
+    ...(options !== undefined &&
+      Object.hasOwn(options, 'customConfigDir') && {
+        customConfigDir: options.customConfigDir,
+      }),
+  }
+}
+
+/**
+ * The settings loader `systematic search` injects into `runSearchCli`: the
+ * full config loader, so the project-config strip warning for a `search` block
+ * reaches stderr (AE2). Config is read at the project root, resolved the same
+ * way the corpus root is. A thrown load, an invalid user or custom source, or
+ * an invalid `search` block all give `unreadable: true`, which makes the core
+ * add the `config unreadable` note to the results. A project source never
+ * counts: project config has no effect on search.
+ *
+ * The full loader drops a whole file that fails validation, so a valid
+ * `search.enabled: false` next to a bad sibling key would be lost. When a
+ * source is invalid, or the load throws, the settings come from the user-level
+ * reader instead, which validates the `search` block on its own (the same
+ * reader the `systematic-search` bin uses), so the opt-out still holds. Never throws.
+ */
+export function loadSearchSettingsForCli(
+  startDir: string,
+  configOptions?: LoadConfigOptions,
+): SearchCliSettingsLoad {
+  const warnings: string[] = []
+  try {
+    const loaded = loadConfigWithSources(resolveSearchRoot(startDir), {
+      ...configOptions,
+      invalidSource: 'report',
+      warningSink: (message) => warnings.push(message),
+    })
+    const invalidSource = loaded.metadata.sources.some(
+      (source) => source.presence === 'invalid' && source.kind !== 'project',
+    )
+    if (invalidSource) {
+      warnings.push(
+        '[systematic] A Systematic config file could not be read, so search results carry a `config unreadable` note. Run `systematic config show` for details.',
+      )
+    }
+    return {
+      settings: invalidSource
+        ? loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
+            .settings
+        : loaded.config.search,
+      warnings,
+      unreadable: invalidSource || loaded.config.searchUnreadable === true,
+    }
+  } catch {
+    return {
+      settings: loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
+        .settings,
+      warnings,
+      unreadable: true,
+    }
+  }
 }
 
 function isHarness(value: string): value is Harness {
@@ -1158,6 +1246,20 @@ function runLegacyCli(args: string[]): void {
       if (status !== 0) process.exit(status)
       break
     }
+    case 'search':
+      // Set the exit code instead of calling process.exit, so buffered stdout
+      // is never cut off.
+      void runSearchCli({
+        argv: args.slice(1),
+        cwd: process.cwd(),
+        errorSink: console.error,
+        usageName: 'systematic search',
+        loadSettings: loadSearchSettingsForCli,
+        outputSink: console.log,
+      }).then((status) => {
+        process.exitCode = status
+      })
+      break
     case 'validate-review-return': {
       const status = runValidateReviewReturnCli({
         argv: ['systematic', ...args],
@@ -1207,6 +1309,6 @@ function runLegacyCli(args: string[]): void {
   }
 }
 
-if (import.meta.main) {
+if (isMainModule(import.meta.url)) {
   runLegacyCli(process.argv.slice(2))
 }

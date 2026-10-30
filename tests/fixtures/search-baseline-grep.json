@@ -1,0 +1,227 @@
+{
+  "note": "Single-shot manual run of the unmodified learnings-researcher, not CI. Not re-run to improve numbers. A query counts as found when at least one `relevant` path is in the first 5 returned, matched by exact path.",
+  "model": "learnings-researcher subagent dispatched from orchestrator session (anthropic/claude-opus-5-5 host; subagent model inherited)",
+  "commit": "03b1b333 (learnings-researcher.md last changed at db26033d; unmodified)",
+  "date": "2026-10-29",
+  "task": "ses_e765f5932ffeND2NFnWlxxwSlw",
+  "counts": {
+    "overall": {
+      "found": 14,
+      "total": 19
+    },
+    "tune": {
+      "found": 11,
+      "total": 14
+    },
+    "heldout": {
+      "found": 3,
+      "total": 5
+    },
+    "lexical_reachable_true": {
+      "found": 11,
+      "total": 16
+    },
+    "lexical_reachable_false": {
+      "found": 3,
+      "total": 3
+    }
+  },
+  "queries": [
+    {
+      "id": "issue-820-prose-dedup",
+      "split": "heldout",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/logic-errors/per-reviewer-cap-reused-as-run-level-cap-2026-10-22.md"
+      ],
+      "hit": false,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q02-discovered-skill-fields-lost",
+      "split": "heldout",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/integration-issues/cross-harness-tools-frontmatter-divergence-2026-08-16.md"
+      ],
+      "hit": false,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q03-old-links-subpath",
+      "split": "heldout",
+      "lexical_reachable": false,
+      "returned": [
+        "docs/solutions/integration-issues/astro-redirect-destinations-missing-base-prefix-2026-05-22.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q04-which-succeeds-version-fails",
+      "split": "heldout",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/integration-issues/availability-guards-must-check-executability-2026-08-16.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q05-slow-regex-repeated-openers",
+      "split": "heldout",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/security-issues/redos-after-plugin-trust-boundary-inversion-2026-05-11.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q06-merge-internal-error-32",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/logic-errors/per-reviewer-cap-reused-as-run-level-cap-2026-10-22.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q07-managed-skills-list-denies",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/best-practices/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md"
+      ],
+      "hit": false,
+      "returned_paths_missing_on_disk": [
+        "docs/solutions/best-practices/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md"
+      ]
+    },
+    {
+      "id": "q08-typecheck-never-covers",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/developer-experience/typecheck-does-not-cover-ci-gate-scripts-2026-08-17.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q09-large-args-guard-unavailable",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/workflow-issues/workflow-guard-skipped-skills-over-32kb-2026-09-26.md",
+        "docs/solutions/workflow-issues/workflow-guard-digest-collapse-long-identities-2026-10-14.md"
+      ],
+      "hit": false,
+      "returned_paths_missing_on_disk": [
+        "docs/solutions/workflow-issues/workflow-guard-skipped-skills-over-32kb-2026-09-26.md",
+        "docs/solutions/workflow-issues/workflow-guard-digest-collapse-long-identities-2026-10-14.md"
+      ]
+    },
+    {
+      "id": "q10-compaction-prune-clears-skill",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/best-practices/testing-host-prune-from-a-plugin-2026-10-20.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q11-bot-ignores-same-repo-prs",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/integration-issues/brokered-push-needs-trusted-head-sha-2026-10-14.md"
+      ],
+      "hit": false,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q12-pipeline-finished-nothing-shipped",
+      "split": "tune",
+      "lexical_reachable": false,
+      "returned": [
+        "docs/solutions/integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q13-mdx-acorn-expression",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/build-errors/mdx-heading-anchor-crashes-astro-build-2026-05-22.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q14-fix-keeps-reverting",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q15-gate-crash-bad-metadata",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/runtime-errors/circular-yaml-alias-aborts-content-integrity-report-2026-10-26.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q16-stray-slashes-in-posted-text",
+      "split": "tune",
+      "lexical_reachable": false,
+      "returned": [
+        "docs/solutions/developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q17-worktree-beside-wrong-gitdir",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/logic-errors/infer-main-worktree-root-from-git-common-dir-2026-10-25.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q18-plugin-key-ignored-new-major",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/documentation-gaps/opencode-plugin-config-key-is-singular-plugin-not-plugins-2026-07-18.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    },
+    {
+      "id": "q19-dependency-bump-fails-test",
+      "split": "tune",
+      "lexical_reachable": true,
+      "returned": [
+        "docs/solutions/test-failures/release-workflow-test-pins-action-sha-2026-10-14.md"
+      ],
+      "hit": true,
+      "returned_paths_missing_on_disk": []
+    }
+  ]
+}

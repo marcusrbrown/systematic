@@ -168,6 +168,40 @@ Body`
         expect(result.body).toBe('')
       })
 
+      test('does not close the block on a value line that ends in ---', () => {
+        const content =
+          '---\ntitle: Crash on start---\nstatus: superseded\nsuperseded_by: docs/solutions/new.md\n---\nBody'
+        const result = parseFrontmatter(content)
+        expect(result.hadFrontmatter).toBe(true)
+        expect(result.parseError).toBe(false)
+        expect(result.data).toEqual({
+          title: 'Crash on start---',
+          status: 'superseded',
+          superseded_by: 'docs/solutions/new.md',
+        })
+        expect(result.body).toBe('Body')
+      })
+
+      test('does not close the block on a --- that is only a line prefix', () => {
+        const content = '---\nname: test\n---not-a-close\nkey: v\n---\nBody'
+        const result = parseFrontmatter(content)
+        expect(result.body).toBe('Body')
+      })
+
+      test('closes a CRLF block that holds a value ending in ---', () => {
+        const content = '---\r\ntitle: A---\r\nname: test\r\n---\r\nBody'
+        const result = parseFrontmatter(content)
+        expect(result.data).toEqual({ title: 'A---', name: 'test' })
+        expect(result.body).toBe('Body')
+      })
+
+      test('parses empty frontmatter with CRLF', () => {
+        const result = parseFrontmatter('---\r\n---\r\nBody')
+        expect(result.hadFrontmatter).toBe(true)
+        expect(result.data).toEqual({})
+        expect(result.body).toBe('Body')
+      })
+
       test('parses a document with both empty frontmatter content and empty body', () => {
         const content = '---\n---\n'
         const result = parseFrontmatter(content)

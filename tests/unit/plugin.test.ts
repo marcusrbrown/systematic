@@ -307,11 +307,12 @@ describe('registered plugin surface', () => {
     }
   }
 
-  test('the plugin registers exactly the skill tool', async () => {
+  test('the plugin registers exactly the skill and search tools', async () => {
     const hooks = await loadSurface()
 
     expect(Object.keys(hooks.tool as Record<string, unknown>)).toEqual([
       'systematic_skill',
+      'systematic_search',
     ])
   })
 

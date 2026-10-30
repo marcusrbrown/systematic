@@ -158,12 +158,22 @@ Skill discovery and resolution
   src/lib/skill-resolver.ts    — resolve bundled skills and build shared skill-tool output
 
 Pi adapter
-  src/lib/agent-resolver.ts        — flatten bundled agent personas into Pi's runtime catalog and resolve tool allowlists
-  src/lib/pi-delegate-session.ts   — construct isolated in-memory Pi delegate child sessions
+  src/lib/agent-resolver.ts        — flatten bundled agent personas into Pi's runtime catalog and resolve tool allowlists (read-only built-ins plus `systematic_search`)
+  src/lib/pi-delegate-session.ts   — construct isolated in-memory Pi delegate child sessions (parent-supplied `customTools` pass through; re-entry guarded)
   src/lib/pi-delegate-tool.ts      — create the bounded sequential `systematic_delegate` tool
   src/lib/pi-subagents-personas.ts — curate, screen, and generate Pi-subagents persona content
   src/lib/pi-subagents-export.ts   — manage transactional export, refresh, and cleanup of Pi personas
   src/lib/setup.ts                 — atomically configure project-local OpenCode or Pi harness settings
+
+Durable-output search
+  src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
+  src/lib/search-corpus.ts         — project root walk-up, `kind` table and bounded, symlink-safe loader for `docs/solutions/`, with a narrowing frontmatter wrapper
+  src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns
+  src/lib/search-core.ts           — host-neutral search composition: validate, lexical lane, lifecycle resolver, render
+  src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a reader that never touches project config (imports only zod, jsonc-parser and node builtins)
+  src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
+  src/lib/search-cli.ts            — `systematic search` and the `systematic-search` bin's shared runner: flag parsing, an injected settings loader, exit codes, the core's text unchanged (imports only `search-core.ts`)
+  src/lib/main-module.ts           — the realpath entry guard that replaces `import.meta.main` (Node gained it only in 24.2); used by `cli.ts`, `claude-code-validator-bin.ts` and `claude-code-search.ts`
 
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
@@ -234,6 +244,15 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 5. **Nothing throws into the v2 host, except invalid config.** `setup` rejects on invalid
    `systematic.json` (mirroring v1's throw at load); every other v2 callback is wrapped by
    `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
+
+6. **Search reads the disk on every call, protects its config as a whole, and avoids `Math.log`.**
+   `docs/solutions/` is read on each call with no memo, because a session can write a learning and
+   search again in the same run. The `search` config block is stripped whole from project config, so a repository
+   cannot switch it off. The search modules use a hand-written `ln`
+   and no `Math.log`, so scores and ranks are identical on Bun and Node. Each host reaches the one
+   `search-core.ts` composition, so every surface returns the same text. The learnings-researcher
+   calls search first and falls back to its grep steps when search has no hits, is disabled, errors
+   or is absent.
 
 ## Data Flow
 
@@ -437,9 +456,12 @@ the Demo section through a description rewrite; its narrative excludes `docs/evi
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
 or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
-Entries under the bundle's `bin/` directory are written with executable mode (`0o755`); nothing else
-in the bundle changes mode. The CI pre-publish guard checks that the bundled validator is executable,
-not merely present, before the job pushes to the branch users install from.
+The bundle ships two narrow bins under `bin/`: the review-artifact validator and `systematic-search`
+(`src/claude-code-search.ts`, which reads the two user-level config files and never project config).
+Entries under `bin/` are written with executable mode (`0o755`); nothing else in the bundle changes
+mode. The search bin bundles `jsonc-parser` through its ESM build, because the UMD build crashes when
+bundled and run from a directory with no `node_modules`. The CI pre-publish guard checks that both
+bins are executable, not merely present, before the job pushes to the branch users install from.
 
 **Typed config validation** (`src/lib/config-schema.ts`) — all user-supplied config passes through
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config

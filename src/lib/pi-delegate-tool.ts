@@ -35,7 +35,7 @@ export type DelegateParentModel = NonNullable<ExtensionContext['model']>
 /**
  * Derived from the pinned Pi SDK's own `CreateAgentSessionOptions` type
  * (`'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'` as of
- * @earendil-works/pi-coding-agent@0.83.0) rather than hand-declared, so a
+ * @earendil-works/pi-coding-agent@1.4.0) rather than hand-declared, so a
  * future SDK bump that changes the union surfaces as a type error here
  * instead of silently drifting. Value-for-value identical to Systematic's
  * own `piSubagentsThinkingSchema` enum in config-schema.ts today — see
@@ -65,11 +65,22 @@ export type CreateDelegateSession = (options: {
   cwd: string
   systemPromptOverride: string
   allowedToolNames: string[]
+  /**
+   * Parent-supplied tool definitions the child may call. A definition is active
+   * only when its name is also in `allowedToolNames`. Omitted means none.
+   */
+  customTools?: ToolDefinition[]
 }) => Promise<DelegateSessionLike>
 
 export interface PiDelegateToolDeps {
   catalog: AgentCatalogEntry[]
   createDelegateSession: CreateDelegateSession
+  /**
+   * Tool definitions delegates may call, in addition to Pi's built-ins. Today
+   * `src/pi.ts` supplies the one shared `systematic_search` definition, or
+   * nothing when search is disabled. Nothing else from the parent passes.
+   */
+  customTools?: ToolDefinition[]
   /**
    * Merged agent/category routing overlays from `loadConfigWithSources`'s
    * `overlays` field. Omit for a config-neutral tool — routing then always
@@ -189,7 +200,7 @@ export function createPiDelegateTool(
   ReturnType<typeof buildDelegateParametersSchema>,
   DelegateToolDetails
 > {
-  const { catalog, createDelegateSession } = deps
+  const { catalog, createDelegateSession, customTools } = deps
   // Built once per registered tool instance and captured by every dispatch's
   // closure below — this is the "once per session" state R4a's KTD describes
   // (the tool has no session object of its own to hang state on; a Pi
@@ -217,7 +228,7 @@ export function createPiDelegateTool(
       ctx: ExtensionContext,
     ): Promise<AgentToolResult<DelegateToolDetails>> {
       return runDelegateTool(
-        { catalog, createDelegateSession },
+        { catalog, createDelegateSession, customTools },
         routing,
         params,
         signal,
@@ -555,7 +566,7 @@ function requestAbort(state: DelegateRunState, reason: AbortReason): void {
   })
 }
 
-/** Installed Pi 0.80.6 emits `turn_start` before assistant streaming, so candidate turn 21 triggers abort while the public count stays at 20. */
+/** Installed Pi 1.4.0 emits `turn_start` before assistant streaming, so candidate turn 21 triggers abort while the public count stays at 20. */
 function subscribeTurnCap(
   session: DelegateSessionLike,
   state: DelegateRunState,
@@ -615,6 +626,7 @@ async function runValidatedDelegateSession(
   request: ValidatedDelegateRequest,
   signal: AbortSignal | undefined,
   cwd: string,
+  customTools: ToolDefinition[] | undefined,
 ): Promise<AgentToolResult<DelegateToolDetails>> {
   const {
     agentName,
@@ -649,6 +661,7 @@ async function runValidatedDelegateSession(
       cwd,
       systemPromptOverride: personaBody,
       allowedToolNames,
+      ...(customTools !== undefined && { customTools }),
     })
 
     void sessionPromise.then(
@@ -736,7 +749,10 @@ async function runValidatedDelegateSession(
 }
 
 async function runDelegateTool(
-  deps: Pick<PiDelegateToolDeps, 'catalog' | 'createDelegateSession'>,
+  deps: Pick<
+    PiDelegateToolDeps,
+    'catalog' | 'createDelegateSession' | 'customTools'
+  >,
   routing: RoutingContext,
   params: { agent: string; task: string },
   signal: AbortSignal | undefined,
@@ -748,5 +764,6 @@ async function runDelegateTool(
     request,
     signal,
     ctx.cwd,
+    deps.customTools,
   )
 }

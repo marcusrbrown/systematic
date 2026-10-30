@@ -1,7 +1,7 @@
 ---
 title: Entry-point scope decides what a plugin bundle can ship
 date: 2026-08-24
-last_updated: 2026-08-24
+last_updated: 2026-10-29
 category: best-practices
 module: claude-code-harness
 problem_type: tooling_decision
@@ -91,6 +91,35 @@ unshippable.
 This also cuts the other way: a dependency that looks fatal may simply be out of scope.
 `jsonc-parser` was never a blocker for artifact validation — it was a blocker for
 `config show`, which the bundle does not ship.
+
+## Two Narrow Bins
+
+The bundle now ships two bins, each with its own narrow entry point, and not one bin that
+grows subcommands: `systematic-validate-review-artifact` (from `src/claude-code-validator-bin.ts`)
+and `systematic-search` (from `src/claude-code-search.ts`). Each entry imports only what its
+surface needs. The search bin reaches zod through one schema module and never imports
+`config.ts`, so it never carries the config loader.
+
+The search bin does need `jsonc-parser`, so it applies the fix above at the dependency level.
+`Bun.build` takes an `onResolve` alias that sends `jsonc-parser` to `jsonc-parser/lib/esm/main.js`.
+The UMD entry crashes with `Cannot find module './impl/format'` once bundled and run from a
+directory with no `node_modules`; the ESM build has no runtime `require`. The test for this is a
+run of the built bin under real `node` from a foreign directory, with stdin closed and a timeout.
+That run is also the guard that the bin did not pull in `config.ts`, whose UMD copy would crash it.
+
+Two limits to know about:
+
+- **Extensionless ESM.** The bins are ES modules in extensionless files. Node runs those only
+  where module-syntax detection is on, which is 20.19 and 22.7 onward. The npm package supports
+  Node 20.11, but the plugin bins do not run there (measured: Node 20.11.0 prints the
+  "To load an ES module, set "type": "module"" warning and exits 1). CommonJS output is no fix:
+  Bun hard-codes `import.meta.url` to the build machine's path in that format, so the
+  entry guard never fires.
+- **One guard per entry.** A direct-execution guard that compares `import.meta.url` with
+  `argv[1]` must live in a file no other bundle imports. In a bundle every module shares one
+  `import.meta.url`, so a guard inside a shared module fires in every bundle that includes it. That
+  is why the validator's guard sits in `claude-code-validator-bin.ts` and not in
+  `claude-code-validator.ts`, which `ce-review-validator.ts` also bundles.
 
 ## When to Apply
 

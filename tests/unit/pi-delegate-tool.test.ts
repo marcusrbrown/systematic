@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
+import { Type } from 'typebox'
 import type { AgentCatalogEntry } from '../../src/lib/agent-resolver.js'
 import type {
   OverlayConfig,
@@ -14,6 +15,7 @@ import {
   type DelegateToolDetails,
   MAX_DELEGATE_TURNS,
 } from '../../src/lib/pi-delegate-tool.js'
+import { createPiSearchTool } from '../../src/lib/search-tool.js'
 
 const catalog: AgentCatalogEntry[] = [
   {
@@ -324,9 +326,112 @@ describe('createPiDelegateTool: happy path', () => {
       fakeCtx(),
     )
 
-    expect(capturedTools).toEqual(['read', 'grep', 'find', 'ls'])
+    expect(capturedTools).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'systematic_search',
+    ])
   })
 })
+
+describe('createPiDelegateTool: custom tools', () => {
+  const searchTool = createPiSearchTool({ settings: undefined, Type })
+  const searchCatalog: AgentCatalogEntry[] = [
+    {
+      name: 'undeclared',
+      description: 'No tools line',
+      body: 'Body.',
+      toolsSource: undefined,
+      key: 'undeclared',
+      category: 'research',
+      id: 'research/undeclared',
+    },
+    {
+      name: 'read-grep-only',
+      description: 'Declares Read and Grep',
+      body: 'Body.',
+      toolsSource: 'Read, Grep',
+      key: 'read-grep-only',
+      category: 'research',
+      id: 'research/read-grep-only',
+    },
+    {
+      name: 'wants-search',
+      description: 'Declares search',
+      body: 'Body.',
+      toolsSource: 'systematic_search',
+      key: 'wants-search',
+      category: 'research',
+      id: 'research/wants-search',
+    },
+  ]
+
+  async function dispatch(
+    agent: string,
+    customTools: ToolDefinition[] | undefined,
+  ) {
+    let captured:
+      | { allowed: string[]; custom: ToolDefinition[] | undefined }
+      | undefined
+    const tool = createPiDelegateTool({
+      catalog: searchCatalog,
+      createDelegateSession: async (opts) => {
+        captured = {
+          allowed: opts.allowedToolNames,
+          custom: opts.customTools,
+        }
+        return createFakeSession(1)
+      },
+      ...(customTools !== undefined && { customTools }),
+    })
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent, task: 'find a learning' },
+      undefined,
+      fakeCtx(),
+    )
+    return captured
+  }
+
+  test('a persona with no tools line gets search in its allowlist and exactly that one custom tool', async () => {
+    const captured = await dispatch('undeclared', [searchTool])
+    expect(captured?.allowed).toContain('systematic_search')
+    expect(captured?.custom).toHaveLength(1)
+    expect(captured?.custom?.[0]).toBe(searchTool)
+  })
+
+  test('a persona with tools: Read, Grep gets no search in its allowlist', async () => {
+    const captured = await dispatch('read-grep-only', [searchTool])
+    expect(captured?.allowed).toEqual(['read', 'grep'])
+    // The definition is handed over, but Pi activates a custom tool only when
+    // its name is also in the allowlist, so it stays inert here.
+    expect(captured?.allowed).not.toContain('systematic_search')
+  })
+
+  test('a persona with tools: systematic_search keeps it through the OPENCODE_TO_PI_TOOL key', async () => {
+    const captured = await dispatch('wants-search', [searchTool])
+    expect(captured?.allowed).toEqual(['systematic_search'])
+    expect(captured?.custom?.[0]).toBe(searchTool)
+  })
+
+  test('with search disabled no custom tool is passed and the allowlist name stays inert', async () => {
+    const captured = await dispatch('undeclared', undefined)
+    expect(captured?.custom).toBeUndefined()
+    expect(captured?.allowed).toContain('systematic_search')
+  })
+
+  test('the parent skill and delegate tools never reach the delegate', async () => {
+    const captured = await dispatch('undeclared', [searchTool])
+    expect(captured?.allowed).not.toContain('systematic_skill')
+    expect(captured?.allowed).not.toContain(DELEGATE_TOOL_NAME)
+    expect(captured?.custom?.map((tool) => tool.name)).toEqual([
+      'systematic_search',
+    ])
+  })
+})
+
 describe('createPiDelegateTool: error paths', () => {
   test("unknown persona rejects through Pi's error channel with available persona names", async () => {
     const tool = createPiDelegateTool({

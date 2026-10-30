@@ -1,0 +1,152 @@
+---
+title: Search your past solutions
+description: Search docs/solutions by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line. Search runs on your machine and needs no setup.
+sidebar:
+  order: 12
+---
+
+Systematic can search the learnings you keep in `docs/solutions/`. You type a symptom, an error message, a module name or a topic. You get ranked hits with the path, title, a snippet, tags and status. Agents use the same search, so the `learnings-researcher` finds a past fix before it greps.
+
+Search needs no setup. It ranks documents with a lexical method (BM25F) that runs in the plugin itself. It makes no network call, downloads no model and writes no cache.
+
+```bash
+npx @fro.bot/systematic search "tests fail only on retry"
+```
+
+## What gets indexed
+
+Search reads one directory: `docs/solutions/`, directly under the [project root](#the-project-root). It reads the files from disk on every call and keeps no copy. A learning that `ce:compound` wrote a moment ago is searchable at once.
+
+It indexes every `.md` file under that directory, with these exceptions:
+
+- `README.md` files.
+- `critical-patterns.md`.
+- Anything under an `_archived/` directory.
+- Symlinks. Search does not follow them. If `docs/solutions` itself resolves to a place outside the project root, search loads nothing from it and prints a warning.
+
+The limits are:
+
+| Limit | Value |
+|---|---|
+| Size of one file | 256 KB (a larger file is skipped with a warning) |
+| Number of files | 2,000 |
+| Directory depth below `docs/solutions` | 6 |
+| Text loaded in one call | 16 MB |
+
+When a limit skips files, the result carries one warning that counts them.
+
+Search reads these frontmatter fields: `title`, `tags`, `module`, `component`, `problem_type`, `symptoms`, `applies_when`, `status`, `superseded_by` and `stale_reason`. A file with no frontmatter is indexed as body text, and its file name is its title. A file with invalid frontmatter is skipped with a warning that names it.
+
+### How lexical ranking works
+
+Search matches whole terms. Text is lowercased and split into runs of the ASCII letters and digits `a-z` and `0-9`. A run joined by `_` or `-` also counts as one term, so `foo_bar` matches `foo_bar`, `foo` and `bar`. There is no stemming, so `timeout` does not match `timeouts`. A letter outside ASCII ends a word. Matches in the title, symptoms and tags weigh more than matches in the body. A query is cut to its first 64 distinct terms, and the result says so.
+
+### Lifecycle: superseded and stale learnings
+
+A learning can say it was replaced. Search follows that link so you read the current doc.
+
+- **Superseded.** If a matching doc has `status: superseded` and a `superseded_by` path, the hit shows the successor instead. The successor takes the best rank among itself and the docs it replaces. The hit carries a `Supersedes:` line that lists every replaced path.
+- **Successor unresolved.** Search follows at most 5 links. If the successor is missing, is not a path under `docs/solutions/`, loops back, or lies past the fifth link, search does not drop the old doc. It returns the superseded doc at its own rank with `Status: superseded` and the line `Caution: successor unresolved`. Treat that doc as out of date and look for a newer one.
+- **Stale.** A doc with `status: stale` is returned with a line that starts `Caution: marked stale`, followed by its `stale_reason` when it has one.
+
+## The project root
+
+Search needs to know which project it is in. The project root is the nearest ancestor of the start directory that holds a `.git` entry. A `.git` file counts, so a linked worktree works. If no ancestor holds one, the start directory is the root. Search then reads `<root>/docs/solutions/`.
+
+The start directory depends on the surface:
+
+| Surface | Start directory |
+|---|---|
+| OpenCode v1 | The directory of the session, as OpenCode reports it for each call |
+| OpenCode v2 | The location directory of the session. If the host provides none, the tool says there is no project directory and searches nothing. |
+| Pi | The working directory of each call. In a delegate, that is the delegate session's own directory. |
+| `systematic search` and `systematic-search` | `--dir <path>`, else the current directory |
+
+In a monorepo the root is the repository root, not the package you are in.
+
+## Where to call it
+
+| Harness | Name | Notes |
+|---|---|---|
+| OpenCode v1 and v2 | `systematic_search` tool | Offered to the model like any other tool. |
+| Pi | `systematic_search` tool | Also on the default read-only allowlist of `systematic_delegate` personas. A persona with an explicit `tools:` list gets it only if the list names `systematic_search`. |
+| Claude Code | `systematic-search` command | A bin in the plugin's `bin/` directory, run from a shell. Claude Code has no `systematic_search` tool. |
+| Any terminal | `systematic search` | Use `npx @fro.bot/systematic search …` if the package is not installed globally. |
+
+The tool takes these arguments. The command takes the same three as flags, plus `--dir`.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `query` | yes | What to look for, in plain words. At most 2,000 characters. |
+| `kind` | no | `solution`. It is the only kind, and the default. |
+| `limit` | no | How many hits to return, an integer from 1 to 20. The default is 8. |
+
+An out-of-range `limit` is rejected with a fixed error on every surface. On the command line it exits with status 2. A reply is at most 16 KB, and a cut reply ends with a marker line that says so.
+
+```bash
+systematic search flaky retry --limit 5
+systematic search --dir ../other-repo "connection pool exhausted"
+systematic search -- "--watch crashes"   # a query that starts with a dash
+```
+
+Exit statuses: `0` for results, no hits and a disabled search; `1` for a failure; `2` for a usage error.
+
+## Configure search
+
+Search has one setting, `search.enabled`. It lives in your **user-level** config only. Systematic reads it from these files, in this order, and merges them:
+
+1. `~/.config/opencode/systematic.jsonc`, or `systematic.json` if there is no `.jsonc`.
+2. The same file name inside the directory named by `OPENCODE_CONFIG_DIR`, if that variable is set and not blank.
+
+The second file overrides the first. `enabled` takes the last file that sets it.
+
+A project config cannot set `search`. If `.opencode/systematic.jsonc` or `.opencode/systematic.json` has a `search` block, Systematic ignores the whole block and prints a warning. This is on purpose. Otherwise a repository you clone could switch search off.
+
+The `systematic-search` command in Claude Code reads the two user-level files and never opens project config. For that reason it cannot print the project-config warning that `systematic search` prints.
+
+### Fields
+
+`search` accepts only the field below. An unknown field makes the whole block invalid.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `search.enabled` | boolean | `true` | `false` removes search. See [Turn search off](#turn-search-off). |
+
+If the `search` block fails its check, Systematic drops that block, prints one warning that names the field and never its value, and loads the rest of the file. Search then runs with its defaults, and each result carries the note `config unreadable`. The `systematic-search` command does the same. It also treats a user-level file it cannot parse as unreadable. Search never stops the plugin from loading.
+
+### Turn search off
+
+Set `search.enabled` to `false`:
+
+```jsonc
+{ "search": { "enabled": false } }
+```
+
+This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from Pi delegates, with no note. `systematic search` and `systematic-search` print that search is disabled and exit with status 0. The `learnings-researcher` then falls back to grep.
+
+### Restart after you change config
+
+OpenCode and Pi read config once when they start. Restart the harness after you change `search`. The `systematic search` command and the `systematic-search` command read config on every run, so they need no restart.
+
+## Notes
+
+Notes appear on the `Notes:` line of a result, separated by semicolons. They use fixed wording.
+
+| Note | What it means |
+|---|---|
+| `config unreadable` | A `search` block or a user-level config file could not be read. The warning on stderr, or in the host log, names the field. |
+| `query cut to its first 64 distinct terms` | The query had more than 64 distinct terms. The extra terms were ignored. |
+
+A result can also carry up to five warnings from the corpus loader, such as a file that was skipped for its size, followed by `+N more`.
+
+## Requirements
+
+The `@fro.bot/systematic` package declares `engines.node` as `>=20.11`. This is the first Node release with `import.meta.dirname`, which the CLI uses.
+
+The `systematic-search` command in the Claude Code plugin is a single bundled file with no extension. Node must detect that it is an ES module. Node turns that detection on by default from **20.19** and **22.7**. On an older Node the command may fail to start. Update Node, or run `systematic search` instead.
+
+## What search does not do
+
+- It does not use embeddings or a semantic index. It matches terms, so a learning that describes the same problem in other words can be missed.
+- It does not send anything off your machine.
+- It searches `docs/solutions/` only. Plans and brainstorms are not indexed.

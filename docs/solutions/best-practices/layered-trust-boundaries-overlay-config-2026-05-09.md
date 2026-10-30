@@ -222,11 +222,11 @@ freely.
 > historical snapshot rather than current source:
 >
 > - **The field set grew to six.** `SECURITY_OVERLAY_FIELDS`
->   (`src/lib/config-schema.ts:732`) is now `model`, `variant`, `skills`,
+>   (`src/lib/config-schema.ts:734`) is now `model`, `variant`, `skills`,
 >   `permission`, `opencode`, `pi` — the two harness blocks were added when
 >   per-harness routing landed, because they carry routing just as `model` does.
 > - **The guard strips instead of throwing.** `rejectProjectSecurityOverlay` no
->   longer exists. `stripProjectSecurityOverlayFields` (`src/lib/config.ts:1038`)
+>   longer exists. `stripProjectSecurityOverlayFields` (`src/lib/config.ts:1104`)
 >   removes the offending field before schema validation and emits a bounded
 >   warning naming the file and key path. Invariant 1 is unchanged — the field
 >   still cannot take effect — but a committed project config with a stray

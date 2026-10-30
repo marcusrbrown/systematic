@@ -55,6 +55,7 @@ const TOP_LEVEL_KEYS = [
   'pi_subagents',
   'skills_as_commands',
   'allow_project_profiles',
+  'search',
 ] as const
 
 /**

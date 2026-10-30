@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import {
   type ParseError,
@@ -31,6 +30,15 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from './routing-resolver.js'
+import type { SearchSettings } from './search-core.js'
+import {
+  formatSearchBlockWarning,
+  mergeSearchSettings,
+  resolveUserLevelConfigDirs,
+  type SearchSettingsSource,
+  selectConfigFile,
+  validateSearchBlock,
+} from './search-user-config.js'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -235,6 +243,18 @@ export interface SystematicConfig {
   pi_subagents?: PiSubagentsOverlayMap
   skills_as_commands: boolean
   allow_project_profiles: boolean
+  /**
+   * Merged `search` settings from user and custom config only. Absent when
+   * neither defines one: there is no default, and the core applies its own at
+   * use time.
+   */
+  search?: SearchSettings
+  /**
+   * Set (to `true`) when a user or custom `search` block, or its file, could
+   * not be read. That block is ignored and search results carry a
+   * `config unreadable` note. Absent otherwise.
+   */
+  searchUnreadable?: boolean
 }
 
 export const DEFAULT_CONFIG: SystematicConfig = {
@@ -266,7 +286,7 @@ interface RawProfileBundle {
 interface RawSystematicConfig
   extends Omit<
     Partial<SystematicConfig>,
-    'agents' | 'categories' | 'pi_subagents'
+    'agents' | 'categories' | 'pi_subagents' | 'search' | 'searchUnreadable'
   > {
   agents?: unknown
   categories?: unknown
@@ -287,6 +307,13 @@ interface FileConfigSource extends ConfigSourceBase {
   readonly kind: 'file'
   /** Keys from `REMOVED_CONFIG_KEYS` this file carries, whatever their value. */
   readonly removedKeys: readonly string[]
+  /**
+   * The file's `search` block, validated on its own and split off the rest
+   * of the file before `SystematicConfigSchema.safeParse`, so a bad block
+   * can never fail the load. Absent for project sources (which are stripped)
+   * and for files with no `search` key.
+   */
+  readonly search?: SearchSettingsSource
   readonly trust: ConfigSourceKind
 }
 
@@ -370,13 +397,16 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
   Record<SecurityOverlayField, ConfigProtectedFieldPath>
 >
 
-// `allow_project_profiles` is unconditionally project-protected. `profiles` is
+// `allow_project_profiles` and `search` are unconditionally project-protected. `profiles` is
 // deliberately NOT in this set -- it is conditionally protected on the
 // effective `allow_project_profiles` opt-in (see
 // `stripProjectProtectedFields`/`collectProjectProtectedFields`). A project can
 // never grant itself that opt-in, since `allow_project_profiles` itself is
 // always stripped regardless of its value.
-const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set(['allow_project_profiles'])
+const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set([
+  'allow_project_profiles',
+  'search',
+])
 
 /** Max rendered length (including a truncation ellipsis) for untrusted text interpolated into a diagnostic message. */
 const MAX_DIAGNOSTIC_TEXT = 200
@@ -545,17 +575,6 @@ export function warnDroppedNames(
       `[systematic] "${displayName}" in \`${field}\` is no longer a bundled name and will be ignored.${removalNote} Remove it from your config to silence this warning. See ${MIGRATION_DOCS_URL} for migration guidance.`,
     )
   }
-}
-
-/**
- * Resolve a config file path by checking `.jsonc` first, then `.json`.
- * Returns the first existing file, or the `.json` path as fallback so
- * callers that `fs.existsSync` the result still work.
- */
-function resolveConfigPath(dir: string, basename: string): string {
-  const jsoncPath = path.join(dir, `${basename}.jsonc`)
-  if (fs.existsSync(jsoncPath)) return jsoncPath
-  return path.join(dir, `${basename}.json`)
 }
 
 function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
@@ -844,13 +863,22 @@ function loadConfigSource(
           )
         : topLevelStripped
 
-    const result = SystematicConfigSchema.safeParse(config)
+    // Validated apart from the rest of the file (user and custom only -- the
+    // project pass already stripped `search` above), so a bad block drops
+    // with one warning instead of failing the whole load.
+    const { config: configWithoutSearch, search } = splitSearchBlock(
+      config,
+      filePath,
+      warningSink,
+    )
+
+    const result = SystematicConfigSchema.safeParse(configWithoutSearch)
     if (!result.success) {
       throwTopLevelConfigSchemaError(
         filePath,
         trust,
         result.error.issues,
-        config,
+        configWithoutSearch,
       )
     }
 
@@ -864,12 +892,13 @@ function loadConfigSource(
       source: {
         kind: 'file',
         canonicalPath: resolveConfigSourcePath(filePath),
-        config,
+        config: configWithoutSearch,
         path: filePath,
         protectedFields,
         removedKeys: REMOVED_CONFIG_KEYS.filter((key) =>
           Object.hasOwn(rawConfig, key),
         ),
+        ...(search && { search }),
         trust,
       },
     }
@@ -883,6 +912,34 @@ function loadConfigSource(
       },
       source: null,
     }
+  }
+}
+
+/**
+ * Split a user/custom file's `search` block off and validate it alone. A
+ * project source never reaches here with a `search` key, because
+ * `PROJECT_ALWAYS_PROTECTED_FIELDS` already removed it. An invalid block is
+ * dropped with one warning that names fields and no value, and the source is
+ * marked unreadable so search results carry a `config unreadable` note.
+ */
+function splitSearchBlock(
+  config: RawSystematicConfig,
+  filePath: string,
+  warningSink: (message: string) => void,
+): { config: RawSystematicConfig; search: SearchSettingsSource | undefined } {
+  if (!Object.hasOwn(config, 'search')) return { config, search: undefined }
+  const { search: rawSearch, ...rest } = config as Record<string, unknown>
+  const validation = validateSearchBlock(rawSearch)
+  if (validation.ok) {
+    return {
+      config: rest as RawSystematicConfig,
+      search: { settings: validation.settings, unreadable: false },
+    }
+  }
+  warningSink(formatSearchBlockWarning(filePath, validation.fields))
+  return {
+    config: rest as RawSystematicConfig,
+    search: { unreadable: true },
   }
 }
 
@@ -961,6 +1018,15 @@ function collectProjectProtectedFields(
       ? [
           {
             fieldPath: 'allow_project_profiles' as const,
+            outcome: 'blocked' as const,
+            sourceKind: 'project' as const,
+          },
+        ]
+      : []),
+    ...(Object.hasOwn(rawConfig, 'search')
+      ? [
+          {
+            fieldPath: 'search' as const,
             outcome: 'blocked' as const,
             sourceKind: 'project' as const,
           },
@@ -1682,6 +1748,13 @@ export function loadConfigWithSources(
     boundedProjectStrip.sink,
   )
 
+  emitTopLevelProtectedFieldWarning(
+    projectSource,
+    'search',
+    `\`search\` in project config (%PATH%) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+    boundedProjectStrip.sink,
+  )
+
   const suppressedStripCount = boundedProjectStrip.suppressedCount()
   if (suppressedStripCount > 0) {
     projectStrip.sink(
@@ -1714,6 +1787,14 @@ export function loadConfigWithSources(
   const customConfig = customSource?.config
 
   const warned = new Set<string>()
+
+  // `search` is protected: only user and custom sources carry one, merged by
+  // the one shared rule (see `mergeSearchSettings`).
+  const mergedSearch = mergeSearchSettings(
+    [userSource?.search, customSource?.search].filter(
+      (source): source is SearchSettingsSource => source !== undefined,
+    ),
+  )
 
   assertAllProfileBundlesAreValid(userConfig, customConfig, projectConfig)
 
@@ -1879,6 +1960,8 @@ export function loadConfigWithSources(
       customConfig?.allow_project_profiles ??
       userConfig?.allow_project_profiles ??
       DEFAULT_CONFIG.allow_project_profiles,
+    ...(mergedSearch.settings && { search: mergedSearch.settings }),
+    ...(mergedSearch.unreadable && { searchUnreadable: true }),
   }
 
   // Drop removed names from the effective config and warn about each one.
@@ -2666,24 +2749,19 @@ export function getConfigPaths(
   projectDir: string,
   options?: ConfigPathOptions,
 ) {
-  const homeDir = options?.homeDir ?? os.homedir()
-  const userConfigDir =
-    options?.userConfigDir ?? path.join(homeDir, '.config/opencode')
-  const customConfigDir =
-    options !== undefined && Object.hasOwn(options, 'customConfigDir')
-      ? options.customConfigDir?.trim()
-      : process.env.OPENCODE_CONFIG_DIR?.trim()
+  const { homeDir, userConfigDir, customConfigDir } =
+    resolveUserLevelConfigDirs(options)
 
   const result = {
-    userConfig: resolveConfigPath(userConfigDir, 'systematic'),
-    projectConfig: resolveConfigPath(
+    userConfig: selectConfigFile(userConfigDir, 'systematic'),
+    projectConfig: selectConfigFile(
       path.join(projectDir, '.opencode'),
       'systematic',
     ),
     userDir: path.join(homeDir, '.config/opencode/systematic'),
     projectDir: path.join(projectDir, '.opencode/systematic'),
     ...(customConfigDir && {
-      customConfig: resolveConfigPath(customConfigDir, 'systematic'),
+      customConfig: selectConfigFile(customConfigDir, 'systematic'),
       customDir: path.join(customConfigDir, 'systematic'),
     }),
   }

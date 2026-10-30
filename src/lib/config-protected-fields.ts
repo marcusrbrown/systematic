@@ -21,6 +21,7 @@
 export const CONFIG_PROTECTED_FIELD_PATHS = [
   'profiles',
   'allow_project_profiles',
+  'search',
   'agents.*.model',
   'agents.*.permission',
   'agents.*.skills',

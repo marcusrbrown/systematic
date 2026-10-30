@@ -241,6 +241,42 @@ describe('resolveToolAllowlist', () => {
     })
   })
 
+  test('the default allowlist is the read-only built-ins plus systematic_search, and nothing else from the parent', () => {
+    expect([...DEFAULT_READONLY_TOOLS]).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'systematic_search',
+    ])
+    expect(DEFAULT_READONLY_TOOLS).not.toContain('systematic_skill')
+    expect(DEFAULT_READONLY_TOOLS).not.toContain('systematic_delegate')
+  })
+
+  test('tools: Read, Grep gets no search', () => {
+    expect(resolveToolAllowlist('Read, Grep')).toEqual({
+      tools: ['read', 'grep'],
+    })
+  })
+
+  test('tools: systematic_search keeps search through its OPENCODE_TO_PI_TOOL key', () => {
+    expect(resolveToolAllowlist('systematic_search')).toEqual({
+      tools: ['systematic_search'],
+    })
+    expect(resolveToolAllowlist('Read, systematic_search')).toEqual({
+      tools: ['read', 'systematic_search'],
+    })
+  })
+
+  test('the parent skill and delegate tools stay unknown to a persona', () => {
+    expect(() => resolveToolAllowlist('systematic_skill')).toThrow(
+      /Unknown declared tool "systematic_skill"/,
+    )
+    expect(() => resolveToolAllowlist('systematic_delegate')).toThrow(
+      /Unknown declared tool "systematic_delegate"/,
+    )
+  })
+
   test('maps known declared OpenCode tool names to Pi built-ins', () => {
     expect(resolveToolAllowlist('Read, Grep, Glob, Edit, Write, Bash')).toEqual(
       {

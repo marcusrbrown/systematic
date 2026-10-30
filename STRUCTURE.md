@@ -11,7 +11,9 @@ systematic/
 │   ├── index.ts      # OpenCode plugin entry — default export only
 │   ├── pi.ts         # Pi extension entry — default export only
 │   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / validate-review-return / config / setup --harness / pi-subagents)
-│   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator entry
+│   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator logic
+│   ├── claude-code-validator-bin.ts # Entry of the validator bin (holds the entry guard)
+│   ├── claude-code-search.ts # Entry of the `systematic-search` Claude Code bin
 │   └── lib/          # Core modules
 ├── skills/           # Bundled skills (one directory per skill, SKILL.md format)
 ├── agents/           # Bundled agents (one subdirectory per category)
@@ -50,9 +52,10 @@ subdirectory of core modules.
   bootstrap injection plus the `systematic_skill` and `systematic_delegate` tools.
 - `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,
   `validate-review-return` (raw persona return from stdin), `config show/path`,
-  `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
+  `search <query...>`, `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
   CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
-- `src/claude-code-validator.ts` — purpose-built Claude Code bundle entry for validating review artifacts
+- `src/claude-code-validator.ts` — review-artifact validation for the Claude Code bundle; `src/claude-code-validator-bin.ts` is the bin's entry
+- `src/claude-code-search.ts` — entry of the `systematic-search` Claude Code bin (user-level config only)
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
@@ -80,6 +83,14 @@ subdirectory of core modules.
 - `src/lib/walk-dir.ts` — `walkDir` (foundation for all asset discovery)
 - `src/lib/validation.ts` — agent config validation + type guards
 - `src/lib/agent-colors.ts` — `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS`
+- `src/lib/search-*.ts` — durable-output search over `docs/solutions/`: `search-core.ts` is the one
+  host-neutral composition (validate, lexical lane, lifecycle resolver, render) that the host
+  adapters in `search-tool.ts` (OpenCode v1, v2, Pi) and `search-cli.ts` (`systematic search` and
+  the `systematic-search` bin) all call, and the learnings-researcher agent reaches through the tool
+  or the bin; `search-corpus.ts`,
+  `search-lexical.ts` and `search-render.ts` are its parts; `search-user-config.ts` holds the
+  `search` config field's schema piece and the user-level reader. See the `ARCHITECTURE.md` codemap
+  for each module
 - `src/lib/review-return-validator.ts` — bounded stdin validator for one raw `ce:review` persona
   return, backing `systematic validate-review-return` (`runReviewReturnValidator`,
   `validateReviewReturnValue`)
@@ -244,8 +255,10 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 |------|------|
 | `src/index.ts` | OpenCode plugin entry — default-export object with `id`, `setup` and `server` |
 | `src/pi.ts` | Pi extension entry — `systematicPiExtension` default export |
-| `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, `pi-subagents` commands |
-| `src/claude-code-validator.ts` | Claude Code bundled validator entry — review-artifact validation with isolated dependencies |
+| `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `validate-review-return`, `search`, `config`, `setup --harness`, `pi-subagents` commands |
+| `src/claude-code-validator.ts` | Claude Code bundled validator logic — review-artifact validation with isolated dependencies |
+| `src/claude-code-validator-bin.ts` | Entry of the validator bin; holds the entry guard so the logic module stays safe to bundle elsewhere |
+| `src/claude-code-search.ts` | Entry of the `systematic-search` bin — durable-output search over the user-level config only |
 
 ### Configuration
 

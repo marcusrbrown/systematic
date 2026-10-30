@@ -733,7 +733,7 @@ async function executeTool(
 }
 
 describe('opencode v1 goldens: registered hooks and systematic_skill', () => {
-  test('registers exactly the five v1 hooks, with systematic_skill as the only tool', async () => {
+  test('registers exactly the five v1 hooks, with systematic_skill and systematic_search as the only tools', async () => {
     await withScenario('hooks-inventory', {}, async (context) => {
       const hooks = await context.start()
       expectGolden('hooks.json', {

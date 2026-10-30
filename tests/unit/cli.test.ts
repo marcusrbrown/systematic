@@ -4,7 +4,10 @@ import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runCapabilitiesCli as runTestableCli } from '../../src/cli.js'
+import {
+  loadSearchSettingsForCli,
+  runCapabilitiesCli as runTestableCli,
+} from '../../src/cli.js'
 import type { ConfigObservationMetadata } from '../../src/lib/capability-snapshot.js'
 import { MANIFEST_FILENAME } from '../../src/lib/pi-subagents-export.js'
 
@@ -2645,6 +2648,390 @@ describe('cli pi-subagents with disabled personas', () => {
       expect(result.stdout).not.toContain(STILL_ACTIVE_HEADING)
     } finally {
       cleanupSandbox(box)
+    }
+  })
+})
+
+describe('cli search', () => {
+  interface SearchBox {
+    readonly root: string
+    readonly project: string
+    readonly home: string
+    readonly env: Record<string, string>
+  }
+
+  function mkSearchBox(): SearchBox {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-cli-search-')),
+    )
+    const project = path.join(root, 'project')
+    const home = path.join(root, 'home')
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(project, 'docs/solutions'), { recursive: true })
+    fs.mkdirSync(path.join(project, 'packages/inner'), { recursive: true })
+    fs.mkdirSync(home, { recursive: true })
+    fs.writeFileSync(
+      path.join(project, 'docs/solutions/zebra-flake.md'),
+      '---\ntitle: Zebra crossing flake\nsymptoms:\n  - zebra flake on retry\n---\n\nThe zebra flake appears when retries overlap.\n',
+    )
+    return {
+      root,
+      project,
+      home,
+      // An empty OPENCODE_CONFIG_DIR counts as unset, so a developer's own
+      // value cannot reach the spawned CLI.
+      env: { HOME: home, OPENCODE_CONFIG_DIR: '' },
+    }
+  }
+
+  function writeUserFile(box: SearchBox, name: string, content: string): void {
+    const dir = path.join(box.home, '.config/opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, name), content)
+  }
+
+  it('prints ranked hits for a query and exits 0', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(['search', 'zebra', 'flake'], box.project, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toBe('')
+      expect(result.stdout).toContain('docs/solutions/zebra-flake.md')
+      expect(result.stdout).toContain('Zebra crossing flake')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('--dir at a subdirectory resolves up to the project root, from a foreign cwd', () => {
+    const box = mkSearchBox()
+    const elsewhere = path.join(box.root, 'elsewhere')
+    fs.mkdirSync(elsewhere)
+    try {
+      const result = runCli(
+        [
+          'search',
+          'zebra',
+          '--dir',
+          path.join(box.project, 'packages/inner'),
+          '--limit',
+          '3',
+          '--kind',
+          'solution',
+        ],
+        elsewhere,
+        box.env,
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('docs/solutions/zebra-flake.md')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('exits 2 with stderr only for usage errors', () => {
+    const box = mkSearchBox()
+    try {
+      for (const args of [
+        ['search'],
+        ['search', 'zebra', '--limit', '0'],
+        ['search', 'zebra', '--limit', '21'],
+        ['search', 'zebra', '--limit', 'abc'],
+        ['search', 'zebra', '--kind', 'bogus'],
+        ['search', 'zebra', '--json'],
+      ]) {
+        const result = runCli(args, box.project, box.env)
+        expect(result.exitCode).toBe(2)
+        expect(result.stdout).toBe('')
+        expect(result.stderr).not.toBe('')
+      }
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('names systematic search in the usage of a parse error', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(
+        ['search', 'zebra', '--bogus'],
+        box.project,
+        box.env,
+      )
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain('Usage: systematic search <query...>')
+      expect(result.stderr).not.toContain('systematic-search')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('prints disabled and exits 0 when the user config switches search off', () => {
+    const box = mkSearchBox()
+    try {
+      writeUserFile(
+        box,
+        'systematic.json',
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const result = runCli(['search', 'zebra'], box.project, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/disabled/i)
+      expect(result.stdout).not.toContain('zebra-flake')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('AE2: prints the project-config strip warning on stderr, ignores the field, and still searches', () => {
+    const box = mkSearchBox()
+    try {
+      fs.mkdirSync(path.join(box.project, '.opencode'))
+      fs.writeFileSync(
+        path.join(box.project, '.opencode/systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const result = runCli(['search', 'zebra'], box.project, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toContain('`search` in project config')
+      expect(result.stderr).toContain('has been ignored')
+      expect(result.stdout).toContain('docs/solutions/zebra-flake.md')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('an invalid user search block warns, still searches with a config unreadable note, and exits 0', () => {
+    const box = mkSearchBox()
+    try {
+      writeUserFile(
+        box,
+        'systematic.json',
+        JSON.stringify({ search: { enabled: 'SECRET-VALUE-no' } }),
+      )
+      const result = runCli(['search', 'zebra'], box.project, box.env)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Notes: config unreadable')
+      expect(result.stdout).toContain('docs/solutions/zebra-flake.md')
+      expect(result.stderr).toContain('search.enabled')
+      expect(result.stderr).not.toContain('SECRET-VALUE')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('stays disabled when the same user file has an invalid sibling key', () => {
+    const box = mkSearchBox()
+    try {
+      writeUserFile(
+        box,
+        'systematic.json',
+        JSON.stringify({
+          search: { enabled: false },
+          disabled_skills: 'not-an-array',
+        }),
+      )
+      const result = runCli(['search', 'zebra'], box.project, box.env)
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Search is disabled')
+      expect(result.stdout).not.toContain('zebra-flake.md')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('help lists the search command and its flags', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(['--help'], box.project, box.env)
+      expect(result.stdout).toContain('search <query...>')
+      expect(result.stdout).toContain('--dir')
+      expect(result.stdout).toContain('--limit')
+      expect(result.stdout).toContain('--kind')
+      expect(result.stdout).toContain('systematic search ')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('search --help prints the search usage', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(['search', '--help'], box.project, box.env)
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: systematic search <query...>')
+      expect(result.stdout).not.toContain('systematic-search')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('loadSearchSettingsForCli', () => {
+  function mkBox() {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-cli-search-load-')),
+    )
+    const project = path.join(root, 'project')
+    const home = path.join(root, 'home')
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(project, 'sub'), { recursive: true })
+    fs.mkdirSync(path.join(home, '.config/opencode'), { recursive: true })
+    return {
+      root,
+      project,
+      home,
+      load: (startDir: string) =>
+        loadSearchSettingsForCli(startDir, {
+          homeDir: home,
+          userConfigDir: path.join(home, '.config/opencode'),
+          customConfigDir: null,
+        }),
+    }
+  }
+
+  it('returns clean, empty settings when no config exists', () => {
+    const box = mkBox()
+    try {
+      expect(box.load(box.project)).toEqual({
+        settings: undefined,
+        warnings: [],
+        unreadable: false,
+      })
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns the merged user settings', () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      expect(box.load(box.project)).toEqual({
+        settings: { enabled: false },
+        warnings: [],
+        unreadable: false,
+      })
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('reads project config at the project root when started from a subdirectory', () => {
+    const box = mkBox()
+    try {
+      fs.mkdirSync(path.join(box.project, '.opencode'))
+      fs.writeFileSync(
+        path.join(box.project, '.opencode/systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const loaded = box.load(path.join(box.project, 'sub'))
+      expect(loaded.settings).toBeUndefined()
+      expect(loaded.warnings).toHaveLength(1)
+      expect(loaded.warnings[0]).toContain('`search` in project config')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('maps a source the loader reports as invalid to unreadable, with a fixed warning', () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        '{ "search": { "enabled": false ',
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.warnings.length).toBeGreaterThan(0)
+      expect(loaded.warnings.join('\n')).not.toContain('enabled')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not mark search unreadable for an invalid project config', () => {
+    const box = mkBox()
+    try {
+      fs.mkdirSync(path.join(box.project, '.opencode'), { recursive: true })
+      fs.writeFileSync(
+        path.join(box.project, '.opencode/systematic.json'),
+        '{ "search": { "enabled": false ',
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.unreadable).toBe(false)
+      expect(loaded.warnings.join('\n')).not.toContain('config unreadable')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a valid search.enabled:false when a sibling key in the same user file is invalid', () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({
+          search: { enabled: false },
+          disabled_skills: 'not-an-array',
+        }),
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.warnings.length).toBeGreaterThan(0)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('takes the search block from the custom file when the user file is invalid', () => {
+    const box = mkBox()
+    try {
+      const customDir = path.join(box.root, 'custom')
+      fs.mkdirSync(customDir)
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        '{ "search": { "enabled": true ',
+      )
+      fs.writeFileSync(
+        path.join(customDir, 'systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const loaded = loadSearchSettingsForCli(box.project, {
+        homeDir: box.home,
+        userConfigDir: path.join(box.home, '.config/opencode'),
+        customConfigDir: customDir,
+      })
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.unreadable).toBe(true)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('maps a bad search block to unreadable and keeps the rest of the file', () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({ search: { enabled: 'x' }, disabled_skills: [] }),
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.settings).toBeUndefined()
+      expect(loaded.warnings.join('\n')).toContain('search.enabled')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
     }
   })
 })

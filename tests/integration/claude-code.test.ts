@@ -137,6 +137,18 @@ describe('claude-code bundle — shared-core content fidelity', () => {
     expect(content).toContain('AskUserQuestion')
   })
 
+  test('output-style names the systematic-search bin and still ships no systematic_skill tool', () => {
+    const content = fs.readFileSync(
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
+      'utf8',
+    )
+    expect(content).toContain('`systematic-search`')
+    expect(content).toContain('command -v systematic-search')
+    expect(content).toContain(
+      'Systematic ships no `systematic_skill` tool on Claude Code',
+    )
+  })
+
   test('output-style carries the worktree placement rule exactly once, between the body and the profile', () => {
     const content = fs.readFileSync(
       path.join(BUILD_DIR, 'output-styles/systematic.md'),

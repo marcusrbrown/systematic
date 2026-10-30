@@ -34,7 +34,7 @@ related_components:
 
 # OpenCode plugin multi-source loading: per-load registration with marker-based bootstrap
 
-> **OpenCode v1.** Unless a section says v2, this doc describes the v1 host. The v1 factory body is no longer in `src/index.ts`: the entry exports an object whose `server` member calls `createOpenCodeV1Hooks` in `src/lib/opencode-v1.ts`, which loads config, composes the bootstrap and registers the hooks on every call. `initializePlugin` in the snippets is that body as it was written. The marker-based `applyBootstrapContent` is unchanged and still runs from the v1 `experimental.chat.system.transform` hook (`src/lib/opencode-v1.ts:131-182`). A v2 host does not use any of this; see `## OpenCode v2`.
+> **OpenCode v1.** Unless a section says v2, this doc describes the v1 host. The v1 factory body is no longer in `src/index.ts`: the entry exports an object whose `server` member calls `createOpenCodeV1Hooks` in `src/lib/opencode-v1.ts`, which loads config, composes the bootstrap and registers the hooks on every call. `initializePlugin` in the snippets is that body as it was written. The marker-based `applyBootstrapContent` is unchanged and still runs from the v1 `experimental.chat.system.transform` hook (`src/lib/opencode-v1.ts:140-191`). A v2 host does not use any of this; see `## OpenCode v2`.
 
 ## Problem
 

@@ -461,6 +461,9 @@ describe('setupOpenCodeV2', () => {
             order.push('skills')
             throw new Error('skills rejected')
           },
+          search: () => {
+            order.push('search')
+          },
           commands: () => {
             order.push('commands')
           },
@@ -471,7 +474,13 @@ describe('setupOpenCodeV2', () => {
       }),
     )
 
-    expect(order).toEqual(['agents', 'skills', 'commands', 'bootstrap'])
+    expect(order).toEqual([
+      'agents',
+      'skills',
+      'search',
+      'commands',
+      'bootstrap',
+    ])
     expect(errorMessages()).toEqual([
       'systematic: agents installer failed: agents exploded',
       'systematic: skills installer failed: skills rejected',

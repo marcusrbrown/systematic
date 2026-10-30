@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import { findAgentsInDir } from './agents.js'
 import { parseFrontmatter } from './frontmatter.js'
+import { SEARCH_TOOL_NAME } from './search-core.js'
 import { extractString } from './validation.js'
 
 /** A single resolved persona entry in the flattened catalog. */
@@ -159,8 +160,20 @@ export function renderAgentCatalogCompact(
     .join('\n')
 }
 
-/** Pi built-in read-only tool names used as the default allowlist. */
-export const DEFAULT_READONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const
+/**
+ * The default delegate allowlist: Pi's built-in read-only tool names plus
+ * `systematic_search`, the one read-only parent tool a delegate may call.
+ * `systematic_search` is not a Pi built-in. It is active in a delegate only
+ * when `src/pi.ts` also passes its definition as a custom tool, and a name
+ * with no definition is inert.
+ */
+export const DEFAULT_READONLY_TOOLS = [
+  'read',
+  'grep',
+  'find',
+  'ls',
+  SEARCH_TOOL_NAME,
+] as const
 
 const OPENCODE_TO_PI_TOOL: Record<string, string> = {
   Read: 'read',
@@ -169,6 +182,7 @@ const OPENCODE_TO_PI_TOOL: Record<string, string> = {
   Bash: 'bash',
   Edit: 'edit',
   Write: 'write',
+  [SEARCH_TOOL_NAME]: SEARCH_TOOL_NAME,
 }
 
 export interface ResolvedToolAllowlist {

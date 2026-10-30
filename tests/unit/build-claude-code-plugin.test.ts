@@ -9,6 +9,7 @@ import {
   buildOutputStyleContent,
   buildPluginManifest,
   buildSourceInventory,
+  CLAUDE_CODE_SEARCH_BIN,
   CLAUDE_CODE_VALIDATOR_BIN,
   checkGeneratedNamespace,
   collectSkillFiles,
@@ -24,6 +25,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
 const PLACEHOLDER_VALIDATOR_BUNDLE = Buffer.from('placeholder validator bundle')
+const PLACEHOLDER_SEARCH_BUNDLE = Buffer.from('placeholder search bundle')
 
 const TEMP_ROOTS: string[] = []
 
@@ -922,6 +924,88 @@ describe('writePluginFiles — atomic staging write', () => {
     // generatePluginFiles throws before writePluginFiles is ever called in
     // the real main() flow — assert the outDir was never created.
     expect(fs.existsSync(outDir)).toBe(false)
+  })
+})
+
+describe('generatePluginFiles — the two Claude Code bins', () => {
+  function makeBinRepo(): string {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+    return root
+  }
+
+  test('names the search bin systematic-search', () => {
+    expect(CLAUDE_CODE_SEARCH_BIN).toBe('systematic-search')
+  })
+
+  test('writes both bins with the node shebang when given a search bundle', () => {
+    const root = makeBinRepo()
+
+    const files = generatePluginFiles(
+      root,
+      PLACEHOLDER_VALIDATOR_BUNDLE,
+      PLACEHOLDER_SEARCH_BUNDLE,
+    )
+
+    const validator = files.get(`bin/${CLAUDE_CODE_VALIDATOR_BIN}`)
+    const search = files.get(`bin/${CLAUDE_CODE_SEARCH_BIN}`)
+    expect(validator?.toString()).toBe(
+      `#!/usr/bin/env node\n${PLACEHOLDER_VALIDATOR_BUNDLE.toString()}`,
+    )
+    expect(search?.toString()).toBe(
+      `#!/usr/bin/env node\n${PLACEHOLDER_SEARCH_BUNDLE.toString()}`,
+    )
+    expect(
+      translateBundle(files, buildSourceInventory(root))
+        .get(`bin/${CLAUDE_CODE_SEARCH_BIN}`)
+        ?.equals(search ?? Buffer.alloc(0)),
+    ).toBe(true)
+  })
+
+  test('both bins land executable on disk', () => {
+    const root = makeBinRepo()
+    const outDir = path.join(root, 'out')
+
+    writePluginFiles(
+      generatePluginFiles(
+        root,
+        PLACEHOLDER_VALIDATOR_BUNDLE,
+        PLACEHOLDER_SEARCH_BUNDLE,
+      ),
+      outDir,
+    )
+
+    for (const bin of [CLAUDE_CODE_VALIDATOR_BIN, CLAUDE_CODE_SEARCH_BIN]) {
+      const stat = fs.statSync(path.join(outDir, 'bin', bin))
+      expect(stat.isFile()).toBe(true)
+      expect(stat.mode & 0o111).toBe(0o111)
+    }
+  })
+
+  test('emits no search bin when the third parameter is omitted, so existing callers are unchanged', () => {
+    const root = makeBinRepo()
+
+    const files = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
+
+    expect(files.has(`bin/${CLAUDE_CODE_VALIDATOR_BIN}`)).toBe(true)
+    expect(files.has(`bin/${CLAUDE_CODE_SEARCH_BIN}`)).toBe(false)
+  })
+
+  test('an empty search bundle fails the build closed', () => {
+    const root = makeBinRepo()
+
+    expect(() =>
+      generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE, Buffer.alloc(0)),
+    ).toThrow(/search bundle is empty/i)
+  })
+
+  test('an empty validator bundle fails the build closed', () => {
+    const root = makeBinRepo()
+
+    expect(() =>
+      generatePluginFiles(root, Buffer.alloc(0), PLACEHOLDER_SEARCH_BUNDLE),
+    ).toThrow(/validator bundle is empty/i)
   })
 })
 

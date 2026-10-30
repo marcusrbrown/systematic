@@ -247,12 +247,31 @@ describe('publish-claude-code-plugin build job', () => {
       'claude-code/output-styles/systematic.md',
       'claude-code/hooks/hooks.json',
       'claude-code/bin/systematic-validate-review-artifact',
+      'claude-code/bin/systematic-search',
       'claude-code/agents',
     ]) {
       expect(run).toContain(required)
     }
     expect(run).toContain(
       '-x "claude-code/bin/systematic-validate-review-artifact"',
+    )
+  })
+
+  test('the bundle guard requires the search bin as a file and checks it is executable', () => {
+    const run = runOf(findStep(build(), 'Guard built bundle'))
+    const required = run.slice(
+      run.indexOf('required=('),
+      run.indexOf(')', run.indexOf('required=(')),
+    )
+    expect(required).toContain('"claude-code/bin/systematic-search"')
+    expect(run).toContain('-x "claude-code/bin/systematic-search"')
+    // The executable check names the bin in its error line too, like the validator's.
+    expect(run).toContain(
+      'Required artifact is not executable: claude-code/bin/systematic-search',
+    )
+    // The search bin check does not replace the validator's.
+    expect(run).toContain(
+      'Required artifact is not executable: claude-code/bin/systematic-validate-review-artifact',
     )
   })
 

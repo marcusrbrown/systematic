@@ -114,7 +114,7 @@ Converting four `js-yaml` imports would have compiled but shipped a regression:
 load('')   // v4: {}   v5: throws YAMLException
 ```
 
-`src/lib/frontmatter.ts:54` depends on the v4 behavior and `tests/unit/frontmatter.test.ts:122-130`
+`src/lib/frontmatter.ts:57` depends on the v4 behavior and `tests/unit/frontmatter.test.ts:122-130`
 pins it. An API migration that typechecks is not a behavioral migration.
 
 ## Why This Matters

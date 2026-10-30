@@ -19,14 +19,15 @@ import {
   type V2PermissionRule,
 } from './opencode-v2-permissions.js'
 import { installSkills } from './opencode-v2-skills.js'
+import { installSearch } from './search-tool.js'
 
 /**
  * OpenCode v2 adapter.
  *
  * `setup` runs once per location. It loads config once, builds one frozen
  * snapshot (the asset plan plus the bootstrap content) and passes that same
- * object to each domain installer: agents, skills, commands and bootstrap.
- * Each domain lives in its own module.
+ * object to each domain installer: agents, skills, search, commands and
+ * bootstrap. Each domain lives in its own module.
  *
  * Two failure rules shape the module:
  *
@@ -120,6 +121,7 @@ export type V2Installer = (input: V2InstallInput) => Promise<void> | void
 export interface V2Installers {
   agents: V2Installer
   skills: V2Installer
+  search: V2Installer
   commands: V2Installer
   bootstrap: V2Installer
 }
@@ -271,6 +273,7 @@ export const installAgents: V2Installer = async ({ ctx, snapshot, guard }) => {
 const DEFAULT_INSTALLERS: V2Installers = {
   agents: installAgents,
   skills: installSkills,
+  search: installSearch,
   commands: installCommands,
   bootstrap: installBootstrap,
 }
@@ -279,6 +282,7 @@ const DEFAULT_INSTALLERS: V2Installers = {
 const INSTALLER_ORDER = [
   'agents',
   'skills',
+  'search',
   'commands',
   'bootstrap',
 ] as const satisfies readonly (keyof V2Installers)[]

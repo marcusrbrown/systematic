@@ -247,6 +247,11 @@ describe('capability snapshot contract', () => {
           outcome: 'blocked',
           sourceKind: 'project',
         },
+        {
+          fieldPath: 'search',
+          outcome: 'blocked',
+          sourceKind: 'project',
+        },
       ],
       sources: [
         {
@@ -313,6 +318,14 @@ describe('capability snapshot contract', () => {
     expect(snapshot.facts).toContainEqual({
       factId: 'config-protected-field',
       fieldPath: 'allow_project_profiles',
+      kind: 'protection',
+      outcome: 'blocked',
+      sourceId: 'config:project',
+      status: 'available',
+    })
+    expect(snapshot.facts).toContainEqual({
+      factId: 'config-protected-field',
+      fieldPath: 'search',
       kind: 'protection',
       outcome: 'blocked',
       sourceId: 'config:project',
