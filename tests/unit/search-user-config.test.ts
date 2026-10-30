@@ -153,7 +153,7 @@ describe('validateSearchBlock', () => {
   })
 
   test('an unknown key is reported against its parent, not by its name', () => {
-    const result = validateSearchBlock({ ['secret-key-name']: 1 })
+    const result = validateSearchBlock({ 'secret-key-name': 1 })
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.fields).toEqual(['search'])

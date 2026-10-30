@@ -83,6 +83,14 @@ subdirectory of core modules.
 - `src/lib/walk-dir.ts` — `walkDir` (foundation for all asset discovery)
 - `src/lib/validation.ts` — agent config validation + type guards
 - `src/lib/agent-colors.ts` — `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS`
+- `src/lib/search-*.ts` — durable-output search over `docs/solutions/`: `search-core.ts` is the one
+  host-neutral composition (validate, lexical lane, lifecycle resolver, render) that the host
+  adapters in `search-tool.ts` (OpenCode v1, v2, Pi) and `search-cli.ts` (`systematic search` and
+  the `systematic-search` bin) all call, and the learnings-researcher agent reaches through the tool
+  or the bin; `search-corpus.ts`,
+  `search-lexical.ts` and `search-render.ts` are its parts; `search-user-config.ts` holds the
+  `search` config field's schema piece and the user-level reader. See the `ARCHITECTURE.md` codemap
+  for each module
 - `src/lib/review-return-validator.ts` — bounded stdin validator for one raw `ce:review` persona
   return, backing `systematic validate-review-return` (`runReviewReturnValidator`,
   `validateReviewReturnValue`)
