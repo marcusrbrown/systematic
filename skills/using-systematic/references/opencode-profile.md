@@ -8,6 +8,7 @@ Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
 | Blocking user interaction | `question` tool | supported | Present numbered options in chat and wait |
 | Task tracking | `todowrite` | supported | Maintain a visible task list in responses |
 | Skill loading | `systematic_skill` for bundled skills; `skill` tool for non-Systematic skills | supported | Read the skill instructions listed by the active harness |
+| Durable-output search | `systematic_search` tool over `docs/solutions/`; absent when `search.enabled` is false | supported | Grep `docs/solutions/` |
 
 ## Invocation examples
 

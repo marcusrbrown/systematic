@@ -8,6 +8,7 @@ Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
 | Blocking user interaction | No native blocking tool | degraded | Present numbered options in chat and wait |
 | Task tracking | No native task-tracking mechanism | unavailable | Maintain a visible task list in responses |
 | Skill loading | `systematic_skill` tool or Pi-native skill activation | supported | Read the skill instructions listed by the active harness |
+| Durable-output search | `systematic_search` tool, delegates included; absent when `search.enabled` is false | supported | Grep `docs/solutions/` |
 
 ## Invocation examples
 

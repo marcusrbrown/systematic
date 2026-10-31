@@ -6,6 +6,7 @@
 | Blocking user interaction | `AskUserQuestion` tool | supported | Present numbered options in chat and wait |
 | Task tracking | `TaskCreate` / `TaskGet` / `TaskList` / `TaskUpdate` (`TodoWrite` is deprecated and disabled by default) | supported | Maintain a visible task list in responses |
 | Skill loading | Native Skill tool with `SKILL.md` discovery (`~/.claude/skills/`, `.claude/skills/`, plugin `skills/`); Systematic ships no `systematic_skill` tool on Claude Code | supported | Read the skill instructions listed by the active harness |
+| Durable-output search | `systematic-search` command in the plugin `bin/`; probe with `command -v systematic-search`; user-level config only | supported | Grep `docs/solutions/` |
 
 Behavioral enforcement on Claude Code rides a plugin output style (force-for-plugin); a declarative `SessionStart` hook carries state only, since imperative hook content is refused as prompt injection.
 
