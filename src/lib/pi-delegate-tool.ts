@@ -502,16 +502,19 @@ function validateDelegateRequest(
   ctx: ExtensionContext,
   routing: RoutingContext,
 ): ValidatedDelegateRequest {
-  const { agent: agentName, task } = params
+  const { agent: requestedName, task } = params
 
-  const persona = resolveAgent(catalog, agentName)
+  const persona = resolveAgent(catalog, requestedName)
   if (!persona) {
     throw new Error(
-      `Unknown persona "${agentName}". Available personas: ${catalog
+      `Unknown persona "${requestedName}". Available personas: ${catalog
         .map((e) => e.name)
         .join(', ')}`,
     )
   }
+  // Everything downstream (notices, errors, result details) reports the canonical
+  // persona name, never a qualified string the caller happened to pass.
+  const agentName = persona.name
 
   const { model, thinkingLevel, notice, commitNotice } = resolvePersonaRouting(
     persona,

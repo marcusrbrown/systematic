@@ -130,6 +130,58 @@ tools: this is body prose, not frontmatter, and must not be read as a policy.`,
     expect(resolveAgent(catalog, 'unknown')).toBeUndefined()
   })
 
+  describe('resolveAgent: qualified names', () => {
+    const dir = makeTempAgentsDir({
+      'research/learnings-researcher.md':
+        '---\nname: learnings-researcher\ndescription: L\n---\nBody L',
+      'review/security-reviewer.md':
+        '---\nname: security-reviewer\ndescription: S\n---\nBody S',
+    })
+    const catalog = buildAgentCatalog(dir)
+
+    test('exact bare match is unchanged', () => {
+      expect(resolveAgent(catalog, 'learnings-researcher')?.id).toBe(
+        'research/learnings-researcher',
+      )
+    })
+
+    test('resolves systematic:<category>:<name> when the category matches', () => {
+      const entry = resolveAgent(
+        catalog,
+        'systematic:research:learnings-researcher',
+      )
+      expect(entry?.name).toBe('learnings-researcher')
+      expect(entry?.category).toBe('research')
+    })
+
+    test('rejects a qualified name whose category does not match', () => {
+      expect(
+        resolveAgent(catalog, 'systematic:review:learnings-researcher'),
+      ).toBeUndefined()
+    })
+
+    test('rejects an unknown qualified name', () => {
+      expect(
+        resolveAgent(catalog, 'systematic:research:no-such-agent'),
+      ).toBeUndefined()
+    })
+
+    test.each([
+      'systematic::learnings-researcher',
+      'systematic:research:',
+      'systematic::',
+      'foo:research:learnings-researcher',
+      'Systematic:research:learnings-researcher',
+      'systematic:Research:learnings-researcher',
+      'systematic:research:learnings-researcher:extra',
+      'systematic:learnings-researcher',
+      'research:learnings-researcher',
+      ':research:learnings-researcher',
+    ])('rejects malformed or non-canonical name %p', (name) => {
+      expect(resolveAgent(catalog, name)).toBeUndefined()
+    })
+  })
+
   test('fails closed on malformed YAML frontmatter, naming the source file', () => {
     const dir = makeTempAgentsDir({
       'a/broken.md': '---\nname: [unterminated\n---\nBody',
