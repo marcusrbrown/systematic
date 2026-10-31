@@ -1,0 +1,435 @@
+{
+  "note": "Two baselines scored by one function. A query counts as found when at least one `relevant` path is in the first 5 returned, matched by exact path. Neither baseline was re-run to improve numbers. The scoring function is re-implemented in tests/unit/search-past-work-fixtures.test.ts and must agree with the stored `hit` and `counts`.",
+  "top_k": 5,
+  "a": {
+    "method": "Deterministic emulation of today's skill scans, run by a script kept outside the repo. ce:plan origin discovery: files matching docs/brainstorms/*-requirements.md created within the last 30 days. ce:ideate resume check: files in docs/ideation/ created within the last 30 days. 'Topic matches' is stood in for by token overlap: the query and the document's title, topic and filename slug are lowercased, split on non-alphanumerics, stopwords and tokens under 3 characters dropped (two-character tokens that contain a digit, such as v2, are kept), a trailing -ing, -ed or plural s stripped; a document matches when they share at least 2 tokens. Matches are ordered by shared-token count, then newest filename date, then path. Returned list is the ce:plan matches followed by the ce:ideate matches.",
+    "repo_ref": "cd990ec5 (primary checkout, clean tree)",
+    "date": "2026-10-31",
+    "as_of": "2026-10-30",
+    "window_days": 30,
+    "min_shared_tokens": 2,
+    "model": "none (deterministic script)",
+    "created_date_source": "the YYYY-MM-DD prefix of the file name",
+    "scans": [
+      {
+        "skill": "ce:plan",
+        "scope": "docs/brainstorms/*-requirements.md",
+        "status": "scanned",
+        "window_files": [
+          "docs/brainstorms/2026-10-11-gated-release-pr-requirements.md",
+          "docs/brainstorms/2026-10-22-pr-attachments-requirements.md",
+          "docs/brainstorms/2026-10-24-worktree-placement-requirements.md",
+          "docs/brainstorms/2026-10-25-solution-doc-contract-requirements.md",
+          "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md",
+          "docs/brainstorms/2026-10-29-durable-output-search-requirements.md",
+          "docs/brainstorms/2026-10-30-search-past-work-requirements.md"
+        ]
+      },
+      {
+        "skill": "ce:ideate",
+        "scope": "docs/ideation/",
+        "status": "scanned",
+        "window_files": ["docs/ideation/2026-10-25-open-ideation.md"]
+      },
+      {
+        "skill": "ce:brainstorm",
+        "scope": "docs/brainstorms/",
+        "status": "no scan",
+        "reason": "Phase 0.1 resumes an obvious recent matching requirements file but defines no window or match rule, so there is nothing deterministic to emulate. It reads the same glob ce:plan scans."
+      },
+      {
+        "kind": "plan",
+        "scope": "docs/plans/",
+        "status": "no scan",
+        "reason": "No skill scans plans for past work."
+      },
+      {
+        "kind": "solution",
+        "scope": "docs/solutions/",
+        "status": "not part of this baseline",
+        "reason": "Solutions are reached through learnings-researcher, which baseline B measures."
+      }
+    ],
+    "sensitivity": {
+      "min_shared_tokens_1": {
+        "found": 2,
+        "total": 16
+      },
+      "min_shared_tokens_2": {
+        "found": 2,
+        "total": 16
+      },
+      "min_shared_tokens_3": {
+        "found": 1,
+        "total": 16
+      }
+    },
+    "first_run": {
+      "overall": {
+        "found": 1,
+        "total": 16
+      },
+      "note": "The first run dropped two-character tokens such as v2 and stripped only plural s, so it could not match \"supporting opencode v2\" to opencode-v2-support. The tokenizer was corrected before any further run; the threshold of 2 shared tokens was fixed before the first run and not changed."
+    },
+    "queries": [
+      {
+        "id": "q01",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q02",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q03",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q04",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q05",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q06",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q07",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q08",
+        "returned": [
+          "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q09",
+        "returned": [
+          "docs/brainstorms/2026-10-11-gated-release-pr-requirements.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q10",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q11",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q12",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q13",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q14",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q15",
+        "returned": [],
+        "hit": false
+      },
+      {
+        "id": "q16",
+        "returned": [],
+        "hit": false
+      }
+    ],
+    "counts": {
+      "overall": {
+        "found": 2,
+        "total": 16
+      },
+      "by_source": {
+        "paraphrase": {
+          "found": 0,
+          "total": 4
+        },
+        "title": {
+          "found": 2,
+          "total": 9
+        },
+        "body": {
+          "found": 0,
+          "total": 3
+        }
+      },
+      "by_target_kind": {
+        "brainstorm": {
+          "found": 0,
+          "total": 2
+        },
+        "any": {
+          "found": 2,
+          "total": 7
+        },
+        "plan": {
+          "found": 0,
+          "total": 5
+        },
+        "ideation": {
+          "found": 0,
+          "total": 1
+        },
+        "solution": {
+          "found": 0,
+          "total": 1
+        }
+      }
+    }
+  },
+  "b": {
+    "method": "grep-only learnings-researcher technique over four dirs. One single-shot run by a fresh lane that saw only queries.tsv.",
+    "repo_ref": "cd990ec5 (primary checkout)",
+    "date": "2026-10-31T13:43:23Z",
+    "model": "anthropic/claude-haiku-5-5",
+    "deviations": [
+      "did not open the first 30 lines of each candidate; relied on surfaced frontmatter lines",
+      "grepped docs/ and hand-filtered to the four dirs",
+      "glob listings capped",
+      "output has only paths"
+    ],
+    "returned_paths_missing_on_disk": {},
+    "queries": [
+      {
+        "id": "q01",
+        "returned": [
+          "docs/brainstorms/2026-04-27-companion-aware-skills-requirements.md",
+          "docs/plans/2026-05-17-003-feat-subagent-stop-instruction-priority-plan.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q02",
+        "returned": [
+          "docs/solutions/best-practices/provider-availability-source-defaults-2026-05-12.md",
+          "docs/plans/2026-05-16-001-fix-provider-availability-memoization-plan.md",
+          "docs/plans/2026-05-14-002-fix-provider-availability-hardening-plan.md",
+          "docs/brainstorms/2026-05-14-provider-availability-dx-hardening-requirements.md",
+          "docs/brainstorms/2026-05-14-provider-availability-hardening-requirements.md",
+          "docs/solutions/integration-issues/availability-guards-must-check-executability-2026-08-16.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q03",
+        "returned": [
+          "docs/solutions/integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md",
+          "docs/plans/2026-05-14-001-fix-isolated-opencode-integration-plan.md",
+          "docs/solutions/best-practices/testing-host-prune-from-a-plugin-2026-10-20.md",
+          "docs/solutions/best-practices/pi-real-runtime-integration-harness-2026-07-16.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q04",
+        "returned": [
+          "docs/plans/2026-05-16-002-feat-typed-config-validation-plan.md",
+          "docs/brainstorms/2026-05-16-typed-config-validation-requirements.md",
+          "docs/plans/2026-07-06-001-feat-removed-name-config-safety-plan.md",
+          "docs/solutions/best-practices/typed-config-validation-build-time-codegen-2026-05-16.md",
+          "docs/solutions/best-practices/removing-config-key-strict-schema-2026-10-19.md",
+          "docs/plans/2026-05-10-001-feat-zod-config-schema-jsonc-plan.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q05",
+        "returned": ["docs/ideation/2026-10-25-open-ideation.md"],
+        "hit": true
+      },
+      {
+        "id": "q06",
+        "returned": [
+          "docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md",
+          "docs/plans/2026-10-19-001-feat-remove-workflow-guard-plan.md",
+          "docs/plans/2026-10-18-002-feat-guard-default-off-plan.md",
+          "docs/brainstorms/2026-07-20-receipt-backed-workflow-grounding-requirements.md",
+          "docs/plans/2026-07-21-002-test-receipt-workflow-capabilities-plan.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q07",
+        "returned": [
+          "docs/plans/2026-05-09-002-feat-provider-model-mcp-overlays-plan.md",
+          "docs/plans/2026-05-09-003-feat-source-configured-agent-models-plan.md",
+          "docs/plans/2026-05-09-001-feat-agent-model-configuration-plan.md",
+          "docs/plans/2026-05-12-001-feat-client-api-source-model-resolution-plan.md",
+          "docs/plans/2026-05-09-004-feat-auth-aware-source-model-resolution-plan.md",
+          "docs/plans/2026-08-16-001-refactor-retire-source-model-defaults-plan.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q08",
+        "returned": [
+          "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+          "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md",
+          "docs/solutions/documentation-gaps/opencode-plugin-config-key-is-singular-plugin-not-plugins-2026-07-18.md",
+          "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q09",
+        "returned": [
+          "docs/plans/2026-10-11-004-feat-gated-release-pr-plan.md",
+          "docs/brainstorms/2026-10-11-gated-release-pr-requirements.md",
+          "docs/solutions/logic-errors/release-gate-rejects-api-created-release-commits-2026-10-14.md",
+          "docs/solutions/logic-errors/auto-merge-rearm-keeps-stale-squash-subject-2026-10-19.md",
+          "docs/solutions/workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md",
+          "docs/solutions/integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q10",
+        "returned": [
+          "docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md",
+          "docs/brainstorms/2026-08-23-claude-code-mcp-server-requirements.md",
+          "docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md",
+          "docs/solutions/workflow-issues/verify-installed-artifacts-not-just-build-gates-2026-07-18.md",
+          "docs/solutions/workflow-issues/a-capability-that-works-has-not-named-its-cause-2026-08-24.md",
+          "docs/plans/2026-08-24-001-feat-claude-code-bundled-validator-plan.md",
+          "docs/brainstorms/2026-07-17-claude-code-plugin-support-requirements.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q11",
+        "returned": [
+          "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md",
+          "docs/solutions/test-failures/unguarded-generator-main-repairs-drift-when-imported-by-tests-2026-07-28.md",
+          "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q12",
+        "returned": [
+          "docs/plans/2026-09-05-001-feat-model-id-validation-gate-plan.md",
+          "docs/brainstorms/2026-09-05-model-id-validation-gate-requirements.md",
+          "docs/brainstorms/2026-09-04-model-config-profiles-requirements.md",
+          "docs/plans/2026-09-04-002-feat-model-config-profiles-plan.md",
+          "docs/plans/2026-09-18-001-feat-project-defined-model-profiles-plan.md",
+          "docs/plans/2026-05-16-002-feat-typed-config-validation-plan.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q13",
+        "returned": [
+          "docs/plans/2026-08-13-001-refactor-bitter-lesson-harness-plan.md",
+          "docs/plans/2026-08-14-001-refactor-bootstrap-catalog-deletion-plan.md",
+          "docs/plans/2026-08-16-001-refactor-retire-source-model-defaults-plan.md",
+          "docs/plans/2026-08-13-002-feat-read-only-capability-diagnostic-plan.md",
+          "docs/plans/2026-08-13-003-feat-local-opencode-eval-foundation-plan.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q14",
+        "returned": [
+          "docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md",
+          "docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md",
+          "docs/solutions/developer-experience/semantic-release-body-ingestion-myth-2026-05-17.md",
+          "docs/plans/2026-05-23-002-feat-release-notes-narrative-ci-automation-plan.md",
+          "docs/plans/2026-05-23-001-feat-release-notes-narrative-skill-plan.md",
+          "docs/brainstorms/2026-05-23-release-notes-narrative-ci-automation-requirements.md",
+          "docs/brainstorms/2026-05-23-release-notes-narrative-skill-requirements.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q15",
+        "returned": [
+          "docs/plans/2026-10-20-001-fix-skill-output-survives-prune-plan.md",
+          "docs/solutions/best-practices/testing-host-prune-from-a-plugin-2026-10-20.md",
+          "docs/brainstorms/2026-04-25-session-compacting-hook-requirements.md",
+          "docs/solutions/integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md"
+        ],
+        "hit": true
+      },
+      {
+        "id": "q16",
+        "returned": [
+          "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md",
+          "docs/solutions/test-failures/unguarded-generator-main-repairs-drift-when-imported-by-tests-2026-07-28.md"
+        ],
+        "hit": true
+      }
+    ],
+    "counts": {
+      "overall": {
+        "found": 16,
+        "total": 16
+      },
+      "by_source": {
+        "paraphrase": {
+          "found": 4,
+          "total": 4
+        },
+        "title": {
+          "found": 9,
+          "total": 9
+        },
+        "body": {
+          "found": 3,
+          "total": 3
+        }
+      },
+      "by_target_kind": {
+        "brainstorm": {
+          "found": 2,
+          "total": 2
+        },
+        "any": {
+          "found": 7,
+          "total": 7
+        },
+        "plan": {
+          "found": 5,
+          "total": 5
+        },
+        "ideation": {
+          "found": 1,
+          "total": 1
+        },
+        "solution": {
+          "found": 1,
+          "total": 1
+        }
+      }
+    }
+  }
+}

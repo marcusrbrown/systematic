@@ -1,5 +1,5 @@
 ---
-title: feat: Move Systematic bootstrap and skill catalog into first system message
+title: "feat: Move Systematic bootstrap and skill catalog into first system message"
 type: feat
 status: completed
 date: 2026-05-13

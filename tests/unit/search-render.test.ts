@@ -55,11 +55,65 @@ function makeHit(
   }
 }
 
+type CorpusReport = SearchResult['corpus']
+type KindReport = CorpusReport['kinds'][number]
+
+const KIND_DIRS = {
+  solution: 'docs/solutions',
+  plan: 'docs/plans',
+  brainstorm: 'docs/brainstorms',
+  ideation: 'docs/ideation',
+} as const
+
+function kindReport(
+  kind: KindReport['kind'],
+  state: KindReport['state'],
+  docCount = 0,
+): KindReport {
+  return { kind, dir: KIND_DIRS[kind], state, docCount }
+}
+
+function solutionCorpus(
+  state: KindReport['state'],
+  docCount: number,
+): CorpusReport {
+  return { state, docCount, kinds: [kindReport('solution', state, docCount)] }
+}
+
+/** A corpus report for a search over every kind, from one state or count per kind. */
+function allCorpus(
+  solution: KindReport['state'] | number,
+  plan: KindReport['state'] | number,
+  brainstorm: KindReport['state'] | number,
+  ideation: KindReport['state'] | number,
+): CorpusReport {
+  const make = (
+    kind: KindReport['kind'],
+    value: KindReport['state'] | number,
+  ): KindReport =>
+    typeof value === 'number'
+      ? kindReport(kind, 'docs', value)
+      : kindReport(kind, value)
+  const kinds = [
+    make('solution', solution),
+    make('plan', plan),
+    make('brainstorm', brainstorm),
+    make('ideation', ideation),
+  ]
+  const docCount = kinds.reduce((sum, report) => sum + report.docCount, 0)
+  const state = kinds.some((report) => report.state === 'docs')
+    ? 'docs'
+    : kinds.every((report) => report.state === 'none')
+      ? 'none'
+      : 'empty'
+  return { state, docCount, kinds }
+}
+
 function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
   return {
     query: 'example query',
     queryTerms: ['example', 'query'],
-    corpus: { state: 'docs', docCount: 126 },
+    corpus: solutionCorpus('docs', 126),
     hits: [makeHit(1)],
     notes: [],
     warnings: [],
@@ -188,13 +242,13 @@ describe('renderSearchResult: header', () => {
   it('separates corpus none, empty and zero hits', () => {
     const none = renderSearchResult(
       makeResult({
-        corpus: { state: 'none', docCount: 0 },
+        corpus: solutionCorpus('none', 0),
         hits: [],
       }),
     )
     const empty = renderSearchResult(
       makeResult({
-        corpus: { state: 'empty', docCount: 0 },
+        corpus: solutionCorpus('empty', 0),
         hits: [],
       }),
     )
@@ -207,6 +261,72 @@ describe('renderSearchResult: header', () => {
     expect(new Set([none, empty, zero]).size).toBe(3)
   })
 
+  it('names the one directory a single-kind search reads', () => {
+    const corpus = (
+      state: KindReport['state'],
+      docCount = 0,
+    ): CorpusReport => ({
+      state,
+      docCount,
+      kinds: [kindReport('plan', state, docCount)],
+    })
+    const headerOf = (report: CorpusReport) =>
+      renderSearchResult(makeResult({ corpus: report, hits: [] })).split(
+        '\n',
+      )[0]
+    expect(headerOf(corpus('none'))).toBe(
+      'Search "example query": corpus: none (no docs/plans/ directory under the project root).',
+    )
+    expect(headerOf(corpus('empty'))).toBe(
+      'Search "example query": corpus: empty (docs/plans/ holds no indexable docs).',
+    )
+    expect(headerOf(corpus('docs', 3))).toBe(
+      'Search "example query": 3 docs, 0 hits. Corpus: docs/plans.',
+    )
+  })
+
+  it('reports one token per kind for an all search: a count, none or empty', () => {
+    const text = renderSearchResult(
+      makeResult({ corpus: allCorpus(3, 2, 'none', 'empty') }),
+    )
+    expect(text.split('\n')[0]).toBe(
+      'Search "example query": 5 docs, 1 hit. Corpus: solution 3, plan 2, brainstorm none, ideation empty.',
+    )
+  })
+
+  it('reads none for an all search only when every kind is none, naming all four directories', () => {
+    const header = renderSearchResult(
+      makeResult({
+        corpus: allCorpus('none', 'none', 'none', 'none'),
+        hits: [],
+      }),
+    ).split('\n')[0]
+    expect(header).toBe(
+      'Search "example query": corpus: none (no docs/solutions/, docs/plans/, docs/brainstorms/ or docs/ideation/ directory under the project root).',
+    )
+  })
+
+  it('reads empty for an all search when a directory exists but holds no document', () => {
+    const header = renderSearchResult(
+      makeResult({
+        corpus: allCorpus('none', 'empty', 'none', 'none'),
+        hits: [],
+      }),
+    ).split('\n')[0]
+    expect(header).toBe(
+      'Search "example query": corpus: empty (no indexable docs: solution none, plan empty, brainstorm none, ideation none).',
+    )
+  })
+
+  it('reads docs for an all search when one kind has documents and the rest are none', () => {
+    const header = renderSearchResult(
+      makeResult({ corpus: allCorpus('none', 'none', 'none', 1), hits: [] }),
+    ).split('\n')[0]
+    expect(header).toBe(
+      'Search "example query": 1 doc, 0 hits. Corpus: solution none, plan none, brainstorm none, ideation 1.',
+    )
+  })
+
   it('counts the hits and prints no lane segment', () => {
     const text = renderSearchResult(
       makeResult({ hits: [makeHit(1), makeHit(2)] }),
@@ -216,9 +336,7 @@ describe('renderSearchResult: header', () => {
     )
     expect(text).not.toContain('Lanes')
     expect(
-      renderSearchResult(
-        makeResult({ corpus: { state: 'docs', docCount: 1 } }),
-      ),
+      renderSearchResult(makeResult({ corpus: solutionCorpus('docs', 1) })),
     ).toContain('1 doc, 1 hit.')
   })
 
@@ -396,6 +514,45 @@ describe('renderSearchResult: sanitising', () => {
     expect(text).toContain('query')
     expect(text).toContain('title')
     expect(text).toContain('path')
+  })
+})
+
+describe('renderSearchResult: Successor lines', () => {
+  const lineFor = (path: string) =>
+    renderSearchResult(
+      makeResult({
+        hits: [makeHit(1, { lifecycle: [`Successor: ${path}`] })],
+      }),
+    )
+      .split('\n')
+      .find((line) => line.includes('Successor:'))
+
+  it('prints the successor path as given', () => {
+    expect(lineFor('docs/plans/next.md')).toBe(
+      '   Successor: docs/plans/next.md',
+    )
+  })
+
+  it('strips terminal escapes and control characters from the path', () => {
+    const line = lineFor(`docs/plans/${ESC}[31mred${ESC}[0m${NUL}\nx.md`)
+    expect(line).toBe('   Successor: docs/plans/red x.md')
+    expect(hasControlCharacter(line ?? '')).toBe(false)
+  })
+
+  it('caps one path at 400 characters, not the whole result', () => {
+    const line = lineFor(`docs/plans/${'p'.repeat(600)}.md`) ?? ''
+    expect(line.startsWith('   Successor: docs/plans/')).toBe(true)
+    expect(line.length).toBe('   Successor: '.length + 400)
+    expect(line.endsWith('…')).toBe(true)
+  })
+
+  it('prints a recorded status of any value, clipped to 40 characters', () => {
+    const text = renderSearchResult(
+      makeResult({
+        hits: [makeHit(1, { status: 'x'.repeat(50) })],
+      }),
+    )
+    expect(text).toContain(`Status: ${'x'.repeat(39)}…`)
   })
 })
 

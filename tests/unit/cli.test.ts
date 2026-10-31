@@ -2855,6 +2855,12 @@ describe('cli search', () => {
       expect(result.stdout).toContain('--limit')
       expect(result.stdout).toContain('--kind')
       expect(result.stdout).toContain('systematic search ')
+      expect(result.stdout).toContain(
+        '[--kind solution|plan|brainstorm|ideation|all]',
+      )
+      expect(result.stdout).toContain('docs/plans')
+      expect(result.stdout).toContain('docs/brainstorms')
+      expect(result.stdout).toContain('docs/ideation')
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }
@@ -2867,6 +2873,49 @@ describe('cli search', () => {
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('Usage: systematic search <query...>')
       expect(result.stdout).not.toContain('systematic-search')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('searches plans with --kind plan and every kind with --kind all', () => {
+    const box = mkSearchBox()
+    try {
+      fs.mkdirSync(path.join(box.project, 'docs/plans'), { recursive: true })
+      fs.writeFileSync(
+        path.join(box.project, 'docs/plans/zebra-rollout.md'),
+        '---\ntitle: Zebra rollout\nstatus: completed\n---\n\nRolling out the zebra change.\n',
+      )
+      const plan = runCli(
+        ['search', 'zebra', '--kind', 'plan'],
+        box.project,
+        box.env,
+      )
+      expect(plan.exitCode).toBe(0)
+      expect(plan.stdout).toContain('docs/plans/zebra-rollout.md')
+      expect(plan.stdout).not.toContain('docs/solutions/zebra-flake.md')
+
+      const all = runCli(
+        ['search', 'zebra', '--kind', 'all'],
+        box.project,
+        box.env,
+      )
+      expect(all.exitCode).toBe(0)
+      expect(all.stdout).toContain('docs/plans/zebra-rollout.md')
+      expect(all.stdout).toContain('docs/solutions/zebra-flake.md')
+      expect(all.stdout).toContain(
+        'Corpus: solution 1, plan 1, brainstorm none, ideation none.',
+      )
+
+      const bogus = runCli(
+        ['search', 'zebra', '--kind', 'bogus'],
+        box.project,
+        box.env,
+      )
+      expect(bogus.exitCode).toBe(2)
+      expect(bogus.stderr).toContain(
+        'kind must be one of: solution, plan, brainstorm, ideation, all.',
+      )
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }

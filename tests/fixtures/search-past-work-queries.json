@@ -1,0 +1,370 @@
+{
+  "header": {
+    "description": "Labelled query set for past-work search over solutions, plans, brainstorms and ideation docs. A query counts as found when at least one path in `relevant` is in the top 5 hits.",
+    "authored": "2026-10-31",
+    "fields": {
+      "id": "unique string",
+      "query": "text a person would type; the only input a ranker or baseline run sees",
+      "target_kind": "a document kind (solution, plan, brainstorm, ideation) to search, or `any` for all kinds",
+      "relevant": "repo-relative {path, kind} entries. Any one in the top 5 counts as found. A superseded document and its successor are both labelled.",
+      "source": "`title` (best-matching target shares 3 or more tokens with its title, topic, tags or file name), `paraphrase` (1 or 2 tokens) or `body` (no shared token; the answer is in the document text)",
+      "requires_local": "true when a relevant path is a brainstorm. docs/brainstorms/ is untracked, so a clone without it skips only the existence check for those paths.",
+      "coverage": "what the query exercises: rejected-or-deferred-brainstorm, completed-plan, ideation, superseded-chain, superseded-plan, mixed-kind, solution",
+      "overlap": "stemmed token overlap between the query and the best-matching relevant target: `union` over title, topic, tags and file name, `lenient` adds a 5-character-prefix match"
+    },
+    "authoring_rules": [
+      "Each query was written before the frontmatter title, topic or tags of its target were read. Targets were picked from directory listings, status lines and superseded_by values.",
+      "q02 was revised once before labelling: the first wording assumed a deferred brainstorm was never built, but a completed plan implemented it.",
+      "q14 to q16 were added after q01 to q13 to lower vocabulary overlap, using the same rules.",
+      "Labels were kept outside the repo until baseline B finished. No query or label changed after that run.",
+      "Source mix: 9 title, 4 paraphrase, 3 body. The title-sourced queries test vocabulary; the others do not."
+    ]
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "query": "did we ever try letting skills detect other installed plugins and adapt to them, and why did we drop it",
+      "target_kind": "brainstorm",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-04-27-companion-aware-skills-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-25-plugin-detection-research.md",
+          "kind": "brainstorm"
+        }
+      ],
+      "source": "paraphrase",
+      "requires_local": true,
+      "coverage": ["rejected-or-deferred-brainstorm"],
+      "overlap": {
+        "union": 1,
+        "lenient": 2
+      }
+    },
+    {
+      "id": "q02",
+      "query": "what happened with caching the provider availability lookups across multiple plugin loads",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-05-14-provider-availability-dx-hardening-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/plans/2026-05-16-001-fix-provider-availability-memoization-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "paraphrase",
+      "requires_local": true,
+      "coverage": [
+        "rejected-or-deferred-brainstorm",
+        "completed-plan",
+        "mixed-kind"
+      ],
+      "overlap": {
+        "union": 2,
+        "lenient": 2
+      }
+    },
+    {
+      "id": "q03",
+      "query": "what shipped for keeping the integration tests from touching my real opencode config",
+      "target_kind": "plan",
+      "relevant": [
+        {
+          "path": "docs/plans/2026-05-14-001-fix-isolated-opencode-integration-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "title",
+      "coverage": ["completed-plan"],
+      "overlap": {
+        "union": 3,
+        "lenient": 3
+      }
+    },
+    {
+      "id": "q04",
+      "query": "what shipped for rejecting misspelled agent and skill names in the plugin config",
+      "target_kind": "plan",
+      "relevant": [
+        {
+          "path": "docs/plans/2026-05-16-002-feat-typed-config-validation-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "title",
+      "coverage": ["completed-plan"],
+      "overlap": {
+        "union": 4,
+        "lenient": 4
+      }
+    },
+    {
+      "id": "q05",
+      "query": "did we consider automatically catching plans that shipped but never got marked done",
+      "target_kind": "ideation",
+      "relevant": [
+        {
+          "path": "docs/ideation/2026-10-25-open-ideation.md",
+          "kind": "ideation"
+        }
+      ],
+      "source": "body",
+      "coverage": ["ideation"],
+      "overlap": {
+        "union": 0,
+        "lenient": 0
+      }
+    },
+    {
+      "id": "q06",
+      "query": "what replaced the receipt-backed workflow guard",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-07-25-001-feat-receipt-backed-workflow-guard-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-20-receipt-backed-workflow-grounding-requirements.md",
+          "kind": "brainstorm"
+        }
+      ],
+      "source": "title",
+      "requires_local": true,
+      "coverage": ["superseded-chain", "mixed-kind", "solution"],
+      "overlap": {
+        "union": 4,
+        "lenient": 4
+      }
+    },
+    {
+      "id": "q07",
+      "query": "which plan took over from the first provider and MCP overlays plan",
+      "target_kind": "plan",
+      "relevant": [
+        {
+          "path": "docs/plans/2026-05-09-003-feat-source-configured-agent-models-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-05-09-002-feat-provider-model-mcp-overlays-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "title",
+      "coverage": ["superseded-chain"],
+      "overlap": {
+        "union": 4,
+        "lenient": 4
+      }
+    },
+    {
+      "id": "q08",
+      "query": "everything we decided about supporting opencode v2",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "title",
+      "requires_local": true,
+      "coverage": ["completed-plan", "mixed-kind"],
+      "overlap": {
+        "union": 3,
+        "lenient": 3
+      }
+    },
+    {
+      "id": "q09",
+      "query": "how did we decide the release PR should be gated",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-10-11-gated-release-pr-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/plans/2026-10-11-004-feat-gated-release-pr-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "title",
+      "requires_local": true,
+      "coverage": ["completed-plan", "mixed-kind"],
+      "overlap": {
+        "union": 3,
+        "lenient": 4
+      }
+    },
+    {
+      "id": "q10",
+      "query": "did we ever ship an MCP server from the Claude Code plugin, and what happened to it",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-08-23-claude-code-mcp-server-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/plans/2026-08-23-001-feat-claude-code-mcp-server-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md",
+          "kind": "solution"
+        }
+      ],
+      "source": "title",
+      "requires_local": true,
+      "coverage": ["superseded-chain", "mixed-kind", "solution"],
+      "overlap": {
+        "union": 6,
+        "lenient": 6
+      }
+    },
+    {
+      "id": "q11",
+      "query": "why did the registry drift check fail after I edited a skill description",
+      "target_kind": "solution",
+      "relevant": [
+        {
+          "path": "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "kind": "solution"
+        }
+      ],
+      "source": "title",
+      "coverage": ["solution"],
+      "overlap": {
+        "union": 4,
+        "lenient": 4
+      }
+    },
+    {
+      "id": "q12",
+      "query": "did we build a check that validates configured model ids, and what became of it",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-09-05-model-id-validation-gate-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/plans/2026-09-05-001-feat-model-id-validation-gate-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/ideation/2026-10-25-open-ideation.md",
+          "kind": "ideation"
+        }
+      ],
+      "source": "paraphrase",
+      "requires_local": true,
+      "coverage": ["superseded-plan", "ideation", "mixed-kind"],
+      "overlap": {
+        "union": 2,
+        "lenient": 4
+      }
+    },
+    {
+      "id": "q13",
+      "query": "did we try stripping scaffolding out of the harness because of the bitter lesson",
+      "target_kind": "plan",
+      "relevant": [
+        {
+          "path": "docs/plans/2026-08-13-001-refactor-bitter-lesson-harness-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "title",
+      "coverage": ["superseded-plan"],
+      "overlap": {
+        "union": 3,
+        "lenient": 3
+      }
+    },
+    {
+      "id": "q14",
+      "query": "after each publish the GitHub page for the version had one-line bullets and a bogus 'closes' link, so what did we do to make the write-ups readable",
+      "target_kind": "plan",
+      "relevant": [
+        {
+          "path": "docs/plans/2026-05-23-001-feat-release-notes-narrative-skill-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-05-23-002-feat-release-notes-narrative-ci-automation-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "source": "body",
+      "coverage": ["completed-plan"],
+      "overlap": {
+        "union": 0,
+        "lenient": 0
+      }
+    },
+    {
+      "id": "q15",
+      "query": "we tried getting our guidance to survive when a long conversation is summarized by the host, so what became of that",
+      "target_kind": "brainstorm",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-04-25-session-compacting-hook-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-27-companion-aware-skills-requirements.md",
+          "kind": "brainstorm"
+        }
+      ],
+      "source": "body",
+      "requires_local": true,
+      "coverage": ["rejected-or-deferred-brainstorm"],
+      "overlap": {
+        "union": 0,
+        "lenient": 0
+      }
+    },
+    {
+      "id": "q16",
+      "query": "CI kept complaining about committed files that are produced by scripts and nobody knew which scripts to run, so did we ever decide on one list of them",
+      "target_kind": "any",
+      "relevant": [
+        {
+          "path": "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "kind": "brainstorm"
+        },
+        {
+          "path": "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "kind": "solution"
+        }
+      ],
+      "source": "paraphrase",
+      "requires_local": true,
+      "coverage": ["completed-plan", "mixed-kind", "solution"],
+      "overlap": {
+        "union": 1,
+        "lenient": 1
+      }
+    }
+  ]
+}

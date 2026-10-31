@@ -1,11 +1,11 @@
 ---
-title: Search your past solutions
-description: Search docs/solutions by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line. Search runs on your machine and needs no setup.
+title: Search your past work
+description: Search your docs/solutions, docs/plans, docs/brainstorms and docs/ideation by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line. Search runs on your machine and needs no setup.
 sidebar:
   order: 12
 ---
 
-Systematic can search the learnings you keep in `docs/solutions/`. You type a symptom, an error message, a module name or a topic. You get ranked hits with the path, title, a snippet, tags and status. Agents use the same search, so the `learnings-researcher` finds a past fix before it greps.
+Systematic can search the durable outputs that its own workflows write: the learnings in `docs/solutions/`, the plans in `docs/plans/`, the brainstorms in `docs/brainstorms/` and the ideation documents in `docs/ideation/`. You type a symptom, an error message, a module name or a topic. You get ranked hits with the path, title, kind, a snippet, tags and status. Agents use the same search, so the `learnings-researcher` finds a past fix, or a direction you already rejected, before it greps.
 
 Search needs no setup. It ranks documents with a lexical method (BM25F) that runs in the plugin itself. It makes no network call, downloads no model and writes no cache.
 
@@ -15,14 +15,27 @@ npx @fro.bot/systematic search "tests fail only on retry"
 
 ## What gets indexed
 
-Search reads one directory: `docs/solutions/`, directly under the [project root](#the-project-root). It reads the files from disk on every call and keeps no copy. A learning that `ce:compound` wrote a moment ago is searchable at once.
+Search has four kinds. Each kind is one directory directly under the [project root](#the-project-root):
 
-It indexes every `.md` file under that directory, with these exceptions:
+| Kind | Directory | What it holds |
+|---|---|---|
+| `solution` | `docs/solutions/` | Learnings that `ce:compound` writes |
+| `plan` | `docs/plans/` | Plans that `ce:plan` writes |
+| `brainstorm` | `docs/brainstorms/` | Requirements documents that `ce:brainstorm` writes |
+| `ideation` | `docs/ideation/` | Ideation documents that `ce:ideate` writes |
+
+Search reads the files from disk on every call and keeps no copy. A learning that `ce:compound` wrote a moment ago is searchable at once. It reads the files whether git tracks them or ignores them.
+
+It indexes every `.md` file under a kind's directory, with these exceptions:
 
 - `README.md` files.
-- `critical-patterns.md`.
+- `critical-patterns.md`, in `docs/solutions/` only.
 - Anything under an `_archived/` directory.
-- Symlinks. Search does not follow them. If `docs/solutions` itself resolves to a place outside the project root, search loads nothing from it and prints a warning.
+- Symlinks. Search does not follow them. If a kind's directory itself resolves to a place outside the project root, search loads nothing from it and prints a warning.
+
+### Brainstorms and git
+
+Some projects list `docs/brainstorms/` in `.gitignore`. Search still reads it in the checkout where the files exist. A linked worktree has only the tracked files, so in a worktree of such a project the `brainstorm` kind reports `none`: the directory is not there. Plans, solutions and ideation documents appear as usual. Search the primary checkout to include brainstorms. A project that keeps its brainstorms in git, or has no `docs/brainstorms/` at all, needs no setup.
 
 The limits are:
 
@@ -30,28 +43,35 @@ The limits are:
 |---|---|
 | Size of one file | 256 KB (a larger file is skipped with a warning) |
 | Number of files | 2,000 |
-| Directory depth below `docs/solutions` | 6 |
+| Directory depth below a kind's directory | 6 |
 | Text loaded in one call | 16 MB |
 
-When a limit skips files, the result carries one warning that counts them.
+The file, depth and text limits apply to each kind separately, so a search of `all` can read up to four times as much. When a limit skips files, the result carries one warning that names the directory and counts them.
 
-Search reads these frontmatter fields: `title`, `tags`, `module`, `component`, `problem_type`, `symptoms`, `applies_when`, `status`, `superseded_by` and `stale_reason`. A file with no frontmatter is indexed as body text, and its file name is its title. A file with invalid frontmatter is skipped with a warning that names it.
+Search reads these frontmatter fields: `title`, `topic`, `tags`, `module`, `component`, `problem_type`, `symptoms`, `applies_when`, `status`, `superseded_by` and `stale_reason`. The title of a hit is `title`, else `topic`, else the file name. A file with no frontmatter is indexed as body text, and its file name is its title. A file with invalid frontmatter is skipped. The result carries one warning per kind that counts the skipped files by reason.
 
 ### How lexical ranking works
 
 Search matches whole terms. Text is lowercased and split into runs of the ASCII letters and digits `a-z` and `0-9`. A run joined by `_` or `-` also counts as one term, so `foo_bar` matches `foo_bar`, `foo` and `bar`. There is no stemming, so `timeout` does not match `timeouts`. A letter outside ASCII ends a word. Matches in the title, symptoms and tags weigh more than matches in the body. A query is cut to its first 64 distinct terms, and the result says so.
 
-### Lifecycle: superseded and stale learnings
+### Status
 
-A learning can say it was replaced. Search follows that link so you read the current doc.
+A solution prints `active`, `stale` or `superseded`, as it always has. A plan, brainstorm or ideation document prints the status it records, exactly as written (`completed`, `abandoned`, `deferred` and so on), or `unspecified` when it records none. Search never maps those values to another word. A status label longer than 40 characters is cut.
 
-- **Superseded.** If a matching doc has `status: superseded` and a `superseded_by` path, the hit shows the successor instead. The successor takes the best rank among itself and the docs it replaces. The hit carries a `Supersedes:` line that lists every replaced path.
-- **Successor unresolved.** Search follows at most 5 links. If the successor is missing, is not a path under `docs/solutions/`, loops back, or lies past the fifth link, search does not drop the old doc. It returns the superseded doc at its own rank with `Status: superseded` and the line `Caution: successor unresolved`. Treat that doc as out of date and look for a newer one.
+Only two statuses do anything: `superseded` and `stale`. For plans, brainstorms and ideation documents, search compares them without regard to case or surrounding spaces. For solutions the comparison is exact.
+
+### Lifecycle: superseded and stale documents
+
+A document can say it was replaced. Search follows that link so you read the current doc.
+
+- **Superseded.** If a matching doc has `status: superseded` and a `superseded_by` path in the same kind, the hit shows the successor instead. The successor takes the best rank among itself and the docs it replaces. The hit carries a `Supersedes:` line that lists every replaced path.
+- **Successor in another kind.** A plan can be superseded by a solution, or a brainstorm by a plan. Search does not hop between kinds. The hit stays on the last document of its own kind and carries a `Successor:` line with the path of the document that replaced it. That line is information, not a warning. Search does not check that the file exists, because the other kind's directory may be absent from this checkout. Read the path before you rely on it.
+- **Successor unresolved.** Search follows at most 5 links. If a same-kind successor is missing, loops back, or lies past the fifth link, or if the link is not a path into any kind's directory, search does not drop the old doc. It returns the superseded doc at its own rank with the line `Caution: successor unresolved`. Treat that doc as out of date and look for a newer one.
 - **Stale.** A doc with `status: stale` is returned with a line that starts `Caution: marked stale`, followed by its `stale_reason` when it has one.
 
 ## The project root
 
-Search needs to know which project it is in. The project root is the nearest ancestor of the start directory that holds a `.git` entry. A `.git` file counts, so a linked worktree works. If no ancestor holds one, the start directory is the root. Search then reads `<root>/docs/solutions/`.
+Search needs to know which project it is in. The project root is the nearest ancestor of the start directory that holds a `.git` entry. A `.git` file counts, so a linked worktree works. If no ancestor holds one, the start directory is the root. Search then reads the kind directories under `<root>/docs/`.
 
 The start directory depends on the surface:
 
@@ -78,16 +98,37 @@ The tool takes these arguments. The command takes the same three as flags, plus 
 | Argument | Required | Meaning |
 |---|---|---|
 | `query` | yes | What to look for, in plain words. At most 2,000 characters. |
-| `kind` | no | `solution`. It is the only kind, and the default. |
+| `kind` | no | `solution`, `plan`, `brainstorm`, `ideation`, or `all`. The default is `solution`. |
 | `limit` | no | How many hits to return, an integer from 1 to 20. The default is 8. |
 
-An out-of-range `limit` is rejected with a fixed error on every surface. On the command line it exits with status 2. A reply is at most 16 KB, and a cut reply ends with a marker line that says so.
+Leaving `kind` out searches solutions only, so existing calls return what they always did. `all` is not a fifth kind. It searches the four kinds in one ranking, and each hit names its kind. An unknown `kind` and an out-of-range `limit` are rejected with a fixed error on every surface. On the command line they exit with status 2. A reply is at most 16 KB, and a cut reply ends with a marker line that says so. With `all`, that one cap covers the whole reply.
 
 ```bash
 systematic search flaky retry --limit 5
+systematic search --kind plan "search lifecycle"
+systematic search --kind all "did we reject semantic search"
 systematic search --dir ../other-repo "connection pool exhausted"
 systematic search -- "--watch crashes"   # a query that starts with a dash
 ```
+
+### Reading the header
+
+The first line of a reply says what was searched. A single-kind search ends with the directory, as in `Corpus: docs/plans.`. A search of `all` ends with one token per kind: its document count, `none` when the directory does not exist, or `empty` when it exists but holds no indexable document. For example:
+
+```text
+Search "search lifecycle": 232 docs, 8 hits. Corpus: solution 128, plan 102, brainstorm none, ideation 2.
+```
+
+When every searched directory is missing, the reply says `corpus: none`. When at least one exists and none holds a document, it says `corpus: empty`.
+
+## Search from the workflow skills
+
+The `learnings-researcher` agent takes a scope on the first line of its prompt, `scope: solutions` or `scope: past-work`. Without that line it searches solutions only, as before.
+
+- `solutions` searches `docs/solutions/` once. `ce:review` and `ce:compound` use it, and so does the overlap check that `ce:compound` runs.
+- `past-work` searches all four kinds with one search per kind (`solution`, `plan`, `brainstorm` and `ideation`, five hits each), so long plans do not crowd the other kinds out of the top results. It never searches `all`. It groups what it finds by kind and recorded status: completed work, rejected, deferred or superseded directions, proposals that were never finished, and solutions. Every item carries its path and status, and nothing proposed is described as shipped. Its reply says once whether it used search or fell back to grep.
+
+Four skills dispatch the researcher with `scope: past-work`: `ce:plan`, `ce:ideate`, `ce:brainstorm` (at Standard and Deep scope; at Lightweight scope it calls search directly with `kind: all`) and `deepen-plan`. When a result shows a rejected, deferred, superseded or completed item that overlaps the new work, the skill cites it by path and status and says how the new work differs. It never blocks the work. A cite names the path and the status and does not quote text from a file that git ignores.
 
 Exit statuses: `0` for results, no hits and a disabled search; `1` for a failure; `2` for a usage error.
 
@@ -122,7 +163,7 @@ Set `search.enabled` to `false`:
 { "search": { "enabled": false } }
 ```
 
-This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from Pi delegates, with no note. `systematic search` and `systematic-search` print that search is disabled and exit with status 0. The `learnings-researcher` then falls back to grep.
+This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from Pi delegates, with no note. `systematic search` and `systematic-search` print that search is disabled and exit with status 0. The `learnings-researcher` then falls back to grep. In `past-work` scope it greps each of the four directories that exists.
 
 ### Restart after you change config
 
@@ -137,7 +178,7 @@ Notes appear on the `Notes:` line of a result, separated by semicolons. They use
 | `config unreadable` | A `search` block or a user-level config file could not be read. The warning on stderr, or in the host log, names the field. |
 | `query cut to its first 64 distinct terms` | The query had more than 64 distinct terms. The extra terms were ignored. |
 
-A result can also carry up to five warnings from the corpus loader, such as a file that was skipped for its size, followed by `+N more`.
+A result can also carry up to five warnings from the corpus loader, followed by `+N more`. Warnings about a directory that cannot be read, or about a limit that was reached, come first and name the directory. After them comes one line per kind that counts its skipped files by reason, such as `docs/plans: skipped 2 files (1 invalid frontmatter, 1 larger than 262144 bytes)`.
 
 ## Requirements
 
@@ -149,4 +190,5 @@ The `systematic-search` command in the Claude Code plugin is a single bundled fi
 
 - It does not use embeddings or a semantic index. It matches terms, so a learning that describes the same problem in other words can be missed.
 - It does not send anything off your machine.
-- It searches `docs/solutions/` only. Plans and brainstorms are not indexed.
+- It searches the four kinds above only. Todos, review artifacts and instruction files such as `AGENTS.md` are not indexed.
+- It does not weigh one kind against another. In a search of `all`, a long plan can outrank a short solution on common words. Search a single kind when you want one.

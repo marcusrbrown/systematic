@@ -88,8 +88,10 @@ revisions — never rename or repurpose a field.
 
 ### Required
 
-- **`title`** — verbatim plan title. Matches the H1 heading so file metadata
-  and visible heading don't drift.
+- **`title`** — verbatim plan title, written as a double-quoted string
+  (`title: "feat: Add x"`). Matches the H1 heading so file metadata and visible
+  heading don't drift. Quote it because a conventional-commit title contains a
+  colon, which YAML reads as a mapping and the plan then fails to parse.
 - **`type`** — conventional-commit-prefix-aligned classification (`feat`,
   `fix`, `refactor`, `chore`, `docs`, `perf`, `test`, etc.). Carries the
   intent the eventual commit message should reflect.

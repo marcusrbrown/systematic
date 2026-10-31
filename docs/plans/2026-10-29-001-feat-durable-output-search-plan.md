@@ -1,7 +1,7 @@
 ---
 title: "feat: Search over Systematic's durable outputs"
 type: feat
-status: active
+status: completed
 date: 2026-10-29
 origin: docs/brainstorms/2026-10-29-durable-output-search-requirements.md
 deepened: 2026-10-29

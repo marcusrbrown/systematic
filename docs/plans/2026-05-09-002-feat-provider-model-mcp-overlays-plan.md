@@ -1,5 +1,5 @@
 ---
-title: feat: Add Source Model Defaults and MCP Overlays
+title: "feat: Add Source Model Defaults and MCP Overlays"
 type: feat
 status: superseded
 date: 2026-05-09

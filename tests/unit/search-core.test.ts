@@ -12,8 +12,18 @@ import {
   SEARCH_TOOL_NAME,
   type SearchOptions,
 } from '../../src/lib/search-core.js'
-import { type CorpusLoad, loadCorpus } from '../../src/lib/search-corpus.js'
-import { MAX_OUTPUT_BYTES } from '../../src/lib/search-render.js'
+import {
+  type CorpusLoad,
+  type DocumentKind,
+  KIND_TABLE,
+  loadCorpus,
+  MAX_FILE_BYTES,
+  parseCorpusDocument,
+} from '../../src/lib/search-corpus.js'
+import {
+  MAX_OUTPUT_BYTES,
+  TRUNCATION_MARKER,
+} from '../../src/lib/search-render.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -44,7 +54,20 @@ function writeDoc(
   fs.writeFileSync(target, `---\n${frontmatter}\n---\n\n${body}\n`)
 }
 
-function copyFixtureCorpus(name: 'lifecycle' | 'hostile'): string {
+function writeKindDoc(
+  root: string,
+  relative: string,
+  frontmatter: string,
+  body = 'Body text.',
+): void {
+  const target = path.join(root, relative)
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, `---\n${frontmatter}\n---\n\n${body}\n`)
+}
+
+function copyFixtureCorpus(
+  name: 'lifecycle' | 'hostile' | 'past-work',
+): string {
   const root = makeProject()
   fs.cpSync(path.join(FIXTURES, name), root, { recursive: true })
   return root
@@ -147,6 +170,53 @@ describe('runSearch: ranking and hit shape', () => {
     expect(pathsOf(withKind)).toEqual(['docs/solutions/a.md'])
   })
 
+  it('searches plans, brainstorms and ideation end to end by kind', async () => {
+    const root = copyFixtureCorpus('past-work')
+    const plan = await search(root, 'alpha rollout quarantine', {
+      kind: 'plan',
+    })
+    expect(pathsOf(plan)).toEqual([
+      'docs/plans/2026-10-01-001-feat-alpha-plan.md',
+    ])
+    if (plan.ok) {
+      expect(plan.result.hits[0]?.document).toMatchObject({
+        kind: 'plan',
+        title: 'feat: Alpha rollout',
+      })
+      expect(plan.text).toContain('Kind: plan')
+    }
+
+    const brainstorm = await search(root, 'foo', {
+      kind: 'brainstorm',
+    })
+    expect(pathsOf(brainstorm)).toEqual([
+      'docs/brainstorms/2026-10-01-topic-only-requirements.md',
+    ])
+    if (brainstorm.ok) {
+      expect(brainstorm.result.hits[0]?.document.title).toBe('foo')
+    }
+
+    const ideation = await search(root, 'caching ideas', { kind: 'ideation' })
+    expect(pathsOf(ideation)).toEqual([
+      'docs/ideation/2026-10-01-open-ideation.md',
+    ])
+  })
+
+  it('does not leak plans into a default solution search', async () => {
+    const root = copyFixtureCorpus('past-work')
+    const response = await search(root, 'alpha rollout quarantine')
+    expect(pathsOf(response)).toEqual([])
+  })
+
+  it('reports a missing new-kind directory as an empty result, not an error', async () => {
+    const root = makeProject()
+    writeDoc(root, 'a.md', 'title: Alpha topic')
+    const response = await search(root, 'alpha', { kind: 'brainstorm' })
+    expect(response.ok).toBe(true)
+    expect(pathsOf(response)).toEqual([])
+    if (response.ok) expect(response.result.corpus.state).toBe('none')
+  })
+
   it('applies a hit needs a score above zero', async () => {
     const root = makeProject()
     writeDoc(root, 'a.md', 'title: Alpha topic')
@@ -213,7 +283,20 @@ describe('runSearch: validation', () => {
       text: SEARCH_ERRORS.queryTooLong,
     })
     expect((await search(root, 'a'.repeat(2000))).ok).toBe(true)
-    for (const kind of ['plan', '', 'Solution', 5, null]) {
+    for (const kind of [
+      'bogus',
+      '',
+      'Solution',
+      'Plan',
+      5,
+      null,
+      'ALL',
+      'All',
+      'all ',
+      ' all',
+      ['all'],
+      ['plan'],
+    ]) {
       expect(await search(root, 'alpha', { kind })).toEqual({
         ok: false,
         text: SEARCH_ERRORS.kindUnknown,
@@ -288,8 +371,30 @@ describe('runSearch: corpus states', () => {
     expect(new Set([none.text, empty.text, zero.text]).size).toBe(3)
     if (none.ok && empty.ok && zero.ok) {
       expect(none.result.corpus.state).toBe('none')
-      expect(empty.result.corpus).toEqual({ state: 'empty', docCount: 0 })
-      expect(zero.result.corpus).toEqual({ state: 'docs', docCount: 2 })
+      expect(empty.result.corpus).toEqual({
+        state: 'empty',
+        docCount: 0,
+        kinds: [
+          {
+            kind: 'solution',
+            dir: 'docs/solutions',
+            state: 'empty',
+            docCount: 0,
+          },
+        ],
+      })
+      expect(zero.result.corpus).toEqual({
+        state: 'docs',
+        docCount: 2,
+        kinds: [
+          {
+            kind: 'solution',
+            dir: 'docs/solutions',
+            state: 'docs',
+            docCount: 2,
+          },
+        ],
+      })
       expect(none.result.hits).toEqual([])
     }
   })
@@ -312,8 +417,11 @@ describe('runSearch: corpus states', () => {
     }
     const response = await search(root, 'alpha')
     expect(response.text).toContain('Warnings:')
-    expect(response.text).toContain('skipped docs/solutions/bad-0.md')
-    expect(response.text).toContain('+2 more')
+    expect(response.text).toContain(
+      '- docs/solutions: skipped 7 files (7 invalid frontmatter)',
+    )
+    expect(response.text).not.toContain('bad-0.md')
+    expect(response.text).not.toContain('more')
   })
 })
 
@@ -405,6 +513,89 @@ describe('runSearch: lifecycle through the full pipeline', () => {
     expect(paths).toHaveLength(2)
     expect(paths[0]).toBe('docs/solutions/s.md')
     expect(new Set(paths).size).toBe(2)
+  })
+})
+
+describe('runSearch: lifecycle across kinds', () => {
+  it('replaces a superseded plan with its completed successor', async () => {
+    const root = makeProject()
+    writeKindDoc(
+      root,
+      'docs/plans/p1.md',
+      'title: Quartz rollout\nstatus: superseded\nsuperseded_by: docs/plans/p2.md',
+    )
+    writeKindDoc(
+      root,
+      'docs/plans/p2.md',
+      'title: Rollout, second attempt\nstatus: completed',
+    )
+    const response = await search(root, 'quartz', { kind: 'plan' })
+    expect(pathsOf(response)).toEqual(['docs/plans/p2.md'])
+    expect(response.text).toContain('Status: completed')
+    expect(response.text).toContain('Supersedes: docs/plans/p1.md')
+  })
+
+  it('keeps a superseded plan visible when its successor is a solution', async () => {
+    const root = makeProject()
+    writeKindDoc(
+      root,
+      'docs/plans/p1.md',
+      'title: Quartz rollout\nstatus: superseded\nsuperseded_by: docs/solutions/never-written.md',
+    )
+    const response = await search(root, 'quartz', { kind: 'plan' })
+    expect(pathsOf(response)).toEqual(['docs/plans/p1.md'])
+    expect(response.text).toContain('Status: superseded')
+    expect(response.text).toContain(
+      'Successor: docs/solutions/never-written.md',
+    )
+    expect(response.text).not.toContain('Caution:')
+  })
+
+  it('prints a Successor line for a solution superseded by a plan', async () => {
+    const root = makeProject()
+    writeDoc(
+      root,
+      'old.md',
+      'title: Quartz fix\nstatus: superseded\nsuperseded_by: docs/plans/p.md',
+    )
+    const response = await search(root, 'quartz')
+    expect(pathsOf(response)).toEqual(['docs/solutions/old.md'])
+    expect(response.text).toContain('Successor: docs/plans/p.md')
+    expect(response.text).not.toContain('Caution:')
+  })
+
+  it('prints recorded status raw for the new kinds and unspecified when absent', async () => {
+    const root = makeProject()
+    writeKindDoc(
+      root,
+      'docs/brainstorms/b.md',
+      'topic: Quartz idea\nstatus: deferred',
+    )
+    writeKindDoc(root, 'docs/ideation/i.md', 'topic: Quartz survey')
+    writeKindDoc(
+      root,
+      'docs/plans/p.md',
+      'title: Quartz plan\nstatus: Completed',
+    )
+    const lines = async (kind: string) =>
+      (await search(root, 'quartz', { kind })).text
+        .split('\n')
+        .filter((line) => line.includes('Status:'))
+    expect(await lines('brainstorm')).toEqual([
+      '   Title: Quartz idea | Kind: brainstorm | Status: deferred',
+    ])
+    expect(await lines('ideation')).toEqual([
+      '   Title: Quartz survey | Kind: ideation | Status: unspecified',
+    ])
+    expect(await lines('plan')).toEqual([
+      '   Title: Quartz plan | Kind: plan | Status: Completed',
+    ])
+  })
+
+  it('still prints active for a solution with no status', async () => {
+    const root = makeProject()
+    writeDoc(root, 'a.md', 'title: Quartz fix')
+    expect((await search(root, 'quartz')).text).toContain('Status: active')
   })
 })
 
@@ -513,7 +704,9 @@ describe('runSearch: hostile content', () => {
     const response = await search(root, `needle evil ${ESC}[31mquery`)
     expect(response.ok).toBe(true)
     expect(response.text).toContain('needle')
-    expect(response.text).toContain('skipped docs/solutions/bad')
+    expect(response.text).toContain(
+      'docs/solutions: skipped 2 files (2 invalid frontmatter)',
+    )
     expect(response.text).not.toContain(ESC)
     expect(response.text).not.toContain(BEL)
     expect(response.text).not.toContain('SGVsbG8')
@@ -560,5 +753,374 @@ describe('runSearch: output shape', () => {
     expect(response.text).not.toContain('Lanes')
     expect(response.result).not.toHaveProperty('lanes')
     expect(response.result.hits[0]).not.toHaveProperty('lanes')
+  })
+})
+
+describe('runSearch: the all selector', () => {
+  function kindsOf(response: Awaited<ReturnType<typeof runSearch>>) {
+    if (!response.ok) throw new Error(response.text)
+    return response.result.hits.map((hit) => hit.document.kind)
+  }
+
+  it('leaves kind out as solutions only, and all adds every other kind (AE1)', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/solutions/s.md', 'title: Quartz fix')
+    writeKindDoc(
+      root,
+      'docs/plans/p.md',
+      'title: Quartz plan\nstatus: completed',
+    )
+    writeKindDoc(root, 'docs/brainstorms/b.md', 'topic: Quartz idea')
+    writeKindDoc(root, 'docs/ideation/i.md', 'topic: Quartz survey')
+
+    const omitted = await search(root, 'quartz')
+    expect(pathsOf(omitted)).toEqual(['docs/solutions/s.md'])
+
+    const all = await search(root, 'quartz', { kind: 'all' })
+    expect(new Set(kindsOf(all))).toEqual(
+      new Set<DocumentKind>(['solution', 'plan', 'brainstorm', 'ideation']),
+    )
+    expect(pathsOf(all)).toHaveLength(4)
+    for (const kind of ['solution', 'plan', 'brainstorm', 'ideation']) {
+      expect(all.text).toContain(`Kind: ${kind}`)
+    }
+  })
+
+  it('searches plans with no docs/solutions/, and solution reports none (AE6)', async () => {
+    const root = makeProject()
+    for (const name of ['a', 'b', 'c']) {
+      writeKindDoc(root, `docs/plans/${name}.md`, `title: Quartz ${name}`)
+    }
+    const all = await search(root, 'quartz', { kind: 'all' })
+    expect(pathsOf(all)).toHaveLength(3)
+    expect(all.text.split('\n')[0]).toBe(
+      'Search "quartz": 3 docs, 3 hits. Corpus: solution none, plan 3, brainstorm none, ideation none.',
+    )
+    const solution = await search(root, 'quartz', { kind: 'solution' })
+    expect(solution.text).toContain('corpus: none')
+    expect(solution.text).toContain('docs/solutions/')
+  })
+
+  it('reads none only when every directory is absent, naming all four', async () => {
+    const root = makeProject()
+    const response = await search(root, 'quartz', { kind: 'all' })
+    expect(response.text.split('\n')[0]).toBe(
+      'Search "quartz": corpus: none (no docs/solutions/, docs/plans/, docs/brainstorms/ or docs/ideation/ directory under the project root).',
+    )
+    if (!response.ok) throw new Error(response.text)
+    expect(response.result.corpus.state).toBe('none')
+    expect(response.result.corpus.kinds.map((report) => report.state)).toEqual([
+      'none',
+      'none',
+      'none',
+      'none',
+    ])
+  })
+
+  it('reads empty when directories exist but hold nothing indexable', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/plans/README.md', 'title: Index')
+    fs.mkdirSync(path.join(root, 'docs/ideation'), { recursive: true })
+    const response = await search(root, 'quartz', { kind: 'all' })
+    expect(response.text.split('\n')[0]).toBe(
+      'Search "quartz": corpus: empty (no indexable docs: solution none, plan empty, brainstorm none, ideation empty).',
+    )
+  })
+
+  it('reads docs when one kind has documents and the other three are none', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/ideation/i.md', 'topic: Quartz survey')
+    const response = await search(root, 'quartz', { kind: 'all' })
+    expect(response.text.split('\n')[0]).toBe(
+      'Search "quartz": 1 doc, 1 hit. Corpus: solution none, plan none, brainstorm none, ideation 1.',
+    )
+  })
+
+  it('reports a count, none or empty for each kind', async () => {
+    const root = makeProject()
+    for (const name of ['a', 'b', 'c']) {
+      writeKindDoc(root, `docs/solutions/${name}.md`, `title: Quartz ${name}`)
+    }
+    for (const name of ['a', 'b']) {
+      writeKindDoc(root, `docs/plans/${name}.md`, `title: Quartz ${name}`)
+    }
+    fs.mkdirSync(path.join(root, 'docs/ideation'), { recursive: true })
+    const response = await search(root, 'quartz', { kind: 'all' })
+    expect(response.text.split('\n')[0]).toContain(
+      'Corpus: solution 3, plan 2, brainstorm none, ideation empty.',
+    )
+  })
+
+  it('accepts each table kind and the single-kind header names its directory', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/brainstorms/b.md', 'topic: Quartz idea')
+    const response = await search(root, 'quartz', { kind: 'brainstorm' })
+    expect(response.text.split('\n')[0]).toBe(
+      'Search "quartz": 1 doc, 1 hit. Corpus: docs/brainstorms.',
+    )
+  })
+
+  it('lists the kinds in table order, then all, in the fixed error, and keeps the limit error', async () => {
+    const root = makeProject()
+    expect(SEARCH_ERRORS.kindUnknown).toBe(
+      'Error: kind must be one of: solution, plan, brainstorm, ideation, all.',
+    )
+    expect(await search(root, 'quartz', { limit: 21, kind: 'all' })).toEqual({
+      ok: false,
+      text: SEARCH_ERRORS.limitInvalid,
+    })
+  })
+
+  it('calls the loader once per kind in table order, and merges in path order', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/solutions/z.md', 'title: Quartz z')
+    writeKindDoc(root, 'docs/plans/a.md', 'title: Quartz a')
+    writeKindDoc(root, 'docs/ideation/m.md', 'title: Quartz m')
+    const calls: DocumentKind[] = []
+    // Same text in every document, so equal scores fall to path order.
+    const loader = (dir: string, kind: DocumentKind): CorpusLoad => {
+      calls.push(kind)
+      return loadCorpus(dir, kind)
+    }
+    const response = await search(
+      root,
+      'quartz',
+      { kind: 'all' },
+      { corpusLoader: loader },
+    )
+    expect(calls).toEqual(['solution', 'plan', 'brainstorm', 'ideation'])
+    expect(pathsOf(response)).toEqual([
+      'docs/ideation/m.md',
+      'docs/plans/a.md',
+      'docs/solutions/z.md',
+    ])
+    const again = await search(root, 'quartz', { kind: 'all' })
+    expect(again.text).toBe(response.text)
+  })
+
+  it('calls the loader once for a single-kind search', async () => {
+    const root = makeProject()
+    const calls: DocumentKind[] = []
+    await search(
+      root,
+      'quartz',
+      { kind: 'plan' },
+      {
+        corpusLoader: (dir, kind) => {
+          calls.push(kind)
+          return loadCorpus(dir, kind)
+        },
+      },
+    )
+    expect(calls).toEqual(['plan'])
+  })
+
+  it('computes IDF over the merged documents', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/solutions/s1.md', 'title: Notes', 'alpha')
+    writeKindDoc(root, 'docs/solutions/s2.md', 'title: Notes', 'beta')
+    for (let index = 0; index < 12; index++) {
+      writeKindDoc(
+        root,
+        `docs/plans/p${String(index).padStart(2, '0')}.md`,
+        'title: Plan',
+        'alpha',
+      )
+    }
+    const solutionOnly = pathsOf(
+      await search(root, 'alpha beta', { kind: 'solution' }),
+    )
+    expect(solutionOnly).toEqual([
+      'docs/solutions/s1.md',
+      'docs/solutions/s2.md',
+    ])
+    const merged = pathsOf(
+      await search(root, 'alpha beta', { kind: 'all', limit: 20 }),
+    )
+    const solutions = merged.filter((hit) => hit.startsWith('docs/solutions/'))
+    // Plans make "alpha" common, so the rare "beta" now outweighs it.
+    expect(solutions).toEqual(['docs/solutions/s2.md', 'docs/solutions/s1.md'])
+  })
+
+  it('keeps the solution scores of a single-kind search when other kinds exist', async () => {
+    const root = makeProject()
+    writeKindDoc(root, 'docs/solutions/s1.md', 'title: Notes', 'alpha')
+    writeKindDoc(root, 'docs/solutions/s2.md', 'title: Notes', 'beta')
+    const before = (await search(root, 'alpha beta')).text
+    for (let index = 0; index < 12; index++) {
+      writeKindDoc(root, `docs/plans/p${index}.md`, 'title: Plan', 'alpha')
+    }
+    expect((await search(root, 'alpha beta')).text).toBe(before)
+  })
+
+  it('keeps all output within the 16 KB cap at limit 20, ending on the marker, never inside a hit line', async () => {
+    const root = makeProject()
+    const longName = (index: number) => `${'n'.repeat(180)}-${index}`
+    const tags = Array.from(
+      { length: 8 },
+      (_, tag) => `${'t'.repeat(60)}${tag}`,
+    )
+    for (let index = 0; index < 20; index++) {
+      writeKindDoc(
+        root,
+        `docs/solutions/${longName(index)}.md`,
+        `title: ${'S'.repeat(150)}\nmodule: ${'m'.repeat(110)}\ntags: [${tags.join(', ')}]`,
+        `needle ${'solution body words '.repeat(40)}`,
+      )
+      writeKindDoc(
+        root,
+        `docs/plans/${longName(index)}.md`,
+        `title: ${'P'.repeat(150)}`,
+        `needle ${'plan body words '.repeat(60)}`,
+      )
+    }
+    const response = await search(root, 'needle', { kind: 'all', limit: 20 })
+    if (!response.ok) throw new Error(response.text)
+    expect(
+      new TextEncoder().encode(response.text).byteLength,
+    ).toBeLessThanOrEqual(MAX_OUTPUT_BYTES)
+    const lines = response.text.split('\n')
+    expect(lines.at(-1)).toBe(TRUNCATION_MARKER)
+
+    const hitLines = lines.slice(1, -1)
+    const pathLines = hitLines.filter((line) => /^\d+\. /.test(line))
+    expect(pathLines.length).toBeGreaterThan(0)
+    expect(pathLines.length).toBeLessThan(20)
+    for (const line of pathLines) {
+      expect(line).toMatch(/^\d+\. docs\/(solutions|plans)\/n+-\d+\.md$/)
+    }
+    // Bodies are identical within a kind, so a snippet cut short would show up
+    // as a third variant.
+    const snippets = new Set(
+      hitLines.filter((line) => line.startsWith('   Snippet: ')),
+    )
+    expect(snippets.size).toBeLessThanOrEqual(2)
+    for (const line of hitLines.filter((line) =>
+      line.startsWith('   Title: '),
+    )) {
+      expect(line).toMatch(
+        /^ {3}Title: ([SP])\1{149} \| Kind: (solution|plan) \| Status: (active|unspecified)$/,
+      )
+    }
+  })
+})
+
+describe('runSearch: warnings per kind', () => {
+  function plansLoader(
+    skipped: number,
+  ): (root: string, kind: DocumentKind) => CorpusLoad {
+    return (_root, kind) => {
+      if (kind === 'plan') {
+        const parsed = parseCorpusDocument(
+          'plan',
+          'docs/plans/ok.md',
+          'quartz\n',
+        )
+        if (!parsed.ok) throw new Error(parsed.reason)
+        return {
+          state: 'loaded',
+          documents: [parsed.document],
+          warnings: Array.from(
+            { length: skipped },
+            (_, index) =>
+              `skipped docs/plans/bad-${index}.md: invalid frontmatter`,
+          ),
+        }
+      }
+      return { state: 'none', documents: [], warnings: [] }
+    }
+  }
+
+  const warningLines = (text: string) =>
+    text.split('\n').filter((line) => line.startsWith('- '))
+
+  it('folds seven unparseable plans into one line with a count', async () => {
+    const root = makeProject()
+    const response = await search(
+      root,
+      'quartz',
+      { kind: 'all' },
+      { corpusLoader: plansLoader(7) },
+    )
+    expect(warningLines(response.text)).toEqual([
+      '- docs/plans: skipped 7 files (7 invalid frontmatter)',
+    ])
+  })
+
+  it('counts each reason and each kind, structural lines first', async () => {
+    const root = makeProject()
+    const loader = (_root: string, kind: DocumentKind): CorpusLoad => {
+      if (kind === 'solution') {
+        return {
+          state: 'loaded',
+          documents: [],
+          warnings: [
+            `skipped docs/solutions/a.md: larger than ${MAX_FILE_BYTES} bytes`,
+            `skipped docs/solutions/b.md: larger than ${MAX_FILE_BYTES} bytes`,
+            `skipped docs/solutions/c.md: larger than ${MAX_FILE_BYTES} bytes`,
+            'skipped docs/solutions/d.md: invalid frontmatter',
+            'docs/solutions: file limit of 2000 reached; skipped 12 files',
+          ],
+        }
+      }
+      if (kind === 'plan') {
+        return {
+          state: 'loaded',
+          documents: [],
+          warnings: [
+            'skipped docs/plans/x.md: invalid frontmatter',
+            'could not read directory docs/plans/locked',
+          ],
+        }
+      }
+      return { state: 'none', documents: [], warnings: [] }
+    }
+    const response = await search(
+      root,
+      'quartz',
+      { kind: 'all' },
+      { corpusLoader: loader },
+    )
+    expect(warningLines(response.text)).toEqual([
+      '- docs/solutions: file limit of 2000 reached; skipped 12 files',
+      '- could not read directory docs/plans/locked',
+      `- docs/solutions: skipped 4 files (3 larger than ${MAX_FILE_BYTES} bytes, 1 invalid frontmatter)`,
+      '- docs/plans: skipped 1 file (1 invalid frontmatter)',
+    ])
+  })
+
+  it('keeps the five-line cap with a +N more line', async () => {
+    const root = makeProject()
+    const loader = (_root: string, kind: DocumentKind): CorpusLoad => ({
+      state: 'loaded',
+      documents: [],
+      warnings: [
+        `could not read directory ${KIND_TABLE[kind].dir}/a`,
+        `could not read directory ${KIND_TABLE[kind].dir}/b`,
+      ],
+    })
+    const response = await search(
+      root,
+      'quartz',
+      { kind: 'all' },
+      { corpusLoader: loader },
+    )
+    expect(warningLines(response.text)).toHaveLength(6)
+    expect(warningLines(response.text).at(-1)).toBe('- +3 more')
+  })
+
+  it('names the directory in a real file-limit warning', async () => {
+    const root = makeProject()
+    for (let index = 0; index < 2001; index++) {
+      writeKindDoc(
+        root,
+        `docs/plans/f${String(index).padStart(5, '0')}.md`,
+        'title: Quartz',
+      )
+    }
+    const response = await search(root, 'quartz', { kind: 'plan' })
+    expect(response.text).toContain(
+      '- docs/plans: file limit of 2000 reached; skipped 1 files',
+    )
   })
 })

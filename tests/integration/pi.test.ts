@@ -62,6 +62,16 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { exportPersonas } from '../../src/lib/pi-subagents-export.js'
+import {
+  assertDelegatedSearchProof,
+  type ChatRequest,
+  createDelegatedSearchScript,
+  type DelegatedSearchScript,
+  evaluateDelegatedSearchProof,
+  hasResearcherSystemMarker,
+  plantDelegatedSearchFixture,
+  researcherSystemMarker,
+} from '../helpers/delegated-search-proof.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const PI_CLI = path.join(
@@ -393,12 +403,21 @@ interface ScriptedResponse {
   toolCalls?: ScriptedToolCall[]
 }
 
+/** Chooses a response from the request's content instead of from its position. */
+type ScriptedResponder = (request: ChatRequest) => ScriptedResponse
+
 interface MockModelServer {
   url: string
   requests: unknown[]
   stop(): void
-  /** Push the next scripted response to return for the next chat-completions request. */
-  push(response: ScriptedResponse): void
+  /**
+   * Push the next scripted response to return for the next chat-completions request.
+   * A function-form push is different: it answers every request from then on,
+   * deciding each turn from the request content. Tests that need the answer to
+   * depend on what the host sent (a child's reply echoing a real tool result)
+   * use it; the positional form stays for everything else.
+   */
+  push(response: ScriptedResponse | ScriptedResponder): void
 }
 
 function sseChunk(obj: unknown): string {
@@ -407,6 +426,7 @@ function sseChunk(obj: unknown): string {
 
 function startMockModelServer(): MockModelServer {
   const script: ScriptedResponse[] = []
+  let responder: ScriptedResponder | undefined
   const requests: unknown[] = []
   let callIndex = 0
 
@@ -420,7 +440,9 @@ function startMockModelServer(): MockModelServer {
       const body = (await req.json()) as unknown
       requests.push(body)
 
-      const scripted = script[callIndex] ?? { text: '' }
+      const scripted = responder
+        ? responder(body as ChatRequest)
+        : (script[callIndex] ?? { text: '' })
       callIndex += 1
 
       const id = `chatcmpl-mock-${callIndex}`
@@ -515,7 +537,10 @@ function startMockModelServer(): MockModelServer {
     url: `http://localhost:${server.port}/v1`,
     requests,
     stop: () => server.stop(true),
-    push: (response) => script.push(response),
+    push: (response) => {
+      if (typeof response === 'function') responder = response
+      else script.push(response)
+    },
   }
 }
 
@@ -1033,6 +1058,96 @@ describe('Pi subprocess integration', () => {
       expect(result?.details?.persona).toBe('best-practices-researcher')
       expect(result?.details?.outcome).toBe('completed')
       expect(result?.details?.turnCount).toBeGreaterThan(0)
+    },
+    TIMEOUT_MS,
+  )
+
+  // The parent delegates to the researcher persona by its bare name, the
+  // persona's default read-only tools include the search tool, and the result
+  // travels back to the parent. RPC hides the child's own tool events, so the
+  // observation is read from the mock's request log.
+  async function runDelegatedSearch(): Promise<{
+    script: DelegatedSearchScript
+    marker: string
+    finalAnswer: string | undefined
+  }> {
+    plantDelegatedSearchFixture(fixture.projectDir)
+    const marker = researcherSystemMarker(REPO_ROOT)
+    const script = createDelegatedSearchScript({
+      dispatch: {
+        tool: 'systematic_delegate',
+        arguments: {
+          agent: 'learnings-researcher',
+          task: 'Find the zebra flake solution.',
+        },
+      },
+      isChildRequest: (request) => hasResearcherSystemMarker(request, marker),
+    })
+    // The function-form push answers every request from the request content.
+    mockModel.push((request) => script.respond(request))
+
+    client = spawnPiRpc({ fixture })
+    await client.send({
+      type: 'set_model',
+      provider: MOCK_PROVIDER_ID,
+      modelId: MOCK_MODEL_ID,
+    })
+    const promptResponse = await client.send({
+      type: 'prompt',
+      message:
+        'Delegate to learnings-researcher to find the zebra flake solution.',
+    })
+    expect(promptResponse.success).toBe(true)
+    await client.waitFor((msg) => msg.type === 'agent_settled', TIMEOUT_MS)
+    // The RPC's own readback of the parent's last assistant message.
+    const lastText = await client.send({ type: 'get_last_assistant_text' })
+    const text = (lastText.data as { text?: unknown } | undefined)?.text
+    return {
+      script,
+      marker,
+      finalAnswer: typeof text === 'string' ? text : undefined,
+    }
+  }
+
+  test(
+    'a delegated learnings-researcher child calls systematic_search and its result reaches the parent',
+    async () => {
+      const { script, marker, finalAnswer } = await runDelegatedSearch()
+
+      // The parent's final assistant message is the one message that must
+      // carry the marker and both planted paths.
+      assertDelegatedSearchProof({
+        ...script.observation(),
+        parentAnswer: finalAnswer,
+      })
+      // The child that ran is the researcher persona.
+      for (const child of script.observation().childRequests) {
+        expect(hasResearcherSystemMarker(child, marker)).toBe(true)
+      }
+    },
+    TIMEOUT_MS,
+  )
+
+  test(
+    'with search.enabled false the researcher child is not offered the tool and the proof fails saying so',
+    async () => {
+      const userConfigDir = path.join(fixture.homeDir, '.config/opencode')
+      fs.mkdirSync(userConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(userConfigDir, 'systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+
+      const { script } = await runDelegatedSearch()
+
+      const verdict = evaluateDelegatedSearchProof(script.observation())
+      expect(verdict).toMatchObject({ ok: false, code: 'tool-not-advertised' })
+      if (!verdict.ok) {
+        expect(verdict.message).toContain('did not advertise systematic_search')
+      }
+      // The child was reached, so the failure is the missing tool, not a
+      // delegation that never happened.
+      expect(script.observation().childRequests.length).toBeGreaterThan(0)
     },
     TIMEOUT_MS,
   )

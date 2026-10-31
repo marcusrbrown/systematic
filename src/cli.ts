@@ -112,10 +112,12 @@ Commands:
                                CI, issues, or fixtures. Not for the ce:review parent's own run artifact.
                                Exit statuses: 0 valid artifact, 1 validation failure,
                                2 operational failure, 3 legacy artifact with no schema_version
-  search <query...> [--dir <path>] [--kind solution] [--limit <1-20>]
-                               Search the project's docs/solutions learnings by symptom, error text,
-                               module or topic, and print ranked hits. The project root is the nearest
-                               ancestor of --dir (default: the current directory) that holds .git.
+  search <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all] [--limit <1-20>]
+                               Search the project's past work by symptom, error text, module or topic,
+                               and print ranked hits: docs/solutions learnings (the default kind),
+                               docs/plans, docs/brainstorms and docs/ideation. --kind all ranks every
+                               kind together. The project root is the nearest ancestor of --dir
+                               (default: the current directory) that holds .git.
                                Reads user-level search settings; a project config cannot change them.
                                Exit statuses: 0 results, no hits, or search disabled; 2 usage error
                                Use -- to end options, for a query that starts with a dash

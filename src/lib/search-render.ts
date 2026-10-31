@@ -11,7 +11,7 @@
  * a human's terminal.
  */
 
-import type { CorpusDocument } from './search-corpus.js'
+import type { CorpusDocument, DocumentKind } from './search-corpus.js'
 
 /** Hard cap on rendered output, in UTF-8 bytes. */
 export const MAX_OUTPUT_BYTES = 16 * 1024
@@ -24,6 +24,8 @@ export const MAX_SNIPPET_CHARS = 240
 export const MAX_WARNINGS = 5
 /** The lifecycle line that lists the docs a successor replaces. */
 export const SUPERSEDES_LABEL = 'Supersedes:'
+/** The lifecycle line that names a successor in another kind. Information, not a caution. */
+export const SUCCESSOR_LABEL = 'Successor:'
 
 const MAX_TAG_CHARS = 64
 const MAX_MODULE_CHARS = 120
@@ -36,15 +38,28 @@ const MAX_PATH_CHARS = 400
 const MAX_LABEL_CHARS = 40
 const ELLIPSIS = '…'
 
-export type SearchHitStatus = 'active' | 'stale' | 'superseded'
+/**
+ * The status a hit prints. A solution gets `active`, `stale` or `superseded`;
+ * the other kinds get the recorded value as written, or `unspecified`.
+ */
+export type SearchHitStatus = string
 
 export interface SearchHit {
   /** 1-based position in the final list. */
   readonly rank: number
   readonly document: CorpusDocument
   readonly status: SearchHitStatus
-  /** Fully formed `Supersedes:` and `Caution:` lines, in print order. */
+  /** Fully formed `Supersedes:`, `Successor:` and `Caution:` lines, in print order. */
   readonly lifecycle: readonly string[]
+}
+
+/** What one searched kind held: its directory, its state and how many documents loaded. */
+export interface KindCorpus {
+  readonly kind: DocumentKind
+  /** Root-relative directory, with `/` separators and no trailing slash. */
+  readonly dir: string
+  readonly state: 'none' | 'empty' | 'docs'
+  readonly docCount: number
 }
 
 export interface SearchResult {
@@ -52,10 +67,15 @@ export interface SearchResult {
   readonly query: string
   /** Unique, sorted query terms, used to pick snippet windows. */
   readonly queryTerms: readonly string[]
-  /** `none`: no docs/solutions/. `empty`: the directory holds no indexable doc. */
+  /**
+   * `none`: no searched directory exists. `empty`: a directory exists but none
+   * holds an indexable doc. `docs` otherwise. `kinds` is one report per searched
+   * kind, in table order: one entry for a single-kind search, every kind for `all`.
+   */
   readonly corpus: {
     readonly state: 'none' | 'empty' | 'docs'
     readonly docCount: number
+    readonly kinds: readonly KindCorpus[]
   }
   readonly hits: readonly SearchHit[]
   readonly notes: readonly string[]
@@ -303,36 +323,68 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
 }
 
+/** `a`, `a or b`, `a, b or c`. */
+function joinOr(items: readonly string[]): string {
+  const last = items[items.length - 1]
+  if (items.length < 2 || last === undefined) return items.join('')
+  return `${items.slice(0, -1).join(', ')} or ${last}`
+}
+
+/** `solution 128, plan 102, brainstorm none, ideation empty`. */
+function kindTokens(kinds: readonly KindCorpus[]): string {
+  return kinds
+    .map(
+      ({ kind, state, docCount }) =>
+        `${kind} ${state === 'docs' ? docCount : state}`,
+    )
+    .join(', ')
+}
+
 function renderHeader(result: SearchResult): string {
   const query = sanitizeInline(result.query, MAX_QUERY_ECHO_CHARS)
   const prefix = `Search "${query}":`
-  switch (result.corpus.state) {
-    case 'none':
-      return `${prefix} corpus: none (no docs/solutions/ directory under the project root).`
+  const { corpus } = result
+  const [only, ...others] = corpus.kinds
+  const single = only !== undefined && others.length === 0
+  switch (corpus.state) {
+    case 'none': {
+      const dirs = joinOr(corpus.kinds.map(({ dir }) => `${dir}/`))
+      return `${prefix} corpus: none (no ${dirs} directory under the project root).`
+    }
     case 'empty':
-      return `${prefix} corpus: empty (docs/solutions/ holds no indexable docs).`
-    case 'docs':
-      return `${prefix} ${plural(result.corpus.docCount, 'doc')}, ${plural(result.hits.length, 'hit')}. Corpus: docs/solutions.`
+      return single
+        ? `${prefix} corpus: empty (${only.dir}/ holds no indexable docs).`
+        : `${prefix} corpus: empty (no indexable docs: ${kindTokens(corpus.kinds)}).`
+    case 'docs': {
+      const counts = `${plural(corpus.docCount, 'doc')}, ${plural(result.hits.length, 'hit')}`
+      const searched = single ? only.dir : kindTokens(corpus.kinds)
+      return `${prefix} ${counts}. Corpus: ${searched}.`
+    }
   }
 }
 
 /**
  * One lifecycle line. A `Supersedes:` line lists every predecessor path, so it
  * is sanitized and capped per path: a successor that replaces many docs keeps
- * all of them, and only the overall 16 KB cut bounds the total. Any other line
+ * all of them, and only the overall 16 KB cut bounds the total. A `Successor:`
+ * line names one path, sanitized and capped the same way. Any other line
  * (`Caution:`) keeps one cap for the whole line.
  */
 function renderLifecycleLine(line: string): string {
-  const prefix = `${SUPERSEDES_LABEL} `
-  if (!line.startsWith(prefix)) {
-    return sanitizeInline(line, MAX_LIFECYCLE_LINE_CHARS)
+  const supersedes = `${SUPERSEDES_LABEL} `
+  if (line.startsWith(supersedes)) {
+    const paths = line
+      .slice(supersedes.length)
+      .split(', ')
+      .map((path) => sanitizeInline(path, MAX_PATH_CHARS))
+      .filter((path) => path !== '')
+    return `${supersedes}${paths.join(', ')}`
   }
-  const paths = line
-    .slice(prefix.length)
-    .split(', ')
-    .map((path) => sanitizeInline(path, MAX_PATH_CHARS))
-    .filter((path) => path !== '')
-  return `${prefix}${paths.join(', ')}`
+  const successor = `${SUCCESSOR_LABEL} `
+  if (line.startsWith(successor)) {
+    return `${successor}${sanitizeInline(line.slice(successor.length), MAX_PATH_CHARS)}`
+  }
+  return sanitizeInline(line, MAX_LIFECYCLE_LINE_CHARS)
 }
 
 function renderHit(hit: SearchHit, queryTerms: readonly string[]): string[] {

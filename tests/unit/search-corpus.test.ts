@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   type CorpusDocument,
+  type DocumentKind,
   isDocumentKind,
   KIND_TABLE,
   loadCorpus,
@@ -20,6 +21,7 @@ const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const FIXTURES = path.join(ROOT_DIR, 'tests/fixtures/search-corpus')
 const LIFECYCLE_ROOT = path.join(FIXTURES, 'lifecycle')
 const HOSTILE_ROOT = path.join(FIXTURES, 'hostile')
+const PAST_WORK_ROOT = path.join(FIXTURES, 'past-work')
 const LIFECYCLE_DIR = 'docs/solutions/lifecycle'
 
 const temp = createTempDirTracker()
@@ -112,8 +114,13 @@ describe('resolveSearchRoot', () => {
 })
 
 describe('KIND_TABLE', () => {
-  it('has one kind, solution, with the corpus exclusions and lifecycle on', () => {
-    expect(Object.keys(KIND_TABLE)).toEqual(['solution'])
+  it('has the four kinds, with the solution corpus exclusions and lifecycle on', () => {
+    expect(Object.keys(KIND_TABLE)).toEqual([
+      'solution',
+      'plan',
+      'brainstorm',
+      'ideation',
+    ])
     expect(KIND_TABLE.solution.dir).toBe('docs/solutions')
     expect(KIND_TABLE.solution.excludedFiles).toEqual([
       'readme.md',
@@ -123,9 +130,23 @@ describe('KIND_TABLE', () => {
     expect(KIND_TABLE.solution.lifecycle).toBe(true)
   })
 
+  it('points each new kind at its docs directory, excluding README and _archived', () => {
+    expect(KIND_TABLE.plan.dir).toBe('docs/plans')
+    expect(KIND_TABLE.brainstorm.dir).toBe('docs/brainstorms')
+    expect(KIND_TABLE.ideation.dir).toBe('docs/ideation')
+    for (const kind of ['plan', 'brainstorm', 'ideation'] as const) {
+      expect(KIND_TABLE[kind].excludedFiles).toEqual(['readme.md'])
+      expect(KIND_TABLE[kind].excludedDirs).toEqual(['_archived'])
+      expect(KIND_TABLE[kind].lifecycle).toBe(true)
+    }
+  })
+
   it('recognises only table keys as kinds', () => {
-    expect(isDocumentKind('solution')).toBe(true)
-    expect(isDocumentKind('plan')).toBe(false)
+    for (const kind of ['solution', 'plan', 'brainstorm', 'ideation']) {
+      expect(isDocumentKind(kind)).toBe(true)
+    }
+    expect(isDocumentKind('all')).toBe(false)
+    expect(isDocumentKind('bogus')).toBe(false)
     expect(isDocumentKind('toString')).toBe(false)
     expect(isDocumentKind(undefined)).toBe(false)
   })
@@ -392,7 +413,7 @@ describe('loadCorpus: caps', () => {
       'docs/solutions/f01999.md',
     )
     expect(result.warnings).toEqual([
-      `file limit of ${MAX_FILES} reached; skipped 1 files`,
+      `docs/solutions: file limit of ${MAX_FILES} reached; skipped 1 files`,
     ])
   })
 
@@ -417,7 +438,7 @@ describe('loadCorpus: caps', () => {
       `docs/solutions/big-${String(fits - 1).padStart(3, '0')}.md`,
     )
     expect(result.warnings).toEqual([
-      `text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${total - fits} files`,
+      `docs/solutions: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${total - fits} files`,
     ])
   })
 })
@@ -715,7 +736,254 @@ describe('loadCorpus: lifecycle fixture corpus', () => {
   })
 })
 
+const NEW_KINDS: Array<{ kind: DocumentKind; dir: string }> = [
+  { kind: 'plan', dir: 'docs/plans' },
+  { kind: 'brainstorm', dir: 'docs/brainstorms' },
+  { kind: 'ideation', dir: 'docs/ideation' },
+]
+
+describe('loadCorpus: plans, brainstorms and ideation', () => {
+  it('loads three plans, one with an older filename style, and no excluded file', () => {
+    const result = loadCorpus(PAST_WORK_ROOT, 'plan')
+    expect(result.state).toBe('loaded')
+    expect(result.warnings).toEqual([])
+    expect(result.documents.map((d) => d.path)).toEqual([
+      'docs/plans/2026-03-04-feat-old-style-plan.md',
+      'docs/plans/2026-10-01-001-feat-alpha-plan.md',
+      'docs/plans/2026-10-02-002-fix-beta-plan.md',
+    ])
+    for (const document of result.documents) expect(document.kind).toBe('plan')
+  })
+
+  it.each(NEW_KINDS)(
+    'excludes README.md and _archived/ for $kind',
+    ({ kind, dir }) => {
+      const paths = loadCorpus(PAST_WORK_ROOT, kind).documents.map(
+        (d) => d.path,
+      )
+      expect(paths.length).toBeGreaterThan(0)
+      expect(paths).not.toContain(`${dir}/README.md`)
+      expect(paths).not.toContain(`${dir}/_archived/old.md`)
+      for (const documentPath of paths) {
+        expect(documentPath.startsWith(`${dir}/`)).toBe(true)
+      }
+    },
+  )
+
+  it('loads brainstorms and ideation documents under their own kinds', () => {
+    expect(
+      loadCorpus(PAST_WORK_ROOT, 'brainstorm').documents.map((d) => d.path),
+    ).toEqual([
+      'docs/brainstorms/2026-10-01-topic-only-requirements.md',
+      'docs/brainstorms/2026-10-02-both-requirements.md',
+      'docs/brainstorms/2026-10-03-neither-requirements.md',
+    ])
+    expect(
+      loadCorpus(PAST_WORK_ROOT, 'ideation').documents.map((d) => d.path),
+    ).toEqual(['docs/ideation/2026-10-01-open-ideation.md'])
+  })
+
+  it('does not load a new kind through the default solution kind', () => {
+    // The fixture holds no docs/solutions, so the default kind finds nothing.
+    expect(loadCorpus(PAST_WORK_ROOT)).toMatchObject({
+      state: 'none',
+      documents: [],
+    })
+  })
+
+  it('uses the topic as the title when there is no title', () => {
+    const { documents } = loadCorpus(PAST_WORK_ROOT, 'brainstorm')
+    expect(
+      byPath(
+        documents,
+        'docs/brainstorms/2026-10-01-topic-only-requirements.md',
+      ).title,
+    ).toBe('foo')
+  })
+
+  it('prefers the title over the topic', () => {
+    const { documents } = loadCorpus(PAST_WORK_ROOT, 'brainstorm')
+    expect(
+      byPath(documents, 'docs/brainstorms/2026-10-02-both-requirements.md')
+        .title,
+    ).toBe('A')
+  })
+
+  it('falls back to the file name without .md when there is neither', () => {
+    const { documents } = loadCorpus(PAST_WORK_ROOT, 'brainstorm')
+    expect(
+      byPath(documents, 'docs/brainstorms/2026-10-03-neither-requirements.md')
+        .title,
+    ).toBe('2026-10-03-neither-requirements')
+  })
+
+  it('uses the quoted plan title as written', () => {
+    const { documents } = loadCorpus(PAST_WORK_ROOT, 'plan')
+    expect(
+      byPath(documents, 'docs/plans/2026-10-01-001-feat-alpha-plan.md').title,
+    ).toBe('feat: Alpha rollout')
+  })
+
+  it('keeps the solution-only fields empty for the new kinds', () => {
+    const { documents } = loadCorpus(PAST_WORK_ROOT, 'plan')
+    for (const document of documents) {
+      expect(document).toMatchObject({
+        tags: [],
+        module: undefined,
+        component: undefined,
+        problemType: undefined,
+        symptoms: [],
+        appliesWhen: [],
+      })
+    }
+  })
+
+  it('reads the status of a new kind as written', () => {
+    const { documents } = loadCorpus(PAST_WORK_ROOT, 'brainstorm')
+    expect(
+      byPath(documents, 'docs/brainstorms/2026-10-02-both-requirements.md')
+        .status,
+    ).toBe('abandoned')
+  })
+
+  describe.each([
+    ['an empty title', "title: ''"],
+    ['a blank title', "title: '   '"],
+    ['a list title', 'title: [Plan Title]'],
+    ['a numeric title', 'title: 42'],
+  ])('title chain with %s', (_label, titleLine) => {
+    const parse = (extra: string) =>
+      parseCorpusDocument(
+        'plan',
+        'docs/plans/2026-10-04-x-plan.md',
+        `---\n${titleLine}\n${extra}---\n\nBody.\n`,
+      )
+
+    it('falls through to the topic', () => {
+      const parsed = parse('topic:  Real topic \n')
+      expect(parsed.ok && parsed.document.title).toBe('Real topic')
+    })
+
+    it('falls through to the file name when the topic is absent', () => {
+      const parsed = parse('')
+      expect(parsed.ok && parsed.document.title).toBe('2026-10-04-x-plan')
+    })
+
+    it('falls through to the file name when the topic is not a usable string', () => {
+      for (const topic of ['topic: 7', 'topic: [a, b]', "topic: ''"]) {
+        const parsed = parse(`${topic}\n`)
+        expect(parsed.ok && parsed.document.title).toBe('2026-10-04-x-plan')
+      }
+    })
+  })
+
+  it.each(NEW_KINDS)(
+    'loads a $kind file with no frontmatter as body-only, with no warning',
+    ({ kind, dir }) => {
+      const root = makeTemp()
+      writeFile(root, `${dir}/2026-01-01-bare.md`, 'Just prose about zebras.\n')
+      const result = loadCorpus(root, kind)
+      expect(result.warnings).toEqual([])
+      expect(result.documents).toHaveLength(1)
+      expect(result.documents[0]).toMatchObject({
+        title: '2026-01-01-bare',
+        status: undefined,
+        supersededBy: { state: 'none' },
+      })
+      expect(result.documents[0]?.body).toContain('zebras')
+    },
+  )
+
+  it.each(NEW_KINDS)(
+    'skips invalid YAML and a non-mapping block for $kind with the fixed reasons',
+    ({ kind, dir }) => {
+      const root = makeTemp()
+      writeFile(root, `${dir}/ok.md`, doc('Ok'))
+      writeFile(root, `${dir}/bad.md`, '---\ntitle: feat: broken\n---\n')
+      writeFile(root, `${dir}/list.md`, '---\n- a\n- b\n---\n')
+      const result = loadCorpus(root, kind)
+      expect(result.documents.map((d) => d.path)).toEqual([`${dir}/ok.md`])
+      expect(result.warnings).toEqual([
+        `skipped ${dir}/bad.md: invalid frontmatter`,
+        `skipped ${dir}/list.md: frontmatter is not a mapping`,
+      ])
+    },
+  )
+
+  it.each(NEW_KINDS)(
+    'reports none, with no warning, when the $kind directory is missing',
+    ({ kind }) => {
+      const root = makeTemp()
+      writeFile(root, 'docs/solutions/other.md', doc('Other'))
+      expect(loadCorpus(root, kind)).toEqual({
+        state: 'none',
+        documents: [],
+        warnings: [],
+      })
+    },
+  )
+
+  it.each(NEW_KINDS)(
+    'loads zero documents from a $kind directory with no indexable file',
+    ({ kind, dir }) => {
+      const root = makeTemp()
+      writeFile(root, `${dir}/README.md`, doc('Index'))
+      writeFile(root, `${dir}/_archived/old.md`, doc('Old'))
+      writeFile(root, `${dir}/notes.txt`, 'plain text')
+      expect(loadCorpus(root, kind)).toEqual({
+        state: 'loaded',
+        documents: [],
+        warnings: [],
+      })
+    },
+  )
+
+  it('does not load docs/plans when it links outside the root, and the warning names it', () => {
+    const outside = makeTemp()
+    writeFile(outside, 'secret.md', doc('Outside secret'))
+    const root = makeTemp()
+    fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+    fs.symlinkSync(outside, path.join(root, 'docs/plans'))
+
+    const result = loadCorpus(root, 'plan')
+    expect(result.state).toBe('none')
+    expect(result.documents).toEqual([])
+    expect(result.warnings).toEqual([
+      'docs/plans resolves outside the project root; not loaded',
+    ])
+    expect(JSON.stringify(result)).not.toContain('Outside secret')
+  })
+
+  it('names the kind directory in a skip warning for a new kind', () => {
+    const root = makeTemp()
+    writeFile(root, 'docs/brainstorms/big.md', 'x'.repeat(MAX_FILE_BYTES + 1))
+    expect(loadCorpus(root, 'brainstorm').warnings).toEqual([
+      `skipped docs/brainstorms/big.md: larger than ${MAX_FILE_BYTES} bytes`,
+    ])
+  })
+
+  it('loads a gitignored kind directory, because the loader never consults git', () => {
+    const root = makeTemp()
+    fs.writeFileSync(path.join(root, '.git'), 'gitdir: /elsewhere\n')
+    fs.writeFileSync(path.join(root, '.gitignore'), 'docs/brainstorms/\n')
+    writeFile(root, 'docs/brainstorms/ignored-requirements.md', doc('Ignored'))
+    const result = loadCorpus(resolveSearchRoot(root), 'brainstorm')
+    expect(result.state).toBe('loaded')
+    expect(result.documents.map((d) => d.title)).toEqual(['Ignored'])
+  })
+})
+
 describe('loadCorpus: this repository', () => {
+  it('loads every real plan with no warnings and a non-empty title', () => {
+    const result = loadCorpus(ROOT_DIR, 'plan')
+    expect(result.warnings).toEqual([])
+    expect(result.state).toBe('loaded')
+    expect(result.documents.length).toBeGreaterThan(100)
+    for (const document of result.documents) {
+      expect(document.title.length).toBeGreaterThan(0)
+    }
+  })
+
   it('loads the real docs/solutions/ with no warnings', () => {
     const result = loadCorpus(ROOT_DIR)
     expect(result.warnings).toEqual([])

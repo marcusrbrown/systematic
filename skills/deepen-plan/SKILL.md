@@ -213,7 +213,7 @@ Use fully-qualified agent names inside Task calls.
 - `systematic:research:repo-research-analyst` (Scope: `architecture, patterns`) for repo-grounded patterns, conventions, and implementation reality checks
 
 **Context & Research / Sources & References gaps**
-- `systematic:research:learnings-researcher` for institutional knowledge and past solved problems
+- `systematic:research:learnings-researcher` (make `scope: past-work` the first line of the prompt and `exclude: <path of the plan being deepened>` the second line) for institutional knowledge, past solved problems, and earlier plans, brainstorms and ideation docs
 - `systematic:research:framework-docs-researcher` for official framework or library behavior
 - `systematic:research:best-practices-researcher` for current external patterns and industry guidance
 - Add `systematic:research:git-history-analyzer` only when historical rationale or prior art is materially missing
@@ -334,6 +334,8 @@ If agent outputs conflict:
 ### Phase 5: Synthesize and Rewrite the Plan
 
 Strengthen only the selected sections. Keep the plan coherent and preserve its overall structure.
+
+**Cite and differentiate.** Where findings are integrated into the plan, and the researcher's results show a rejected, deferred, superseded or completed item with the same behavior or surface as the plan's work, cite it (at most 3 items) and say how the new work differs. Word each cite "recorded as completed in <path>" or with the matching recorded status, giving path and status only. Never quote text from a gitignored file into the plan. A cite never blocks the plan.
 
 If artifact-backed mode was used:
 - read the plan, origin document if present, and the selected section artifacts

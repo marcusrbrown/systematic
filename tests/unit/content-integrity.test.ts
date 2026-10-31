@@ -23,6 +23,7 @@ import {
   checkHookParity,
   checkLibModuleTableCompleteness,
   checkMigratedSkillIdentifiers,
+  checkPlanFrontmatterParse,
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
   checkSkillReferenceIntegrity,
@@ -1078,6 +1079,217 @@ describe('checkStalePlanStatus', () => {
       )
 
       expect(checkStalePlanStatus(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkPlanFrontmatterParse', () => {
+  const PLAN = 'docs/plans/2026-01-01-001-feat-example-plan.md'
+
+  test('reports nothing for a quoted conventional-commit title', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        PLAN,
+        '---\ntitle: "feat: x"\nstatus: active\n---\n\n## Units\n',
+      )
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an unquoted title with a colon and names the file, the title field and quoting', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        PLAN,
+        '---\ntitle: feat: x\nstatus: active\n---\n\n## Units\n',
+      )
+
+      const violations = checkPlanFrontmatterParse(root)
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'unparseable-frontmatter',
+        file: PLAN,
+      })
+      expect(violations[0]?.message).toContain(PLAN)
+      expect(violations[0]?.message).toContain('title')
+      expect(violations[0]?.message).toContain('quote')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags other parse failures without naming the title field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        PLAN,
+        '---\ntitle: "feat: x"\ntags: [unclosed\n---\n\n## Units\n',
+      )
+
+      const violations = checkPlanFrontmatterParse(root)
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe(PLAN)
+      expect(violations[0]?.message).toContain(PLAN)
+      expect(violations[0]?.message).toContain('quot')
+      expect(violations[0]?.message).not.toContain('title')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not name the title field when an unquoted title has a colon but no space after it', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        PLAN,
+        '---\ntitle: feat:x\ntags: [unclosed\n---\n\n## Units\n',
+      )
+
+      const violations = checkPlanFrontmatterParse(root)
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.message).not.toContain('title')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes a plan with no frontmatter', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, '# Just a heading\n\nfeat: not frontmatter\n')
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes a BOM-prefixed valid plan', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        PLAN,
+        '\uFEFF---\ntitle: "feat: x"\nstatus: active\n---\n\n## Units\n',
+      )
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes a plan whose closing delimiter is the last line with no trailing newline', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, '---\ntitle: "feat: x"\nstatus: active\n---')
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a BOM-prefixed plan with an unquoted colon title', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, '\uFEFF---\ntitle: feat: x\nstatus: active\n---\n')
+
+      expect(checkPlanFrontmatterParse(root)).toMatchObject([{ file: PLAN }])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a broken plan whose closing delimiter is the last line with no trailing newline', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, '---\ntitle: feat: x\nstatus: active\n---')
+
+      expect(checkPlanFrontmatterParse(root)).toMatchObject([{ file: PLAN }])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes a single-quoted title that contains a colon', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, "---\ntitle: 'fix: y'\nstatus: active\n---\n")
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes a placeholder-list title because it parses', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, '---\ntitle: [Plan Title]\nstatus: active\n---\n')
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('walks nested plan directories and reports only the broken file', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, PLAN, '---\ntitle: "feat: x"\n---\n')
+      writeFile(
+        root,
+        'docs/plans/nested/2026-01-02-001-fix-y-plan.md',
+        '---\ntitle: fix: y\n---\n',
+      )
+
+      expect(checkPlanFrontmatterParse(root)).toMatchObject([
+        { file: 'docs/plans/nested/2026-01-02-001-fix-y-plan.md' },
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports nothing when docs/plans does not exist', () => {
+    const root = makeFixtureRepo()
+    try {
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — plan frontmatter parse wiring', () => {
+  test('surfaces an unparseable plan in the aggregate result', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-feat-example-plan.md',
+        '---\ntitle: feat: x\n---\n',
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.planFrontmatterViolations).toMatchObject([
+        { kind: 'unparseable-frontmatter' },
+      ])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

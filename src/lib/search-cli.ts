@@ -33,15 +33,18 @@ import {
  * bin user to run a command they may not have.
  */
 export function searchCliUsage(commandName: string): string {
-  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
+  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
 
-Searches the project's docs/solutions learnings by symptom, error text, module
-or topic, and prints ranked hits.
+Searches the project's past work by symptom, error text, module or topic, and
+prints ranked hits: the docs/solutions learnings, and the docs/plans,
+docs/brainstorms and docs/ideation documents.
 
 Options:
   --dir <path>     Start the search from <path> (default: the current directory).
                    The project root is the nearest ancestor holding .git.
-  --kind <kind>    The kind of durable output to search. Only "solution" exists.
+  --kind <kind>    The kind of durable output to search: solution (docs/solutions,
+                   the default), plan (docs/plans), brainstorm (docs/brainstorms),
+                   ideation (docs/ideation), or all to rank every kind together.
   --limit <n>      How many hits to return, ${MIN_LIMIT} to ${MAX_LIMIT} (default: 8).
   --               End of options; everything after it is part of the query.
   -h, --help       Show this help.

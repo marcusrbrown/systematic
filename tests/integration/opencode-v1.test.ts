@@ -23,6 +23,16 @@ import path from 'node:path'
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import {
+  assertDelegatedSearchProof,
+  type ChatRequest,
+  createDelegatedSearchScript,
+  type DelegatedSearchScript,
+  evaluateDelegatedSearchProof,
+  hasResearcherSystemMarker,
+  plantDelegatedSearchFixture,
+  researcherSystemMarker,
+} from '../helpers/delegated-search-proof.js'
+import {
   assertMixedVersionProbeEvents,
   assertOk,
   assertProbeCapturedEvents,
@@ -173,6 +183,89 @@ async function callToolOnHost(
     })
     assertOk(result)
     return model.result()
+  } finally {
+    model.stop()
+  }
+}
+
+/**
+ * A scripted model that answers every request from a delegated-search script
+ * and keeps no state of its own. The script decides each turn from the request.
+ */
+function startDelegatedSearchModel(
+  script: DelegatedSearchScript,
+): ScriptedModelServer {
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (
+        request.method !== 'POST' ||
+        !request.url.endsWith('/chat/completions')
+      ) {
+        return new Response('not found', { status: 404 })
+      }
+      const body = (await request.json()) as ChatRequest
+      const chunks = scriptedResponseChunks(
+        script.respond(body),
+        'v1-delegated-search-response',
+        Math.floor(Date.now() / 1000),
+      )
+      const sse = [
+        ...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`),
+        'data: [DONE]\n\n',
+      ].join('')
+      return new Response(new TextEncoder().encode(sse), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+  return {
+    url: `http://localhost:${server.port}/v1`,
+    stop: () => server.stop(true),
+  }
+}
+
+/**
+ * Runs the parent through `opencode run`, with the scripted parent dispatching
+ * the learnings researcher by `task`. Returns what the run printed and what
+ * the model saw. The researcher child is told apart from the parent by the
+ * researcher's own opening line, read from its agent file.
+ */
+async function runDelegatedSearch(
+  fixture: IsolatedFixture,
+  pluginUrl: string,
+): Promise<{ result: OpencodeResult; script: DelegatedSearchScript }> {
+  plantDelegatedSearchFixture(fixture.projectDir)
+  const marker = researcherSystemMarker(REPO_ROOT)
+  const script = createDelegatedSearchScript({
+    dispatch: {
+      tool: 'task',
+      arguments: {
+        description: 'Search past solutions',
+        prompt: 'Find the zebra flake solution.',
+        subagent_type: 'learnings-researcher',
+      },
+    },
+    isChildRequest: (request) => hasResearcherSystemMarker(request, marker),
+  })
+  const model = startDelegatedSearchModel(script)
+  try {
+    const configContent = withScriptedProvider(
+      JSON.stringify({ plugin: [pluginUrl], snapshot: false }),
+      model.url,
+    )
+    const result = await spawnOpencodeChild(
+      buildOpencodeRunArgv(
+        TARGET_OPENCODE_HOST,
+        'Dispatch the learnings researcher to find the zebra flake solution.',
+      ),
+      {
+        cwd: fixture.projectDir,
+        env: buildIsolatedOpencodeEnv(fixture, configContent),
+        timeoutMs: TIMEOUT_MS,
+      },
+    )
+    return { result, script }
   } finally {
     model.stop()
   }
@@ -465,6 +558,57 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
         expect(tooMany).toContain(SEARCH_ERRORS.limitInvalid)
       },
       TIMEOUT_MS * 3,
+    )
+
+    // The parent dispatches the researcher through `task`, the child calls
+    // the plugin's search tool, and the result travels back to the parent.
+    // Runs on the floor and current lanes alike.
+    test(
+      'a dispatched learnings-researcher child calls systematic_search and its result reaches the parent',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+
+        const { result, script } = await runDelegatedSearch(fixture, pluginUrl)
+
+        assertOk(result)
+        // `opencode run` prints the parent's final message and nothing else
+        // on stdout, so stdout is that one message. The proof requires it to
+        // carry the parent's marker and both planted paths.
+        assertDelegatedSearchProof({
+          ...script.observation(),
+          parentAnswer: result.stdout.trim(),
+        })
+      },
+      TIMEOUT_MS * 2,
+    )
+
+    test(
+      'with search.enabled false the researcher child is not offered the tool and the proof fails saying so',
+      async () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({ search: { enabled: false } }),
+        )
+
+        const { result, script } = await runDelegatedSearch(fixture, pluginUrl)
+
+        assertOk(result)
+        const verdict = evaluateDelegatedSearchProof(script.observation())
+        expect(verdict).toMatchObject({
+          ok: false,
+          code: 'tool-not-advertised',
+        })
+        if (!verdict.ok) {
+          expect(verdict.message).toContain(
+            'did not advertise systematic_search',
+          )
+        }
+        // The child was reached, so the failure is the missing tool, not a
+        // dispatch that never happened.
+        expect(script.observation().childRequests.length).toBeGreaterThan(0)
+      },
+      TIMEOUT_MS * 2,
     )
   },
 )
