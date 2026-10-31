@@ -4,6 +4,25 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.28.0](https://github.com/marcusrbrown/systematic/compare/v3.27.2...v3.28.0) (2026-10-31)
+
+### Features
+
+* search past solutions from every harness ([#1261](https://github.com/marcusrbrown/systematic/issues/1261)) ([42c3618](https://github.com/marcusrbrown/systematic/commit/42c3618de13d7e37e9c29b1d998fd2c00e1077c5))
+
+### Documentation
+
+* **solutions:** validate frontmatter from other harnesses before passing it to OpenCode ([#1257](https://github.com/marcusrbrown/systematic/issues/1257)) ([f16af3f](https://github.com/marcusrbrown/systematic/commit/f16af3ff17e5ac962e69a9242c8870c3bd79bb94))
+
+### Code Refactoring
+
+* move the discovered-skill collector's docblock onto its function ([#1258](https://github.com/marcusrbrown/systematic/issues/1258)) ([321e9d4](https://github.com/marcusrbrown/systematic/commit/321e9d4196fbfa5c5ff4e36abeebc14c414fec6e))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.130.0 ([#1260](https://github.com/marcusrbrown/systematic/issues/1260)) ([a57551b](https://github.com/marcusrbrown/systematic/commit/a57551be414d73a5edd68c6fa956e7f04adae8b1))
+* **dev:** update dependency agent-browser to v0.39.4 ([#1259](https://github.com/marcusrbrown/systematic/issues/1259)) ([d3e2a35](https://github.com/marcusrbrown/systematic/commit/d3e2a3524c40cb7749532406f4a5fd298bcb26d2))
+
 ## [3.27.2](https://github.com/marcusrbrown/systematic/compare/v3.27.1...v3.27.2) (2026-10-29)
 
 ### Bug Fixes
