@@ -10,9 +10,11 @@ origin: docs/brainstorms/2026-10-30-search-past-work-requirements.md
 
 ## Overview
 
-v3.28.0 search reads `docs/solutions/` and nothing else. The plans, brainstorms and ideation docs that Systematic's own workflows write are reachable only through narrow scans, so a rejected direction or a finished plan from two months ago can be proposed again without anyone noticing. This plan extends search to three more kinds (`plan`, `brainstorm`, `ideation`), adds an explicit `kind: all` selector, gives each new kind its own lifecycle rules, and widens learnings-researcher with a `past-work` scope. ce:plan, ce:ideate, ce:brainstorm and deepen-plan then dispatch the researcher in that scope and cite what it finds.
+v3.28.0 search reads `docs/solutions/` and nothing else. The plans, brainstorms and ideation docs that Systematic's own workflows write are reachable only through narrow scans, so a rejected direction or a finished plan from two months ago can be proposed again without anyone noticing. This plan extends search to three more kinds (`plan`, `brainstorm`, `ideation`), adds an explicit `kind: all` selector, gives the three new kinds one shared set of status and successor rules (each kind takes its own link-form rule from the kind table), and widens learnings-researcher with a `past-work` scope. ce:plan, ce:ideate, ce:brainstorm and deepen-plan then dispatch the researcher in that scope and cite what it finds.
 
-Everything ships in one `feat` PR. Its gate is proof that a dispatched researcher subagent really calls search on four host configurations (OpenCode v1 at its floor and at its current pin, OpenCode v2, Pi), plus one manual Claude Code run. The proof harness is built first, against today's solution-only search, so a stall there is found before any engine work is spent. If the harness cannot be made to work, the engine units (U3 to U5) split off as their own PR.
+Everything ships in one `feat` PR. Its delivery gate is proof of reach: a dispatched researcher subagent really calls search and receives its result on four host configurations (OpenCode v1 at its floor and at its current pin, OpenCode v2, Pi), plus one manual Claude Code run. Those tests prove reach and plumbing only. They do not show that the feature is useful, and a scripted model makes the call. The one quality gate is the solution-results comparison against v3.28.0 (no top-5 loss on solution queries). The evidence table, including its comparison against the recorded grep baseline, is reported with no ship rule attached.
+
+The two probes at the start of the harness unit run first, against today's solution-only search, so a stall is found before any engine work is spent. Those probes are a prerequisite for the engine units (U3 to U5); the rest of the harness runs in parallel with them. If the probes fail or the harness cannot be made to work, the engine units split off as their own PR.
 
 The plan also fixes a bug it would otherwise trip over: five existing plans fail frontmatter parsing because the ce:plan template leaves `title:` unquoted and conventional titles contain a colon. Those plans would be invisible to search, and every `plan` or `all` query would print a warnings block.
 
@@ -20,7 +22,7 @@ The plan also fixes a bug it would otherwise trip over: five existing plans fail
 
 ## Problem Frame
 
-v3.28.0 search accepts a `kind` argument on every surface, but its lifecycle handling assumes solutions. Successor links must point into `docs/solutions/`. Every status except `stale` renders as `active`. Most brainstorms carry `topic` rather than `title`, so they would show filenames as titles. Of the 23 plans that carry `superseded_by`, 18 point at solutions, 1 at a brainstorm and 4 at plans, so a solution-only successor rule would leave most plan successors unresolved.
+v3.28.0 search accepts a `kind` argument on every surface, but its lifecycle handling assumes solutions. Successor links must point into `docs/solutions/`. Every status except `stale` renders as `active`. Most brainstorms carry `topic` rather than `title`, so they would show filenames as titles. Of the 23 plans that carry `superseded_by` (22 parse today; the 23rd is in one of the five unparseable files), 18 point at solutions, 1 at a brainstorm and 4 at plans, so a solution-only successor rule would leave most plan successors unresolved.
 
 Around the engine, the skills reach past work only by narrow scans:
 
@@ -46,7 +48,7 @@ The origin defines R1 to R24 and AE1 to AE8. Every requirement maps to at least 
 | R5 | `all` returns one combined ranking, each hit names its kind, the output cap applies to the whole | U5 |
 | R6 | Every surface behaves the same; tool descriptions and help name the new kinds and `all`; harness profiles keep their search row | U5, U8 |
 | R7 | `all` reports corpus state per kind; `none` only when no kind has a directory | U5 |
-| R8 | Non-solution hits show recorded status raw, or `unspecified`; solution output unchanged | U4 |
+| R8 | Non-solution hits show recorded status raw, or `unspecified`; solution status output unchanged, except that a solution whose `superseded_by` names a plan now prints a `Successor:` line instead of `Caution: successor unresolved` (no solution does today) | U4 |
 | R9 | Only `superseded` triggers successor handling; only `stale` adds a caution | U4 |
 | R10 | Same-kind successors resolve as solutions do today, bounded and cycle-safe | U4 |
 | R11 | Cross-kind successors stay visible and name the successor's path | U4 |
@@ -111,10 +113,10 @@ Researcher and skills:
 
 Tests and gates:
 
-- Single-kind pins that must change: `tests/unit/search-core.test.ts:112-120`, `:141-147` and `:216-219` (the last asserts `plan` is rejected), `tests/unit/search-lifecycle.test.ts:211-224`, `tests/unit/search-corpus.test.ts:114-131` (asserts the `KIND_TABLE` keys equal `['solution']`) and `tests/unit/search-adapters-parity.test.ts:532`.
+- Single-kind pins that must change: `tests/unit/search-core.test.ts:216-219` (a loop that asserts `plan` is rejected), `tests/unit/search-corpus.test.ts:114-131` (asserts the `KIND_TABLE` keys equal `['solution']`) and `tests/unit/search-adapters-parity.test.ts:532` (asserts `plan` is rejected on every surface). Two more pin warning text and change with the warning aggregation in U5: `tests/unit/search-render.test.ts` and `tests/unit/search-corpus.test.ts`. Tests that stay green because the solution default is kept: `search-core.test.ts:112-120` (solution hit shape and `active` status), `:141-147` (omitted `kind` equals `solution`) and `search-lifecycle.test.ts:211-224` (the `isSuccessorPathForm` cases).
 - `tests/unit/search-recall.test.ts` plus `tests/fixtures/search-queries.json` and `tests/fixtures/search-baseline-grep.json` are the existing solution recall floor and grep baseline.
-- Harness mocks: `tests/integration/opencode-v1.test.ts:91-143` (`startToolCallModel`, a single-shot `issued` flag); `tests/integration/opencode-v2.test.ts:1382-1435` (an `@@TOOL subagent` dispatch whose child turns are filtered by a marker and by the absence of `@@TOOL`); `tests/integration/pi.test.ts:1055-1092` (a child's tool calls are visible only in the mock model's request log). Planted-doc precedent: `tests/integration/opencode-v1.test.ts:439-460` and `opencode-v2.test.ts:577-601` write `docs/solutions/zebra-flake.md`. Pass floors live in `scripts/host-contract-guard.ts:174-178`.
-- `scripts/content-integrity.ts`: `checkStalePlanStatus` (`:3448`) with `collectPlanFiles` (`:3407`) is the model for a plan-wide gate; `checkSolutionLifecycle` (`:1996`) is the model for lifecycle checks; the codemap and lib-module-table gates (`:3281`, `:3348`) enforce the two registration surfaces.
+- Harness mocks: `tests/integration/opencode-v1.test.ts:91-143` (`startToolCallModel`, a single-shot `issued` flag); `tests/integration/opencode-v2.test.ts:1382-1435` (an `@@TOOL subagent` dispatch whose child turns are filtered by a marker and by the absence of `@@TOOL`); `tests/integration/pi.test.ts:982-1025` (a parent dispatches a persona child through `systematic_delegate` with positional `push` turns), with the mock server and its `requests` log at about `:409-421` and `push` at `:516` (a child's tool calls are visible only in that request log). Planted-doc precedent: `tests/integration/opencode-v1.test.ts:439-460` and `opencode-v2.test.ts:577-601` write `docs/solutions/zebra-flake.md`. Pass floors live in `scripts/host-contract-guard.ts:174-178`.
+- `scripts/content-integrity.ts`: `checkStalePlanStatus` (`:3448`) with `collectPlanFiles` (`:3407`) is the model for a plan-wide gate; `checkSolutionLifecycle` (`:2011`) is the model for lifecycle checks; the codemap and lib-module-table gates (`:3281`, `:3348`) enforce the two registration surfaces.
 - `tests/unit/config-corpus.test.ts:25-85` holds `runCorpusEntry` and `canonicalJson`; the 14 fixtures under `tests/fixtures/config-corpus/` embed the researcher prompt.
 
 ### Institutional Learnings
@@ -133,8 +135,8 @@ No learning covers conditional researcher scope, fixture regeneration, profile b
 
 ### Corpus and Cost Facts
 
-- This repo: 101 plans (3.39 MB), 59 brainstorms (0.90 MB, gitignored), 1 ideation doc, 128 solutions (1.02 MB). `all` reads about 5.3 MB per call against about 1 MB today. Warm timings under Bun: solution 42 ms, plan 122 ms, brainstorm 34 ms, `all` about 200 ms, roughly 35 ms per MB.
-- Crowding: one plan-flavoured query's top 20 under a merged ranking held 12 plans, 4 brainstorms, 3 solutions and 1 ideation doc. Mean body length is 7.2k characters for solutions, 33k for plans and 15k for brainstorms, and only solutions carry `tags`, `symptoms` and `module`. Under BM25F that favors long plans on common terms; the evidence table measures it and per-kind weighting stays out of scope.
+- This repo: 101 plans before this one (3.39 MB; 102 with it), 59 brainstorms (0.90 MB, gitignored), 1 ideation doc, 128 solutions (1.02 MB). `all` reads about 5.3 MB per call against about 1 MB today. Warm timings under Bun: solution 42 ms, plan 122 ms, brainstorm 34 ms, `all` about 200 ms, roughly 35 ms per MB.
+- Crowding: one plan-flavoured query's top 20 under a merged ranking held 12 plans, 4 brainstorms, 3 solutions and 1 ideation doc. That is a single query, so it motivates the design but does not establish a rate; U9's evidence table records whether solution hits fall out of the top 5 under `all` alone. Mean body length is 7.2k characters for solutions, 33k for plans and 15k for brainstorms, and only solutions carry `tags`, `symptoms` and `module`. Under BM25F that favors long plans on common terms; the evidence table measures it and per-kind weighting stays out of scope.
 - Plan lifecycle in this repo: 69 completed, 25 superseded, 2 active, 5 unparseable. Three superseded plans carry no `superseded_by`. Brainstorms: 48 have `topic` only, 9 have `title`, 2 have no frontmatter. No solution carries `topic`, so solution output does not change.
 
 ### External References
@@ -186,37 +188,37 @@ Decisions carried from the origin are marked (see origin). The rest were settled
 - KTD1. **Widen learnings-researcher with a `past-work` scope; add no agent and rename nothing** (see origin). The retrieval is identical and there is no second dispatch. A separate decisions agent that called learnings-researcher would fail on Pi, where `systematic_delegate` refuses nested delegates. A dedicated agent can be split out later if decision research grows its own workflow.
 - KTD2. **Leaving `kind` out still means `solution`; `all` is a selector, not a document kind** (see origin). Direct callers, ce:review and ce:compound keep today's results. `all` expands to every kind in the table. The kind table stays the one source of truth for document kinds, so `all` never becomes a key in it, and the validation error lists the kinds plus `all`.
 - KTD3. **Cite and differentiate; never block** (see origin). A surfaced rejected, deferred, superseded or completed item that overlaps the proposal is cited with its path and status, and the skill says how the new work differs. Blocking would stop legitimate revisits, and silence would let rejected ideas return unnoticed.
-- KTD4. **One PR, gated on delegated reach** (see origin). A researcher that silently falls back to grep would make the wiring a no-op, so wiring is not claimed until a real host shows the call. The harness is the first unit. If it stalls, the engine units split off as their own PR.
+- KTD4. **One PR, gated on delegated reach** (see origin). A researcher that silently falls back to grep would make the wiring a no-op, so wiring is not claimed until a real host shows the call. That is a reach gate, not a usefulness gate: the retrieval quality is judged by KTD22. The harness probes are the first work. If they fail or the harness stalls, the engine units split off as their own PR.
 
 **Corpus and ranking**
 
 - KTD5. **Load once per kind through the existing loader seam, then merge.** `all` calls the loader for each kind, merges documents in code-unit path order, merges warnings and keeps per-kind state. Caps stay per kind, which preserves the `corpusLoader` seam tests inject and keeps cap warnings attributable; plans, the largest kind, use about 3.4 MB of the 16 MB byte budget. IDF is computed over the merged set for `all`; the single-kind path is unchanged, so solution scores are bit-identical to v3.28.0. Cap warnings gain the directory (`docs/plans: file limit of 2000 reached; skipped 12 files`).
 - KTD6. **Title is the first non-empty string of `title`, `topic`, then the filename.** A non-string `title`, an empty string and the placeholder-array shape (`title: [Plan Title]` parses as a list) all fall through. No solution carries `topic`, so solution titles do not change.
-- KTD7. **Show recorded status raw; map nothing** (see origin). Plan, brainstorm and ideation hits print the status as written, or `unspecified`. A solution with no status still prints `active`. The `superseded` and `stale` triggers compare trimmed and lower-cased for the three new kinds, because plans were hand-written with mixed case; the solution comparison stays exact so solution output cannot change. The renderer's 40-character label clip stays: a status is a label, the longest recorded values are short words, and the clip only bounds hostile input.
-- KTD8. **Successors resolve within a kind and are shown across kinds.** The walk follows only links whose target passes the current document's own kind-form rule and names a loaded file of that kind. At the first link that passes another kind's form rule, the walk stops without an existence check and the last same-kind document is shown with `Supersedes:` (if it replaced others) and a `Successor: <path>` line. That line is information, not a `Caution:`. Hops count toward the existing 5 and a visited set still guards cycles. The form rule is driven by each kind's table entry (directory prefix, `.md` suffix, no `..`, excluded file names, excluded directory segments); existence is not checked across kinds, because a kind whose directory is absent in a clone (brainstorms are untracked here) must not turn into a false caution. A link that fits no kind's form, or a same-kind link naming a missing file, keeps `Caution: successor unresolved`. A solution whose `superseded_by` names a plan behaves the same way, and a mutual cross-kind pair names each other without a caution. For the solution kind the result is unchanged, because an excluded file such as `critical-patterns.md` already fails the existence check.
-- KTD9. **Header and warnings report corpus state per kind.** The `Search "…": N docs, M hits.` prefix stays. For `all` it appends `Corpus: solution 128, plan 96, brainstorm none, ideation 1`; a single-kind search keeps `Corpus: <dir>.`. The state is `none` when every kind is none, `empty` when no kind has docs and at least one directory exists, and `docs` otherwise. Skip warnings aggregate into one line per kind with counts per reason; structural warnings (unreadable directory, outside the root, cap reached) come first with their exact text. The five-line warning cap and `+N more` stay.
+- KTD7. **Show recorded status raw; normalize only the trigger comparison** (see origin). Plan, brainstorm and ideation hits print the status as written, or `unspecified`; nothing is mapped. A solution with no status still prints `active`. The `superseded` and `stale` triggers compare trimmed and lower-cased for the three new kinds, because plans were hand-written with mixed case; the solution comparison stays exact so solution status output cannot change. The renderer's 40-character label clip stays: a status is a label, the longest recorded values are short words, and the clip only bounds hostile input.
+- KTD8. **Successors resolve within a kind and are shown across kinds.** The walk follows only links whose target passes the current document's own kind-form rule and names a loaded file of that kind. At the first link that passes another kind's form rule, the walk stops without an existence check and the last same-kind document is shown with `Supersedes:` (if it replaced others) and a `Successor: <path>` line. That line is information, not a `Caution:`. Hops count toward the existing 5 and a visited set still guards cycles. The form rule is driven by each kind's table entry (directory prefix, `.md` suffix, no `..`, excluded file names, excluded directory segments); existence is not checked across kinds, because a kind whose directory is absent in a clone (brainstorms are untracked here) must not turn into a false caution. The tradeoff is accepted: a mistyped cross-kind link shows as a clean `Successor:` line, so that `kind: plan` and `kind: all` agree on the same document. The researcher's read step catches a dead pointer. A link that fits no kind's form, or a same-kind link naming a missing file, keeps `Caution: successor unresolved`. A mutual cross-kind pair names each other without a caution. Same-kind solution links resolve exactly as today, because an excluded file such as `critical-patterns.md` already fails the existence check. The one intended change to solution lifecycle output is a solution whose `superseded_by` names a plan: today it prints `Caution: successor unresolved`, and now it behaves like any cross-kind link and prints a `Successor:` line. No solution in the repo has such a link today (all 11 solution `superseded_by` values point at solutions), so no existing output moves.
+- KTD9. **Header and warnings report corpus state per kind.** The `Search "…": N docs, M hits.` prefix stays. For `all` it appends one token per kind: the parseable document count when the kind has documents, otherwise `none` (no directory) or `empty` (a directory with no indexable document), as in `Corpus: solution 128, plan 102, brainstorm none, ideation 1` (verified by parsing `docs/plans/`: 97 parse today and 5 fail, and the total of 102 is the 101 earlier plans plus this one, so every plan counts once U1 quotes the five failing titles). A single-kind search keeps `Corpus: <dir>.`. The combined state is `none` when every kind is none, `empty` when no kind has docs and at least one directory exists, and `docs` otherwise. Skip warnings aggregate into one line per kind with counts per reason; structural warnings (unreadable directory, outside the root, cap reached) come first with their exact text. The five-line warning cap and `+N more` stay.
 - KTD10. **The 16 KB output cap stays one cap over the combined result.** The renderer already cuts at a line boundary with its marker. A test runs `limit: 20` on `all` against the cap, and the researcher asks for at most 12 results and treats the truncation marker as "more exist, narrow the query".
 
 **Researcher and skills**
 
 - KTD11. **Scope arrives as the first prompt line, `scope: <value>`, with an optional `exclude: <path>` line after it.** Every harness passes only prompt text, so a line is the one transport that works everywhere. A missing line means `solutions`. An unknown value is named in the reply and the researcher falls back to `solutions`. Overlap mode forces `solutions` (see origin R16). ce:plan passes the chosen origin as `exclude` so the researcher does not rediscover it.
-- KTD12. **A `past-work` search makes exactly two search calls, `kind: all` and `kind: solution`, deduplicated by path.** The `all` call finds plans, brainstorms and ideation next to solutions; the dedicated `solution` call keeps proven lessons from being crowded out of a merged ranking, which the crowding measurement shows is real. No further calls. The researcher may also grep `docs/plans` for a brainstorm's `origin:` link, so its one-line method statement reads "search, plus origin lookups by grep".
+- KTD12. **A `past-work` search makes exactly two search calls, `kind: all` and `kind: solution`, deduplicated by path.** The `all` call finds plans, brainstorms and ideation next to solutions; the dedicated `solution` call keeps proven lessons from being crowded out of a merged ranking. The only crowding evidence so far is one plan-flavoured query, so the two-call design is a precaution rather than a measured need; it stays as decided, and U9's evidence table records whether solution hits fall out of the top 5 under `all` alone. No further calls. The researcher may also grep `docs/plans` for a brainstorm's `origin:` link, so its one-line method statement reads "search, plus origin lookups by grep".
 - KTD13. **Groups come from recorded status mechanically, never from inference.** `completed` is existing or completed work. `abandoned`, `deferred`, `archived` and `superseded` are rejected, deferred or superseded directions. `draft`, `active` and `unspecified` are reported as "proposed in <doc>". Solutions are proven lessons. Decisions and rationale come from a document's body sections. When nothing matches, the researcher says "no recorded plan or solution found in the results" rather than implying absence from the repo. This is what stops a brainstorm's proposal from being presented as shipped (AE5).
-- KTD14. **The researcher's read budget is frontmatter plus targeted headings, at most 3 full reads and at most 12 items.** Past-work prose grows the agent prompt by at most 25%, measured in U7; the 14 config-corpus fixtures embed the prompt, so growth is also fixture churn.
+- KTD14. **The researcher's read budget is frontmatter plus targeted headings, at most 3 full reads and at most 12 items.** Past-work prose should grow the agent prompt by at most 25%. That is review guidance, not a test: U7 records the before and after byte counts in the PR, and the 14 config-corpus fixtures embed the prompt, so any prompt change already shows up there.
 - KTD15. **Cite rule scope.** A skill cites only an item with the same behavior or surface, at most 3 items, worded "recorded as completed in <path>" or the matching status. Placement: ce:plan cites in Sources & References or Key Technical Decisions and never in the prior-art JSON; ce:ideate in rejection or survivor reasoning; ce:brainstorm in Key Decisions; deepen-plan wherever its findings are integrated. A cite names path and status only. Text from a gitignored file is never quoted into a tracked document.
 - KTD16. **Wiring.** ce:ideate and ce:plan move their existing dispatch to `past-work`. ce:brainstorm dispatches at Standard and Deep scope and searches directly (`kind: all`) at Lightweight, where a dispatch costs more than the brainstorm is worth. ce:plan's origin discovery keeps its relevance rules and gains a `kind: brainstorm` search when a search tool exists, so an older relevant requirements document is ranked rather than missed by the 30-day window. Both deepen-plan dispatches widen to `past-work` and follow the cite rule. ce:review and ce:compound stay on `solutions`.
 
 **Hygiene and prerequisites**
 
-- KTD17. **Quote plan titles at the source and gate them.** The five plans that fail to parse get quoted `title:` values, and the ce:plan template and title guidance quote the title so the bug stops recurring. No lenient parsing is added. The repo-wide guarantee is a content-integrity check modeled on the stale-plan check, not a unit test over the live tree: the gate runs in CI over every future plan, reports the file and field, and follows the existing registration pattern. A unit test of the check uses temp-dir fixtures, and a separate template contract test asserts the template quotes `title:`.
+- KTD17. **Quote plan titles at the source and gate them.** The five plans that fail to parse get quoted `title:` values, and the ce:plan template and title guidance quote the title so the bug stops recurring. No lenient parsing is added. The repo-wide guarantee is a content-integrity check modeled on the stale-plan check, not a unit test over the live tree: the gate runs in CI over every future plan and follows the existing registration pattern. The parser reports a parse failure only as a boolean, so the gate always reports the file and a remediation that names quoting, and names the `title` field only when the file has a `title:` line whose unquoted value contains a colon followed by a space. A unit test of the check uses temp-dir fixtures, and a separate template contract test asserts the template quotes `title:`.
 - KTD18. **The Pi qualified-name fix ships first, as its own small PR.** Skills dispatch `systematic:research:learnings-researcher`; Pi's resolver matches exact flat names, and the Pi profile tells models to use the bare name. The fix is an exact `systematic:<category>:` strip with a unit test and no other aliases, normalizing at runtime and never rewriting skill source. This plan lists it as a prerequisite for the skill wiring, not as a unit.
-- KTD19. **Worktree sessions see `brainstorm: none`.** `docs/brainstorms/` is gitignored here, so a worktree has none. That is correct behavior, and the docs say so. Timing (R24) and the evidence table are measured from the primary checkout, where the corpus is complete.
+- KTD19. **Worktree sessions see `brainstorm: none`.** `docs/brainstorms/` is gitignored in this repo by local choice, so a worktree has none. That is correct behavior, and the docs say so. The maintainer's worktree sessions therefore get past work from plans, solutions and ideation only; that is a known limit of this repo's ignore rule, not of the feature. Timing (R24) and the evidence table are measured from the primary checkout, where the corpus is complete.
 
 **Verification**
 
 - KTD20. **The harness probes before it builds, with an explicit stop gate.** U2 first checks whether tools added through the OpenCode v2 `ctx.tool.transform` reach a child session, and whether the OpenCode v1 `opencode run` permission set lets the parent call `task`. If a child cannot reach search, work stops and goes back to the maintainer: file an upstream issue and offer to split the engine PR off. The harness is not bent to pass.
-- KTD21. **Three layers of proof per host, with a negative control.** (1) The tool is advertised to the child. (2) The child's next model request carries a `role: tool` message that starts `Search "` and contains the planted path, and not `Error:`. (3) Where a client exists, a completed child tool part. The mock echoes the planted path in its final answer, and the parent's task result is asserted to contain it. With search disabled, layer 2 must fail, and the assertion helper has its own unit tests. Child requests are told apart per host: v1 by a state machine keyed on the researcher's own system line (read from the agent file at test time), v2 by the existing subagent filter, Pi by a function-form `push` that chooses each turn from the request content. A mock request cap bounds runaway loops.
-- KTD22. **Solution results are gated once; new-kind results are reported.** One comparison between a `v3.28.0` build and the branch, on a frozen copy of `docs/solutions`, uses the 19 recall queries plus every solution title and must show no top-5 loss. It is run once and recorded in the PR; `search-recall.test.ts` stays as the standing floor and no golden harness is committed. The evidence table (about 12 queries, labelled first) and the timings are reported, not gated; any call over 1 second is flagged.
+- KTD21. **One proof per host, with a diagnostic branch and a negative control.** The delivery assertion is the same on all four hosts: the child's next model request carries a `role: tool` message that starts `Search "`, contains the planted path and does not start `Error:`, and the parent's final answer names that path (the mock echoes the path it read from the real tool message). A separate check that the tool is advertised to the child's first request is a diagnostic branch, used to name the failure. With search disabled the proof fails because the tool is not advertised to the child, and the diagnostic says so. The assertion helper has its own unit tests. Child requests are told apart per host: v1 by a state machine keyed on the researcher's own system line (read from the agent file at test time), v2 by the existing subagent filter, Pi by a function-form `push` that chooses each turn from the request content. A mock request cap bounds runaway loops.
+- KTD22. **Solution results are the one quality gate; everything else is observation.** One comparison between a `v3.28.0` build and the branch, on a frozen copy of `docs/solutions`, uses the 19 recall queries plus every solution title and must show no top-5 loss. It is run once and recorded in the PR; `search-recall.test.ts` stays as the standing floor and no golden harness is committed. The delegated tests prove reach and plumbing, not usefulness. The evidence table (about 12 queries, labelled first), including its comparison against the recorded grep baseline, and the timings are reported with no ship rule attached; any call over 1 second is flagged.
 - KTD23. **Config-corpus fixtures are regenerated with a throwaway script.** They are not a generated surface. A script outside the repo copies `runCorpusEntry` and `canonicalJson`, rewrites the 14 fixtures, and its diff must show that only the researcher key changed.
 
 ---
@@ -258,7 +260,7 @@ Decisions carried from the origin are marked (see origin). The rest were settled
 |-----------------|--------------|-----------|--------------------|
 | omitted or `solution` | solution | solution only (unchanged) | `Corpus: docs/solutions.` |
 | `plan`, `brainstorm` or `ideation` | that kind | that kind | `Corpus: <that kind's dir>.` |
-| `all` | all four, one loader call each | merged documents | `Corpus: solution 128, plan 96, brainstorm none, ideation 1` |
+| `all` | all four, one loader call each | merged documents | `Corpus: solution 128, plan 102, brainstorm none, ideation 1` |
 | anything else | none | n/a | fixed error naming the kinds and `all` |
 
 **Lifecycle walk.** Applies to every hit whose status marks it superseded; each hop counts toward the 5-hop bound.
@@ -294,8 +296,8 @@ Phase A is evidence and proof (U1, U2) and has no engine change. Phase B is the 
 | Unit | Content | Depends on |
 |------|---------|------------|
 | U1 | Baselines and hygiene | none |
-| U2 | Delegated-reach harness against today's search | none; runs in parallel with U3 to U5 |
-| U3 | Corpus kinds | U1 |
+| U2 | Delegated-reach harness against today's search | none; its two probes gate U3, and the rest runs in parallel with U3 to U5 |
+| U3 | Corpus kinds | U1, and U2's probes answered |
 | U4 | Lifecycle | U3 |
 | U5 | `all` selector and every surface's text | U3, U4 |
 | U6 | Flip the harness to assert the planted brainstorm through `kind: all` | U2, U5 |
@@ -326,7 +328,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Approach:**
 - Confirm the failing set by running the frontmatter parser over `docs/plans/` rather than trusting a list: five files, all with an unquoted `feat: …` or `fix: …` title. Quote each value; change nothing else in those files.
 - The template line becomes a quoted title, and Phase 3.1 gains one sentence saying to quote it because a conventional-commit title contains a colon that YAML reads as a mapping. `plan-sections.md` says the same in the `title` bullet. No other template text changes.
-- The gate follows the stale-plan check: walk `docs/plans/`, normalize the way the search loader does (strip a BOM, ensure a trailing newline), parse, and report a violation with the file, the cause and a remediation that names quoting. A file with no frontmatter is not a violation. Choosing a gate over a live-tree unit test follows KTD17.
+- The gate follows the stale-plan check: walk `docs/plans/`, normalize the way the search loader does (strip a BOM, ensure a trailing newline), parse, and report a violation. The parser reports failure only as a boolean, so the violation always carries the file and a remediation that names quoting, and names the `title` field only when the file has a `title:` line whose unquoted value contains a colon followed by a space. A file with no frontmatter is not a violation. Choosing a gate over a live-tree unit test follows KTD17; CI runs the gate over the real repo, so no test repeats that.
 - Evidence labels come first and are authored blind to any ranker: about 12 queries phrased as a person would ask ("did we reject X", "what shipped for Y"), each with `target_kind` (a known kind, or `any`), the relevant paths with their kinds, and a `source` (`paraphrase`, `title` or `body`). Cover at least two rejected or deferred brainstorms, two completed plans, one ideation doc, one superseded chain and some mixed-kind targets. Labels that point at untracked brainstorm files carry `requires_local: true` so a clone without them skips only the existence check, not the fixture.
 - Keep the drafts outside the repo until both baselines are recorded, so no later step reads labels it should not.
 - Baseline A emulates today's skill scans: the 30-day `*-requirements.md` window of ce:plan and the 30-day `docs/ideation/` window of ce:ideate, with a deterministic token-overlap stand-in for "topic matches" and the as-of date recorded. ce:brainstorm names no path and plans have no scan, so those rows record "no scan". Baseline B is one single-shot grep-only run over the four directories using the researcher's own frontmatter-grep technique, with model, repo ref and date recorded. Both run from the primary checkout (KTD19), and both are scored at top 5 with the same function.
@@ -341,13 +343,13 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Test scenarios:**
 - Happy path: the gate over a temp tree holding a plan with `title: "feat: x"` reports nothing.
 - Error path: a temp plan with `title: feat: x` yields one violation naming the file and the `title` field, and its remediation mentions quoting.
+- Error path: a temp plan that fails to parse for another reason (for example `tags: [unclosed`) yields a violation naming the file and the quoting-or-syntax remediation, and does not name `title`.
 - Edge case: a plan with no frontmatter, a BOM-prefixed valid plan, a plan whose closing `---` is the last line with no trailing newline, and a quoted title that contains a colon all pass. `title: [Plan Title]` parses (a list) and is not flagged.
-- Integration: the gate over the real repo reports zero violations, and the parser reads 101 of 101 plans.
 - Contract: the template's frontmatter `title:` value begins with a double quote; substituting `feat: Add x` and parsing returns that exact string; Phase 3.1 mentions quoting.
 - Fixture shape: 10 to 14 queries with unique ids; every non-`requires_local` relevant path exists; the coverage mix above holds; the baseline file records model, ref, date and as-of; both baselines are re-scored by one function and agree with their stored counts.
 
 **Verification:**
-- `bun scripts/content-integrity.ts` is clean, including the new check, and `bun run surfaces:affected --run` regenerates whatever the `ce-plan` text change touches (registry and docs reference).
+- `bun scripts/content-integrity.ts` is clean, including the new check run over the real repo once after the five titles are quoted, and `bun run surfaces:affected --run` regenerates whatever the `ce-plan` text change touches (registry and docs reference).
 - Both fixture files are committed, and that commit precedes any change under `src/lib/search-*.ts` or `agents/research/learnings-researcher.md`.
 
 - [ ] U2. Delegated-reach harness against today's solution-only search
@@ -356,35 +358,36 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 **Requirements:** R22 (first half), AE7
 
-**Dependencies:** None; runs in parallel with U3 to U5.
+**Dependencies:** None. The two probes in Approach gate U3. Once they pass, the rest of the unit runs in parallel with U3 to U5.
 
 **Files:**
-- Create: `tests/helpers/delegated-search-proof.ts` (the three-layer assertion over a recorded request list, shared by the three host files)
+- Create: `tests/helpers/delegated-search-proof.ts` (the proof assertion and its diagnostic branch over a recorded request list, shared by the three host files)
 - Test: `tests/unit/delegated-search-proof.test.ts`
 - Modify: `tests/integration/opencode-v1.test.ts`, `tests/integration/opencode-v2.test.ts`, `tests/integration/pi.test.ts`
 - Modify (after CI, as a reviewed diff): `scripts/host-contract-guard.ts` (pass floors), `tests/integration/host-contract-timings.json` (v2 timings)
 
 **Approach:**
 - Stop gate, first. Before building anything else, probe two facts: on a v2 host, whether a child session's request advertises a tool registered through `ctx.tool.transform`; on a v1 host, whether `opencode run` lets the parent call `task` and whether the child advertises the plugin tool. If either answer is no, stop, record the observation, and ask the maintainer whether to file an upstream issue and split the engine PR off (KTD20). Do not bend the harness to pass.
-- The fixture project holds a planted solution with distinctive tokens and a planted `abandoned` brainstorm, so U6 changes only the tool arguments and one assertion. Planted names live in one shared constants spot.
+- The fixture project holds a planted solution with distinctive tokens and a planted `abandoned` brainstorm, so U6 can flip the child's search arguments to `kind: all` and tighten the assertions. Planted names live in one shared constants spot.
 - Each host scripts the same four turns: the parent dispatches the researcher; the child calls `systematic_search` with the planted query; the child, seeing the tool result, answers with text that echoes the path found in that result; the parent finishes. The echo is read from the real tool message, so the final answer depends on the real result. The parent's last request is asserted to carry that path.
-- Child requests are told apart per host. v1: a small state machine replacing the single-shot flag, with the child recognized by the researcher's opening line, read from the agent file at test time so the marker cannot drift. v2: the existing subagent filter (marker present, parent directive absent). Pi: a function-form `push` in place of the positional script, choosing a turn by request content, with the observation read from the mock's request log because RPC hides the child's own tool events. Pi dispatches with the bare persona name its profile documents, with search enabled, and the persona's default read-only tools include search.
-- The helper checks three layers: the child's first request advertises the tool; the child's next request has a `role: tool` message that starts `Search "`, contains the planted path and does not start `Error:`; and, where a client exists (v2), a completed child tool part. Its failure message names the failing layer.
-- Negative control: the same scenario with `search.enabled: false` must fail layer 1, and the helper has unit tests over hand-built request lists. A mock request cap, chosen from a passing run, fails runaway loops fast.
+- Child requests are told apart per host. v1: a small state machine replacing the single-shot flag, with the child recognized by the researcher's opening line, read from the agent file at test time so the marker cannot drift. v2: the existing subagent filter (marker present, parent directive absent). Pi: a function-form `push` beside the existing positional script (existing Pi tests keep their positional pushes), needed only because the child's final answer must echo the path from the real tool result. The observation is read from the mock's request log because RPC hides the child's own tool events. Pi dispatches with the bare persona name its profile documents, with search enabled, and the persona's default read-only tools include search.
+- One proof applies to all four hosts (KTD21): the child's next request has a `role: tool` message that starts `Search "`, contains the planted path and does not start `Error:`, and the parent's final answer names the path. The helper also has a diagnostic branch that checks whether the child's first request advertises the tool, used only to name the failure. No host-specific client-side check is added.
+- Negative control: the same scenario with `search.enabled: false` must fail the proof, and the diagnostic must say the tool was not advertised to the child. The helper has unit tests over hand-built request lists. A mock request cap, chosen from a passing run, fails runaway loops fast.
 - What this proves: a researcher child can reach search and get a result on each host. It does not prove a live model chooses to call it; the scripted model makes the call. U9's manual Claude Code run is the live-model evidence for that host only.
 - The tests live in the three existing files, so the host-contract profile lists need no change. Floors are raised only after CI shows the new counts. No workflow YAML changes.
 
 **Patterns to follow:**
-- `tests/integration/opencode-v2.test.ts:1382-1435` for the subagent dispatch and child filter; `tests/integration/opencode-v1.test.ts:91-143` for the scripted model; `:439-460` and `opencode-v2.test.ts:577-601` for planting a doc; `tests/integration/pi.test.ts:1055-1092` for reading the request log.
+- `tests/integration/opencode-v2.test.ts:1382-1435` for the subagent dispatch and child filter; `tests/integration/opencode-v1.test.ts:91-143` for the scripted model; `:439-460` and `opencode-v2.test.ts:577-601` for planting a doc; `tests/integration/pi.test.ts:982-1025` for a parent-dispatched persona child and the mock request log (server at about `:409-421`, `push` at `:516`).
 - `docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`, `docs/solutions/workflow-issues/real-host-ci-catches-what-offline-gates-cannot-2026-09-06.md` and `docs/solutions/best-practices/pi-real-runtime-integration-harness-2026-07-16.md`: close stdin, bound spawns, isolate the environment, fail closed when a host is unavailable.
 
 **Test scenarios:**
-- Happy path (each of v1 floor, v1 current, v2, Pi): the four-turn script passes all applicable layers, and the parent's result contains the planted path.
-- Error path: with search disabled, layer 1 fails and the failure names it; a scripted tool message beginning `Error:` fails layer 2.
+- Happy path (each of v1 floor, v1 current, v2, Pi): the four-turn script passes the proof, and the parent's final answer contains the planted path.
+- Error path: with search disabled, the proof fails and the diagnostic names the missing tool advertisement; a scripted tool message beginning `Error:` fails the proof.
+- Error path: a passing child tool message but a parent answer that omits the path fails the proof.
 - Edge case: a child that answers in text without calling the tool (the grep-fallback shape, AE7) fails with a no-tool-call message; a runaway script hits the request cap and fails fast.
 - Edge case: on v2, the parent's directive turn is not mistaken for the child turn, and on v1 the state machine does not treat the parent's second request as a child request.
 - Integration: each host's run goes through the real packaged plugin, so registration, permissions and child inheritance are exercised, not mocked.
-- Unit (helper): no tool advertised, wrong path, a message not starting `Search "`, a missing tool message and a passing list each give the expected verdict.
+- Unit (helper): no tool advertised, wrong path, a message not starting `Search "`, an `Error:` message, a missing tool message, a parent answer without the path and a passing list each give the expected verdict and diagnostic.
 
 **Verification:**
 - Both probes are answered and recorded before the rest is built; a negative answer stops the unit.
@@ -398,7 +401,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 **Requirements:** R1, R2, R3, AE2 (title half)
 
-**Dependencies:** U1 (all plans parse)
+**Dependencies:** U1 (all plans parse), and U2's two probes answered (KTD20).
 
 **Files:**
 - Modify: `src/lib/search-corpus.ts` (three `KIND_TABLE` entries, the title chain, narrowing `topic`)
@@ -429,7 +432,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Integration: `runSearch` with `kind: 'plan'` over a fixture returns a plan hit end to end, and `kind: 'bogus'` returns the fixed error.
 
 **Verification:**
-- `loadCorpus` over this repo loads 101 plans with no warnings, the primary checkout's brainstorms, the ideation doc and 128 solutions; the solution count and solution recall test are unchanged.
+- `loadCorpus` over this repo loads all 102 plans (the 101 earlier plans plus this one) with no warnings, the primary checkout's brainstorms, the ideation doc and 128 solutions; the solution count and solution recall test are unchanged.
 - The PR records the per-kind unparseable counts.
 
 - [ ] U4. Lifecycle for the new kinds
@@ -443,7 +446,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Files:**
 - Modify: `src/lib/search-core.ts` (kind-aware successor form check, the walk, `ResolvedEntry`, `entryStatus`, `lifecycleLines`, a `Successor:` label constant)
 - Modify: `src/lib/search-render.ts` (the hit status type becomes a string; `Successor:` lines are sanitized per path like `Supersedes:`)
-- Test: `tests/unit/search-lifecycle.test.ts` (the pin at `:211-224` changes), `tests/unit/search-core.test.ts` (`:112-120`, `:141-147`), `tests/unit/search-render.test.ts`
+- Test: `tests/unit/search-lifecycle.test.ts` (new cases; the `isSuccessorPathForm` cases at `:211-224` stay green through the solution default), `tests/unit/search-core.test.ts` (new lifecycle cases; the solution hit shape at `:112-120` stays green), `tests/unit/search-render.test.ts`
 
 **Approach:**
 - Form check: the successor path rule takes the kind and reads its prefix and exclusions from the table (KTD8). A second helper returns the kind whose form a link fits, in table order. The solution default keeps today's behavior for the existing exported function.
@@ -469,11 +472,11 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Edge case (R9): `status: archived` gets no successor handling and no caution; `status: stale` with `stale_reason` gets `Caution: marked stale: <reason>`.
 - Error path: `superseded_by` values `../x.md`, `docs/plans/README.md`, `docs/plans/_archived/x.md`, an absolute path, `docs/other/x.md`, a list, a number and an empty string each give `Caution: successor unresolved`; a same-kind link to a missing file does too.
 - Integration: a cross-kind link into a kind whose directory is absent still shows its `Successor:` line and no caution.
-- Regression: the solution characterization outputs are byte-identical before and after.
+- Regression: the solution characterization outputs (stale doc, resolved chain, unresolved chain, merge, same-kind links) are byte-identical before and after. The one intended change is pinned separately by the symmetry scenario above: a solution whose `superseded_by` names a plan prints a `Successor:` line where it used to print `Caution: successor unresolved`.
 - Render: a `Successor:` path with terminal escapes or control characters is sanitized, and one longer than 400 characters is capped.
 
 **Verification:**
-- Solution lifecycle output is unchanged and `tests/unit/search-recall.test.ts` still passes.
+- Solution lifecycle output is unchanged, apart from the one deliberate change (a solution-to-plan link now prints a `Successor:` line), which a test pins and which no solution in the repo triggers today. `tests/unit/search-recall.test.ts` still passes.
 - Every pinned single-kind test in the two unit files is updated to the new truth, with no test deleted to make it pass.
 
 - [ ] U5. The `all` selector and every surface's text
@@ -506,7 +509,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Test scenarios:**
 - Happy path (AE1): a project with solutions and plans: no `kind` returns solutions only; `kind: all` also returns plans, and each hit shows `Kind: solution` or `Kind: plan`.
 - Happy path (AE6, engine half): a project with plans and no `docs/solutions/`: `kind: all` returns plan hits and the header reads `Corpus: solution none, plan 3, brainstorm none, ideation none`; `kind: solution` on the same project reports `corpus: none`.
-- Edge case (R7): every directory absent gives `corpus: none` naming all four directories; directories present with no indexable files give `corpus: empty`; one kind with docs gives `docs` even when the other three are `none`.
+- Edge case (R7): every directory absent gives `corpus: none` naming all four directories; directories present with no indexable files give `corpus: empty`; one kind with docs gives `docs` even when the other three are `none`; per-kind tokens read as a count, `none` or `empty` (`Corpus: solution 3, plan 2, brainstorm none, ideation empty`).
 - Edge case: seven unparseable plans and three oversized solutions give one warning line per kind with counts, structural warnings first, at most five lines plus `+N more`; a file-limit warning names its directory.
 - Edge case: the loader seam is called once per kind in table order; merged documents are in code-unit path order; running twice gives identical text; the `solution` single-kind scores and order equal the v3.28.0 characterization.
 - Edge case: a term common in plans and rare in solutions ranks differently under `all` than under `solution`, which proves IDF is computed over the merged set.
@@ -516,7 +519,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Integration: each surface's description or usage mentions `plan`, `brainstorm`, `ideation` and `all`; the harness profile files are unchanged and stay under the 4,000-character budget.
 
 **Verification:**
-- Single-kind solution output differs from v3.28.0 only in the aggregated warning wording; `tests/unit/search-recall.test.ts` passes.
+- Single-kind solution output differs from v3.28.0 only in the aggregated warning wording and in the one deliberate lifecycle change from U4 (a solution-to-plan link); `tests/unit/search-recall.test.ts` passes.
 - `bun run surfaces:affected --run` regenerates any surface the CLI help or tool text touches, and the parity and bootstrap tests pass.
 
 ### Phase C: Delivery gate and wiring
@@ -535,7 +538,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Modify (after CI, as a reviewed diff): `scripts/host-contract-guard.ts` floors, `tests/integration/host-contract-timings.json`
 
 **Approach:**
-- The scripted child call changes from `kind: "solution"` to `kind: "all"` with a query that matches both planted documents. Layer 2 now also requires the brainstorm's path, `Kind: brainstorm` and `Status: abandoned` in the tool message, and the parent's final answer must name the brainstorm path, which is the requirement that "the child's output must name it".
+- The scripted child call changes from `kind: "solution"` to `kind: "all"` with a query that matches both planted documents. The proof now also requires the brainstorm's path, `Kind: brainstorm` and `Status: abandoned` in the child's tool message, and the parent's final answer must name the brainstorm path, which is the requirement that "the child's output must name it".
 - The negative control stays. A new grep-fallback case scripts a child that answers from file-read text and never calls the tool; the helper must fail it by name (AE7).
 - The fixture creates the brainstorm inside the temp project, so the repo's gitignore is irrelevant to the test.
 - The scripted model makes the call, so these tests prove reach and plumbing, not that a live model chooses search. U7 adds prompt-level checks of the researcher's own text, and U9 supplies live-model evidence for Claude Code.
@@ -545,8 +548,8 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 **Test scenarios:**
 - Happy path (each of the four configurations): the child's tool message carries both planted paths, `Kind: brainstorm` and `Status: abandoned`, and the parent's answer names the brainstorm path.
-- Error path: a child call with `kind: "solution"` against the same fixture lacks the brainstorm path, so the helper fails layer 2 and names the missing path.
-- Error path (AE7): a child that never calls the tool fails with the no-tool-call verdict; with search disabled the run fails layer 1.
+- Error path: a child call with `kind: "solution"` against the same fixture lacks the brainstorm path, so the helper fails the proof and names the missing path.
+- Error path (AE7): a child that never calls the tool fails with the no-tool-call verdict; with search disabled the proof fails and the diagnostic names the missing tool advertisement.
 - Edge case: a tool message that starts `Search "` but ends in the truncation marker still passes when the planted paths are present before the cut.
 
 **Verification:**
@@ -572,7 +575,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Grep fallback for `past-work` extends the content-search patterns over the four directories (frontmatter `title`, `topic`, `status`, `type`, `origin`, `date` plus filenames) and reads those fields in Steps 5 and 6. The researcher may grep `docs/plans` for a brainstorm's `origin:` link; its method line then reads "search, plus origin lookups by grep" (KTD12). When search is unavailable, one line states that grep was used and why (R15).
 - Output for `past-work` has five groups in a fixed order: proven lessons, recorded decisions and their rationale, existing or completed work, rejected, deferred or superseded directions, and conflicts and open questions. The status-to-group table from KTD13 is written out in full, including that `draft`, `active` and `unspecified` are reported as "proposed in <path>" and that a proposal is never presented as implemented or decided. Decisions come from body sections such as Key Decisions and Scope Boundaries. Every item carries its path and recorded status. The read budget is frontmatter plus targeted headings, at most 3 full reads and at most 12 items (KTD14). With nothing found it says "no recorded plan or solution found in the results". The `solutions` output template is untouched.
 - Skill wiring follows KTD16 and KTD15. Each dispatch puts `scope: past-work` on the first line of the prompt; ce:plan adds `exclude: <chosen origin>` when it has one and otherwise omits the line. Each skill's cite text states: same behavior or surface only, at most 3 items, "recorded as completed in <path>" or the matching status, path and status only, and how the new work differs. ce:plan places cites in Sources & References or Key Technical Decisions and never in the prior-art JSON; ce:ideate in rejection or survivor reasoning; ce:brainstorm in Key Decisions; deepen-plan wherever findings are integrated. ce:brainstorm's Lightweight path calls the search tool directly with `kind: all` when the tool exists and otherwise keeps its current topic search; its resume detection is untouched.
-- The prompt grows by at most 25% over the body measured at the start of the unit (about 19,000 characters); trim prose before raising the budget. Dispatch prose stays harness-neutral, with no pseudo-call syntax and a qualified agent id.
+- The prompt should grow by at most 25% over the body measured at the start of the unit (about 19,000 characters). That is review guidance, not a test: record the before and after byte counts in the PR, and trim prose before raising the budget. Dispatch prose stays harness-neutral, with no pseudo-call syntax and a qualified agent id.
 
 **Execution note:** Test-first: write the contract test (it fails against today's prose) before editing the agent or any skill.
 
@@ -584,15 +587,14 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Test scenarios:**
 - Contract (researcher): the agent file defines the first-line `scope:` and optional `exclude:` rules, the `solutions` default, the unknown-value handling and the overlap override; Step 0 names four directories for `past-work`; the group table maps each of `completed`, `abandoned`, `deferred`, `archived`, `superseded`, `draft`, `active` and `unspecified` to exactly one group; the absence sentence, the 12-item and 3-read budgets, the truncation row and both method statements appear.
 - Contract (wiring): the five dispatch sites each carry `scope: past-work` on the prompt's first line; ce:plan's dispatch also describes `exclude:`; `ce-review` and `ce-compound` dispatch text contains no `past-work`; ce:plan's cite text names Sources & References or Key Technical Decisions and excludes the prior-art JSON.
-- Contract (budget): the agent body length is at most 1.25 times the baseline constant recorded in the test.
 - Error path: an unknown `scope: everything` line is covered by the prose (named in the reply, treated as `solutions`).
 - Edge case (AE5): the table puts a `draft` brainstorm proposing X in "proposed in <path>", never in decisions or existing work, and the contract test pins that row.
 - Edge case (AE6, researcher half): the prose continues to the `kind: all` call when `docs/solutions/` is missing and the plan directory exists.
 - Edge case (AE8, R21): ce:plan, ce:ideate and ce:brainstorm each carry the cite-and-differentiate text with the 3-item bound and the never-block wording.
-- Integration: after the Pi PR has merged, a Pi scenario dispatches the researcher by `systematic:research:learnings-researcher` and passes the three-layer proof from U2; before it, the same call fails with the unknown-persona message, which is why the PR is a prerequisite.
+- Integration: after the Pi PR has merged, a Pi scenario dispatches the researcher by `systematic:research:learnings-researcher` and passes the proof from U2; before it, the same call fails with the unknown-persona message, which is why the PR is a prerequisite.
 
 **Verification:**
-- The contract test and `bun scripts/content-integrity.ts` pass; the prompt budget holds.
+- The contract test and `bun scripts/content-integrity.ts` pass; the before and after prompt byte counts are noted for the PR.
 - The config-corpus unit test stays red until U8 regenerates the 14 fixtures; the rest of the suite is green.
 - `bun run surfaces:affected --run` runs at the end; the registry and docs reference regenerate in U8.
 
@@ -616,9 +618,9 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Approach:**
 - Config-corpus is not a generated surface. Write a throwaway script outside the repo that copies `runCorpusEntry` and `canonicalJson` from `tests/unit/config-corpus.test.ts:25-85`, rewrites the 14 expectations, and diff them: the only changed key in each file must be the researcher's prompt (KTD23). Run it once, after the prose from U7 is final.
 - Run `bun run registry:generate` for the researcher description, then `bun run surfaces:affected --run`, then `bun run surfaces:drift`. The Pi persona fixtures should not change, because learnings-researcher is not a curated Pi persona; the drift check confirms it.
-- `guides/search.mdx` says in plain prose that search covers four kinds plus `all`, shows recorded status as written, explains the cross-kind `Successor:` line, and states that brainstorms are untracked in this repo so a worktree reports that kind as `none` while the primary checkout has them (KTD19).
+- `guides/search.mdx` says in plain prose that search covers four kinds plus `all`, shows recorded status as written, explains the cross-kind `Successor:` line, and states that brainstorms are gitignored in this repo so a worktree reports that kind as `none` while the primary checkout has them (KTD19).
 - `ARCHITECTURE.md` invariant 6 and the codemap lines describe the per-kind loader, the merged `all` index and the lifecycle rules. `src/lib/AGENTS.md` rows are updated to match, and the stale "fetches 2× the limit" claim in the `search-core.ts` row is replaced with what the code does: every lexical hit goes through the lifecycle merge and the limit applies afterwards. No module is added, so both registration surfaces are edits to existing rows; `bun scripts/content-integrity.ts` verifies them.
-- `HARNESSES.md`: the capability row names the four kinds; the line saying no real-host check exists for the Pi tool becomes false once U2 and U6 land and is rewritten to cite SR-5, which describes the three-layer proof on four configurations. SR-4, the Claude Code manual run, is added in U9 with its result, because it cannot be written before the run exists.
+- `HARNESSES.md`: the capability row names the four kinds; the line saying no real-host check exists for the Pi tool becomes false once U2 and U6 land and is rewritten to cite SR-5, which describes the one proof (child tool result plus parent answer) on four configurations. SR-4, the Claude Code manual run, is added in U9 with its result, because it cannot be written before the run exists.
 
 **Patterns to follow:**
 - `docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md` and the Generated surfaces paragraph of `AGENTS.md` for regeneration order.
@@ -629,6 +631,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 **Verification:**
 - The config-corpus unit test passes, and the fixture diff changes the researcher key and nothing else.
+- The PR description follows the fixture README's rule for an intentional change: it lists the 14 regenerated `expected.opencode.json` entries, shows the one-key diff for each, and says why the researcher prompt changed (the `past-work` scope), so a reviewer can confirm no other entry moved.
 - `bun run surfaces:affected --run`, `bun run surfaces:drift` and `bun scripts/content-integrity.ts` pass; `bun run docs:build` succeeds; the harness profile files are byte-unchanged.
 
 - [ ] U9. Measurement and evidence
@@ -645,9 +648,9 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Results are recorded in the PR description. No golden harness is committed, and `tests/unit/search-recall.test.ts` stays as the standing solution floor.
 
 **Approach:**
-- Solution-results gate (KTD22). Build search from a `git archive` of `v3.28.0` into a scratch directory, and freeze a copy of `docs/solutions`. Run the 19 recall queries plus every solution title through both builds with `kind: solution`, once. The comparator is v3.28.0 and the cutoff is top 5. The check passes when no labelled query loses a relevant path from its top 5 and every title query still finds its own document in the top 5. Because single-kind solution scoring is bit-identical by construction, zero rank differences are expected; any difference is listed and explained.
-- Evidence table. Run the two merged search calls of a `past-work` scope (KTD12) in process for each U1 query, from the primary checkout so brainstorms exist. Score at top 5 and report per query: the `past-work` result, today's skill scans (baseline A), the recorded grep run (baseline B), and, for queries whose target kind is known, `all` against a kind-specific search. Every comparison names its comparator and cutoff. This is reported, not gated, and it scores retrieval, not the researcher's model-written synthesis.
-- Timings (R24). From the primary checkout, measure cold (fresh process) and warm (median of five repeats) per-call time for in-process `runSearch`, the `systematic search` CLI and the Claude Code bin under Node, at `limit` 8 and 20, for `solution`, `plan`, `brainstorm`, `ideation` and `all`. Flag any call over 1 second. No gate.
+- Solution-results gate (KTD22). Build search from a `git archive` of `v3.28.0` into a scratch directory, and freeze a copy of `docs/solutions`. Run the 19 recall queries plus every solution title through both builds with `kind: solution`, once. The comparator is v3.28.0 and the cutoff is top 5. The check passes when no labelled query loses a relevant path from its top 5 and every title query still finds its own document in the top 5. Because single-kind solution scoring is bit-identical by construction, zero rank differences are expected; any difference is listed and explained. The one deliberate lifecycle change (a solution whose `superseded_by` names a plan) cannot appear in this comparison, because no solution in the repo has such a link. This is the only comparison with a ship rule.
+- Evidence table. Run the two merged search calls of a `past-work` scope (KTD12) in process for each U1 query, from the primary checkout so brainstorms exist. Score at top 5 and report per query: the `past-work` result, today's skill scans (baseline A), the recorded grep run (baseline B), and, for queries whose target kind is known, `all` against a kind-specific search. Also record, per query, whether any solution hit that the `solution` call returns in the top 5 falls out of the top 5 under `all` alone. Every comparison names its comparator and cutoff. This is reported with no ship rule attached, including the comparison against the grep baseline, and it scores retrieval, not the researcher's model-written synthesis.
+- Timings (R24). From the primary checkout, measure the warm median of five repeats on the `systematic search` CLI under Node, at the default limit, for `solution`, `plan`, `brainstorm`, `ideation` and `all`, plus one cold first-run row for `all`. Add the in-process and bin surfaces, or `limit` 20, only for a call that goes over 1 second. Record the table in the PR. No gate.
 - Claude Code manual run (R23). Build the plugin bundle, then in a project with the planted solution and brainstorm run `claude -p` with a prompt that makes the researcher subagent search, using `--output-format stream-json`. Look for a Bash call to `systematic-search` that carries a non-null parent tool-use id, and confirm the real field name in the live output before citing it. Record the Claude Code version, date, prompt, outcome and the field name in HARNESSES as SR-4, labelled manual evidence and not a CI check. If the subagent falls back to grep, record that and say so. This run needs the maintainer's Claude Code authentication, so it cannot run unattended.
 - Qualitative success check: run ce:ideate on the focus "search" from the primary checkout and record whether it surfaces the durable-output search plan and its requirements document, citing path and status only.
 - After the final CI run, raise the three host-contract floors and refresh the v2 timings as one reviewed diff. No workflow YAML changes.
@@ -660,7 +663,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Test expectation: none -- measurement and manual evidence that change no behavior. The standing guards are `tests/unit/search-recall.test.ts` and the host-contract floors.
 
 **Verification:**
-- The PR records the gate result (or its explained differences), the evidence table with comparators and cutoffs, the timing table with any call over 1 second flagged, and the ideation check.
+- The PR records the gate result (or its explained differences), the evidence table with comparators and cutoffs, the timing table (five warm rows and one cold row, plus extra rows only for calls over 1 second), whether `all` pushed solution hits out of the top 5, and the ideation check.
 - HARNESSES carries SR-4 with a real result, and the floors and timings are updated from the final CI run.
 
 ---
@@ -672,7 +675,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - **State lifecycle risks:** Search reads the disk on every call with no memo, so ce:compound's write-then-search still sees fresh files. `all` reads about 5.3 MB per call in this repo; the measurement in U9 decides whether that needs follow-up, and a persistent index is out of scope.
 - **API surface parity:** All five adapters share one validation, one header and one lifecycle. The tool descriptions, CLI usage and bin usage change together in U5, and the parity test compares their rendered output.
 - **Integration coverage:** Mocks cannot prove that a child session inherits a plugin tool; the four real-host configurations in U2 and U6 do, within the limit that a scripted model makes the call.
-- **Unchanged invariants:** Leaving `kind` out means `solution`. Single-kind solution scores and ranks are bit-identical to v3.28.0. Harness profiles keep their search row and their 4,000-character budget. `search.enabled: false` still removes the tool everywhere. Bundled agent markdown stays model-free. The researcher's overlap check for ce:compound stays solution-only.
+- **Unchanged invariants:** Leaving `kind` out means `solution`. Single-kind solution scores and ranks are bit-identical to v3.28.0, and solution lifecycle output is unchanged except that a solution whose `superseded_by` names a plan prints a `Successor:` line instead of `Caution: successor unresolved` (no solution does today). Harness profiles keep their search row and their 4,000-character budget. `search.enabled: false` still removes the tool everywhere. Bundled agent markdown stays model-free. The researcher's overlap check for ce:compound stays solution-only.
 
 ---
 
@@ -685,10 +688,10 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 | Merged ranking lets long plans crowd out other kinds | The researcher's second, solution-only call protects proven lessons; U9's evidence table measures crowding; per-kind weighting stays out of scope |
 | `all` is slow on a large corpus | Timings are measured and anything over 1 second is flagged; caps stay per kind; a persistent index is deferred |
 | Skills dispatch the qualified agent name and Pi cannot resolve it | The Pi normalization PR merges first and U7 depends on it; U7 has a Pi scenario that fails without it |
-| Researcher prompt growth causes fixture churn and slower runs | The +25% budget is a test; fixtures regenerate once, after the prose is final, with a diff that must touch only the researcher key |
+| Researcher prompt growth causes fixture churn and slower runs | The +25% budget is review guidance with before and after byte counts recorded in the PR; fixtures regenerate once, after the prose is final, with a diff that must touch only the researcher key |
 | Untracked brainstorms make labels and counts differ between clones and this repo | Labels carry `requires_local`; measurements run from the primary checkout; the docs state that a clone without brainstorms reports that kind as `none` |
 | Citing ignored-file text leaks local content into tracked documents | The cite rule allows path and status only (KTD15) |
-| Case-insensitive status matching for new kinds diverges from the solution rule | Deliberate (KTD7); the solution comparison stays exact so solution output cannot change, and tests pin both |
+| Case-insensitive status matching for new kinds diverges from the solution rule | Deliberate (KTD7); the solution comparison stays exact so solution status output cannot change, and tests pin both |
 
 Dependencies:
 
@@ -701,8 +704,8 @@ Dependencies:
 ## Documentation / Operational Notes
 
 - `guides/search.mdx`, `ARCHITECTURE.md` invariant 6, `STRUCTURE.md`, `src/lib/AGENTS.md` and `HARNESSES.md` are updated in U8; SR-4 follows in U9.
-- Worktree sessions in this repo see `brainstorm: none` because `docs/brainstorms/` is gitignored; the docs say so, and all measurements run from the primary checkout.
-- Systematic's skills tell users to commit brainstorms. A user clone that does so gets the new kind for free; one that ignores the directory sees `none`.
+- Worktree sessions in this repo see `brainstorm: none` because `docs/brainstorms/` is gitignored here by local choice; the docs say so, and all measurements run from the primary checkout. The maintainer's worktree sessions therefore get past work from plans, solutions and ideation only. That is a known limit of this repo's ignore rule, not of the feature.
+- Systematic's skills do not tell users to commit or ignore brainstorms, and its reviewers treat `docs/plans` and `docs/brainstorms` as protected artifacts. A project that keeps its brainstorms on disk gets the new kind with no setup; a project without that directory sees `none`.
 - No telemetry, no network access and no new dependency are added. Search stays local and read-only.
 - The PR description carries the gate result, evidence table, timings and the per-kind unparseable-document counts from U3.
 
