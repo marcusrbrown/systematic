@@ -3,18 +3,20 @@
  * host, shared by the OpenCode v1, OpenCode v2 and Pi integration files.
  *
  * One proof applies to every host: the researcher child's next model request
- * carries a `role: tool` message that starts with `Search "`, contains the
- * planted path and is not an `Error:`, and the parent's final request carries
- * that path too. Whether the tool was advertised to the child's first request
- * is only a diagnostic: it names the failure when delivery fails, and never
- * makes a run pass.
+ * carries a `role: tool` message that starts with `Search "`, is not an
+ * `Error:`, and holds both planted documents. The child searches every kind, so
+ * the abandoned brainstorm must be there too, printed with `Kind: brainstorm`
+ * and `Status: abandoned` on its own hit. The parent's final request must carry
+ * both paths. Whether the tool was advertised to the child's first request is
+ * only a diagnostic: it names the failure when delivery fails, and never makes
+ * a run pass.
  *
  * The scripted model is the same on every host. It runs four turns: the parent
  * dispatches the researcher, the child calls the search tool, the child answers
- * with the path it read from the real tool message, and the parent answers with
- * the path it read from the real dispatch result. Because both answers are
- * read back from what the host sent, a final answer that names the path means
- * the real result went all the way through.
+ * with the paths it read from the real tool message, and the parent answers
+ * with the paths it read from the real dispatch result. Because both answers
+ * are read back from what the host sent, a final answer that names the paths
+ * means the real result went all the way through.
  *
  * What this does not prove: a live model choosing to call the tool. The
  * scripted model makes the call.
@@ -33,15 +35,16 @@ export const DELEGATED_SEARCH_FIXTURE = {
     content:
       '---\ntitle: Zebra crossing flake\nsymptoms:\n  - zebra flake on retry\n---\n\nThe zebra flake appears when retries overlap.\n',
   },
-  /** Planted so a later check can widen the search to every kind. Today's search does not read it. */
+  /** Found only when the search covers every kind; a solution-only search never reads it. */
   brainstorm: {
     path: 'docs/brainstorms/2026-01-15-zebra-crossing-requirements.md',
+    kind: 'brainstorm',
     status: 'abandoned',
     content:
       '---\ndate: 2026-01-15\ntopic: zebra-crossing\nstatus: abandoned\n---\n\n# Zebra crossing\n\nAn abandoned idea: retry the zebra flake with a longer delay.\n',
   },
   /** What the scripted child sends to the search tool. */
-  searchArguments: { query: 'zebra flake retry', kind: 'solution' },
+  searchArguments: { query: 'zebra flake retry', kind: 'all' },
   /** The researcher agent file, relative to the repository root. */
   researcherAgentFile: 'agents/research/learnings-researcher.md',
 } as const
@@ -161,6 +164,7 @@ export type DelegatedSearchFailureCode =
   | 'error-result'
   | 'bad-header'
   | 'path-missing'
+  | 'bad-label'
   | 'no-parent-final'
   | 'parent-answer-missing-path'
 
@@ -176,11 +180,15 @@ export interface DelegatedSearchObservation {
   childRequests: readonly ChatRequest[]
   /** The parent's requests, in order. */
   parentRequests: readonly ChatRequest[]
-  /** The path the child must have found. Defaults to the planted solution. */
+  /** The solution path the child must have found. Defaults to the planted solution. */
   plantedPath?: string
+  /** The brainstorm path the child must have found. Defaults to the planted brainstorm. */
+  plantedBrainstormPath?: string
 }
 
 const SEARCH_HEADER_PREFIX = 'Search "'
+/** What the renderer joins a hit's label fields with. */
+const HIT_FIELD_SEPARATOR = ' | '
 
 function fail(
   code: DelegatedSearchFailureCode,
@@ -207,12 +215,99 @@ function diagnoseMissingDelivery(first: ChatRequest): DelegatedSearchVerdict {
   )
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * The `Kind:` and `Status:` fields the renderer prints on the line right after
+ * a hit's `N. <path>` line, or `undefined` when that path heads no hit (it may
+ * only be quoted in a snippet) or the output was cut before the label line.
+ */
+function hitLabels(
+  toolText: string,
+  hitPath: string,
+): readonly string[] | undefined {
+  const heading = new RegExp(`^\\d+\\. ${escapeRegExp(hitPath)}$`)
+  const lines = toolText.split('\n')
+  const at = lines.findIndex((line) => heading.test(line))
+  const labelLine = at === -1 ? undefined : lines[at + 1]
+  if (labelLine === undefined) return undefined
+  return labelLine.trim().split(HIT_FIELD_SEPARATOR)
+}
+
+/** Checks the child's tool message: a search result holding both planted hits. */
+function checkChildResult(
+  toolText: string,
+  plantedPaths: readonly string[],
+  brainstormPath: string,
+): DelegatedSearchVerdict | undefined {
+  if (toolText.startsWith('Error:')) {
+    return fail(
+      'error-result',
+      `the child's tool message is an error: ${toolText.slice(0, 160)}`,
+    )
+  }
+  if (!toolText.startsWith(SEARCH_HEADER_PREFIX)) {
+    return fail(
+      'bad-header',
+      `the child's tool message does not start with ${SEARCH_HEADER_PREFIX}: ${toolText.slice(0, 160)}`,
+    )
+  }
+  const absent = plantedPaths.find((planted) => !toolText.includes(planted))
+  if (absent !== undefined) {
+    return fail(
+      'path-missing',
+      `the child's tool message does not contain ${absent}: ${toolText.slice(0, 160)}`,
+    )
+  }
+  const printed = hitLabels(toolText, brainstormPath)
+  const missingLabels = [
+    `Kind: ${DELEGATED_SEARCH_FIXTURE.brainstorm.kind}`,
+    `Status: ${DELEGATED_SEARCH_FIXTURE.brainstorm.status}`,
+  ].filter((label) => !printed?.includes(label))
+  if (missingLabels.length > 0) {
+    return fail(
+      'bad-label',
+      `the hit for ${brainstormPath} does not print ${missingLabels.join(' and ')} (printed: ${printed?.join(HIT_FIELD_SEPARATOR) ?? 'no hit line'})`,
+    )
+  }
+  return undefined
+}
+
+/** Checks that the parent's last request carries every planted path. */
+function checkParentFinal(
+  parentRequests: readonly ChatRequest[],
+  plantedPaths: readonly string[],
+): DelegatedSearchVerdict | undefined {
+  const lastParent = parentRequests.at(-1)
+  if (lastParent === undefined || lastMessageRole(lastParent) !== 'tool') {
+    return fail(
+      'no-parent-final',
+      "the parent never made a request after the researcher's result came back",
+    )
+  }
+  const parentText = lastToolText(lastParent) ?? ''
+  const absent = plantedPaths.find((planted) => !parentText.includes(planted))
+  return absent === undefined
+    ? undefined
+    : fail(
+        'parent-answer-missing-path',
+        `the parent's final request does not carry ${absent}`,
+      )
+}
+
 /** Applies the single delivery proof to what a scripted run recorded. */
 export function evaluateDelegatedSearchProof(
   observation: DelegatedSearchObservation,
 ): DelegatedSearchVerdict {
-  const plantedPath =
-    observation.plantedPath ?? DELEGATED_SEARCH_FIXTURE.solution.path
+  const brainstormPath =
+    observation.plantedBrainstormPath ??
+    DELEGATED_SEARCH_FIXTURE.brainstorm.path
+  const plantedPaths = [
+    observation.plantedPath ?? DELEGATED_SEARCH_FIXTURE.solution.path,
+    brainstormPath,
+  ]
   const { childRequests, parentRequests } = observation
 
   if (observation.requestCount > observation.requestCap) {
@@ -235,39 +330,10 @@ export function evaluateDelegatedSearchProof(
   const toolText = delivered === undefined ? undefined : lastToolText(delivered)
   if (toolText === undefined) return diagnoseMissingDelivery(first)
 
-  if (toolText.startsWith('Error:')) {
-    return fail(
-      'error-result',
-      `the child's tool message is an error: ${toolText.slice(0, 160)}`,
-    )
-  }
-  if (!toolText.startsWith(SEARCH_HEADER_PREFIX)) {
-    return fail(
-      'bad-header',
-      `the child's tool message does not start with ${SEARCH_HEADER_PREFIX}: ${toolText.slice(0, 160)}`,
-    )
-  }
-  if (!toolText.includes(plantedPath)) {
-    return fail(
-      'path-missing',
-      `the child's tool message does not contain ${plantedPath}: ${toolText.slice(0, 160)}`,
-    )
-  }
-
-  const lastParent = parentRequests.at(-1)
-  if (lastParent === undefined || lastMessageRole(lastParent) !== 'tool') {
-    return fail(
-      'no-parent-final',
-      "the parent never made a request after the researcher's result came back",
-    )
-  }
-  if (!(lastToolText(lastParent) ?? '').includes(plantedPath)) {
-    return fail(
-      'parent-answer-missing-path',
-      `the parent's final request does not carry ${plantedPath}`,
-    )
-  }
-  return { ok: true }
+  return (
+    checkChildResult(toolText, plantedPaths, brainstormPath) ??
+    checkParentFinal(parentRequests, plantedPaths) ?? { ok: true }
+  )
 }
 
 /** Throws the verdict's message when the proof fails. */
@@ -309,16 +375,20 @@ export interface DelegatedSearchScript {
   observation(): DelegatedSearchObservation
 }
 
-const PATH_PATTERN = /docs\/[a-z]+\/[\w.-]+\.md/
+const PATH_PATTERN = /docs\/[a-z]+\/[\w.-]+\.md/g
 
-/** The path in the request's latest tool result, or a marker when there is none. */
-function pathInLastResult(request: ChatRequest): string {
-  return PATH_PATTERN.exec(lastToolText(request) ?? '')?.[0] ?? 'NO-PATH'
+/**
+ * Each distinct path in the request's latest tool result, in the order they
+ * appear, or a marker when there is none.
+ */
+function pathsInLastResult(request: ChatRequest): string {
+  const found = new Set(lastToolText(request)?.match(PATH_PATTERN))
+  return found.size === 0 ? 'NO-PATH' : [...found].join(' ')
 }
 
 function childTurn(request: ChatRequest): ScriptedTurn {
   if (lastMessageRole(request) === 'tool') {
-    return { text: `CHILD-FOUND ${pathInLastResult(request)}` }
+    return { text: `CHILD-FOUND ${pathsInLastResult(request)}` }
   }
   if (!toolNamesOf(request).includes(SEARCH_TOOL_NAME)) {
     return { text: 'CHILD-ANSWERED-WITHOUT-SEARCH' }
@@ -351,7 +421,7 @@ export function createDelegatedSearchScript(
 
   function parentTurn(request: ChatRequest): ScriptedTurn {
     if (lastMessageRole(request) === 'tool') {
-      return { text: `PARENT-FINAL ${pathInLastResult(request)}` }
+      return { text: `PARENT-FINAL ${pathsInLastResult(request)}` }
     }
     if (dispatched) return { text: 'PARENT-UNEXPECTED-TURN' }
     dispatched = true

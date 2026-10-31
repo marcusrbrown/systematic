@@ -19,10 +19,17 @@ import {
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const PATH = DELEGATED_SEARCH_FIXTURE.solution.path
+const BRAINSTORM_PATH = DELEGATED_SEARCH_FIXTURE.brainstorm.path
 const MARKER = 'You are the test researcher'
 const SEARCH_TOOL = 'systematic_search'
 
-const FOUND_MESSAGE = `Search "zebra flake retry": 1 doc, 1 hit. Corpus: docs/solutions.\n\n1. ${PATH}\n   Title: Zebra crossing flake | Kind: solution | Status: active`
+const SOLUTION_HIT = `1. ${PATH}\n   Title: Zebra crossing flake | Kind: solution | Status: active\n   Snippet: The zebra flake appears when retries overlap.`
+const BRAINSTORM_HIT = `2. ${BRAINSTORM_PATH}\n   Title: Zebra crossing | Kind: brainstorm | Status: abandoned\n   Snippet: An abandoned idea: retry the zebra flake with a longer delay.`
+const ALL_HEADER =
+  'Search "zebra flake retry": 2 docs, 2 hits. Corpus: solution 1, plan none, brainstorm 1, ideation none.'
+
+const FOUND_MESSAGE = `${ALL_HEADER}\n\n${SOLUTION_HIT}\n\n${BRAINSTORM_HIT}`
+const BOTH_PATHS = `${PATH} ${BRAINSTORM_PATH}`
 
 function tool(name: string) {
   return { type: 'function', function: { name } }
@@ -83,7 +90,7 @@ function passing(): DelegatedSearchObservation {
     childRequests: [childFirst(), childNext(FOUND_MESSAGE)],
     parentRequests: [
       parentFirst(),
-      parentFinal(`<task_result>CHILD-FOUND ${PATH}</task_result>`),
+      parentFinal(`<task_result>CHILD-FOUND ${BOTH_PATHS}</task_result>`),
     ],
   }
 }
@@ -175,6 +182,113 @@ describe('evaluateDelegatedSearchProof', () => {
     expect(verdict).toMatchObject({ ok: false, code: 'path-missing' })
   })
 
+  test('a child that searched only solutions lacks the brainstorm and the verdict names its path', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [
+        childFirst(),
+        childNext(
+          `Search "zebra flake retry": 1 doc, 1 hit. Corpus: docs/solutions.\n\n${SOLUTION_HIT}`,
+        ),
+      ],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'path-missing' })
+    if (!verdict.ok) expect(verdict.message).toContain(BRAINSTORM_PATH)
+  })
+
+  test('a different planted brainstorm path can be required', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      plantedBrainstormPath: 'docs/brainstorms/other.md',
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'path-missing' })
+  })
+
+  test('the brainstorm hit must print Kind: brainstorm', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [
+        childFirst(),
+        childNext(FOUND_MESSAGE.replace('Kind: brainstorm', 'Kind: plan')),
+      ],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+    if (!verdict.ok) expect(verdict.message).toContain('Kind: brainstorm')
+  })
+
+  test('the brainstorm hit must print Status: abandoned', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [
+        childFirst(),
+        childNext(
+          FOUND_MESSAGE.replace('Status: abandoned', 'Status: unspecified'),
+        ),
+      ],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+    if (!verdict.ok) expect(verdict.message).toContain('Status: abandoned')
+  })
+
+  test('labels on some other hit do not stand in for the brainstorm hit', () => {
+    const wrongBrainstormLine = BRAINSTORM_HIT.replace(
+      'Kind: brainstorm | Status: abandoned',
+      'Kind: plan | Status: active',
+    )
+    const message = `${ALL_HEADER}\n\n3. docs/plans/other.md\n   Title: Other | Kind: brainstorm | Status: abandoned\n\n${SOLUTION_HIT}\n\n${wrongBrainstormLine}`
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [childFirst(), childNext(message)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+  })
+
+  test('a brainstorm path that is only quoted in a snippet has no hit labels and fails', () => {
+    const message = `${ALL_HEADER}\n\n${SOLUTION_HIT.replace('The zebra flake appears when retries overlap.', `See ${BRAINSTORM_PATH}.`)}`
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [childFirst(), childNext(message)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+  })
+
+  test('a truncated message still passes when both hits are complete before the cut', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [
+        childFirst(),
+        childNext(
+          `${FOUND_MESSAGE}\n[Systematic: search output truncated at 16 KB]`,
+        ),
+      ],
+    })
+    expect(verdict).toEqual({ ok: true })
+  })
+
+  test('a message cut before the brainstorm hit labels fails', () => {
+    const cut = `${ALL_HEADER}\n\n${SOLUTION_HIT}\n\n2. ${BRAINSTORM_PATH}\n[Systematic: search output truncated at 16 KB]`
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [childFirst(), childNext(cut)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+  })
+
+  test('a parent answer that names only the solution fails and the verdict names the brainstorm path', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentRequests: [
+        parentFirst(),
+        parentFinal(`<task_result>CHILD-FOUND ${PATH}</task_result>`),
+      ],
+    })
+    expect(verdict).toMatchObject({
+      ok: false,
+      code: 'parent-answer-missing-path',
+    })
+    if (!verdict.ok) expect(verdict.message).toContain(BRAINSTORM_PATH)
+  })
+
   test('a parent whose last request lacks the path fails', () => {
     const verdict = evaluateDelegatedSearchProof({
       ...passing(),
@@ -211,7 +325,7 @@ describe('evaluateDelegatedSearchProof', () => {
     ).toThrow(/\[no-child-request\].*never dispatched/)
   })
 
-  test('a different planted path can be required', () => {
+  test('a different planted solution path can be required', () => {
     const verdict = evaluateDelegatedSearchProof({
       ...passing(),
       plantedPath: 'docs/solutions/other.md',
@@ -255,22 +369,41 @@ describe('createDelegatedSearchScript', () => {
         },
       ],
     })
+    // The scripted child searches every kind, so the brainstorm is reachable.
+    expect(DELEGATED_SEARCH_FIXTURE.searchArguments.kind).toBe('all')
 
     expect(s.respond(childNext(FOUND_MESSAGE))).toEqual({
-      text: `CHILD-FOUND ${PATH}`,
+      text: `CHILD-FOUND ${BOTH_PATHS}`,
     })
 
     // The parent's second request has a tool message but no researcher
     // marker, so it must not be taken for a child request.
     expect(
-      s.respond(parentFinal(`<task_result>CHILD-FOUND ${PATH}</task_result>`)),
-    ).toEqual({ text: `PARENT-FINAL ${PATH}` })
+      s.respond(
+        parentFinal(`<task_result>CHILD-FOUND ${BOTH_PATHS}</task_result>`),
+      ),
+    ).toEqual({ text: `PARENT-FINAL ${BOTH_PATHS}` })
 
     const observation = s.observation()
     expect(observation.requestCount).toBe(5)
     expect(observation.childRequests).toHaveLength(2)
     expect(observation.parentRequests).toHaveLength(2)
     expect(evaluateDelegatedSearchProof(observation)).toEqual({ ok: true })
+  })
+
+  test('the child echoes each path once, in the order the result lists them', () => {
+    const s = script()
+    const doubled = `${FOUND_MESSAGE}\n   Successor: ${PATH}`
+    expect(s.respond(childNext(doubled))).toEqual({
+      text: `CHILD-FOUND ${BOTH_PATHS}`,
+    })
+  })
+
+  test('a child whose result names no path echoes a marker the proof rejects', () => {
+    const s = script()
+    expect(s.respond(childNext('Search "x": 1 doc, 0 hits.'))).toEqual({
+      text: 'CHILD-FOUND NO-PATH',
+    })
   })
 
   test('a child offered no search tool answers in text, and the proof names the missing advertisement', () => {

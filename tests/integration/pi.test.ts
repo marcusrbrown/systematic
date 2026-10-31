@@ -1117,10 +1117,11 @@ describe('Pi subprocess integration', () => {
       for (const child of script.observation().childRequests) {
         expect(hasResearcherSystemMarker(child, marker)).toBe(true)
       }
-      // The parent's last answer is the path it read from the delegate result.
-      expect(rpcText).toContain(
-        `PARENT-FINAL ${DELEGATED_SEARCH_FIXTURE.solution.path}`,
-      )
+      // The parent's last answer carries the paths it read from the delegate
+      // result, the planted brainstorm among them.
+      expect(rpcText).toContain('PARENT-FINAL')
+      expect(rpcText).toContain(DELEGATED_SEARCH_FIXTURE.solution.path)
+      expect(rpcText).toContain(DELEGATED_SEARCH_FIXTURE.brainstorm.path)
     },
     TIMEOUT_MS,
   )

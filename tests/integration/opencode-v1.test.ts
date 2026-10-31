@@ -573,9 +573,12 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
 
         assertOk(result)
         assertDelegatedSearchProof(script.observation())
-        // The parent's last answer is the path it read from the dispatch result.
+        // The parent's last answer carries the paths it read from the dispatch
+        // result, the planted brainstorm among them.
+        expect(result.stdout).toContain('PARENT-FINAL')
+        expect(result.stdout).toContain(DELEGATED_SEARCH_FIXTURE.solution.path)
         expect(result.stdout).toContain(
-          `PARENT-FINAL ${DELEGATED_SEARCH_FIXTURE.solution.path}`,
+          DELEGATED_SEARCH_FIXTURE.brainstorm.path,
         )
       },
       TIMEOUT_MS * 2,
