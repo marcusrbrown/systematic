@@ -22,7 +22,7 @@ Drop the `exclude:` path from the hits by exact path; a `Supersedes:` line keeps
 
 The `docs/solutions/` directory holds documented solutions with YAML frontmatter. There may be hundreds of files, so use this strategy, which minimizes tool calls. Never assume a layout: discover what exists first.
 
-Try the search tool once (Step 1b). When it returns hits, it replaces the grep steps (Steps 2 and 3, and the content search in Step 4). When it cannot help, the grep steps below run unchanged.
+Try the search tool (Step 1b: one call in `solutions` scope, one per kind in `past-work` scope). When it returns hits, it replaces the grep steps (Steps 2 and 3, and the content search in Step 4). When it cannot help, the grep steps below run unchanged.
 
 ### Step 0: Discover What Exists
 
@@ -48,7 +48,7 @@ From the feature/task description, identify:
 - **Hosts that ship a command instead of a tool (the plugin bundle's `bin/`):** run `command -v systematic-search`. A printed path means the tool exists.
 - If there is no such tool, go to Step 2 and use the grep path.
 
-**Call it once**, with the problem description as the query and `kind` set to `solution`. With the tool, call `systematic_search({ query: "<description>", kind: "solution" })`. With the command, run `systematic-search --kind solution -- '<description>'` with single quotes removed from the description first. Write the query as symptoms, error text, module names and the topic, as a person would type them. Use the default limit.
+**In `solutions` scope, call it once**, with the problem description as the query and `kind` set to `solution`. With the tool, call `systematic_search({ query: "<description>", kind: "solution" })`. With the command, run `systematic-search --kind solution -- '<description>'` with single quotes removed from the description first. Write the query as symptoms, error text, module names and the topic, as a person would type them. Use the default limit.
 
 **Past-work scope.** Make one search per kind, `solution`, `plan`, `brainstorm` and `ideation`, and merge the hits by repo-root path: `systematic_search({ query: "<description>", kind: "<kind>", limit: 5 })`. With the command, pass `--kind <kind> --limit 5`. Never search `all`: long plans crowd the other kinds out of its top results. A `none`, `empty`, zero-hit or `Error:` reply from one kind adds nothing. Route on the merged hits.
 
@@ -298,7 +298,7 @@ The rules below about content search, patterns, synonyms and narrowing apply to 
 
 **DO:**
 - List `docs/solutions/` first and work from the directories that exist
-- Try the search tool once, when it exists, before any grep step
+- Try the search tool, when it exists, before any grep step: one call in `solutions` scope, one per kind (four) in `past-work` scope
 - Take the grep path when search finds nothing, is disabled, errors or does not exist
 - Use the native content-search tool to pre-filter files BEFORE reading any content (critical for 100+ files)
 - Run multiple content searches in PARALLEL for different keywords
@@ -326,7 +326,7 @@ The rules below about content search, patterns, synonyms and narrowing apply to 
 - Read every file in full (wasteful)
 - Return raw document contents (distill instead)
 - Return a superseded doc whose successor resolves. Return its successor. If the successor does not resolve, return the superseded doc with `Caution: successor unresolved`.
-- Run the grep steps after a search that returned hits, or call the search tool more than once (twice in `past-work` scope)
+- Run the grep steps after a search that returned hits, or call the search tool more than once in `solutions` scope, or more than four times in `past-work` scope (one call per kind)
 - Follow a `superseded_by` that is not a repo-root `docs/solutions/` path, and never follow more than 5 hops
 - Include tangentially related learnings (focus on relevance)
 

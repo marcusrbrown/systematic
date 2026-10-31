@@ -12,6 +12,7 @@ import {
   type DelegatedSearchObservation,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
+  PARENT_FINAL_MARKER,
   plantDelegatedSearchFixture,
   researcherSystemMarker,
   systemTextOf,
@@ -30,6 +31,7 @@ const ALL_HEADER =
 
 const FOUND_MESSAGE = `${ALL_HEADER}\n\n${SOLUTION_HIT}\n\n${BRAINSTORM_HIT}`
 const BOTH_PATHS = `${PATH} ${BRAINSTORM_PATH}`
+const FINAL_ANSWER = `${PARENT_FINAL_MARKER} ${BOTH_PATHS}`
 
 function tool(name: string) {
   return { type: 'function', function: { name } }
@@ -92,6 +94,7 @@ function passing(): DelegatedSearchObservation {
       parentFirst(),
       parentFinal(`<task_result>CHILD-FOUND ${BOTH_PATHS}</task_result>`),
     ],
+    parentAnswer: FINAL_ANSWER,
   }
 }
 
@@ -303,6 +306,71 @@ describe('evaluateDelegatedSearchProof', () => {
     })
   })
 
+  test('a solution path that is only quoted in another hit snippet has no hit labels and fails', () => {
+    const quoting = BRAINSTORM_HIT.replace(
+      'An abandoned idea: retry the zebra flake with a longer delay.',
+      `See ${PATH}.`,
+    )
+    const message = `${ALL_HEADER}\n\n${quoting}`
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [childFirst(), childNext(message)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+    if (!verdict.ok) expect(verdict.message).toContain(PATH)
+  })
+
+  test('the solution hit must print Kind: solution', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [
+        childFirst(),
+        childNext(FOUND_MESSAGE.replace('Kind: solution', 'Kind: plan')),
+      ],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+    if (!verdict.ok) expect(verdict.message).toContain('Kind: solution')
+  })
+
+  test('a final answer that omits the brainstorm path fails even when the parent received both', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentAnswer: `${PARENT_FINAL_MARKER} ${PATH}`,
+    })
+    expect(verdict).toMatchObject({
+      ok: false,
+      code: 'final-answer-missing-path',
+    })
+    if (!verdict.ok) expect(verdict.message).toContain(BRAINSTORM_PATH)
+  })
+
+  test('a final answer that omits the solution path fails', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentAnswer: `${PARENT_FINAL_MARKER} ${BRAINSTORM_PATH}`,
+    })
+    expect(verdict).toMatchObject({
+      ok: false,
+      code: 'final-answer-missing-path',
+    })
+    if (!verdict.ok) expect(verdict.message).toContain(PATH)
+  })
+
+  test('a final answer without the parent marker fails', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentAnswer: BOTH_PATHS,
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'no-final-answer' })
+  })
+
+  test('a run that captured no final answer fails', () => {
+    const { parentAnswer: _omitted, ...withoutAnswer } = passing()
+    const verdict = evaluateDelegatedSearchProof(withoutAnswer)
+    expect(verdict).toMatchObject({ ok: false, code: 'no-final-answer' })
+    if (!verdict.ok) expect(verdict.message).toContain('no message')
+  })
+
   test('a parent that never saw the result back fails', () => {
     const verdict = evaluateDelegatedSearchProof({
       ...passing(),
@@ -388,7 +456,13 @@ describe('createDelegatedSearchScript', () => {
     expect(observation.requestCount).toBe(5)
     expect(observation.childRequests).toHaveLength(2)
     expect(observation.parentRequests).toHaveLength(2)
-    expect(evaluateDelegatedSearchProof(observation)).toEqual({ ok: true })
+    // The host returns the parent's scripted answer as its final message.
+    expect(
+      evaluateDelegatedSearchProof({
+        ...observation,
+        parentAnswer: `${PARENT_FINAL_MARKER} ${BOTH_PATHS}`,
+      }),
+    ).toEqual({ ok: true })
   })
 
   test('the child echoes each path once, in the order the result lists them', () => {

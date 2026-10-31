@@ -37,7 +37,14 @@ function copyLifecycleProject(): string {
   return root
 }
 
+// A fixture emptied of requests would register no per-request test and pass.
+const EXPECTED_REQUEST_COUNT = 11
+
 describe('solution lifecycle output is unchanged', () => {
+  it('records the expected number of requests', () => {
+    expect(golden.requests).toHaveLength(EXPECTED_REQUEST_COUNT)
+  })
+
   it('has one recorded output per request', () => {
     expect(golden.outputs).toHaveLength(golden.requests.length)
   })

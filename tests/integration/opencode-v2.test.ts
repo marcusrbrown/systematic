@@ -673,6 +673,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     async function runDelegatedSearch(pluginSpec: string): Promise<{
       script: DelegatedSearchScript
       marker: string
+      finalAnswer: string | undefined
     }> {
       plantDelegatedSearchFixture(fixture.projectDir)
       const marker = researcherSystemMarker(REPO_ROOT)
@@ -694,6 +695,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       })
       const model = startDelegatedSearchModel(script)
       const host = await startAgentHost(pluginSpec, model)
+      let finalAnswer: string | undefined
       try {
         const session = await host.client.session.create({
           location: { directory: fixture.projectDir },
@@ -705,11 +707,36 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           text: `${PARENT_DIRECTIVE} Dispatch the learnings researcher to find the zebra flake solution.`,
         })
         await host.client.session.wait({ sessionID: session.id })
+        finalAnswer = lastAssistantText(
+          await host.client.session.context({ sessionID: session.id }),
+        )
       } finally {
         model.stop()
         await host.server.stop()
       }
-      return { script, marker }
+      return { script, marker, finalAnswer }
+    }
+
+    /**
+     * The text of the session's last assistant message, as the host stores it,
+     * or `undefined` when the session holds none.
+     */
+    function lastAssistantText(
+      messages: readonly { type: string; content?: unknown }[],
+    ): string | undefined {
+      const last = messages.filter((m) => m.type === 'assistant').at(-1)
+      if (last === undefined || !Array.isArray(last.content)) return undefined
+      return last.content
+        .map((part: unknown) =>
+          typeof part === 'object' &&
+          part !== null &&
+          (part as { type?: unknown }).type === 'text' &&
+          typeof (part as { text?: unknown }).text === 'string'
+            ? (part as { text: string }).text
+            : '',
+        )
+        .join('')
+        .trim()
     }
 
     test(
@@ -717,9 +744,15 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       async () => {
         const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
 
-        const { script, marker } = await runDelegatedSearch(pluginSpec)
+        const { script, marker, finalAnswer } =
+          await runDelegatedSearch(pluginSpec)
 
-        assertDelegatedSearchProof(script.observation())
+        // The parent's final assistant message, read from the session, is the
+        // one message that must carry the marker and both planted paths.
+        assertDelegatedSearchProof({
+          ...script.observation(),
+          parentAnswer: finalAnswer,
+        })
         // The child that ran is the researcher, not some other agent.
         for (const child of script.observation().childRequests) {
           expect(hasResearcherSystemMarker(child, marker)).toBe(true)

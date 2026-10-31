@@ -26,7 +26,6 @@ import {
   assertDelegatedSearchProof,
   type ChatRequest,
   createDelegatedSearchScript,
-  DELEGATED_SEARCH_FIXTURE,
   type DelegatedSearchScript,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
@@ -572,14 +571,13 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
         const { result, script } = await runDelegatedSearch(fixture, pluginUrl)
 
         assertOk(result)
-        assertDelegatedSearchProof(script.observation())
-        // The parent's last answer carries the paths it read from the dispatch
-        // result, the planted brainstorm among them.
-        expect(result.stdout).toContain('PARENT-FINAL')
-        expect(result.stdout).toContain(DELEGATED_SEARCH_FIXTURE.solution.path)
-        expect(result.stdout).toContain(
-          DELEGATED_SEARCH_FIXTURE.brainstorm.path,
-        )
+        // `opencode run` prints the parent's final message and nothing else
+        // on stdout, so stdout is that one message. The proof requires it to
+        // carry the parent's marker and both planted paths.
+        assertDelegatedSearchProof({
+          ...script.observation(),
+          parentAnswer: result.stdout.trim(),
+        })
       },
       TIMEOUT_MS * 2,
     )

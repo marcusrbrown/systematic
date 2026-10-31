@@ -149,6 +149,51 @@ describe('learnings-researcher Step 1b under past-work', () => {
   test('Step 3b stays solution-only', () => {
     expect(step1b).toMatch(/Step 3b stays solution-only/)
   })
+
+  const COUNT_WORDS: Record<string, number> = {
+    once: 1,
+    twice: 2,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+  }
+
+  /** The call counts a line names, as numbers, in the order they appear. */
+  function countsNamedIn(line: string): number[] {
+    return [
+      ...line.matchAll(/\b(once|twice|two|three|four|five|six|\d+)\b/gi),
+    ].map((match) => {
+      const word = (match[1] ?? '').toLowerCase()
+      return COUNT_WORDS[word] ?? Number(word)
+    })
+  }
+
+  const efficiencyRule = RESEARCHER.split('\n').find((line) =>
+    line.includes('call the search tool more than'),
+  )
+
+  test('the efficiency rule allows one call in solutions scope and four in past-work scope', () => {
+    expect(efficiencyRule).toBeDefined()
+    const rule = efficiencyRule ?? ''
+    expect(rule).toMatch(/`solutions` scope/)
+    expect(rule).toMatch(/`past-work` scope/)
+    expect(countsNamedIn(rule)).toEqual([1, 4])
+  })
+
+  test('no line of the prompt caps past-work at two calls', () => {
+    expect(RESEARCHER).not.toMatch(/\btwice\b/i)
+    expect(RESEARCHER).not.toMatch(/\btwo (search|call)/i)
+  })
+
+  test('the count reader sees a stale two-call cap', () => {
+    expect(
+      countsNamedIn(
+        'call the search tool more than once (twice in `past-work` scope)',
+      ),
+    ).toEqual([1, 2])
+  })
 })
 
 describe('learnings-researcher past-work grep fallback', () => {

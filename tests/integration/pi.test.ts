@@ -66,7 +66,6 @@ import {
   assertDelegatedSearchProof,
   type ChatRequest,
   createDelegatedSearchScript,
-  DELEGATED_SEARCH_FIXTURE,
   type DelegatedSearchScript,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
@@ -1070,7 +1069,7 @@ describe('Pi subprocess integration', () => {
   async function runDelegatedSearch(): Promise<{
     script: DelegatedSearchScript
     marker: string
-    rpcText: string
+    finalAnswer: string | undefined
   }> {
     plantDelegatedSearchFixture(fixture.projectDir)
     const marker = researcherSystemMarker(REPO_ROOT)
@@ -1100,28 +1099,31 @@ describe('Pi subprocess integration', () => {
     })
     expect(promptResponse.success).toBe(true)
     await client.waitFor((msg) => msg.type === 'agent_settled', TIMEOUT_MS)
+    // The RPC's own readback of the parent's last assistant message.
+    const lastText = await client.send({ type: 'get_last_assistant_text' })
+    const text = (lastText.data as { text?: unknown } | undefined)?.text
     return {
       script,
       marker,
-      rpcText: JSON.stringify(client.messages()),
+      finalAnswer: typeof text === 'string' ? text : undefined,
     }
   }
 
   test(
     'a delegated learnings-researcher child calls systematic_search and its result reaches the parent',
     async () => {
-      const { script, marker, rpcText } = await runDelegatedSearch()
+      const { script, marker, finalAnswer } = await runDelegatedSearch()
 
-      assertDelegatedSearchProof(script.observation())
+      // The parent's final assistant message is the one message that must
+      // carry the marker and both planted paths.
+      assertDelegatedSearchProof({
+        ...script.observation(),
+        parentAnswer: finalAnswer,
+      })
       // The child that ran is the researcher persona.
       for (const child of script.observation().childRequests) {
         expect(hasResearcherSystemMarker(child, marker)).toBe(true)
       }
-      // The parent's last answer carries the paths it read from the delegate
-      // result, the planted brainstorm among them.
-      expect(rpcText).toContain('PARENT-FINAL')
-      expect(rpcText).toContain(DELEGATED_SEARCH_FIXTURE.solution.path)
-      expect(rpcText).toContain(DELEGATED_SEARCH_FIXTURE.brainstorm.path)
     },
     TIMEOUT_MS,
   )
