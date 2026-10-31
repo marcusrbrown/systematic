@@ -167,9 +167,9 @@ Pi adapter
 
 Durable-output search
   src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
-  src/lib/search-corpus.ts         — project root walk-up, `kind` table and bounded, symlink-safe loader for `docs/solutions/`, with a narrowing frontmatter wrapper
-  src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns
-  src/lib/search-core.ts           — host-neutral search composition: validate, lexical lane, lifecycle resolver, render
+  src/lib/search-corpus.ts         — project root walk-up, the `kind` table (`solution`, `plan`, `brainstorm`, `ideation`: directory and exclusions per kind) and a bounded, symlink-safe loader that reads one kind per call, with a narrowing frontmatter wrapper (title is `title`, else `topic`, else the file name)
+  src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns; the header names the corpus directory, or one count per kind for `all`
+  src/lib/search-core.ts           — host-neutral search composition: validate `kind` (one kind or the `all` selector), load each requested kind through the loader, rank the merged documents as one corpus, per-kind lifecycle resolver, render
   src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a reader that never touches project config (imports only zod, jsonc-parser and node builtins)
   src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
   src/lib/search-cli.ts            — `systematic search` and the `systematic-search` bin's shared runner: flag parsing, an injected settings loader, exit codes, the core's text unchanged (imports only `search-core.ts`)
@@ -246,13 +246,30 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
 
 6. **Search reads the disk on every call, protects its config as a whole, and avoids `Math.log`.**
-   `docs/solutions/` is read on each call with no memo, because a session can write a learning and
-   search again in the same run. The `search` config block is stripped whole from project config, so a repository
-   cannot switch it off. The search modules use a hand-written `ln`
-   and no `Math.log`, so scores and ranks are identical on Bun and Node. Each host reaches the one
-   `search-core.ts` composition, so every surface returns the same text. The learnings-researcher
-   calls search first and falls back to its grep steps when search has no hits, is disabled, errors
-   or is absent.
+   Search covers four kinds, each with its own directory in the `KIND_TABLE` of `search-corpus.ts`:
+   `solution` (`docs/solutions/`), `plan` (`docs/plans/`), `brainstorm` (`docs/brainstorms/`) and
+   `ideation` (`docs/ideation/`). The loader reads one kind per call, from disk, with no memo and no
+   git lookup, because a session can write a learning and search again in the same run and because a
+   gitignored directory must load like a tracked one. Leaving `kind` out means `solution`. `all` is a
+   selector, not a table key: it calls the loader once per kind, merges the documents in path order
+   and ranks them as one corpus, while a single kind ranks exactly as it does alone. Caps stay per
+   kind, and the 16 KB output cap applies once to the combined result. A solution's status prints as
+   `active`, `stale` or `superseded`; a plan, brainstorm or ideation hit prints its recorded status as
+   written, or `unspecified`. Only `superseded` and `stale` trigger anything, and the other kinds
+   compare them trimmed and lower-case. A successor resolves within a kind (at most 5 hops, a
+   visited set, and a form rule taken from the kind's table entry) and is only shown across kinds:
+   a `superseded_by` that fits another kind's form ends the walk at the last same-kind document with
+   a `Successor: <path>` line and no existence check. A link that fits no kind, or a same-kind link
+   to a missing file, keeps `Caution: successor unresolved`. The header reads `Corpus: <dir>.` for one
+   kind and one token per kind for `all` (`solution 128, plan 102, brainstorm none, ideation 1`),
+   where `none` means no directory and `empty` means a directory with no indexable document. The
+   `search` config block is stripped whole from project config, so a repository cannot switch it
+   off. The search modules use a hand-written `ln` and no `Math.log`, so scores and ranks are
+   identical on Bun and Node. Each host reaches the one `search-core.ts` composition, so every
+   surface returns the same text. The learnings-researcher calls search first and falls back to its
+   grep steps when search has no hits, is disabled, errors or is absent. Its default scope is
+   `solutions`; with `scope: past-work` it makes one `all` call and one `solution` call and groups
+   the merged hits by recorded status, and its overlap mode stays on `solutions`.
 
 ## Data Flow
 
