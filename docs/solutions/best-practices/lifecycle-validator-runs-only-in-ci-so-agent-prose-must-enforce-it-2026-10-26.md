@@ -86,3 +86,4 @@ The researcher follows one, for up to 5 hops with a visited set, because a repo 
 
 - `docs/solutions/best-practices/content-integrity-mirror-runtime-drop-rules-2026-05-17.md`: the opposite direction, where a gate must mirror what the runtime parser actually does.
 - `docs/solutions/runtime-errors/circular-yaml-alias-aborts-content-integrity-report-2026-10-26.md`: reporting circular YAML values in `checkSolutionLifecycle` and the other frontmatter checks without throwing.
+- `docs/solutions/logic-errors/frontmatter-close-delimiter-must-be-a-whole-line-2026-10-30.md`: a value ending in `---` closed the frontmatter early and dropped `status` and `superseded_by`; a regression test asserts such a superseded doc resolves to its successor.

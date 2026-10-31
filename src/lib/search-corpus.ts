@@ -311,11 +311,11 @@ export type ParsedDocument =
   | { readonly ok: false; readonly reason: string }
 
 /**
- * Parse one file. Wraps `parseFrontmatter` (which stays unedited): strips a
- * leading BOM, supplies the newline its regex needs when the closing `---` is
- * the last line, and reads only known fields, narrowing each. No frontmatter
- * means a body-only document with no warning. Invalid YAML, or a frontmatter
- * block that is not a mapping, is not indexable.
+ * Parse one file. Wraps `parseFrontmatter`: strips a leading BOM, supplies the
+ * newline its regex needs when the closing `---` is the last line, and reads
+ * only known fields, narrowing each. No frontmatter means a body-only document
+ * with no warning. Invalid YAML, or a frontmatter block that is not a mapping,
+ * is not indexable.
  */
 export function parseCorpusDocument(
   kind: DocumentKind,

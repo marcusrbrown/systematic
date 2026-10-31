@@ -172,3 +172,6 @@ tags: [measurement, evidence, ground-truth, instrument-validation, analysis,
 - Issues: [#820](https://github.com/marcusrbrown/systematic/issues/820)
   (the rediscovery), resolved in
   [PR #846](https://github.com/marcusrbrown/systematic/pull/846).
+- [A retrieval lane that recalls well can still lose after fusion](../best-practices/a-retrieval-lane-that-recalls-well-can-still-lose-after-fusion-2026-10-30.md)
+  — the #820 query later became a held-out search test; its label and
+  baseline results are recorded there.
