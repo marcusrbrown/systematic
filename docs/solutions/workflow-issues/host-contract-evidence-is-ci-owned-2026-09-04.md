@@ -2,7 +2,7 @@
 title: "Host-contract evidence is CI-owned: nobody re-runs the suite by hand"
 module: ".github/workflows/main.yaml host-contract jobs + scripts/host-contract-guard.ts + scripts/lib/opencode-pin.ts"
 date: 2026-09-04
-last_updated: 2026-10-28
+last_updated: 2026-10-31
 problem_type: workflow_issue
 component: testing_framework
 severity: medium
@@ -228,15 +228,23 @@ definition that pins the exact environment.
   profile list or lists that should run it in
   `scripts/host-contract-guard.ts` (every file under `tests/integration/` must
   be on at least one list, which `tests/unit/host-contract-guard.test.ts`
-  checks). A file on the v2 list also belongs in a refreshed timings file;
-  only the v2 shards use it. Regenerate it locally the way CI selects the
-  suite, on an idle machine: run `bun test` on the files from
+  checks). A file on the v2 list also belongs in the timings file; only the v2
+  shards use it. Take its per-file times from CI: sum the test-case times per
+  file in the JUnit reports of the final green run, which each shard uploads
+  as the `host-contract-v2-shard-N` artifact (`.github/workflows/main.yaml:298-306`).
+  Local times are a fallback for a file that has no CI run yet, and a CI value
+  replaces them once one exists. A loaded local run skewed the times and
+  reordered the files, which the shard split uses; an idle local run was not
+  compared. If you must refresh
+  locally, run `bun test` on the files from
   `bun scripts/host-contract-guard.ts files --profile v2` with
   `--timings=tests/integration/host-contract-timings.json --update-timings`,
   and set `SYSTEMATIC_OPENCODE_HOST=v2`, `SYSTEMATIC_OPENCODE_V2_BIN` and
-  `SYSTEMATIC_REQUIRE_OPENCODE_V2=1`. CI never writes it.
+  `SYSTEMATIC_REQUIRE_OPENCODE_V2=1`, on an idle machine. CI never writes it.
 - Shard times drifting apart — one shard running well past the others means
-  the committed timings no longer match the suite; refresh them the same way.
+  the committed timings no longer match the suite; refresh them from CI the
+  same way. One shard cannot run shorter than the largest single file, so
+  moving other files stops helping once that file sits alone in its shard.
 
 ## Examples
 

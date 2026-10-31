@@ -1,6 +1,7 @@
 ---
 title: Restate CI-only validator rules in agent prose at the step that acts on each pointer
 date: 2026-10-26
+last_updated: 2026-10-31
 category: best-practices
 module: content-integrity
 problem_type: best_practice
@@ -12,6 +13,8 @@ applies_when:
   - A rule is enforced by a script in Systematic's own CI but ships to user repos only as skill or agent instructions
   - Agent prose follows, resolves or deletes by reference, such as a path-valued frontmatter field
   - Changing checkSolutionLifecycle or the solution-doc lifecycle fields
+  - Adding a scope or a mode to an agent prompt that has both a search path and a grep fallback
+  - Trimming an agent prompt to fit a size budget
 tags:
   - lifecycle
   - superseded-by
@@ -19,6 +22,8 @@ tags:
   - validator-parity
   - learnings-researcher
   - compound-refresh
+  - wiring-tests
+  - prompt-budget
 ---
 
 # Restate CI-only validator rules in agent prose at the step that acts on each pointer
@@ -51,6 +56,12 @@ Write each check as a step at the point where the agent acts on a pointer.
 
 5. **Bound and order every cascade.** A plain Delete collects the pointing docs transitively with a visited set. It defers the whole Delete when any of them must remain. Otherwise it deletes the farthest dependents first and the target last, and stops at the first failure (`skills/ce-compound-refresh/SKILL.md:547`).
 
+6. **State a shared rule once and reference it from the other path.** Step 4 owns successor resolution (`agents/research/learnings-researcher.md:135`), and the past-work grep fallback points back with "Step 4's rule holds in each" (`agents/research/learnings-researcher.md:220`). This does not replace step 1: each path still carries the check that acts on its pointer. The wiring test pins that every place that restates the rule agrees, and that the old solution-only phrases are gone (`describe('one successor rule on the search path and the grep path')`, `tests/unit/past-work-wiring-contract.test.ts:548-623`).
+
+7. **When a count or limit changes, search every occurrence.** After the researcher moved from two search calls to one per kind, a line in the efficiency list still capped past-work at two. Grep the prompt for the words that name the count (`once`, `twice`, `two`), not only the section you edited. The wiring test reads the call counts out of that line and asserts `[1, 4]`, with a self-test that the reader catches a stale cap (`tests/unit/past-work-wiring-contract.test.ts:162-205`).
+
+8. **After a prompt trim, review each removed instruction.** A byte budget is review guidance, not a test (`docs/plans/2026-10-30-001-feat-search-past-work-plan.md:207`), and a byte count cannot say whether a removed line was a duplicate, stale or deliberate. A trim once removed "Do not assume any particular category exists" (`agents/research/learnings-researcher.md:33`), and no wiring test pins it. Regenerated whole-prompt fixtures cannot detect a removed instruction, because they are rebuilt from the trimmed prompt. Pin the stack-neutral and negative rules you intend to keep.
+
 ## Why This Matters
 
 Steps 1, 4 and 5 keep the pointers that the validator's `dangling-superseded-by` and `successor-superseded` classes check from breaking. Steps 2 and 3 make the prose read the corpus the way the validator does. In a user repo nothing reports a miss, so a gap in the prose becomes a silent wrong answer: a deleted successor returned as live guidance, or a retired doc pointing at a file that no longer exists.
@@ -60,9 +71,11 @@ Prose cannot enforce "no dangling pointer" after the fact. It can only order its
 ## When to Apply
 
 - Adding or changing a rule in `checkSolutionLifecycle` or `classifySupersededBy`. Check that the researcher's Step 4 and refresh's Lifecycle Consistency still state it.
-- Changing the hop cap, the successor form rule or the unresolved-caution text in `src/lib/search-core.ts`. The researcher's Step 4 fallback has to say the same, and no gate compares the two, so review the prose by hand.
+- Changing the hop cap, the successor form rule or the unresolved-caution text in `src/lib/search-core.ts`. The researcher's Step 4 fallback has to say the same. No gate compares the code with the prose, and the wiring test in step 6 only checks that the prose agrees with itself across the two paths, so review the code-to-prose match by hand.
 - Writing any agent instruction that dereferences a path-valued frontmatter field.
 - Writing any agent instruction that deletes files that other files point at.
+- Adding a scope to the researcher, or changing a count or limit that its efficiency list states. Search the prompt for every place the rule appears before editing one.
+- Trimming a prompt to meet a size budget. Read the removed lines before accepting the trim.
 - When the prose is deliberately more lenient than the validator, say so next to the rule in the prose, so the next change does not "fix" it.
 
 ## Examples
