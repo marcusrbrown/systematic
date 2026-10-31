@@ -545,6 +545,83 @@ describe('Successor lines in both scopes', () => {
   })
 })
 
+describe('one successor rule on the search path and the grep path', () => {
+  const step4 = section(RESEARCHER, '### Step 4')
+  const rule = paragraph(step4, '**Resolving a successor.**')
+  const applied = step4.slice(step4.indexOf('**Then apply the result.**'))
+  const fallback = section(RESEARCHER, '### Past-work grep fallback')
+  const lifecycle = paragraph(fallback, '**Lifecycle.**')
+  const dont = paragraph(RESEARCHER, '- Follow a `superseded_by`')
+  const FOUR_DIRS = [
+    'docs/solutions/',
+    'docs/plans/',
+    'docs/brainstorms/',
+    'docs/ideation/',
+  ]
+
+  test('Step 4 resolves a successor within its own kind, for every kind', () => {
+    expect(rule).toMatch(/only within (its|the candidate's) own kind/i)
+    for (const dir of FOUR_DIRS) expect(rule).toContain(`\`${dir}\``)
+  })
+
+  test('Step 4 keeps the shared form checks', () => {
+    expect(rule).toContain('`.md`')
+    expect(rule).toContain('`..`')
+    expect(rule).toContain('`README.md`')
+    expect(rule).toContain('`_archived/`')
+    expect(rule).toMatch(/file that exists/i)
+  })
+
+  test('Step 4 does not follow a link into another kind', () => {
+    expect(rule).toMatch(/another of the four/i)
+    expect(rule).toMatch(/not followed/i)
+  })
+
+  test('the grep path names Successor: for a cross-kind link and keeps the doc', () => {
+    expect(applied).toContain('`Successor: <path>`')
+    expect(applied).toMatch(/another of the four/i)
+    expect(applied).toMatch(/stays/i)
+    expect(applied).toMatch(/both scopes/i)
+  })
+
+  test('a solution superseded by a plan prints Successor: on the grep path', () => {
+    expect(applied).toMatch(/solution superseded by a plan/i)
+    expect(applied).toContain('`Successor:`')
+  })
+
+  test('a cross-kind link is not reported as unresolved', () => {
+    expect(applied).toMatch(/not `Caution: successor unresolved`/)
+  })
+
+  test('a same-kind link to a missing file, or any other form, is unresolved', () => {
+    expect(applied).toMatch(/missing/i)
+    expect(applied).toMatch(/any other form/i)
+    expect(applied).toContain('`Caution: successor unresolved`')
+  })
+
+  test("the DON'T bullet allows same-kind resolution for every kind", () => {
+    expect(dont).toMatch(/own kind/i)
+    expect(dont).toMatch(/another of the four/i)
+    expect(dont).toMatch(/5 hops/)
+    expect(dont).not.toMatch(/not a repo-root `docs\/solutions\/` path/)
+  })
+
+  test('the past-work bullet matches the same rule', () => {
+    expect(lifecycle).toMatch(/own (directory|kind)/i)
+    expect(lifecycle).toMatch(/another of the four/i)
+    expect(lifecycle).toContain('`Successor:`')
+    expect(lifecycle).toContain('`Caution: successor unresolved`')
+  })
+
+  test('nothing in the prompt restricts following to docs/solutions/ only', () => {
+    expect(RESEARCHER).not.toMatch(/starts with `docs\/solutions\/`/)
+    expect(RESEARCHER).not.toMatch(
+      /superseded_by[^\n]*not a repo-root `docs\/solutions\/` path/,
+    )
+    expect(RESEARCHER).not.toMatch(/only a repo-root path counts/i)
+  })
+})
+
 describe('status groups for unknown statuses', () => {
   const output = section(RESEARCHER, '## Past-Work Output')
   const row = output

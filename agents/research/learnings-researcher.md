@@ -79,7 +79,7 @@ The grep path keeps its OR patterns for synonyms. A zero-hit search does not add
 
 The grep path starts here.
 
-If the feature type is clear, narrow the search to the category directories from Step 0 whose names fit it. Match by name. For example, performance work fits a directory with `performance` in its name, and a security change fits one with `security` in its name. Several directories can fit. When the type is unclear, or no directory fits, search `docs/solutions/` as a whole.
+If the feature type is clear, narrow the search to the category directories from Step 0 whose names fit it. Match by name; several can fit. When the type is unclear, or no directory fits, search `docs/solutions/` as a whole.
 
 ### Step 3: Content-Search Pre-Filter (Critical for Efficiency)
 
@@ -95,12 +95,7 @@ content-search: pattern="component:.*background_job" path=docs/solutions/ files_
 
 **Pattern construction tips:**
 - Use `|` for synonyms: `tags:.*(auth|login|session|token)`
-- Include `title:` - often the most descriptive field
-- Search case-insensitively
-- Include related terms the user might not have mentioned
 - To learn which `module`, `component` or `tags` values the project actually uses, search for the field name (`^module:`) and read the values the matches show. Do not guess values from memory.
-
-**Why this works:** Content search scans file contents without reading into context. Only matching filenames are returned, dramatically reducing the set of files to examine.
 
 **Combine results** from all searches to get candidate files (typically 5-20 files instead of 200). Drop the files Step 0 says to skip.
 
@@ -137,20 +132,21 @@ Then resolve every candidate before scoring:
 | `stale` | Keep it, and give it a `Caution:` line (see Output Format). |
 | `superseded` | Replace it with its successor, if the successor resolves. Otherwise keep the superseded doc and give it `Caution: successor unresolved`. |
 
-**Resolving a successor.** Only a repo-root path counts: a value that starts with `docs/solutions/`, ends in `.md`, contains no `..` segment, is not a `README.md`, is not under `_archived/`, and names a file that exists. A bare filename, a relative path, an empty value, a list, a missing file and any other form are all unresolvable. Do not guess.
+**Resolving a successor.** A successor resolves only within its own kind (`docs/solutions/`, `docs/plans/`, `docs/brainstorms/`, `docs/ideation/`). The link must be a repo-root path under the holding doc's directory, end in `.md`, contain no `..` segment, not be a `README.md`, not be under `_archived/`, and name a file that exists. A link that fits another of the four directories is not followed (see the apply step). Any other form, such as a bare filename, relative path, empty value or list, and a missing same-kind file, is unresolvable. Do not guess.
 
 1. Start with the candidate's `superseded_by` value. Keep a visited set holding the candidate's own path.
-2. At every hop, before taking the target as the successor, check that it passes the form rule above and that the file exists. Check existence against the Step 0 listing or Glob results you already have, or with a direct existence check. A target that fails either check makes the chain unresolvable. A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.
+2. At every hop, before taking the target as the successor, check that it passes the form rule above for the current doc's kind. If it fits another of the four directories, the walk ends here and the doc you are on stays, without reading or checking the target. Otherwise check that the file exists. Check existence against the Step 0 listing or Glob results you already have, or with a direct existence check. A target that fails either check makes the chain unresolvable. A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.
 3. If the target is already in the visited set, the chain is a cycle: unresolvable.
 4. Read the target's frontmatter and take its `status`. If it is `superseded`, follow its `superseded_by` and repeat from step 2.
 5. One hop is one `superseded_by` link. Follow at most 5 hops. A target still superseded after the fifth hop makes the chain unresolvable.
-6. The first target that is not `superseded` is the successor. An unrecognized status counts as active. If reading the target's frontmatter fails, the chain is unresolvable.
+6. The first target that is not `superseded` is the successor. If reading the target's frontmatter fails, the chain is unresolvable.
 
 **Then apply the result.**
 - A superseded candidate with a resolvable successor is never returned. Return the successor in its place, labelled with a `Supersedes:` line (see Output Format). The successor does not need to match the keywords itself, because it stands in for a doc that did.
 - If the successor is `stale`, it also gets a `Caution:` line.
 - Several superseded docs that resolve to the same successor return that successor once. Its `Supersedes:` line lists all of them. If the successor is also a candidate in its own right, merge the two into one entry.
-- A superseded candidate with an unresolvable successor is returned itself, at its own rank, with the line `Caution: successor unresolved`. Nothing is dropped. A successor that is missing, fails the form rule, forms a cycle or lies past the hop cap is unresolvable.
+- A walk that ends at a link into another of the four directories leaves the doc it stopped on in place, at its own rank. It stays, with the line `Successor: <path>`, not `Caution: successor unresolved`. This holds in both scopes: a solution superseded by a plan prints `Successor:` on the grep path too, as search does.
+- A superseded candidate with an unresolvable successor is returned itself, at its own rank, with the line `Caution: successor unresolved`. Nothing is dropped. A same-kind successor that is missing, any other form, a cycle and a chain past the hop cap are unresolvable.
 
 ### Step 5: Read Frontmatter of Candidates Only
 
@@ -201,7 +197,7 @@ Fully read only the files that pass the filter (strong or moderate matches), to 
 
 ### Step 8: Return Distilled Summaries
 
-For each relevant document, return a summary in this format. `Supersedes:`, `Successor:` and `Caution:` are optional; include each only when it applies. `Successor:` is copied from the hit. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from its frontmatter if it has one. On a superseded doc whose successor does not resolve, the line is exactly `Caution: successor unresolved`.
+For each relevant document, return a summary in this format. `Supersedes:`, `Successor:` and `Caution:` are optional; include each only when it applies. `Successor:` is copied from the hit, or written on the grep path from a cross-kind link. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from its frontmatter if it has one. On a superseded doc whose successor does not resolve, the line is exactly `Caution: successor unresolved`.
 
 ```markdown
 ### [Title from document]
@@ -221,7 +217,7 @@ Caution: <text>
 In `past-work` scope, when search cannot help, run Steps 2 to 6 over each of the four directories that exists. If only some kinds errored, run them over that kind's directory only.
 
 - **Patterns.** In each directory, match the frontmatter fields `title:`, `topic:`, `status:`, `type:`, `origin:` and `date:`, and match filenames with a glob on the keywords. Read those fields in Steps 5 and 6; a missing `status` is `unspecified`.
-- **Lifecycle.** Run the Step 4 content search over all four. A `superseded_by` resolves only within the doc's own directory; a path in another of the four stays a named successor, and any other form is `Caution: successor unresolved`.
+- **Lifecycle.** Run the Step 4 content search over all four. Step 4's rule holds in each: a `superseded_by` resolves only within the doc's own directory, a path in another of the four stays a `Successor:` line, and any other form is `Caution: successor unresolved`.
 - **Origin lookups.** To learn whether a plan carried out a brainstorm, grep `docs/plans/` for its path in `origin:`. The proposal counts as implemented only when that plan's recorded status is `completed`.
 
 ## Output Format
@@ -304,19 +300,15 @@ The rules below about content search, patterns, synonyms and narrowing apply to 
 - Take the grep path when search finds nothing, is disabled, errors or does not exist
 - Use the native content-search tool to pre-filter files BEFORE reading any content (critical for 100+ files)
 - Run content searches in PARALLEL, with `title:` and OR patterns for synonyms
-- Use category directories to narrow scope when feature type is clear
-- Do a broader content search if <3 candidates are found, and re-narrow if >25
 - Use one search to find which files mention the lifecycle fields, read each such doc's frontmatter for the values, and resolve superseded docs before scoring
-- Read the critical patterns file only when it exists
 - Prioritize high-severity and critical patterns
-- Note when no relevant learnings exist
 
 **DON'T:**
 - Read a path that may not exist (a category directory, `critical-patterns.md`, a successor) without checking that it exists
 - Return raw document contents (distill instead)
-- Return a superseded doc whose successor resolves. Return its successor. If the successor does not resolve, return the superseded doc with `Caution: successor unresolved`.
+- Return a superseded doc whose successor resolves. Return its successor.
 - Run the grep steps after a search that returned hits, or call the search tool more than once in `solutions` scope, or more than four times in `past-work` scope (one call per kind)
-- Follow a `superseded_by` that is not a repo-root `docs/solutions/` path, and never follow more than 5 hops
+- Follow a `superseded_by` outside the doc's own kind (a link into another of the four directories gets a `Successor:` line instead) or one that fails that kind's form rule, and never follow more than 5 hops
 - Include tangentially related learnings (focus on relevance)
 
 ## Integration Points
