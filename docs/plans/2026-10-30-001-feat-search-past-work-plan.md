@@ -309,7 +309,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 ### Phase A: Evidence and proof
 
-- [ ] U1. Baselines and hygiene
+- [x] U1. Baselines and hygiene
 
 **Goal:** Make every plan parse and keep it that way, and commit the evidence labels and both recorded baselines before any new ranker exists.
 
@@ -352,7 +352,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - `bun scripts/content-integrity.ts` is clean, including the new check run over the real repo once after the five titles are quoted, and `bun run surfaces:affected --run` regenerates whatever the `ce-plan` text change touches (registry and docs reference).
 - Both fixture files are committed, and that commit precedes any change under `src/lib/search-*.ts` or `agents/research/learnings-researcher.md`.
 
-- [ ] U2. Delegated-reach harness against today's solution-only search
+- [x] U2. Delegated-reach harness against today's solution-only search
 
 **Goal:** Show on four host configurations that a dispatched learnings-researcher child really calls `systematic_search` and receives its result, using v3.28.0 search and a planted solution, and learn now whether that is possible.
 
@@ -395,7 +395,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 ### Phase B: Engine
 
-- [ ] U3. Corpus kinds
+- [x] U3. Corpus kinds
 
 **Goal:** Search loads plans, brainstorms and ideation docs, with correct titles, from disk whether or not git tracks them.
 
@@ -435,7 +435,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - `loadCorpus` over this repo loads all 102 plans (the 101 earlier plans plus this one) with no warnings, the primary checkout's brainstorms, the ideation doc and 128 solutions; the solution count and solution recall test are unchanged.
 - The PR records the per-kind unparseable counts.
 
-- [ ] U4. Lifecycle for the new kinds
+- [x] U4. Lifecycle for the new kinds
 
 **Goal:** Status, caution and successor rules are right per kind, and a successor in a different kind stays visible instead of replacing or erasing the requested document.
 
@@ -479,7 +479,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - Solution lifecycle output is unchanged, apart from the one deliberate change (a solution-to-plan link now prints a `Successor:` line), which a test pins and which no solution in the repo triggers today. `tests/unit/search-recall.test.ts` still passes.
 - Every pinned single-kind test in the two unit files is updated to the new truth, with no test deleted to make it pass.
 
-- [ ] U5. The `all` selector and every surface's text
+- [x] U5. The `all` selector and every surface's text
 
 **Goal:** `kind: all` returns one combined ranking that names each hit's kind, reports corpus state per kind, and every tool description and help text names the new kinds.
 
@@ -524,7 +524,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 ### Phase C: Delivery gate and wiring
 
-- [ ] U6. Flip the harness to assert the planted brainstorm through `kind: all`
+- [x] U6. Flip the harness to assert the planted brainstorm through `kind: all`
 
 **Goal:** On all four host configurations, the child's search call uses `kind: all`, and the planted rejected brainstorm appears in the child's tool result and in the parent's final answer.
 
@@ -555,7 +555,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Verification:**
 - All four configurations pass in the CI host-contract jobs; the new pass counts are reflected in the floors and v2 timings through a reviewed diff.
 
-- [ ] U7. Researcher and skill wiring
+- [x] U7. Researcher and skill wiring
 
 **Goal:** learnings-researcher gains the `past-work` scope, and ce:plan, ce:ideate, ce:brainstorm and deepen-plan dispatch it and cite what it surfaces.
 
@@ -600,7 +600,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 
 ### Phase D: Surfaces, docs and measurement
 
-- [ ] U8. Generated surfaces and documentation
+- [x] U8. Generated surfaces and documentation
 
 **Goal:** Every committed generated surface, registry entry and document reflects the widened tools, researcher and skills.
 
