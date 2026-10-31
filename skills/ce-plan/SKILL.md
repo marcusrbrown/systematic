@@ -354,6 +354,7 @@ Ask the user only when the answer materially affects architecture, scope, sequen
 #### 3.1 Title and File Naming
 
 - Draft a clear, searchable title using conventional format such as `feat: Add user authentication` or `fix: Prevent checkout double-submit`
+  - Quote the title in the frontmatter (`title: "feat: Add user authentication"`): a conventional-commit title contains a colon, which YAML reads as a mapping, and the plan then fails to parse
 - Determine the plan type: `feat`, `fix`, or `refactor`
 - Build the filename following the repository convention: `docs/plans/YYYY-MM-DD-NNN-<type>-<descriptive-name>-plan.md`
   - Create `docs/plans/` if it does not exist
@@ -510,7 +511,7 @@ Omit clearly inapplicable optional sections, especially for Lightweight plans.
 
 ```markdown
 ---
-title: [Plan Title]
+title: "[Plan Title]"
 type: [feat|fix|refactor]
 status: active
 date: YYYY-MM-DD

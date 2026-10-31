@@ -1,5 +1,5 @@
 ---
-title: feat: Typed config validation for bundled agent and skill names
+title: "feat: Typed config validation for bundled agent and skill names"
 type: feat
 status: completed
 shipped: PR #384 → v2.15.0

@@ -35,7 +35,7 @@ Both resolvers answer an unresolvable successor the same way. The matched supers
 
 Write each check as a step at the point where the agent acts on a pointer.
 
-1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1942`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:127`, quoted with an elision):
+1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1949`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:127`, quoted with an elision):
 
    ```md
    2. At every hop, before taking the target as the successor, check that it passes the form rule above and that the file exists. [...] A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.

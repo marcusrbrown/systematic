@@ -1,5 +1,5 @@
 ---
-title: fix: Isolate OpenCode integration tests
+title: "fix: Isolate OpenCode integration tests"
 type: fix
 status: completed
 date: 2026-05-14

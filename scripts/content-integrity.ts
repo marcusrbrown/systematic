@@ -346,6 +346,12 @@ export interface StalePlanStatusViolation {
   message: string
 }
 
+export interface PlanFrontmatterViolation {
+  kind: 'unparseable-frontmatter'
+  file: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -373,6 +379,7 @@ export interface CheckResult {
   codemapCompletenessViolations: CodemapCompletenessViolation[]
   libModuleTableCompletenessViolations: LibModuleTableCompletenessViolation[]
   stalePlanStatusViolations: StalePlanStatusViolation[]
+  planFrontmatterViolations: PlanFrontmatterViolation[]
   dispatchArgumentViolations: DispatchArgumentViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -3476,6 +3483,62 @@ export function checkStalePlanStatus(
 }
 
 /**
+ * An unquoted `title:` value is read by YAML as a mapping when it holds a
+ * colon followed by a space, which is what a conventional-commit title
+ * (`feat: Add x`) does. A value that starts with a quote is a quoted scalar.
+ */
+function hasUnquotedColonTitle(content: string): boolean {
+  const block = extractFrontmatterBlock(content)
+  if (block === null) return false
+  for (const line of block.split(/\r?\n/)) {
+    const match = line.match(/^title:[ \t]*(.*)$/)
+    if (!match) continue
+    const value = (match[1] ?? '').trim()
+    return value !== '' && !/^["']/.test(value) && value.includes(': ')
+  }
+  return false
+}
+
+/**
+ * Every file under `docs/plans/` must have frontmatter that parses, because
+ * search skips a document it cannot parse. The parser reports failure only as
+ * a boolean, so the remediation always says to quote values, and it names the
+ * `title` field only when the file has an unquoted title holding a colon and
+ * a space. A file with no frontmatter is not a violation.
+ *
+ * Normalization matches the search loader: strip a leading BOM and make sure
+ * the content ends in a newline, so a closing `---` on the last line counts.
+ */
+export function checkPlanFrontmatterParse(
+  rootDir: string,
+  plansDir = PLANS_DIR,
+): PlanFrontmatterViolation[] {
+  const violations: PlanFrontmatterViolation[] = []
+
+  for (const relPath of collectPlanFiles(rootDir, plansDir)) {
+    const raw = readFileSafe(path.join(rootDir, relPath))
+    if (raw === null) continue
+
+    let content = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+    if (!content.endsWith('\n')) content += '\n'
+
+    if (!parseFrontmatter(content).parseError) continue
+
+    const remediation = hasUnquotedColonTitle(content)
+      ? 'The `title` value has a colon followed by a space, which YAML reads as a mapping. Wrap the title in double quotes, for example `title: "feat: Add x"`.'
+      : 'Fix the YAML syntax, and wrap any value that contains a colon followed by a space in double quotes.'
+
+    violations.push({
+      kind: 'unparseable-frontmatter',
+      file: relPath,
+      message: `${relPath} has frontmatter that does not parse as YAML, so search cannot index it. ${remediation}`,
+    })
+  }
+
+  return violations
+}
+
+/**
  * Strip fenced code blocks (``` or ~~~) from a markdown body string.
  * Returns the body with all fenced regions replaced by empty strings so that
  * literal patterns inside fences are not matched by subsequent scans.
@@ -4047,6 +4110,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   const libModuleTableCompletenessViolations =
     checkLibModuleTableCompleteness(rootDir)
   const stalePlanStatusViolations = checkStalePlanStatus(rootDir)
+  const planFrontmatterViolations = checkPlanFrontmatterParse(rootDir)
   const dispatchArgumentViolations = checkDispatchArguments(
     rootDir,
     targets.markdown,
@@ -4084,6 +4148,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     codemapCompletenessViolations,
     libModuleTableCompletenessViolations,
     stalePlanStatusViolations,
+    planFrontmatterViolations,
     dispatchArgumentViolations,
     exemptHits,
     scanStats: {
@@ -4154,6 +4219,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
     result.libModuleTableCompletenessViolations,
   )
   printStalePlanStatusViolations(result.stalePlanStatusViolations)
+  printPlanFrontmatterViolations(result.planFrontmatterViolations)
   printDispatchArgumentViolations(result.dispatchArgumentViolations)
 
   if (totalViolations(result) === 0) {
@@ -4455,6 +4521,18 @@ function printStalePlanStatusViolations(
   }
 }
 
+function printPlanFrontmatterViolations(
+  violations: readonly PlanFrontmatterViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nPlan frontmatter parse violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(`  [${violation.kind}] ${violation.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -4480,6 +4558,7 @@ function totalViolations(result: CheckResult): number {
     result.codemapCompletenessViolations.length +
     result.libModuleTableCompletenessViolations.length +
     result.stalePlanStatusViolations.length +
+    result.planFrontmatterViolations.length +
     result.dispatchArgumentViolations.length
   )
 }

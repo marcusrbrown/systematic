@@ -1,5 +1,5 @@
 ---
-title: feat: Add Agent Configuration Overlays
+title: "feat: Add Agent Configuration Overlays"
 type: feat
 status: completed
 date: 2026-05-09
