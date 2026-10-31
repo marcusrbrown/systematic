@@ -8,8 +8,15 @@ import {
   MAX_SUCCESSOR_HOPS,
   resolveLifecycle,
   resolveSuccessor,
+  SUCCESSOR_LABEL,
+  successorFormKind,
 } from '../../src/lib/search-core.js'
-import { type CorpusDocument, loadCorpus } from '../../src/lib/search-corpus.js'
+import {
+  type CorpusDocument,
+  type DocumentKind,
+  KIND_TABLE,
+  loadCorpus,
+} from '../../src/lib/search-corpus.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const FIXTURES = path.join(ROOT_DIR, 'tests/fixtures/search-corpus')
@@ -234,5 +241,407 @@ describe('isSuccessorPathForm', () => {
     const byPath = new Map(documents.map((doc) => [doc.path, doc]))
     expect(byPath.has(p('broken-target'))).toBe(false)
     expect(resolveSuccessor(at('skipped-target'), byPath)).toBeUndefined()
+  })
+})
+
+type DocFields = Partial<Omit<CorpusDocument, 'path' | 'kind' | 'title'>>
+
+function made(
+  kind: DocumentKind,
+  name: string,
+  fields: DocFields = {},
+): CorpusDocument {
+  return {
+    path: `${KIND_TABLE[kind].dir}/${name}.md`,
+    kind,
+    title: name,
+    tags: [],
+    module: undefined,
+    component: undefined,
+    problemType: undefined,
+    symptoms: [],
+    appliesWhen: [],
+    status: undefined,
+    supersededBy: { state: 'none' },
+    staleReason: undefined,
+    body: '',
+    ...fields,
+  }
+}
+
+const link = (value: string): CorpusDocument['supersededBy'] => ({
+  state: 'value',
+  value,
+})
+
+/** Resolve `candidates` against `corpus` and describe each entry for comparison. */
+function describeEntries(
+  candidates: readonly CorpusDocument[],
+  corpus: readonly CorpusDocument[],
+) {
+  return resolveLifecycle(candidates, corpus).map((entry) => ({
+    path: entry.document.path,
+    status: entryStatus(entry),
+    lines: lifecycleLines(entry),
+  }))
+}
+
+describe('isSuccessorPathForm: per kind', () => {
+  const cases: Array<[DocumentKind, string, boolean]> = [
+    ['plan', 'docs/plans/a.md', true],
+    ['plan', 'docs/plans/sub/a.md', true],
+    ['plan', 'docs/solutions/a.md', false],
+    ['plan', 'docs/plans/README.md', false],
+    ['plan', 'docs/plans/_archived/a.md', false],
+    ['plan', 'docs/plans/../plans/a.md', false],
+    ['plan', 'docs/plans/a.txt', false],
+    ['brainstorm', 'docs/brainstorms/a-requirements.md', true],
+    ['brainstorm', 'docs/brainstorms/readme.md', false],
+    ['ideation', 'docs/ideation/a.md', true],
+    ['ideation', 'docs/ideation/_archived/a.md', false],
+    ['solution', 'docs/plans/a.md', false],
+    ['solution', 'docs/solutions/critical-patterns.md', false],
+  ]
+  for (const [kind, value, ok] of cases) {
+    it(`${kind}: ${JSON.stringify(value)} is ${ok ? 'accepted' : 'rejected'}`, () => {
+      expect(isSuccessorPathForm(value, kind)).toBe(ok)
+    })
+  }
+
+  it('defaults to the solution form', () => {
+    expect(isSuccessorPathForm('docs/solutions/a.md')).toBe(true)
+    expect(isSuccessorPathForm('docs/plans/a.md')).toBe(false)
+  })
+})
+
+describe('successorFormKind', () => {
+  it('names the kind whose form a link fits, in table order', () => {
+    expect(successorFormKind('docs/solutions/a.md')).toBe('solution')
+    expect(successorFormKind('docs/plans/a.md')).toBe('plan')
+    expect(successorFormKind('docs/brainstorms/a.md')).toBe('brainstorm')
+    expect(successorFormKind('docs/ideation/a.md')).toBe('ideation')
+  })
+
+  it('names nothing for a link that fits no kind', () => {
+    for (const value of [
+      '',
+      '../x.md',
+      '/docs/plans/x.md',
+      'docs/other/x.md',
+      'docs/plans/README.md',
+      'docs/plans/_archived/x.md',
+      'docs/plans/x.txt',
+    ]) {
+      expect(successorFormKind(value)).toBeUndefined()
+    }
+  })
+})
+
+describe('lifecycle for plans, brainstorms and ideation', () => {
+  it('replaces a superseded plan with its completed successor (AE3)', () => {
+    const p1 = made('plan', 'p1', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/p2.md'),
+    })
+    const p2 = made('plan', 'p2', { status: 'completed' })
+    expect(describeEntries([p1], [p1, p2])).toEqual([
+      {
+        path: p2.path,
+        status: 'completed',
+        lines: ['Supersedes: docs/plans/p1.md'],
+      },
+    ])
+  })
+
+  it('keeps a plan whose successor is a solution and prints a Successor line (AE4)', () => {
+    const p1 = made('plan', 'p1', {
+      status: 'superseded',
+      supersededBy: link('docs/solutions/x.md'),
+    })
+    // The solution neither matches the query nor exists in the corpus.
+    expect(describeEntries([p1], [p1])).toEqual([
+      {
+        path: p1.path,
+        status: 'superseded',
+        lines: ['Successor: docs/solutions/x.md'],
+      },
+    ])
+  })
+
+  it('stops a chain at the first cross-kind link and keeps the last same-kind document', () => {
+    const p1 = made('plan', 'p1', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/p2.md'),
+    })
+    const p2 = made('plan', 'p2', {
+      status: 'superseded',
+      supersededBy: link('docs/solutions/x.md'),
+    })
+    expect(describeEntries([p1], [p1, p2])).toEqual([
+      {
+        path: p2.path,
+        status: 'superseded',
+        lines: [
+          'Supersedes: docs/plans/p1.md',
+          'Successor: docs/solutions/x.md',
+        ],
+      },
+    ])
+  })
+
+  it('does not follow a cross-kind link even when the target is loaded and superseded', () => {
+    const p1 = made('plan', 'p1', {
+      status: 'superseded',
+      supersededBy: link('docs/brainstorms/b.md'),
+    })
+    const b = made('brainstorm', 'b', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/p1.md'),
+    })
+    expect(describeEntries([p1, b], [p1, b])).toEqual([
+      {
+        path: p1.path,
+        status: 'superseded',
+        lines: ['Successor: docs/brainstorms/b.md'],
+      },
+      {
+        path: b.path,
+        status: 'superseded',
+        lines: ['Successor: docs/plans/p1.md'],
+      },
+    ])
+  })
+
+  it('keeps a solution whose successor is a plan and prints a Successor line', () => {
+    const s = made('solution', 's', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/p.md'),
+    })
+    const entries = describeEntries([s], [s])
+    expect(entries).toEqual([
+      {
+        path: s.path,
+        status: 'superseded',
+        lines: ['Successor: docs/plans/p.md'],
+      },
+    ])
+    expect(entries[0]?.lines.join('\n')).not.toContain('Caution')
+  })
+
+  it('prints a mutual cross-kind pair without a caution', () => {
+    const s = made('solution', 's', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/p.md'),
+    })
+    const p = made('plan', 'p', {
+      status: 'superseded',
+      supersededBy: link('docs/solutions/s.md'),
+    })
+    for (const entry of describeEntries([s, p], [s, p])) {
+      expect(entry.lines).toHaveLength(1)
+      expect(entry.lines[0]?.startsWith('Successor: ')).toBe(true)
+    }
+  })
+
+  it('merges two superseded plans into one successor with sorted paths', () => {
+    const a = made('plan', 'a', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/z.md'),
+    })
+    const b = made('plan', 'b', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/z.md'),
+    })
+    const z = made('plan', 'z', { status: 'completed' })
+    expect(describeEntries([b, a], [a, b, z])).toEqual([
+      {
+        path: z.path,
+        status: 'completed',
+        lines: ['Supersedes: docs/plans/a.md, docs/plans/b.md'],
+      },
+    ])
+  })
+
+  it('merges a successor that is also a direct hit at the better rank', () => {
+    const a = made('plan', 'a', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/z.md'),
+    })
+    const other = made('plan', 'other')
+    const z = made('plan', 'z', { status: 'completed' })
+    const entries = resolveLifecycle([z, other, a], [a, other, z])
+    expect(entries.map((entry) => entry.document.path)).toEqual([
+      z.path,
+      other.path,
+    ])
+    expect(entries[0]?.supersedes).toEqual([a.path])
+  })
+
+  it('shows a cross-kind link on a document that is also a direct hit once', () => {
+    const p1 = made('plan', 'p1', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/p2.md'),
+    })
+    const p2 = made('plan', 'p2', {
+      status: 'superseded',
+      supersededBy: link('docs/solutions/x.md'),
+    })
+    const entries = describeEntries([p2, p1], [p1, p2])
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.lines).toEqual([
+      'Supersedes: docs/plans/p1.md',
+      'Successor: docs/solutions/x.md',
+    ])
+  })
+
+  it('counts a cross-kind link as a hop and refuses a chain of six', () => {
+    const chain = Array.from({ length: 6 }, (_, index) =>
+      made('plan', `c${index}`, {
+        status: 'superseded',
+        supersededBy: link(
+          index === 5 ? 'docs/solutions/x.md' : `docs/plans/c${index + 1}.md`,
+        ),
+      }),
+    )
+    // c0 reaches the cross-kind link of c5 on its sixth link: unresolved.
+    const head = chain[0] as CorpusDocument
+    const tail = chain[5] as CorpusDocument
+    const [first] = describeEntries([head], chain)
+    expect(first).toEqual({
+      path: head.path,
+      status: 'superseded',
+      lines: ['Caution: successor unresolved'],
+    })
+    // c1 reaches it on its fifth link: resolved with a Successor line.
+    const [second] = describeEntries([chain[1] as CorpusDocument], chain)
+    expect(second).toEqual({
+      path: tail.path,
+      status: 'superseded',
+      lines: ['Supersedes: docs/plans/c1.md', 'Successor: docs/solutions/x.md'],
+    })
+  })
+
+  it('treats a cycle and a self-link as unresolved', () => {
+    const a = made('plan', 'a', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/b.md'),
+    })
+    const b = made('plan', 'b', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/a.md'),
+    })
+    const self = made('plan', 'self', {
+      status: 'superseded',
+      supersededBy: link('docs/plans/self.md'),
+    })
+    for (const entry of describeEntries([a, self], [a, b, self])) {
+      expect(entry.lines).toEqual(['Caution: successor unresolved'])
+      expect(entry.status).toBe('superseded')
+    }
+  })
+
+  it('matches superseded and stale case-insensitively for the new kinds', () => {
+    const old = made('plan', 'old', {
+      status: ' Superseded ',
+      supersededBy: link('docs/plans/new.md'),
+    })
+    const fresh = made('plan', 'new', { status: 'Completed' })
+    expect(describeEntries([old], [old, fresh])).toEqual([
+      {
+        path: fresh.path,
+        status: 'Completed',
+        lines: ['Supersedes: docs/plans/old.md'],
+      },
+    ])
+    const stale = made('brainstorm', 'b', {
+      status: 'STALE',
+      staleReason: 'replaced by a newer idea',
+    })
+    expect(describeEntries([stale], [stale])).toEqual([
+      {
+        path: stale.path,
+        status: 'STALE',
+        lines: ['Caution: marked stale: replaced by a newer idea'],
+      },
+    ])
+  })
+
+  it('keeps the exact match for solutions', () => {
+    const old = made('solution', 'old', {
+      status: 'Superseded',
+      supersededBy: link('docs/solutions/new.md'),
+    })
+    const fresh = made('solution', 'new')
+    expect(describeEntries([old], [old, fresh])).toEqual([
+      { path: old.path, status: 'active', lines: [] },
+    ])
+    const stale = made('solution', 'stale', { status: 'Stale' })
+    expect(describeEntries([stale], [stale])).toEqual([
+      { path: stale.path, status: 'active', lines: [] },
+    ])
+  })
+
+  it('shows the recorded status raw, or unspecified when there is none', () => {
+    const cases: Array<[CorpusDocument, string]> = [
+      [made('brainstorm', 'a', { status: 'deferred' }), 'deferred'],
+      [made('ideation', 'b'), 'unspecified'],
+      [made('plan', 'c', { status: 'Completed' }), 'Completed'],
+      [made('plan', 'd', { status: '   ' }), 'unspecified'],
+      [made('plan', 'e', { status: 'x'.repeat(50) }), 'x'.repeat(50)],
+    ]
+    for (const [doc, shown] of cases) {
+      expect(describeEntries([doc], [doc])).toEqual([
+        { path: doc.path, status: shown, lines: [] },
+      ])
+    }
+  })
+
+  it('treats archived as an ordinary status: no successor handling and no caution', () => {
+    const archived = made('plan', 'a', {
+      status: 'archived',
+      supersededBy: link('docs/plans/b.md'),
+    })
+    const b = made('plan', 'b')
+    expect(describeEntries([archived], [archived, b])).toEqual([
+      { path: archived.path, status: 'archived', lines: [] },
+    ])
+  })
+
+  it('keeps a superseded document with no or a malformed link, with a caution', () => {
+    const values: Array<CorpusDocument['supersededBy']> = [
+      { state: 'none' },
+      { state: 'invalid' },
+      link(''),
+      link('../x.md'),
+      link('docs/plans/README.md'),
+      link('docs/plans/_archived/x.md'),
+      link('/docs/plans/x.md'),
+      link('docs/other/x.md'),
+      link('docs/plans/missing.md'),
+    ]
+    for (const supersededBy of values) {
+      const doc = made('plan', 'p', { status: 'superseded', supersededBy })
+      expect(describeEntries([doc], [doc])).toEqual([
+        {
+          path: doc.path,
+          status: 'superseded',
+          lines: ['Caution: successor unresolved'],
+        },
+      ])
+    }
+  })
+
+  it('does not check that a cross-kind target exists', () => {
+    const p = made('plan', 'p', {
+      status: 'superseded',
+      supersededBy: link('docs/brainstorms/never-written.md'),
+    })
+    expect(describeEntries([p], [p])[0]?.lines).toEqual([
+      'Successor: docs/brainstorms/never-written.md',
+    ])
+  })
+
+  it('exports the Successor label', () => {
+    expect(SUCCESSOR_LABEL).toBe('Successor:')
   })
 })

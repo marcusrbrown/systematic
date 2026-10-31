@@ -399,6 +399,45 @@ describe('renderSearchResult: sanitising', () => {
   })
 })
 
+describe('renderSearchResult: Successor lines', () => {
+  const lineFor = (path: string) =>
+    renderSearchResult(
+      makeResult({
+        hits: [makeHit(1, { lifecycle: [`Successor: ${path}`] })],
+      }),
+    )
+      .split('\n')
+      .find((line) => line.includes('Successor:'))
+
+  it('prints the successor path as given', () => {
+    expect(lineFor('docs/plans/next.md')).toBe(
+      '   Successor: docs/plans/next.md',
+    )
+  })
+
+  it('strips terminal escapes and control characters from the path', () => {
+    const line = lineFor(`docs/plans/${ESC}[31mred${ESC}[0m${NUL}\nx.md`)
+    expect(line).toBe('   Successor: docs/plans/red x.md')
+    expect(hasControlCharacter(line ?? '')).toBe(false)
+  })
+
+  it('caps one path at 400 characters, not the whole result', () => {
+    const line = lineFor(`docs/plans/${'p'.repeat(600)}.md`) ?? ''
+    expect(line.startsWith('   Successor: docs/plans/')).toBe(true)
+    expect(line.length).toBe('   Successor: '.length + 400)
+    expect(line.endsWith('…')).toBe(true)
+  })
+
+  it('prints a recorded status of any value, clipped to 40 characters', () => {
+    const text = renderSearchResult(
+      makeResult({
+        hits: [makeHit(1, { status: 'x'.repeat(50) })],
+      }),
+    )
+    expect(text).toContain(`Status: ${'x'.repeat(39)}…`)
+  })
+})
+
 describe('renderSearchResult: 16 KB cap', () => {
   it('ends in the marker and stays within 16,384 bytes with 20 long hits', () => {
     const hits = Array.from({ length: 20 }, (_, i) =>

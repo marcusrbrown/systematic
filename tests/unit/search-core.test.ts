@@ -457,6 +457,100 @@ describe('runSearch: lifecycle through the full pipeline', () => {
   })
 })
 
+describe('runSearch: lifecycle across kinds', () => {
+  function writeKindDoc(
+    root: string,
+    relative: string,
+    frontmatter: string,
+    body = 'Body text.',
+  ): void {
+    const target = path.join(root, relative)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, `---\n${frontmatter}\n---\n\n${body}\n`)
+  }
+
+  it('replaces a superseded plan with its completed successor', async () => {
+    const root = makeProject()
+    writeKindDoc(
+      root,
+      'docs/plans/p1.md',
+      'title: Quartz rollout\nstatus: superseded\nsuperseded_by: docs/plans/p2.md',
+    )
+    writeKindDoc(
+      root,
+      'docs/plans/p2.md',
+      'title: Rollout, second attempt\nstatus: completed',
+    )
+    const response = await search(root, 'quartz', { kind: 'plan' })
+    expect(pathsOf(response)).toEqual(['docs/plans/p2.md'])
+    expect(response.text).toContain('Status: completed')
+    expect(response.text).toContain('Supersedes: docs/plans/p1.md')
+  })
+
+  it('keeps a superseded plan visible when its successor is a solution', async () => {
+    const root = makeProject()
+    writeKindDoc(
+      root,
+      'docs/plans/p1.md',
+      'title: Quartz rollout\nstatus: superseded\nsuperseded_by: docs/solutions/never-written.md',
+    )
+    const response = await search(root, 'quartz', { kind: 'plan' })
+    expect(pathsOf(response)).toEqual(['docs/plans/p1.md'])
+    expect(response.text).toContain('Status: superseded')
+    expect(response.text).toContain(
+      'Successor: docs/solutions/never-written.md',
+    )
+    expect(response.text).not.toContain('Caution:')
+  })
+
+  it('prints a Successor line for a solution superseded by a plan', async () => {
+    const root = makeProject()
+    writeDoc(
+      root,
+      'old.md',
+      'title: Quartz fix\nstatus: superseded\nsuperseded_by: docs/plans/p.md',
+    )
+    const response = await search(root, 'quartz')
+    expect(pathsOf(response)).toEqual(['docs/solutions/old.md'])
+    expect(response.text).toContain('Successor: docs/plans/p.md')
+    expect(response.text).not.toContain('Caution:')
+  })
+
+  it('prints recorded status raw for the new kinds and unspecified when absent', async () => {
+    const root = makeProject()
+    writeKindDoc(
+      root,
+      'docs/brainstorms/b.md',
+      'topic: Quartz idea\nstatus: deferred',
+    )
+    writeKindDoc(root, 'docs/ideation/i.md', 'topic: Quartz survey')
+    writeKindDoc(
+      root,
+      'docs/plans/p.md',
+      'title: Quartz plan\nstatus: Completed',
+    )
+    const lines = async (kind: string) =>
+      (await search(root, 'quartz', { kind })).text
+        .split('\n')
+        .filter((line) => line.includes('Status:'))
+    expect(await lines('brainstorm')).toEqual([
+      '   Title: Quartz idea | Kind: brainstorm | Status: deferred',
+    ])
+    expect(await lines('ideation')).toEqual([
+      '   Title: Quartz survey | Kind: ideation | Status: unspecified',
+    ])
+    expect(await lines('plan')).toEqual([
+      '   Title: Quartz plan | Kind: plan | Status: Completed',
+    ])
+  })
+
+  it('still prints active for a solution with no status', async () => {
+    const root = makeProject()
+    writeDoc(root, 'a.md', 'title: Quartz fix')
+    expect((await search(root, 'quartz')).text).toContain('Status: active')
+  })
+})
+
 describe('runSearch: lifecycle merges and the limit', () => {
   it('returns limit hits when many superseded docs share one successor, and lists every one under Supersedes:', async () => {
     const root = makeProject()

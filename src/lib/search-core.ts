@@ -10,9 +10,11 @@
  * This module also owns the `SearchSettings` type, the tool name and argument
  * constants, and the lifecycle constants and resolver. The resolver follows
  * the learnings-researcher's rules: at most 5 hops, a visited set, and a form
- * rule for the successor path. A superseded doc whose successor cannot be
- * resolved is returned at its own rank with `Caution: successor unresolved`.
- * Nothing is dropped.
+ * rule for the successor path. A successor resolves within a kind and is only
+ * shown across kinds: a link into another kind's directory ends the walk at the
+ * last same-kind document with a `Successor:` line. A superseded doc whose
+ * successor cannot be resolved is returned at its own rank with
+ * `Caution: successor unresolved`. Nothing is dropped.
  */
 
 import {
@@ -37,12 +39,13 @@ import {
   type SearchHit,
   type SearchHitStatus,
   type SearchResult,
+  SUCCESSOR_LABEL,
   SUPERSEDES_LABEL,
   sanitizeInline,
 } from './search-render.js'
 
 export type { SearchHit, SearchResult } from './search-render.js'
-export { SUPERSEDES_LABEL }
+export { SUCCESSOR_LABEL, SUPERSEDES_LABEL }
 
 /** Tool name shared by every host surface. */
 export const SEARCH_TOOL_NAME = 'systematic_search'
@@ -82,12 +85,15 @@ export const SEARCH_CONFIG_UNREADABLE_NOTE = 'config unreadable'
 
 /** Most `superseded_by` links followed from one candidate. */
 export const MAX_SUCCESSOR_HOPS = 5
-/** A successor path must start with this and name a loaded file. */
+/** A solution successor path must start with this and name a loaded file. */
 export const SUCCESSOR_PATH_PREFIX = `${KIND_TABLE.solution.dir}/`
 export const CAUTION_LABEL = 'Caution:'
 export const SUCCESSOR_UNRESOLVED_TEXT = 'successor unresolved'
 export const STALE_CAUTION_TEXT = 'marked stale'
 const MAX_STALE_REASON_CHARS = 200
+/** Printed for a plan, brainstorm or ideation hit that records no status. */
+const UNSPECIFIED_STATUS = 'unspecified'
+const DOCUMENT_KINDS = Object.keys(KIND_TABLE).filter(isDocumentKind)
 
 /** Fixed validation errors. They never echo the rejected value. */
 export const SEARCH_ERRORS = {
@@ -127,44 +133,129 @@ export type SearchResponse =
   | { readonly ok: true; readonly text: string; readonly result: SearchResult }
   | { readonly ok: false; readonly text: string }
 
-/** Whether a `superseded_by` value has the shape of a repo-root solution path. */
-export function isSuccessorPathForm(value: string): boolean {
-  if (!value.startsWith(SUCCESSOR_PATH_PREFIX)) return false
+/**
+ * Whether a `superseded_by` value has the shape of a repo-root path into
+ * `kind`: that kind's directory, a `.md` file, no `..` segment, and neither an
+ * excluded file name nor an excluded directory. Every part comes from the
+ * kind's table entry.
+ */
+export function isSuccessorPathForm(
+  value: string,
+  kind: DocumentKind = 'solution',
+): boolean {
+  const spec = KIND_TABLE[kind]
+  if (!value.startsWith(`${spec.dir}/`)) return false
   if (!value.endsWith('.md')) return false
   const segments = value.split('/')
   if (segments.includes('..')) return false
   const name = segments[segments.length - 1]?.toLowerCase()
-  if (name === 'readme.md') return false
-  if (segments.includes('_archived')) return false
-  return true
+  if (
+    name !== undefined &&
+    (spec.excludedFiles as readonly string[]).includes(name)
+  ) {
+    return false
+  }
+  return !segments.some((segment) =>
+    (spec.excludedDirs as readonly string[]).includes(segment),
+  )
+}
+
+/** The first kind, in table order, whose form rule the link fits. */
+export function successorFormKind(value: string): DocumentKind | undefined {
+  return DOCUMENT_KINDS.find((kind) => isSuccessorPathForm(value, kind))
 }
 
 /**
- * Follow a superseded document's `superseded_by` chain. Returns the first
- * document that is not superseded, or `undefined` when the chain is
- * unresolvable: a link that is not a string, fails the form rule, names a file
- * outside the loaded corpus, revisits a document, or is still superseded after
- * `MAX_SUCCESSOR_HOPS` links.
+ * Solutions compare their lifecycle status exactly, as they always have. The
+ * other kinds were written by hand with mixed case and stray spaces, so their
+ * `superseded` and `stale` triggers compare trimmed and lower-cased.
+ */
+function hasStatus(
+  document: CorpusDocument,
+  wanted: 'superseded' | 'stale',
+): boolean {
+  if (document.status === undefined) return false
+  if (document.kind === 'solution') return document.status === wanted
+  return document.status.trim().toLowerCase() === wanted
+}
+
+type SuccessorWalk =
+  | { readonly outcome: 'unresolved' }
+  | {
+      readonly outcome: 'resolved'
+      /** The first document that is not superseded, or the last same-kind one before a cross-kind link. */
+      readonly document: CorpusDocument
+      /** The cross-kind link the walk stopped at, if any. */
+      readonly successorPath: string | undefined
+    }
+
+type SuccessorHop =
+  | SuccessorWalk
+  /** The link names a superseded same-kind document: keep walking from it. */
+  | { readonly outcome: 'continue'; readonly next: CorpusDocument }
+
+/** Read one `superseded_by` link of `current` and decide what it means. */
+function stepSuccessor(
+  current: CorpusDocument,
+  byPath: ReadonlyMap<string, CorpusDocument>,
+  visited: Set<string>,
+): SuccessorHop {
+  const link = current.supersededBy
+  if (link.state !== 'value') return { outcome: 'unresolved' }
+  if (!isSuccessorPathForm(link.value, current.kind)) {
+    if (successorFormKind(link.value) === undefined) {
+      return { outcome: 'unresolved' }
+    }
+    return { outcome: 'resolved', document: current, successorPath: link.value }
+  }
+  const target = byPath.get(link.value)
+  if (target === undefined || visited.has(target.path)) {
+    return { outcome: 'unresolved' }
+  }
+  visited.add(target.path)
+  if (hasStatus(target, 'superseded'))
+    return { outcome: 'continue', next: target }
+  return { outcome: 'resolved', document: target, successorPath: undefined }
+}
+
+/**
+ * Follow a superseded document's `superseded_by` chain. Each hop reads the
+ * current document's link, and it must be a string. A link that fits the
+ * current document's own kind has to name a loaded file of that kind that has
+ * not been visited; a target that is not superseded ends the walk. A link that
+ * fits another kind ends the walk at the current document without any
+ * existence check, and the link is reported as `successorPath`. A link that
+ * fits no kind, or a walk still superseded after `MAX_SUCCESSOR_HOPS` links, is
+ * unresolved.
+ */
+function walkSuccessors(
+  candidate: CorpusDocument,
+  byPath: ReadonlyMap<string, CorpusDocument>,
+): SuccessorWalk {
+  const visited = new Set<string>([candidate.path])
+  let current = candidate
+  for (let hop = 1; hop <= MAX_SUCCESSOR_HOPS; hop++) {
+    const step = stepSuccessor(current, byPath, visited)
+    if (step.outcome !== 'continue') return step
+    current = step.next
+  }
+  return { outcome: 'unresolved' }
+}
+
+/**
+ * The document that replaces a superseded one, or `undefined` when the chain is
+ * unresolvable or ends at a link into another kind (that case replaces
+ * nothing: the walk keeps the last same-kind document and reports the link).
  */
 export function resolveSuccessor(
   candidate: CorpusDocument,
   byPath: ReadonlyMap<string, CorpusDocument>,
 ): CorpusDocument | undefined {
-  const visited = new Set<string>([candidate.path])
-  let current = candidate
-  for (let hop = 1; hop <= MAX_SUCCESSOR_HOPS; hop++) {
-    const link = current.supersededBy
-    if (link.state !== 'value' || !isSuccessorPathForm(link.value)) {
-      return undefined
-    }
-    if (visited.has(link.value)) return undefined
-    const target = byPath.get(link.value)
-    if (target === undefined) return undefined
-    visited.add(target.path)
-    if (target.status !== 'superseded') return target
-    current = target
+  const walk = walkSuccessors(candidate, byPath)
+  if (walk.outcome !== 'resolved' || walk.successorPath !== undefined) {
+    return undefined
   }
-  return undefined
+  return walk.document
 }
 
 export interface ResolvedEntry {
@@ -174,6 +265,8 @@ export interface ResolvedEntry {
   readonly supersedes: readonly string[]
   /** True for a superseded document returned because its successor is unresolved. */
   readonly unresolved: boolean
+  /** The link into another kind that ended the walk at `document`, if any. */
+  readonly successor: string | undefined
 }
 
 function compareCodeUnits(a: string, b: string): number {
@@ -185,8 +278,9 @@ function compareCodeUnits(a: string, b: string): number {
  * Resolve the lifecycle of a ranked list, best first. A superseded candidate
  * is replaced by its successor; a successor takes the best rank among itself
  * and the documents it replaces; duplicates merge. An unresolvable superseded
- * candidate stays at its own rank. `documents` is the whole loaded corpus,
- * because a successor does not have to be a match.
+ * candidate stays at its own rank, and so does one whose successor is in
+ * another kind (with that link attached). `documents` is the whole loaded
+ * corpus, because a successor does not have to be a match.
  */
 export function resolveLifecycle(
   ranked: readonly CorpusDocument[],
@@ -196,24 +290,31 @@ export function resolveLifecycle(
   const order: string[] = []
   const entries = new Map<
     string,
-    { document: CorpusDocument; replaced: Set<string>; unresolved: boolean }
+    {
+      document: CorpusDocument
+      replaced: Set<string>
+      unresolved: boolean
+      successor: string | undefined
+    }
   >()
 
   for (const candidate of ranked) {
     let target = candidate
     let replaces: string | undefined
     let unresolved = false
-    if (candidate.status === 'superseded') {
-      const successor = resolveSuccessor(candidate, byPath)
-      if (successor === undefined) unresolved = true
+    let successor: string | undefined
+    if (hasStatus(candidate, 'superseded')) {
+      const walk = walkSuccessors(candidate, byPath)
+      if (walk.outcome === 'unresolved') unresolved = true
       else {
-        target = successor
-        replaces = candidate.path
+        target = walk.document
+        successor = walk.successorPath
+        if (target.path !== candidate.path) replaces = candidate.path
       }
     }
     let entry = entries.get(target.path)
     if (entry === undefined) {
-      entry = { document: target, replaced: new Set(), unresolved }
+      entry = { document: target, replaced: new Set(), unresolved, successor }
       entries.set(target.path, entry)
       order.push(target.path)
     }
@@ -228,25 +329,40 @@ export function resolveLifecycle(
         document: entry.document,
         supersedes: [...entry.replaced].sort(compareCodeUnits),
         unresolved: entry.unresolved,
+        successor: entry.successor,
       },
     ]
   })
 }
 
+/**
+ * The status a hit prints. A solution keeps its three computed values. The
+ * other kinds print the recorded status as written, or `unspecified`.
+ */
 export function entryStatus(entry: ResolvedEntry): SearchHitStatus {
-  if (entry.unresolved) return 'superseded'
-  return entry.document.status === 'stale' ? 'stale' : 'active'
+  const { document } = entry
+  if (document.kind !== 'solution') {
+    const { status } = document
+    return status !== undefined && status.trim() !== ''
+      ? status
+      : UNSPECIFIED_STATUS
+  }
+  if (entry.unresolved || entry.successor !== undefined) return 'superseded'
+  return document.status === 'stale' ? 'stale' : 'active'
 }
 
-/** The `Supersedes:` and `Caution:` lines for one entry, in print order. */
+/** The `Supersedes:`, `Successor:` and `Caution:` lines for one entry, in print order. */
 export function lifecycleLines(entry: ResolvedEntry): string[] {
   const lines: string[] = []
   if (entry.supersedes.length > 0) {
     lines.push(`${SUPERSEDES_LABEL} ${entry.supersedes.join(', ')}`)
   }
+  if (entry.successor !== undefined) {
+    lines.push(`${SUCCESSOR_LABEL} ${entry.successor}`)
+  }
   if (entry.unresolved) {
     lines.push(`${CAUTION_LABEL} ${SUCCESSOR_UNRESOLVED_TEXT}`)
-  } else if (entry.document.status === 'stale') {
+  } else if (hasStatus(entry.document, 'stale')) {
     const reason = sanitizeInline(
       entry.document.staleReason ?? '',
       MAX_STALE_REASON_CHARS,

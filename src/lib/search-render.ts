@@ -24,6 +24,8 @@ export const MAX_SNIPPET_CHARS = 240
 export const MAX_WARNINGS = 5
 /** The lifecycle line that lists the docs a successor replaces. */
 export const SUPERSEDES_LABEL = 'Supersedes:'
+/** The lifecycle line that names a successor in another kind. Information, not a caution. */
+export const SUCCESSOR_LABEL = 'Successor:'
 
 const MAX_TAG_CHARS = 64
 const MAX_MODULE_CHARS = 120
@@ -36,14 +38,18 @@ const MAX_PATH_CHARS = 400
 const MAX_LABEL_CHARS = 40
 const ELLIPSIS = '…'
 
-export type SearchHitStatus = 'active' | 'stale' | 'superseded'
+/**
+ * The status a hit prints. A solution gets `active`, `stale` or `superseded`;
+ * the other kinds get the recorded value as written, or `unspecified`.
+ */
+export type SearchHitStatus = string
 
 export interface SearchHit {
   /** 1-based position in the final list. */
   readonly rank: number
   readonly document: CorpusDocument
   readonly status: SearchHitStatus
-  /** Fully formed `Supersedes:` and `Caution:` lines, in print order. */
+  /** Fully formed `Supersedes:`, `Successor:` and `Caution:` lines, in print order. */
   readonly lifecycle: readonly string[]
 }
 
@@ -319,20 +325,25 @@ function renderHeader(result: SearchResult): string {
 /**
  * One lifecycle line. A `Supersedes:` line lists every predecessor path, so it
  * is sanitized and capped per path: a successor that replaces many docs keeps
- * all of them, and only the overall 16 KB cut bounds the total. Any other line
+ * all of them, and only the overall 16 KB cut bounds the total. A `Successor:`
+ * line names one path, sanitized and capped the same way. Any other line
  * (`Caution:`) keeps one cap for the whole line.
  */
 function renderLifecycleLine(line: string): string {
-  const prefix = `${SUPERSEDES_LABEL} `
-  if (!line.startsWith(prefix)) {
-    return sanitizeInline(line, MAX_LIFECYCLE_LINE_CHARS)
+  const supersedes = `${SUPERSEDES_LABEL} `
+  if (line.startsWith(supersedes)) {
+    const paths = line
+      .slice(supersedes.length)
+      .split(', ')
+      .map((path) => sanitizeInline(path, MAX_PATH_CHARS))
+      .filter((path) => path !== '')
+    return `${supersedes}${paths.join(', ')}`
   }
-  const paths = line
-    .slice(prefix.length)
-    .split(', ')
-    .map((path) => sanitizeInline(path, MAX_PATH_CHARS))
-    .filter((path) => path !== '')
-  return `${prefix}${paths.join(', ')}`
+  const successor = `${SUCCESSOR_LABEL} `
+  if (line.startsWith(successor)) {
+    return `${successor}${sanitizeInline(line.slice(successor.length), MAX_PATH_CHARS)}`
+  }
+  return sanitizeInline(line, MAX_LIFECYCLE_LINE_CHARS)
 }
 
 function renderHit(hit: SearchHit, queryTerms: readonly string[]): string[] {
