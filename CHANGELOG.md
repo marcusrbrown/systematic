@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.29.0](https://github.com/marcusrbrown/systematic/compare/v3.28.1...v3.29.0) (2026-10-31)
+
+### Features
+
+* search past plans, brainstorms and ideation ([#1269](https://github.com/marcusrbrown/systematic/issues/1269)) ([da65914](https://github.com/marcusrbrown/systematic/commit/da6591409a4dc8854c08a7d60d370699fe405aaf))
+
 ## [3.28.1](https://github.com/marcusrbrown/systematic/compare/v3.28.0...v3.28.1) (2026-10-31)
 
 ### Bug Fixes
