@@ -50,7 +50,7 @@ From the feature/task description, identify:
 
 **Call it once**, with the problem description as the query and `kind` set to `solution`. With the tool, call `systematic_search({ query: "<description>", kind: "solution" })`. With the command, run `systematic-search --kind solution -- '<description>'` with single quotes removed from the description first. Write the query as symptoms, error text, module names and the topic, as a person would type them. Use the default limit.
 
-**Past-work scope.** Make exactly two calls and merge the hits by repo-root path: `systematic_search({ query: "<description>", kind: "all", limit: 12 })`, then the same with `kind: "solution"`. With the command, pass `--kind all --limit 12`, then `--kind solution`. Route on the first reply, and skip the second call when it routes to Step 2 or to "No Matches". The second call only adds hits: a `none`, `empty`, zero-hit or `Error:` reply from it changes nothing.
+**Past-work scope.** Make one search per kind, `solution`, `plan`, `brainstorm` and `ideation`, and merge the hits by repo-root path: `systematic_search({ query: "<description>", kind: "<kind>", limit: 5 })`. With the command, pass `--kind <kind> --limit 5`. Never search `all`: long plans crowd the other kinds out of its top results. A `none`, `empty`, zero-hit or `Error:` reply from one kind adds nothing. Route on the merged hits.
 
 **Read the reply, then pick one path.** Read the header from the line that starts with `Search "`. On the command path, warnings can print before it.
 
@@ -58,10 +58,9 @@ In overlap mode (the caller asks for an overlap assessment against a new doc), d
 
 | Reply | Path |
 |-------|------|
-| The header says `corpus: none` | Stop and return the "No Matches" result, saying the project has no solutions directory yet (past-work: none of the four exists). This is not an error. Do not run the grep steps. A `could not read docs/solutions` warning under the header means the directory exists but cannot be read; report that warning too. |
-| The header says `corpus: empty` | Run Step 3b first. Search leaves out `critical-patterns.md`, so a project whose only doc is that file reports `empty`. Then return the "No Matches" result, saying the project has no indexable docs, together with any relevant critical patterns in the Critical Patterns section. This is not an error. Do not run the grep steps. |
-| The header ends `Corpus:` with a token per kind (`solution none, plan 102, brainstorm none, ideation 1`): a count, `none` or `empty` | Past-work. A `none` or `empty` kind is absent, which is not a stop while another kind has docs. Then use the `N doc(s), M hit(s)` rows. |
-| The reply ends with `[Systematic: search output truncated at 16 KB]` | Past-work. Results were cut: say so, and tell the caller to narrow the query. Do not repeat the call. |
+| The header says `corpus: none` | Stop and return the "No Matches" result, saying the project has no solutions directory yet. This is not an error. Do not run the grep steps. A `could not read docs/solutions` warning under the header means the directory exists but cannot be read; report that warning too. Past-work: that kind adds nothing and is not a stop while another kind has docs; stop only when all four say `none`. |
+| The header says `corpus: empty` | Run Step 3b first. Search leaves out `critical-patterns.md`, so a project whose only doc is that file reports `empty`. Then return the "No Matches" result, saying the project has no indexable docs, together with any relevant critical patterns in the Critical Patterns section. This is not an error. Do not run the grep steps. Past-work: that kind adds nothing; take this row only when no kind has docs. |
+| The reply ends with `[Systematic: search output truncated at 16 KB]` | Past-work. Results were cut: say so, and tell the caller to narrow the query. Do not repeat that call. |
 | The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular), and at least one hit remains after the overlap-mode drop | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
 | The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`), or in overlap mode no hit remains after the drop | Grep path. Go to Step 2. |
 | The reply says `No project directory is available` | Grep path. Go to Step 2. |

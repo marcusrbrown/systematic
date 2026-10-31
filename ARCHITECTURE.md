@@ -268,8 +268,10 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    identical on Bun and Node. Each host reaches the one `search-core.ts` composition, so every
    surface returns the same text. The learnings-researcher calls search first and falls back to its
    grep steps when search has no hits, is disabled, errors or is absent. Its default scope is
-   `solutions`; with `scope: past-work` it makes one `all` call and one `solution` call and groups
-   the merged hits by recorded status, and its overlap mode stays on `solutions`.
+   `solutions`; with `scope: past-work` it makes one search per kind (`solution`, `plan`,
+   `brainstorm`, `ideation`, 5 hits each) and never searches `all`, because long plans crowd the
+   other kinds out of the top results. It groups the merged hits by kind and recorded status, and
+   its overlap mode stays on `solutions`.
 
 ## Data Flow
 

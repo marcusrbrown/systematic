@@ -94,25 +94,47 @@ describe('learnings-researcher Step 0 under past-work', () => {
 describe('learnings-researcher Step 1b under past-work', () => {
   const step1b = section(RESEARCHER, '### Step 1b')
 
-  test('past-work makes exactly two calls, kind all then kind solution, merged by path', () => {
-    expect(step1b).toMatch(/exactly two/i)
-    expect(step1b).toMatch(/kind: "all"/)
-    expect(step1b).toMatch(/kind: "solution"/)
-    expect(step1b).toMatch(/by (repo-root )?path/i)
+  const calls = paragraph(step1b, '**Past-work scope.**')
+
+  test('past-work makes one search per kind, merged by path', () => {
+    expect(calls).toMatch(/one search per kind/i)
+    for (const kind of ['solution', 'plan', 'brainstorm', 'ideation']) {
+      expect(calls).toContain(`\`${kind}\``)
+    }
+    expect(calls).toMatch(/by (repo-root )?path/i)
   })
 
-  test('each call asks for at most 12 results', () => {
-    expect(step1b).toMatch(/limit: 12/)
+  test('each per-kind call asks for at most 5 results', () => {
+    expect(calls).toContain('limit: 5')
+    expect(calls).toContain('--limit 5')
+    expect(calls).not.toMatch(/limit:? 12/)
   })
 
-  test('the routing table has a per-kind header row that does not stop on a missing kind', () => {
-    const row = step1b
+  test('the researcher never searches kind all, with the tool or the command', () => {
+    for (const text of [calls, step1b, RESEARCHER]) {
+      expect(text).not.toMatch(/kind: "?all"?/)
+      expect(text).not.toMatch(/--kind all/)
+    }
+  })
+
+  const tableRow = (needle: string) =>
+    step1b
       .split('\n')
-      .find((line) => line.startsWith('|') && line.includes('token per kind'))
+      .find((line) => line.startsWith('|') && line.includes(needle))
+
+  test('a kind whose header says none contributes nothing, and only four nones stop', () => {
+    const row = tableRow('`corpus: none`')
     expect(row).toBeDefined()
-    expect(row).toMatch(/`none`/)
+    expect(row).toMatch(/adds nothing/i)
     expect(row).toMatch(/not a stop/i)
     expect(row).toMatch(/while another kind has docs/i)
+    expect(row).toMatch(/all four[^|]*`none`/i)
+  })
+
+  test('a kind whose header says empty contributes nothing', () => {
+    const row = tableRow('`corpus: empty`')
+    expect(row).toBeDefined()
+    expect(row).toMatch(/adds nothing/i)
   })
 
   test('the routing table has a truncation row that says results were cut and to narrow the query', () => {
@@ -122,10 +144,6 @@ describe('learnings-researcher Step 1b under past-work', () => {
     expect(row).toBeDefined()
     expect(row).toMatch(/cut/i)
     expect(row).toMatch(/narrow/i)
-  })
-
-  test('a missing docs/solutions/ continues to the all call when other kinds have docs', () => {
-    expect(step1b).toMatch(/solution none[^\n]*not a stop/i)
   })
 
   test('Step 3b stays solution-only', () => {
