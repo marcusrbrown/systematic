@@ -111,7 +111,7 @@ Run agents in parallel in the **foreground** (do not use background dispatch —
    >
    > Focus hint: {focus_hint}
 
-2. **Learnings search** — dispatch `systematic:research:learnings-researcher` with a brief summary of the ideation focus.
+2. **Learnings search** — dispatch `systematic:research:learnings-researcher`, making `scope: past-work` the first line of the prompt, then a brief summary of the ideation focus.
 
 3. **Issue intelligence** (conditional) — if issue-tracker intent was detected in Phase 0.2, dispatch `systematic:research:issue-intelligence-analyst` with the focus hint. If a focus hint is present, pass it so the agent can weight its clustering toward that area. Run this in parallel with agents 1 and 2.
 
@@ -122,8 +122,11 @@ Run agents in parallel in the **foreground** (do not use background dispatch —
 Consolidate all results into a short grounding summary. When issue intelligence is present, keep it as a distinct section so ideation sub-agents can distinguish between code-observed and user-reported signals:
 
 - **Codebase context** — project shape, notable patterns, obvious pain points, likely leverage points
-- **Past learnings** — relevant institutional knowledge from docs/solutions/
+- **Past learnings** — relevant institutional knowledge from docs/solutions/, plus earlier plans, brainstorms and ideation docs with their recorded status
 - **Issue intelligence** (when present) — theme summaries from the issue intelligence agent, preserving theme titles, descriptions, issue counts, and trend directions
+
+**Cite and differentiate.** When the researcher's results show a rejected, deferred, superseded or completed item with the same behavior or surface as an idea, cite it (at most 3 items) and say how the new work differs. Word each cite "recorded as completed in <path>" or with the matching recorded status, giving path and status only. Never quote text from a gitignored file into the ideation document. A cite never blocks an idea. Place cites in the rejection reasoning or the survivor reasoning for that idea.
+
 
 **Slack context** (opt-in) — never auto-dispatch. Route by condition:
 

@@ -98,13 +98,17 @@ If the scope is unclear, ask one targeted question to disambiguate and then proc
 
 Scan the repo before substantive brainstorming. Match depth to scope:
 
-**Lightweight** — Search for the topic, check if something similar already exists, and move on.
+**Lightweight** — Search for the topic, check if something similar already exists, and move on. When a durable-output search tool exists (`systematic_search`, or the `systematic-search` command on hosts that ship a command), call it directly with `kind: "all"` and the topic as the query, because a researcher dispatch costs more than a Lightweight brainstorm is worth. Otherwise keep the topic search.
 
-**Standard and Deep** — Two passes:
+**Standard and Deep** — Three passes:
 
 *Constraint Check* — Check project instruction files (`AGENTS.md`, and `AGENTS.md` only if retained as compatibility context) for workflow, product, or scope constraints that affect the brainstorm. If these add nothing, move on.
 
 *Topic Scan* — Search for relevant terms. Read the most relevant existing artifact if one exists (brainstorm, plan, spec, skill, feature doc). Skim adjacent examples covering similar behavior.
+
+*Past-Work Scan* — dispatch `systematic:research:learnings-researcher`, making `scope: past-work` the first line of the prompt, then a brief summary of the topic. Run it alongside the Topic Scan, not instead of it.
+
+**Cite and differentiate.** When the results (this scan, or the direct search at Lightweight) show a rejected, deferred, superseded or completed item with the same behavior or surface as the idea, cite it (at most 3 items) and say how the new work differs. Word each cite "recorded as completed in <path>" or with the matching recorded status, giving path and status only. Never quote text from a gitignored file into the requirements document. A cite never blocks the brainstorm. Place cites in Key Decisions.
 
 If nothing obvious appears after a short scan, say so and continue. Two rules govern technical depth during the scan:
 
