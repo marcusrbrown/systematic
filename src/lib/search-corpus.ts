@@ -1,6 +1,7 @@
 /**
  * Corpus loader for durable-output search: project root, `kind` table, safe
- * walk of `docs/solutions/` and a narrowing wrapper around `parseFrontmatter`.
+ * walk of one kind's docs directory and a narrowing wrapper around
+ * `parseFrontmatter`.
  *
  * Reads from disk on every call and keeps no memo, because `ce:compound`
  * searches right after it writes. Never throws: every filesystem failure
@@ -39,13 +40,33 @@ interface KindSpec {
 }
 
 /**
- * One entry per document kind. Release 1 indexes `docs/solutions/` only; a new
- * kind (plans, brainstorms) is a new entry here plus its frontmatter fit.
+ * One entry per document kind. Every Markdown file under a kind's directory
+ * counts, except a README and anything under `_archived/`. The loader reads the
+ * filesystem and never consults git, so a gitignored directory loads like a
+ * tracked one. A new kind is a new entry here plus its frontmatter fit.
  */
 export const KIND_TABLE = {
   solution: {
     dir: 'docs/solutions',
     excludedFiles: ['readme.md', 'critical-patterns.md'],
+    excludedDirs: ['_archived'],
+    lifecycle: true,
+  },
+  plan: {
+    dir: 'docs/plans',
+    excludedFiles: ['readme.md'],
+    excludedDirs: ['_archived'],
+    lifecycle: true,
+  },
+  brainstorm: {
+    dir: 'docs/brainstorms',
+    excludedFiles: ['readme.md'],
+    excludedDirs: ['_archived'],
+    lifecycle: true,
+  },
+  ideation: {
+    dir: 'docs/ideation',
+    excludedFiles: ['readme.md'],
     excludedDirs: ['_archived'],
     lifecycle: true,
   },
@@ -72,7 +93,7 @@ export interface CorpusDocument {
   /** Root-relative path with `/` separators. */
   readonly path: string
   readonly kind: DocumentKind
-  /** The `title` field, else the file name without `.md`. */
+  /** The first non-empty string of `title`, `topic`, then the file name without `.md`. */
   readonly title: string
   readonly tags: readonly string[]
   readonly module: string | undefined
@@ -284,6 +305,12 @@ function narrowString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+/** A string with something in it after trimming; anything else is `undefined`. */
+function narrowNonEmptyString(value: unknown): string | undefined {
+  const trimmed = narrowString(value)?.trim()
+  return trimmed ? trimmed : undefined
+}
+
 /**
  * A string, or a list of strings (and finite numbers, since YAML reads a bare
  * `404` tag as a number). Anything else, including a nested or cyclic
@@ -333,13 +360,16 @@ export function parseCorpusDocument(
   const data: Record<string, unknown> = isRecord(parsed.data) ? parsed.data : {}
 
   const fileName = relativePath.slice(relativePath.lastIndexOf('/') + 1)
-  const title = narrowString(data.title)?.trim()
+  const title =
+    narrowNonEmptyString(data.title) ??
+    narrowNonEmptyString(data.topic) ??
+    fileName.replace(/\.md$/i, '')
   return {
     ok: true,
     document: {
       path: relativePath,
       kind,
-      title: title ? title : fileName.replace(/\.md$/i, ''),
+      title,
       tags: narrowStringList(data.tags),
       module: narrowString(data.module),
       component: narrowString(data.component),

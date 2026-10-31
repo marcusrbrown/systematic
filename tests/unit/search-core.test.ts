@@ -44,7 +44,9 @@ function writeDoc(
   fs.writeFileSync(target, `---\n${frontmatter}\n---\n\n${body}\n`)
 }
 
-function copyFixtureCorpus(name: 'lifecycle' | 'hostile'): string {
+function copyFixtureCorpus(
+  name: 'lifecycle' | 'hostile' | 'past-work',
+): string {
   const root = makeProject()
   fs.cpSync(path.join(FIXTURES, name), root, { recursive: true })
   return root
@@ -147,6 +149,53 @@ describe('runSearch: ranking and hit shape', () => {
     expect(pathsOf(withKind)).toEqual(['docs/solutions/a.md'])
   })
 
+  it('searches plans, brainstorms and ideation end to end by kind', async () => {
+    const root = copyFixtureCorpus('past-work')
+    const plan = await search(root, 'alpha rollout quarantine', {
+      kind: 'plan',
+    })
+    expect(pathsOf(plan)).toEqual([
+      'docs/plans/2026-10-01-001-feat-alpha-plan.md',
+    ])
+    if (plan.ok) {
+      expect(plan.result.hits[0]?.document).toMatchObject({
+        kind: 'plan',
+        title: 'feat: Alpha rollout',
+      })
+      expect(plan.text).toContain('Kind: plan')
+    }
+
+    const brainstorm = await search(root, 'foo', {
+      kind: 'brainstorm',
+    })
+    expect(pathsOf(brainstorm)).toEqual([
+      'docs/brainstorms/2026-10-01-topic-only-requirements.md',
+    ])
+    if (brainstorm.ok) {
+      expect(brainstorm.result.hits[0]?.document.title).toBe('foo')
+    }
+
+    const ideation = await search(root, 'caching ideas', { kind: 'ideation' })
+    expect(pathsOf(ideation)).toEqual([
+      'docs/ideation/2026-10-01-open-ideation.md',
+    ])
+  })
+
+  it('does not leak plans into a default solution search', async () => {
+    const root = copyFixtureCorpus('past-work')
+    const response = await search(root, 'alpha rollout quarantine')
+    expect(pathsOf(response)).toEqual([])
+  })
+
+  it('reports a missing new-kind directory as an empty result, not an error', async () => {
+    const root = makeProject()
+    writeDoc(root, 'a.md', 'title: Alpha topic')
+    const response = await search(root, 'alpha', { kind: 'brainstorm' })
+    expect(response.ok).toBe(true)
+    expect(pathsOf(response)).toEqual([])
+    if (response.ok) expect(response.result.corpus.state).toBe('none')
+  })
+
   it('applies a hit needs a score above zero', async () => {
     const root = makeProject()
     writeDoc(root, 'a.md', 'title: Alpha topic')
@@ -213,7 +262,7 @@ describe('runSearch: validation', () => {
       text: SEARCH_ERRORS.queryTooLong,
     })
     expect((await search(root, 'a'.repeat(2000))).ok).toBe(true)
-    for (const kind of ['plan', '', 'Solution', 5, null]) {
+    for (const kind of ['bogus', '', 'Solution', 'Plan', 5, null]) {
       expect(await search(root, 'alpha', { kind })).toEqual({
         ok: false,
         text: SEARCH_ERRORS.kindUnknown,

@@ -529,7 +529,7 @@ describe('search adapters parity (AE5: v1, v2, Pi, CLI, bin)', () => {
       expect(await surface.search(root, { query: '   ' })).toBe(
         SEARCH_ERRORS.queryEmpty,
       )
-      expect(await surface.search(root, { query: 'a', kind: 'plan' })).toBe(
+      expect(await surface.search(root, { query: 'a', kind: 'bogus' })).toBe(
         SEARCH_ERRORS.kindUnknown,
       )
     }
