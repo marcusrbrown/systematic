@@ -1,13 +1,13 @@
 {
   "version": 1,
   "files": {
-    "tests/integration/eval-artifact.test.ts": 47396,
-    "tests/integration/opencode-v2.test.ts": 34210,
-    "tests/integration/pi.test.ts": 20052,
-    "tests/integration/release-notes-ci.test.ts": 18490,
-    "tests/integration/opencode.test.ts": 6061,
-    "tests/integration/validate-release-target.test.ts": 2549,
-    "tests/integration/claude-code.test.ts": 281,
-    "tests/integration/eval-fixture.test.ts": 92
+    "tests/integration/opencode-v2.test.ts": 59616,
+    "tests/integration/eval-artifact.test.ts": 44445,
+    "tests/integration/pi.test.ts": 20933,
+    "tests/integration/release-notes-ci.test.ts": 8015,
+    "tests/integration/opencode.test.ts": 7459,
+    "tests/integration/claude-code.test.ts": 189,
+    "tests/integration/eval-fixture.test.ts": 179,
+    "tests/integration/validate-release-target.test.ts": 82
   }
 }

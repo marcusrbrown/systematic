@@ -1,7 +1,7 @@
 ---
 title: "feat: Search past plans, brainstorms and ideation"
 type: feat
-status: active
+status: completed
 date: 2026-10-30
 origin: docs/brainstorms/2026-10-30-search-past-work-requirements.md
 ---
@@ -634,7 +634,7 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 - The PR description follows the fixture README's rule for an intentional change: it lists the 14 regenerated `expected.opencode.json` entries, shows the one-key diff for each, and says why the researcher prompt changed (the `past-work` scope), so a reviewer can confirm no other entry moved.
 - `bun run surfaces:affected --run`, `bun run surfaces:drift` and `bun scripts/content-integrity.ts` pass; `bun run docs:build` succeeds; the harness profile files are byte-unchanged.
 
-- [ ] U9. Measurement and evidence
+- [x] U9. Measurement and evidence
 
 **Goal:** Produce the manual Claude Code evidence, the timings, the solution-results gate result and the evidence table, and set the final host-contract floors.
 
@@ -665,6 +665,8 @@ No unit adds a `src/lib` module, so the codemap and module-table obligations are
 **Verification:**
 - The PR records the gate result (or its explained differences), the evidence table with comparators and cutoffs, the timing table (five warm rows and one cold row, plus extra rows only for calls over 1 second), whether `all` pushed solution hits out of the top 5, and the ideation check.
 - HARNESSES carries SR-4 with a real result, and the floors and timings are updated from the final CI run.
+
+**CI evidence (run 41237102814 on d48a709a):** v2 passed 168 across four shards (27, 36, 35, 70; 0 skipped, 0 failed), v1 floor 38 pass, 1 skip, 0 fail, and v1 current 78 pass, 1 skip, 0 fail. Floors went from 140/28/60 to 144/33/65, and the v2 timings were refreshed from the shards' per-file JUnit times.
 
 ---
 

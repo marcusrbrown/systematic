@@ -166,17 +166,18 @@ export const PROFILE_EXEMPT_SKIPS: Readonly<
  * and the exempt-skip check.
  *
  * Each floor sits well under what its profile passes, so a normal change in
- * test count does not trip it but a mass collapse does. The first CI runs on
- * Linux passed 163 (v2), 32 (v1 floor) and 72 (v1 current), all green, which
- * puts the floors at roughly 86%, 88% and 83% of those counts. Raise a floor
- * as its suite grows, and do not lower it without a documented reason.
+ * test count does not trip it but a mass collapse does. The latest CI run
+ * on Linux passed 168 (v2, summed over four shards), 38 (v1 floor) and 78
+ * (v1 current), all green, which puts the floors at roughly 86%, 87% and 83%
+ * of those counts. Raise a floor as its suite grows, and do not lower it
+ * without a documented reason.
  */
 export const PROFILE_PASS_FLOORS: Readonly<
   Record<HostContractProfile, number>
 > = {
-  v2: 140,
-  'v1-floor': 28,
-  'v1-current': 60,
+  v2: 144,
+  'v1-floor': 33,
+  'v1-current': 65,
 }
 
 export interface SkippedTestCase {
