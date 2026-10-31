@@ -136,12 +136,30 @@ function extractRawToolsSource(
   return trimmed
 }
 
-/** Resolves a persona by exact flat name from the catalog. */
+/** Exactly `systematic:<category>:<name>`: three non-empty, colon-free segments and a literal lowercase prefix. */
+const QUALIFIED_PERSONA_NAME = /^systematic:([^:]+):([^:]+)$/
+
+/**
+ * Resolves a persona by exact flat name from the catalog. Failing that, accepts
+ * the canonical qualified form `systematic:<category>:<name>` that bundled skills
+ * dispatch with, translated here at the host boundary: the stripped name must
+ * match an entry whose `category` equals the qualified category. No other
+ * aliases or case folding.
+ */
 export function resolveAgent(
   catalog: AgentCatalogEntry[],
   name: string,
 ): AgentCatalogEntry | undefined {
-  return catalog.find((entry) => entry.name === name)
+  const exact = catalog.find((entry) => entry.name === name)
+  if (exact) return exact
+
+  const qualified = QUALIFIED_PERSONA_NAME.exec(name)
+  if (!qualified) return undefined
+
+  const [, category, flatName] = qualified
+  return catalog.find(
+    (entry) => entry.name === flatName && entry.category === category,
+  )
 }
 
 /**

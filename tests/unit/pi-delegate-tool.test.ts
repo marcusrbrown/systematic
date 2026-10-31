@@ -309,6 +309,59 @@ describe('createPiDelegateTool: happy path', () => {
     expect(capturedPrompt).toBe('You are a security reviewer.')
   })
 
+  test('resolves a qualified systematic:<category>:<name> agent to the persona and reports its canonical name', async () => {
+    let capturedPrompt: string | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async (opts) => {
+        capturedPrompt = opts.systemPromptOverride
+        return createFakeSession(2)
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'systematic:review:security-reviewer', task: 'find bugs' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(capturedPrompt).toBe('You are a security reviewer.')
+    expect(result.details).toEqual({
+      persona: 'security-reviewer',
+      turnCount: 2,
+      outcome: 'completed',
+    })
+  })
+
+  test('routing notice names the canonical persona, not the qualified string the caller passed', async () => {
+    const configModel = { provider: 'openai', id: 'flat-model' }
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: overlays({
+        'security-reviewer': { model: 'openai/flat-model' },
+      }),
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'systematic:review:security-reviewer', task: 'x' },
+      undefined,
+      fakeCtx(
+        { provider: 'p', id: 'parent-model' },
+        true,
+        fakeModelRegistry({ 'openai/flat-model': configModel }),
+      ),
+    )
+
+    const text = result.content
+      .map((part) => (part.type === 'text' ? part.text : ''))
+      .join('')
+    expect(text).toContain('"security-reviewer" routed to model')
+    expect(text).not.toContain('systematic:review:')
+  })
+
   test('undeclared persona tools defaults to the read-only allowlist', async () => {
     let capturedTools: string[] | undefined
     const tool = createPiDelegateTool({
@@ -447,6 +500,24 @@ describe('createPiDelegateTool: error paths', () => {
         fakeCtx(),
       ),
     ).rejects.toThrow(/Unknown persona "nonexistent".*git-analyzer/s)
+  })
+
+  test('qualified name with the wrong category keeps the unchanged Unknown persona error', async () => {
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => createFakeSession(1),
+    })
+
+    await expect(
+      execute(
+        tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+        { agent: 'systematic:research:security-reviewer', task: 'x' },
+        undefined,
+        fakeCtx(),
+      ),
+    ).rejects.toThrow(
+      /Unknown persona "systematic:research:security-reviewer"\. Available personas: git-analyzer, security-reviewer/,
+    )
   })
 
   test('undefined parent model rejects before creating a child session', async () => {
