@@ -121,3 +121,4 @@ Revisit the semantic lane with a fresh query set labelled before any ranker runs
 ## Related
 
 - `docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md`: a metric that looks fine can be evidence about the instrument, not the system.
+- `docs/solutions/best-practices/search-kinds-separately-instead-of-one-merged-ranking-2026-10-31.md`: the same comparator-and-cutoff discipline applied to merging document kinds, with post-hoc numbers labeled.

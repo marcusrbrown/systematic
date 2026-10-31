@@ -617,8 +617,8 @@ committed timings file, and each uploads its JUnit report and log. The aggregato
 every shard did, and runs the guard over all four report pairs even after a shard failure. The
 guard merges the pairs and judges the union against a fixed expected-suite-file list, an
 exempt-skip list, and a pass floor on the summed pass counts; a missing report is a violation.
-Regenerate the timings file with `bun test tests/integration --timings=tests/integration/host-contract-timings.json
---update-timings` on an idle machine when the suite's file mix changes. `Host Contract` is a required
+Refresh the timings file from the final green run's shard JUnit times when the file mix changes
+(see `docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`). `Host Contract` is a required
 status check in the `main` ruleset and classic branch protection, so a red run blocks the merge;
 evidence gathered at one pinned OpenCode version is not evidence at another, so a Renovate OpenCode
 bump is only complete when this check is green on that bump.
