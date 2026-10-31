@@ -91,7 +91,7 @@ For everything else (quick questions, error messages, factual lookups) **only wh
 
 #### 0.2 Find Upstream Requirements Document
 
-Before asking planning questions, search `docs/brainstorms/` for files matching `*-requirements.md`.
+Before asking planning questions, search `docs/brainstorms/` for files matching `*-requirements.md`. When a durable-output search tool exists (`systematic_search`, or the `systematic-search` command on hosts that ship a command), also run it once with `kind: "brainstorm"` and the feature description as the query. It ranks an older relevant requirements document that the 30-day window would miss. Treat each hit as a candidate under the criteria below.
 
 **Relevance criteria:** A requirements document is relevant if:
 - The topic semantically matches the feature description
@@ -227,14 +227,15 @@ Prepare a concise planning context summary (a paragraph or two) to pass as input
 Run these agents in parallel:
 
 - Dispatch `systematic:repo-research-analyst` — scope: technology, architecture, patterns, prior-art; pass the planning context summary to the technology, architecture, and patterns scopes. For the prior-art scope, pass only the independently stated concern — its trigger, effect, state, and integration boundary — plus the classified plan depth, rather than the planning context summary or proposed solution. Skip the prior-art scope for explicitly non-software planning and mechanical work that changes no behavior; make that exemption decision here at dispatch.
-- Dispatch `systematic:learnings-researcher` — pass the planning context summary.
+- Dispatch `systematic:learnings-researcher` — make `scope: past-work` the first line of the prompt. When Phase 0 chose an origin document, make `exclude: <origin path>` the second line so the researcher does not rediscover it; otherwise omit that line. Then pass the planning context summary.
+
 Collect:
 - Technology stack and versions (used in section 1.2 to make sharper external research decisions)
 - Architectural patterns and conventions to follow
 - Implementation patterns, relevant files, modules, and tests
 - Prior-art survey result: schema version, verdict, surveyed scope and freshness record, bounded budget, candidate ownership and dispositions, and any recorded acceptance
 - AGENTS.md guidance that materially affects the plan, with AGENTS.md used only as compatibility fallback when present
-- Institutional learnings from `docs/solutions/`
+- Institutional learnings from `docs/solutions/`, plus earlier plans, brainstorms and ideation docs with their recorded status
 
 When the prior-art scope runs, apply its verdict before continuing planning: an `unscoped` or `unresolved` result stops planning until the scope narrows, the budget rises, or the user explicitly accepts the uncertainty. Record that acceptance in the Prior-Art Survey section. In a run with no user present, either verdict fails the run rather than proceeding.
 
@@ -243,6 +244,8 @@ When the prior-art scope runs, apply its verdict before continuing planning: an 
 - **Tools available + user asked**: Dispatch `systematic:slack-researcher` with the planning context summary in parallel with other Phase 1.1 agents. If the origin document has a Slack context section, pass it verbatim so the researcher focuses on gaps. Include findings in consolidation.
 - **Tools available + user didn't ask**: Note in output: "Slack tools detected. Ask me to search Slack for organizational context at any point, or include it in your next prompt."
 - **No tools + user asked**: Note in output: "Slack context was requested but no Slack tools are available. Install and authenticate the Slack plugin to enable organizational context search."
+
+**Cite and differentiate.** When the researcher's results show a rejected, deferred, superseded or completed item with the same behavior or surface as this plan, cite it (at most 3 items) and say how the new work differs. Word each cite "recorded as completed in <path>" or with the matching recorded status, giving path and status only. Never quote text from a gitignored file into the plan. A cite never blocks planning. Place cites in Sources & References or Key Technical Decisions, never in the Prior-Art Survey JSON.
 
 #### 1.1b Detect Execution Posture Signals
 
@@ -305,7 +308,7 @@ If Step 1.2 indicates external research is useful, run these agents in parallel:
 
 Summarize:
 - Relevant codebase patterns and file paths
-- Relevant institutional learnings
+- Relevant institutional learnings and overlapping past work, with recorded status
 - Organizational context from Slack conversations, if gathered (prior discussions, decisions, or domain knowledge relevant to the feature)
 - External references and best practices, if gathered
 - Related issues, PRs, or prior art
@@ -354,6 +357,7 @@ Ask the user only when the answer materially affects architecture, scope, sequen
 #### 3.1 Title and File Naming
 
 - Draft a clear, searchable title using conventional format such as `feat: Add user authentication` or `fix: Prevent checkout double-submit`
+  - Quote the title in the frontmatter (`title: "feat: Add user authentication"`): a conventional-commit title contains a colon, which YAML reads as a mapping, and the plan then fails to parse
 - Determine the plan type: `feat`, `fix`, or `refactor`
 - Build the filename following the repository convention: `docs/plans/YYYY-MM-DD-NNN-<type>-<descriptive-name>-plan.md`
   - Create `docs/plans/` if it does not exist
@@ -510,7 +514,7 @@ Omit clearly inapplicable optional sections, especially for Lightweight plans.
 
 ```markdown
 ---
-title: [Plan Title]
+title: "[Plan Title]"
 type: [feat|fix|refactor]
 status: active
 date: YYYY-MM-DD
@@ -684,6 +688,7 @@ Omit `scopes_considered` unless the verdict is `unscoped`, and omit `acceptance`
        reader cloning the repo will not find it, and a bare link cannot tell them
        whether they are missing context or whether it was always local. -->
 - Related code: [path or symbol]
+- Related past work: [path], recorded [status]. [How this plan differs]
 - Related PRs/issues: #[number]
 - External docs: [url]
 ```
