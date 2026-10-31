@@ -4,6 +4,25 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.28.1](https://github.com/marcusrbrown/systematic/compare/v3.28.0...v3.28.1) (2026-10-31)
+
+### Bug Fixes
+
+* accept qualified agent names in Pi delegation ([#1267](https://github.com/marcusrbrown/systematic/issues/1267)) ([cd990ec](https://github.com/marcusrbrown/systematic/commit/cd990ec5e7adef7b684e99952ae3983f4513bdad))
+
+### Build System
+
+* **dev:** update OpenCode to v1.19.5 ([#1266](https://github.com/marcusrbrown/systematic/issues/1266)) ([6126549](https://github.com/marcusrbrown/systematic/commit/61265494f1a1a4fee7572d085a6188fd0261c74a))
+
+### Documentation
+
+* **solutions:** record why fused search lost to lexical and the frontmatter delimiter fix ([#1263](https://github.com/marcusrbrown/systematic/issues/1263)) ([f32f378](https://github.com/marcusrbrown/systematic/commit/f32f378dd081f9d163fcd82d31c07b0a0218464f))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.130.1 ([#1264](https://github.com/marcusrbrown/systematic/issues/1264)) ([a3fa17f](https://github.com/marcusrbrown/systematic/commit/a3fa17f471066d7f8fb3b99eeb393ad4ede07ddb))
+* **deps:** update fro-bot/agent to v0.130.2 ([#1265](https://github.com/marcusrbrown/systematic/issues/1265)) ([2ceefc6](https://github.com/marcusrbrown/systematic/commit/2ceefc6c650acbea0ac4292ae253c93fd04242ef))
+
 ## [3.28.0](https://github.com/marcusrbrown/systematic/compare/v3.27.2...v3.28.0) (2026-10-31)
 
 ### Features
