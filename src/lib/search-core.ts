@@ -2,8 +2,9 @@
  * The one host-neutral composition behind durable-output search.
  *
  * `runSearch` validates the request, resolves the project root, loads the
- * corpus, runs the lexical lane, resolves the solution lifecycle, and renders. Every adapter (OpenCode
- * v1 and v2, Pi, the CLI and the standalone search bin) calls it and does only host
+ * corpus of each requested kind, runs the lexical lane over the merged
+ * documents, resolves the lifecycle, and renders. Every adapter (OpenCode v1
+ * and v2, Pi, the CLI and the standalone search bin) calls it and does only host
  * I/O: the start directory, the settings, and mapping the response to its
  * host's return shape. Adapters never format text themselves.
  *
@@ -35,6 +36,7 @@ import {
   uniqueQueryTerms,
 } from './search-lexical.js'
 import {
+  type KindCorpus,
   renderSearchResult,
   type SearchHit,
   type SearchHitStatus,
@@ -61,16 +63,22 @@ export const MIN_LIMIT = 1
 export const MAX_LIMIT = 20
 export const MAX_QUERY_CHARS = 2000
 
+/** The `kind` value that searches every kind in one ranking. It is a selector, not a table key. */
+export const KIND_SELECTOR_ALL = 'all'
+
+const DOCUMENT_KINDS = Object.keys(KIND_TABLE).filter(isDocumentKind)
+const KIND_NAMES = [...DOCUMENT_KINDS, KIND_SELECTOR_ALL]
+
 /**
  * The tool text every host surface shows the model. `limit` is a plain integer
  * in every host schema, so its range is stated here and nowhere else: the core
  * owns the out-of-range error and a host never pre-empts it.
  */
 export const SEARCH_TOOL_DESCRIPTION =
-  "Search this project's durable outputs (the docs/solutions learnings) by symptom, error text, module or topic. Returns ranked hits with path, title, snippet, tags and status. A superseded learning is replaced by its successor, and a stale one carries a caution. Read a hit's path for the full text. Use it before debugging a failure or planning work a past learning may already cover."
+  "Search this project's durable outputs by symptom, error text, module or topic: the docs/solutions learnings, and the docs/plans, docs/brainstorms and docs/ideation documents that earlier work wrote. Returns ranked hits with path, title, kind, snippet, tags and status. A superseded document is replaced by its successor in the same kind, a successor in another kind is named on a Successor line, and a stale one carries a caution. Read a hit's path for the full text. Use it before debugging a failure or planning work that a past learning, plan, brainstorm or ideation doc may already cover."
 export const SEARCH_ARG_DESCRIPTIONS = {
   query: `What to look for: a symptom, error message, module or topic, in plain words. At most ${MAX_QUERY_CHARS} characters.`,
-  kind: 'Optional. The kind of durable output to search. Only "solution" (docs/solutions/) exists today, and it is the default.',
+  kind: `Optional. The kind of durable output to search: ${DOCUMENT_KINDS.map((kind) => `"${kind}" (${KIND_TABLE[kind].dir}/)`).join(', ')}, or "${KIND_SELECTOR_ALL}" for every kind in one ranking. Defaults to "solution".`,
   limit: `Optional. How many hits to return, an integer from ${MIN_LIMIT} to ${MAX_LIMIT}. Defaults to ${DEFAULT_LIMIT}.`,
 } as const
 
@@ -85,21 +93,18 @@ export const SEARCH_CONFIG_UNREADABLE_NOTE = 'config unreadable'
 
 /** Most `superseded_by` links followed from one candidate. */
 export const MAX_SUCCESSOR_HOPS = 5
-/** A solution successor path must start with this and name a loaded file. */
-export const SUCCESSOR_PATH_PREFIX = `${KIND_TABLE.solution.dir}/`
 export const CAUTION_LABEL = 'Caution:'
 export const SUCCESSOR_UNRESOLVED_TEXT = 'successor unresolved'
 export const STALE_CAUTION_TEXT = 'marked stale'
 const MAX_STALE_REASON_CHARS = 200
 /** Printed for a plan, brainstorm or ideation hit that records no status. */
 const UNSPECIFIED_STATUS = 'unspecified'
-const DOCUMENT_KINDS = Object.keys(KIND_TABLE).filter(isDocumentKind)
 
 /** Fixed validation errors. They never echo the rejected value. */
 export const SEARCH_ERRORS = {
   queryEmpty: 'Error: query must be a non-empty string.',
   queryTooLong: `Error: query must be at most ${MAX_QUERY_CHARS} characters.`,
-  kindUnknown: `Error: kind must be one of: ${Object.keys(KIND_TABLE).join(', ')}.`,
+  kindUnknown: `Error: kind must be one of: ${KIND_NAMES.join(', ')}.`,
   limitInvalid: `Error: limit must be an integer from ${MIN_LIMIT} to ${MAX_LIMIT}.`,
 } as const
 
@@ -396,10 +401,18 @@ type Validated =
   | {
       readonly ok: true
       readonly query: string
-      readonly kind: DocumentKind
+      /** The kinds to load, in table order. One for a single kind, every kind for `all`. */
+      readonly kinds: readonly DocumentKind[]
       readonly limit: number
     }
   | { readonly ok: false; readonly error: string }
+
+/** An omitted `kind` means `solution`; `all` is a selector for every table kind. */
+function requestedKinds(value: unknown): readonly DocumentKind[] | undefined {
+  if (value === undefined) return ['solution']
+  if (value === KIND_SELECTOR_ALL) return DOCUMENT_KINDS
+  return isDocumentKind(value) ? [value] : undefined
+}
 
 function validate(request: SearchRequest): Validated {
   const { query } = request
@@ -410,12 +423,9 @@ function validate(request: SearchRequest): Validated {
     return { ok: false, error: SEARCH_ERRORS.queryTooLong }
   }
 
-  let kind: DocumentKind = 'solution'
-  if (request.kind !== undefined) {
-    if (!isDocumentKind(request.kind)) {
-      return { ok: false, error: SEARCH_ERRORS.kindUnknown }
-    }
-    kind = request.kind
+  const kinds = requestedKinds(request.kind)
+  if (kinds === undefined) {
+    return { ok: false, error: SEARCH_ERRORS.kindUnknown }
   }
 
   let limit = DEFAULT_LIMIT
@@ -431,12 +441,84 @@ function validate(request: SearchRequest): Validated {
     }
     limit = value
   }
-  return { ok: true, query, kind, limit }
+  return { ok: true, query, kinds, limit }
+}
+
+interface KindLoad {
+  readonly kind: DocumentKind
+  readonly load: CorpusLoad
+}
+
+const SKIPPED_PREFIX = 'skipped '
+
+/** The reason of a per-file `skipped <path>: <reason>` warning, or `undefined` for any other warning. */
+function skipReason(warning: string): string | undefined {
+  if (!warning.startsWith(SKIPPED_PREFIX)) return undefined
+  const colon = warning.lastIndexOf(': ')
+  return colon === -1 ? undefined : warning.slice(colon + 2)
+}
+
+function plural(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`
+}
+
+/** `docs/plans: skipped 7 files (5 invalid frontmatter, 2 larger than 262144 bytes)`. */
+function skipSummary(
+  dir: string,
+  reasons: ReadonlyMap<string, number>,
+): string {
+  const parts = [...reasons]
+    .sort(([a, x], [b, y]) => y - x || compareCodeUnits(a, b))
+    .map(([reason, count]) => `${count} ${reason}`)
+  const total = [...reasons.values()].reduce((sum, count) => sum + count, 0)
+  return `${dir}: skipped ${plural(total, 'file')} (${parts.join(', ')})`
+}
+
+/**
+ * One line per kind for per-file skips, counted by reason, instead of one line
+ * per file. Every other warning is structural (an unreadable or escaping
+ * directory, a cap reached) and keeps its exact text; those come first, in
+ * kind order.
+ */
+function aggregateWarnings(loads: readonly KindLoad[]): string[] {
+  const structural: string[] = []
+  const summaries: string[] = []
+  for (const { kind, load } of loads) {
+    const reasons = new Map<string, number>()
+    for (const warning of load.warnings) {
+      const reason = skipReason(warning)
+      if (reason === undefined) structural.push(warning)
+      else reasons.set(reason, (reasons.get(reason) ?? 0) + 1)
+    }
+    if (reasons.size > 0) {
+      summaries.push(skipSummary(KIND_TABLE[kind].dir, reasons))
+    }
+  }
+  return [...structural, ...summaries]
+}
+
+function kindCorpus({ kind, load }: KindLoad): KindCorpus {
+  const docCount = load.documents.length
+  let state: KindCorpus['state'] = 'docs'
+  if (load.state === 'none') state = 'none'
+  else if (docCount === 0) state = 'empty'
+  return { kind, dir: KIND_TABLE[kind].dir, state, docCount }
+}
+
+/** `none` when no searched directory exists, `docs` when any kind holds a document, else `empty`. */
+function combinedState(
+  kinds: readonly KindCorpus[],
+): SearchResult['corpus']['state'] {
+  if (kinds.some((report) => report.state === 'docs')) return 'docs'
+  return kinds.every((report) => report.state === 'none') ? 'none' : 'empty'
 }
 
 /**
  * Validate, search, resolve the lifecycle and render. Never throws on bad
  * input: a bad request comes back as `{ ok: false }` with a fixed error text.
+ * The loader runs once per requested kind, in table order; the documents are
+ * merged in code-unit path order and ranked as one corpus, so a single-kind
+ * request ranks exactly as it does alone.
  */
 export async function runSearch(
   request: SearchRequest,
@@ -444,16 +526,23 @@ export async function runSearch(
 ): Promise<SearchResponse> {
   const checked = validate(request)
   if (!checked.ok) return { ok: false, text: checked.error }
-  const { query, kind, limit } = checked
+  const { query, kinds, limit } = checked
 
   const root = resolveSearchRoot(options.startDir)
-  const load = (options.corpusLoader ?? loadCorpus)(root, kind)
+  const loader = options.corpusLoader ?? loadCorpus
+  const loads = kinds.map((kind) => ({ kind, load: loader(root, kind) }))
+  const reports = loads.map(kindCorpus)
+  const corpus = {
+    state: combinedState(reports),
+    docCount: reports.reduce((sum, report) => sum + report.docCount, 0),
+    kinds: reports,
+  }
   const { terms, truncated } = uniqueQueryTerms(query)
 
   const base = {
     query,
     queryTerms: terms,
-    warnings: load.warnings,
+    warnings: aggregateWarnings(loads),
   }
   const noteList: string[] = [...(options.notes ?? [])]
   if (truncated) noteList.push('query cut to its first 64 distinct terms')
@@ -464,41 +553,31 @@ export async function runSearch(
     result,
   })
 
-  if (load.state === 'none') {
-    return finish({
-      ...base,
-      corpus: { state: 'none', docCount: 0 },
-      hits: [],
-      notes: noteList,
-    })
-  }
-  if (load.documents.length === 0) {
-    return finish({
-      ...base,
-      corpus: { state: 'empty', docCount: 0 },
-      hits: [],
-      notes: noteList,
-    })
+  if (corpus.state !== 'docs') {
+    return finish({ ...base, corpus, hits: [], notes: noteList })
   }
 
+  const documents = loads
+    .flatMap(({ load }) => load.documents)
+    .sort((a, b) => compareCodeUnits(a.path, b.path))
   const index = buildLexicalIndex(
-    load.documents.map(toLexicalDocument),
+    documents.map(toLexicalDocument),
     options.lexicalParams ?? BM25F_PARAMS,
   )
   const lexical = searchLexical(index, terms)
 
-  const byPath = new Map(load.documents.map((doc) => [doc.path, doc]))
+  const byPath = new Map(documents.map((doc) => [doc.path, doc]))
   const candidates: CorpusDocument[] = []
   // Every lexical hit goes through the lifecycle merge, and the limit applies
   // after it: merges shrink the list, so a window cut first could return fewer
   // than `limit` hits and leave a `Supersedes:` list incomplete. The corpus is
-  // capped at `MAX_FILES`, so this is bounded.
+  // capped at `MAX_FILES` per kind, so this is bounded.
   for (const hit of lexical) {
     const document = byPath.get(hit.id)
     if (document !== undefined) candidates.push(document)
   }
 
-  const hits: SearchHit[] = resolveLifecycle(candidates, load.documents)
+  const hits: SearchHit[] = resolveLifecycle(candidates, documents)
     .slice(0, limit)
     .map((entry, position) => ({
       rank: position + 1,
@@ -507,10 +586,5 @@ export async function runSearch(
       lifecycle: lifecycleLines(entry),
     }))
 
-  return finish({
-    ...base,
-    corpus: { state: 'docs', docCount: load.documents.length },
-    hits,
-    notes: noteList,
-  })
+  return finish({ ...base, corpus, hits, notes: noteList })
 }

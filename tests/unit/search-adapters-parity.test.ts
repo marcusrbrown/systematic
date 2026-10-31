@@ -135,6 +135,29 @@ function makeProject(): string {
 
 const QUERY = 'zebra flake retry'
 
+/** `makeProject()` plus a plan, a brainstorm and an ideation doc that all mention the zebra. */
+function makeMixedProject(): string {
+  const root = makeProject()
+  const write = (relative: string, content: string) => {
+    const target = path.join(root, relative)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content)
+  }
+  write(
+    'docs/plans/2026-10-01-001-feat-zebra-plan.md',
+    '---\ntitle: "feat: Zebra flake rollout"\nstatus: completed\n---\n\nPlan for the zebra flake retry change.\n',
+  )
+  write(
+    'docs/brainstorms/2026-10-02-zebra-requirements.md',
+    '---\ntopic: Zebra flake ideas\nstatus: abandoned\n---\n\nWe rejected a zebra flake retry rewrite.\n',
+  )
+  write(
+    'docs/ideation/2026-10-03-zebra-ideation.md',
+    '---\ntopic: Zebra survey\n---\n\nIdeas about zebra flake retries.\n',
+  )
+  return root
+}
+
 interface Surface {
   readonly name: string
   search(root: string, args: Record<string, unknown>): Promise<string>
@@ -460,6 +483,28 @@ describe('search adapters parity (AE5: v1, v2, Pi, CLI, bin)', () => {
     for (const text of texts) expect(text).toBe(texts[0] as string)
   })
 
+  test('kind all and kind plan give byte-identical text on every surface, built bin included', async () => {
+    const root = makeMixedProject()
+    const surfaces = [
+      ...(await everySurface(root)),
+      await createBuiltBinSurface(),
+    ]
+    for (const kind of ['all', 'plan', 'brainstorm', 'ideation']) {
+      const texts = await Promise.all(
+        surfaces.map((surface) => surface.search(root, { query: QUERY, kind })),
+      )
+      for (const text of texts) expect(text).toBe(texts[0] as string)
+    }
+    const all = await surfaces[0]?.search(root, { query: QUERY, kind: 'all' })
+    expect(all).toContain('Corpus: solution ')
+    for (const kind of ['solution', 'plan', 'brainstorm', 'ideation']) {
+      expect(all).toContain(`Kind: ${kind}`)
+    }
+    expect(all).toContain('docs/brainstorms/2026-10-02-zebra-requirements.md')
+    expect(all).toContain('Status: abandoned')
+    expect(all).toContain('Title: feat: Zebra flake rollout')
+  }, 60_000)
+
   test('the built bin, run under real node from a directory with no node_modules, prints the same text as every other surface', async () => {
     const root = makeProject()
     const built = await createBuiltBinSurface()
@@ -529,9 +574,11 @@ describe('search adapters parity (AE5: v1, v2, Pi, CLI, bin)', () => {
       expect(await surface.search(root, { query: '   ' })).toBe(
         SEARCH_ERRORS.queryEmpty,
       )
-      expect(await surface.search(root, { query: 'a', kind: 'bogus' })).toBe(
-        SEARCH_ERRORS.kindUnknown,
-      )
+      for (const kind of ['bogus', 'ALL', 'all ', '']) {
+        expect(await surface.search(root, { query: 'a', kind })).toBe(
+          SEARCH_ERRORS.kindUnknown,
+        )
+      }
     }
   })
 
@@ -744,6 +791,56 @@ describe('search adapters: registration', () => {
     const pi = await initPi()
     expect(pi.tool).toBeUndefined()
     expect(pi.tools.map((t) => t.name)).not.toContain('systematic_search')
+  })
+})
+
+describe('search adapters: tool text names every kind', () => {
+  const WORDS = ['solution', 'plan', 'brainstorm', 'ideation', 'all']
+
+  function expectKindText(text: string): void {
+    for (const word of WORDS) expect(text).toContain(`"${word}"`)
+    expect(text).not.toContain('exists today')
+  }
+
+  test('v1 describes the tool and its kind argument', async () => {
+    const hooks = await createOpenCodeV1Hooks(
+      {
+        client: { app: { log: async () => {} } },
+        directory: makeProject(),
+      } as unknown as PluginInput,
+      { packageRoot: PACKAGE_ROOT },
+    )
+    const tool = hooks.tool?.systematic_search
+    if (tool === undefined) throw new Error('v1 did not register the tool')
+    const kind = (
+      tool.args as unknown as Record<string, { description?: string }>
+    ).kind
+    expectKindText(kind?.description ?? '')
+    expect(tool.description).toContain('docs/plans')
+  })
+
+  test('v2 describes the tool and its kind argument', async () => {
+    const host = await createV2Host(makeProject())
+    const tool = host.tool
+    if (tool === undefined) throw new Error('v2 did not register the tool')
+    const properties = tool.input.properties as Record<
+      string,
+      Record<string, unknown>
+    >
+    expectKindText(String(properties.kind?.description))
+  })
+
+  test('Pi describes the tool and its kind argument', async () => {
+    const host = await initPi()
+    const tool = host.tool
+    if (tool === undefined) throw new Error('Pi did not register the tool')
+    const schema = tool.parameters as unknown as {
+      properties: Record<string, Record<string, unknown>>
+    }
+    expectKindText(String(schema.properties.kind?.description))
+    expect(tool.description).toContain('docs/brainstorms')
+    expect(tool.promptSnippet).toContain('docs/plans')
+    expect(tool.promptSnippet).toContain('all')
   })
 })
 

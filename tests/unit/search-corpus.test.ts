@@ -413,7 +413,7 @@ describe('loadCorpus: caps', () => {
       'docs/solutions/f01999.md',
     )
     expect(result.warnings).toEqual([
-      `file limit of ${MAX_FILES} reached; skipped 1 files`,
+      `docs/solutions: file limit of ${MAX_FILES} reached; skipped 1 files`,
     ])
   })
 
@@ -438,7 +438,7 @@ describe('loadCorpus: caps', () => {
       `docs/solutions/big-${String(fits - 1).padStart(3, '0')}.md`,
     )
     expect(result.warnings).toEqual([
-      `text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${total - fits} files`,
+      `docs/solutions: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${total - fits} files`,
     ])
   })
 })

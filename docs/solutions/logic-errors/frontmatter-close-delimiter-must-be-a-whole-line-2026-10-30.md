@@ -28,7 +28,7 @@ tags:
 
 `parseFrontmatter` in `src/lib/frontmatter.ts` ended the block at the first `---` followed by a line break, even when that `---` ended a value. A value such as `title: Crash on start---` closed the block early. The parser then dropped `status` and `superseded_by`, reported no error (`parseError` stayed `false`), and put the rest of the YAML in the body.
 
-The regression test added with the fix (`tests/unit/search-core.test.ts:367`) asserts that such a doc resolves to its successor. The search impact on the old code was not reproduced.
+The regression test added with the fix (`tests/unit/search-core.test.ts:475`) asserts that such a doc resolves to its successor. The search impact on the old code was not reproduced.
 
 The bug was latent. No `key: value` line under `docs/solutions` or in `tests/fixtures` ends in `---`, so the existing corpus does not exercise it.
 
@@ -64,7 +64,7 @@ Tests that pin the behavior:
 - `tests/unit/frontmatter.test.ts:191`: the same case with CRLF line endings.
 - `tests/unit/frontmatter.test.ts:198`: empty frontmatter with CRLF still parses.
 - `tests/unit/frontmatter.test.ts:205`: empty frontmatter and an empty body still parse.
-- `tests/unit/search-core.test.ts:367`: end to end, a superseded doc whose title ends in `---` resolves to its successor.
+- `tests/unit/search-core.test.ts:475`: end to end, a superseded doc whose title ends in `---` resolves to its successor.
 
 Caveat: the test at `tests/unit/frontmatter.test.ts:185` ("does not close the block on a --- that is only a line prefix") also passes on the old pattern. It is a guard against a regression in the other direction, not a regression test for this bug. Do not count it as coverage.
 

@@ -11,7 +11,7 @@
  * a human's terminal.
  */
 
-import type { CorpusDocument } from './search-corpus.js'
+import type { CorpusDocument, DocumentKind } from './search-corpus.js'
 
 /** Hard cap on rendered output, in UTF-8 bytes. */
 export const MAX_OUTPUT_BYTES = 16 * 1024
@@ -53,15 +53,29 @@ export interface SearchHit {
   readonly lifecycle: readonly string[]
 }
 
+/** What one searched kind held: its directory, its state and how many documents loaded. */
+export interface KindCorpus {
+  readonly kind: DocumentKind
+  /** Root-relative directory, with `/` separators and no trailing slash. */
+  readonly dir: string
+  readonly state: 'none' | 'empty' | 'docs'
+  readonly docCount: number
+}
+
 export interface SearchResult {
   /** The query as the caller sent it; sanitised and capped when echoed. */
   readonly query: string
   /** Unique, sorted query terms, used to pick snippet windows. */
   readonly queryTerms: readonly string[]
-  /** `none`: no docs/solutions/. `empty`: the directory holds no indexable doc. */
+  /**
+   * `none`: no searched directory exists. `empty`: a directory exists but none
+   * holds an indexable doc. `docs` otherwise. `kinds` is one report per searched
+   * kind, in table order: one entry for a single-kind search, every kind for `all`.
+   */
   readonly corpus: {
     readonly state: 'none' | 'empty' | 'docs'
     readonly docCount: number
+    readonly kinds: readonly KindCorpus[]
   }
   readonly hits: readonly SearchHit[]
   readonly notes: readonly string[]
@@ -309,16 +323,43 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
 }
 
+/** `a`, `a or b`, `a, b or c`. */
+function joinOr(items: readonly string[]): string {
+  const last = items[items.length - 1]
+  if (items.length < 2 || last === undefined) return items.join('')
+  return `${items.slice(0, -1).join(', ')} or ${last}`
+}
+
+/** `solution 128, plan 102, brainstorm none, ideation empty`. */
+function kindTokens(kinds: readonly KindCorpus[]): string {
+  return kinds
+    .map(
+      ({ kind, state, docCount }) =>
+        `${kind} ${state === 'docs' ? docCount : state}`,
+    )
+    .join(', ')
+}
+
 function renderHeader(result: SearchResult): string {
   const query = sanitizeInline(result.query, MAX_QUERY_ECHO_CHARS)
   const prefix = `Search "${query}":`
-  switch (result.corpus.state) {
-    case 'none':
-      return `${prefix} corpus: none (no docs/solutions/ directory under the project root).`
+  const { corpus } = result
+  const [only, ...others] = corpus.kinds
+  const single = only !== undefined && others.length === 0
+  switch (corpus.state) {
+    case 'none': {
+      const dirs = joinOr(corpus.kinds.map(({ dir }) => `${dir}/`))
+      return `${prefix} corpus: none (no ${dirs} directory under the project root).`
+    }
     case 'empty':
-      return `${prefix} corpus: empty (docs/solutions/ holds no indexable docs).`
-    case 'docs':
-      return `${prefix} ${plural(result.corpus.docCount, 'doc')}, ${plural(result.hits.length, 'hit')}. Corpus: docs/solutions.`
+      return single
+        ? `${prefix} corpus: empty (${only.dir}/ holds no indexable docs).`
+        : `${prefix} corpus: empty (no indexable docs: ${kindTokens(corpus.kinds)}).`
+    case 'docs': {
+      const counts = `${plural(corpus.docCount, 'doc')}, ${plural(result.hits.length, 'hit')}`
+      const searched = single ? only.dir : kindTokens(corpus.kinds)
+      return `${prefix} ${counts}. Corpus: ${searched}.`
+    }
   }
 }
 

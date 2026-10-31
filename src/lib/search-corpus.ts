@@ -492,12 +492,12 @@ export function loadCorpus(
   if (capSkipped > 0) {
     const atLeast = found.truncated ? 'at least ' : ''
     warnings.push(
-      `file limit of ${MAX_FILES} reached; skipped ${atLeast}${capSkipped} files`,
+      `${spec.dir}: file limit of ${MAX_FILES} reached; skipped ${atLeast}${capSkipped} files`,
     )
   }
   if (budgetSkipped > 0) {
     warnings.push(
-      `text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${budgetSkipped} files`,
+      `${spec.dir}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${budgetSkipped} files`,
     )
   }
 

@@ -88,6 +88,45 @@ async function coreText(
   return response.text
 }
 
+describe('runSearchCli: kinds', () => {
+  function addPlan(root: string): void {
+    const dir = path.join(root, 'docs/plans')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'zebra-rollout.md'),
+      '---\ntitle: Zebra rollout\nstatus: completed\n---\n\nRolling out the zebra change.\n',
+    )
+  }
+
+  it('accepts --kind plan and --kind all, in both flag forms, and prints the core text', async () => {
+    const root = makeProject()
+    addPlan(root)
+    for (const kind of ['plan', 'all']) {
+      const expected = await coreText(root, { query: 'zebra', kind })
+      for (const argv of [
+        ['zebra', '--kind', kind],
+        [`--kind=${kind}`, 'zebra'],
+      ]) {
+        const result = await run(argv, { cwd: root })
+        expect(result.status).toBe(0)
+        expect(result.stdout).toEqual([expected])
+      }
+    }
+    const all = await run(['zebra', '--kind', 'all'], { cwd: root })
+    expect(all.stdout[0]).toContain('docs/plans/zebra-rollout.md')
+    expect(all.stdout[0]).toContain('docs/solutions/zebra-flake.md')
+  })
+
+  it('exits 2 with the fixed error for a wrong-case or padded all', async () => {
+    const root = makeProject()
+    for (const kind of ['ALL', 'all ', '']) {
+      const result = await run(['zebra', '--kind', kind], { cwd: root })
+      expect(result.status).toBe(2)
+      expect(result.stderr).toEqual([SEARCH_ERRORS.kindUnknown])
+    }
+  })
+})
+
 describe('runSearchCli: results', () => {
   it('prints exactly the core text for a query and exits 0', async () => {
     const root = makeProject()
@@ -210,6 +249,15 @@ describe('searchCliUsage', () => {
     expect(searchCliUsage('systematic search')).toContain(
       'Usage: systematic search <query...>',
     )
+  })
+
+  it('names every kind, all and the default in the usage text', () => {
+    const usage = searchCliUsage('systematic-search')
+    expect(usage).toContain('[--kind solution|plan|brainstorm|ideation|all]')
+    for (const word of ['plan', 'brainstorm', 'ideation', 'all', 'default']) {
+      expect(usage).toContain(word)
+    }
+    expect(usage).not.toContain('Only "solution" exists')
   })
 
   it('threads usageName into --help and into a usage error', async () => {

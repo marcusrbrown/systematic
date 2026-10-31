@@ -6,7 +6,8 @@
  * of the rendered text belong to `runSearch` in `search-core.ts`.
  *
  * No adapter asks for a permission: the tool reads only the project's own
- * `docs/solutions/`, under a realpath containment check in the corpus loader.
+ * `docs/solutions/`, `docs/plans/`, `docs/brainstorms/` and `docs/ideation/`,
+ * under a realpath containment check in the corpus loader.
  * Every host schema declares `limit` as a plain integer and states the range
  * in the description, so the core's fixed error is what an out-of-range value
  * gets wherever the host passes it through.
@@ -250,7 +251,7 @@ export function createPiSearchTool(
     label: 'Systematic Search',
     description: SEARCH_TOOL_DESCRIPTION,
     promptSnippet:
-      'Use `systematic_search` to find past learnings in docs/solutions.',
+      'Use `systematic_search` to find past learnings (docs/solutions), plans, brainstorms and ideation (docs/plans, docs/brainstorms, docs/ideation). Pass kind "all" to search them together.',
     parameters: buildPiParameters(Type),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const text = await executeSearch(
