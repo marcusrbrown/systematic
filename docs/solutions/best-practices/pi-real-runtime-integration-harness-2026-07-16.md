@@ -100,7 +100,7 @@ const responsePromise = waitFor((msg) => msg.type === 'response' && msg.id === i
 stdin.write(`${JSON.stringify(withId)}\n`)
 ```
 
-Timeout errors include stdout/stderr tails for diagnosis. Refs: `waitFor`, `tests/integration/pi.test.ts:639-663`.
+Timeout errors include stdout/stderr tails for diagnosis. Refs: `waitFor`, `tests/integration/pi.test.ts:665-689`.
 
 ### 5) Ground observability in what the runtime actually exposes
 
@@ -109,8 +109,8 @@ Do not rely on a command that does not exist.
 - The system prompt is **not** exposed by RPC; assert the bootstrap marker in the mock model's
   captured request payload instead (`tests/integration/pi.test.ts:832-849`).
 - Extension load is proven by **absence of `extension_error`** plus behavioral markers, not by
-  slash commands (`extensionErrors`, `tests/integration/pi.test.ts:756-761`).
-- Tool success is proven via `tool_execution_end` frames (`tests/integration/pi.test.ts:895-899`).
+  slash commands (`extensionErrors`, `tests/integration/pi.test.ts:782-787`).
+- Tool success is proven via `tool_execution_end` frames (`tests/integration/pi.test.ts:921-925`).
 - Pi registers tools, not commands, so `get_commands` is the wrong load signal
   (explained in the comment at `tests/integration/pi.test.ts:735-742`).
 

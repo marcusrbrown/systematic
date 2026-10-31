@@ -16,6 +16,16 @@ import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
+  assertDelegatedSearchProof,
+  createDelegatedSearchScript,
+  type DelegatedSearchScript,
+  evaluateDelegatedSearchProof,
+  hasResearcherSystemMarker,
+  lastUserTextOf,
+  plantDelegatedSearchFixture,
+  researcherSystemMarker,
+} from '../helpers/delegated-search-proof.js'
+import {
   buildIsolatedOpencodeEnv,
   buildOpencodeRunArgv,
   cleanupPackedTarball,
@@ -222,6 +232,43 @@ function startToolModelServer(): ToolScriptedModel {
   return model
 }
 
+/**
+ * A scripted model that answers every request from a delegated-search script.
+ * The script decides each turn from the request, so the server keeps no state.
+ */
+function startDelegatedSearchModel(
+  script: DelegatedSearchScript,
+): ScriptedModelServer {
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (
+        request.method !== 'POST' ||
+        !request.url.endsWith('/chat/completions')
+      ) {
+        return new Response('not found', { status: 404 })
+      }
+      const body = (await request.json()) as ChatRequestBody
+      const chunks = scriptedResponseChunks(
+        script.respond(body),
+        'v2-delegated-search-response',
+        Math.floor(Date.now() / 1000),
+      )
+      const payload = [
+        ...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`),
+        'data: [DONE]\n\n',
+      ].join('')
+      return new Response(payload, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+  return {
+    url: `http://localhost:${server.port}/v1`,
+    stop: () => server.stop(true),
+  }
+}
+
 async function waitFor(
   check: () => boolean | Promise<boolean>,
   what: string,
@@ -365,7 +412,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
 
     async function startAgentHost(
       pluginSpec: string,
-      toolModel: ToolScriptedModel,
+      toolModel: ScriptedModelServer,
       extraConfig: Record<string, unknown> = {},
     ) {
       const configContent = withScriptedProvider(
@@ -608,6 +655,103 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           toolModel.stop()
           await host.server.stop()
         }
+      },
+      TIMEOUT_MS,
+    )
+
+    // The parent dispatches the researcher through `subagent`, the child calls
+    // the plugin's search tool, and the result travels back to the parent.
+    const PARENT_DIRECTIVE = '@@PARENT-DISPATCH'
+    const CHILD_PROMPT_MARK = 'DELEGATED-SEARCH-CHILD'
+
+    /**
+     * Runs the delegated search scenario against a v2 server. The child is told
+     * apart from the parent by its prompt text, which the parent's own turns
+     * never carry; the researcher's opening line, read from its agent file,
+     * then confirms the right agent ran.
+     */
+    async function runDelegatedSearch(pluginSpec: string): Promise<{
+      script: DelegatedSearchScript
+      marker: string
+    }> {
+      plantDelegatedSearchFixture(fixture.projectDir)
+      const marker = researcherSystemMarker(REPO_ROOT)
+      const script = createDelegatedSearchScript({
+        dispatch: {
+          tool: 'subagent',
+          arguments: {
+            agent: 'learnings-researcher',
+            description: 'Search past solutions',
+            prompt: `${CHILD_PROMPT_MARK} Find the zebra flake solution.`,
+          },
+        },
+        isChildRequest: (request) => {
+          const user = lastUserTextOf(request)
+          return (
+            user.includes(CHILD_PROMPT_MARK) && !user.includes(PARENT_DIRECTIVE)
+          )
+        },
+      })
+      const model = startDelegatedSearchModel(script)
+      const host = await startAgentHost(pluginSpec, model)
+      try {
+        const session = await host.client.session.create({
+          location: { directory: fixture.projectDir },
+          agent: 'build',
+          model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+        })
+        await host.client.session.prompt({
+          sessionID: session.id,
+          text: `${PARENT_DIRECTIVE} Dispatch the learnings researcher to find the zebra flake solution.`,
+        })
+        await host.client.session.wait({ sessionID: session.id })
+      } finally {
+        model.stop()
+        await host.server.stop()
+      }
+      return { script, marker }
+    }
+
+    test(
+      'a dispatched learnings-researcher child calls systematic_search and its result reaches the parent',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+
+        const { script, marker } = await runDelegatedSearch(pluginSpec)
+
+        assertDelegatedSearchProof(script.observation())
+        // The child that ran is the researcher, not some other agent.
+        for (const child of script.observation().childRequests) {
+          expect(hasResearcherSystemMarker(child, marker)).toBe(true)
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'with search.enabled false the researcher child is not offered the tool and the proof fails saying so',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({ search: { enabled: false } }),
+        )
+
+        const { script } = await runDelegatedSearch(pluginSpec)
+
+        const verdict = evaluateDelegatedSearchProof(script.observation())
+        expect(verdict).toMatchObject({
+          ok: false,
+          code: 'tool-not-advertised',
+        })
+        if (!verdict.ok) {
+          expect(verdict.message).toContain(
+            'did not advertise systematic_search',
+          )
+        }
+        // The child was reached, so the failure is the missing tool, not a
+        // dispatch that never happened.
+        expect(script.observation().childRequests.length).toBeGreaterThan(0)
       },
       TIMEOUT_MS,
     )
