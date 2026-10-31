@@ -51,7 +51,7 @@ On 16 labeled queries, scored at top 5, the union of `all` and `solution` found 
 
 ## Examples
 
-One ideation query (q05) ranked its target first when ideation was searched alone, and the target was missing from `all`'s top 20 (measured during the PR, not committed). The ideation kind held a single document, so that call returns it for every query, and this find is partly mechanical.
+One ideation query (q05) ranked its target first when ideation was searched alone, and the target was missing from `all`'s top 20 (measured during the PR, not committed). The ideation kind held a single document, so it ranks first whenever a query term matches its indexed fields, and this find is partly mechanical.
 
 ## Related
 
