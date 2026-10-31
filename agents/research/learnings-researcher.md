@@ -50,7 +50,7 @@ From the feature/task description, identify:
 
 **In `solutions` scope, call it once**, with the problem description as the query and `kind` set to `solution`. With the tool, call `systematic_search({ query: "<description>", kind: "solution" })`. With the command, run `systematic-search --kind solution -- '<description>'` with single quotes removed from the description first. Write the query as symptoms, error text, module names and the topic, as a person would type them. Use the default limit.
 
-**Past-work scope.** Make one search per kind, `solution`, `plan`, `brainstorm` and `ideation`, and merge the hits by repo-root path: `systematic_search({ query: "<description>", kind: "<kind>", limit: 5 })`. With the command, pass `--kind <kind> --limit 5`. Never search `all`: long plans crowd the other kinds out of its top results. A `none`, `empty`, zero-hit or `Error:` reply from one kind adds nothing. Route on the merged hits.
+**Past-work scope.** Make one search per kind, `solution`, `plan`, `brainstorm` and `ideation`, and merge the hits by repo-root path: `systematic_search({ query: "<description>", kind: "<kind>", limit: 5 })`. With the command, pass `--kind <kind> --limit 5`. Never search `all`: long plans crowd the other kinds out of its top results. A `none`, `empty` or zero-hit reply from one kind adds nothing. A kind whose call returns `Error:` is unsearched: say so in Search Context, and grep that kind's directory only (see the Past-work grep fallback). The other kinds' hits still route normally. If every kind errors, run the whole grep path. Route on the merged hits.
 
 **Read the reply, then pick one path.** Read the header from the line that starts with `Search "`. On the command path, warnings can print before it.
 
@@ -64,7 +64,7 @@ In overlap mode (the caller asks for an overlap assessment against a new doc), d
 | The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular), and at least one hit remains after the overlap-mode drop | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
 | The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`), or in overlap mode no hit remains after the drop | Grep path. Go to Step 2. |
 | The reply says `No project directory is available` | Grep path. Go to Step 2. |
-| The reply says search is disabled, starts with `Error:`, or the call fails | Grep path. Go to Step 2. |
+| The reply says search is disabled, starts with `Error:`, or the call fails | Grep path. Go to Step 2. Past-work: per kind, as above. |
 
 The grep path keeps its OR patterns for synonyms. A zero-hit search does not add a new synonym pass.
 
@@ -72,7 +72,7 @@ The grep path keeps its OR patterns for synonyms. A zero-hit search does not add
 - The hits are already ranked and already resolved for lifecycle. Do not run Step 4's resolution again.
 - A hit with a `Supersedes:` line is the successor that stands in for the docs it lists. Copy `Supersedes:` and `Caution:` lines literally into the entry, including `Caution: successor unresolved` on a superseded doc whose successor does not resolve.
 - Read a hit's `Status` and lifecycle lines from the reply. Take the other frontmatter fields in Step 5.
-- Past-work: read each hit's `Kind:` and `Status:` fields. Copy a `Successor:` line (a successor in another kind) literally; the hit stays, and you do not follow it. Step 3b stays solution-only.
+- Copy any `Successor:` line (a successor in another kind) literally in `solutions` and `past-work` scope, overlap mode included. The hit stays, and you never follow it. Past-work: read each hit's `Kind:` and `Status:` fields; Step 3b stays solution-only.
 - In overlap mode, you already dropped the doc under comparison. Compare the docs its `Supersedes:` line listed, as well as the remaining hits. The search rank and hit count never set the `score=` value. Judge the five dimensions for each remaining doc as described under Output Format.
 
 ### Step 2: Category-Based Narrowing (Optional but Recommended)
@@ -172,6 +172,8 @@ Extract these fields from the YAML frontmatter:
 
 On the grep path, `status`, `superseded_by` and `stale_reason` come from the Step 4 frontmatter read, not from search lines. On the search path they come from the hit's own lines. Values for these fields are whatever the docs use. Do not validate them against a fixed list.
 
+Past-work: for plans, brainstorms and ideation docs, read `title`, `topic` and `status`, and the headings of the decision or requirements sections, not the solution fields above.
+
 ### Step 6: Score and Rank Relevance
 
 Match frontmatter fields against the feature/task description:
@@ -191,17 +193,15 @@ Match frontmatter fields against the feature/task description:
 - No overlapping tags, symptoms, or modules
 - Unrelated problem types
 
+**Past-work.** Judge plans, brainstorms and ideation docs by their title, topic, filename and decision or requirements sections, not by the solution fields above. A real match on title or topic is enough to keep one. Solutions keep these rules, and `solutions` scope is unchanged.
+
 ### Step 7: Full Read of Relevant Files
 
-Only for files that pass the filter (strong or moderate matches), read the complete document to extract:
-- The full problem description
-- The solution implemented
-- Prevention guidance
-- Code examples
+Fully read only the files that pass the filter (strong or moderate matches), to extract the problem, the solution, prevention guidance and code examples.
 
 ### Step 8: Return Distilled Summaries
 
-For each relevant document, return a summary in this format. `Supersedes:` and `Caution:` are optional; include each only when it applies. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from its frontmatter if it has one. On a superseded doc whose successor does not resolve, the line is exactly `Caution: successor unresolved`.
+For each relevant document, return a summary in this format. `Supersedes:`, `Successor:` and `Caution:` are optional; include each only when it applies. `Successor:` is copied from the hit. `Supersedes:` lists each retired doc as a repo-root path, comma-separated. `Caution:` says the doc is marked stale and quotes its `stale_reason` from its frontmatter if it has one. On a superseded doc whose successor does not resolve, the line is exactly `Caution: successor unresolved`.
 
 ```markdown
 ### [Title from document]
@@ -212,12 +212,13 @@ For each relevant document, return a summary in this format. `Supersedes:` and `
 - **Key Insight**: [The most important takeaway - the thing that prevents repeating the mistake]
 - **Severity**: [severity level]
 Supersedes: <path>[, <path>]
+Successor: <path>
 Caution: <text>
 ```
 
 ### Past-work grep fallback
 
-In `past-work` scope, when search cannot help, run Steps 2 to 6 over each of the four directories that exists.
+In `past-work` scope, when search cannot help, run Steps 2 to 6 over each of the four directories that exists. If only some kinds errored, run them over that kind's directory only.
 
 - **Patterns.** In each directory, match the frontmatter fields `title:`, `topic:`, `status:`, `type:`, `origin:` and `date:`, and match filenames with a glob on the keywords. Read those fields in Steps 5 and 6; a missing `status` is `unspecified`.
 - **Lifecycle.** Run the Step 4 content search over all four. A `superseded_by` resolves only within the doc's own directory; a path in another of the four stays a named successor, and any other form is `Caution: successor unresolved`.
@@ -247,6 +248,7 @@ Structure your findings as:
 - **Relevance**: [why this matters for current task]
 - **Key Insight**: [the gotcha or pattern to apply]
 Supersedes: <path>[, <path>]
+Successor: <path>
 Caution: <text>
 
 #### 2. [Title]
@@ -282,13 +284,13 @@ State the method once, on one line, in Search Context: `search`, `search, plus o
 | `completed` | Existing or completed work |
 | `abandoned`, `deferred`, `archived`, `superseded` | Rejected, deferred or superseded directions |
 | `draft`, `active`, `unspecified` | Conflicts and open questions, worded "proposed in <path>" |
-| any other value | Conflicts and open questions |
+| any other value, such as `pending` or `planned`; `stale` keeps its `Caution:` line | Conflicts and open questions, worded "proposed in <path>" |
 
 Recorded decisions and their rationale come from body sections (Key Decisions, Scope Boundaries) of lessons, existing work and rejected items, never from an item proposed in <path>. A proposal is never reported as implemented, shipped or decided. Every item carries its repo-root path and recorded status. A recorded status is not verified.
 
 When nothing matches, write "no recorded plan or solution found in the results". Do not say the repo holds none.
 
-Open with `## Past-Work Search Results` and `### Search Context` (feature, method, absent kinds, "results cut, narrow the query" when truncated). Then, omitting empty groups: `### Proven lessons`, `### Recorded decisions and their rationale`, `### Existing or completed work`, `### Rejected, deferred or superseded directions`, `### Conflicts and open questions`.
+Open with `## Past-Work Search Results` and `### Search Context` (feature, method, absent kinds, unsearched kinds, "results cut, narrow the query" when truncated). Then, omitting empty groups: `### Proven lessons`, `### Recorded decisions and their rationale`, `### Existing or completed work`, `### Rejected, deferred or superseded directions`, `### Conflicts and open questions`.
 
 Under each group, one line per item: `- **[title]**: [path], status [recorded status]. [why it applies]`. Copy `Supersedes:`, `Successor:` and `Caution:` lines literally under their item.
 
@@ -301,29 +303,16 @@ The rules below about content search, patterns, synonyms and narrowing apply to 
 - Try the search tool, when it exists, before any grep step: one call in `solutions` scope, one per kind (four) in `past-work` scope
 - Take the grep path when search finds nothing, is disabled, errors or does not exist
 - Use the native content-search tool to pre-filter files BEFORE reading any content (critical for 100+ files)
-- Run multiple content searches in PARALLEL for different keywords
-- Include `title:` in search patterns - often the most descriptive field
-- Use OR patterns for synonyms: `tags:.*(auth|login|session)`
-- Use `-i=true` for case-insensitive matching
+- Run content searches in PARALLEL, with `title:` and OR patterns for synonyms
 - Use category directories to narrow scope when feature type is clear
-- Do a broader content search as fallback if <3 candidates found
-- Re-narrow with more specific patterns if >25 candidates found
+- Do a broader content search if <3 candidates are found, and re-narrow if >25
 - Use one search to find which files mention the lifecycle fields, read each such doc's frontmatter for the values, and resolve superseded docs before scoring
 - Read the critical patterns file only when it exists
-- Only read frontmatter of search-matched candidates (not all files)
-- Filter aggressively - only fully read truly relevant files
 - Prioritize high-severity and critical patterns
-- Extract actionable insights, not just summaries
-- Note when no relevant learnings exist (this is valuable information too)
+- Note when no relevant learnings exist
 
 **DON'T:**
 - Read a path that may not exist (a category directory, `critical-patterns.md`, a successor) without checking that it exists
-- Read frontmatter of ALL files (use content-search to pre-filter first)
-- Run searches sequentially when they can be parallel
-- Use only exact keyword matches (include synonyms)
-- Skip the `title:` field in search patterns
-- Proceed with >25 candidates without narrowing first
-- Read every file in full (wasteful)
 - Return raw document contents (distill instead)
 - Return a superseded doc whose successor resolves. Return its successor. If the successor does not resolve, return the superseded doc with `Caution: successor unresolved`.
 - Run the grep steps after a search that returned hits, or call the search tool more than once in `solutions` scope, or more than four times in `past-work` scope (one call per kind)
@@ -332,12 +321,4 @@ The rules below about content search, patterns, synonyms and narrowing apply to 
 
 ## Integration Points
 
-This agent is designed to be invoked by:
-- `/ce:plan` - To inform planning with institutional knowledge and add depth during confidence checking
-- `/ce:review` - To flag known patterns in the diff under review
-- `/ce:ideate` - To ground ideas in documented past solutions
-- `/ce:compound` - As the Related Docs Finder when a new learning is written
-- `/deepen-plan` - To strengthen plans with documented prior art
-- Manual invocation before starting work on a feature
-
-The goal is to surface relevant learnings in under 30 seconds for a typical solutions directory, enabling fast knowledge retrieval during planning phases.
+Invoked by `/ce:plan` (planning and confidence checking), `/ce:review` (known patterns in the diff), `/ce:ideate` (grounding ideas), `/ce:compound` (Related Docs Finder), `/deepen-plan`, or manually before starting work. Aim to surface relevant learnings in under 30 seconds.

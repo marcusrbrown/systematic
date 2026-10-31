@@ -18,13 +18,22 @@ const DEEPENING_WORKFLOW = read(
   'skills/ce-plan/references/deepening-workflow.md',
 )
 
-/** The text under a heading, up to the next heading of any level. */
+/**
+ * The text under a heading, up to the next heading of any level. A `#` line
+ * inside a code fence is a comment, not a heading.
+ */
 function section(text: string, heading: string): string {
   const start = text.indexOf(heading)
   if (start === -1) throw new Error(`heading not found: ${heading}`)
   const rest = text.slice(start + heading.length)
-  const next = rest.search(/^#{1,4} /m)
-  return next === -1 ? rest : rest.slice(0, next)
+  let inFence = false
+  let offset = 0
+  for (const line of rest.split('\n')) {
+    if (line.startsWith('```')) inFence = !inFence
+    else if (!inFence && /^#{1,4} /.test(line)) return rest.slice(0, offset)
+    offset += line.length + 1
+  }
+  return rest
 }
 
 /** The line that holds `needle`, plus any indented lines that continue it. */
@@ -439,5 +448,168 @@ describe('ce-review and ce-compound stay on solutions', () => {
     expect(text).toContain(DISPATCH_ID)
     expect(text).not.toMatch(/past-work/)
     expect(text).not.toMatch(/^scope:/m)
+  })
+})
+
+describe('past-work relevance for plans, brainstorms and ideation', () => {
+  const step5 = section(RESEARCHER, '### Step 5')
+  const step6 = section(RESEARCHER, '### Step 6')
+
+  test('Step 5 reads title, topic and decision headings of non-solution docs', () => {
+    const rule = paragraph(step5, 'Past-work')
+    expect(rule).toMatch(/plans, brainstorms and ideation/i)
+    expect(rule).toMatch(/`title`/)
+    expect(rule).toMatch(/`topic`/)
+    expect(rule).toMatch(/decision or requirements/i)
+  })
+
+  test('Step 6 judges those docs by title, topic, filename and decision or requirements sections', () => {
+    const rule = paragraph(step6, 'Past-work')
+    expect(rule).toMatch(/plans, brainstorms and ideation/i)
+    expect(rule).toMatch(/title/i)
+    expect(rule).toMatch(/topic/i)
+    expect(rule).toMatch(/filename/i)
+    expect(rule).toMatch(/decision or requirements sections/i)
+  })
+
+  test('a real title or topic match keeps the doc', () => {
+    const rule = paragraph(step6, 'Past-work')
+    expect(rule).toMatch(/match on (its )?title or topic is enough to keep/i)
+  })
+
+  test('solutions keep the field rules and solutions scope is unchanged', () => {
+    const rule = paragraph(step6, 'Past-work')
+    expect(rule).toMatch(
+      /solutions keep (the|these) (existing )?(rules|fields)/i,
+    )
+    expect(rule).toMatch(/`solutions` scope[^\n]*unchanged/i)
+  })
+})
+
+describe('a kind whose search call errors', () => {
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const calls = paragraph(step1b, '**Past-work scope.**')
+  const fallback = section(RESEARCHER, '### Past-work grep fallback')
+  const output = section(RESEARCHER, '## Past-Work Output')
+
+  test('an Error: reply is not treated as an empty kind', () => {
+    expect(calls).not.toMatch(/`Error:`[^.]*adds nothing/)
+    expect(calls).not.toMatch(/adds nothing[^.]*`Error:`/)
+  })
+
+  test('an Error: reply marks the kind unsearched and greps that directory only', () => {
+    expect(calls).toMatch(/`Error:`/)
+    expect(calls).toMatch(/unsearched/i)
+    expect(calls).toMatch(/that kind's directory only/i)
+  })
+
+  test('hits from the other kinds still route normally', () => {
+    expect(calls).toMatch(/other kinds'? hits (still )?route/i)
+  })
+
+  test('every kind erroring runs the whole grep path', () => {
+    expect(calls).toMatch(/every kind[^.]*whole grep path/i)
+  })
+
+  test('the grep fallback runs over only the errored kind directory', () => {
+    expect(fallback).toMatch(/that kind's directory only/i)
+  })
+
+  test('Search Context reports unsearched kinds', () => {
+    expect(paragraph(output, 'Open with')).toMatch(/unsearched/i)
+  })
+})
+
+describe('Successor lines in both scopes', () => {
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const bullet = paragraph(step1b, 'Successor:')
+
+  test('the copy rule names both scopes and overlap mode', () => {
+    expect(bullet).toMatch(/`solutions`/)
+    expect(bullet).toMatch(/`past-work`/)
+    expect(bullet).toMatch(/overlap/i)
+  })
+
+  test('the successor is copied literally and never followed', () => {
+    expect(bullet).toMatch(/literally/i)
+    expect(bullet).toMatch(/never follow|do not follow/i)
+  })
+
+  test('the rule is not limited to past-work', () => {
+    expect(bullet.startsWith('- Past-work')).toBe(false)
+  })
+
+  test('the solutions entry format allows a Successor line', () => {
+    const step8 = section(RESEARCHER, '### Step 8')
+    expect(step8).toMatch(/`Successor:`/)
+  })
+})
+
+describe('status groups for unknown statuses', () => {
+  const output = section(RESEARCHER, '## Past-Work Output')
+  const row = output
+    .split('\n')
+    .find((line) => line.startsWith('|') && line.includes('any other value'))
+
+  test('an unrecognised status is proposed in <path>', () => {
+    expect(row).toBeDefined()
+    expect(row).toContain('proposed in <path>')
+  })
+
+  test('pending and planned are named as examples', () => {
+    expect(row).toContain('`pending`')
+    expect(row).toContain('`planned`')
+  })
+
+  test('stale keeps its caution', () => {
+    expect(row).toContain('`stale`')
+    expect(row).toMatch(/Caution:/)
+  })
+
+  test('the row still lands in conflicts and open questions', () => {
+    expect(row).toMatch(/Conflicts and open questions/)
+  })
+})
+
+describe('deepening dispatches exclude the plan being deepened', () => {
+  test.each([
+    ['deepen-plan', paragraph(DEEPEN, `\`${DISPATCH_ID}\` (`)],
+    [
+      'deepening-workflow',
+      paragraph(DEEPENING_WORKFLOW, `\`${DISPATCH_ID}\` (`),
+    ],
+  ])('%s passes exclude as the second prompt line', (_name, text) => {
+    expect(text).toContain('`exclude: <path of the plan being deepened>`')
+    expect(text).toMatch(/second line/i)
+    expect(text.indexOf('`scope: past-work`')).toBeLessThan(
+      text.indexOf('`exclude: <'),
+    )
+  })
+})
+
+describe('lifecycle validator solution doc', () => {
+  const doc = read(
+    'docs/solutions/best-practices/lifecycle-validator-runs-only-in-ci-so-agent-prose-must-enforce-it-2026-10-26.md',
+  )
+  const note = doc.includes('resolves successors within a kind')
+    ? paragraph(doc, 'resolves successors within a kind')
+    : ''
+
+  test('says search resolves successors within a kind', () => {
+    expect(note).toMatch(/within a kind/i)
+  })
+
+  test('says a cross-kind link is reported on a Successor: line, not as unresolved', () => {
+    expect(note).toContain('`Successor:`')
+    expect(note).toMatch(/unresolved/i)
+  })
+
+  test('says the CI validator still accepts only docs/solutions/ links', () => {
+    expect(note).toContain('`docs/solutions/`')
+    expect(note).toMatch(/validator/i)
+  })
+
+  test('says the researcher copies the Successor: line in both scopes', () => {
+    expect(note).toMatch(/both scopes/i)
   })
 })

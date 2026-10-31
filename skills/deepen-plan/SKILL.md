@@ -213,7 +213,7 @@ Use fully-qualified agent names inside Task calls.
 - `systematic:research:repo-research-analyst` (Scope: `architecture, patterns`) for repo-grounded patterns, conventions, and implementation reality checks
 
 **Context & Research / Sources & References gaps**
-- `systematic:research:learnings-researcher` (make `scope: past-work` the first line of the prompt) for institutional knowledge, past solved problems, and earlier plans, brainstorms and ideation docs
+- `systematic:research:learnings-researcher` (make `scope: past-work` the first line of the prompt and `exclude: <path of the plan being deepened>` the second line) for institutional knowledge, past solved problems, and earlier plans, brainstorms and ideation docs
 - `systematic:research:framework-docs-researcher` for official framework or library behavior
 - `systematic:research:best-practices-researcher` for current external patterns and industry guidance
 - Add `systematic:research:git-history-analyzer` only when historical rationale or prior art is materially missing

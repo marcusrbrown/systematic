@@ -31,6 +31,8 @@ That validator never runs in a user's repo. There, the same rules are enforced t
 
 Both resolvers answer an unresolvable successor the same way. The matched superseded doc is kept at its own rank with `Caution: successor unresolved`. The researcher used to omit such a doc and report it on a `Skipped:` line, and that label is retired. A reader still sees the doc and learns that its pointer is broken.
 
+Search now also covers plans, brainstorms and ideation docs, and it resolves successors within a kind (`resolveLifecycle` in `src/lib/search-core.ts`). A `superseded_by` link that crosses into another kind, such as a solution superseded by a plan, is not reported as unresolved. The hit stays, and a `Successor:` line names the target. The CI validator is unchanged: it still accepts only `docs/solutions/` successor links, so a cross-kind link never passes it. The researcher copies the `Successor:` line literally in both scopes, `solutions` and `past-work`, and never follows it.
+
 ## Guidance
 
 Write each check as a step at the point where the agent acts on a pointer.
