@@ -126,7 +126,7 @@
     "@tintinweb/pi-subagents": "0.22.0",
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "agent-browser": "0.39.4",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
