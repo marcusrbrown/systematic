@@ -1,0 +1,1575 @@
+{
+  "header": {
+    "description": "Outcome record for the decision-store trial: per need, which kinds of document a labeler returned (flags only, no document paths). `run1` is the main run, `a4` a later re-measure recorded as a protocol failure; they are separate and never summed. No raw mined text, thread number or session identifier is stored. Every external target lives in another repo, so ci_reproducible is false.",
+    "authored": "2026-11-02",
+    "ci_reproducible": false,
+    "fields": {
+      "id": "run1 `n-<pool>-NNN`, A4 `a-<pool>-NNN`; the number is not a rank or a date",
+      "source": "`pr-or-issue-title`, `body-sentence` or `dispatch-topic`",
+      "sys": "{sys_answers, sys_helps}: a Systematic doc of the repo was returned in that tier",
+      "stores": "external stores with a counting record, each {store_answers, store_helps}; absent means none. A Deciduous action node never counts",
+      "outcome": "`systematic-only`, `store-only` (a store record in either tier, no Systematic doc in either), `both` or `nothing`",
+      "recorded": "agreement comes from document-level labels that are not stored, so the test checks only its range. swap lists, per cell, the sampled needs a second labeler would add (gains) or remove (losses); the full, gain-only and loss-only counts and the borderline flag follow from the cell count"
+    },
+    "pools": {
+      "sp": {
+        "repo": "marcusrbrown/sparkle",
+        "stores": ["systematic", "deciduous"],
+        "refs": {
+          "marcusrbrown/sparkle": "9653534edd9e048f9b3ba9ca5bb268624d5bc366"
+        },
+        "catalogue_sha256": "e26bcc662c1685d1a998acaf7bf35e0a393164b804af585aeee29ebcf5f2bf79",
+        "catalogue_entries": 424
+      },
+      "ag": {
+        "repo": "fro-bot/agent",
+        "stores": ["systematic", "legacy", "agent-wiki", "github-wiki"],
+        "refs": {
+          "fro-bot/agent": "263d79e739c79cb4442af5eb4008f98959c015fc",
+          "fro-bot/.github": "2c7ecbeb4bb33eb98d0c07c88d80ec4507c318ed"
+        },
+        "catalogue_sha256": "99af7210c5ee9f07e7361066aaaf30af07858ba4a1247eaf47070b6b8beb4bef",
+        "catalogue_entries": 362
+      },
+      "gh": {
+        "repo": "fro-bot/.github",
+        "stores": ["systematic", "github-wiki"],
+        "refs": {
+          "fro-bot/.github": "2c7ecbeb4bb33eb98d0c07c88d80ec4507c318ed"
+        },
+        "catalogue_sha256": "46baa3c0e21502acf9331ba1e5b91ed9c8555b9d31448e5b2a4ec0784e323e29",
+        "catalogue_entries": 208
+      },
+      "in": {
+        "repo": "marcusrbrown/infra",
+        "stores": ["systematic", "runbook"],
+        "refs": {
+          "marcusrbrown/infra": "351bb6b3042da670ac133a7b9cd3fd413e44e29c"
+        },
+        "catalogue_sha256": "09a8a00fe4806f88391ae03f80a39d5eac3c871c588cfe68a7761d5c082a2b33",
+        "catalogue_entries": 148
+      }
+    },
+    "cells": [
+      { "cell": 1, "pool": "sp", "store": "deciduous" },
+      { "cell": 2, "pool": "ag", "store": "legacy" },
+      { "cell": 3, "pool": "ag", "store": "agent-wiki" },
+      { "cell": 4, "pool": "ag", "store": "github-wiki" },
+      { "cell": 5, "pool": "gh", "store": "github-wiki" },
+      { "cell": 6, "pool": "in", "store": "runbook" }
+    ],
+    "store_first_record_month": {
+      "deciduous": "2026-09",
+      "legacy": "2026-01",
+      "agent-wiki": "2026-04",
+      "github-wiki": "2026-04",
+      "runbook": "2026-05"
+    },
+    "labelers": {
+      "primary": "anthropic/claude-sonnet-5-5",
+      "second": "openai/gpt-5.6-luna"
+    },
+    "scratch": {
+      "protocol_sha256": "04fd9f8dfd71d990cf1d237af48db25d7866b67e80f0f16980d2c075eff99c15",
+      "prompts_sha256": "e545d10b11f0339580092d6b821deee09b526b8924e5e05c53182fa1a692033b",
+      "code_tree_sha256": "b64c30f1b7a1dad8a1ead0d443978eea5e122273b5d0f270ca2badfce4b8d026",
+      "snapshot_manifest_sha256": "66a6491d2aaa42cc64122c27884843ffd76871a05e45e6c6164a2f1d7fd73247",
+      "catalogue_manifest_sha256": "b050901e658ee5f52a2e991957820b57219aa199f4fe12cd081ea5d4b513e68b",
+      "needs_a3_manifest_sha256": "7f233e4e9a031d279b920a7a60c243e2eac2494052c604e36d2468d2f566b299",
+      "labels_sha256": "25d85528289932eeb3140375d95c09607ef4632d223814c34ad7cb0565e61a71",
+      "kept_set_sha256": "dbe6f917a5e399f911d036ffacd395376343062e4c4e45f83d09c00c743dd6ec",
+      "outcomes_sha256": "f59392cbbcd09884fbd53693b73f59c9faadda2047ee80cda8393e1705d257eb",
+      "counts_sha256": "9cc079eebe978a032e09ebff49324d091410a97b1b96f354e139f8aa747940d9",
+      "decision_sha256": "d6ca1a289b2edd09c89c57847ac1784769b88404069a40a86641938667970573",
+      "a4_protocol_sha256": "6047a109d0bc6359d5a1d01e9244641cdc492ca4a899e4c38f507d4dc11bf1e1"
+    },
+    "amendments": [
+      {
+        "id": "A1",
+        "note": "Deciduous dependency-title regex widened; sparkle catalogue rebuilt"
+      },
+      {
+        "id": "A2",
+        "note": "first need rule and rubric; replaced by A3 before any relevance label"
+      },
+      {
+        "id": "A3",
+        "note": "need sentence became the hybrid-search rule; rubric reduced to four drop kinds"
+      },
+      {
+        "id": "A4",
+        "note": "post-store re-measure on dispatch topics; recorded as a protocol failure"
+      }
+    ],
+    "calls": {
+      "total": 469,
+      "by_role": {
+        "primary_labeler": 257,
+        "second_labeler": 39,
+        "classifier": 165,
+        "reviewer": 4,
+        "transport_probe": 4
+      },
+      "rate_limited": 0
+    },
+    "stop2": {
+      "date": "2026-11-02",
+      "gating_table": "stands as the record of the run 1 sample",
+      "feature": "opt-in external-source search for every store, as its own follow-up",
+      "ships_first_rule": "retired: incremental >= 3 of n was fixed for A4 and is not applied",
+      "derived_flags_overridden": false
+    },
+    "recorded": {
+      "agreement": {
+        "run1": {
+          "sp": { "n": 3, "kappa": 0.89, "jaccard": 0.8, "outcome_agree": 1 },
+          "ag": {
+            "n": 9,
+            "kappa": 0.59,
+            "jaccard": 0.42,
+            "outcome_agree": 0.78
+          },
+          "gh": {
+            "n": 9,
+            "kappa": 0.48,
+            "jaccard": 0.33,
+            "outcome_agree": 0.56
+          },
+          "in": {
+            "n": 9,
+            "kappa": 0.57,
+            "jaccard": 0.42,
+            "outcome_agree": 0.78
+          }
+        },
+        "a4": {
+          "sp": { "n": 1, "kappa": 0.61, "jaccard": 0.44, "outcome_agree": 1 },
+          "ag": {
+            "n": 3,
+            "kappa": 0.5,
+            "jaccard": 0.34,
+            "outcome_agree": 0.33
+          },
+          "gh": {
+            "n": 3,
+            "kappa": 0.03,
+            "jaccard": 0.03,
+            "outcome_agree": 0.33
+          },
+          "in": { "n": 2, "kappa": 0, "jaccard": 0, "outcome_agree": 0.5 }
+        }
+      },
+      "swap": {
+        "run1": [
+          { "cell": 1, "gains": 0, "losses": 0 },
+          { "cell": 2, "gains": 0, "losses": 0 },
+          { "cell": 3, "gains": 0, "losses": 1 },
+          { "cell": 4, "gains": 1, "losses": 0 },
+          { "cell": 5, "gains": 2, "losses": 1 },
+          { "cell": 6, "gains": 0, "losses": 0 }
+        ],
+        "a4": [
+          { "cell": 1, "gains": 0, "losses": 0 },
+          { "cell": 2, "gains": 0, "losses": 0 },
+          { "cell": 3, "gains": 0, "losses": 0 },
+          { "cell": 4, "gains": 0, "losses": 0 },
+          { "cell": 5, "gains": 0, "losses": 0 },
+          { "cell": 6, "gains": 0, "losses": 0 }
+        ]
+      }
+    }
+  },
+  "run1": {
+    "description": "Earliest needs by time per pool, first 30 survivors after the authorship drop; counted with the exclusive rule. Floor 5 per cell, thin below 15.",
+    "floor": 5,
+    "thin_below": 15,
+    "decision_rule": "a cell qualifies at 5 or more needs where a store record is in either tier and no Systematic doc is in either tier; the wiki has two cells and is never summed",
+    "totals": {
+      "by_pool": {
+        "sp": { "n": 7, "thin": true },
+        "ag": { "n": 30, "thin": false },
+        "gh": { "n": 30, "thin": false },
+        "in": { "n": 30, "thin": false }
+      },
+      "cells": [
+        {
+          "cell": 1,
+          "pool": "sp",
+          "store": "deciduous",
+          "n": 7,
+          "count": 5,
+          "answers_only": 4,
+          "qualifies": true,
+          "thin": true
+        },
+        {
+          "cell": 2,
+          "pool": "ag",
+          "store": "legacy",
+          "n": 30,
+          "count": 0,
+          "answers_only": 7,
+          "qualifies": false,
+          "thin": false
+        },
+        {
+          "cell": 3,
+          "pool": "ag",
+          "store": "agent-wiki",
+          "n": 30,
+          "count": 1,
+          "answers_only": 3,
+          "qualifies": false,
+          "thin": false
+        },
+        {
+          "cell": 4,
+          "pool": "ag",
+          "store": "github-wiki",
+          "n": 30,
+          "count": 1,
+          "answers_only": 1,
+          "qualifies": false,
+          "thin": false
+        },
+        {
+          "cell": 5,
+          "pool": "gh",
+          "store": "github-wiki",
+          "n": 30,
+          "count": 1,
+          "answers_only": 7,
+          "qualifies": false,
+          "thin": false
+        },
+        {
+          "cell": 6,
+          "pool": "in",
+          "store": "runbook",
+          "n": 30,
+          "count": 0,
+          "answers_only": 0,
+          "qualifies": false,
+          "thin": false
+        }
+      ],
+      "stores": [
+        {
+          "store": "deciduous",
+          "qualifies": true,
+          "untestable": false,
+          "borderline": false
+        },
+        {
+          "store": "legacy",
+          "qualifies": false,
+          "untestable": false,
+          "borderline": false
+        },
+        {
+          "store": "agent-wiki",
+          "qualifies": false,
+          "untestable": false,
+          "borderline": false
+        },
+        {
+          "store": "github-wiki",
+          "qualifies": false,
+          "untestable": false,
+          "borderline": false
+        },
+        {
+          "store": "runbook",
+          "qualifies": false,
+          "untestable": false,
+          "borderline": false
+        }
+      ]
+    },
+    "entries": [
+      {
+        "id": "n-sp-001",
+        "pool": "sp",
+        "source": "body-sentence",
+        "month": "2025-08",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "deciduous": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-sp-002",
+        "pool": "sp",
+        "source": "pr-or-issue-title",
+        "month": "2025-02",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "n-sp-003",
+        "pool": "sp",
+        "source": "body-sentence",
+        "month": "2020-12",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "n-sp-004",
+        "pool": "sp",
+        "source": "body-sentence",
+        "month": "2025-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "deciduous": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-sp-005",
+        "pool": "sp",
+        "source": "pr-or-issue-title",
+        "month": "2025-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "deciduous": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-sp-006",
+        "pool": "sp",
+        "source": "body-sentence",
+        "month": "2025-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "deciduous": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-sp-007",
+        "pool": "sp",
+        "source": "body-sentence",
+        "month": "2025-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "deciduous": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-ag-001",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": true, "store_helps": true },
+          "legacy": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-002",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-003",
+        "pool": "ag",
+        "source": "body-sentence",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-004",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": { "legacy": { "store_answers": true, "store_helps": false } },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-005",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-ag-006",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-007",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-008",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-009",
+        "pool": "ag",
+        "source": "body-sentence",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-010",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-011",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": true, "store_helps": true },
+          "legacy": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-012",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-013",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-014",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-015",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-016",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": true, "store_helps": true },
+          "legacy": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-017",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-018",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": { "legacy": { "store_answers": true, "store_helps": true } },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-019",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-020",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-021",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-022",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-023",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-024",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": { "legacy": { "store_answers": true, "store_helps": true } },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-025",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": true, "store_helps": false }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-026",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-027",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true },
+          "github-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-028",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-ag-029",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true },
+          "legacy": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-ag-030",
+        "pool": "ag",
+        "source": "pr-or-issue-title",
+        "month": "2026-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": { "legacy": { "store_answers": false, "store_helps": true } },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-001",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-002",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2024-12",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-003",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-07",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "n-gh-004",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-03",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-gh-005",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-006",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-007",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2024-12",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-gh-008",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-gh-009",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-03",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-010",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-08",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-011",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-09",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-012",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-013",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-06",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-gh-014",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-08",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-015",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-09",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-016",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2024-12",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-017",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-08",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-018",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "n-gh-019",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2024-12",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-020",
+        "pool": "gh",
+        "source": "body-sentence",
+        "month": "2023-06",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-021",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-03",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-gh-022",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2022-11",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-023",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-024",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-08",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-025",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-026",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2024-12",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-027",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-028",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2025-01",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-029",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2023-09",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-gh-030",
+        "pool": "gh",
+        "source": "pr-or-issue-title",
+        "month": "2024-02",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "github-wiki": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-001",
+        "pool": "in",
+        "source": "body-sentence",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-002",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-003",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": true, "store_helps": false }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-004",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-005",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-006",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-007",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-008",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-009",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-010",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": true, "store_helps": false }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-011",
+        "pool": "in",
+        "source": "body-sentence",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-012",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-013",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-014",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-015",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-016",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": { "runbook": { "store_answers": true, "store_helps": true } },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-017",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-018",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-019",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-020",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-021",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-022",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-023",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-024",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-025",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-026",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "runbook": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "n-in-027",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-028",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-029",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "n-in-030",
+        "pool": "in",
+        "source": "pr-or-issue-title",
+        "month": "2026-04",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      }
+    ]
+  },
+  "a4": {
+    "description": "Dispatch topics (and, for sparkle, later titles) dated after each store first record, up to 10 per pool at even spacing. Recorded as a protocol failure.",
+    "protocol_failure": {
+      "recorded": true,
+      "reason": "the topic rule took the first sentence of each dispatch prompt, and most of those are generic search instructions, paths or read-only notices, so the sample carries little topic"
+    },
+    "retired_rule": {
+      "name": "ships-first",
+      "bar": "incremental >= 3 of the store n",
+      "status": "retired"
+    },
+    "window_rule": "a store counts the needs dated on or after the month of its own first record",
+    "totals": {
+      "by_pool": {
+        "sp": { "n": 2, "thin": true },
+        "ag": { "n": 10, "thin": true },
+        "gh": { "n": 10, "thin": true },
+        "in": { "n": 5, "thin": true }
+      },
+      "cells": [
+        {
+          "cell": 1,
+          "pool": "sp",
+          "store": "deciduous",
+          "n": 2,
+          "direct": 2,
+          "incremental": 1,
+          "exclusive": 1
+        },
+        {
+          "cell": 2,
+          "pool": "ag",
+          "store": "legacy",
+          "n": 10,
+          "direct": 0,
+          "incremental": 0,
+          "exclusive": 0
+        },
+        {
+          "cell": 3,
+          "pool": "ag",
+          "store": "agent-wiki",
+          "n": 10,
+          "direct": 0,
+          "incremental": 0,
+          "exclusive": 0
+        },
+        {
+          "cell": 4,
+          "pool": "ag",
+          "store": "github-wiki",
+          "n": 10,
+          "direct": 0,
+          "incremental": 0,
+          "exclusive": 0
+        },
+        {
+          "cell": 5,
+          "pool": "gh",
+          "store": "github-wiki",
+          "n": 10,
+          "direct": 0,
+          "incremental": 0,
+          "exclusive": 0
+        },
+        {
+          "cell": 6,
+          "pool": "in",
+          "store": "runbook",
+          "n": 5,
+          "direct": 0,
+          "incremental": 0,
+          "exclusive": 0
+        }
+      ]
+    },
+    "entries": [
+      {
+        "id": "a-sp-001",
+        "pool": "sp",
+        "source": "pr-or-issue-title",
+        "month": "2026-09",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "deciduous": { "store_answers": true, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "a-sp-002",
+        "pool": "sp",
+        "source": "pr-or-issue-title",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "stores": {
+          "deciduous": { "store_answers": true, "store_helps": false }
+        },
+        "outcome": "store-only"
+      },
+      {
+        "id": "a-ag-001",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-ag-002",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "a-ag-003",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-ag-004",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-08",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-ag-005",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-ag-006",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-07",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-ag-007",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-ag-008",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": true, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-ag-009",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-ag-010",
+        "pool": "ag",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "stores": {
+          "agent-wiki": { "store_answers": false, "store_helps": true }
+        },
+        "outcome": "both"
+      },
+      {
+        "id": "a-gh-001",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-gh-002",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-gh-003",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-gh-004",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-gh-005",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-gh-006",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-gh-007",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-gh-008",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-gh-009",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-08",
+        "sys": { "sys_answers": false, "sys_helps": true },
+        "outcome": "systematic-only"
+      },
+      {
+        "id": "a-gh-010",
+        "pool": "gh",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-in-001",
+        "pool": "in",
+        "source": "dispatch-topic",
+        "month": "2026-08",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-in-002",
+        "pool": "in",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-in-003",
+        "pool": "in",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-in-004",
+        "pool": "in",
+        "source": "dispatch-topic",
+        "month": "2026-10",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      },
+      {
+        "id": "a-in-005",
+        "pool": "in",
+        "source": "dispatch-topic",
+        "month": "2026-09",
+        "sys": { "sys_answers": false, "sys_helps": false },
+        "outcome": "nothing"
+      }
+    ]
+  }
+}
