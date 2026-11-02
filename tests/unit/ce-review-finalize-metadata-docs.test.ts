@@ -7,9 +7,6 @@
 // unknown key) must keep failing at the paths the section names.
 
 import { describe, expect, test } from 'bun:test'
-import { spawnSync } from 'node:child_process'
-import fs from 'node:fs'
-import path from 'node:path'
 import { MAX_RUN_FINDINGS } from '../../src/lib/review-artifact-schema.js'
 import {
   applyReviewAdjudication,
@@ -17,18 +14,14 @@ import {
   screenReviewReturn,
 } from '../../src/lib/review-pipeline.js'
 import { ParentRunMetadataSchema } from '../../src/lib/review-pipeline-contract.js'
-
-const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
-const DOC_PATH = path.join(
-  ROOT_DIR,
-  'skills/ce-review/references/pipeline-invocation.md',
-)
-const VALIDATOR_PATH = path.join(
-  ROOT_DIR,
-  'skills/ce-review/scripts/validate-review.mjs',
-)
-
-type JsonRecord = Record<string, unknown>
+import {
+  docSection,
+  documentedJsonExample,
+  hasBullet,
+  hasMention,
+  type JsonRecord,
+  runShippedPhase,
+} from '../helpers/ce-review-doc-contract.js'
 
 /** Outcomes for which the dispatch never produced a screen result. */
 const SCREEN_EXEMPT_OUTCOMES = new Set([
@@ -36,19 +29,10 @@ const SCREEN_EXEMPT_OUTCOMES = new Set([
   'validation_unavailable',
 ])
 
-function finalizeSection(): string {
-  const doc = fs.readFileSync(DOC_PATH, 'utf8')
-  const section = doc.split(/^## /m).find((s) => s.startsWith('finalize\n'))
-  if (section === undefined) throw new Error('no "## finalize" section found')
-  return section
-}
+const finalizeSection = () => docSection('finalize')
 
 function documentedExample(): JsonRecord {
-  const block = /```json\n([\s\S]*?)\n```/.exec(finalizeSection())
-  if (block?.[1] === undefined) {
-    throw new Error('no fenced json example in the finalize section')
-  }
-  return JSON.parse(block[1]) as JsonRecord
+  return documentedJsonExample(finalizeSection()) as JsonRecord
 }
 
 /**
@@ -99,23 +83,8 @@ function buildEnvelope(metadata: JsonRecord): JsonRecord {
   }
 }
 
-function runFinalize(envelope: JsonRecord): {
-  readonly exitCode: number
-  readonly stdout: string
-  readonly stderr: string
-} {
-  const result = spawnSync(process.execPath, [VALIDATOR_PATH, 'finalize'], {
-    encoding: 'utf8',
-    env: { PATH: process.env.PATH ?? '' },
-    input: JSON.stringify(envelope),
-    timeout: 30_000,
-  })
-  return {
-    exitCode: result.status ?? -1,
-    stderr: result.stderr ?? '',
-    stdout: result.stdout ?? '',
-  }
-}
+const runFinalize = (envelope: JsonRecord) =>
+  runShippedPhase('finalize', envelope)
 
 function mutated(mutate: (metadata: JsonRecord) => void): JsonRecord {
   const metadata = structuredClone(documentedExample())
@@ -148,15 +117,6 @@ describe('pipeline-invocation.md finalize section', () => {
 
   test('names every parent_run_metadata field and enum value the schema accepts', () => {
     const section = finalizeSection()
-    const hasBullet = (name: string) => section.includes(`\n- \`${name}\` --`)
-    // A name inside an inline code span, outside fenced blocks, so
-    // `{ started_at, completed_at }` counts as naming both.
-    const spans = [
-      ...section.replace(/```[\s\S]*?```/g, '').matchAll(/`([^`]+)`/g),
-    ].map((match) => match[1] ?? '')
-    const hasMention = (name: string) =>
-      spans.some((span) => new RegExp(`\\b${name}\\b`).test(span))
-
     const { shape } = ParentRunMetadataSchema
     const topLevel = Object.keys(shape)
     const dispatchFields = Object.keys(shape.selected_dispatches.element.shape)
@@ -172,14 +132,14 @@ describe('pipeline-invocation.md finalize section', () => {
     }
 
     for (const field of [...topLevel, ...dispatchFields]) {
-      expect(hasBullet(field), `field ${field}`).toBe(true)
+      expect(hasBullet(section, field), `field ${field}`).toBe(true)
     }
     for (const field of nested) {
-      expect(hasMention(field), `nested field ${field}`).toBe(true)
+      expect(hasMention(section, field), `nested field ${field}`).toBe(true)
     }
     for (const [name, values] of Object.entries(enums)) {
       for (const value of values) {
-        expect(hasMention(value), `${name} value ${value}`).toBe(true)
+        expect(hasMention(section, value), `${name} value ${value}`).toBe(true)
       }
     }
     // The `applied_fixes` array bound.
@@ -189,7 +149,7 @@ describe('pipeline-invocation.md finalize section', () => {
 
     // `validation.status` accepts four values, but finalize rejects all
     // except this one, which is the only one the section documents.
-    expect(hasMention('not_attempted'), 'validation status').toBe(true)
+    expect(hasMention(section, 'not_attempted'), 'validation status').toBe(true)
   })
 
   test.each([
