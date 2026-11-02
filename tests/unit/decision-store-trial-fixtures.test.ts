@@ -294,6 +294,21 @@ describe('derived totals', () => {
     const early = E({ id: 'a-ag-002', month: '2025-12' }) // before the legacy store's first record
     expect(derive('a4', [early]).cells[1]).toMatchObject({ n: 0 })
   })
+
+  test('recorded agreement covers every pool with stats in range and a 30% sample', () => {
+    for (const run of ['run1', 'a4'] as const) {
+      const rec = at('header', 'recorded', 'agreement', run) as Obj
+      expect(Object.keys(rec).sort()).toEqual(['ag', 'gh', 'in', 'sp'])
+      for (const [pool, a] of Object.entries(rec) as [string, Obj][]) {
+        const n = inPool(entriesOf(run), pool).length
+        expect(a.n).toBe(Math.ceil(0.3 * n))
+        for (const k of ['kappa', 'jaccard', 'outcome_agree']) {
+          expect(a[k]).toBeGreaterThanOrEqual(0)
+          expect(a[k]).toBeLessThanOrEqual(1)
+        }
+      }
+    }
+  })
 })
 
 describe('the raw-text guard', () => {
