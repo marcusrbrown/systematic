@@ -171,16 +171,93 @@ cross-reviewer agreement boost), fingerprint, submitters, and conservatively
 narrowed route -- the model supplies judgment per candidate group; the helper
 supplies the arithmetic and the narrowing rule.
 
-**Input:** `{ prepared:<prepare output>, adjudication:<model envelope with decisions[]> }`.
+**Input:** `{ prepared:<prepare output>, adjudication:{ decisions[] } }`.
 Build one `decisions[]` entry for every candidate-group member: a `merged`
-decision citing 2+ input IDs from the same group with the merged finding's
-`title`, `why_it_matters`, `evidence`, `line`, an optional `proposed_route`,
-`route_narrowing_reason` (required whenever `proposed_route` is present),
-and optional `disagreement_facts` and `eligible_agreement_credit`; or a
-`declined` decision citing exactly one input ID with a `declined_reason`
-explaining why it stays a separate defect. Every candidate-group member must
-be cited by exactly one decision -- no omissions, no double-citations.
-`prepare`'s true singletons need no decision at all.
+decision citing 2+ members of the same group, or a `declined` decision
+citing exactly one member and explaining why it stays a separate defect.
+Every candidate-group member must be cited by exactly one decision -- no
+omissions, no double-citations. `prepare`'s true singletons need no decision
+at all.
+
+`decisions[]` holds at most 2,048 entries. Each entry's `disposition` selects
+its form; a `kind` key or any other discriminator is rejected. Unknown keys are
+rejected on `adjudication`, on each decision, and on `proposed_route`. Every
+`decision_id` is unique across the envelope and becomes the `finding_id` of
+the finding the decision produces, so it must not equal the input ID of a
+singleton `prepare` passes through -- label it `merge-1`, not `correctness#0`.
+All fields are required unless marked optional.
+
+**Merged decision:**
+
+- `decision_id` -- string, 1-128 characters, not blank.
+- `disposition` -- `merged`.
+- `input_finding_ids` -- plural; at least 2 and at most 2,048 input IDs, each
+  at most 128 characters, all from one candidate group.
+- `title` -- string, 1-256 characters, not blank.
+- `why_it_matters` -- string, not blank, at most 2048 characters.
+- `evidence` -- 1-5 entries. Each is a string of at most 500 characters with
+  no leading `/`, drive letter, or backslash, or an overflow marker
+  `{ "overflow": true, "excerpt": <such a string> }`.
+- `line` -- positive integer equal to the `line` of one cited member.
+- `suggested_fix` -- optional string of at most 2048 characters, or `null`.
+- `disagreement_facts` -- optional array of at most 32 non-blank strings of at
+  most 2048 characters each.
+- `eligible_agreement_credit` -- optional array of at most 64 persona names.
+  Each persona appears once, contributed an admitted finding elsewhere in this
+  run, and is not a submitter of a cited finding.
+- `proposed_route` -- optional `{ autofix_class, owner, requires_verification }`,
+  all three required. `autofix_class` is `safe_auto`, `gated_auto`, `manual`,
+  or `advisory`. `owner` is `review-fixer`, `downstream-resolver`, `human`, or
+  `release`. `requires_verification` is a boolean.
+- `route_narrowing_reason` -- optional string of at most 2048 characters;
+  required whenever `proposed_route` is present.
+
+**Declined decision:**
+
+- `decision_id` -- string, 1-128 characters, not blank.
+- `disposition` -- `declined`.
+- `input_finding_id` -- singular; one input ID of at most 128 characters,
+  from a candidate group.
+- `declined_reason` -- string, not blank, at most 2048 characters.
+- `disagreement_facts` -- optional; same shape as on a merged decision.
+- `proposed_route` -- optional; same shape as on a merged decision.
+- `route_narrowing_reason` -- optional; required whenever `proposed_route` is
+  present.
+
+A complete valid `adjudication` for a group of `correctness#0`, `testing#0`,
+and `security#0`, where `maintainability` has an admitted finding on another
+file:
+
+```json
+{
+  "decisions": [
+    {
+      "decision_id": "merge-1",
+      "disposition": "merged",
+      "input_finding_ids": ["correctness#0", "testing#0"],
+      "title": "Session token survives logout",
+      "why_it_matters": "A stolen token stays valid after the user logs out.",
+      "evidence": ["src/auth/session.ts:42 never clears the token on logout."],
+      "line": 42,
+      "suggested_fix": "Delete the token record in the logout handler.",
+      "disagreement_facts": ["correctness rated it P1; testing rated it P2."],
+      "eligible_agreement_credit": ["maintainability"],
+      "proposed_route": {
+        "autofix_class": "manual",
+        "owner": "downstream-resolver",
+        "requires_verification": true
+      },
+      "route_narrowing_reason": "Logout changes need a targeted regression test."
+    },
+    {
+      "decision_id": "decline-1",
+      "disposition": "declined",
+      "input_finding_id": "security#0",
+      "declined_reason": "It describes the cookie flags, a different defect."
+    }
+  ]
+}
+```
 
 Omit `proposed_route` unless the route genuinely narrows: strictly narrower
 than every contributing finding's own route, per the authored
