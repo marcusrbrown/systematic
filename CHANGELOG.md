@@ -4,6 +4,28 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.29.1](https://github.com/marcusrbrown/systematic/compare/v3.29.0...v3.29.1) (2026-11-02)
+
+### Build System
+
+* **deps:** update OpenCode v2 to v2.2.1 ([#1276](https://github.com/marcusrbrown/systematic/issues/1276)) ([1e90315](https://github.com/marcusrbrown/systematic/commit/1e90315b9bad05831f6e3c30b3c184daaee71809))
+* **deps:** update OpenCode v2 to v2.2.3 ([#1280](https://github.com/marcusrbrown/systematic/issues/1280)) ([6a772ec](https://github.com/marcusrbrown/systematic/commit/6a772ec5729a2da0f939246b45007be9ca1bc1b2))
+
+### Documentation
+
+* **skills:** document the ce:review finalize metadata shape ([#1283](https://github.com/marcusrbrown/systematic/issues/1283)) ([3d08571](https://github.com/marcusrbrown/systematic/commit/3d085716bde58221c6037a3011907da5f2a3ac4a))
+* **skills:** document the ce:review merge decision shape ([#1285](https://github.com/marcusrbrown/systematic/issues/1285)) ([eb5e6a3](https://github.com/marcusrbrown/systematic/commit/eb5e6a37e6dd81918ac99110e8206ec7abfb47f8))
+* **solutions:** correct when a single-document kind is returned by search ([#1274](https://github.com/marcusrbrown/systematic/issues/1274)) ([32e2097](https://github.com/marcusrbrown/systematic/commit/32e2097f112d11c26bc507344900f8707ee2ec87))
+* **solutions:** record the past-work search lessons ([#1273](https://github.com/marcusrbrown/systematic/issues/1273)) ([ebae8a4](https://github.com/marcusrbrown/systematic/commit/ebae8a4a491e59148a53ac0c10650df4f95f0eae))
+* **solutions:** record why mined needs could not settle external decision stores ([#1281](https://github.com/marcusrbrown/systematic/issues/1281)) ([9e4a417](https://github.com/marcusrbrown/systematic/commit/9e4a417e3afe8ecc2f349a184add7642159dc8ab))
+* **solutions:** record why search stays lexical-only for now ([#1278](https://github.com/marcusrbrown/systematic/issues/1278)) ([94ecfb0](https://github.com/marcusrbrown/systematic/commit/94ecfb0eb3c6f888e6e3deaea44c7a3779ae8892))
+
+### Miscellaneous Chores
+
+* **deps:** update dependency @biomejs/biome to v2.6.4 ([#1275](https://github.com/marcusrbrown/systematic/issues/1275)) ([bd1d4a8](https://github.com/marcusrbrown/systematic/commit/bd1d4a868f34a683d77b6627645b65e0899742a1))
+* **deps:** update fro-bot/agent to v0.131.0 ([#1270](https://github.com/marcusrbrown/systematic/issues/1270)) ([4c0265c](https://github.com/marcusrbrown/systematic/commit/4c0265c3fb5cea40487a3ee44b8054db67a3780a))
+* **deps:** update fro-bot/agent to v0.132.0 ([#1277](https://github.com/marcusrbrown/systematic/issues/1277)) ([0a5fa53](https://github.com/marcusrbrown/systematic/commit/0a5fa53003a77e3d1c2d666e22216583ef917fbd))
+
 ## [3.29.0](https://github.com/marcusrbrown/systematic/compare/v3.28.1...v3.29.0) (2026-10-31)
 
 ### Features
