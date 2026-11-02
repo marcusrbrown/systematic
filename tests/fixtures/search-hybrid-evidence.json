@@ -1,0 +1,2546 @@
+{
+  "header": {
+    "description": "Outcome record for the hybrid-search evaluation that stopped at its floor. 60 representatives mined from real work; each entry names its primary labeled document (labeled before any ranker ran) and whether lexical search (the build at 32e2097f) found a labeled document in each call shape. Entries that lexical missed in at least one shape also list every labeled document; entries it always found list only the primary. No raw mined text and no session identifiers are stored; ids are opaque.",
+    "authored": "2026-11-01",
+    "outcome": "floor-stop",
+    "floor": 8,
+    "representative_cap": 60,
+    "fields": {
+      "id": "opaque q-hNNN id; the number is not a rank or a date",
+      "source": "`dispatch`, `user` or `gh`, the kind of record the need came from",
+      "primary": "the single most relevant labeled document as {path, kind}; kind brainstorm adds ci_reproducible:false because docs/brainstorms/ is untracked",
+      "targets": "present only on an entry that lexical missed in at least one call shape (pastwork, solutions, all or sentence_form_pastwork): every labeled document as {path, kind}, with ci_reproducible:false on a brainstorm. An entry lexical always found has no targets field; its primary is the only listed path.",
+      "lexical": "`pastwork`: four per-kind calls at limit 5, found when any labeled path is in the top 5 of any call. `solutions`: one solution call at limit 8, scored on solution targets only (`applicable` is false when no solution is labeled). `all`: one `all` call at limit 5. `sentence_form_pastwork` runs the same four calls on the unconverted need sentence. Every shape records a boolean `found`; a miss also names a `miss_stratum` (`6-20`: ranked 6 to 20; `over-20`: shares a term but ranks beyond 20; `no-overlap`) and a find has none.",
+      "totals": "every count is derived from the entries: `by_target_kind` counts primaries; `solutions_shape` counts entries with a solution label (`applicable`), their misses, and the solution-primary subset; `miss_strata` counts misses per stratum for each of pastwork, solutions, all and sentence_form_pastwork",
+      "primary_has_symptoms": "whether the primary target carries `symptoms` frontmatter",
+      "any_target_has_symptoms": "whether any labeled target carries `symptoms` frontmatter"
+    },
+    "scratch": {
+      "frozen_lexical_build": "32e2097f",
+      "corpus_hash": "14ae62b7e3ffb740fdbb62b768a50a7b8a94d19f49e7b0ac92c343efaf9b117d",
+      "labels_hash": "fca3cd26a291b12766fd992f61c03a168a933f3be0ea4a003a834ceb409ed45f",
+      "converted_query_set_hash": "141c5ab9073cc47557258c8c823dc4af9c87dc3410b25e77e113ced04572a8f7",
+      "lexical_run_hash": "5eb573715b6accdeb120de916c8e4f37e43e78ca999590862e15566873897696"
+    }
+  },
+  "candidates": {
+    "status": "not-applicable",
+    "reason": "The run stopped at the floor: fewer than 8 lexical misses in 60 representatives. No candidate ran on this set, so there are no per-candidate outcomes."
+  },
+  "totals": {
+    "representatives": 60,
+    "by_source": {
+      "dispatch": 2,
+      "user": 2,
+      "gh": 56
+    },
+    "by_target_kind": {
+      "solution": 30,
+      "plan": 26,
+      "brainstorm": 4
+    },
+    "pastwork_misses": 2,
+    "solutions_shape": {
+      "applicable": 60,
+      "misses": 6,
+      "primary_solution_queries": 30,
+      "primary_solution_misses": 4
+    },
+    "all_shape_misses": 12,
+    "sentence_form_pastwork_misses": 1,
+    "miss_strata": {
+      "pastwork": {
+        "6-20": 2
+      },
+      "solutions": {
+        "6-20": 6
+      },
+      "all": {
+        "6-20": 9,
+        "over-20": 3
+      },
+      "sentence_form_pastwork": {
+        "6-20": 1
+      }
+    }
+  },
+  "queries": [
+    {
+      "id": "q-h049",
+      "source": "dispatch",
+      "primary": {
+        "path": "docs/plans/2026-09-18-001-feat-project-defined-model-profiles-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h059",
+      "source": "dispatch",
+      "primary": {
+        "path": "docs/solutions/best-practices/workflow-guard-removed-2026-10-19.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h119",
+      "source": "user",
+      "primary": {
+        "path": "docs/solutions/best-practices/docs-site-oklch-migration-2026-05-21.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/best-practices/docs-site-oklch-migration-2026-05-21.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/pre-push-live-server-screenshot-qa-2026-05-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/verify-css-liveness-against-rendered-html-2026-06-04.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/build-errors/mdx-heading-anchor-crashes-astro-build-2026-05-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/astro-redirect-destinations-missing-base-prefix-2026-05-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/runtime-errors/starlight-steps-astro-hmr-regression-2026-06-04.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/ui-bugs/mdx-gfm-tables-render-as-raw-pipe-text-2026-07-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/auto-generated-install-commands-mdx-pitfalls-2026-06-06.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-05-22-001-feat-launch-surface-cleanup-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-22-launch-surface-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-05-27-001-feat-promotion-and-growth-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-18-infra-improvements-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-02-12-reference-section-refresh.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-02-08-docs-next-steps.md",
+          "kind": "plan"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h128",
+      "source": "user",
+      "primary": {
+        "path": "docs/plans/2026-09-04-001-refactor-ci-owned-host-contract-suite-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h134",
+      "source": "gh",
+      "primary": {
+        "path": "docs/brainstorms/2026-09-25-skill-delivery-requirements.md",
+        "kind": "brainstorm",
+        "ci_reproducible": false
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h135",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-04-17-002-refactor-truth-reset-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h136",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-01-20-systematic-implementation.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h137",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/removing-config-key-strict-schema-2026-10-19.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h138",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h143",
+      "source": "gh",
+      "primary": {
+        "path": "docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md",
+        "kind": "brainstorm",
+        "ci_reproducible": false
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h144",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/harden-converter-injected-agent-defaults-2026-06-06.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h145",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/generate-pi-package-agents-in-build-not-prepublish-2026-10-22.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/best-practices/generate-pi-package-agents-in-build-not-prepublish-2026-10-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-01-20-systematic-implementation.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-01-20-systematic-plugin-design.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-10-20-003-feat-pi-subagents-package-agents-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/typed-config-validation-build-time-codegen-2026-05-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/dependency-free-module-for-a-constant-shared-across-a-boundary-2026-09-20.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/availability-guards-must-check-executability-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/real-host-ci-catches-what-offline-gates-cannot-2026-09-06.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-09-04-001-refactor-ci-owned-host-contract-suite-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/developer-experience/typecheck-does-not-cover-ci-gate-scripts-2026-08-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/unguarded-generator-main-repairs-drift-when-imported-by-tests-2026-07-28.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/export-shape-change-missed-the-installed-eval-consumer-2026-10-28.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/build-errors/mdx-heading-anchor-crashes-astro-build-2026-05-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/verify-installed-artifacts-not-just-build-gates-2026-07-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-17-claude-code-plugin-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h146",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/typed-config-validation-build-time-codegen-2026-05-16.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h147",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/logic-errors/unquoted-conventional-commit-title-hides-plans-from-search-2026-10-31.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h148",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-09-25-001-feat-opencode-skill-delivery-completeness-plan.md",
+        "kind": "plan"
+      },
+      "targets": [
+        {
+          "path": "docs/plans/2026-09-25-001-feat-opencode-skill-delivery-completeness-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-09-25-skill-delivery-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-06-004-feat-discovered-skills-as-commands-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-05-17-002-feat-cc-residue-excision-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-17-excise-cc-residue-skills-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/content-integrity-mirror-runtime-drop-rules-2026-05-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-10-20-001-fix-skill-output-survives-prune-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/integration-issues/plugin-tool-output-truncated-before-after-hook-2026-09-26.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-06-003-feat-pi-harness-support-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-06-pi-harness-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-10-20-004-fix-pi-disable-settings-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-01-20-systematic-implementation.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-01-20-systematic-plugin-design.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-10-13-002-fix-stale-skill-load-names-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/dependency-free-module-for-a-constant-shared-across-a-boundary-2026-09-20.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-05-13-001-feat-bootstrap-message0-skill-catalog-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-08-14-001-refactor-bootstrap-catalog-deletion-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/logic-errors/frontmatter-close-delimiter-must-be-a-whole-line-2026-10-30.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h149",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-06-06-003-feat-skill-frontmatter-tune-up-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h150",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h151",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h152",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/fail-closed-shape-guard-for-user-owned-markdown-edits-2026-10-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/measure-a-source-scanner-blind-spots-2026-09-07.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/anchor-bundled-script-paths-in-skill-prose-2026-08-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/undecidable-detection-honest-ban-rule-2026-06-04.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-04-17-002-refactor-truth-reset-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-21-v3-converter-removal-and-excision-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-06-002-feat-v3-cleanup-release-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-05-05-001-feat-ce-work-beta-graduation-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-07-17-001-refactor-ce-dispatch-prose-harness-neutral-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/neutral-v1-marker-migrated-set-identifier-gate-2026-07-17.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h153",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-04-30-001-feat-writing-systematic-skills-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h154",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-05-22-001-feat-launch-surface-cleanup-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h155",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-09-04-002-feat-model-config-profiles-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h156",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-06-004-feat-discovered-skills-as-commands-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-17-claude-code-plugin-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/cross-harness-tools-frontmatter-divergence-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/content-integrity-mirror-runtime-drop-rules-2026-05-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-06-06-skill-frontmatter-tune-up-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-06-06-003-feat-skill-frontmatter-tune-up-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-17-excise-cc-residue-skills-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-05-17-002-feat-cc-residue-excision-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/opencode-config-schema-rejects-ad-hoc-agent-colors-2026-05-09.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-16-harness-portable-skills-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-16-001-feat-harness-portable-skills-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/anchor-bundled-script-paths-in-skill-prose-2026-08-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-09-25-skill-delivery-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "over-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h157",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-05-10-001-feat-zod-config-schema-jsonc-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h158",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-10-13-002-fix-stale-skill-load-names-plan.md",
+        "kind": "plan"
+      },
+      "targets": [
+        {
+          "path": "docs/plans/2026-10-13-002-fix-stale-skill-load-names-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-06-004-feat-discovered-skills-as-commands-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-09-25-skill-delivery-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-09-25-001-feat-opencode-skill-delivery-completeness-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-28-writing-systematic-skills-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-04-30-001-feat-writing-systematic-skills-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-17-ce-dispatch-prose-harness-neutral-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-17-001-refactor-ce-dispatch-prose-harness-neutral-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/neutral-v1-marker-migrated-set-identifier-gate-2026-07-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h159",
+      "source": "gh",
+      "primary": {
+        "path": "docs/brainstorms/2026-06-04-cep-verification-layers-requirements.md",
+        "kind": "brainstorm",
+        "ci_reproducible": false
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h160",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-08-17-001-feat-prior-art-survey-plan.md",
+        "kind": "plan"
+      },
+      "targets": [
+        {
+          "path": "docs/plans/2026-08-17-001-feat-prior-art-survey-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-08-17-grounding-planning-in-existing-code-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/brainstorms/2026-04-17-credibility-reset-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-04-17-002-refactor-truth-reset-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-18-infra-improvements-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/workflow-issues/clean-checkout-baselines-before-quoting-metrics-2026-08-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/truth-reset-scope-split-20260417.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/an-allowlist-is-a-claim-the-content-is-correct-2026-08-17.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h166",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-17-claude-code-plugin-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-10-11-004-feat-gated-release-pr-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-11-gated-release-pr-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/integration-issues/astro-redirect-destinations-missing-base-prefix-2026-05-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/commit-pinned-urls-publish-pr-evidence-images-2026-10-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-05-22-001-feat-launch-surface-cleanup-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h167",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/astro-redirect-destinations-missing-base-prefix-2026-05-22.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h172",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h173",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-07-11-001-refactor-v3-bundle-curation-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h174",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/ocx-registry-review-fixes.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h175",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/registry-validator-passthrough-hid-ocx-schema-mismatch-2026-10-29.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h176",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h177",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-02-12-reference-sidebar-badges-and-index-pages-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h178",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/brokered-push-needs-trusted-head-sha-2026-10-14.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h179",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/workflow-command-prompt-dry-run-integration.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/integration-issues/workflow-command-prompt-dry-run-integration.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-05-14-001-fix-isolated-opencode-integration-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-09-04-001-refactor-ci-owned-host-contract-suite-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/real-host-ci-catches-what-offline-gates-cannot-2026-09-06.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/availability-guards-must-check-executability-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/testing-host-prune-from-a-plugin-2026-10-20.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/prove-a-dispatched-subagent-reached-a-plugin-tool-on-a-real-host-2026-10-31.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/pi-real-runtime-integration-harness-2026-07-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/duplicated-cli-help-fixture-is-a-hidden-registration-point-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/export-shape-change-missed-the-installed-eval-consumer-2026-10-28.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/test-failures/unguarded-generator-main-repairs-drift-when-imported-by-tests-2026-07-28.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-06-004-feat-discovered-skills-as-commands-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-09-25-001-feat-opencode-skill-delivery-completeness-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-09-25-skill-delivery-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h180",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-07-06-004-feat-discovered-skills-as-commands-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h181",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-05-17-003-feat-subagent-stop-instruction-priority-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h182",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-05-23-001-feat-release-notes-narrative-skill-plan.md",
+        "kind": "plan"
+      },
+      "targets": [
+        {
+          "path": "docs/plans/2026-05-23-001-feat-release-notes-narrative-skill-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-23-release-notes-narrative-skill-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-05-23-002-feat-release-notes-narrative-ci-automation-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-23-release-notes-narrative-ci-automation-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-10-11-004-feat-gated-release-pr-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-11-gated-release-pr-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/auto-generated-install-commands-mdx-pitfalls-2026-06-06.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-02-12-reference-section-refresh.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/plans/2026-04-25-001-feat-registry-automation-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-25-registry-automation-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-07-11-001-refactor-v3-bundle-curation-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-11-v3-bundle-curation-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/developer-experience/semantic-release-body-ingestion-myth-2026-05-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/one-shot-release-for-an-older-major-2026-08-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/generate-pi-package-agents-in-build-not-prepublish-2026-10-22.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/typed-config-validation-build-time-codegen-2026-05-16.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h183",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-10-11-004-feat-gated-release-pr-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h187",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/test-failures/duplicated-cli-help-fixture-is-a-hidden-registration-point-2026-08-16.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h190",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/commit-pinned-urls-publish-pr-evidence-images-2026-10-24.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h191",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/third-party-bundled-skills-light-adaptation-2026-05-17.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/best-practices/third-party-bundled-skills-light-adaptation-2026-05-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/third-party-skill-design-law-import-2026-05-21.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-17-import-superpowers-foundation-skills-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-05-17-001-feat-import-superpowers-foundation-skills-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/solutions/integration-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-27-agent-browser-vendor-sync-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/content-integrity-mirror-runtime-drop-rules-2026-05-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-05-20-frontend-design-upgrade-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-05-20-001-feat-frontend-design-upgrade-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-06-04-merge-upstream-brainstorm-plan-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-06-04-002-feat-merge-upstream-brainstorm-plan-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-28-writing-systematic-skills-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/harden-converter-injected-agent-defaults-2026-06-06.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "over-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h194",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/fail-closed-shape-guard-for-user-owned-markdown-edits-2026-10-24.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/best-practices/fail-closed-shape-guard-for-user-owned-markdown-edits-2026-10-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-10-22-002-feat-pr-attachments-skill-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-22-pr-attachments-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/commit-pinned-urls-publish-pr-evidence-images-2026-10-24.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": false,
+          "miss_stratum": "6-20"
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h195",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-10-22-002-feat-pr-attachments-skill-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h198",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-05-13-001-feat-bootstrap-message0-skill-catalog-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h199",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h203",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/workflow-issues/delegated-verification-needs-a-prepared-environment-2026-08-18.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/workflow-issues/delegated-verification-needs-a-prepared-environment-2026-08-18.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/clean-checkout-baselines-before-quoting-metrics-2026-08-17.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/developer-experience/local-systematic-overrides-global-2026-05-14.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/brokered-push-needs-trusted-head-sha-2026-10-14.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/brainstorms/2026-04-17-credibility-reset-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/brainstorms/2026-10-24-worktree-placement-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "solutions": {
+          "applicable": true,
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "over-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h204",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-05-27-001-feat-promotion-and-growth-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h205",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-04-25-001-feat-registry-automation-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h206",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h207",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-07-06-002-feat-v3-cleanup-release-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h208",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/build-errors/mdx-heading-anchor-crashes-astro-build-2026-05-22.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h216",
+      "source": "gh",
+      "primary": {
+        "path": "docs/brainstorms/2026-05-21-v3-converter-removal-and-excision-requirements.md",
+        "kind": "brainstorm",
+        "ci_reproducible": false
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h218",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h223",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-04-18-001-feat-content-integrity-gate-plan.md",
+        "kind": "plan"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h224",
+      "source": "gh",
+      "primary": {
+        "path": "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+        "kind": "plan"
+      },
+      "targets": [
+        {
+          "path": "docs/plans/2026-10-26-001-feat-generated-surface-manifest-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-26-generated-surface-manifest-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/measure-a-source-scanner-blind-spots-2026-09-07.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md",
+          "kind": "solution"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": false,
+      "any_target_has_symptoms": false
+    },
+    {
+      "id": "q-h227",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md",
+        "kind": "solution"
+      },
+      "targets": [
+        {
+          "path": "docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-07-06-004-feat-discovered-skills-as-commands-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/plans/2026-10-27-001-feat-opencode-v2-support-plan.md",
+          "kind": "plan"
+        },
+        {
+          "path": "docs/brainstorms/2026-10-27-opencode-v2-support-requirements.md",
+          "kind": "brainstorm",
+          "ci_reproducible": false
+        },
+        {
+          "path": "docs/solutions/workflow-issues/subagent-skill-permission-scoping-2026-05-20.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/validate-foreign-harness-frontmatter-against-host-vocabulary-2026-10-29.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/integration-issues/cross-harness-tools-frontmatter-divergence-2026-08-16.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/solutions/best-practices/layered-trust-boundaries-overlay-config-2026-05-09.md",
+          "kind": "solution"
+        },
+        {
+          "path": "docs/plans/2026-05-09-001-feat-agent-model-configuration-plan.md",
+          "kind": "plan"
+        }
+      ],
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": false,
+          "miss_stratum": "6-20"
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    },
+    {
+      "id": "q-h229",
+      "source": "gh",
+      "primary": {
+        "path": "docs/solutions/integration-issues/opencode-plugin-named-exports-break-loader-2026-05-11.md",
+        "kind": "solution"
+      },
+      "lexical": {
+        "pastwork": {
+          "found": true
+        },
+        "solutions": {
+          "applicable": true,
+          "found": true
+        },
+        "all": {
+          "found": true
+        },
+        "sentence_form_pastwork": {
+          "found": true
+        }
+      },
+      "primary_has_symptoms": true,
+      "any_target_has_symptoms": true
+    }
+  ]
+}
