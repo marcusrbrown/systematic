@@ -220,9 +220,10 @@ structural validity, and evidence assessment separate:
 - **exit 2**, a missing or unreadable helper, or a launch failure — validation
   unavailable. Withhold the return and report the exact unavailability and what
   was withheld. Update that selected persona's preinitialized dispatch entry
-  from `never_returned` to `dispatch_outcome: "validation_unavailable"` with
-  `input_finding_count: 0` and, optionally, a safe `rejection_reason` naming the
-  exit status, missing helper, or launch failure without payload values. Set
+  from `never_returned` to `dispatch_outcome: "validation_unavailable"`, adding
+  no other field: the dispatch object is strict, and `finalize` derives
+  `input_finding_count: 0` into the artifact. Name the exit status, missing
+  helper, or launch failure in Coverage, without payload values. Set
   `run_status` to `degraded`. Never omit the dispatch entry, never leave it as
   `never_returned`, never label it `malformed`, never admit the payload, and
   never fabricate a rejected-summary ledger row. `never_returned` is a
