@@ -109,8 +109,9 @@ Read the exit status:
   validation unavailable. Withhold the return and report the exact
   unavailability and what was withheld. Update that selected persona's
   preinitialized dispatch entry from `never_returned` to `dispatch_outcome:
-  "validation_unavailable"` with `input_finding_count: 0`, and set
-  `run_status` to `degraded`. A run containing `validation_unavailable`
+  "validation_unavailable"`, adding no other field (the dispatch object is
+  strict; `finalize` derives `input_finding_count: 0` into the artifact), and
+  set `run_status` to `degraded`. A run containing `validation_unavailable`
   evidence can never finalize as `completed`, and that persona must not have
   an admitted input finding. `validation_unavailable` is not `malformed` and
   is not `never_returned`; they are distinct coverage states. `never_returned`
@@ -280,8 +281,8 @@ is not listed here.
 - `validation` -- `{ status, reason }`. `status` must be `not_attempted` at
   finalize (see above); `reason` is a non-blank string of at most 2048
   characters.
-- `applied_fixes` -- array of non-blank strings of at most 2048 characters
-  each. `[]` on the first call.
+- `applied_fixes` -- array of at most 2,048 non-blank strings of at most 2048
+  characters each. `[]` on the first call.
 
 Each dispatch object in `selected_dispatches` and `dispatch_records` is:
 
@@ -355,8 +356,8 @@ Choose a fresh delimiter the same way as `screen`'s. Read the exit status:
   `merge`/`prepared`, a missing or extra validator-lifecycle result, an
   invalid plan-assessment envelope, invalid `parent_run_metadata`, or an
   artifact that failed its own internal schema check. Correct the envelope
-  once per the never-bypass rule, then stop visibly if it is rejected again. Never hand-assemble a
-  substitute report or artifact.
+  once per the never-bypass rule, then stop visibly if it is rejected again.
+  Never hand-assemble a substitute report or artifact.
 - **exit 2**, a missing helper, or a launch failure -- unavailable; retry
   once with identical bytes, then stop visibly.
 

@@ -10,8 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-
-import { DispatchOutcomeSchema } from '../../src/lib/review-artifact-schema.js'
+import { MAX_RUN_FINDINGS } from '../../src/lib/review-artifact-schema.js'
 import {
   applyReviewAdjudication,
   prepareReviewCandidates,
@@ -150,23 +149,47 @@ describe('pipeline-invocation.md finalize section', () => {
   test('names every parent_run_metadata field and enum value the schema accepts', () => {
     const section = finalizeSection()
     const hasBullet = (name: string) => section.includes(`\n- \`${name}\` --`)
-    const mode = ParentRunMetadataSchema.shape.mode.options
-    const dispatchFields = [
-      'persona',
-      'dispatch_outcome',
-      'selection_surface',
-      'selection_reason',
-    ]
+    // A name inside an inline code span, outside fenced blocks, so
+    // `{ started_at, completed_at }` counts as naming both.
+    const spans = [
+      ...section.replace(/```[\s\S]*?```/g, '').matchAll(/`([^`]+)`/g),
+    ].map((match) => match[1] ?? '')
+    const hasMention = (name: string) =>
+      spans.some((span) => new RegExp(`\\b${name}\\b`).test(span))
 
-    for (const field of [
-      ...Object.keys(ParentRunMetadataSchema.shape),
-      ...dispatchFields,
-    ]) {
+    const { shape } = ParentRunMetadataSchema
+    const topLevel = Object.keys(shape)
+    const dispatchFields = Object.keys(shape.selected_dispatches.element.shape)
+    const nested = [
+      ...Object.keys(shape.timestamps.shape),
+      ...Object.keys(shape.validation.shape),
+    ]
+    const enums = {
+      mode: shape.mode.options,
+      harness: shape.harness.options,
+      dispatch_outcome:
+        shape.selected_dispatches.element.shape.dispatch_outcome.options,
+    }
+
+    for (const field of [...topLevel, ...dispatchFields]) {
       expect(hasBullet(field), `field ${field}`).toBe(true)
     }
-    for (const value of [...mode, ...DispatchOutcomeSchema.options]) {
-      expect(section.includes(`\`${value}\``), `enum value ${value}`).toBe(true)
+    for (const field of nested) {
+      expect(hasMention(field), `nested field ${field}`).toBe(true)
     }
+    for (const [name, values] of Object.entries(enums)) {
+      for (const value of values) {
+        expect(hasMention(value), `${name} value ${value}`).toBe(true)
+      }
+    }
+    // The `applied_fixes` array bound.
+    expect(section).toContain(
+      `at most ${MAX_RUN_FINDINGS.toLocaleString('en-US')}`,
+    )
+
+    // `validation.status` accepts four values, but finalize rejects all
+    // except this one, which is the only one the section documents.
+    expect(hasMention('not_attempted'), 'validation status').toBe(true)
   })
 
   test.each([
