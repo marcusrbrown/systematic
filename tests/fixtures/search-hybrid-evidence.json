@@ -10,7 +10,8 @@
       "source": "`dispatch`, `user` or `gh`, the kind of record the need came from",
       "primary": "the single most relevant labeled document as {path, kind}; kind brainstorm adds ci_reproducible:false because docs/brainstorms/ is untracked",
       "targets": "present only on an entry that lexical missed in at least one call shape (pastwork, solutions, all or sentence_form_pastwork): every labeled document as {path, kind}, with ci_reproducible:false on a brainstorm. An entry lexical always found has no targets field; its primary is the only listed path.",
-      "lexical": "`pastwork`: four per-kind calls at limit 5, found when any labeled path is in the top 5 of any call. `solutions`: one solution call at limit 8, scored on solution targets only (`applicable` is false when no solution is labeled). `all`: one `all` call at limit 5. `sentence_form_pastwork` runs the unconverted need sentence. `miss_stratum` is `6-20` (ranked 6 to 20), `over-20` (shares a term but ranks beyond 20) or `no-overlap`.",
+      "lexical": "`pastwork`: four per-kind calls at limit 5, found when any labeled path is in the top 5 of any call. `solutions`: one solution call at limit 8, scored on solution targets only (`applicable` is false when no solution is labeled). `all`: one `all` call at limit 5. `sentence_form_pastwork` runs the same four calls on the unconverted need sentence. Every shape records a boolean `found`; a miss also names a `miss_stratum` (`6-20`: ranked 6 to 20; `over-20`: shares a term but ranks beyond 20; `no-overlap`) and a find has none.",
+      "totals": "every count is derived from the entries: `by_target_kind` counts primaries; `solutions_shape` counts entries with a solution label (`applicable`), their misses, and the solution-primary subset; `miss_strata` counts misses per stratum for each of pastwork, solutions, all and sentence_form_pastwork",
       "primary_has_symptoms": "whether the primary target carries `symptoms` frontmatter",
       "any_target_has_symptoms": "whether any labeled target carries `symptoms` frontmatter"
     },
@@ -57,6 +58,9 @@
       "all": {
         "6-20": 9,
         "over-20": 3
+      },
+      "sentence_form_pastwork": {
+        "6-20": 1
       }
     }
   },
@@ -2051,7 +2055,8 @@
           "miss_stratum": "6-20"
         },
         "sentence_form_pastwork": {
-          "found": false
+          "found": false,
+          "miss_stratum": "6-20"
         }
       },
       "primary_has_symptoms": false,

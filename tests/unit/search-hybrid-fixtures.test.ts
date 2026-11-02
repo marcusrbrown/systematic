@@ -81,21 +81,35 @@ function rawTextProblems(entry: unknown): string[] {
   return [...problems]
 }
 
-/** Problems with one lexical outcome: a miss needs a stratum; a found outcome must not carry one. */
-function outcomeProblems(o: unknown): string[] {
+const SHAPES = [
+  'pastwork',
+  'solutions',
+  'all',
+  'sentence_form_pastwork',
+] as const
+type Shape = (typeof SHAPES)[number]
+
+/**
+ * Problems with one lexical outcome: `found` must be a boolean, a miss names a known stratum and a find has none.
+ * Only the solutions shape may be `applicable: false`, and then it carries neither `found` nor a stratum.
+ */
+function outcomeProblems(o: unknown, shape: Shape): string[] {
   if (!isRecord(o)) return ['outcome is not an object']
-  if (o.applicable === false) {
-    return 'found' in o ? ['not-applicable outcome reports found'] : []
+  if ('applicable' in o && shape !== 'solutions') {
+    return [`${shape} outcome has an applicable field`]
   }
-  if (o.found === true) {
+  if (o.applicable === false) {
+    return 'found' in o || 'miss_stratum' in o
+      ? ['not-applicable outcome reports found or a stratum']
+      : []
+  }
+  if (typeof o.found !== 'boolean') return ['outcome has no boolean found flag']
+  if (o.found) {
     return 'miss_stratum' in o ? ['found outcome carries a stratum'] : []
   }
-  if (o.found === false) {
-    return STRATA.some((x) => x === o.miss_stratum)
-      ? []
-      : ['miss has no known stratum']
-  }
-  return ['outcome has no found flag']
+  return STRATA.some((x) => x === o.miss_stratum)
+    ? []
+    : ['miss has no known stratum']
 }
 
 interface Target {
@@ -148,9 +162,7 @@ function listedTargets(entry: Record<string, unknown>): Target[] {
 /** True when lexical missed the entry in at least one call shape. */
 function missedInSomeShape(entry: Record<string, unknown>): boolean {
   const lexical = isRecord(entry.lexical) ? entry.lexical : {}
-  return (
-    ['pastwork', 'solutions', 'all', 'sentence_form_pastwork'] as const
-  ).some((shape) => {
+  return SHAPES.some((shape) => {
     const o = lexical[shape]
     return isRecord(o) && o.found === false
   })
@@ -175,20 +187,86 @@ function targetsListProblems(entry: Record<string, unknown>): string[] {
   return problems
 }
 
+const KIND_KEYS = ['solution', 'plan', 'brainstorm'] as const
+
+/** Every count the fixture records as `totals`, recomputed from the entries alone. */
+function deriveTotals(entries: Record<string, unknown>[]) {
+  const outcome = (e: Record<string, unknown>, shape: Shape) => {
+    const l = isRecord(e.lexical) ? e.lexical : {}
+    const o = l[shape]
+    return isRecord(o) ? o : {}
+  }
+  const primaryKind = (e: Record<string, unknown>) =>
+    isRecord(e.primary) ? e.primary.kind : undefined
+  const missed = (e: Record<string, unknown>, shape: Shape) =>
+    outcome(e, shape).found === false
+  const strata = (shape: Shape) => {
+    const m: Record<string, number> = {}
+    for (const e of entries) {
+      const o = outcome(e, shape)
+      if (o.found === false) {
+        const k = String(o.miss_stratum)
+        m[k] = (m[k] ?? 0) + 1
+      }
+    }
+    return m
+  }
+  const bySource: Record<string, number> = {}
+  for (const e of entries) {
+    bySource[String(e.source)] = (bySource[String(e.source)] ?? 0) + 1
+  }
+  const solutionPrimary = entries.filter((e) => primaryKind(e) === 'solution')
+  return {
+    representatives: entries.length,
+    by_source: bySource,
+    by_target_kind: Object.fromEntries(
+      KIND_KEYS.map((k) => [
+        k,
+        entries.filter((e) => primaryKind(e) === k).length,
+      ]),
+    ),
+    pastwork_misses: entries.filter((e) => missed(e, 'pastwork')).length,
+    solutions_shape: {
+      applicable: entries.filter(
+        (e) => outcome(e, 'solutions').applicable === true,
+      ).length,
+      misses: entries.filter((e) => missed(e, 'solutions')).length,
+      primary_solution_queries: solutionPrimary.length,
+      primary_solution_misses: solutionPrimary.filter((e) =>
+        missed(e, 'solutions'),
+      ).length,
+    },
+    all_shape_misses: entries.filter((e) => missed(e, 'all')).length,
+    sentence_form_pastwork_misses: entries.filter((e) =>
+      missed(e, 'sentence_form_pastwork'),
+    ).length,
+    miss_strata: {
+      pastwork: strata('pastwork'),
+      solutions: strata('solutions'),
+      all: strata('all'),
+      sentence_form_pastwork: strata('sentence_form_pastwork'),
+    },
+  }
+}
+
 const evidence = readJson('tests/fixtures/search-hybrid-evidence.json')
 const tune = readJson('tests/fixtures/search-hybrid-tune.json')
 
-function evidenceEntries(): Record<string, unknown>[] {
-  if (!isRecord(evidence) || !Array.isArray(evidence.queries)) {
-    throw new Error('evidence fixture has no queries array')
+/** The `queries` array of a fixture; every element must be a record, so a stray string or null fails instead of being skipped. */
+function entriesOf(fixture: unknown, name: string): Record<string, unknown>[] {
+  if (!isRecord(fixture) || !Array.isArray(fixture.queries)) {
+    throw new Error(`${name} fixture has no queries array`)
   }
-  return evidence.queries.filter(isRecord)
+  return fixture.queries.map((q, i) => {
+    if (!isRecord(q)) throw new Error(`${name} queries[${i}] is not a record`)
+    return q
+  })
+}
+function evidenceEntries(): Record<string, unknown>[] {
+  return entriesOf(evidence, 'evidence')
 }
 function tuneEntries(): Record<string, unknown>[] {
-  if (!isRecord(tune) || !Array.isArray(tune.queries)) {
-    throw new Error('tune fixture has no queries array')
-  }
-  return tune.queries.filter(isRecord)
+  return entriesOf(tune, 'tune')
 }
 
 describe('fixture shape', () => {
@@ -213,11 +291,7 @@ describe('fixture shape', () => {
         expect(e.any_target_has_symptoms).toBe(true)
       }
       const lexical = isRecord(e.lexical) ? e.lexical : {}
-      for (const shape of ['pastwork', 'solutions', 'all'] as const) {
-        const outcome = lexical[shape]
-        expect(isRecord(outcome)).toBe(true)
-      }
-      expect(isRecord(lexical.sentence_form_pastwork)).toBe(true)
+      expect(Object.keys(lexical).sort()).toEqual([...SHAPES].sort())
     }
   })
 
@@ -275,48 +349,119 @@ describe('fixture shape', () => {
     ).toEqual(['primary is not among the targets'])
   })
 
-  test('every miss names a stratum and no found outcome does', () => {
+  test('every shape, sentence-form included, has a boolean found; a miss names a stratum and a find has none', () => {
     for (const e of evidenceEntries()) {
       const lexical = isRecord(e.lexical) ? e.lexical : {}
-      for (const shape of ['pastwork', 'solutions', 'all'] as const) {
-        expect(outcomeProblems(lexical[shape])).toEqual([])
+      for (const shape of SHAPES) {
+        expect(outcomeProblems(lexical[shape], shape)).toEqual([])
       }
     }
   })
 
-  test('error path: a miss without a stratum, a found outcome with one, and an applicable:false outcome that reports found all fail', () => {
-    expect(outcomeProblems({ found: false })).toHaveLength(1)
-    expect(outcomeProblems({ found: true, miss_stratum: '6-20' })).toHaveLength(
-      1,
-    )
-    expect(outcomeProblems({ applicable: false, found: true })).toHaveLength(1)
-    expect(outcomeProblems({ found: false, miss_stratum: '6-20' })).toEqual([])
-    expect(outcomeProblems({ found: true })).toEqual([])
-    expect(outcomeProblems({ applicable: false })).toEqual([])
+  test('error path: malformed outcomes fail, sentence-form ones included', () => {
+    const bad = (o: unknown, shape: Shape = 'pastwork') =>
+      outcomeProblems(o, shape)
+    expect(bad({ found: false })).toHaveLength(1)
+    expect(bad({ found: true, miss_stratum: '6-20' })).toHaveLength(1)
+    expect(bad({ applicable: false, found: true }, 'solutions')).toHaveLength(1)
+    expect(bad({ found: false, miss_stratum: 'deep' })).toHaveLength(1)
+    // sentence-form: the same rules, and no applicable field
+    expect(bad({ found: false }, 'sentence_form_pastwork')).toHaveLength(1)
+    expect(bad({ found: 'false' }, 'sentence_form_pastwork')).toHaveLength(1)
+    expect(bad({}, 'sentence_form_pastwork')).toHaveLength(1)
+    expect(bad(null, 'sentence_form_pastwork')).toHaveLength(1)
+    expect(
+      bad({ found: true, miss_stratum: '6-20' }, 'sentence_form_pastwork'),
+    ).toHaveLength(1)
+    expect(
+      bad({ applicable: true, found: true }, 'sentence_form_pastwork'),
+    ).toHaveLength(1)
+    // the valid forms
+    expect(bad({ found: false, miss_stratum: '6-20' })).toEqual([])
+    expect(bad({ found: true })).toEqual([])
+    expect(bad({ applicable: false }, 'solutions')).toEqual([])
+    expect(
+      bad({ found: false, miss_stratum: 'over-20' }, 'sentence_form_pastwork'),
+    ).toEqual([])
+    expect(bad({ found: true }, 'sentence_form_pastwork')).toEqual([])
   })
 
-  test('the totals match the entries', () => {
-    if (!isRecord(evidence) || !isRecord(evidence.totals)) {
-      throw new Error('no totals')
-    }
-    const entries = evidenceEntries()
-    const lexOf = (e: Record<string, unknown>, shape: string) => {
-      const l = isRecord(e.lexical) ? e.lexical : {}
-      const o = l[shape]
-      return isRecord(o) ? o : {}
-    }
-    expect(evidence.totals.representatives).toBe(entries.length)
-    expect(evidence.totals.pastwork_misses).toBe(
-      entries.filter((e) => lexOf(e, 'pastwork').found === false).length,
-    )
-    expect(evidence.totals.all_shape_misses).toBe(
-      entries.filter((e) => lexOf(e, 'all').found === false).length,
-    )
-    const bySource: Record<string, number> = {}
-    for (const e of entries) {
-      bySource[String(e.source)] = (bySource[String(e.source)] ?? 0) + 1
-    }
-    expect(evidence.totals.by_source).toEqual(bySource)
+  test('error path: a non-record element in queries fails instead of being skipped', () => {
+    const ok = evidenceEntries()
+    expect(() => entriesOf({ queries: ok }, 'evidence')).not.toThrow()
+    expect(() =>
+      entriesOf(
+        { queries: [...ok, 'why did the build fail after my edit'] },
+        'evidence',
+      ),
+    ).toThrow('queries[60] is not a record')
+    expect(() => entriesOf({ queries: [...ok, null] }, 'evidence')).toThrow()
+    expect(() => entriesOf({ queries: [...ok, [1]] }, 'evidence')).toThrow()
+    expect(() => entriesOf({}, 'evidence')).toThrow('no queries array')
+  })
+
+  test('every recorded total equals the value derived from the entries', () => {
+    if (!isRecord(evidence)) throw new Error('no evidence')
+    expect(evidence.totals).toEqual(deriveTotals(evidenceEntries()))
+  })
+
+  test('deriveTotals counts each total independently; a wrong recorded value would differ', () => {
+    const miss = (stratum: string) => ({ found: false, miss_stratum: stratum })
+    const entry = (
+      id: string,
+      source: string,
+      primaryKind: Kind,
+      lexical: Record<string, unknown>,
+    ) => ({
+      id,
+      source,
+      primary: { path: `${KIND_DIR[primaryKind]}a.md`, kind: primaryKind },
+      lexical,
+    })
+    const found = { found: true }
+    const entries = [
+      entry('q-h001', 'gh', 'solution', {
+        pastwork: miss('6-20'),
+        solutions: { applicable: true, ...miss('6-20') },
+        all: miss('over-20'),
+        sentence_form_pastwork: miss('no-overlap'),
+      }),
+      entry('q-h002', 'user', 'plan', {
+        pastwork: found,
+        solutions: { applicable: true, found: true },
+        all: found,
+        sentence_form_pastwork: found,
+      }),
+      entry('q-h003', 'gh', 'brainstorm', {
+        pastwork: found,
+        solutions: { applicable: false },
+        all: miss('6-20'),
+        sentence_form_pastwork: miss('6-20'),
+      }),
+    ]
+    expect(deriveTotals(entries)).toEqual({
+      representatives: 3,
+      by_source: { gh: 2, user: 1 },
+      by_target_kind: { solution: 1, plan: 1, brainstorm: 1 },
+      pastwork_misses: 1,
+      solutions_shape: {
+        applicable: 2,
+        misses: 1,
+        primary_solution_queries: 1,
+        primary_solution_misses: 1,
+      },
+      all_shape_misses: 2,
+      sentence_form_pastwork_misses: 2,
+      miss_strata: {
+        pastwork: { '6-20': 1 },
+        solutions: { '6-20': 1 },
+        all: { 'over-20': 1, '6-20': 1 },
+        sentence_form_pastwork: { 'no-overlap': 1, '6-20': 1 },
+      },
+    })
+    // a tampered copy of the real totals differs
+    const real = deriveTotals(evidenceEntries())
+    expect({ ...real, sentence_form_pastwork_misses: 0 }).not.toEqual(real)
   })
 
   test('the floor stop is explicit: the run is below the floor and candidates are marked not applicable', () => {
