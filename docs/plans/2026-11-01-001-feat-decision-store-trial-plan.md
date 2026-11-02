@@ -1,7 +1,7 @@
 ---
 title: "feat: Measure whether real needs depend on decision stores outside Systematic docs"
 type: feat
-status: active
+status: completed
 date: 2026-11-01
 origin: docs/brainstorms/2026-11-01-decision-store-trial-requirements.md
 ---
@@ -10,7 +10,9 @@ origin: docs/brainstorms/2026-11-01-decision-store-trial-requirements.md
 
 ## Overview
 
-This is a measurement, not a feature. Nothing is built to reach any external store.
+**Outcome (2026-11-02).** The measurement was completed and its usefulness is unresolved. One cell reached the floor (Deciduous, 5 of 7, thin and circular) and the other five did not, but the exclusive-coverage gate, early-history sampling, PR-title needs, a store seeded from the needs' own PRs and a lopsided label tier explain the zeros better than the stores do. A later re-measure (A4) on dispatch topics was a protocol failure: the topic rule took boilerplate first sentences. Measuring stopped and R16 was replaced. Opt-in external-source search through the existing lexical engine is authorized separately, for every store, and its value is checked by dogfooding. The learning and the evidence fixture record both runs. Phase C (U9) runs after merge.
+
+This was planned as a measurement, not a feature. Nothing is built to reach any external store.
 
 Four trial repos each get one need pool. A need is a real "why, how, what did we" sentence that a human wrote in that repo's issues, PRs or opencode sessions. Each pool is labeled against a frozen catalogue: the repo's Systematic docs plus its external stores. A store earns a follow-up only if at least 5 needs in one pool cell are answered or helped by the store and by no Systematic doc.
 
@@ -362,7 +364,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 
 ### Phase A: Measurement (scratch only)
 
-- [ ] U1. Protocol, ledger and harness fork
+- [x] U1. Protocol, ledger and harness fork
 
 **Goal:** Every decision the protocol pins is hashed in the ledger before any pool data is read.
 
@@ -401,7 +403,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 - A dry run refuses every out-of-order transition the guard covers, and the scripts refuse the rest.
 - The hybrid tree hash is unchanged.
 
-- [ ] U2. Snapshot, thread metadata and pinned refs
+- [x] U2. Snapshot, thread metadata and pinned refs
 
 **Goal:** The session snapshot, thread metadata and per-repo refs exist, hashed, under a fixed cutoff `T`.
 
@@ -436,7 +438,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 - The top-level and subagent split per pool is recorded.
 - GraphQL totals reconcile for all four repos.
 
-- [ ] U3. Catalogues, Deciduous filter and yield forecast
+- [x] U3. Catalogues, Deciduous filter and yield forecast
 
 **Goal:** Four frozen catalogues, each built from pinned archives, and a metadata-only forecast, before any need text is derived.
 
@@ -478,7 +480,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 - The token estimate fits the model context.
 - STOP1 either did not trigger or is recorded as decided.
 
-- [ ] U4. Need derivation
+- [x] U4. Need derivation
 
 **Goal:** Per pool, an ordered, frozen list of human-text representatives, derived before any label exists.
 
@@ -521,7 +523,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 - Per-pool `needs_sha256`, the exclusions log hash, the ordered representative list, `W` and the source mix by class are in the ledger. No relevance label call has run. A model call that only classifies "not a need" is allowed, and its rubric was frozen in U1.
 - Every drop has a reason.
 
-- [ ] U5. Authorship indices and primary labels
+- [x] U5. Authorship indices and primary labels
 
 **Goal:** Each pool's kept set (up to 30), from frozen primary labels that passed the recall control.
 
@@ -563,7 +565,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 - Per-pool `labels_sha256`, `walk_sha256` and `kept_set_sha256` are in the ledger, with every drop reason and the unmapped share.
 - The snapshot file is deleted and the deletion is recorded.
 
-- [ ] U6. Second sample, scoring and borderline
+- [x] U6. Second sample, scoring and borderline
 
 **Goal:** Frozen second labels, a pure decision function, and per-cell counts with borderline flags.
 
@@ -603,7 +605,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 - `sample_sha256`, `second_sha256`, `outcomes_sha256` and `counts_sha256` are in the ledger.
 - Every qualifying, borderline, `thin` and `untestable` flag is derived, not typed.
 
-- [ ] U7. Stop package and Marcus's decision
+- [x] U7. Stop package and Marcus's decision
 
 **Goal:** Marcus decides each store with the evidence in front of him, and the decision is recorded without recomputation.
 
@@ -627,7 +629,7 @@ Each phase records its hash in the ledger. The hybrid guard's phase machine enfo
 
 ### Phase B: Evidence (repo)
 
-- [ ] U8. Learning, evidence fixture and shape test
+- [x] U8. Learning, evidence fixture and shape test
 
 **Goal:** The decision and its protocol survive in the repo without the harness or any raw mined text.
 
