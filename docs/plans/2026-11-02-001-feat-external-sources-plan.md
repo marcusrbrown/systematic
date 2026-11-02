@@ -38,7 +38,7 @@ The origin defines R1 to R24 and AE1 to AE11. Every requirement maps to at least
 | ID | Requirement (short form) | Units |
 |----|--------------------------|-------|
 | R1 | A source has a name, a format and one or more roots | U1, U3 |
-| R2 | Project roots resolve to strict subfolders; no `.`, no dot segment; a bad root drops its source with a named warning | U1, U4 |
+| R2 | Project roots resolve to strict subfolders; no `.`, no dot segment except the `.deciduous/` exception (KTD9); a bad root drops its source with a named warning | U1, U4, U7 |
 | R3 | Proposed sources load only for allowed projects; otherwise search says so and reads nothing | U3, U5 |
 | R4 | User config declares sources anywhere, mapped to projects | U1, U3 |
 | R5 | Project identity is the main repo root; a worktree matches its main checkout; exact path match | U2, U3 |
@@ -96,7 +96,7 @@ Acceptance examples and where they are pinned:
 ### Deferred to Separate Tasks
 
 - Running the real-host delegated proof on OpenCode v1, Pi and Claude Code: later work, if the v2 proof and the host-free parity test leave a gap.
-- A size assertion for the Claude Code bin bundle: none exists today; U6 records the size change and leaves a guard for follow-up.
+- A size guard for the Claude Code bin bundle: none exists today. U6 records the size change in the PR notes, and no guard is added.
 
 ---
 
@@ -120,7 +120,7 @@ Researcher and tests:
 - Delegated proof: `tests/helpers/delegated-search-proof.ts`, `tests/unit/delegated-search-proof.test.ts`, and the v2 case in `tests/integration/opencode-v2.test.ts`.
 - Identity fixtures: `tests/unit/git-worktree-fixtures.ts` (real git in isolated temp repos).
 - Pins the new text must move together: `tests/unit/search-core.test.ts`, `tests/unit/cli.test.ts`, `tests/unit/search-cli.test.ts`, `tests/unit/search-adapters-parity.test.ts`, `tests/unit/search-render.test.ts`, `tests/unit/search-lifecycle-characterization.test.ts`, `tests/unit/claude-code-search.test.ts`, and the `fieldPath: 'search'` pins in `tests/unit/capability-snapshot.test.ts` and `tests/unit/config.test.ts`.
-- Generated surfaces affected: schema (`docs/public/schemas/v*/systematic-config.schema.json`), config-reference (`docs/src/content/docs/reference/configuration.mdx`), registry, and the Pi persona fixtures. Both config surfaces already list `src/lib/search-user-config.ts` as a trigger.
+- Generated surfaces affected: schema (`docs/public/schemas/v*/systematic-config.schema.json`), config-reference (`docs/src/content/docs/reference/configuration.mdx`), and the registry only if the researcher change triggers it. Both config surfaces already list `src/lib/search-user-config.ts` as a trigger.
 
 ### Institutional Learnings
 
@@ -237,22 +237,27 @@ Decisions below were settled in planning. The first group came from Marcus's rev
 
 - KTD1. `external` is a selector, not a document kind. `KIND_TABLE` and `DocumentKind` stay closed. External records are their own type (source, origin, optional `node_type`, optional status) with no lifecycle. `validate` returns a tagged result, the core branches once, and `renderSearchResult` is untouched. This is what makes R17 and the byte-identity criterion true by construction.
 - KTD2. One shared per-call reader serves all five surfaces. For `external`, the core calls a reader that reads the user config files and the project file on every call, through an injectable seam like `corpusLoader`. `search.enabled` and tool presence stay fixed at init; allow-list and source edits take effect on the next call. Init-time captured settings are never used for `external`, because v1 and Pi load config once while taking a per-call directory.
-- KTD3. The `search` block is validated by field and by entry. `enabled`, `allow_project_sources` and `sources` validate separately, and each source entry validates on its own, so one bad entry drops only itself. A bad allow entry never allows anything and sets the `config unreadable` note. A typo in `sources` can never lose `enabled: false`. Project and user sources use one pure validator set, called from both `config.ts` and the per-call reader, so the two paths cannot disagree.
-- KTD4. Trust is per field. `enabled` and `allow_project_sources` are user-only, tagged inline with the trust meta, and are protected paths with per-path warnings. A project may set `sources` only. The outer `trustProtected` wrapper on `search` goes away, `search` leaves the always-protected list, and a project step keeps only `sources`. The runtime authority for `external` is the per-call reader (KTD2), but `config.ts` still carries project `sources` as a third merge input, so the resolved config is coherent and the schema accepts the field.
-- KTD5. Project identity is the main root, derived by pure filesystem reads. The `.git` file gives the `gitdir:` path, `commondir` gives the common directory, and when its basename is `.git` the main root is its parent. The `<gitdir>/gitdir` back-pointer must equal this `.git` path, so a forged `.git` cannot inherit an allowed identity. No `commondir` (a submodule or separate git dir) means the checkout's own root. A relative `gitdir:` resolves against the `.git` file. Anything corrupt or inconsistent fails closed and never matches. A bare-repo worktree never matches, and is documented as unsupported. Comparison is exact on realpaths.
+- KTD3. The `search` block is validated by field and by entry. `enabled`, `allow_project_sources` and `sources` validate separately, and each source entry validates on its own, so one bad entry drops only itself. A bad allow entry never allows anything and sets the user-config `config unreadable` note (the project-level state for a bad project file is the separate "project config unreadable", KTD13). A typo in `sources` can never lose `enabled: false`. Project and user sources use one pure validator set, called from both `config.ts` and the per-call reader, so the two paths cannot disagree.
+- KTD4. Trust is per field. `enabled` and `allow_project_sources` are user-only, tagged inline with the trust meta, and are protected paths with per-path warnings. A project may set `sources` only. The outer `trustProtected` wrapper on `search` goes away, `search` leaves the always-protected list, and a project step keeps only `sources`. That step keeps `search.sources` through the strip so the strip warning stays silent, validates it, then discards it from the resolved config. The per-call reader (KTD2) is the only consumer of project `sources`, and nothing merges them in `config.ts`. The schema still accepts the field.
+- KTD5. Project identity is the main root, derived by pure filesystem reads, and verified from the common-dir side. Three cases decide the starting point:
+  - A `.git` directory is its own root.
+  - A `.git` file whose gitdir sits under a `modules/` directory is a submodule, so it is its own root.
+  - A `.git` file whose gitdir sits under a `worktrees/` directory is a linked worktree and requires `commondir`. If `commondir` is missing, the result is unresolved.
+
+  For a linked worktree, the `gitdir:` path (relative values resolve against the `.git` file) gives the gitdir, and `commondir` resolves to the common directory. The gitdir must be exactly `<commondir>/worktrees/<name>`, and `<commondir>/worktrees/<name>/gitdir` must equal this `.git` path. The back-pointer is resolved against its own directory first, because git writes relative paths when `worktree.useRelativePaths` is set. Both sides are compared as realpaths. This stops a self-consistent forgery, where an attacker writes both the gitdir and the commondir, from inheriting an allowed identity, because the common directory's own `worktrees/` entry will not point back at the forged `.git`. When the common directory's basename is `.git`, the main root is its parent. If the common directory's `config` sets `core.worktree`, the result is unresolved, mirroring the refusal in `resolve_main_root`; this is a pure text read of the config file. Anything corrupt, inconsistent or unreadable fails closed and never matches. A bare-repo worktree never matches, and is documented as unsupported. Allow comparison is exact on realpaths.
 - KTD6. The allow list is `search.allow_project_sources`, an array of absolute or `~`-prefixed main-root paths. Entries are realpath'd at compare time with the native realpath, and stale entries are silent. The list is the union across user and custom config dirs. Matching is exact; an allowed project covers whatever any of its branches proposes, which is accepted and documented. User sources reach a project the same way, through `projects[]` entries of the same form.
 - KTD7. Source resolution order is fixed. Drop proposals for a project that is not allowed, apply shadowing, order user sources (user file, then custom dir, in declared order) before project sources, and cap at 8 active sources. A user source shadows a same-named project source only when the user source is mapped to this project. Names are case-sensitive. A duplicate within one file keeps the first and warns. `sources` merge by name with the custom dir winning.
-- KTD8. Bounds. Maximum 8 sources and a 32 MB read budget, measured as stat bytes of every file the loader opens. A source that does not fit the remaining budget is dropped whole with a named warning, and later, smaller sources are still tried. Per-source caps stay the built-in ones. The record cap applies to kept records for Deciduous, so edge files and filtered nodes do not consume it.
+- KTD8. Bounds. Maximum 8 sources and a 32 MB read budget, measured as stat bytes of every file the loader opens. A source that does not fit the remaining budget is dropped whole with a named warning, and later, smaller sources are still tried. Per-source byte caps stay the built-in ones. For Markdown, `MAX_FILES` bounds files read. For Deciduous, `MAX_DISCOVERED_FILES` bounds the files scanned and `MAX_FILES` bounds kept decision-shaped records, so edge files and filtered nodes do not consume the record cap (KTD15).
 - KTD9. Root rules. Project roots are relative, resolve against the checkout root, must not be `.` or contain `..`, and reject any dot segment, with one named exception: a source with `format: deciduous` may propose a root under `.deciduous/`, such as `.deciduous/sync`. The first segment may be `.deciduous` only when at least one non-dot segment follows it, and every later segment is held to the same no-dot rule. A project root that is itself a symlink is dropped. User roots must be absolute or `~`-prefixed, and a relative user root is rejected. A user root that is a symlink is followed once. Symlinks inside any root are skipped at every depth. Project roots keep realpath containment inside the checkout root; user roots skip it.
 - KTD10. Source entries are bounded: names match a restricted charset (letters, digits, `-`, `_`) and a 40-character length, an unknown format drops the entry, roots may not be empty, and each source takes at most 8 roots.
 - KTD11. Ranking and output. Each source gets its own lexical index, because scores are not comparable across sources. `limit` applies per source and is capped at 5 there. Sections sort by source name in code-unit order, and hits within a section by rank, then path. The external allowance is 12 KB, split evenly across sources, and a source over its share drops whole hits and prints `+N more hits not shown`. The 16 KB built-in cap is not shared. Hit paths are `<source>/<relative path>`, and each section header shows its root with the home directory collapsed to `~`. External reads are optional and count against the researcher's three full reads.
-- KTD12. Fixed replies and prefix. Four fixed replies, all `ok: true` and pinned as constants: disabled, no project, project proposes sources that are not allowed, and no active source. Precedence is disabled, then no project, then the core's existing validation errors, then per-source states. A root that exists but is missing still counts as an active source, so it does not get the no-active-source reply. The not-allowed reply gives the count and the exact main-root string to add, and never echoes source names or roots. Every external reply starts with `External sources for "<q>":` and carries none of the built-in routing tokens (`corpus: none`, `corpus: empty`, `N docs, M hits`, `Search "`). A negative test pins this.
+- KTD12. Fixed replies and prefix. Four fixed replies, all `ok: true` and pinned as constants: disabled, no project, project proposes sources that are not allowed, and no active source. Precedence is disabled, then no project, then the core's existing validation errors, then per-source states. A declared root that is missing still counts as an active source, so it does not get the no-active-source reply. The not-allowed reply gives the proposal count and the exact main-root string to add, and never echoes source names or roots. It prints the main-root path only when the identity is verified. An unresolved identity gets the same fixed not-allowed reply with no path. Every external reply starts with `External sources for "<q>":` and carries none of the built-in routing tokens (`corpus: none`, `corpus: empty`, `N docs, M hits`, `Search "`). A negative test pins this.
 - KTD13. Per-source and project-level states. Per-source: missing, empty, unreadable, dropped. Project-level: not allowed, project config unreadable. Project-source problems never touch built-in replies, `MAX_WARNINGS` stays 5 with source drops listed first, and a gitignored source inside a worktree shows as missing.
 - KTD14. Markdown records. The title is `title`, then the first H1, then the filename; status is the recorded `status` string, never inferred. A separate external parser shares the narrowing helpers, and no kind-specific excludes apply (a `README.md` is searchable). The shared loader gains a `loadSourceFiles` core with optional `extensions`, a parse callback and a display prefix; `loadCorpus` becomes a caller of it with unchanged behavior.
-- KTD15. Deciduous records. Read `nodes/` before `edges/`. A missing root is a missing source; a missing `nodes/` is empty with a warning; a missing `edges/` yields records without rationale and a warning. Malformed files and bad ids are skipped and aggregated; a duplicate `change_id` keeps the first. Title is `title`, then the first description line, then `change_id`. An edge contributes rationale to a node when its other endpoint is any live node; tombstoned nodes and edges are skipped. Rationale is capped at 300 characters per edge, 20 edges per node and 2 KB per node. Hit paths are `nodes/<id>.json`, and the hit shows `node_type`.
-- KTD16. The Claude Code bin gets a bin-safe reader. It reads the project file once, with a 1 MB cap and the same file selection as the other surfaces, and never imports `config.ts`. A missing file is normal. A read error, JSON error or invalid content yields zero proposals, an aggregate line in the reply, and one stderr warning, for `external` only. The bin uses the start directory it is given.
-- KTD17. Researcher. The call is `kind: external` at `limit: 3`. It takes at most 4 of the 12 items in the output budget. The External records group is the sixth group, outside the status table. Items read `source, path, no recorded status` or `node_type decision`. Disabled, error and not-allowed replies go to Search Context; the researcher never greps or globs source roots and never retries.
-- KTD18. Prompt budget. Measure the body first, then trim the unpinned prose the research lane identified. If trimming cannot absorb the 700 to 900 bytes added, raise the working ceiling on purpose and record the new ceiling and why in the unit's verification notes. Line 3 (the description) and line 8 (the delegated-proof marker) do not change.
+- KTD15. Deciduous records. Deciduous does not use the shared `min(candidates, MAX_FILES)` cut. It has its own scan, `nodes/` first and then `edges/`, in that explicit order rather than a path sort. `MAX_DISCOVERED_FILES` bounds the files scanned, `MAX_FILES` bounds the kept decision-shaped records, and the per-source byte caps still apply. Ids must match `[A-Za-z0-9_-]{1,64}`; anything else is skipped as a bad id. Display paths are built only from validated ids, and no file is ever opened by an id taken from content. A missing root is a missing source; a missing `nodes/` is empty with a warning; a missing `edges/` yields records without rationale and a warning. Malformed files and bad ids are skipped and aggregated; a duplicate `change_id` keeps the first. Title is `title`, then the first description line, then `change_id`. An edge contributes rationale to a node when its other endpoint is any live node; tombstoned nodes and edges are skipped. Rationale is capped at 300 characters per edge, 20 edges per node and 2 KB per node. Hit paths are `nodes/<id>.json`, and the hit shows `node_type`.
+- KTD16. The Claude Code bin gets a bin-safe reader. It reads the project file once, with a 1 MB cap, and never imports `config.ts`. The file is `<checkout root>/.opencode/systematic.jsonc`, falling back to `.json`, chosen by `selectConfigFile`, which mirrors `getConfigPaths` in `src/lib/config.ts`. Every surface uses the same selection. A missing file is normal. A read error, JSON error or invalid content yields zero proposals, an aggregate line in the reply, and one stderr warning, for `external` only. The bin uses the start directory it is given.
+- KTD17. Researcher. The call is `kind: external` at `limit: 3`. The total output budget rises from 12 items to 16: external gets at most 4, and the built-in groups keep all 12. Full reads stay at 3. The External records group is the sixth group, outside the status table. Items read `source, path, no recorded status` or `node_type decision`. Disabled, error and not-allowed replies go to Search Context; the researcher never greps or globs source roots and never retries.
+- KTD18. Prompt budget. Measure the body first, then trim the unpinned prose the research lane identified. If trimming cannot absorb the 700 to 900 bytes added, raise the working ceiling on purpose and record the new ceiling and why in the unit's verification notes. The ceiling in force after measuring (about 24,027 bytes unless raised on purpose) is enforced by one test on the body bytes after frontmatter. Line 3 (the description) and line 8 (the delegated-proof marker) do not change.
 - KTD19. Proof scope. One real-host delegated proof on OpenCode v2, plus a negative control. The other three hosts are covered by the host-free parity test (CLI, bin and v1) and the existing per-host search proofs. The scripted model makes the call, so the proof shows reach and plumbing, not that a model chooses to call `external`; the wiring contract pins the prompt side.
 - KTD20. One feature PR; Markdown format before Deciduous.
 
@@ -275,7 +280,7 @@ Decisions below were settled in planning. The first group came from Marcus's rev
 - The schema generator renumbers its `__schemaNN` definitions, so the generated diff will be large; its shape is known only after generation.
 - Which unpinned researcher prose actually gets trimmed, and whether the ceiling has to move (KTD18). That depends on measuring.
 - How many of the 14 config-corpus fixtures change beyond the researcher prompt string. The expectation is none, and a throwaway diff check confirms it.
-- The bin bundle size change, observed and recorded rather than asserted.
+- The bin bundle size change, observed and recorded in the PR notes. No guard is added (see Deferred to Separate Tasks).
 
 ---
 
@@ -339,8 +344,8 @@ flowchart TB
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/lib/search-user-config.ts` (schema fields, project variant, validators, `mergeSearchSettings` third input, doc comments)
-- Modify: `src/lib/config.ts` (`PROJECT_ALWAYS_PROTECTED_FIELDS`, `collectProjectProtectedFields`, `splitSearchBlock`, the strip warning, merge wiring, stale comments)
+- Modify: `src/lib/search-user-config.ts` (schema fields, project variant, validators, doc comments; the user-then-custom merge gains `allow_project_sources` as a union and `sources` by name)
+- Modify: `src/lib/config.ts` (`PROJECT_ALWAYS_PROTECTED_FIELDS`, `collectProjectProtectedFields`, `splitSearchBlock`, the strip warning, the validate-then-discard project step, stale comments)
 - Modify: `src/lib/config-protected-fields.ts`
 - Modify: `src/lib/config-schema.ts` (drop the outer `trustProtected`; inline trust meta on the two user-only fields)
 - Modify: `docs/scripts/generate-config-reference.ts` (new `search` branch with examples on every nested field)
@@ -349,10 +354,10 @@ flowchart TB
 - Test: `tests/unit/search-user-config.test.ts`, `tests/unit/config.test.ts`, `tests/unit/config-schema.test.ts`, `tests/unit/capability-snapshot.test.ts`, `tests/unit/generate-config-reference.test.ts`, `tests/unit/generate-config-schema.test.ts`
 
 **Approach:**
-- Follow the config-field edits the repo already established for a new protected field: drop the outer wrapper, change the protected paths to `search.enabled` and `search.allow_project_sources`, remove `search` from the always-protected list and add a project step that keeps only `sources`, emit per-path warnings, and pass trust into `splitSearchBlock`.
+- Follow the config-field edits the repo already established for a new protected field: drop the outer wrapper, change the protected paths to `search.enabled` and `search.allow_project_sources`, remove `search` from the always-protected list and add a project step that keeps only `sources`, emit per-path warnings, and pass trust into `splitSearchBlock`. The project step keeps `search.sources` through the strip so the strip warning stays silent, validates it, then discards it from the resolved config. The schema keeps accepting the field.
 - `sources[]` is `{name, format, roots[]}`. A user entry adds `projects[]`. The project variant adds the root rules of KTD9, including the single `.deciduous/` exception, and rejects `.`, `..`, absolute roots and every other dot segment. The user variant requires absolute or `~` roots.
 - Validate `enabled`, `allow_project_sources` and `sources` separately, then each entry. Warnings name fields and source names, never values.
-- Feed the project's validated `sources` into the merge as a third input, with the precedence in KTD7.
+- Project `sources` are not merged in `config.ts`. The per-call reader (U3) is their only consumer, and it applies the precedence in KTD7.
 - Update the docs comments at the old user-only statements in `search-user-config.ts`, `config-schema.ts` and `config.ts`.
 - If `config-schema.ts` ends up importing a new module, add it as a trigger in `scripts/lib/generated-surfaces.ts`. Keeping everything in `search-user-config.ts` avoids that, and both config surfaces already list it.
 
@@ -364,16 +369,17 @@ flowchart TB
 
 **Test scenarios:**
 - Happy path: a user config with `enabled`, `allow_project_sources` and two valid sources parses and merges custom over user by name, with `allow_project_sources` as a union and `enabled` last-defining.
-- Happy path: a project file with `sources` only keeps its sources; a project file that also sets `enabled` or `allow_project_sources` has exactly those fields stripped, each with its own per-path warning, and `sources` survive.
+- Happy path: a project file with `sources` only keeps its sources; a project file that also sets `enabled` or `allow_project_sources` has exactly those fields stripped, each with its own per-path warning, and `sources` raise no strip warning. The resolved config carries no project `sources`; the project block is validated and then discarded, and no test pins a project value in the merged result.
 - Edge case: a project `sources` entry with root `.deciduous/sync` and `format: deciduous` is accepted; the same root with `format: markdown` is rejected; `.deciduous` alone is rejected; `.deciduous/.cache` is rejected; `.slim/clonedeps` is rejected for either format.
 - Error path (AE3): roots `.`, `.slim/clonedeps` and `../other-repo/docs` each drop only their own source with one warning that names the source, and a sibling valid source stays.
-- Error path (C1): an invalid `sources` entry does not drop `enabled: false`; a non-string allow entry allows nothing, keeps valid siblings and sets the `config unreadable` note; a duplicate name within one file keeps the first and warns; an unknown format, an overlong or badly charactered name, an empty `roots` and a ninth root each drop their entry.
+- Error path (C1): an invalid `sources` entry does not drop `enabled: false`; a non-string allow entry allows nothing, keeps valid siblings and sets the user-config `config unreadable` note; a duplicate name within one file keeps the first and warns; an unknown format, an overlong or badly charactered name, an empty `roots` and a ninth root each drop their entry.
 - Error path: a relative user root is rejected; a user `projects[]` entry that is not absolute or `~` is rejected.
 - Integration: the generated schema and config reference list the new fields with examples, and `surfaces:drift` is clean afterwards.
 
 **Verification:**
 - The three `fieldPath: 'search'` pins now name the two user-only paths, and a test proves a project cannot set either.
 - Both generated surfaces regenerate and pass their drift checks; the large schema renumbering diff is the only noise.
+- Nothing in `config.ts` reads project `sources` after validation.
 
 ---
 
@@ -391,22 +397,26 @@ flowchart TB
 - Test: `tests/unit/search-project-identity.test.ts`
 
 **Approach:**
-- Implement the steps in KTD5 as a pure reader with node builtins only, because the bin bundles it. It returns a tagged result (main root, or unresolved with a reason) and a separate matcher that realpaths both sides and compares exactly.
+- Implement KTD5 as a pure reader with node builtins only, because the bin bundles it. It classifies the checkout as a `.git` directory (own root), a `.git` file under `modules/` (submodule, own root) or a `.git` file under `worktrees/` (linked worktree). For a linked worktree it verifies from the common-dir side: `commondir` is required, the gitdir must be `<commondir>/worktrees/<name>`, the `gitdir` back-pointer in that entry resolves against its own directory and must equal this `.git` path by realpath, and a `core.worktree` setting in the common directory's `config` gives unresolved. It returns a tagged result (main root, or unresolved with a reason) and a separate matcher that realpaths both sides and compares exactly.
 - It takes the checkout root that `resolveSearchRoot` already returns. Do not unify with `resolveSearchRoot` or `findGitWorktreeRoot`; the existing AGENTS note says those copies differ on purpose.
 
 **Execution note:** Test-first. The fixtures create real repositories, so write the cases before the derivation.
 
 **Patterns to follow:**
 - `tests/unit/git-worktree-fixtures.ts` for isolated real-git repos and temp-dir cleanup.
-- `resolve_main_root` in the git-worktree manager script for the commondir logic, mirrored in pure fs.
+- `resolve_main_root` in the git-worktree manager script for the commondir logic and its `core.worktree` refusal, mirrored in pure fs.
 
 **Test scenarios:**
 - Happy path: a plain checkout returns its own root.
 - Happy path (AE4): a real `git worktree add` worktree returns the main checkout's root, and a worktree created from another linked worktree still returns the main root.
-- Edge case: a submodule checkout (no `commondir`) returns its own root, and a nested repo is its own project.
+- Happy path: a real worktree created with `worktree.useRelativePaths=true` (git writes relative back-pointers) resolves to the main root.
+- Edge case: a real submodule checkout (a `.git` file under `modules/`) returns its own root, a `.git` directory returns its own root, and a nested repo is its own project.
 - Edge case: a symlinked checkout path and the real path compare equal after realpath; a relative `gitdir:` resolves correctly.
-- Error path: a forged `.git` file whose `gitdir:` points at a real worktree's git dir but lacks the back-pointer match returns unresolved.
-- Error path: a missing `commondir` where one is required, a corrupt `.git`, an unreadable file and a bare-repo worktree each return unresolved, never throw, and never match any allow entry.
+- Error path: a forged `.git` file whose `gitdir:` points at a real worktree's git dir, with no matching back-pointer, returns unresolved.
+- Error path: a self-consistent forgery, with an attacker-written gitdir and `commondir` that agree with each other and with a forged back-pointer, returns unresolved because the common directory's own `worktrees/<name>` entry does not point back at the forged `.git`.
+- Error path: a `.git` file whose gitdir sits under `worktrees/` but has no `commondir` returns unresolved.
+- Error path: a common directory whose `config` sets `core.worktree` returns unresolved.
+- Error path: a corrupt `.git`, an unreadable file and a bare-repo worktree each return unresolved, never throw, and never match any allow entry.
 - Integration: the matcher expands `~`, treats a stale (non-existent) allow entry as a silent non-match, and matches only the exact main root, not a parent or a child.
 
 **Verification:**
@@ -427,14 +437,14 @@ flowchart TB
 
 **Files:**
 - Create: `src/lib/search-external-sources.ts` (resolution and the per-call composer)
-- Modify: `src/lib/search-user-config.ts` (a bin-safe `loadProjectSearchSources` that reuses `readSearchBlock` and `selectConfigFile`, 1 MB cap, never importing `config.ts`)
+- Modify: `src/lib/search-user-config.ts` (a bin-safe `loadProjectSearchSources` that reuses `readSearchBlock` and `selectConfigFile`, 1 MB cap, never importing `config.ts`, reading `<checkout root>/.opencode/systematic.jsonc` and falling back to `.json`, as `getConfigPaths` in `src/lib/config.ts` does)
 - Modify: `ARCHITECTURE.md`, `src/lib/AGENTS.md`
 - Test: `tests/unit/search-external-sources.test.ts`, `tests/unit/search-user-config.test.ts`
 
 **Approach:**
 - Inputs: start directory, injectable config-dir resolution (defaulting to the same env and file selection the other readers use), and the identity result. Output: ordered active sources (name, format, resolved roots, `project` or `user` origin) plus project-level states and bounded warnings.
 - Apply the order in KTD7. A project file is read from the checkout root of the start directory, so a worktree reads its own copy of the project config while matching its main root's allow entry.
-- Project-source problems never throw and never affect `enabled` or built-in replies. A read error, JSON error or invalid content yields zero proposals and the project-config-unreadable state.
+- Project-source problems never throw and never affect `enabled` or built-in replies. A read error, JSON error or invalid content yields zero proposals and the project config unreadable state. That state is separate from the user-config `config unreadable` note.
 - Expose the resolver through the injectable seam the core will take (U5); tests inject it.
 
 **Patterns to follow:**
@@ -444,13 +454,14 @@ flowchart TB
 **Test scenarios:**
 - Happy path (AE1): the project proposes `decisions` at `docs/decisions`, the main root is allowed, and the source resolves as `project`.
 - Happy path (AE4): a user source mapped to the agent repo's main root resolves when the start directory is the repo root and when it is one of its real worktrees, and does not resolve at an unrelated repo root.
-- Error path (AE2): the same proposal with no allow entry resolves to no sources, records the not-allowed state with the proposal count, and echoes no names or roots.
+- Error path (AE2): the same proposal with no allow entry resolves to no sources, records the not-allowed state with the proposal count, and echoes no names or roots. The main-root string is carried only when the identity is verified.
 - Edge case: a user source and a project source share a name. The user source shadows the project source only when it is mapped to this project; when it is mapped elsewhere, the project source loads and the user source does not.
 - Edge case: names are case-sensitive, so `Wiki` and `wiki` coexist.
 - Edge case: ten declared sources cap at 8, in the KTD7 order, with a warning naming the dropped ones first.
 - Edge case: `allow_project_sources` in the user file and the custom config dir unions; `sources` of the same name resolve with the custom dir winning.
-- Error path: a project file over 1 MB, malformed JSONC, or schema-invalid yields zero proposals and the unreadable state, while `enabled` and user sources are unaffected.
-- Error path: an unresolved identity (U2) allows nothing and maps no user source.
+- Error path: a project file over 1 MB, malformed JSONC, or schema-invalid yields zero proposals and the project config unreadable state, while `enabled` and user sources are unaffected.
+- Error path: an unresolved identity (U2) allows nothing, maps no user source, and yields the not-allowed state with no main-root string.
+- Edge case: a worktree reads `.opencode/systematic.jsonc` at its own checkout root, falls back to `.json` when the `.jsonc` file is absent, and prefers `.jsonc` when both exist.
 - Integration (C2): editing the allow list or the project file between two calls changes the second call's result without restarting anything.
 
 **Verification:**
@@ -478,7 +489,7 @@ flowchart TB
 - The external record is `{source, origin, path, title, status?, nodeType?, body}`. The Markdown parser applies KTD14 and shares frontmatter parsing and narrowing helpers with the corpus parser.
 - Containment: project roots must realpath inside the checkout root and are dropped otherwise; a project root that is a symlink is dropped; a user root symlink is followed once. Symlinks inside roots are skipped through the existing `classifyEntry` rule, with no warning that names a target.
 - The loader draws on the shared budget in the order given by U3, drops a non-fitting source whole, and still tries later ones.
-- Dispatch is by format. Until U7, the dispatch table has no Deciduous entry, and such a source reports the dropped state.
+- Dispatch is by format. The `loadSourceFiles` file-count cut (`min(candidates, MAX_FILES)`) serves Markdown only; Deciduous has its own scan (U7). Until U7, the dispatch table has no Deciduous entry, and such a source reports the dropped state.
 - Sources only read files. Nothing in this module spawns, fetches or writes.
 
 **Execution note:** Characterization-first. Pin `loadCorpus` output on the existing corpus fixtures before extracting `loadSourceFiles`.
@@ -537,8 +548,9 @@ flowchart TB
 - Edge case: `limit` above 5 is capped at 5 per source; a source past its 12 KB share drops whole hits and prints the count line.
 - Edge case: a missing root, an empty source and an unreadable source print quiet states, and the other sources still render.
 - Error path (AE2): not-allowed with no other source returns the fixed not-allowed reply with the count and the main-root string and no names or roots; with another active source it adds the project-level state line instead.
-- Error path (AE7): no active source returns the fixed reply with `ok: true`; a missing-but-declared root does not.
-- Error path: the disabled and no-project replies appear in that precedence order, and an empty query or bad limit still returns the core's existing error first.
+- Error path: with a verified identity the not-allowed reply prints the main-root path; with an unresolved identity it returns the same fixed reply with no path.
+- Error path (AE7): no active source returns the fixed reply with `ok: true`; a declared root that is missing does not.
+- Error path (KTD12 precedence, one case per step): with `enabled: false` and an empty query, the disabled reply wins; with an enabled search, no project and an empty query, the no-project reply wins; with a project and an empty query, the core validation error wins over any per-source state; with a project and a valid query, per-source states render.
 - Negative: no external reply contains `Corpus:`, `corpus: none`, `corpus: empty`, `N docs, M hits` or `Search "`; the four constants contain none of those tokens either.
 - Integration (AE11): with sources active, `all`, the four kinds and the default produce text byte-identical to the pre-change golden outputs; the existing characterization and render fixtures pass unmodified.
 
@@ -566,7 +578,7 @@ flowchart TB
 - Surfaces pass their per-call directory (v1 `context.directory`, v2 `ctx.location?.directory`, Pi per-call `ctx.cwd`, CLI `--dir` or cwd, bin start directory) into the core, and the core's default resolver does the rest (KTD2). No surface carries source or allow state of its own.
 - A v2 setup must never fail because a project `sources` block is bad (KTD3).
 - Narrow the existing bin test that asserts it reads user config only to say it reads only sources and the allow list from project config.
-- The bin test also covers the unreadable-project-file path of KTD16.
+- The bin test also covers the project config unreadable path of KTD16.
 
 **Patterns to follow:**
 - The existing parity test, which drives each adapter's real entry over one fixture.
@@ -577,7 +589,7 @@ flowchart TB
 - Integration (AE1/AE2): the same fixture with the allow entry removed yields the identical not-allowed reply on all three.
 - Integration: Pi and v2 are covered by their adapter tests with the same expectations on the shared text; Pi's per-call `cwd` outside the project gives the no-project reply.
 - Integration (foreign dir): the built bin, run under Node from a directory with no `node_modules`, reads user config and the project file at the start directory it is passed and returns the expected sections; jsonc parsing works in the ESM bundle.
-- Error path: an invalid project block leaves v2 setup intact, built-in search working, and `external` carrying the unreadable state; a bin project-file read error prints one stderr warning and the aggregate line, for `external` only.
+- Error path: an invalid project block leaves v2 setup intact, built-in search working, and `external` carrying the project config unreadable state; a bin project-file read error prints one stderr warning and the aggregate line, for `external` only.
 - Edge case (AE11): with sources active, `kind: "all"` is byte-identical to its pre-change output on every surface.
 - Edge case: `search.enabled: false` removes the tool as before and suppresses `external` everywhere.
 
@@ -604,7 +616,8 @@ flowchart TB
 - Test: `tests/unit/search-external-deciduous.test.ts`, `tests/unit/search-external.test.ts`, `tests/unit/search-user-config.test.ts`
 
 **Approach:**
-- Implement KTD15. Only `decision`, `option`, `outcome` and `goal` nodes become records, and `action` and `observation` nodes are never indexed. The record-count cap applies to kept records, with the discovery ceiling bounding files scanned; a source with a few thousand node and edge files must keep all its decision-shaped nodes under the cap.
+- Implement KTD15 with a Deciduous-specific scan, not the shared `min(candidates, MAX_FILES)` cut. Scan `nodes/` first and then `edges/`, in that explicit order rather than a path sort. `MAX_DISCOVERED_FILES` bounds the files scanned and `MAX_FILES` bounds kept decision-shaped records; the per-source byte caps still apply.
+- Only `decision`, `option`, `outcome` and `goal` nodes become records, and `action` and `observation` nodes are never indexed. Ids must match `[A-Za-z0-9_-]{1,64}`; anything else is skipped as a bad id. Display paths are built only from validated ids, and no file is ever opened by an id taken from content.
 - Rationale joins the searchable body of both endpoints' records, subject to the caps in KTD15. Edges themselves are never records.
 - The `.deciduous/` project-root exception is validated in U1; this unit proves it end to end.
 - `deleted_at` is tested against a fixture only. The real snapshot carries none.
@@ -618,12 +631,15 @@ flowchart TB
 - Edge case: a node with `deleted_at` is skipped, and an edge to or from a tombstoned node contributes nothing.
 - Edge case: title falls back from `title` to the first description line to `change_id`.
 - Edge case: rationale caps hold (300 characters per edge, 20 edges per node, 2 KB per node).
-- Edge case: a fixture shaped like the real snapshot (about 2,100 node files and 600 edge files, over 1,100 decision-shaped nodes) loads every decision-shaped node under the cap.
-- Error path: a missing root is missing; no `nodes/` is empty with a warning; no `edges/` yields records without rationale and a warning; a malformed JSON file, a bad id and a symlinked file are skipped and aggregated; a duplicate `change_id` keeps the first.
+- Edge case: a fixture with 2,146 node files and 664 edge files, over 1,100 of them decision-shaped, loads every decision-shaped node. The test fails if any one is dropped.
+- Edge case: node files are read before edge files, in the explicit order, and results are identical across repeated runs.
+- Error path: a missing root is missing; no `nodes/` is empty with a warning; no `edges/` yields records without rationale and a warning; a malformed JSON file, a symlinked file and an id outside `[A-Za-z0-9_-]{1,64}` (including one containing `..` or a path separator) are skipped and aggregated; a duplicate `change_id` keeps the first.
+- Error path: an edge whose content names an id with a path-shaped value causes no file open and appears in no display path.
 - Integration: a project that proposes `.deciduous/sync` with `format: deciduous` and an allow entry produces records through the whole per-call path; the same root with `format: markdown`, or any other dot-segment root, is dropped with a named warning.
 
 **Verification:**
 - Nodes load before edges, and the loader order is deterministic.
+- No decision-shaped node is lost to a file-count cut.
 - Deciduous never reads or writes outside the source root.
 
 ---
@@ -644,12 +660,13 @@ flowchart TB
 - Modify: `tests/fixtures/config-corpus/*` (the 14 fixtures; researcher prompt string only)
 - Modify: `tests/helpers/delegated-search-proof.ts`, `tests/integration/opencode-v2.test.ts`
 - Modify: `tests/integration/host-contract-timings.json` (if the guard requires a refreshed entry); a new integration file would also need a place in the profile lists in `scripts/host-contract-guard.ts`
-- Regenerate: `registry/registry.jsonc`, `tests/fixtures/pi-subagents-personas/**`
-- Test: `tests/unit/delegated-search-proof.test.ts`, `tests/unit/host-contract-guard.test.ts`, `tests/unit/config-corpus.test.ts`
+- Regenerate: run the generated-surfaces affected check. No registry diff is expected, since the description is unchanged; keep `registry/registry.jsonc` in the change only if that check says the agents change triggers it.
+- Test: `tests/unit/delegated-search-proof.test.ts`, `tests/unit/host-contract-guard.test.ts`, `tests/unit/config-corpus.test.ts`, plus one body-size assertion in `tests/unit/past-work-wiring-contract.test.ts`
 
 **Approach:**
-- Measure the body size first. Add the fifth call (`kind: external`, `limit: 3`), the sixth group, the item format and the routing from KTD17. Edit the four call-count sites by their wording; today they sit near lines 25, 53, 299 and 310. Keep stray count words such as "twice" out of the line the wiring test counts on.
+- Measure the body size first. Add the fifth call (`kind: external`, `limit: 3`), the sixth group, the item format, the 16-item total budget (external at most 4, the built-in groups keeping all 12, full reads still 3) and the routing from KTD17. Edit the four call-count sites by their wording; today they sit near lines 25, 53, 299 and 310. Keep stray count words such as "twice" out of the line the wiring test counts on.
 - Trim from the unpinned prose before moving the ceiling: the lines near 23, 69, 90-93, 98 (second sentence), 104-107 and the "Aim" sentence near 316. If that is not enough, raise the ceiling deliberately and record why under this unit's notes (KTD18). Do not touch the description or the delegated-proof marker.
+- Record the ceiling in force after measuring (about 24,027 bytes unless raised on purpose) in this unit, and add one test that asserts the researcher body (bytes after frontmatter) stays at or under it.
 - The skills need no edit. A negative wiring test proves the solutions scope, the compound overlap mode and the ce:review prose never mention `external`.
 - The proof reuses the helper's scripted model. The parent dispatches the researcher, the child calls the search tool with `kind: external` against a planted allowed source, and the parent's final assistant message must carry the marker and the external path. The negative control removes the allow entry so the child receives the not-allowed reply, and the evaluator reports a distinct failure code. The existing `search.enabled: false` control stays.
 - Regenerate the config-corpus fixtures with a throwaway script and diff them: only the researcher prompt string may change.
@@ -663,15 +680,16 @@ flowchart TB
 **Test scenarios:**
 - Happy path: the wiring contract counts exactly five per-kind calls (`[1,5]`), names `external`, and describes six output groups in order with External records last and outside the status table.
 - Happy path (AE10): the prompt directs a hit with no status to External records with "no recorded status", never to a lifecycle group.
-- Edge case: the 4-of-12 external budget and the `limit: 3` call are pinned; the cite rule names source, path and recorded status or `node_type`.
+- Edge case: the 16-item total budget (12 built-in plus at most 4 external), the 3 full reads and the `limit: 3` call are pinned; the cite rule names source, path and recorded status or `node_type`.
 - Error path (AE7): routing rows send disabled, error and not-allowed replies to Search Context with no grep, glob or retry.
 - Negative: the solutions-scope text, the compound overlap text and the ce:review skill text contain no mention of `external`.
 - Integration (v2 proof): the parent's final answer carries the marker and the external path from the child's result.
 - Integration (negative control): with the allow entry absent, the child's result is the not-allowed reply, the parent's answer lacks the external path, and the evaluator names the failure.
+- Edge case (ceiling): a test asserts the researcher body, in bytes after frontmatter, is at or under the ceiling recorded in this unit.
 - Integration: the config-corpus regeneration changes only the researcher prompt string in all 14 fixtures.
 
 **Verification:**
-- The researcher body is within the ceiling in force, and any change to that ceiling is written down in this unit.
+- The researcher body is within the ceiling in force, the body-size test passes, and any change to that ceiling is written down in this unit.
 - Run the generated-surfaces affected check for this unit, then the full drift check.
 - The host-contract guard recognizes the proof's test file and timing.
 
@@ -694,7 +712,7 @@ flowchart TB
 - Test: `tests/unit/harness-profiles-search.test.ts`
 
 **Approach:**
-- The guide gets one worked example per format and states the three trust boundaries: a repo proposes, the user allows, user roots are unrestricted. It documents the not-allowed reply, the exact string to add (the main root), and the caveat that an allowed project covers whatever a branch proposes.
+- The guide gets one worked example per format and states the three trust boundaries: a repo proposes, the user allows, user roots are unrestricted. It documents the not-allowed reply, the exact string to add (the main root), and two accepted limits. First, every worktree of an allowed project, including a PR worktree under review, contributes its proposals and Markdown, and an allowed project covers whatever a branch proposes. Second, a stale allow entry trusts whatever repo is later cloned to that path, so remove entries for paths you no longer use.
 - HARNESSES says the bin now reads project sources and the allow list (it was user-only), and that the v2 delegated proof covers `external`.
 - Preserve the privacy note: external text reaches the model provider and nothing is redacted.
 
@@ -713,7 +731,7 @@ flowchart TB
 - **State lifecycle risks:** nothing is cached. Each call rereads config and files, so an allow-list edit or a deleted source takes effect on the next call. The cost is a few small file reads per call, bounded by the 1 MB project-file cap and the 32 MB budget.
 - **API surface parity:** all five surfaces read the same per-call reader and render the same text. The parity test pins CLI, bin and v1; v2 and Pi share the same core and are pinned by their adapter tests; the v2 real-host proof covers the dispatched path.
 - **Integration coverage:** the pieces unit tests cannot prove alone are a real `git worktree add` identity, the bin under Node from a foreign directory, and the child-to-parent path on a real v2 host.
-- **Security surface:** the allow list is the trust gate. A project's own dot-segment, symlink and containment rules bound what a proposal can reach, and a user root is deliberately unrestricted because the user wrote it. Reads happen with the user's privileges, so the not-allowed reply echoes nothing the project wrote.
+- **Security surface:** the allow list is the trust gate. A project's own dot-segment, symlink and containment rules bound what a proposal can reach, and a user root is deliberately unrestricted because the user wrote it. Reads happen with the user's privileges. The not-allowed reply echoes no source name or root the project wrote, and it prints the main-root path only when the identity is verified; an unresolved identity gets the fixed reply with no path.
 - **Unchanged invariants:**
   - The four built-in kinds, the default `solution` search and `kind: "all"` return the same text as before whether or not sources exist, and never return external records. `renderSearchResult` and `KIND_TABLE` are not modified.
   - A project with no active source gets byte-identical output from every built-in search.
@@ -729,7 +747,7 @@ flowchart TB
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | A project-supplied path reads outside the project or plants a record the user never agreed to trust | Low | High | Allow gate, relative-only roots, dot-segment and containment rules, symlink drops, the narrow `.deciduous/` exception, per-field trust tests |
-| A forged `.git` inherits an allowed identity | Low | High | Back-pointer check, fail-closed results, a forged-`.git` fixture |
+| A forged `.git` inherits an allowed identity | Low | High | Verification from the common-dir side: the gitdir must be `<commondir>/worktrees/<name>` and that entry's `gitdir` back-pointer (relative or absolute, realpath-compared) must equal this `.git`; `core.worktree` and missing `commondir` fail closed; fixtures for a self-consistent forgery and for `worktree.useRelativePaths` |
 | Built-in output changes by accident during the loader refactor | Medium | High | Characterization before refactor, renderer untouched, byte-identity fixtures run through every unit |
 | Init-captured settings drift from the per-call project | Medium | Medium | One per-call reader for all surfaces; a test that edits config between two calls |
 | The bin grows or breaks under Node | Medium | Medium | No `config.ts` import, foreign-directory Node test, recorded size change |
@@ -737,6 +755,9 @@ flowchart TB
 | Wiring pins go stale or leak `external` into other flows | Medium | Medium | `[1,5]` assertion, six-group assertion, negative tests on solutions, compound and review |
 | The v2 proof is mistaken for evidence that a model calls `external` | Medium | Low | State that the proof shows plumbing; the prompt side is pinned by the wiring contract |
 | An allowed project's later branch proposes something broader | Medium | Medium | Accepted and documented: the allow covers the project, and roots still pass the dot and containment rules |
+| Every worktree of an allowed project, including a PR worktree under review, contributes proposals and Markdown | Medium | Medium | Accepted and documented in the guide; roots still pass the dot, symlink and containment rules |
+| A stale allow entry trusts whatever repo is later cloned to that path | Low | Medium | Accepted and documented in the guide; the entry is an exact path, so the user removes it when the path goes away |
+| A Deciduous id taken from content reaches a file open or a display path | Low | Medium | Ids must match `[A-Za-z0-9_-]{1,64}`, display paths use validated ids only, and a test plants a path-shaped id |
 | The schema generator's renumbering hides a real change in review | Medium | Low | Regenerate once in U1, review the semantic diff by field, and keep later units from re-touching the schema |
 | Source text with embedded instructions influences a plan | Medium | Medium | Accepted for Marcus's own stores; documented. No redaction in scope |
 
@@ -746,7 +767,8 @@ Dependencies: none external. The plan adds no package and touches no lockfile.
 
 ## Documentation / Operational Notes
 
-- The user-facing change is config only: `search.allow_project_sources`, `search.sources`, and project `search.sources`. A user must add each project's main root to the allow list. The not-allowed reply tells them the exact string.
+- The user-facing change is config only: `search.allow_project_sources`, `search.sources`, and project `search.sources`. A user must add each project's main root to the allow list. The not-allowed reply tells them the exact string when the identity is verified.
+- Accepted limits, also stated in the guide (U9): every worktree of an allowed project, including a PR worktree under review, contributes its proposals and Markdown; and a stale allow entry trusts whatever repo is later cloned to that path.
 - Release: a `feat` that semantic-release publishes as a minor version. No migration is needed because the new fields are optional.
 - No telemetry is added. The post-ship record below is a manual note.
 
@@ -755,9 +777,9 @@ Dependencies: none external. The plan adds no package and touches no lockfile.
 ## Success Criteria
 
 - A project with no active source gets byte-identical output from every built-in search. The researcher's extra `external` call returns the fixed reply, and it adds nothing and carries on.
-- The behavior is the same on every surface that has search, and `search.enabled` is the only switch that stays user-only.
+- The behavior is the same on every surface that has search, and `search.enabled` and `search.allow_project_sources` are the user-only switches.
 - A planner can build against the document without inventing source semantics, the allow rule, the bounds, the output grouping or which workflows call `external`.
-- After shipping, not as a gate: keep a manual record of the next 10 past-work runs in the repos Marcus plans in. Note what external material was read, what was cited, what changed a decision, plus noise and cost, with no telemetry. If external material changes no decision in any of the 10 runs, cut back or remove the feature.
+- After shipping, not as a gate: keep a manual record of the next 10 past-work runs in the repos Marcus plans in. Marcus keeps that record in a local file outside the repo. Note what external material was read, what was cited, what changed a decision, plus noise and cost, with no telemetry. "Changed a decision" means an external record is cited and the plan or brainstorm differs because of it. If external material changes no decision in any of the 10 runs, cut back or remove the feature.
 
 ---
 
