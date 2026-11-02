@@ -109,8 +109,9 @@ Read the exit status:
   validation unavailable. Withhold the return and report the exact
   unavailability and what was withheld. Update that selected persona's
   preinitialized dispatch entry from `never_returned` to `dispatch_outcome:
-  "validation_unavailable"` with `input_finding_count: 0`, and set
-  `run_status` to `degraded`. A run containing `validation_unavailable`
+  "validation_unavailable"`, adding no other field (the dispatch object is
+  strict; `finalize` derives `input_finding_count: 0` into the artifact), and
+  set `run_status` to `degraded`. A run containing `validation_unavailable`
   evidence can never finalize as `completed`, and that persona must not have
   an admitted input finding. `validation_unavailable` is not `malformed` and
   is not `never_returned`; they are distinct coverage states. `never_returned`
@@ -239,7 +240,7 @@ dispatch; fix-applying modes call it again with the exact applied-fix
 outcomes and the same validator results, and only that second call is
 persisted. Report-only calls it once and writes nothing.
 
-**Input:** `{ merge:<merge output>, prepared:<prepare output>, screen_results:<same array given to prepare>, dispatch_records:<same selected_dispatches>, validator_lifecycle_results[{finding_id, result:{outcome:'true'|'false'|'failed'|'unavailable', reason?}}], plan_assessment:{ verdict, results[{kind:'explicit_unmet_requirement'|'inferred_gap', description}] }, parent_run_metadata:{ run_id, mode:'interactive'|'autofix'|'headless'|'report-only', harness, branch, head_sha, selected_dispatches, timestamps:{started_at, completed_at}, validation:{status, reason?}, applied_fixes[] } }`.
+**Input:** `{ merge:<merge output>, prepared:<prepare output>, screen_results:<same array given to prepare>, dispatch_records:<same selected_dispatches>, validator_lifecycle_results[{finding_id, result:{outcome:'true'|'false'|'failed'|'unavailable', reason?}}], plan_assessment:{ verdict, results[{kind:'explicit_unmet_requirement'|'inferred_gap', description}] }, parent_run_metadata:{ ... } }` -- `parent_run_metadata` is specified field by field below.
 Reuse `prepared`, `screen_results`, and `dispatch_records` wholesale from the
 earlier phases rather than restating them; `finalize` re-derives the ledger,
 rejected-payload weights, coverage notes, and reviewer ownership from this
@@ -257,6 +258,77 @@ step can run, so the only truthful value at that point is
 `{status: "not_attempted", reason}` -- finalize rejects any other value.
 The post-write validation status is reported by the parent in the rendered
 Coverage section, never rewritten into the persisted artifact.
+
+**`parent_run_metadata` fields.** All are required unless marked optional.
+Unknown keys are rejected at every level of the metadata -- the object itself,
+`timestamps`, `validation`, and each dispatch object -- so send no field that
+is not listed here.
+
+- `run_id` -- string, 1-64 characters, not blank.
+- `mode` -- `interactive`, `autofix`, `headless`, or `report-only`.
+  `report-only` returns no artifact.
+- `harness` -- `opencode`, `pi`, or `claude-code`.
+- `branch` -- string, up to 256 characters.
+- `head_sha` -- 40 lowercase hex characters.
+- `selected_dispatches` -- array of at most 64 dispatch objects, one per
+  persona, each persona once. It is the same array given to `prepare` as
+  `selected_dispatches`, and it must equal `dispatch_records` on every
+  persona's `dispatch_outcome`, `selection_surface`, and `selection_reason`.
+  Persona name strings are rejected.
+- `timestamps` -- `{ started_at, completed_at }`, both required. Each is a UTC
+  ISO 8601 string ending in `Z`, such as `2026-01-01T00:05:00.000Z`. An offset
+  such as `+00:00` is rejected. Only `completed_at` is persisted.
+- `validation` -- `{ status, reason }`. `status` must be `not_attempted` at
+  finalize (see above); `reason` is a non-blank string of at most 2048
+  characters.
+- `applied_fixes` -- array of at most 2,048 non-blank strings of at most 2048
+  characters each. `[]` on the first call.
+
+Each dispatch object in `selected_dispatches` and `dispatch_records` is:
+
+- `persona` -- string, 1-64 characters, not blank. Required.
+- `dispatch_outcome` -- `findings`, `empty`, `malformed`, `never_returned`, or
+  `validation_unavailable`. Required.
+- `selection_surface` -- optional array of at most 32 unique repo-relative
+  paths of at most 256 characters each. No leading `/`, drive letter, or
+  backslash. Writing modes require a non-empty surface for `security`,
+  `data-migrations`, `api-contract`, `reliability`, and `performance`.
+- `selection_reason` -- optional non-blank string of at most 2048 characters.
+
+Do not send `input_finding_count` or `rejection_reason`. `finalize` derives
+them into the artifact's own `dispatches` entries (input dispatch fields plus
+`input_finding_count`, plus `rejection_reason` when `screen_results` carries a
+rejected summary); they are not input.
+
+A complete valid `parent_run_metadata`:
+
+```json
+{
+  "run_id": "20260101-000000-a1b2c3d4",
+  "mode": "interactive",
+  "harness": "opencode",
+  "branch": "feature/example",
+  "head_sha": "0123456789abcdef0123456789abcdef01234567",
+  "selected_dispatches": [
+    { "persona": "correctness", "dispatch_outcome": "empty" },
+    {
+      "persona": "security",
+      "dispatch_outcome": "empty",
+      "selection_surface": ["src/auth/session.ts"],
+      "selection_reason": "Diff changes session handling."
+    }
+  ],
+  "timestamps": {
+    "started_at": "2026-01-01T00:00:00.000Z",
+    "completed_at": "2026-01-01T00:05:00.000Z"
+  },
+  "validation": {
+    "status": "not_attempted",
+    "reason": "Artifact validation runs after the write."
+  },
+  "applied_fixes": []
+}
+```
 
 **Output:** `{ kind:'writing', artifact, report }` or `{ kind:'report_only', ...report }`.
 `report` carries `verdict`, `findings`, `applied_fixes`,
@@ -282,10 +354,10 @@ Choose a fresh delimiter the same way as `screen`'s. Read the exit status:
   the report; report-only renders `report` directly and writes nothing.
 - **exit 1** -- the aggregate envelope was rejected: a shape mismatch against
   `merge`/`prepared`, a missing or extra validator-lifecycle result, an
-  invalid plan-assessment envelope, or an artifact that failed its own
-  internal schema check. Correct the envelope once per the never-bypass
-  rule, then stop visibly if it is rejected again. Never hand-assemble a
-  substitute report or artifact.
+  invalid plan-assessment envelope, invalid `parent_run_metadata`, or an
+  artifact that failed its own internal schema check. Correct the envelope
+  once per the never-bypass rule, then stop visibly if it is rejected again.
+  Never hand-assemble a substitute report or artifact.
 - **exit 2**, a missing helper, or a launch failure -- unavailable; retry
   once with identical bytes, then stop visibly.
 
