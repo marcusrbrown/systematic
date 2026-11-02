@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,11 +6,14 @@ import { z } from 'zod'
 import { loadConfigWithSources } from '../../src/lib/config.js'
 import type { SearchSettings } from '../../src/lib/search-core.js'
 import {
+  loadProjectSearchSources,
   loadUserLevelSearchSettings,
+  MAX_PROJECT_CONFIG_BYTES,
   mergeSearchSettings,
   resolveUserLevelConfigDirs,
   SearchSettingsSchema,
   type SearchSettingsSource,
+  SearchSourceSchema,
   selectConfigFile,
   validateSearchConfig,
 } from '../../src/lib/search-user-config.js'
@@ -71,6 +74,7 @@ const validUser = (name: string, extra: Record<string, unknown> = {}) => ({
   name,
   format: 'markdown' as const,
   roots: ['/srv/docs'],
+  projects: ['/work/app'],
   ...extra,
 })
 
@@ -873,5 +877,307 @@ describe('loadUserLevelSearchSettings', () => {
     )
     expect(loaded.warnings[0]).not.toContain('lexical')
     expect(loaded.warnings[0]).not.toContain('nope')
+  })
+})
+
+describe('loadProjectSearchSources', () => {
+  function checkout(): { root: string; dir: string } {
+    const root = makeTempDir('project-reader')
+    const dir = path.join(root, '.opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    return { root, dir }
+  }
+
+  const GOOD = {
+    name: 'rfcs',
+    format: 'markdown' as const,
+    roots: ['docs/rfcs'],
+  }
+
+  /** A valid project config padded with trailing whitespace to exactly `bytes`. */
+  function paddedConfig(bytes: number): string {
+    const base = JSON.stringify({ search: { sources: [GOOD] } })
+    return base + ' '.repeat(bytes - Buffer.byteLength(base))
+  }
+
+  test('the cap is 1 MB', () => {
+    expect(MAX_PROJECT_CONFIG_BYTES).toBe(1024 * 1024)
+  })
+
+  test('a missing file is normal: no sources, no warning, readable', () => {
+    const { root } = checkout()
+    expect(loadProjectSearchSources(root)).toEqual({
+      sources: [],
+      warnings: [],
+      unreadable: false,
+    })
+  })
+
+  test('a file without a search block is normal', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      '{"disabled_skills":[]}',
+    )
+    expect(loadProjectSearchSources(root)).toEqual({
+      sources: [],
+      warnings: [],
+      unreadable: false,
+    })
+  })
+
+  test('reads valid sources from .json', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      JSON.stringify({ search: { sources: [GOOD] } }),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([GOOD])
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.warnings).toEqual([])
+  })
+
+  test('prefers .jsonc over .json when both exist', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      JSON.stringify({ search: { sources: [{ ...GOOD, name: 'from-json' }] } }),
+    )
+    fs.writeFileSync(
+      path.join(dir, 'systematic.jsonc'),
+      '// comment\n{ "search": { "sources": [{ "name": "from-jsonc", "format": "markdown", "roots": ["docs"] }] } }',
+    )
+    expect(loadProjectSearchSources(root).sources.map((s) => s.name)).toEqual([
+      'from-jsonc',
+    ])
+  })
+
+  test('does not read the user-only fields: enabled and allow list are ignored', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      JSON.stringify({
+        search: {
+          enabled: false,
+          allow_project_sources: ['/x'],
+          sources: [GOOD],
+        },
+      }),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([GOOD])
+    expect(loaded).not.toHaveProperty('enabled')
+  })
+
+  test('one valid and one invalid entry: the valid one loads, a warning names the other, not unreadable', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            GOOD,
+            { name: 'escape', format: 'markdown', roots: ['..'] },
+          ],
+        },
+      }),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([GOOD])
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.warnings[0]).toContain('"escape"')
+  })
+
+  test.each([
+    ['malformed JSONC', '{ "search": { "sources": [ '],
+    ['a non-object root', '[1]'],
+    ['sources that is not an array', '{"search":{"sources":"docs"}}'],
+    ['a search block that is not an object', '{"search":"on"}'],
+  ])(
+    '%s is structural: zero proposals, unreadable, one warning without values',
+    (_label, content) => {
+      const { root, dir } = checkout()
+      fs.writeFileSync(path.join(dir, 'systematic.json'), content)
+      const loaded = loadProjectSearchSources(root)
+      expect(loaded.sources).toEqual([])
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.warnings).toHaveLength(1)
+      expect(loaded.warnings[0]).not.toContain('docs')
+    },
+  )
+
+  test('a project read warning does not claim a user-config note', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(path.join(dir, 'systematic.json'), '{ nope')
+    expect(loadProjectSearchSources(root).warnings[0]).not.toContain(
+      'config unreadable',
+    )
+  })
+
+  test('a file that is not a regular file is unreadable and is not read', () => {
+    const { root, dir } = checkout()
+    fs.mkdirSync(path.join(dir, 'systematic.jsonc'))
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([])
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.warnings[0]).toContain('not a regular file')
+  })
+
+  test('a file of exactly 1 MB is accepted', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      paddedConfig(MAX_PROJECT_CONFIG_BYTES),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.sources).toEqual([GOOD])
+  })
+
+  test('a file one byte over 1 MB is rejected', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      paddedConfig(MAX_PROJECT_CONFIG_BYTES + 1),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.sources).toEqual([])
+    expect(loaded.warnings).toHaveLength(1)
+  })
+
+  test('a file far over 1 MB is rejected after reading at most the cap plus one byte', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      paddedConfig(MAX_PROJECT_CONFIG_BYTES * 5),
+    )
+    const realReadSync = fs.readSync.bind(fs)
+    let bytesRead = 0
+    const spy = spyOn(fs, 'readSync').mockImplementation(((
+      ...args: Parameters<typeof fs.readSync>
+    ) => {
+      const count = realReadSync(...args)
+      bytesRead += count
+      return count
+    }) as typeof fs.readSync)
+    try {
+      const loaded = loadProjectSearchSources(root)
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.sources).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+    expect(bytesRead).toBeGreaterThan(0)
+    expect(bytesRead).toBeLessThanOrEqual(MAX_PROJECT_CONFIG_BYTES + 1)
+  })
+
+  test('a file that grows past 1 MB while it is being read is rejected the same way', () => {
+    const { root, dir } = checkout()
+    const file = path.join(dir, 'systematic.json')
+    fs.writeFileSync(file, paddedConfig(600 * 1024))
+    const realReadSync = fs.readSync.bind(fs)
+    let calls = 0
+    let bytesRead = 0
+    const spy = spyOn(fs, 'readSync').mockImplementation(((
+      ...args: Parameters<typeof fs.readSync>
+    ) => {
+      const count = realReadSync(...args)
+      bytesRead += count
+      calls += 1
+      // The file doubles after the first chunk, as a concurrent writer would.
+      if (calls === 1) fs.appendFileSync(file, ' '.repeat(600 * 1024))
+      return count
+    }) as typeof fs.readSync)
+    try {
+      const loaded = loadProjectSearchSources(root)
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.sources).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+    expect(calls).toBeGreaterThan(1)
+    expect(bytesRead).toBeLessThanOrEqual(MAX_PROJECT_CONFIG_BYTES + 1)
+  })
+})
+
+describe('a user source must be mapped to at least one project', () => {
+  const user = (value: unknown) =>
+    validateSearchConfig(value, 'user', USER_FILE)
+
+  const unmapped = (name: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    format: 'markdown' as const,
+    roots: ['/srv/docs'],
+    ...extra,
+  })
+
+  test.each([
+    ['omits projects', unmapped('loose')],
+    ['has an empty projects array', unmapped('loose', { projects: [] })],
+  ])(
+    'an entry that %s is dropped with the usual entry warning and its siblings stay',
+    (_label, entry) => {
+      const keeper = unmapped('keeper', { projects: ['/work/app'] })
+      const result = user({ enabled: false, sources: [entry, keeper] })
+
+      expect(result.settings).toEqual({ enabled: false, sources: [keeper] })
+      expect(result.structural).toBe(false)
+      expect(result.unreadable).toBe(false)
+      expect(result.warnings).toHaveLength(1)
+      expect(result.warnings[0]).toContain('"loose"')
+      expect(result.warnings[0]).toContain('was dropped')
+      expect(result.warnings[0]).toContain('projects')
+      expect(result.warnings[0]).toContain('Its valid siblings still load')
+    },
+  )
+
+  test('a non-array projects value is still dropped', () => {
+    const result = user({ sources: [unmapped('a', { projects: '/work/app' })] })
+    expect(result.settings?.sources).toBeUndefined()
+    expect(result.warnings).toHaveLength(1)
+  })
+
+  test('project trust still takes an entry without projects', () => {
+    const result = validateSearchConfig(
+      { sources: [{ name: 'p', format: 'markdown', roots: ['docs'] }] },
+      'project',
+      '/repo/.opencode/systematic.json',
+    )
+    expect(result.settings?.sources).toHaveLength(1)
+    expect(result.warnings).toEqual([])
+  })
+
+  test('the loaders drop an unmapped user entry too', () => {
+    const root = makeTempDir('unmapped')
+    const homeDir = path.join(root, 'home')
+    const userDir = path.join(homeDir, '.config/opencode')
+    fs.mkdirSync(userDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(userDir, 'systematic.json'),
+      JSON.stringify({ search: { sources: [unmapped('loose')] } }),
+    )
+    const loaded = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    expect(loaded.settings).toBeUndefined()
+    expect(loaded.warnings).toHaveLength(1)
+    const config = loadConfigWithSources(root, {
+      homeDir,
+      customConfigDir: null,
+      warningSink: () => {},
+    }).config
+    expect(config.search).toBeUndefined()
+  })
+
+  test('the schema says projects is required for a user entry', () => {
+    const description = z.globalRegistry.get(
+      SearchSourceSchema.shape.projects,
+    )?.description
+    expect(description).toContain('at least one')
+    expect(description).toContain('required')
   })
 })

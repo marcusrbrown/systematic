@@ -77,11 +77,15 @@ const sourceProjectsSchema = z
   .optional()
   .meta({
     description:
-      'User config only. Absolute or `~`-prefixed main repository roots this source applies to. A project config may not set it.',
+      'User config only, and required there: at least one absolute or `~`-prefixed main repository root this source applies to. A user source that omits it or leaves it empty is dropped with a warning, so a source can never apply to every project by accident. A project config may not set it.',
     examples: [['~/src/github.com/me/app']],
   })
 
-/** One entry of `search.sources`. `projects` is user-config only; the validators enforce that. */
+/**
+ * One entry of `search.sources`. `projects` is user-config only, and a user
+ * entry must carry at least one; the validators enforce both. The schema keeps
+ * it optional because the project variant may not set it.
+ */
 export const SearchSourceSchema = z
   .object({
     name: sourceNameSchema,
@@ -132,7 +136,7 @@ export const SearchSettingsSchema = z
       .optional()
       .meta({
         description:
-          'Opt-in external decision sources for `kind: "external"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`. An invalid entry is dropped with a warning and its valid siblings stay.',
+          'Opt-in external decision sources for `kind: "external"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`, which every user source must list (at least one project root). An invalid entry is dropped with a warning and its valid siblings stay.',
         examples: [
           [{ name: 'team-rfcs', format: 'markdown', roots: ['docs/rfcs'] }],
           [
@@ -155,7 +159,12 @@ export const SearchSettingsSchema = z
       {
         allow_project_sources: ['~/src/github.com/me/app'],
         sources: [
-          { name: 'team-rfcs', format: 'markdown', roots: ['/srv/rfcs'] },
+          {
+            name: 'team-rfcs',
+            format: 'markdown',
+            roots: ['/srv/rfcs'],
+            projects: ['~/src/github.com/me/app'],
+          },
         ],
       },
     ],
@@ -344,9 +353,15 @@ function validateProjects(
   projects: unknown,
   trust: SearchConfigTrust,
 ): readonly string[] | undefined | string {
-  if (projects === undefined) return undefined
-  if (trust === 'project') return 'projects is only valid in user config'
-  if (!Array.isArray(projects) || !projects.every(isUserPathForm)) {
+  if (trust === 'project') {
+    return projects === undefined
+      ? undefined
+      : 'projects is only valid in user config'
+  }
+  if (!Array.isArray(projects) || projects.length === 0) {
+    return 'a user source needs a projects list with at least one project root'
+  }
+  if (!projects.every(isUserPathForm)) {
     return 'a projects entry must be an absolute or ~-prefixed path'
   }
   return projects
@@ -695,16 +710,94 @@ type FileRead =
       readonly has: boolean
     }
 
-function readSearchBlock(filePath: string): FileRead {
-  let content: string
+type TextRead =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'failed'; readonly reason: string }
+  | { readonly kind: 'text'; readonly content: string }
+
+function errorCode(error: unknown): unknown {
+  return error instanceof Error && 'code' in error ? error.code : undefined
+}
+
+/** Largest project config file the bin-safe project reader accepts (KTD16). */
+export const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024
+
+const READ_CHUNK_BYTES = 64 * 1024
+
+/**
+ * Read a text file through an open fd, never more than `maxBytes + 1` bytes.
+ * Reaching `maxBytes + 1` rejects the file, so a file that is already too
+ * large and one that grows past the cap while it is being read fail the same
+ * way, and the size is never trusted from a `stat`. The fd must be a regular
+ * file; the open is non-blocking so a FIFO planted at the path cannot hang the
+ * reader.
+ */
+function readTextBounded(filePath: string, maxBytes: number): TextRead {
+  let fd: number
   try {
-    content = fs.readFileSync(filePath, 'utf-8')
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0),
+    )
   } catch (error) {
-    const code =
-      error instanceof Error && 'code' in error ? error.code : undefined
-    if (code === 'ENOENT') return { kind: 'absent' }
+    if (errorCode(error) === 'ENOENT') return { kind: 'absent' }
     return { kind: 'failed', reason: 'unable to read file' }
   }
+  try {
+    if (!fs.fstatSync(fd).isFile()) {
+      return { kind: 'failed', reason: 'not a regular file' }
+    }
+    const limit = maxBytes + 1
+    const chunks: Buffer[] = []
+    let total = 0
+    while (total < limit) {
+      const chunk = Buffer.allocUnsafe(
+        Math.min(READ_CHUNK_BYTES, limit - total),
+      )
+      const count = fs.readSync(fd, chunk, 0, chunk.length, null)
+      if (count === 0) break
+      chunks.push(chunk.subarray(0, count))
+      total += count
+    }
+    if (total >= limit) {
+      return {
+        kind: 'failed',
+        reason: `file is larger than ${maxBytes / (1024 * 1024)} MB`,
+      }
+    }
+    return { kind: 'text', content: Buffer.concat(chunks).toString('utf-8') }
+  } catch {
+    return { kind: 'failed', reason: 'unable to read file' }
+  } finally {
+    try {
+      fs.closeSync(fd)
+    } catch {
+      // Nothing useful to do: the read result is already decided.
+    }
+  }
+}
+
+function readTextWhole(filePath: string): TextRead {
+  try {
+    return { kind: 'text', content: fs.readFileSync(filePath, 'utf-8') }
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return { kind: 'absent' }
+    return { kind: 'failed', reason: 'unable to read file' }
+  }
+}
+
+/**
+ * Read and parse one config file's `search` block. `maxBytes` bounds the read
+ * (used for project config, which a cloned repository controls); user-level
+ * files are read whole, as before.
+ */
+function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
+  const text =
+    maxBytes === undefined
+      ? readTextWhole(filePath)
+      : readTextBounded(filePath, maxBytes)
+  if (text.kind !== 'text') return text
+  const content = text.content
   const errors: ParseError[] = []
   const parsed: unknown = parseJsonc(content, errors)
   const firstError = errors[0]
@@ -759,4 +852,59 @@ export function loadUserLevelSearchSettings(
   }
   const merged = mergeSearchSettings(sources)
   return { ...merged, warnings }
+}
+
+// ── The project-level reader ────────────────────────────────────────────────
+
+export interface ProjectSearchLoad {
+  /** The valid proposed sources. Empty for an absent file, a structural error or no `sources`. */
+  readonly sources: readonly SearchSourceEntry[]
+  /** Bounded warnings. They name fields and source names, never a value. */
+  readonly warnings: readonly string[]
+  /**
+   * The project config is unreadable: the file could not be read (including
+   * over `MAX_PROJECT_CONFIG_BYTES`) or parsed, or a container is invalid
+   * (`search` is not an object, `sources` is not an array). An invalid entry
+   * alone does not set it. This is not the user-config `config unreadable` note.
+   */
+  readonly unreadable: boolean
+}
+
+function formatProjectFileWarning(sourcePath: string, reason: string): string {
+  return `[systematic] project search settings in ${displaySafe(sourcePath)} could not be read (${reason}); the sources it proposes were ignored.`
+}
+
+/**
+ * Read the sources a project config proposes, from the checkout root's
+ * `.opencode/systematic.jsonc` (falling back to `.json`, as `getConfigPaths`
+ * in `config.ts` does). Bin-safe: it needs no `config.ts`. The read is capped
+ * at `MAX_PROJECT_CONFIG_BYTES`, the file is validated with the project rules
+ * (`sources` only; `enabled` and `allow_project_sources` are never read), and
+ * it never throws. A missing file or a missing `search` block is normal.
+ */
+export function loadProjectSearchSources(
+  checkoutRoot: string,
+): ProjectSearchLoad {
+  const filePath = selectConfigFile(
+    path.join(checkoutRoot, '.opencode'),
+    'systematic',
+  )
+  const read = readSearchBlock(filePath, MAX_PROJECT_CONFIG_BYTES)
+  if (read.kind === 'absent') {
+    return { sources: [], warnings: [], unreadable: false }
+  }
+  if (read.kind === 'failed') {
+    return {
+      sources: [],
+      warnings: [formatProjectFileWarning(filePath, read.reason)],
+      unreadable: true,
+    }
+  }
+  if (!read.has) return { sources: [], warnings: [], unreadable: false }
+  const validation = validateSearchConfig(read.searchBlock, 'project', filePath)
+  return {
+    sources: validation.structural ? [] : (validation.settings?.sources ?? []),
+    warnings: validation.warnings,
+    unreadable: validation.structural,
+  }
 }

@@ -1927,7 +1927,8 @@
             {
               "name": "team-rfcs",
               "format": "markdown",
-              "roots": ["/srv/rfcs"]
+              "roots": ["/srv/rfcs"],
+              "projects": ["~/src/github.com/me/app"]
             }
           ]
         }
@@ -1953,7 +1954,7 @@
       "minLength": 1
     },
     "__schema76": {
-      "description": "Opt-in external decision sources for `kind: \"external\"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`. An invalid entry is dropped with a warning and its valid siblings stay.",
+      "description": "Opt-in external decision sources for `kind: \"external\"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`, which every user source must list (at least one project root). An invalid entry is dropped with a warning and its valid siblings stay.",
       "examples": [
         [
           {
@@ -2034,7 +2035,7 @@
       "minLength": 1
     },
     "__schema82": {
-      "description": "User config only. Absolute or `~`-prefixed main repository roots this source applies to. A project config may not set it.",
+      "description": "User config only, and required there: at least one absolute or `~`-prefixed main repository root this source applies to. A user source that omits it or leaves it empty is dropped with a warning, so a source can never apply to every project by accident. A project config may not set it.",
       "examples": [["~/src/github.com/me/app"]],
       "allOf": [
         {

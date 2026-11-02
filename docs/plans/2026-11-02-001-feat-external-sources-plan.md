@@ -505,7 +505,7 @@ flowchart TB
 
 ### Phase B: Reader and Markdown loader
 
-- [ ] U3. Per-call source reader shared by all surfaces
+- [x] U3. Per-call source reader shared by all surfaces
 
 **Goal:** Produce the active source list for one `external` call from the user files and the project file, honoring identity, allow list, shadowing, order and the source cap.
 

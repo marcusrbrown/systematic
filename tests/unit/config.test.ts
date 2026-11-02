@@ -6719,8 +6719,18 @@ describe('search config field', () => {
           enabled: false,
           allow_project_sources: ['/work/a'],
           sources: [
-            { name: 'wiki', format: 'markdown', roots: ['/user/wiki'] },
-            { name: 'only-user', format: 'markdown', roots: ['/user/x'] },
+            {
+              name: 'wiki',
+              format: 'markdown',
+              roots: ['/user/wiki'],
+              projects: ['/work/a'],
+            },
+            {
+              name: 'only-user',
+              format: 'markdown',
+              roots: ['/user/x'],
+              projects: ['/work/a'],
+            },
           ],
         },
       })
@@ -6728,7 +6738,12 @@ describe('search config field', () => {
         search: {
           allow_project_sources: ['/work/b'],
           sources: [
-            { name: 'wiki', format: 'markdown', roots: ['/custom/wiki'] },
+            {
+              name: 'wiki',
+              format: 'markdown',
+              roots: ['/custom/wiki'],
+              projects: ['/work/a'],
+            },
           ],
         },
       })
@@ -6737,8 +6752,18 @@ describe('search config field', () => {
         enabled: false,
         allow_project_sources: ['/work/a', '/work/b'],
         sources: [
-          { name: 'wiki', format: 'markdown', roots: ['/custom/wiki'] },
-          { name: 'only-user', format: 'markdown', roots: ['/user/x'] },
+          {
+            name: 'wiki',
+            format: 'markdown',
+            roots: ['/custom/wiki'],
+            projects: ['/work/a'],
+          },
+          {
+            name: 'only-user',
+            format: 'markdown',
+            roots: ['/user/x'],
+            projects: ['/work/a'],
+          },
         ],
       })
       expect(t.warnings).toEqual([])
@@ -6750,15 +6775,32 @@ describe('search config field', () => {
         search: {
           enabled: false,
           sources: [
-            { name: 'bad', format: 'yaml', roots: ['/x'] },
-            { name: 'good', format: 'markdown', roots: ['/y'] },
+            {
+              name: 'bad',
+              format: 'yaml',
+              roots: ['/x'],
+              projects: ['/work/a'],
+            },
+            {
+              name: 'good',
+              format: 'markdown',
+              roots: ['/y'],
+              projects: ['/work/a'],
+            },
           ],
         },
       })
       const { config } = t.load()
       expect(config.search).toEqual({
         enabled: false,
-        sources: [{ name: 'good', format: 'markdown', roots: ['/y'] }],
+        sources: [
+          {
+            name: 'good',
+            format: 'markdown',
+            roots: ['/y'],
+            projects: ['/work/a'],
+          },
+        ],
       })
       expect(t.warnings).toHaveLength(1)
     })

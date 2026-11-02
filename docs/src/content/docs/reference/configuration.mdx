@@ -918,6 +918,9 @@ Search settings. `enabled` and `allow_project_sources` are user-owned: only user
       "format": "markdown",
       "roots": [
         "/srv/rfcs"
+      ],
+      "projects": [
+        "~/src/github.com/me/app"
       ]
     }
   ]
@@ -955,7 +958,7 @@ Main repository roots (absolute or `~`-prefixed) whose project config may propos
 
 ### sources
 
-Opt-in external decision sources for `kind: "external"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`. An invalid entry is dropped with a warning and its valid siblings stay.
+Opt-in external decision sources for `kind: "external"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`, which every user source must list (at least one project root). An invalid entry is dropped with a warning and its valid siblings stay.
 
 **Type:** `object`[]
 
@@ -1048,7 +1051,7 @@ One to eight folders to read. In a project config each root is a relative path u
 
 #### sources[].projects
 
-User config only. Absolute or `~`-prefixed main repository roots this source applies to. A project config may not set it.
+User config only, and required there: at least one absolute or `~`-prefixed main repository root this source applies to. A user source that omits it or leaves it empty is dropped with a warning, so a source can never apply to every project by accident. A project config may not set it.
 
 **Type:** `string`[]
 
