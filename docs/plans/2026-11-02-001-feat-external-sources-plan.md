@@ -469,7 +469,7 @@ flowchart TB
 
 ---
 
-- [ ] U10. Built-in output goldens
+- [x] U10. Built-in output goldens
 
 **Goal:** Record the byte-exact output of every built-in search path before U4 and U5 change search behavior, so "built-in output is unchanged" is checked against a recorded baseline for all four kinds and `all`, not only the 11 solution requests pinned today.
 
