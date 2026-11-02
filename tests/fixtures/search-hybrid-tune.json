@@ -1,0 +1,117 @@
+{
+  "header": {
+    "description": "Vocabulary-disjoint paraphrases used to tune the hybrid-search candidates. Each is written from the problem a target document solves, then checked with the real lexical tokenizer: no content term of the paraphrase appears in the target title, tags, module, symptoms, applies_when, component, problem type or body. Brainstorm targets are left out because docs/brainstorms/ is untracked, so this file holds committed kinds only. A paraphrase is a tuning input, never a mined need.",
+    "authored": "2026-11-01",
+    "disjointness_checked_against": "the corpus at 32e2097f plus 60 untracked brainstorms",
+    "fields": {
+      "id": "opaque q-tNNN id; the number is the paraphrase's position in the full tune split before brainstorm targets were left out",
+      "target_kind": "solution, plan or ideation",
+      "target": "repo-relative path of the one labeled document",
+      "paraphrase": "the information need, in words that do not appear in the target"
+    }
+  },
+  "queries": [
+    {
+      "id": "q-t001",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md",
+      "paraphrase": "mirroring an outside supplier's enclosed instruction text, kept in lockstep as its library appears anew"
+    },
+    {
+      "id": "q-t002",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/a-mutation-that-fails-nothing-needs-a-decision-2026-10-15.md",
+      "paraphrase": "deliberate sabotage of the source flipped zero alarms; unsure if I should retain or discard that experiment"
+    },
+    {
+      "id": "q-t003",
+      "target_kind": "solution",
+      "target": "docs/solutions/integration-issues/opencode-config-schema-rejects-ad-hoc-agent-colors-2026-05-09.md",
+      "paraphrase": "terminal front end will not boot after a host upgrade since a shipped sidekick named an unusual hue"
+    },
+    {
+      "id": "q-t004",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/pi-real-runtime-integration-harness-2026-07-16.md",
+      "paraphrase": "stand-in dependencies look fine, but nobody has demonstrated that the distributed add-on truly comes alive inside the genuine environment"
+    },
+    {
+      "id": "q-t005",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/auto-generated-install-commands-mdx-pitfalls-2026-06-06.md",
+      "paraphrase": "machine-produced pages explode when I embed pointy placeholders inside each sheet's pasteable shell invocation"
+    },
+    {
+      "id": "q-t006",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/zod-json-schema-ref-dedup-postprocessors-2026-05-17.md",
+      "paraphrase": "serialized outputs bloated with duplicates; replacing the repeats with links broke my tidy-up transforms"
+    },
+    {
+      "id": "q-t007",
+      "target_kind": "solution",
+      "target": "docs/solutions/logic-errors/pi-chained-bootstrap-composition-2026-07-14.md",
+      "paraphrase": "neighbouring module's preamble vanished after we rewrote our boot directives on the second platform"
+    },
+    {
+      "id": "q-t008",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/measure-a-source-scanner-blind-spots-2026-09-07.md",
+      "paraphrase": "glob-driven lint over character streams stays satisfied though trivial evasions are possible; how to gauge what slips by"
+    },
+    {
+      "id": "q-t009",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/content-integrity-has-no-warning-channel-2026-06-06.md",
+      "paraphrase": "wanted a gentle nudge for a missing tip property but the checker only supports pass or fail"
+    },
+    {
+      "id": "q-t010",
+      "target_kind": "solution",
+      "target": "docs/solutions/best-practices/commit-pinned-urls-publish-pr-evidence-images-2026-10-24.md",
+      "paraphrase": "pictures in my proposal write-up disappear once the label of the live limb is removed after squashing revisions into one"
+    },
+    {
+      "id": "q-t011",
+      "target_kind": "plan",
+      "target": "docs/plans/2026-07-06-001-feat-removed-name-config-safety-plan.md",
+      "paraphrase": "extension crashes at launch for folks who muted a feature we afterwards retired"
+    },
+    {
+      "id": "q-t012",
+      "target_kind": "plan",
+      "target": "docs/plans/2026-05-17-003-feat-subagent-stop-instruction-priority-plan.md",
+      "paraphrase": "make offspring workers disregard the flow preamble and let the human's own preferences prevail"
+    },
+    {
+      "id": "q-t013",
+      "target_kind": "plan",
+      "target": "docs/plans/2026-04-17-002-refactor-truth-reset-plan.md",
+      "paraphrase": "outward statements exaggerate facts, so align promotional wording with what the undertaking truly does and abolish the old mirroring machinery"
+    },
+    {
+      "id": "q-t014",
+      "target_kind": "plan",
+      "target": "docs/plans/2026-06-06-003-feat-skill-frontmatter-tune-up-plan.md",
+      "paraphrase": "a single included routine shows no suggestion string for its dollar-sign variable and I want a gentle linter"
+    },
+    {
+      "id": "q-t015",
+      "target_kind": "plan",
+      "target": "docs/plans/2026-05-22-001-feat-launch-surface-cleanup-plan.md",
+      "paraphrase": "rework the homepage, onboarding tutorial and front-door blurb for newcomers"
+    },
+    {
+      "id": "q-t016",
+      "target_kind": "plan",
+      "target": "docs/plans/2026-04-25-001-feat-registry-automation-plan.md",
+      "paraphrase": "have the catalog of parts produced automatically from the tree on disk instead of an artisanal listing"
+    },
+    {
+      "id": "q-t022",
+      "target_kind": "ideation",
+      "target": "docs/ideation/2026-10-25-open-ideation.md",
+      "paraphrase": "prioritised suggestions for what to tackle next throughout the tooling, such as one entry point exercising all the update utilities"
+    }
+  ]
+}

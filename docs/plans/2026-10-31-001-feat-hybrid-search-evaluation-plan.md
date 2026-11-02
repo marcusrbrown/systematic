@@ -1,7 +1,7 @@
 ---
 title: "feat: Measure meaning-only search recall and ship the winning approach"
 type: feat
-status: active
+status: completed
 date: 2026-10-31
 origin: docs/brainstorms/2026-10-31-hybrid-search-requirements.md
 ---
@@ -9,6 +9,8 @@ origin: docs/brainstorms/2026-10-31-hybrid-search-requirements.md
 # feat: Measure meaning-only search recall and ship the winning approach
 
 ## Overview
+
+**Outcome (2026-11-01): floor stop.** Lexical missed 2 of 60 mined real needs in the shipped past-work shape, below the floor of 8, so no candidate was chosen. U5 to U7 and every U9 unit were not run. The result is recorded in `docs/solutions/best-practices/count-real-lexical-misses-before-adding-an-embeddings-lane-2026-11-01.md`.
 
 Search is lexical (BM25F) over four kinds: `solution`, `plan`, `brainstorm` and `ideation`. It misses a document when the question and the document share no terms. A parked embeddings lane tried to fix that with rank fusion and lost lexical hits. No existing query set can show a meaning-only win.
 
@@ -388,7 +390,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 
 ### Phase A: Evaluation (scratch only)
 
-- [ ] U0. Setup (scratch)
+- [x] U0. Setup (scratch)
 
 **Goal:** Everything the protocol freezes exists, hashed and recorded, before any harness code or query exists.
 
@@ -431,7 +433,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 - The guard refuses each out-of-order phase transition in a dry run.
 - The measured latencies are recorded.
 
-- [ ] U1. Harness (scratch)
+- [x] U1. Harness (scratch)
 
 **Goal:** A tested harness that scores every candidate the same way, so no scoring logic is written after results exist.
 
@@ -483,7 +485,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 - The scorer reproduces the committed lexical results for the 19 and 16 sets within the recorded numbers.
 - The ledger records the harness tree hash.
 
-- [ ] U2. Tune and rehearsal (scratch)
+- [x] U2. Tune and rehearsal (scratch)
 
 **Goal:** Every frozen setting is chosen without touching held-out data, and the whole pipeline has run once end to end.
 
@@ -514,7 +516,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 - The false-trigger rate and extra-call count are recorded.
 - The rehearsal completes end to end with the guard enforcing its phases.
 
-- [ ] U3. Mining (scratch)
+- [x] U3. Mining (scratch)
 
 **Goal:** A deduplicated, leak-checked, clustered set of real questions in original wording, kept out of the tune directory.
 
@@ -545,7 +547,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 - The leak-check log lists each drop with its reason.
 - The representative rule is recorded in the ledger before the first lexical run.
 
-- [ ] U4. Label, convert and lexical run (scratch)
+- [x] U4. Label, convert and lexical run (scratch)
 
 **Goal:** Every batch is labeled before its lexical run, the labels are frozen once after mining ends, and the lexical-only baseline says how many misses there are.
 
@@ -672,7 +674,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 
 ### Phase B: Evidence (repo)
 
-- [ ] U8. The learning, the tune set and the evidence fixture
+- [x] U8. The learning, the tune set and the evidence fixture
 
 **Goal:** The decision and its protocol survive in the repo without the harness or any raw mined text.
 
@@ -927,7 +929,7 @@ Phase A (U0 to U7) is scratch-only and commits nothing. Phase B (U8) commits the
 
 ### Final
 
-- [ ] U10. Full gates and the ship question
+- [x] U10. Full gates and the ship question
 
 **Goal:** Every path ends with green gates and an explicit question to Marcus about shipping.
 
