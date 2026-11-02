@@ -427,7 +427,7 @@ flowchart TB
 
 ---
 
-- [ ] U2. Project identity helper
+- [x] U2. Project identity helper
 
 **Goal:** Return a checkout's main repository root, or an unresolved result that never matches, using only filesystem reads, and provide the exact-path allow match.
 
