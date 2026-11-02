@@ -30,14 +30,13 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from './routing-resolver.js'
-import type { SearchSettings } from './search-core.js'
 import {
-  formatSearchBlockWarning,
   mergeSearchSettings,
   resolveUserLevelConfigDirs,
+  type SearchSchemaOutput,
   type SearchSettingsSource,
   selectConfigFile,
-  validateSearchBlock,
+  validateSearchConfig,
 } from './search-user-config.js'
 
 export interface BootstrapConfig {
@@ -244,11 +243,14 @@ export interface SystematicConfig {
   skills_as_commands: boolean
   allow_project_profiles: boolean
   /**
-   * Merged `search` settings from user and custom config only. Absent when
-   * neither defines one: there is no default, and the core applies its own at
-   * use time.
+   * Merged `search` settings from user and custom config only: `enabled`
+   * (last-defining), `allow_project_sources` (union) and the user `sources`
+   * (by name, custom winning). Absent when neither defines one: there is no
+   * default, and the core applies its own at use time. A project config's
+   * `search.sources` are validated at load and then discarded; they never
+   * appear here. The per-call external reader is their only consumer.
    */
-  search?: SearchSettings
+  search?: SearchSchemaOutput
   /**
    * Set (to `true`) when a user or custom `search` block, or its file, could
    * not be read. That block is ignored and search results carry a
@@ -291,6 +293,8 @@ interface RawSystematicConfig
   agents?: unknown
   categories?: unknown
   pi_subagents?: { categories?: unknown; agents?: unknown }
+  /** Raw and unvalidated: `splitSearchBlock` validates it apart from the rest of the file. */
+  search?: unknown
   profiles?: Record<string, RawProfileBundle>
   profile?: string | null
 }
@@ -310,8 +314,8 @@ interface FileConfigSource extends ConfigSourceBase {
   /**
    * The file's `search` block, validated on its own and split off the rest
    * of the file before `SystematicConfigSchema.safeParse`, so a bad block
-   * can never fail the load. Absent for project sources (which are stripped)
-   * and for files with no `search` key.
+   * can never fail the load. Absent for project sources (whose `sources` are
+   * validated and then discarded) and for files with no `search` key.
    */
   readonly search?: SearchSettingsSource
   readonly trust: ConfigSourceKind
@@ -397,16 +401,23 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
   Record<SecurityOverlayField, ConfigProtectedFieldPath>
 >
 
-// `allow_project_profiles` and `search` are unconditionally project-protected. `profiles` is
-// deliberately NOT in this set -- it is conditionally protected on the
+// `allow_project_profiles` is unconditionally project-protected. `search` is
+// protected per nested path (`search.enabled`, `search.allow_project_sources`),
+// because a project may still set `search.sources`. Those two paths are
+// reported by `collectProjectProtectedFields`, and `splitSearchBlock` then
+// reads a project's block for `sources` alone and discards it, so neither
+// value can reach the resolved config. `profiles` is deliberately NOT in this set -- it is conditionally protected on the
 // effective `allow_project_profiles` opt-in (see
 // `stripProjectProtectedFields`/`collectProjectProtectedFields`). A project can
 // never grant itself that opt-in, since `allow_project_profiles` itself is
 // always stripped regardless of its value.
-const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set([
-  'allow_project_profiles',
-  'search',
-])
+const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set(['allow_project_profiles'])
+
+/** The `search` fields only user and custom config may set. */
+const PROJECT_PROTECTED_SEARCH_FIELDS = [
+  ['enabled', 'search.enabled'],
+  ['allow_project_sources', 'search.allow_project_sources'],
+] as const satisfies ReadonlyArray<readonly [string, ConfigProtectedFieldPath]>
 
 /** Max rendered length (including a truncation ellipsis) for untrusted text interpolated into a diagnostic message. */
 const MAX_DIAGNOSTIC_TEXT = 200
@@ -863,12 +874,13 @@ function loadConfigSource(
           )
         : topLevelStripped
 
-    // Validated apart from the rest of the file (user and custom only -- the
-    // project pass already stripped `search` above), so a bad block drops
-    // with one warning instead of failing the whole load.
+    // Validated apart from the rest of the file, so a bad block drops with a
+    // warning instead of failing the whole load. A project's block (its
+    // `sources` only, after the strip above) is validated and then discarded.
     const { config: configWithoutSearch, search } = splitSearchBlock(
       config,
       filePath,
+      trust,
       warningSink,
     )
 
@@ -916,30 +928,35 @@ function loadConfigSource(
 }
 
 /**
- * Split a user/custom file's `search` block off and validate it alone. A
- * project source never reaches here with a `search` key, because
- * `PROJECT_ALWAYS_PROTECTED_FIELDS` already removed it. An invalid block is
- * dropped with one warning that names fields and no value, and the source is
- * marked unreadable so search results carry a `config unreadable` note.
+ * Split a file's `search` block off and validate it alone with the shared
+ * field-and-entry validators. A user or custom block gives its valid parts
+ * plus the `unreadable` flag. A project block is read for `sources`
+ * alone (the validator ignores `enabled` and `allow_project_sources` under
+ * project trust, which `collectProjectProtectedFields` and the per-path
+ * warnings already report), validated for its warnings, and then discarded,
+ * because the per-call reader is the only consumer of project `sources`. Only `settings` and `unreadable` of the result are consumed here;
+ * a project's `structural` state belongs to that reader.
  */
 function splitSearchBlock(
   config: RawSystematicConfig,
   filePath: string,
+  trust: ConfigSourceKind,
   warningSink: (message: string) => void,
 ): { config: RawSystematicConfig; search: SearchSettingsSource | undefined } {
   if (!Object.hasOwn(config, 'search')) return { config, search: undefined }
   const { search: rawSearch, ...rest } = config as Record<string, unknown>
-  const validation = validateSearchBlock(rawSearch)
-  if (validation.ok) {
-    return {
-      config: rest as RawSystematicConfig,
-      search: { settings: validation.settings, unreadable: false },
-    }
-  }
-  warningSink(formatSearchBlockWarning(filePath, validation.fields))
+  const validation = validateSearchConfig(
+    rawSearch,
+    trust === 'project' ? 'project' : 'user',
+    filePath,
+  )
+  for (const message of validation.warnings) warningSink(message)
   return {
     config: rest as RawSystematicConfig,
-    search: { unreadable: true },
+    search:
+      trust === 'project'
+        ? undefined
+        : { settings: validation.settings, unreadable: validation.unreadable },
   }
 }
 
@@ -991,6 +1008,21 @@ function emitTopLevelProtectedFieldWarning(
   sink(`[systematic] ${messageTemplate.replace('%PATH%', safePath)}`)
 }
 
+/** One per-path warning for each user-only `search` field a project source set. */
+function emitProjectSearchProtectedWarnings(
+  projectSource: FileConfigSource | null,
+  sink: (message: string) => void,
+): void {
+  for (const [, fieldPath] of PROJECT_PROTECTED_SEARCH_FIELDS) {
+    emitTopLevelProtectedFieldWarning(
+      projectSource,
+      fieldPath,
+      `\`${fieldPath}\` in project config (%PATH%) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. A project config may set \`search.sources\` only.`,
+      sink,
+    )
+  }
+}
+
 /**
  * @param allowProjectProfiles The effective (already-resolved custom ??
  * user) opt-in value. Gates whether a project-set `profiles` is reported as
@@ -1023,18 +1055,23 @@ function collectProjectProtectedFields(
           },
         ]
       : []),
-    ...(Object.hasOwn(rawConfig, 'search')
-      ? [
-          {
-            fieldPath: 'search' as const,
-            outcome: 'blocked' as const,
-            sourceKind: 'project' as const,
-          },
-        ]
-      : []),
+    ...collectSearchProtectedFields(rawConfig.search),
     ...collectOverlayProtectedFields(rawConfig.agents, 'agents'),
     ...collectOverlayProtectedFields(rawConfig.categories, 'categories'),
   ]
+}
+
+function collectSearchProtectedFields(
+  search: unknown,
+): readonly ConfigProtectedFieldMetadata[] {
+  if (!isRecord(search)) return []
+  return PROJECT_PROTECTED_SEARCH_FIELDS.filter(([key]) =>
+    Object.hasOwn(search, key),
+  ).map(([, fieldPath]) => ({
+    fieldPath,
+    outcome: 'blocked' as const,
+    sourceKind: 'project' as const,
+  }))
 }
 
 function collectOverlayProtectedFields(
@@ -1748,12 +1785,7 @@ export function loadConfigWithSources(
     boundedProjectStrip.sink,
   )
 
-  emitTopLevelProtectedFieldWarning(
-    projectSource,
-    'search',
-    `\`search\` in project config (%PATH%) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
-    boundedProjectStrip.sink,
-  )
+  emitProjectSearchProtectedWarnings(projectSource, boundedProjectStrip.sink)
 
   const suppressedStripCount = boundedProjectStrip.suppressedCount()
   if (suppressedStripCount > 0) {
@@ -1788,8 +1820,9 @@ export function loadConfigWithSources(
 
   const warned = new Set<string>()
 
-  // `search` is protected: only user and custom sources carry one, merged by
-  // the one shared rule (see `mergeSearchSettings`).
+  // Only user and custom sources carry a resolved `search`, merged by the one
+  // shared rule (see `mergeSearchSettings`). A project's `search.sources` were
+  // validated and discarded at load; nothing here reads them.
   const mergedSearch = mergeSearchSettings(
     [userSource?.search, customSource?.search].filter(
       (source): source is SearchSettingsSource => source !== undefined,

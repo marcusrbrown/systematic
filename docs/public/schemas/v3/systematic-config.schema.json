@@ -24,25 +24,25 @@
       "$ref": "#/definitions/__schema72"
     },
     "disabled_skills": {
-      "$ref": "#/definitions/__schema75"
+      "$ref": "#/definitions/__schema84"
     },
     "disabled_agents": {
-      "$ref": "#/definitions/__schema77"
+      "$ref": "#/definitions/__schema86"
     },
     "disabled_commands": {
-      "$ref": "#/definitions/__schema79"
+      "$ref": "#/definitions/__schema88"
     },
     "bootstrap": {
-      "$ref": "#/definitions/__schema81"
+      "$ref": "#/definitions/__schema90"
     },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema87"
+      "$ref": "#/definitions/__schema96"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema89"
+      "$ref": "#/definitions/__schema98"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema100"
+      "$ref": "#/definitions/__schema109"
     }
   },
   "additionalProperties": false,
@@ -1907,40 +1907,159 @@
       "properties": {
         "enabled": {
           "$ref": "#/definitions/__schema73"
+        },
+        "allow_project_sources": {
+          "$ref": "#/definitions/__schema74"
+        },
+        "sources": {
+          "$ref": "#/definitions/__schema76"
         }
       },
       "additionalProperties": false,
-      "description": "Durable-output search settings. Only user config and OPENCODE_CONFIG_DIR config may set this field; a project config that sets it has the whole field ignored with a warning, so a repository cannot switch search off. An invalid block is dropped with a warning; the rest of the file still loads.",
+      "description": "Search settings. `enabled` and `allow_project_sources` are user-owned: only user config and OPENCODE_CONFIG_DIR config may set them, and a project config that sets either has that field ignored with a warning. A project config may set `sources`. An invalid field or entry is dropped with a warning; the rest of the file still loads.",
       "examples": [
         {
           "enabled": false
-        }
-      ],
-      "trust": "project-or-higher"
-    },
-    "__schema73": {
-      "description": "Set to false to remove the search tool. Defaults to true when unset.",
-      "examples": [false],
-      "allOf": [
+        },
         {
-          "$ref": "#/definitions/__schema74"
+          "allow_project_sources": ["~/src/github.com/me/app"],
+          "sources": [
+            {
+              "name": "team-rfcs",
+              "format": "markdown",
+              "roots": ["/srv/rfcs"]
+            }
+          ]
         }
       ]
     },
+    "__schema73": {
+      "type": "boolean",
+      "description": "Set to false to remove the search tool. Defaults to true when unset. User-owned: only valid in user config or OPENCODE_CONFIG_DIR config.",
+      "examples": [false],
+      "trust": "project-or-higher"
+    },
     "__schema74": {
-      "type": "boolean"
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/__schema75"
+      },
+      "description": "Main repository roots (absolute or `~`-prefixed) whose project config may propose `search.sources`. A project's sources are read only when its main root is listed here; matching is exact, a linked worktree matches its main checkout, and an allowed project covers whatever any of its branches proposes. User-owned: only valid in user config or OPENCODE_CONFIG_DIR config; the lists in both are combined.",
+      "examples": [["~/src/github.com/me/app"]],
+      "trust": "project-or-higher"
     },
     "__schema75": {
+      "type": "string",
+      "minLength": 1
+    },
+    "__schema76": {
+      "description": "Opt-in external decision sources for `kind: \"external\"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`. An invalid entry is dropped with a warning and its valid siblings stay.",
+      "examples": [
+        [
+          {
+            "name": "team-rfcs",
+            "format": "markdown",
+            "roots": ["docs/rfcs"]
+          }
+        ],
+        [
+          {
+            "name": "decisions",
+            "format": "deciduous",
+            "roots": ["~/src/github.com/me/app/.deciduous/sync"],
+            "projects": ["~/src/github.com/me/app"]
+          }
+        ]
+      ],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema77"
+        }
+      ]
+    },
+    "__schema77": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/definitions/__schema78"
+          },
+          "format": {
+            "$ref": "#/definitions/__schema79"
+          },
+          "roots": {
+            "$ref": "#/definitions/__schema80"
+          },
+          "projects": {
+            "$ref": "#/definitions/__schema82"
+          }
+        },
+        "required": ["name", "format", "roots"],
+        "additionalProperties": false,
+        "description": "One opt-in decision source: a name, a format and one or more roots.",
+        "examples": [
+          {
+            "name": "team-rfcs",
+            "format": "markdown",
+            "roots": ["docs/rfcs"]
+          }
+        ]
+      }
+    },
+    "__schema78": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,40}$",
+      "description": "Source name: letters, digits, `-` and `_`, at most 40 characters. Case-sensitive. Search results label the source with it, and a user source with the same name as a project source replaces it when the user source is mapped to the project.",
+      "examples": ["team-rfcs", "ops_runbooks"]
+    },
+    "__schema79": {
+      "type": "string",
+      "enum": ["markdown", "deciduous"],
+      "description": "How the source stores records. `markdown` reads `.md` files under each root; `deciduous` reads Deciduous sync JSON (`nodes/` and `edges/`).",
+      "examples": ["markdown", "deciduous"]
+    },
+    "__schema80": {
+      "minItems": 1,
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/__schema81"
+      },
+      "description": "One to eight folders to read. In a project config each root is a relative path under the checkout (no `.`, no `..`, no dot segment, except `.deciduous/<subfolder>` for a `deciduous` source). In user config each root is an absolute or `~`-prefixed path. Symlinks inside a root are skipped.",
+      "examples": [["docs/rfcs"], ["~/src/wiki/pages", "/srv/runbooks"]]
+    },
+    "__schema81": {
+      "type": "string",
+      "minLength": 1
+    },
+    "__schema82": {
+      "description": "User config only. Absolute or `~`-prefixed main repository roots this source applies to. A project config may not set it.",
+      "examples": [["~/src/github.com/me/app"]],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema83"
+        }
+      ]
+    },
+    "__schema83": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "__schema84": {
       "default": [],
       "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
       "examples": [["ce:plan", "ce:review"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema76"
+          "$ref": "#/definitions/__schema85"
         }
       ]
     },
-    "__schema76": {
+    "__schema85": {
       "type": "array",
       "items": {
         "type": "string",
@@ -1999,7 +2118,7 @@
         ]
       }
     },
-    "__schema77": {
+    "__schema86": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -2008,11 +2127,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema78"
+          "$ref": "#/definitions/__schema87"
         }
       ]
     },
-    "__schema78": {
+    "__schema87": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2122,23 +2241,23 @@
         ]
       }
     },
-    "__schema79": {
+    "__schema88": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema80"
+          "$ref": "#/definitions/__schema89"
         }
       ]
     },
-    "__schema80": {
+    "__schema89": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema81": {
+    "__schema90": {
       "default": {
         "enabled": true
       },
@@ -2153,18 +2272,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema82"
+          "$ref": "#/definitions/__schema91"
         }
       ]
     },
-    "__schema82": {
+    "__schema91": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema83"
+          "$ref": "#/definitions/__schema92"
         },
         "file": {
-          "$ref": "#/definitions/__schema85"
+          "$ref": "#/definitions/__schema94"
         }
       },
       "additionalProperties": false,
@@ -2178,42 +2297,42 @@
         }
       ]
     },
-    "__schema83": {
+    "__schema92": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema84"
+          "$ref": "#/definitions/__schema93"
         }
       ]
     },
-    "__schema84": {
+    "__schema93": {
       "type": "boolean"
     },
-    "__schema85": {
+    "__schema94": {
       "description": "Path to a custom bootstrap prompt file",
       "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema86"
+          "$ref": "#/definitions/__schema95"
         }
       ]
     },
-    "__schema86": {
+    "__schema95": {
       "type": "string"
     },
-    "__schema87": {
+    "__schema96": {
       "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
       "deprecated": true,
       "allOf": [
         {
-          "$ref": "#/definitions/__schema88"
+          "$ref": "#/definitions/__schema97"
         }
       ]
     },
-    "__schema88": {},
-    "__schema89": {
+    "__schema97": {},
+    "__schema98": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2235,11 +2354,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema90"
+          "$ref": "#/definitions/__schema99"
         }
       ]
     },
-    "__schema90": {
+    "__schema99": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2255,7 +2374,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema91"
+              "$ref": "#/definitions/__schema100"
             }
           ]
         },
@@ -2272,14 +2391,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema99"
+              "$ref": "#/definitions/__schema108"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema91": {
+    "__schema100": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2293,12 +2412,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema98"
+            "$ref": "#/definitions/__schema107"
           }
         ]
       }
     },
-    "__schema92": {
+    "__schema101": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2306,7 +2425,7 @@
         }
       ]
     },
-    "__schema93": {
+    "__schema102": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2314,48 +2433,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema94": {
+    "__schema103": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema95": {
+    "__schema104": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema96"
+          "$ref": "#/definitions/__schema105"
         },
         {
-          "$ref": "#/definitions/__schema97"
+          "$ref": "#/definitions/__schema106"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema96": {
+    "__schema105": {
       "type": "boolean",
       "const": true
     },
-    "__schema97": {
+    "__schema106": {
       "type": "string",
       "minLength": 1
     },
-    "__schema98": {
+    "__schema107": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema92"
+          "$ref": "#/definitions/__schema101"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema93"
+          "$ref": "#/definitions/__schema102"
         },
         "tools": {
-          "$ref": "#/definitions/__schema94"
+          "$ref": "#/definitions/__schema103"
         },
         "skills": {
-          "$ref": "#/definitions/__schema95"
+          "$ref": "#/definitions/__schema104"
         }
       },
       "additionalProperties": false,
@@ -2367,26 +2486,26 @@
         }
       ]
     },
-    "__schema99": {
+    "__schema108": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema98"
+        "$ref": "#/definitions/__schema107"
       }
     },
-    "__schema100": {
+    "__schema109": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema101"
+          "$ref": "#/definitions/__schema110"
         }
       ]
     },
-    "__schema101": {
+    "__schema110": {
       "type": "boolean"
     }
   }

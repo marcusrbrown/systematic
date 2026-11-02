@@ -19,6 +19,7 @@ import {
   validateConfig,
 } from '../../src/lib/config-schema.js'
 import { REMOVED_CONFIG_KEYS } from '../../src/lib/removed-names.js'
+import type { SearchSettingsSchema } from '../../src/lib/search-user-config.js'
 
 /**
  * Zod's `SafeParseError` always carries at least one issue; this narrows the
@@ -235,11 +236,31 @@ describe('SystematicConfigSchema', () => {
       ).toBe(false)
     })
 
-    test('is tagged project-or-higher in the schema metadata', () => {
+    test('the outer field is not trust-tagged: a project may set sources', () => {
       const shape = SystematicConfigSchema.shape
-      expect(z.globalRegistry.get(unwrapForMeta(shape.search))?.trust).toBe(
-        'project-or-higher',
-      )
+      expect(
+        z.globalRegistry.get(unwrapForMeta(shape.search))?.trust,
+      ).toBeUndefined()
+    })
+
+    test('the two user-only nested fields are tagged project-or-higher, sources is not', () => {
+      const searchSchema = unwrapForMeta(SystematicConfigSchema.shape.search)
+      const nested = (searchSchema as typeof SearchSettingsSchema).shape
+      const trustOf = (field: z.ZodType) =>
+        z.globalRegistry.get(unwrapForMeta(field))?.trust
+      expect(trustOf(nested.enabled)).toBe('project-or-higher')
+      expect(trustOf(nested.allow_project_sources)).toBe('project-or-higher')
+      expect(trustOf(nested.sources)).toBeUndefined()
+    })
+
+    test('accepts the new fields', () => {
+      const result = SystematicConfigSchema.safeParse({
+        search: {
+          allow_project_sources: ['/work/app'],
+          sources: [{ name: 'rfcs', format: 'markdown', roots: ['docs/rfcs'] }],
+        },
+      })
+      expect(result.success).toBe(true)
     })
   })
 

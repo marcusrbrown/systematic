@@ -263,8 +263,9 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    to a missing file, keeps `Caution: successor unresolved`. The header reads `Corpus: <dir>.` for one
    kind and one token per kind for `all` (`solution 128, plan 102, brainstorm none, ideation 1`),
    where `none` means no directory and `empty` means a directory with no indexable document. The
-   `search` config block is stripped whole from project config, so a repository cannot switch it
-   off. The search modules use a hand-written `ln` and no `Math.log`, so scores and ranks are
+   `search.enabled` and `search.allow_project_sources` are stripped from project config, so a
+   repository can neither switch search off nor allow its own sources; a project may set
+   `search.sources` only. The search modules use a hand-written `ln` and no `Math.log`, so scores and ranks are
    identical on Bun and Node. Each host reaches the one `search-core.ts` composition, so every
    surface returns the same text. The learnings-researcher calls search first and falls back to its
    grep steps when search has no hits, is disabled, errors or is absent. Its default scope is

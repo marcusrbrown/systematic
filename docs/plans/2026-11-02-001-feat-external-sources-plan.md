@@ -375,7 +375,7 @@ flowchart TB
 
 ### Phase A: Config, identity and goldens
 
-- [ ] U1. Search config: fields, validation, trust and generated surfaces
+- [x] U1. Search config: fields, validation, trust and generated surfaces
 
 **Goal:** Extend the `search` block with `allow_project_sources` and `sources`, validate per field and per entry, let a project set `sources` only, and regenerate the config surfaces.
 

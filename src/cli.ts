@@ -520,12 +520,15 @@ function userLevelDirOptions(
 
 /**
  * The settings loader `systematic search` injects into `runSearchCli`: the
- * full config loader, so the project-config strip warning for a `search` block
- * reaches stderr (AE2). Config is read at the project root, resolved the same
- * way the corpus root is. A thrown load, an invalid user or custom source, or
- * an invalid `search` block all give `unreadable: true`, which makes the core
- * add the `config unreadable` note to the results. A project source never
- * counts: project config has no effect on search.
+ * full config loader, so the project-config strip warning for `search.enabled`
+ * or `search.allow_project_sources` reaches stderr (AE2). Config is read at the
+ * project root, resolved the same way the corpus root is. A thrown load, an
+ * invalid user or custom source, or an invalid `search` block all give
+ * `unreadable: true`, which makes the core add the `config unreadable` note to
+ * the results. A project source never counts toward `unreadable`, and a
+ * project config cannot change `enabled` or the allow list. It may propose
+ * `search.sources`, but the loader validates and discards them: the per-call
+ * external reader is their only consumer, and nothing here reads them.
  *
  * The full loader drops a whole file that fails validation, so a valid
  * `search.enabled: false` next to a bad sibling key would be lost. When a

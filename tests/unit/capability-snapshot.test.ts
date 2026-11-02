@@ -248,7 +248,12 @@ describe('capability snapshot contract', () => {
           sourceKind: 'project',
         },
         {
-          fieldPath: 'search',
+          fieldPath: 'search.enabled',
+          outcome: 'blocked',
+          sourceKind: 'project',
+        },
+        {
+          fieldPath: 'search.allow_project_sources',
           outcome: 'blocked',
           sourceKind: 'project',
         },
@@ -323,14 +328,19 @@ describe('capability snapshot contract', () => {
       sourceId: 'config:project',
       status: 'available',
     })
-    expect(snapshot.facts).toContainEqual({
-      factId: 'config-protected-field',
-      fieldPath: 'search',
-      kind: 'protection',
-      outcome: 'blocked',
-      sourceId: 'config:project',
-      status: 'available',
-    })
+    for (const fieldPath of [
+      'search.enabled',
+      'search.allow_project_sources',
+    ] as const) {
+      expect(snapshot.facts).toContainEqual({
+        factId: 'config-protected-field',
+        fieldPath,
+        kind: 'protection',
+        outcome: 'blocked',
+        sourceId: 'config:project',
+        status: 'available',
+      })
+    }
   })
 
   test('maps invalid config sources to sanitized unavailable metadata', () => {

@@ -2798,7 +2798,7 @@ describe('cli search', () => {
       const result = runCli(['search', 'zebra'], box.project, box.env)
 
       expect(result.exitCode).toBe(0)
-      expect(result.stderr).toContain('`search` in project config')
+      expect(result.stderr).toContain('`search.enabled` in project config')
       expect(result.stderr).toContain('has been ignored')
       expect(result.stdout).toContain('docs/solutions/zebra-flake.md')
     } finally {
@@ -2986,7 +2986,7 @@ describe('loadSearchSettingsForCli', () => {
       const loaded = box.load(path.join(box.project, 'sub'))
       expect(loaded.settings).toBeUndefined()
       expect(loaded.warnings).toHaveLength(1)
-      expect(loaded.warnings[0]).toContain('`search` in project config')
+      expect(loaded.warnings[0]).toContain('`search.enabled` in project config')
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }
