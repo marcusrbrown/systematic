@@ -552,7 +552,7 @@ flowchart TB
 
 ---
 
-- [ ] U4. Markdown external loader
+- [x] U4. Markdown external loader
 
 **Goal:** Load `.md` files from a resolved source into bounded external records, sharing the corpus loader's walk, symlink and cap logic without changing built-in behavior.
 

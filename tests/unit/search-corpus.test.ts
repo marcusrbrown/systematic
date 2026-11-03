@@ -5,14 +5,17 @@ import path from 'node:path'
 import {
   type CorpusDocument,
   type DocumentKind,
+  discoverSourceFiles,
   isDocumentKind,
   KIND_TABLE,
   loadCorpus,
+  loadSourceFiles,
   MAX_DEPTH,
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_TOTAL_BYTES,
   parseCorpusDocument,
+  parseMarkdownFrontmatter,
   resolveSearchRoot,
 } from '../../src/lib/search-corpus.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
@@ -992,5 +995,145 @@ describe('loadCorpus: this repository', () => {
     for (const document of result.documents) {
       expect(document.title.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('loadSourceFiles', () => {
+  const MARKDOWN_WALK = { excludedFiles: [], excludedDirs: [] }
+  const readText = (displayPath: string, content: string) => ({
+    ok: true as const,
+    value: `${displayPath}=${content.trim()}`,
+  })
+
+  it('walks the extensions it is given, not only .md', () => {
+    const root = makeTemp()
+    writeFile(root, 'a.txt', 'one')
+    writeFile(root, 'b.md', 'two')
+    writeFile(root, 'sub/c.TXT', 'three')
+
+    const loaded = loadSourceFiles(
+      {
+        directory: root,
+        walk: { ...MARKDOWN_WALK, extensions: ['.txt'] },
+        label: 'src',
+      },
+      {
+        displayPrefix: 'src',
+        label: 'src',
+        maxFileBytes: 1000,
+        parse: readText,
+      },
+    )
+
+    expect(loaded.state).toBe('loaded')
+    if (loaded.state !== 'loaded') return
+    expect(loaded.items).toEqual(['src/a.txt=one', 'src/sub/c.TXT=three'])
+  })
+
+  it('uses the per-file cap, the display prefix and the label it is given in warnings', () => {
+    const root = makeTemp()
+    writeFile(root, 'small.md', 'ok')
+    writeFile(root, 'big.md', 'x'.repeat(50))
+
+    const loaded = loadSourceFiles(
+      { directory: root, walk: MARKDOWN_WALK, label: 'wiki' },
+      {
+        displayPrefix: 'wiki',
+        label: 'wiki',
+        maxFileBytes: 10,
+        parse: readText,
+      },
+    )
+
+    if (loaded.state !== 'loaded') throw new Error('not loaded')
+    expect(loaded.items).toEqual(['wiki/small.md=ok'])
+    expect(loaded.warnings).toEqual([
+      'skipped wiki/big.md: larger than 10 bytes',
+    ])
+    expect(loaded.bytesRead).toBe(2)
+  })
+
+  it('contains the directory only when asked: a symlinked root is followed without containment and refused with it', () => {
+    const base = makeTemp()
+    const checkout = path.join(base, 'repo')
+    const outside = path.join(base, 'outside')
+    fs.mkdirSync(checkout)
+    writeFile(outside, 'a.md', 'text')
+    fs.symlinkSync(outside, path.join(checkout, 'link'))
+    const read = {
+      displayPrefix: 'p',
+      label: 'p',
+      maxFileBytes: 100,
+      parse: readText,
+    }
+
+    const free = loadSourceFiles(
+      {
+        directory: path.join(checkout, 'link'),
+        walk: MARKDOWN_WALK,
+        label: 'p',
+      },
+      read,
+    )
+    const contained = loadSourceFiles(
+      {
+        directory: path.join(checkout, 'link'),
+        containedIn: checkout,
+        walk: MARKDOWN_WALK,
+        label: 'p',
+      },
+      read,
+    )
+
+    expect(free.state).toBe('loaded')
+    expect(contained.state).toBe('outside')
+    expect(contained.warnings).toEqual([
+      'p resolves outside the project root; not loaded',
+    ])
+  })
+
+  it('discoverSourceFiles reads no file: it returns sorted candidates with their stat sizes', () => {
+    const root = makeTemp()
+    writeFile(root, 'b.md', 'bb')
+    writeFile(root, 'a.md', 'a')
+    const warnings: string[] = []
+
+    const found = discoverSourceFiles(
+      { directory: root, walk: MARKDOWN_WALK, label: 'x' },
+      warnings,
+    )
+
+    if (found.state !== 'found') throw new Error('not found')
+    expect(found.candidates.map((c) => [c.relative, c.size])).toEqual([
+      ['a.md', 1],
+      ['b.md', 2],
+    ])
+    expect(found.truncated).toBe(false)
+  })
+})
+
+describe('parseMarkdownFrontmatter', () => {
+  it('strips a BOM, accepts a missing trailing newline and returns the body', () => {
+    const parsed = parseMarkdownFrontmatter('\uFEFF---\ntitle: T\n---')
+    expect(parsed).toEqual({ ok: true, data: { title: 'T' }, body: '' })
+  })
+
+  it('returns empty data for a file with no frontmatter', () => {
+    expect(parseMarkdownFrontmatter('just text')).toMatchObject({
+      ok: true,
+      data: {},
+      body: 'just text\n',
+    })
+  })
+
+  it('rejects invalid YAML and a non-mapping block with the corpus reasons', () => {
+    expect(parseMarkdownFrontmatter('---\na: [x\n---\n')).toEqual({
+      ok: false,
+      reason: 'invalid frontmatter',
+    })
+    expect(parseMarkdownFrontmatter('---\n- a\n---\n')).toEqual({
+      ok: false,
+      reason: 'frontmatter is not a mapping',
+    })
   })
 })
