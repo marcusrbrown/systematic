@@ -4,6 +4,21 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.30.1](https://github.com/marcusrbrown/systematic/compare/v3.30.0...v3.30.1) (2026-11-03)
+
+### Bug Fixes
+
+* route the OMO profile to current models and check shipped model IDs ([#1292](https://github.com/marcusrbrown/systematic/issues/1292)) ([7325f46](https://github.com/marcusrbrown/systematic/commit/7325f46739fea6546be31b996339e3b6f995fd20))
+
+### Documentation
+
+* **solutions:** record the unlistable-root and traversal-budget lessons from external search ([#1291](https://github.com/marcusrbrown/systematic/issues/1291)) ([f3167df](https://github.com/marcusrbrown/systematic/commit/f3167df0d341591953f05d189be963ed7d019efa))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.134.0 ([#1293](https://github.com/marcusrbrown/systematic/issues/1293)) ([e7988f1](https://github.com/marcusrbrown/systematic/commit/e7988f1c34d36750553329cb35516acb16216902))
+* **dev:** update dependency @types/node to v26.6.6 ([#1271](https://github.com/marcusrbrown/systematic/issues/1271)) ([0b7d032](https://github.com/marcusrbrown/systematic/commit/0b7d032fa9227733bfa130715748132c5ef2fdcc))
+
 ## [3.30.0](https://github.com/marcusrbrown/systematic/compare/v3.29.1...v3.30.0) (2026-11-03)
 
 ### Features
