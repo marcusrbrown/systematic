@@ -665,17 +665,17 @@
       "description": "Per-agent configuration overlay",
       "examples": [
         {
-          "model": "anthropic/claude-opus-5",
+          "model": "anthropic/claude-opus-5-5",
           "temperature": 0.1,
           "mode": "subagent"
         },
         {
           "opencode": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "high"
           },
           "pi": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "thinking": "high"
           }
         }
@@ -704,7 +704,7 @@
         }
       ],
       "description": "Model identifier in provider/model format, or null to inherit parent model",
-      "examples": ["anthropic/claude-sonnet-5", null]
+      "examples": ["anthropic/claude-sonnet-5-5", null]
     },
     "__schema8": {
       "trust": "project-or-higher",
@@ -938,7 +938,7 @@
       "description": "OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.",
       "examples": [
         {
-          "model": "anthropic/claude-opus-5",
+          "model": "anthropic/claude-opus-5-5",
           "variant": "high"
         },
         {
@@ -990,7 +990,7 @@
       "description": "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.",
       "examples": [
         {
-          "model": "anthropic/claude-opus-5",
+          "model": "anthropic/claude-opus-5-5",
           "thinking": "high"
         },
         {
@@ -1004,7 +1004,7 @@
       "examples": [
         {
           "review": {
-            "model": "anthropic/claude-opus-5"
+            "model": "anthropic/claude-opus-5-5"
           }
         },
         {}
@@ -1064,7 +1064,7 @@
         "description": "Per-category configuration overlay (same fields as agent minus disable)",
         "examples": [
           {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "temperature": 0.1
           },
           {
@@ -1212,7 +1212,7 @@
           {
             "agents": {
               "fixer": {
-                "model": "anthropic/claude-opus-5"
+                "model": "anthropic/claude-opus-5-5"
               }
             },
             "categories": {
@@ -1791,7 +1791,7 @@
       "description": "Routing-only overlay fields permitted inside a named profile bundle entry: model, variant, temperature, top_p, and the opencode/pi harness blocks. Non-routing fields (permission, skills, mode, hidden, disable, steps, color) are rejected.",
       "examples": [
         {
-          "model": "anthropic/claude-opus-5"
+          "model": "anthropic/claude-opus-5-5"
         },
         {
           "opencode": {
@@ -1856,7 +1856,7 @@
       "examples": [
         {
           "review": {
-            "model": "anthropic/claude-opus-5"
+            "model": "anthropic/claude-opus-5-5"
           }
         }
       ],

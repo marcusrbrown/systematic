@@ -5,10 +5,10 @@ status: superseded
 date: 2026-09-05
 origin: docs/brainstorms/2026-09-05-model-id-validation-gate-requirements.md
 superseded_at: 2026-10-25
-superseded_reason: "The whole-catalog models.dev snapshot approach was dropped and never shipped: there is no snapshot generator, no snapshot file and no model-refresh workflow. Example ids were refreshed once by hand in #907. A narrower validation of explicitly shipped model values would need a new plan."
+superseded_reason: "The whole-catalog models.dev snapshot approach was dropped and never shipped: there is no snapshot generator, no snapshot file and no model-refresh workflow. Example ids were refreshed once by hand in #907. The narrower replacement is the dev-only `scripts/check-model-ids.ts`, which checks the shipped model ids against the live models.dev catalog before a release."
 ---
 
-> **Status: superseded.** The whole-catalog snapshot approach was dropped before any unit shipped. A narrower validation of explicitly shipped model values would need a new plan.
+> **Status: superseded.** The whole-catalog snapshot approach was dropped before any unit shipped. The dev-only `scripts/check-model-ids.ts` now checks the shipped model ids instead.
 
 # feat: Validate shipped model ids against a models.dev snapshot
 

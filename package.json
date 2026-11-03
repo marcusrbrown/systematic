@@ -58,6 +58,7 @@
     "docs:generate": "bun docs/scripts/generate-stats.ts && bun docs/scripts/transform-content.ts && bun scripts/generate-config-schema.ts && bun docs/scripts/generate-config-reference.ts && bun docs/scripts/generate-release-notes.ts && bun docs/scripts/generate-changelog-page.ts",
     "schema:generate": "bun scripts/generate-config-schema.ts",
     "schema:drift": "bun scripts/generate-config-schema.ts --check",
+    "models:check": "bun scripts/check-model-ids.ts",
     "review-schema:generate": "bun scripts/generate-review-artifact-schema.ts",
     "review-schema:drift": "bun scripts/generate-review-artifact-schema.ts --check",
     "ce-review-validator:build": "bun scripts/generate-ce-review-validator.ts",

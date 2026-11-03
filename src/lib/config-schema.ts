@@ -40,13 +40,13 @@ const permissionSchema = z.record(z.string(), permissionRuleSchema).meta({
 })
 
 const MODEL_FORMAT_MESSAGE =
-  'must be in provider/model format (e.g., "anthropic/claude-sonnet-5")'
+  'must be in provider/model format (e.g., "anthropic/claude-sonnet-5-5")'
 
 /**
  * Pattern for provider/model format.
  * Provider: one or more non-whitespace, non-slash chars (e.g., "anthropic", "openai").
  * Model: one or more non-whitespace chars — may contain slashes for multi-segment
- *        paths such as "openrouter/anthropic/claude-sonnet-5".
+ *        paths such as "openrouter/anthropic/claude-sonnet-5-5".
  *
  * This is an exact regex translation of the original isValidModelFormat check:
  * "no whitespace anywhere, at least one char before the first slash, at least one
@@ -63,7 +63,7 @@ const modelSchema = z
   .meta({
     description:
       'Model identifier in provider/model format, or null to inherit parent model',
-    examples: ['anthropic/claude-sonnet-5', null],
+    examples: ['anthropic/claude-sonnet-5-5', null],
   })
 
 const variantSchema = z
@@ -203,7 +203,7 @@ const OpencodeHarnessBlockSchema = z
     description:
       'OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.',
     examples: [
-      { model: 'anthropic/claude-opus-5', variant: 'high' },
+      { model: 'anthropic/claude-opus-5-5', variant: 'high' },
       { model: null },
     ],
   })
@@ -218,7 +218,7 @@ const PiHarnessBlockSchema = z
     description:
       "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.",
     examples: [
-      { model: 'anthropic/claude-opus-5', thinking: 'high' },
+      { model: 'anthropic/claude-opus-5-5', thinking: 'high' },
       { model: null },
     ],
   })
@@ -244,13 +244,13 @@ export const AgentOverlaySchema = z
     description: 'Per-agent configuration overlay',
     examples: [
       {
-        model: 'anthropic/claude-opus-5',
+        model: 'anthropic/claude-opus-5-5',
         temperature: 0.1,
         mode: 'subagent',
       },
       {
-        opencode: { model: 'anthropic/claude-opus-5', variant: 'high' },
-        pi: { model: 'anthropic/claude-opus-5', thinking: 'high' },
+        opencode: { model: 'anthropic/claude-opus-5-5', variant: 'high' },
+        pi: { model: 'anthropic/claude-opus-5-5', thinking: 'high' },
       },
     ],
   })
@@ -275,7 +275,7 @@ export const CategoryOverlaySchema = z
     description:
       'Per-category configuration overlay (same fields as agent minus disable)',
     examples: [
-      { model: 'anthropic/claude-opus-5', temperature: 0.1 },
+      { model: 'anthropic/claude-opus-5-5', temperature: 0.1 },
       { opencode: { variant: 'high' }, pi: { thinking: 'high' } },
     ],
   })
@@ -304,7 +304,7 @@ export const ProfileOverlaySchema = z
     description:
       'Routing-only overlay fields permitted inside a named profile bundle entry: model, variant, temperature, top_p, and the opencode/pi harness blocks. Non-routing fields (permission, skills, mode, hidden, disable, steps, color) are rejected.',
     examples: [
-      { model: 'anthropic/claude-opus-5' },
+      { model: 'anthropic/claude-opus-5-5' },
       { opencode: { variant: 'high' }, pi: { thinking: 'high' } },
     ],
   })
@@ -352,7 +352,7 @@ function createProfileBundleSchema(
         .meta({
           description:
             'Per-category routing overlays for this profile, keyed by category name, using the same routing-only field set as every profile entry.',
-          examples: [{ review: { model: 'anthropic/claude-opus-5' } }],
+          examples: [{ review: { model: 'anthropic/claude-opus-5-5' } }],
         }),
     })
     .strict()
@@ -361,7 +361,7 @@ function createProfileBundleSchema(
         'A named routing-only overlay bundle. Entries under agents/categories have the same shape as the top-level agents/categories overlays, restricted to routing fields.',
       examples: [
         {
-          agents: { fixer: { model: 'anthropic/claude-opus-5' } },
+          agents: { fixer: { model: 'anthropic/claude-opus-5-5' } },
           categories: { review: { pi: { thinking: 'high' } } },
         },
       ],
@@ -571,7 +571,7 @@ export function createSystematicConfigSchema(
         .meta({
           description:
             'Per-category configuration overlays keyed by category name. Trust-protected fields (model, variant, skills, permission, opencode, pi) are only valid in user config or OPENCODE_CONFIG_DIR config — a project config setting them has that field ignored with a warning; other fields in the same overlay still apply.',
-          examples: [{ review: { model: 'anthropic/claude-opus-5' } }, {}],
+          examples: [{ review: { model: 'anthropic/claude-opus-5-5' } }, {}],
         }),
       profiles: z
         .record(
