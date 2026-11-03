@@ -234,7 +234,7 @@ A `markdown` source indexes every `.md` file under each root, to a depth of 6.
 - The status is the frontmatter `status` string exactly as written, and a hit with none prints no status. Search never infers a status, and it does not follow `superseded_by` links in an external source.
 - Nothing is excluded by name: a `README.md` is searchable, and so is a folder called `_archived`.
 - Symlinks are skipped at every depth. A file with invalid frontmatter is skipped, and the reply counts it in one warning.
-- A hit path is `<source>/<path inside the root>`. It is relative to the source's root, which the section header shows. It is not a repo path. If two roots of one source provide the same path, the first root wins.
+- A hit path is `<source>/<path inside a root>`. The source name comes first, so the path is not relative to the root as it stands. To find the file, strip the source name; what is left is a path inside one of the source's roots, which the section header lists. The reply does not say which root a hit came from. If two roots of one source provide the same path, the first root wins, so with several roots the file is under the first listed root that has it.
 
 ### Deciduous sources
 
@@ -243,7 +243,7 @@ A `deciduous` source reads the sync folder of a Deciduous graph. The root is the
 - Only nodes of type `decision`, `option`, `outcome` and `goal` become records. `action` and `observation` nodes never do. A node with a `deleted_at` value is skipped.
 - The title is `title`, else the first line of `description`, else the `change_id`. A hit prints `node_type decision` (or `option`, `outcome`, `goal`) where a Markdown hit prints its status.
 - An edge is not a record. Its `rationale` text becomes searchable text on the nodes it links, as long as the other end of the edge is a live node. Each edge adds up to 300 characters, each node takes up to 20 edges and 2 KB of rationale, and deleted nodes and edges add nothing.
-- A hit path is `<source>/nodes/<id>.json`.
+- A hit path is `<source>/nodes/<id>.json`. Strip the source name to get `nodes/<id>.json`, a path inside one of the source's roots. The reply does not say which root, so with several roots it is the first listed root that has the file.
 - A missing `nodes/` folder makes the source empty with a warning. A missing `edges/` folder gives records without rationale, with a warning.
 - A `nodes/` folder that exists but cannot be listed makes the source `unreadable`, the same state a Markdown root gets when it cannot be read. An `edges/` folder that exists but cannot be listed adds the warning `could not read an edges/ folder; records load without its rationale`, and the records still load. With several roots, the source is `unreadable` only when no root had a `nodes/` folder that could be listed.
 - The scan visits the `nodes/` folder of every root, in root order, and then the `edges/` folder of every root, sharing one limit of 8,000 files. A large `edges/` folder in the first root cannot use up the limit before a later root's nodes are scanned.
@@ -255,9 +255,9 @@ A `deciduous` source reads the sync folder of a Deciduous graph. The root is the
 | Active sources in one call | 8. User sources come before project sources, and the extra ones are dropped with a warning that names them. |
 | Roots per source | 8 |
 | Size of one external file | 1 MB. A larger file is skipped with a warning, including a file that grew past the limit after search first saw it. Search reads at most one byte more than the limit. (The four built-in kinds keep their 256 KB limit.) |
-| Bytes read in one call, all sources together | 32 MB. Before any file is read, the file sizes of a source are added up, and a source that does not fit what is left is dropped whole. Later, smaller sources are still tried. Once a file is read, the budget is charged the bytes actually read, not the size seen earlier. |
+| Bytes read in one call, all sources together | 32 MB. Before any file is read, the file sizes of a source are added up, and a source that does not fit what is left is dropped whole. Later, smaller sources are still tried. Each read is limited to what the budget and the 16 MB source limit leave, so a file that grew after it was sized is rejected, not indexed, and nothing after it is read. The budget is charged the bytes actually read. |
 | Files per source | 2,000 Markdown files, or 2,000 Deciduous records out of up to 8,000 files scanned |
-| Directory entries examined in one folder | 32,000, for external sources. A folder with more entries than that, of any name, stops at the limit with a warning that names the folder. Built-in kinds list a folder whole. |
+| Directory entries examined per source | 32,000 in total, across every folder and every root of one external source. The source stops at the limit with one warning that names the source. Built-in kinds list a folder whole. |
 | Text per source | 16 MB |
 | Hits per source | At most 5, even when `limit` asks for more. `limit` applies to each source, not to the whole reply. |
 | Reply size | 12 KB, shared evenly by the sources that have hits |

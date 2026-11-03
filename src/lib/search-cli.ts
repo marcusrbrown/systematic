@@ -47,6 +47,9 @@ Options:
                    the default), plan (docs/plans), brainstorm (docs/brainstorms),
                    ideation (docs/ideation), all to rank every kind together, or
                    external for the external sources you allowed, ranked per source.
+                   An external hit prints as <source>/<path>: strip the source name for a
+                   path inside one of that source's roots (with several roots, the first
+                   that has the file).
   --limit <n>      How many hits to return, ${MIN_LIMIT} to ${MAX_LIMIT} (default: 8). With
                    --kind external it applies to each source, at most 5 per source.
   --               End of options; everything after it is part of the query.

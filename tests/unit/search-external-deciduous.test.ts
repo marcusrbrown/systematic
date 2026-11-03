@@ -6,6 +6,7 @@ import {
   MAX_DISCOVERED_FILES,
   MAX_FILES,
   MAX_LISTED_ENTRIES,
+  MAX_TOTAL_BYTES,
 } from '../../src/lib/search-corpus.js'
 import {
   EXTERNAL_MAX_FILE_BYTES,
@@ -763,7 +764,7 @@ describe('Deciduous loader: bounded work', () => {
 
     expect(result.state).toBe('empty')
     expect(result.warnings.join('\n')).toContain(
-      `graph: nodes/ listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
+      `graph: entry limit of ${MAX_LISTED_ENTRIES} reached; some entries were not examined`,
     )
   }, 30_000)
 
@@ -805,8 +806,10 @@ describe('Deciduous loader: bounded work', () => {
     const target = path.join(fs.realpathSync(grown), 'nodes/a.json')
     const statSize = fs.statSync(target).size
     const laterSize = fs.statSync(path.join(later, 'nodes/b.json')).size
-    // Room for the later source only if the first one is charged its stat size.
-    const budget = statSize + laterSize + 10
+    // The first source grows by 400 bytes and still fits. Room is left for the
+    // later source only if the first one is charged its stat size.
+    const budget = statSize + 400 + 10
+    expect(laterSize).toBeLessThanOrEqual(budget - statSize)
     const realOpen = fs.openSync.bind(fs)
     const spy = spyOn(fs, 'openSync').mockImplementation(((
       file: fs.PathLike,
@@ -831,6 +834,171 @@ describe('Deciduous loader: bounded work', () => {
 
     expect(loads[0]?.state).toBe('loaded')
     expect(loads[1]?.state).toBe('dropped')
+  })
+})
+
+/**
+ * Watch the files a load opens and the bytes it reads. A path in `grow` gets
+ * that text appended just before it is opened, as a writer would between
+ * discovery and the read.
+ */
+function watchReads(grow: Readonly<Record<string, string>> = {}) {
+  const opened: string[] = []
+  let bytes = 0
+  const realOpen = fs.openSync.bind(fs)
+  const realRead = fs.readSync.bind(fs)
+  const openSpy = spyOn(fs, 'openSync').mockImplementation(((
+    file: fs.PathLike,
+    ...rest: unknown[]
+  ) => {
+    const key = String(file)
+    opened.push(key)
+    const extra = grow[key]
+    if (extra !== undefined) fs.appendFileSync(key, extra)
+    return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+  }) as typeof fs.openSync)
+  const readSpy = spyOn(fs, 'readSync').mockImplementation(((
+    ...args: Parameters<typeof fs.readSync>
+  ) => {
+    const count = realRead(...args)
+    bytes += count
+    return count
+  }) as typeof fs.readSync)
+  return {
+    opened,
+    get bytes() {
+      return bytes
+    },
+    stop: () => {
+      openSpy.mockRestore()
+      readSpy.mockRestore()
+    },
+  }
+}
+
+describe('Deciduous loader: reads stop at the remaining allowance', () => {
+  test('a node that grows past the remaining shared budget is rejected, not indexed, and nothing after it is read', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'a', { title: 'A' })
+    node(root, 'b', { title: 'B' })
+    const watch = watchReads({
+      [path.join(fs.realpathSync(root), 'nodes/a.json')]: ' '.repeat(4900),
+    })
+    let result: SourceLoad
+    try {
+      result = load(env, source([root]), 1000)
+    } finally {
+      watch.stop()
+    }
+
+    expect(result.records).toEqual([])
+    expect(result.state).toBe('empty')
+    // The allowance of 1,000 bytes, plus the one sentinel byte.
+    expect(watch.bytes).toBeLessThanOrEqual(1001)
+    expect(watch.bytes).toBeGreaterThan(0)
+    expect(watch.opened.some((file) => file.endsWith('/b.json'))).toBe(false)
+    expect(result.warnings).toContain(
+      'graph: read budget of this call reached; skipped 2 files',
+    )
+  })
+
+  test('a node that grows past the per-source text budget is rejected, not indexed, and nothing after it is read', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    // Sixteen nodes of about 1,000,000 bytes leave under 777,216 of the 16 MiB.
+    for (let index = 0; index < 16; index++) {
+      node(root, `n${String(index).padStart(2, '0')}`, {
+        description: 'x'.repeat(999_900),
+      })
+    }
+    node(root, 'o-grows', { title: 'Grows' })
+    node(root, 'p-later', { title: 'Later' })
+    const sizes = fs
+      .readdirSync(path.join(root, 'nodes'))
+      .filter((name) => name.startsWith('n'))
+      .reduce(
+        (sum, name) => sum + fs.statSync(path.join(root, 'nodes', name)).size,
+        0,
+      )
+    const watch = watchReads({
+      [path.join(fs.realpathSync(root), 'nodes/o-grows.json')]: ' '.repeat(
+        1_000_000,
+      ),
+    })
+    let result: SourceLoad
+    try {
+      result = load(env, source([root]))
+    } finally {
+      watch.stop()
+    }
+
+    expect(result.records).toHaveLength(16)
+    expect(result.records.some((r) => r.path.endsWith('o-grows.json'))).toBe(
+      false,
+    )
+    expect(watch.bytes).toBeLessThanOrEqual(MAX_TOTAL_BYTES + 1)
+    expect(sizes).toBeLessThan(MAX_TOTAL_BYTES)
+    expect(watch.opened.some((file) => file.endsWith('/p-later.json'))).toBe(
+      false,
+    )
+    expect(result.warnings).toContain(
+      `graph: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped 2 files`,
+    )
+  })
+})
+
+describe('Deciduous loader: one entry budget per source', () => {
+  test('nodes/ and edges/ folders across two roots stop at the budget, with one warning', () => {
+    const env = makeEnv()
+    const one = path.join(env.root, 'one')
+    const two = path.join(env.root, 'two')
+    for (const root of [one, two]) {
+      for (const folder of ['nodes', 'edges']) {
+        fillWithEntries(path.join(root, folder), 60, 'txt')
+      }
+    }
+    const opened: string[] = []
+    let entries = 0
+    const realOpendir = fs.opendirSync.bind(fs)
+    const spy = spyOn(fs, 'opendirSync').mockImplementation(((
+      target: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      opened.push(String(target))
+      const dir = (realOpendir as (...args: unknown[]) => fs.Dir)(
+        target,
+        ...rest,
+      )
+      const realRead = dir.readSync.bind(dir)
+      dir.readSync = () => {
+        const entry = realRead()
+        if (entry !== null) entries += 1
+        return entry
+      }
+      return dir
+    }) as typeof fs.opendirSync)
+    let loads: SourceLoad[]
+    try {
+      loads = loadExternalSources({
+        sources: [source([one, two])],
+        checkoutRoot: env.repo,
+        entryBudget: 100,
+      })
+    } finally {
+      spy.mockRestore()
+    }
+
+    const [result] = loads
+    expect(result?.state).toBe('empty')
+    expect(result?.warnings.filter((w) => w.includes('entry limit'))).toEqual([
+      'graph: entry limit of 100 reached; some entries were not examined',
+    ])
+    // The budget, plus the one read that shows a listing had more.
+    expect(entries).toBeLessThanOrEqual(101)
+    expect(entries).toBeGreaterThan(90)
+    // The folders after the budget ran out are never opened.
+    expect(opened.some((target) => target.endsWith('/edges'))).toBe(false)
   })
 })
 

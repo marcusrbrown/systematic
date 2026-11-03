@@ -27,9 +27,10 @@ export const MAX_TOTAL_BYTES = 16 * 1024 * 1024
 /** Discovery stops here so a hostile tree cannot make the walk itself unbounded. */
 export const MAX_DISCOVERED_FILES = MAX_FILES * 4
 /**
- * Most directory entries one external listing may examine. The discovery
- * ceiling counts accepted candidates only, so this bounds the work a folder of
- * non-matching entries can cost.
+ * Most directory entries one external source may examine in total, across every
+ * directory and every root of the source. The discovery ceiling counts accepted
+ * candidates only, so this bounds the work a tree of non-matching entries can
+ * cost.
  */
 export const MAX_LISTED_ENTRIES = MAX_DISCOVERED_FILES * 4
 /** Longest warning, in characters, after sanitising. */
@@ -45,12 +46,6 @@ interface WalkSpec {
   readonly excludedDirs: readonly string[]
   /** Lower-case file extensions that are indexed, dot included. Defaults to `.md`. */
   readonly extensions?: readonly string[]
-  /**
-   * Most entries one directory listing may examine. A listing that reaches it
-   * stops with a warning. Unset for the built-in kinds, which list a directory
-   * whole.
-   */
-  readonly maxListedEntries?: number
 }
 
 interface KindSpec extends WalkSpec {
@@ -213,6 +208,47 @@ export function safeReaddir(target: string): string[] | null {
   }
 }
 
+/**
+ * The entries one external source may still examine. One budget is shared by
+ * every directory and root of the source; the built-in kinds have none and list
+ * a directory whole.
+ */
+export interface EntryBudget {
+  remaining: number
+  /** True once a listing was cut short or skipped for want of budget. */
+  exhausted: boolean
+}
+
+export function newEntryBudget(
+  limit: number = MAX_LISTED_ENTRIES,
+): EntryBudget {
+  return { remaining: limit, exhausted: false }
+}
+
+/**
+ * List a directory against a budget: at most `budget.remaining` names, which
+ * are then taken off the budget. A directory with more entries, or one reached
+ * after the budget ran out, marks the budget exhausted; a spent budget opens
+ * nothing. `null` when the directory cannot be read.
+ */
+export function listDirectoryWithin(
+  target: string,
+  budget: EntryBudget,
+): BoundedListing | null {
+  if (budget.remaining <= 0) {
+    budget.exhausted = true
+    return { names: [], truncated: true }
+  }
+  const listing = listDirectoryBounded(target, budget.remaining)
+  if (listing === null) return null
+  budget.remaining -= listing.names.length
+  if (listing.truncated) {
+    budget.remaining = 0
+    budget.exhausted = true
+  }
+  return listing
+}
+
 export interface BoundedListing {
   readonly names: string[]
   /** True when the directory held more than `limit` entries, so `names` is a subset. */
@@ -334,6 +370,8 @@ interface Discovery {
   truncated: boolean
   /** True when the walked directory itself could not be listed. */
   rootUnreadable: boolean
+  /** Set for an external source: the entries every directory of the walk shares. */
+  readonly budget?: EntryBudget | undefined
 }
 
 type EntryKind = 'file' | 'directory' | 'ignored'
@@ -366,33 +404,26 @@ function wholeListing(directory: string): BoundedListing | null {
 /**
  * The entry names of one walked directory, or `null` when it cannot be read.
  * A subdirectory that cannot be read gets a warning here; the walked directory
- * itself is reported by `discoverSourceFiles`. A bounded listing that was cut
- * says so once.
+ * itself is reported by `discoverSourceFiles`. With a budget, the listing takes
+ * its names from it; the caller says once that the budget ran out.
  */
 function listWalkedDirectory(
-  spec: WalkSpec,
+  budget: EntryBudget | undefined,
   label: string,
   directory: string,
   prefix: string,
   warnings: string[],
 ): string[] | null {
-  const shown = prefix === '' ? label : `${label}/${prefix.slice(0, -1)}`
   const listing =
-    spec.maxListedEntries === undefined
+    budget === undefined
       ? wholeListing(directory)
-      : listDirectoryBounded(directory, spec.maxListedEntries)
+      : listDirectoryWithin(directory, budget)
   if (listing === null) {
     if (prefix !== '') {
+      const shown = `${label}/${prefix.slice(0, -1)}`
       warnings.push(cleanForWarning(`could not read directory ${shown}`))
     }
     return null
-  }
-  if (listing.truncated) {
-    warnings.push(
-      cleanForWarning(
-        `${shown}: directory listing limit of ${spec.maxListedEntries} entries reached; some entries were not examined`,
-      ),
-    )
   }
   return listing.names
 }
@@ -406,7 +437,13 @@ function discoverFiles(
   found: Discovery,
   warnings: string[],
 ): void {
-  const names = listWalkedDirectory(spec, label, directory, prefix, warnings)
+  const names = listWalkedDirectory(
+    found.budget,
+    label,
+    directory,
+    prefix,
+    warnings,
+  )
   if (names === null) {
     if (depth === 0) found.rootUnreadable = true
     return
@@ -556,6 +593,11 @@ export interface DiscoverSourceFilesOptions {
    */
   readonly containedIn?: string | undefined
   readonly walk: WalkSpec
+  /**
+   * An external source's entry budget, shared with the other roots of the same
+   * source. Left out, every directory is listed whole.
+   */
+  readonly entryBudget?: EntryBudget | undefined
   /** Names the directory in warnings: `spec.dir` for a built-in kind, the source name for an external one. */
   readonly label: string
 }
@@ -586,7 +628,7 @@ export function discoverSourceFiles(
   options: DiscoverSourceFilesOptions,
   warnings: string[],
 ): SourceDiscovery {
-  const { directory, containedIn, walk, label } = options
+  const { directory, containedIn, walk, label, entryBudget } = options
   const directoryProbe = probeRealpath(directory)
   const containerProbe =
     containedIn === undefined ? undefined : probeRealpath(containedIn)
@@ -623,6 +665,7 @@ export function discoverSourceFiles(
     candidates: [],
     truncated: false,
     rootUnreadable: false,
+    budget: entryBudget,
   }
   discoverFiles(walk, label, directoryReal, '', 0, found, warnings)
   // Whether `realpath` of a locked directory fails depends on the platform; a
@@ -647,6 +690,11 @@ export interface ReadSourceFilesOptions<T> {
   readonly label: string
   /** Largest single file read, in bytes. */
   readonly maxFileBytes: number
+  /**
+   * Bytes of a read budget shared with other sources that this call may still
+   * use. Left out for the built-in kinds, which share none.
+   */
+  readonly sharedBytes?: number | undefined
   /** Parses one file; `displayPath` is `displayPrefix/relative`. */
   readonly parse: (displayPath: string, content: string) => ParsedSourceFile<T>
 }
@@ -657,52 +705,124 @@ export interface SourceFilesRead<T> {
   readonly bytesRead: number
 }
 
-interface ReadOutcome<T> extends SourceFilesRead<T> {
-  readonly budgetSkipped: number
+/** What bounds a read: the per-file cap, the per-source text budget or the budget shared with other sources. */
+export type ReadBound = 'file' | 'source' | 'shared'
+
+export interface ReadAllowance {
+  /** The most a file may hold: a read stops at one byte past it. */
+  readonly limit: number
+  readonly bound: ReadBound
 }
 
-/** Read the first `considered` candidates in order, within the size and byte caps. */
+/**
+ * How much the next file may hold, given the bytes this source has already
+ * used: the smallest of the per-file cap and what is left of the per-source
+ * text budget and of the shared budget. The size seen at discovery is not part
+ * of it, because a file can grow after discovery.
+ */
+export function readAllowance(
+  used: number,
+  maxFileBytes: number,
+  sharedBytes?: number,
+): ReadAllowance {
+  const source = MAX_TOTAL_BYTES - used
+  const shared = sharedBytes === undefined ? Infinity : sharedBytes - used
+  const left = Math.max(Math.min(source, shared), 0)
+  if (maxFileBytes <= left) return { limit: maxFileBytes, bound: 'file' }
+  return { limit: left, bound: shared < source ? 'shared' : 'source' }
+}
+
+interface ReadOutcome<T> extends SourceFilesRead<T> {
+  readonly budgetSkipped: number
+  readonly budgetBound: ReadBound
+}
+
+type BudgetedRead =
+  | { readonly kind: 'text'; readonly text: string; readonly bytes: number }
+  | { readonly kind: 'skip'; readonly reason: string; readonly bytes: number }
+  | { readonly kind: 'stop'; readonly bound: ReadBound; readonly bytes: number }
+
+/**
+ * Read one file within the per-file cap and what is left of the per-source and
+ * shared budgets. `bytes` is what the read charges. The size seen at discovery
+ * can be out of date, so the read itself is limited to what the budgets leave:
+ * a file that crosses a budget stops the source, charged what was left.
+ */
+function readWithinBudgets<T>(
+  options: ReadSourceFilesOptions<T>,
+  candidate: SourceFileCandidate,
+  used: number,
+): BudgetedRead {
+  const { maxFileBytes, sharedBytes } = options
+  const tooLarge = `larger than ${maxFileBytes} bytes`
+  if (candidate.size > maxFileBytes) {
+    return { kind: 'skip', reason: tooLarge, bytes: 0 }
+  }
+  if (used + candidate.size > MAX_TOTAL_BYTES) {
+    return { kind: 'stop', bound: 'source', bytes: 0 }
+  }
+  if (sharedBytes !== undefined && used + candidate.size > sharedBytes) {
+    return { kind: 'stop', bound: 'shared', bytes: 0 }
+  }
+  const allowance = readAllowance(used, maxFileBytes, sharedBytes)
+  const read = readBytesBounded(candidate.absolute, allowance.limit)
+  if (read.kind === 'too-large') {
+    return allowance.bound === 'file'
+      ? { kind: 'skip', reason: tooLarge, bytes: read.bytesRead }
+      : { kind: 'stop', bound: allowance.bound, bytes: allowance.limit }
+  }
+  if (read.kind !== 'bytes') {
+    return { kind: 'skip', reason: 'could not be read', bytes: 0 }
+  }
+  return {
+    kind: 'text',
+    text: read.bytes.toString('utf8'),
+    bytes: read.bytes.byteLength,
+  }
+}
+
+/**
+ * Read the first `considered` candidates in order, each within the budgets
+ * (see `readWithinBudgets`). A file that crosses a budget is rejected and
+ * nothing after it is read.
+ */
 function readCandidates<T>(
   options: ReadSourceFilesOptions<T>,
   candidates: readonly SourceFileCandidate[],
   considered: number,
   warnings: string[],
 ): ReadOutcome<T> {
-  const { displayPrefix, maxFileBytes, parse } = options
   const items: T[] = []
   let totalBytes = 0
   for (let index = 0; index < considered; index++) {
     const candidate = candidates[index]
     if (candidate === undefined) break
-    const logicalPath = `${displayPrefix}/${candidate.relative}`
+    const logicalPath = `${options.displayPrefix}/${candidate.relative}`
     const display = cleanForWarning(logicalPath)
-    if (candidate.size > maxFileBytes) {
-      warnings.push(`skipped ${display}: larger than ${maxFileBytes} bytes`)
+    const read = readWithinBudgets(options, candidate, totalBytes)
+    totalBytes += read.bytes
+    if (read.kind === 'stop') {
+      return {
+        items,
+        bytesRead: totalBytes,
+        budgetSkipped: considered - index,
+        budgetBound: read.bound,
+      }
+    }
+    if (read.kind === 'skip') {
+      warnings.push(`skipped ${display}: ${read.reason}`)
       continue
     }
-    if (totalBytes + candidate.size > MAX_TOTAL_BYTES) {
-      return { items, bytesRead: totalBytes, budgetSkipped: considered - index }
-    }
-
-    // The size came from an earlier lstat. The read is bounded on its own, and
-    // the budget is charged the bytes actually read.
-    const read = readBytesBounded(candidate.absolute, maxFileBytes)
-    if (read.kind === 'too-large') {
-      totalBytes += read.bytesRead
-      warnings.push(`skipped ${display}: larger than ${maxFileBytes} bytes`)
-      continue
-    }
-    if (read.kind !== 'bytes') {
-      warnings.push(`skipped ${display}: could not be read`)
-      continue
-    }
-    const bytes = read.bytes
-    totalBytes += bytes.byteLength
-    const parsed = parse(logicalPath, bytes.toString('utf8'))
+    const parsed = options.parse(logicalPath, read.text)
     if (parsed.ok) items.push(parsed.value)
     else warnings.push(`skipped ${display}: ${parsed.reason}`)
   }
-  return { items, bytesRead: totalBytes, budgetSkipped: 0 }
+  return {
+    items,
+    bytesRead: totalBytes,
+    budgetSkipped: 0,
+    budgetBound: 'source',
+  }
 }
 
 /**
@@ -718,7 +838,7 @@ export function readSourceFiles<T>(
   warnings: string[],
 ): SourceFilesRead<T> {
   const considered = Math.min(candidates.length, MAX_FILES)
-  const { items, bytesRead, budgetSkipped } = readCandidates(
+  const { items, bytesRead, budgetSkipped, budgetBound } = readCandidates(
     options,
     candidates,
     considered,
@@ -734,7 +854,9 @@ export function readSourceFiles<T>(
   }
   if (budgetSkipped > 0) {
     warnings.push(
-      `${options.label}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${budgetSkipped} files`,
+      budgetBound === 'shared'
+        ? `${options.label}: read budget of this call reached; skipped ${budgetSkipped} files`
+        : `${options.label}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${budgetSkipped} files`,
     )
   }
   return { items, bytesRead }

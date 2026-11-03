@@ -145,16 +145,23 @@ describe('external limit and path text', () => {
     expect(SEARCH_ARG_DESCRIPTIONS.limit).toContain('at most 5')
   })
 
-  it('tells the model an external hit path is relative to its source root, not a repo path', () => {
+  it('tells the model an external hit path is source-qualified and how to resolve it', () => {
     expect(SEARCH_TOOL_DESCRIPTION).toStartWith(
       "Search this project's durable outputs by symptom",
     )
     expect(SEARCH_TOOL_DESCRIPTION).toContain(
       'Use it before debugging a failure or planning work that a past learning, plan, brainstorm or ideation doc may already cover.',
     )
-    expect(SEARCH_TOOL_DESCRIPTION).toMatch(
-      /external[^.]*path is relative to its source's root[^.]*section header[^.]*not a repo path/i,
+    const external = SEARCH_TOOL_DESCRIPTION.slice(
+      SEARCH_TOOL_DESCRIPTION.indexOf('With kind external'),
     )
+    expect(external).toContain('`<source>/<path>`')
+    expect(external).toContain('Strip the source name')
+    expect(external).toContain("inside one of that source's roots")
+    expect(external).toContain('does not say which root')
+    expect(external).toContain('first listed root that has it')
+    // The path is not relative to the root as printed: the source name leads it.
+    expect(external).not.toContain('relative to its source')
   })
 })
 
@@ -1657,6 +1664,45 @@ describe('runSearch: kind external', () => {
       expect(response.ok).toBe(true)
       expect(hasControlOrInvisible(response.text)).toBe(false)
       expect(response.text).not.toContain('t'.repeat(200))
+    })
+  })
+
+  describe('hit paths with several roots', () => {
+    it('shows a hit from the second root as <source>/<path>, with both roots in the header and no mark of which root', async () => {
+      const env = makeExternalEnv(temp)
+      const one = path.join(env.root, 'wiki-one')
+      const two = path.join(env.root, 'wiki-two')
+      writeMarkdown(one, 'a.md', { title: 'Only in one', body: 'needle' })
+      writeMarkdown(two, 'b.md', { title: 'Only in two', body: 'needle' })
+      writeMarkdown(one, 'dup.md', { title: 'Dup from one', body: 'needle' })
+      writeMarkdown(two, 'dup.md', { title: 'Dup from two', body: 'needle' })
+      writeUserSearch(env, {
+        sources: [
+          {
+            name: 'wiki',
+            format: 'markdown',
+            roots: [one, two],
+            projects: [env.repo],
+          },
+        ],
+      })
+
+      const response = await externalSearch(env, 'needle')
+      const lines = response.text.split('\n')
+
+      expect(sectionHeaders(response.text)).toEqual([
+        `wiki (user): ${one}, ${two}`,
+      ])
+      expect(lines).toContain('1. wiki/a.md')
+      expect(lines.some((line) => /^\d+\. wiki\/b\.md$/.test(line))).toBe(true)
+      // The path names the source, not the root, and no hit line says which root.
+      for (const line of lines.filter((l) => /^\d+\. /.test(l))) {
+        expect(line).not.toContain(one)
+        expect(line).not.toContain(two)
+      }
+      // The first listed root that has a path provides it.
+      expect(response.text).toContain('Title: Dup from one')
+      expect(response.text).not.toContain('Dup from two')
     })
   })
 

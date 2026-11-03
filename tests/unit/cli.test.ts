@@ -2881,6 +2881,19 @@ describe('cli search', () => {
     }
   })
 
+  it('help says how to resolve an external hit path', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(['--help'], box.project, box.env)
+      const flat = result.stdout.replace(/\s+/g, ' ')
+      expect(flat).toContain(
+        "An external hit prints as <source>/<path>; strip the source name for a path inside one of the source's roots (with several roots, the first that has the file).",
+      )
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
   it('search --help prints the search usage', () => {
     const box = mkSearchBox()
     try {

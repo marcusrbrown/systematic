@@ -28,13 +28,17 @@ import { readBytesBounded } from './search-bounded-read.js'
 import {
   cleanForWarning,
   compareCodeUnits,
+  type EntryBudget,
   isInside,
-  listDirectoryBounded,
+  listDirectoryWithin,
   MAX_DISCOVERED_FILES,
   MAX_FILES,
   MAX_LISTED_ENTRIES,
   MAX_TOTAL_BYTES,
   narrowNonEmptyString,
+  newEntryBudget,
+  type ReadBound,
+  readAllowance,
   safeLstat,
   symlinkedComponent,
 } from './search-corpus.js'
@@ -90,6 +94,8 @@ export interface DeciduousLoadInput {
   readonly remainingBytes: number
   /** Largest single file read, in bytes. */
   readonly maxFileBytes: number
+  /** Directory entries the source may examine in total. Defaults to `MAX_LISTED_ENTRIES`. */
+  readonly entryLimit?: number | undefined
 }
 
 interface FileCandidate {
@@ -164,8 +170,6 @@ interface FolderScan {
   readonly candidates: FileCandidate[]
   /** True when the scan stopped at its file ceiling, so counts are lower bounds. */
   readonly truncated: boolean
-  /** True when the listing stopped at its entry ceiling, so some entries were never examined. */
-  readonly listingTruncated: boolean
 }
 
 /**
@@ -197,7 +201,7 @@ function classifyJsonEntry(
 }
 
 function folderScan(status: Exclude<FolderStatus, 'listed'>): FolderScan {
-  return { status, candidates: [], truncated: false, listingTruncated: false }
+  return { status, candidates: [], truncated: false }
 }
 
 type FolderStat =
@@ -219,8 +223,8 @@ function statFolder(directory: string): FolderStat {
  * List one folder directly (no recursion) in code-unit order. A symlink, a
  * directory, a non-`.json` name and anything that is not a regular file is
  * ignored; a symlink is counted. A stem outside the id charset is counted and
- * never opened. The listing examines at most `MAX_LISTED_ENTRIES` entries and
- * the scan stops after `limit` candidates. A folder that exists but cannot be
+ * never opened. The listing takes its entries from the source's budget and the
+ * scan stops after `limit` candidates. A folder that exists but cannot be
  * inspected or listed is `unreadable`, not absent.
  */
 function scanFolder(
@@ -228,6 +232,7 @@ function scanFolder(
   folder: 'nodes' | 'edges',
   limit: number,
   skips: Skips,
+  budget: EntryBudget,
 ): FolderScan {
   const directory = path.join(rootReal, folder)
   const probed = statFolder(directory)
@@ -238,9 +243,9 @@ function scanFolder(
     return folderScan('absent')
   }
   if (!probed.stat.isDirectory()) return folderScan('absent')
-  const listing = listDirectoryBounded(directory, MAX_LISTED_ENTRIES)
+  const listing = listDirectoryWithin(directory, budget)
   if (listing === null) return folderScan('unreadable')
-  const { names, truncated: listingTruncated } = listing
+  const { names } = listing
   names.sort(compareCodeUnits)
 
   const candidates: FileCandidate[] = []
@@ -248,11 +253,11 @@ function scanFolder(
     const candidate = classifyJsonEntry(directory, folder, name, skips)
     if (candidate === undefined) continue
     if (candidates.length >= limit) {
-      return { status: 'listed', candidates, truncated: true, listingTruncated }
+      return { status: 'listed', candidates, truncated: true }
     }
     candidates.push(candidate)
   }
-  return { status: 'listed', candidates, truncated: false, listingTruncated }
+  return { status: 'listed', candidates, truncated: false }
 }
 
 /** What walking every root found, merged: nodes first, then edges. */
@@ -334,8 +339,6 @@ interface FolderTally {
   listed: boolean
   /** The folder exists in some root and could not be listed. */
   unreadable: boolean
-  /** A listing stopped at its entry ceiling. */
-  listingCut: boolean
   /** A scan stopped at the shared file ceiling. */
   truncated: boolean
 }
@@ -345,7 +348,6 @@ function newTally(): FolderTally {
     files: new Map(),
     listed: false,
     unreadable: false,
-    listingCut: false,
     truncated: false,
   }
 }
@@ -356,6 +358,7 @@ function scanRoots(
   tally: FolderTally,
   otherCount: number,
   skips: Skips,
+  budget: EntryBudget,
 ): void {
   for (const real of reals) {
     const scan = scanFolder(
@@ -363,10 +366,10 @@ function scanRoots(
       folder,
       Math.max(MAX_DISCOVERED_FILES - otherCount - tally.files.size, 0),
       skips,
+      budget,
     )
     tally.listed = tally.listed || scan.status === 'listed'
     tally.unreadable = tally.unreadable || scan.status === 'unreadable'
-    tally.listingCut = tally.listingCut || scan.listingTruncated
     tally.truncated = tally.truncated || scan.truncated
     for (const candidate of scan.candidates) {
       if (tally.files.has(candidate.relative)) skips.sharedPaths++
@@ -388,11 +391,6 @@ function folderWarnings(
         : `${name}: could not read an edges/ folder; records load without its rationale`,
     )
   }
-  if (tally.listingCut) {
-    lines.push(
-      `${name}: ${folder}/ listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
-    )
-  }
   return lines
 }
 
@@ -407,14 +405,22 @@ function gather(
 
   // `nodes/` of every root in root order, then `edges/` of every root, with
   // one file ceiling across all of them.
+  // One entry budget covers every folder of every root of this source.
+  const limit = input.entryLimit ?? MAX_LISTED_ENTRIES
+  const budget = newEntryBudget(limit)
   const nodes = newTally()
   const edges = newTally()
-  scanRoots(reals, 'nodes', nodes, 0, skips)
-  scanRoots(reals, 'edges', edges, nodes.files.size, skips)
+  scanRoots(reals, 'nodes', nodes, 0, skips, budget)
+  scanRoots(reals, 'edges', edges, nodes.files.size, skips, budget)
   warnings.push(
     ...folderWarnings(input.name, 'nodes', nodes),
     ...folderWarnings(input.name, 'edges', edges),
   )
+  if (budget.exhausted) {
+    warnings.push(
+      `${input.name}: entry limit of ${limit} reached; some entries were not examined`,
+    )
+  }
   return {
     kind: 'gathered',
     gathered: {
@@ -510,29 +516,61 @@ function bodyOf(entry: NodeEntry): string {
 
 interface Reader {
   bytesUsed: number
-  /** Files not opened because the per-source byte ceiling was reached. */
+  /** Files not read because a byte budget was reached. */
   budgetSkipped: number
+  /** Which budget the files not read ran into. */
+  budgetBound: ReadBound
+  /** Set once a file crossed a budget while being read: nothing after it is read. */
+  exhausted: boolean
 }
 
-/** Read one file within the per-file and per-source byte caps; `undefined` when skipped. */
+/** Count a file left unread for a budget; `exhaust` also stops every later read. */
+function skipForBudget(
+  reader: Reader,
+  bound: ReadBound,
+  exhaust: boolean,
+): undefined {
+  reader.budgetSkipped++
+  reader.budgetBound = bound
+  if (exhaust) reader.exhausted = true
+  return undefined
+}
+
+/**
+ * Read one file within the per-file cap and what is left of the per-source and
+ * shared budgets; `undefined` when skipped. A file that grew past the budget
+ * since discovery is rejected, charged what was left, and ends all reading.
+ */
 function readCandidate(
   candidate: FileCandidate,
   input: DeciduousLoadInput,
   reader: Reader,
   skips: Skips,
 ): JsonObject | undefined {
+  if (reader.exhausted) return skipForBudget(reader, reader.budgetBound, true)
   if (candidate.size > input.maxFileBytes) {
     skips.tooLarge++
     return undefined
   }
   if (reader.bytesUsed + candidate.size > MAX_TOTAL_BYTES) {
-    reader.budgetSkipped++
-    return undefined
+    return skipForBudget(reader, 'source', false)
   }
-  // The size came from an earlier lstat. The read is bounded on its own, and
-  // the budget is charged the bytes actually read.
-  const read = readBytesBounded(candidate.absolute, input.maxFileBytes)
+  if (reader.bytesUsed + candidate.size > input.remainingBytes) {
+    return skipForBudget(reader, 'shared', false)
+  }
+  // The size came from an earlier lstat and can be out of date. The read is
+  // limited to what the budgets leave, and charged the bytes read.
+  const allowance = readAllowance(
+    reader.bytesUsed,
+    input.maxFileBytes,
+    input.remainingBytes,
+  )
+  const read = readBytesBounded(candidate.absolute, allowance.limit)
   if (read.kind === 'too-large') {
+    if (allowance.bound !== 'file') {
+      reader.bytesUsed += allowance.limit
+      return skipForBudget(reader, allowance.bound, true)
+    }
     reader.bytesUsed += read.bytesRead
     skips.tooLarge++
     return undefined
@@ -691,6 +729,7 @@ function limitWarnings(
     readonly scanTruncated: boolean
     readonly recordCapSkipped: number
     readonly budgetSkipped: number
+    readonly budgetBound: ReadBound
   },
 ): string[] {
   const lines: string[] = []
@@ -706,7 +745,9 @@ function limitWarnings(
   }
   if (cuts.budgetSkipped > 0) {
     lines.push(
-      `${name}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${plural(cuts.budgetSkipped, 'file')}`,
+      cuts.budgetBound === 'shared'
+        ? `${name}: read budget of this call reached; skipped ${plural(cuts.budgetSkipped, 'file')}`
+        : `${name}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${plural(cuts.budgetSkipped, 'file')}`,
     )
   }
   return lines
@@ -785,7 +826,12 @@ export function loadDeciduousRecords(input: DeciduousLoadInput): DeciduousLoad {
     return nothing('dropped', warnings.map(cleanForWarning))
   }
 
-  const reader: Reader = { bytesUsed: 0, budgetSkipped: 0 }
+  const reader: Reader = {
+    bytesUsed: 0,
+    budgetSkipped: 0,
+    budgetBound: 'source',
+    exhausted: false,
+  }
   const scan = readNodes(gathered.nodes, input, reader, skips)
   readEdges(gathered.edges, scan, input, reader, skips)
 
@@ -798,6 +844,7 @@ export function loadDeciduousRecords(input: DeciduousLoadInput): DeciduousLoad {
       scanTruncated: gathered.truncated,
       recordCapSkipped: scan.recordCapSkipped,
       budgetSkipped: reader.budgetSkipped,
+      budgetBound: reader.budgetBound,
     }),
   )
 

@@ -27,6 +27,7 @@ import {
   MAX_FILES,
   MAX_LISTED_ENTRIES,
   narrowNonEmptyString,
+  newEntryBudget,
   type ParsedSourceFile,
   parseMarkdownFrontmatter,
   readSourceFiles,
@@ -90,6 +91,8 @@ export interface LoadExternalSourcesInput {
   readonly checkoutRoot: string
   /** Bytes the sources may open between them. Defaults to the 32 MB budget; tests inject a small one. */
   readonly budgetBytes?: number | undefined
+  /** Directory entries each source may examine. Defaults to `MAX_LISTED_ENTRIES`; tests inject a small one. */
+  readonly entryBudget?: number | undefined
 }
 
 interface SourceOutcome extends SourceLoad {
@@ -100,6 +103,7 @@ interface SourceOutcome extends SourceLoad {
 interface LoadContext {
   readonly checkoutRoot: string
   readonly remainingBytes: number
+  readonly entryLimit: number
 }
 
 type SourceLoader = (
@@ -107,11 +111,7 @@ type SourceLoader = (
   context: LoadContext,
 ) => SourceOutcome
 
-const MARKDOWN_WALK = {
-  excludedFiles: [],
-  excludedDirs: [],
-  maxListedEntries: MAX_LISTED_ENTRIES,
-} as const
+const MARKDOWN_WALK = { excludedFiles: [], excludedDirs: [] } as const
 
 /** Everything but the state is empty: the source produced nothing and read nothing. */
 function nothing(
@@ -239,6 +239,23 @@ function finishGather(
   return { kind: 'gathered', candidates, truncated: merge.truncated }
 }
 
+/** Why a project root drops its source before it is walked, or `undefined`. */
+function projectRootProblem(
+  source: ActiveSource,
+  context: LoadContext,
+  root: string,
+): string | undefined {
+  if (source.origin !== 'project') return undefined
+  switch (symlinkedComponent(context.checkoutRoot, root)) {
+    case 'root':
+      return 'a project root is a symlink'
+    case 'ancestor':
+      return 'a project root passes through a symlink'
+    default:
+      return undefined
+  }
+}
+
 /**
  * Walk every root and merge the candidates into one set, so every cap and the
  * budget check apply to the source as a whole. The first root to provide a
@@ -263,19 +280,12 @@ function gatherCandidates(
     kind: 'done',
     outcome: nothing(source, 'dropped', warnings),
   })
+  // One budget covers every directory of every root of this source.
+  const entryBudget = newEntryBudget(context.entryLimit)
   for (const root of source.roots) {
-    const symlinked =
-      origin === 'project'
-        ? symlinkedComponent(context.checkoutRoot, root)
-        : undefined
-    if (symlinked === 'root') {
-      warnings.push(`${name}: a project root is a symlink; source dropped`)
-      return drop()
-    }
-    if (symlinked === 'ancestor') {
-      warnings.push(
-        `${name}: a project root passes through a symlink; source dropped`,
-      )
+    const problem = projectRootProblem(source, context, root)
+    if (problem !== undefined) {
+      warnings.push(`${name}: ${problem}; source dropped`)
       return drop()
     }
     const discovery = discoverSourceFiles(
@@ -283,6 +293,7 @@ function gatherCandidates(
         directory: root,
         containedIn: origin === 'project' ? context.checkoutRoot : undefined,
         walk: MARKDOWN_WALK,
+        entryBudget,
         label: name,
       },
       warnings,
@@ -290,6 +301,11 @@ function gatherCandidates(
     if (discovery.state === 'outside') return drop()
     if (discovery.state === 'unreadable') merge.unreadable = true
     if (discovery.state === 'found') mergeDiscovery(merge, discovery)
+  }
+  if (entryBudget.exhausted) {
+    warnings.push(
+      `${name}: entry limit of ${context.entryLimit} reached; some entries were not examined`,
+    )
   }
   return finishGather(source, merge, warnings)
 }
@@ -332,6 +348,7 @@ function loadMarkdownSource(
       displayPrefix: name,
       label: name,
       maxFileBytes: EXTERNAL_MAX_FILE_BYTES,
+      sharedBytes: context.remainingBytes,
       parse: (displayPath, content) =>
         parseMarkdownRecord(source, displayPath, content),
     },
@@ -364,6 +381,7 @@ function loadDeciduousSource(
     containedIn: origin === 'project' ? context.checkoutRoot : undefined,
     remainingBytes: context.remainingBytes,
     maxFileBytes: EXTERNAL_MAX_FILE_BYTES,
+    entryLimit: context.entryLimit,
   })
   return {
     name,
@@ -402,6 +420,7 @@ export function loadExternalSources(
     const { bytesUsed, ...load } = loadSource(source, {
       checkoutRoot,
       remainingBytes,
+      entryLimit: input.entryBudget ?? MAX_LISTED_ENTRIES,
     })
     remainingBytes -= bytesUsed
     loads.push(load)

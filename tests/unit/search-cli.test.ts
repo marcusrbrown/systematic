@@ -298,6 +298,17 @@ describe('searchCliUsage', () => {
     }
   })
 
+  it('says how to resolve an external hit path', () => {
+    for (const name of ['systematic-search', 'systematic search']) {
+      const flat = searchCliUsage(name).replace(/\s+/g, ' ')
+      expect(flat).toContain('An external hit prints as <source>/<path>')
+      expect(flat).toContain(
+        "strip the source name for a path inside one of that source's roots",
+      )
+      expect(flat).toContain('with several roots, the first that has the file')
+    }
+  })
+
   it('threads usageName into --help and into a usage error', async () => {
     const root = makeProject()
     const help = await run(['--help'], { cwd: root, usageName: 'my-bin' })

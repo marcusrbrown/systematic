@@ -7,6 +7,7 @@ import {
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_LISTED_ENTRIES,
+  MAX_TOTAL_BYTES,
 } from '../../src/lib/search-corpus.js'
 import {
   EXTERNAL_MAX_FILE_BYTES,
@@ -723,11 +724,11 @@ describe('loadExternalSources: bounded work', () => {
 
     expect(load.state).toBe('empty')
     expect(load.warnings).toContain(
-      `assets: directory listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
+      `assets: entry limit of ${MAX_LISTED_ENTRIES} reached; some entries were not examined`,
     )
   }, 30_000)
 
-  test('a nested folder reports its own listing limit with its path', () => {
+  test('a nested folder that runs the entry budget out is named once for the source', () => {
     const env = makeEnv()
     const root = path.join(env.outside, 'wiki')
     write(root, 'top.md', '# Top\n')
@@ -741,7 +742,7 @@ describe('loadExternalSources: bounded work', () => {
 
     expect(load.records.map((r) => r.path)).toEqual(['wiki/top.md'])
     expect(load.warnings).toContain(
-      `wiki/media: directory listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
+      `wiki: entry limit of ${MAX_LISTED_ENTRIES} reached; some entries were not examined`,
     )
   }, 30_000)
 
@@ -848,6 +849,209 @@ describe('loadExternalSources: bounded work', () => {
     expect(builtIn.warnings).toContain(
       `skipped docs/solutions/grows.md: larger than ${MAX_FILE_BYTES} bytes`,
     )
+  })
+})
+
+/**
+ * Count the directory entries a load reads, through the directory handles it
+ * opens, and the paths it opens a handle for.
+ */
+function watchListings() {
+  const opened: string[] = []
+  let entries = 0
+  const realOpendir = fs.opendirSync.bind(fs)
+  const spy = spyOn(fs, 'opendirSync').mockImplementation(((
+    target: fs.PathLike,
+    ...rest: unknown[]
+  ) => {
+    opened.push(String(target))
+    const dir = (realOpendir as (...args: unknown[]) => fs.Dir)(target, ...rest)
+    const realRead = dir.readSync.bind(dir)
+    dir.readSync = () => {
+      const entry = realRead()
+      if (entry !== null) entries += 1
+      return entry
+    }
+    return dir
+  }) as typeof fs.opendirSync)
+  return {
+    opened,
+    get entries() {
+      return entries
+    },
+    stop: () => spy.mockRestore(),
+  }
+}
+
+/**
+ * Watch the files a load opens and the bytes it reads. A path in `grow` gets
+ * that text appended just before it is opened, as a writer would between
+ * discovery and the read.
+ */
+function watchReads(grow: Readonly<Record<string, string>> = {}) {
+  const opened: string[] = []
+  let bytes = 0
+  const realOpen = fs.openSync.bind(fs)
+  const realRead = fs.readSync.bind(fs)
+  const openSpy = spyOn(fs, 'openSync').mockImplementation(((
+    file: fs.PathLike,
+    ...rest: unknown[]
+  ) => {
+    const key = String(file)
+    opened.push(key)
+    const extra = grow[key]
+    if (extra !== undefined) fs.appendFileSync(key, extra)
+    return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+  }) as typeof fs.openSync)
+  const readSpy = spyOn(fs, 'readSync').mockImplementation(((
+    ...args: Parameters<typeof fs.readSync>
+  ) => {
+    const count = realRead(...args)
+    bytes += count
+    return count
+  }) as typeof fs.readSync)
+  return {
+    opened,
+    get bytes() {
+      return bytes
+    },
+    stop: () => {
+      openSpy.mockRestore()
+      readSpy.mockRestore()
+    },
+  }
+}
+
+describe('loadExternalSources: reads stop at the remaining allowance', () => {
+  test('a file that grows past the remaining shared budget is rejected, not indexed, and nothing after it is read', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'docs')
+    write(root, 'a.md', `# A\n${'a'.repeat(90)}\n`)
+    write(root, 'b.md', `# B\n${'b'.repeat(90)}\n`)
+    const watch = watchReads({
+      [path.join(fs.realpathSync(root), 'a.md')]: 'x'.repeat(4900),
+    })
+    let load: SourceLoad
+    try {
+      load = loadOne(env, source('docs', [root]), 1000)
+    } finally {
+      watch.stop()
+    }
+
+    expect(load.records).toEqual([])
+    expect(load.state).toBe('empty')
+    // The allowance of 1,000 bytes, plus the one sentinel byte.
+    expect(watch.bytes).toBeLessThanOrEqual(1001)
+    expect(watch.bytes).toBeGreaterThan(0)
+    expect(watch.opened.some((file) => file.endsWith('/b.md'))).toBe(false)
+    expect(load.warnings).toContain(
+      'docs: read budget of this call reached; skipped 2 files',
+    )
+  })
+
+  test('a file that grows past the per-source text budget is rejected, not indexed, and nothing after it is read', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'big')
+    // Sixteen files of 1,000,000 bytes leave 777,216 of the 16 MiB source budget.
+    for (let index = 0; index < 16; index++) {
+      write(
+        root,
+        `f${String(index).padStart(2, '0')}.md`,
+        `# F${index}\n${'x'.repeat(1_000_000)}\n`,
+      )
+    }
+    write(root, 'grows.md', '# Grows\n')
+    write(root, 'later.md', '# Later\n')
+    const watch = watchReads({
+      [path.join(fs.realpathSync(root), 'grows.md')]: 'x'.repeat(1_000_000),
+    })
+    let load: SourceLoad
+    try {
+      load = loadOne(env, source('big', [root]))
+    } finally {
+      watch.stop()
+    }
+
+    expect(load.records).toHaveLength(16)
+    expect(load.records.some((r) => r.path.endsWith('grows.md'))).toBe(false)
+    // The 16 MiB source budget, plus the one sentinel byte.
+    expect(watch.bytes).toBeLessThanOrEqual(MAX_TOTAL_BYTES + 1)
+    expect(watch.opened.some((file) => file.endsWith('/later.md'))).toBe(false)
+    expect(load.warnings).toContain(
+      `big: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped 2 files`,
+    )
+  })
+})
+
+describe('loadExternalSources: one entry budget per source', () => {
+  test('several directories across two roots that hold no Markdown stop at the budget, with one warning', () => {
+    const env = makeEnv()
+    const one = path.join(env.outside, 'one')
+    const two = path.join(env.outside, 'two')
+    for (const root of [one, two]) {
+      for (const dir of ['d1', 'd2', 'd3']) {
+        for (let index = 0; index < 40; index++) {
+          write(root, `${dir}/f${index}.png`, 'x')
+        }
+      }
+    }
+    const watch = watchListings()
+    let loads: SourceLoad[]
+    try {
+      loads = loadExternalSources({
+        sources: [source('assets', [one, two])],
+        checkoutRoot: env.checkout,
+        entryBudget: 100,
+      })
+    } finally {
+      watch.stop()
+    }
+
+    const [load] = loads
+    expect(load?.state).toBe('empty')
+    expect(load?.warnings).toEqual([
+      'assets: entry limit of 100 reached; some entries were not examined',
+    ])
+    // The budget, plus the one read that shows a listing had more.
+    expect(watch.entries).toBeLessThanOrEqual(101)
+    expect(watch.entries).toBeGreaterThan(90)
+    // The second root is never opened once the first has used the budget.
+    expect(watch.opened.some((target) => target.includes('/two'))).toBe(false)
+  })
+
+  test('a source with room under the budget is listed whole and says nothing', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'a/one.md', '# One\n')
+    write(root, 'b/two.md', '# Two\n')
+
+    const [load] = loadExternalSources({
+      sources: [source('wiki', [root])],
+      checkoutRoot: env.checkout,
+      entryBudget: 100,
+    })
+
+    expect(load?.records).toHaveLength(2)
+    expect(load?.warnings).toEqual([])
+  })
+
+  test('each source gets its own budget', () => {
+    const env = makeEnv()
+    const one = path.join(env.outside, 'one')
+    const two = path.join(env.outside, 'two')
+    for (const root of [one, two]) {
+      for (let index = 0; index < 30; index++) write(root, `f${index}.png`, 'x')
+      write(root, 'note.md', '# Note\n')
+    }
+
+    const loads = loadExternalSources({
+      sources: [source('a', [one]), source('b', [two])],
+      checkoutRoot: env.checkout,
+      entryBudget: 40,
+    })
+
+    expect(loads.map((l) => l.records.length)).toEqual([1, 1])
+    expect(loads.flatMap((l) => l.warnings)).toEqual([])
   })
 })
 
