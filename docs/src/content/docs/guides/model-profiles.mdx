@@ -34,7 +34,7 @@ Profiles live in your user config. Each entry under `profiles` carries `agents` 
       }
     },
     "personal": {
-      "categories": { "review": { "model": "anthropic/claude-opus-5" } }
+      "categories": { "review": { "model": "anthropic/claude-opus-5-5" } }
     }
   }
 }
@@ -83,7 +83,7 @@ Set `allow_project_profiles: true` in your user (or `$OPENCODE_CONFIG_DIR`) conf
   "profile": "ci-cheap",
   "profiles": {
     "ci-cheap": {
-      "agents": { "correctness-reviewer": { "model": "anthropic/claude-haiku" } }
+      "agents": { "correctness-reviewer": { "model": "anthropic/claude-haiku-5-5" } }
     }
   }
 }
@@ -106,7 +106,7 @@ Any `agents.<name>` or `categories.<category>` overlay, in a profile or in base 
 {
   "agents": {
     "correctness-reviewer": {
-      "model": "anthropic/claude-sonnet-5",
+      "model": "anthropic/claude-sonnet-5-5",
       "opencode": { "variant": "high" },
       "pi": { "thinking": "high" }
     }
@@ -162,8 +162,8 @@ Resolved configuration:
 
   Routing:
   correctness-reviewer (review):
-    opencode: model=anthropic/claude-haiku (agent/flat, project-profile), variant=(none) ((n/a))
-    pi: model=anthropic/claude-haiku (agent/flat, project-profile), thinking=(none) ((n/a))
+    opencode: model=anthropic/claude-haiku-5-5 (agent/flat, project-profile), variant=(none) ((n/a))
+    pi: model=anthropic/claude-haiku-5-5 (agent/flat, project-profile), thinking=(none) ((n/a))
 ```
 
 `Defined in:` names the file that actually defined the active profile's content — not just which source *selected* it (`Selected by:`). It's absent (not printed empty) when no profile is active. The routing table's trailing tag after `level/form` (`project-profile` above) is the same per-field attribution `--json` carries under `source.model.origin`/`source.qualifier.origin`: `user`, `custom`, `user-profile`, `custom-profile`, or `project-profile` — `user`/`custom` mean your own base config set that specific field directly; `*-profile` means the active profile bundle set it, split by which file defined the bundle.
@@ -185,13 +185,13 @@ This is how you tell a project-defined profile that changed nothing apart from w
     {
       "target": { "agentKey": "correctness-reviewer", "category": "review" },
       "opencode": {
-        "model": "anthropic/claude-haiku",
+        "model": "anthropic/claude-haiku-5-5",
         "source": {
           "model": { "level": "agent", "form": "flat", "origin": "project-profile" }
         }
       },
       "pi": {
-        "model": "anthropic/claude-haiku",
+        "model": "anthropic/claude-haiku-5-5",
         "source": {
           "model": { "level": "agent", "form": "flat", "origin": "project-profile" }
         }

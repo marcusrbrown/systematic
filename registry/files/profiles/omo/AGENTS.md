@@ -103,7 +103,7 @@ This loads Systematic's skills guide. Then check OMO:
 | Code review | `/workflows:review` | Specialized architectural agents |
 | Parallel work | `@Sisyphus` | Orchestrates multi-agent execution |
 | Fast trivial work | `task(category='quick')` | Haiku model, cost-optimized |
-| Complex reasoning | `task(category='ultrabrain')` | GPT-5.3-codex with xhigh reasoning |
+| Complex reasoning | `task(category='ultrabrain')` | GPT-6.1 Sol with xhigh reasoning |
 | Visual/UI work | `task(category='visual-engineering')` | Gemini 3 Pro for design |
 
 ### The Three Loops
@@ -160,7 +160,7 @@ Results documented in compound-docs
 @Metis <spec>            # Find hidden requirements
 task(category='quick')   # Fast trivial tasks (Haiku)
 task(category='visual-engineering')  # UI design (Gemini)
-task(category='ultrabrain')  # Deep reasoning (GPT-5.3)
+task(category='ultrabrain')  # Deep reasoning (GPT-6.1 Sol)
 ```
 
 ## Specialized Agents
@@ -203,8 +203,8 @@ The profile comes pre-configured with:
 - **Category models** — Optimal model per task type:
   - `quick` → Haiku (fast/cheap)
   - `visual-engineering` → Gemini 3.1 Pro (UI excellence)
-  - `ultrabrain` → GPT-5.3-codex (deep reasoning)
-  - `unspecified-high` → Opus 5 (powerful general)
+  - `ultrabrain` → GPT-6.1 Sol (deep reasoning)
+  - `unspecified-high` → Opus 5.5 (powerful general)
 
 - **Disabled features**:
   - Prometheus Planner (use Systematic's better planning)
@@ -229,12 +229,12 @@ Add your own overrides:
 {
   "agents": {
     "Sisyphus": {
-      "model": "anthropic/claude-opus-5"
+      "model": "anthropic/claude-opus-5-5"
     }
   },
   "categories": {
     "visual-engineering": {
-      "model": "anthropic/claude-opus-5"
+      "model": "anthropic/claude-opus-5-5"
     }
   }
 }

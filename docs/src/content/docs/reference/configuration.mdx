@@ -48,7 +48,7 @@ When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes prece
   "agents": {
     "security-reviewer": {
       // User or custom config only; project config cannot choose model/provider routing.
-      "model": "anthropic/claude-sonnet-5",
+      "model": "anthropic/claude-sonnet-5-5",
       "variant": "thinking",
       "temperature": 0.2,
       "steps": 30
@@ -131,7 +131,7 @@ For a task-oriented walkthrough, see the [model profiles guide](/systematic/guid
       "agents": { "correctness-reviewer": { "model": "openai/gpt-6-astra" } }
     },
     "personal": {
-      "categories": { "review": { "model": "anthropic/claude-opus-5" } }
+      "categories": { "review": { "model": "anthropic/claude-opus-5-5" } }
     }
   }
 }
@@ -161,7 +161,7 @@ Setting `allow_project_profiles: true` in your **user** (or `$OPENCODE_CONFIG_DI
   "profile": "ci-cheap",
   "profiles": {
     "ci-cheap": {
-      "agents": { "correctness-reviewer": { "model": "anthropic/claude-haiku" } }
+      "agents": { "correctness-reviewer": { "model": "anthropic/claude-haiku-5-5" } }
     }
   }
 }
@@ -191,7 +191,7 @@ Switching which profile is active never changes an agent's visibility, permissio
 {
   "agents": {
     "correctness-reviewer": {
-      "model": "anthropic/claude-sonnet-5", // harness-neutral default
+      "model": "anthropic/claude-sonnet-5-5", // harness-neutral default
       "opencode": { "variant": "thinking" }, // OpenCode-only qualifier
       "pi": { "thinking": "high" } // Pi-only qualifier
     }
@@ -208,7 +208,7 @@ Resolution precedence, evaluated independently for `model` and for the harness's
 ```jsonc
 {
   "categories": {
-    "review": { "model": "anthropic/claude-sonnet-5", "variant": "high" }
+    "review": { "model": "anthropic/claude-sonnet-5-5", "variant": "high" }
   },
   "agents": {
     // Overrides the category's model. The category's "high" variant does NOT
@@ -273,7 +273,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-5
+anthropic/claude-sonnet-5-5
 ```
 
 ```json
@@ -465,7 +465,7 @@ OpenCode-specific routing block. When present, model/variant here override the f
 
 ```json
 {
-  "model": "anthropic/claude-opus-5",
+  "model": "anthropic/claude-opus-5-5",
   "variant": "high"
 }
 ```
@@ -485,7 +485,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-5
+anthropic/claude-sonnet-5-5
 ```
 
 ```json
@@ -518,7 +518,7 @@ Pi-specific routing block. When present, model/thinking here override the flat m
 
 ```json
 {
-  "model": "anthropic/claude-opus-5",
+  "model": "anthropic/claude-opus-5-5",
   "thinking": "high"
 }
 ```
@@ -538,7 +538,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-5
+anthropic/claude-sonnet-5-5
 ```
 
 ```json
@@ -623,7 +623,7 @@ Per-category configuration overlays keyed by category name. Trust-protected fiel
 ```json
 {
   "review": {
-    "model": "anthropic/claude-opus-5"
+    "model": "anthropic/claude-opus-5-5"
   }
 }
 ```
@@ -1077,7 +1077,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-5
+anthropic/claude-sonnet-5-5
 ```
 
 ```json
@@ -1150,7 +1150,7 @@ OpenCode-specific routing block. When present, model/variant here override the f
 
 ```json
 {
-  "model": "anthropic/claude-opus-5",
+  "model": "anthropic/claude-opus-5-5",
   "variant": "high"
 }
 ```
@@ -1170,7 +1170,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-5
+anthropic/claude-sonnet-5-5
 ```
 
 ```json
@@ -1203,7 +1203,7 @@ Pi-specific routing block. When present, model/thinking here override the flat m
 
 ```json
 {
-  "model": "anthropic/claude-opus-5",
+  "model": "anthropic/claude-opus-5-5",
   "thinking": "high"
 }
 ```
@@ -1223,7 +1223,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-5
+anthropic/claude-sonnet-5-5
 ```
 
 ```json
