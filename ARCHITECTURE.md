@@ -480,7 +480,7 @@ the Demo section through a description rewrite; its narrative excludes `docs/evi
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
 or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
 The bundle ships two narrow bins under `bin/`: the review-artifact validator and `systematic-search`
-(`src/claude-code-search.ts`, which reads the two user-level config files and never project config).
+(`src/claude-code-search.ts`, which reads the two user-level config files and, from project config, only the `sources` a project proposes, for `--kind external`).
 Entries under `bin/` are written with executable mode (`0o755`); nothing else in the bundle changes
 mode. The search bin bundles `jsonc-parser` through its ESM build, because the UMD build crashes when
 bundled and run from a directory with no `node_modules`. The CI pre-publish guard checks that both

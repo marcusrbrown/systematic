@@ -690,7 +690,18 @@ export async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
 }
 
 /**
+ * What `buildSearchBundle` returns: the bin and the metafile of the same
+ * build, so a test over the module graph reads exactly what ships.
+ */
+export interface SearchBundleBuild {
+  readonly bundle: Buffer
+  readonly metafile: Bun.BuildMetafile
+}
+
+/**
  * Bundles `src/claude-code-search.ts` for Node into one self-contained file.
+ * Also returns the build metafile (KTD24: the module graph test pins that
+ * neither `config.ts` nor `config-schema.ts` is in it).
  *
  * `jsonc-parser` is aliased to its ESM build. Its default entry is a UMD file
  * whose runtime `require` of its own parts crashes once bundled and run from a
@@ -704,12 +715,15 @@ export async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
  * Bun hard-codes `import.meta.url` to the build machine's path there and the
  * entry guard would never fire.
  */
-export async function buildSearchBundle(rootDir: string): Promise<Buffer> {
+export async function buildSearchBundle(
+  rootDir: string,
+): Promise<SearchBundleBuild> {
   const jsoncEsm = Bun.resolveSync('jsonc-parser/lib/esm/main.js', rootDir)
   const result = await Bun.build({
     entrypoints: [path.join(rootDir, 'src/claude-code-search.ts')],
     minify: true,
     target: 'node',
+    metafile: true,
     plugins: [
       {
         name: 'jsonc-parser-esm',
@@ -732,14 +746,20 @@ export async function buildSearchBundle(rootDir: string): Promise<Buffer> {
   if (!output) {
     throw new Error('Claude Code search build produced no output.')
   }
-  return Buffer.from(await output.arrayBuffer())
+  if (!result.metafile) {
+    throw new Error('Claude Code search build produced no metafile.')
+  }
+  return {
+    bundle: Buffer.from(await output.arrayBuffer()),
+    metafile: result.metafile,
+  }
 }
 
 async function main(rootDir: string): Promise<void> {
   const claudeCodeDir = path.join(rootDir, 'claude-code')
 
   const validatorBundle = await buildValidatorBundle(rootDir)
-  const searchBundle = await buildSearchBundle(rootDir)
+  const { bundle: searchBundle } = await buildSearchBundle(rootDir)
   let files: Map<string, Buffer>
   try {
     files = generatePluginFiles(rootDir, validatorBundle, searchBundle)

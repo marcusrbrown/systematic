@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   runSearchCli,
   SEARCH_CLI_DISABLED_NOTICE,
+  SEARCH_CLI_PROJECT_CONFIG_WARNING,
   type SearchCliSettingsLoad,
   type SearchCliSettingsLoader,
   searchCliUsage,
@@ -627,6 +628,51 @@ describe('runSearchCli: kind external', () => {
       })
       expect(result.status).toBe(0)
       expect(result.stdout[0]).toContain('missing: root not found.')
+    })
+  })
+
+  describe('a structurally broken project config (KTD16)', () => {
+    function brokenProject() {
+      const env = makeExternalEnv(temp)
+      fs.mkdirSync(path.join(env.repo, '.opencode'))
+      fs.writeFileSync(
+        path.join(env.repo, '.opencode/systematic.json'),
+        '{ "search": { "sources": "SECRET-VALUE" } }',
+      )
+      return env
+    }
+
+    it('prints one fixed stderr warning and the aggregate line in the reply, for external only', async () => {
+      const env = brokenProject()
+      const external = await run(['zebra', '--kind', 'external'], {
+        cwd: env.repo,
+        configOptions: env.configOptions,
+      })
+      expect(external.status).toBe(0)
+      expect(external.stderr).toEqual([SEARCH_CLI_PROJECT_CONFIG_WARNING])
+      expect(external.stdout[0]).toContain(
+        'Project sources: the project config could not be read, so it proposes none.',
+      )
+      expect(external.stderr.join('\n')).not.toContain('SECRET-VALUE')
+
+      const builtin = await run(['zebra'], {
+        cwd: env.repo,
+        configOptions: env.configOptions,
+      })
+      expect(builtin.stderr).toEqual([])
+    })
+
+    it('prints the stderr warning once even when a user source keeps the reply a sections reply', async () => {
+      const env = brokenProject()
+      const wiki = path.join(env.root, 'wiki')
+      writeMarkdown(wiki, 'a.md', { title: 'Zebra decision', body: 'zebra' })
+      writeUserSearch(env, { sources: [userSource(env, 'wiki', wiki)] })
+      const result = await run(['zebra', '--kind', 'external'], {
+        cwd: env.repo,
+        configOptions: env.configOptions,
+      })
+      expect(result.stdout[0]).toContain('wiki (user)')
+      expect(result.stderr).toEqual([SEARCH_CLI_PROJECT_CONFIG_WARNING])
     })
   })
 

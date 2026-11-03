@@ -33,6 +33,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { Plugin } from '@opencode/plugin'
 import type { PluginInput } from '@opencode-ai/plugin'
+import { Type } from 'typebox'
 import {
   buildSearchBundle,
   CLAUDE_CODE_SEARCH_BIN,
@@ -40,12 +41,25 @@ import {
   writePluginFiles,
 } from '../../scripts/build-claude-code-plugin.js'
 import { runClaudeCodeSearch } from '../../src/claude-code-search.js'
-import { loadSearchSettingsForCli } from '../../src/cli.js'
+import { searchCliInputs } from '../../src/cli.js'
 import { createOpenCodeV1Hooks } from '../../src/lib/opencode-v1.js'
 import { setupOpenCodeV2 } from '../../src/lib/opencode-v2.js'
 import { REAL_PI_DELEGATE_SESSION_RUNTIME } from '../../src/lib/pi-delegate-session.js'
-import { runSearchCli } from '../../src/lib/search-cli.js'
-import { MAX_LIMIT, SEARCH_ERRORS } from '../../src/lib/search-core.js'
+import {
+  runSearchCli,
+  SEARCH_CLI_DISABLED_NOTICE,
+} from '../../src/lib/search-cli.js'
+import {
+  MAX_LIMIT,
+  runSearch,
+  SEARCH_ERRORS,
+  SEARCH_NOTICES,
+} from '../../src/lib/search-core.js'
+import {
+  createPiSearchTool,
+  createSearchTool,
+} from '../../src/lib/search-tool.js'
+import type { UserLevelConfigDirOptions } from '../../src/lib/search-user-config.js'
 import piExtension from '../../src/pi.js'
 import { NODE_BIN } from '../helpers/real-node.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
@@ -371,12 +385,11 @@ function createCliSurface(): Surface {
         argv: toArgv(args),
         cwd: root,
         usageName: 'systematic search',
-        loadSettings: (dir) =>
-          loadSearchSettingsForCli(dir, {
-            homeDir: isolatedHome,
-            userConfigDir: path.join(isolatedHome, '.config/opencode'),
-            customConfigDir: null,
-          }),
+        ...searchCliInputs({
+          homeDir: isolatedHome,
+          userConfigDir: path.join(isolatedHome, '.config/opencode'),
+          customConfigDir: null,
+        }),
         outputSink: (message) => stdout.push(message),
         errorSink: (message) => stderr.push(message),
       })
@@ -417,7 +430,7 @@ function installBuiltBin(): Promise<string> {
     const files = generatePluginFiles(
       PACKAGE_ROOT,
       Buffer.from('placeholder validator bundle'),
-      await buildSearchBundle(PACKAGE_ROOT),
+      (await buildSearchBundle(PACKAGE_ROOT)).bundle,
     )
     writePluginFiles(
       new Map(
@@ -953,5 +966,424 @@ describe('search adapters: Pi delegates', () => {
       makeProject(),
     )
     expect(options?.customTools).toEqual([])
+  })
+})
+
+// --- kind: "external" ---------------------------------------------------------
+
+const EXTERNAL_QUERY = 'zebra'
+
+interface ExternalFixture {
+  readonly root: string
+  readonly wiki: string
+}
+
+function writeProjectSearch(root: string, search: unknown): void {
+  fs.mkdirSync(path.join(root, '.opencode'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, '.opencode/systematic.json'),
+    JSON.stringify({ search }),
+  )
+}
+
+/**
+ * A project that proposes `decisions` (with a committed symlink plant inside
+ * it), a user wiki mapped to the project, and a user config that allows the
+ * project's main root. The home and every root sit in temp directories.
+ */
+function makeExternalProject(
+  options: { allow?: boolean; userSource?: boolean } = {},
+): ExternalFixture {
+  const { allow = true, userSource = true } = options
+  const root = makeProject()
+  const outside = temp.track(
+    fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-outside-'))),
+  )
+  fs.writeFileSync(
+    path.join(outside, 'secret.md'),
+    '---\ntitle: Outside secret\n---\n\nzebra OUTSIDE-SECRET-BODY\n',
+  )
+  const decisions = path.join(root, 'docs/decisions')
+  fs.mkdirSync(decisions, { recursive: true })
+  fs.writeFileSync(
+    path.join(decisions, 'zebra-rollback.md'),
+    '---\ntitle: Zebra rollback decision\nstatus: accepted\n---\n\nWe roll the zebra flake fix back when retries overlap.\n',
+  )
+  fs.symlinkSync(
+    path.join(outside, 'secret.md'),
+    path.join(decisions, 'leak.md'),
+  )
+  writeProjectSearch(root, {
+    sources: [
+      { name: 'decisions', format: 'markdown', roots: ['docs/decisions'] },
+    ],
+  })
+
+  const wiki = temp.track(
+    fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-wiki-'))),
+  )
+  fs.writeFileSync(
+    path.join(wiki, 'zebra-wiki.md'),
+    '# Zebra wiki page\n\nThe zebra flake is documented here.\n',
+  )
+  writeUserConfig({
+    search: {
+      ...(allow && { allow_project_sources: [root] }),
+      ...(userSource && {
+        sources: [
+          { name: 'wiki', format: 'markdown', roots: [wiki], projects: [root] },
+        ],
+      }),
+    },
+  })
+  return { root, wiki }
+}
+
+/** Every surface, built bin included. */
+async function externalSurfaces(root: string): Promise<Surface[]> {
+  return [...(await everySurface(root)), await createBuiltBinSurface()]
+}
+
+async function externalTexts(
+  surfaces: readonly Surface[],
+  root: string,
+  args: Record<string, unknown> = { query: EXTERNAL_QUERY, kind: 'external' },
+): Promise<string[]> {
+  const texts: string[] = []
+  // One at a time: the built bin and the hosts share the isolated home.
+  for (const surface of surfaces) texts.push(await surface.search(root, args))
+  return texts
+}
+
+function expectIdentical(
+  surfaces: readonly Surface[],
+  texts: readonly string[],
+): void {
+  surfaces.forEach((surface, index) => {
+    expect([surface.name, texts[index]]).toEqual([
+      surface.name,
+      texts[0] as string,
+    ])
+  })
+}
+
+describe('search adapters parity: kind external', () => {
+  test('AE1: the same fixture gives byte-identical external text on every surface, built bin included, and the symlink plant stays out', async () => {
+    const { root } = makeExternalProject()
+    const surfaces = await externalSurfaces(root)
+    const texts = await externalTexts(surfaces, root)
+
+    expect(texts[0]).toStartWith(`External sources for "${EXTERNAL_QUERY}":`)
+    expect(texts[0]).toContain('decisions (project)')
+    expect(texts[0]).toContain('wiki (user)')
+    expect(texts[0]).toContain('decisions/zebra-rollback.md')
+    expect(texts[0]).not.toContain('leak.md')
+    expect(texts[0]).not.toContain('OUTSIDE-SECRET')
+    expectIdentical(surfaces, texts)
+  }, 120_000)
+
+  test('AE2: with the allow entry removed every surface gives the identical not-allowed text and reads nothing from the project', async () => {
+    const { root } = makeExternalProject({ allow: false })
+    const surfaces = await externalSurfaces(root)
+    const texts = await externalTexts(surfaces, root)
+
+    expect(texts[0]).toContain('wiki (user)')
+    expect(texts[0]).toContain('Project sources: 1 proposed source not read')
+    expect(texts[0]).toContain(root)
+    expect(texts[0]).not.toContain('decisions (project)')
+    expect(texts[0]).not.toContain('zebra-rollback.md')
+    expectIdentical(surfaces, texts)
+  }, 120_000)
+
+  test('AE2: with no user source either, every surface returns the identical fixed not-allowed reply', async () => {
+    const { root } = makeExternalProject({ allow: false, userSource: false })
+    const surfaces = await externalSurfaces(root)
+    const texts = await externalTexts(surfaces, root)
+
+    expect(texts[0]).toContain('but it is not in search.allow_project_sources')
+    expect(texts[0]).toContain(`add "${root}"`)
+    expect(texts[0]).not.toContain('decisions')
+    expectIdentical(surfaces, texts)
+  }, 120_000)
+
+  test('AE11: with sources active, every built-in selector is byte-identical to its output with none', async () => {
+    const root = makeMixedProject()
+    const surfaces = await everySurface(root)
+    const kinds = [
+      undefined,
+      'solution',
+      'plan',
+      'brainstorm',
+      'ideation',
+      'all',
+    ]
+    const before = new Map<string, string>()
+    for (const surface of surfaces) {
+      for (const kind of kinds) {
+        before.set(
+          `${surface.name}/${kind}`,
+          await surface.search(root, { query: QUERY, kind }),
+        )
+      }
+    }
+
+    // Sources become active: a project proposal, an allow entry and a user wiki.
+    const wiki = temp.track(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-wiki-'))),
+    )
+    fs.writeFileSync(
+      path.join(wiki, 'z.md'),
+      '# Zebra flake\n\nzebra flake retry\n',
+    )
+    writeProjectSearch(root, {
+      sources: [
+        { name: 'decisions', format: 'markdown', roots: ['docs/plans'] },
+      ],
+    })
+    writeUserConfig({
+      search: {
+        allow_project_sources: [root],
+        sources: [
+          { name: 'wiki', format: 'markdown', roots: [wiki], projects: [root] },
+        ],
+      },
+    })
+    const external = await surfaces[0]?.search(root, {
+      query: QUERY,
+      kind: 'external',
+    })
+    expect(external).toContain('wiki (user)')
+
+    for (const surface of surfaces) {
+      for (const kind of kinds) {
+        const after = await surface.search(root, { query: QUERY, kind })
+        expect([surface.name, kind, after]).toEqual([
+          surface.name,
+          kind,
+          before.get(`${surface.name}/${kind}`) as string,
+        ])
+        expect(after).not.toContain('External sources')
+        expect(after).not.toContain('wiki (user)')
+      }
+    }
+  }, 120_000)
+
+  test('editing the allow list between two calls changes the second call on every surface, with nothing restarted', async () => {
+    const { root } = makeExternalProject({ allow: false, userSource: false })
+    const surfaces = await everySurface(root)
+    for (const surface of surfaces) {
+      expect(
+        await surface.search(root, { query: EXTERNAL_QUERY, kind: 'external' }),
+      ).toContain('not in search.allow_project_sources')
+    }
+    writeUserConfig({ search: { allow_project_sources: [root] } })
+    for (const surface of surfaces) {
+      expect([
+        surface.name,
+        await surface.search(root, { query: EXTERNAL_QUERY, kind: 'external' }),
+      ]).toEqual([surface.name, expect.stringContaining('decisions (project)')])
+    }
+  })
+
+  test('an invalid enabled beside valid sources gives one note and the same sections on all surfaces: no fixed failure line anywhere', async () => {
+    const { root, wiki } = makeExternalProject()
+    writeUserConfig({
+      search: {
+        enabled: 'SECRET-VALUE-no',
+        allow_project_sources: [root],
+        sources: [
+          { name: 'wiki', format: 'markdown', roots: [wiki], projects: [root] },
+        ],
+      },
+    })
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const surfaces = await everySurface(root)
+      const texts = await externalTexts(surfaces, root)
+      expect(texts[0]).toContain('Notes: config unreadable')
+      expect((texts[0] ?? '').match(/config unreadable/g)).toHaveLength(1)
+      expect(texts[0]).toContain('wiki (user)')
+      expect(texts[0]).toContain('decisions (project)')
+      expect(texts[0]).not.toContain(SEARCH_NOTICES.failed)
+      expect(texts.join('\n')).not.toContain('SECRET-VALUE')
+      expectIdentical(surfaces, texts)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  test('search.enabled false: the CLI and the bin print the disabled notice for external, and no tool registers', async () => {
+    const { root } = makeExternalProject()
+    writeUserConfig({
+      search: { enabled: false, allow_project_sources: [root] },
+    })
+    for (const surface of [createCliSurface(), createBinSurface()]) {
+      expect(
+        await surface.search(root, { query: EXTERNAL_QUERY, kind: 'external' }),
+      ).toBe(SEARCH_CLI_DISABLED_NOTICE)
+    }
+    expect((await createV2Host(root, isolatedHome)).tool).toBeUndefined()
+    expect((await initPi()).tool).toBeUndefined()
+  })
+
+  test('a Pi call whose cwd has no .git ancestor gets the core no-project reply; a v2 call with no host directory gets the adapter line', async () => {
+    makeExternalProject()
+    const bare = temp.track(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-bare-'))),
+    )
+    const pi = await createPiSurface()
+    const text = await pi.search(bare, {
+      query: EXTERNAL_QUERY,
+      kind: 'external',
+    })
+    expect(text).toStartWith(
+      `External sources for "${EXTERNAL_QUERY}": no project`,
+    )
+    expect(text).toBe(
+      (
+        await runSearch(
+          { query: EXTERNAL_QUERY, kind: 'external' },
+          { startDir: bare },
+        )
+      ).text,
+    )
+
+    const host = await createV2Host(undefined)
+    const result = await host.tool?.execute(
+      { query: EXTERNAL_QUERY, kind: 'external' },
+      {
+        sessionID: 's',
+        agent: 'a',
+        messageID: 'm',
+        id: 'c',
+        progress: async () => {},
+      },
+    )
+    expect(result?.content).toBe(SEARCH_NOTICES.noProject)
+  })
+
+  test('a v2 project file with a valid shape but a bad sources entry leaves setup intact: built-in search works and external warns', async () => {
+    const root = makeProject()
+    writeProjectSearch(root, {
+      sources: [
+        { name: 'decisions', format: 'markdown', roots: ['docs/decisions'] },
+        { name: 'bad', format: 'markdown', roots: ['.'] },
+      ],
+    })
+    fs.mkdirSync(path.join(root, 'docs/decisions'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'docs/decisions/zebra-rollback.md'),
+      '---\ntitle: Zebra rollback decision\n---\n\nzebra\n',
+    )
+    writeUserConfig({ search: { allow_project_sources: [root] } })
+
+    // The config loader warns once per load; this test is about the replies.
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const v2 = await createV2Surface(root)
+      expect(await v2.search(root, { query: QUERY })).toContain('parity-a.md')
+      const external = await v2.search(root, {
+        query: EXTERNAL_QUERY,
+        kind: 'external',
+      })
+      expect(external).toContain('decisions (project)')
+      expect(external).toContain('Warnings:')
+      expect(external).toContain('bad')
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+})
+
+describe('search adapters: config-dir option and note merge', () => {
+  function altConfig(root: string, wiki: string): UserLevelConfigDirOptions {
+    const home = temp.track(
+      fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'search-alt-home-')),
+      ),
+    )
+    const dir = path.join(home, '.config/opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            {
+              name: 'altwiki',
+              format: 'markdown',
+              roots: [wiki],
+              projects: [root],
+            },
+          ],
+        },
+      }),
+    )
+    return { homeDir: home, customConfigDir: null }
+  }
+
+  async function callV1(
+    tool: ReturnType<typeof createSearchTool>,
+    root: string,
+  ): Promise<string> {
+    const result = await tool.execute(
+      { query: EXTERNAL_QUERY, kind: 'external' } as never,
+      toolContext(root) as never,
+    )
+    return typeof result === 'string' ? result : result.output
+  }
+
+  test('v1 and Pi hand their config-dir option to the external reader and select the allow list it names', async () => {
+    const { root, wiki } = makeExternalProject({
+      allow: false,
+      userSource: false,
+    })
+    const configOptions = altConfig(root, wiki)
+
+    const v1 = createSearchTool({ settings: undefined, configOptions })
+    const v1Text = await callV1(v1, root)
+    expect(v1Text).toContain('altwiki (user)')
+
+    const pi = createPiSearchTool({ settings: undefined, configOptions, Type })
+    const piText = await piCall(pi, root, {
+      query: EXTERNAL_QUERY,
+      kind: 'external',
+    })
+    const first = piText.content[0]
+    expect(first?.type === 'text' ? first.text : '').toBe(v1Text)
+
+    // Without the option the adapter reads the isolated default home: no wiki.
+    const plain = createSearchTool({ settings: undefined })
+    expect(await callV1(plain, root)).not.toContain('altwiki')
+  })
+
+  test('a registration-time note and a per-call failure print one note; a repair clears only the per-call part', async () => {
+    const { root, wiki } = makeExternalProject({
+      allow: false,
+      userSource: false,
+    })
+    const configOptions = altConfig(root, wiki)
+    const configFile = path.join(
+      configOptions.homeDir as string,
+      '.config/opencode/systematic.json',
+    )
+    const good = fs.readFileSync(configFile, 'utf8')
+    const count = (text: string) =>
+      (text.match(/config unreadable/g) ?? []).length
+
+    const unflagged = createSearchTool({ settings: undefined, configOptions })
+    const flagged = createSearchTool({
+      settings: undefined,
+      unreadable: true,
+      configOptions,
+    })
+
+    fs.writeFileSync(configFile, '{ broken')
+    expect(count(await callV1(unflagged, root))).toBe(1)
+    expect(count(await callV1(flagged, root))).toBe(1)
+
+    fs.writeFileSync(configFile, good)
+    expect(count(await callV1(unflagged, root))).toBe(0)
+    expect(count(await callV1(flagged, root))).toBe(1)
   })
 })

@@ -58,6 +58,14 @@ Exit statuses: 0 results, no hits, or search disabled; 2 usage error`
 export const SEARCH_CLI_DISABLED_NOTICE =
   'Search is disabled (search.enabled is false in your Systematic config), so there is nothing to search.'
 
+/**
+ * Printed once to stderr when `--kind external` finds the project's config
+ * file structurally broken (KTD16). Fixed text: no path, no value. The reply
+ * carries the aggregate line and the bounded warnings.
+ */
+export const SEARCH_CLI_PROJECT_CONFIG_WARNING =
+  '[systematic] The project Systematic config could not be read, so it proposes no external sources.'
+
 /** What a settings loader returns. The bin's user-level reader returns the same shape. */
 export interface SearchCliSettingsLoad {
   readonly settings?: SearchSettings | undefined
@@ -247,6 +255,9 @@ export async function runSearchCli(options: SearchCliOptions): Promise<number> {
       // `runSearch` rejects only a bad request: the caller's mistake.
       errorSink(response.text)
       return 2
+    }
+    if (response.selector === 'external' && response.projectConfigUnreadable) {
+      errorSink(SEARCH_CLI_PROJECT_CONFIG_WARNING)
     }
     outputSink(response.text)
     return 0

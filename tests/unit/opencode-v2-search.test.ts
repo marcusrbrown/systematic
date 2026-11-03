@@ -256,3 +256,105 @@ describe('setupOpenCodeV2 search slot', () => {
     expect(order).toEqual(['agents', 'commands', 'bootstrap'])
   })
 })
+
+/**
+ * KTD23: a project file that parses but holds a bad `search.sources` never
+ * fails v2 setup. One that cannot be parsed fails as it always has, because the
+ * whole project config loads before `search` is split out.
+ */
+describe('setupOpenCodeV2 with a project search.sources problem', () => {
+  const TOOL_CONTEXT = { sessionID: 's', agent: 'a', messageID: 'm', id: 'c' }
+
+  function makeHost(project: string) {
+    const added: StubTool[] = []
+    const ctx = {
+      location: { directory: project },
+      session: { async hook() {} },
+      agent: { async transform() {} },
+      skill: { async transform() {} },
+      command: {
+        async list() {
+          return { data: [] }
+        },
+        async transform() {},
+      },
+      tool: {
+        async transform(callback: (editor: unknown) => void) {
+          callback({
+            get: () => undefined,
+            add: (tool: StubTool) => added.push(tool),
+          })
+        },
+      },
+    } as unknown as Plugin.Context
+    return { ctx, added }
+  }
+
+  function makeEnv(projectFile: string) {
+    const home = temp.track(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-src-home-'))),
+    )
+    const project = temp.track(
+      fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'v2-src-project-')),
+      ),
+    )
+    fs.mkdirSync(path.join(project, '.git'))
+    fs.mkdirSync(path.join(project, '.opencode'))
+    fs.writeFileSync(
+      path.join(project, '.opencode/systematic.json'),
+      projectFile,
+    )
+    fs.mkdirSync(path.join(project, 'docs/solutions'), { recursive: true })
+    fs.writeFileSync(
+      path.join(project, 'docs/solutions/zebra.md'),
+      '---\ntitle: Zebra flake\n---\n\nzebra\n',
+    )
+    return { home, project }
+  }
+
+  test.each([
+    ['sources that is not an array', '{ "search": { "sources": "nope" } }'],
+    [
+      'an entry with a root the project rules reject',
+      '{ "search": { "sources": [ { "name": "bad", "format": "markdown", "roots": ["."] } ] } }',
+    ],
+  ])(
+    '%s leaves setup intact, built-in search working and external reporting it',
+    async (_label, projectFile) => {
+      const { home, project } = makeEnv(projectFile)
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const host = makeHost(project)
+        await setupOpenCodeV2(host.ctx, {
+          packageRoot: PACKAGE_ROOT,
+          homeDir: home,
+        })
+
+        const tool = host.added.find(
+          (entry) => entry.name === 'systematic_search',
+        )
+        expect(tool).toBeDefined()
+        const builtin = await tool?.execute({ query: 'zebra' }, TOOL_CONTEXT)
+        expect(builtin?.content).toContain('docs/solutions/zebra.md')
+        const external = await tool?.execute(
+          { query: 'zebra', kind: 'external' },
+          TOOL_CONTEXT,
+        )
+        expect(external?.content).toStartWith('External sources for "zebra":')
+        expect(external?.content).toContain('no external sources are active')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    },
+  )
+
+  test('a project file that cannot be parsed rejects setup exactly as it did before sources existed', async () => {
+    const { home, project } = makeEnv('{ broken')
+    const host = makeHost(project)
+    await expect(
+      setupOpenCodeV2(host.ctx, { packageRoot: PACKAGE_ROOT, homeDir: home }),
+    ).rejects.toThrow('Invalid Systematic config in')
+    expect(host.added).toEqual([])
+  })
+})

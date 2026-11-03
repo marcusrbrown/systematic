@@ -7,9 +7,11 @@ import path from 'node:path'
 import {
   loadSearchSettingsForCli,
   runCapabilitiesCli as runTestableCli,
+  searchCliInputs,
 } from '../../src/cli.js'
 import type { ConfigObservationMetadata } from '../../src/lib/capability-snapshot.js'
 import { MANIFEST_FILENAME } from '../../src/lib/pi-subagents-export.js'
+import { runSearchCli } from '../../src/lib/search-cli.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const CLI_PATH = path.join(ROOT_DIR, 'src/cli.ts')
@@ -2919,6 +2921,201 @@ describe('cli search', () => {
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
     }
+  })
+
+  function proposeDecisions(box: SearchBox): void {
+    fs.mkdirSync(path.join(box.project, 'docs/decisions'), { recursive: true })
+    fs.writeFileSync(
+      path.join(box.project, 'docs/decisions/zebra-rollback.md'),
+      '---\ntitle: Zebra rollback decision\nstatus: accepted\n---\n\nRoll the zebra flake fix back.\n',
+    )
+    fs.mkdirSync(path.join(box.project, '.opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(box.project, '.opencode/systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            {
+              name: 'decisions',
+              format: 'markdown',
+              roots: ['docs/decisions'],
+            },
+          ],
+        },
+      }),
+    )
+  }
+
+  it('help no longer says a project config cannot change search settings', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(['--help'], box.project, box.env)
+      expect(result.stdout).not.toContain('a project config cannot change them')
+      expect(result.stdout).toContain(
+        'propose external sources but cannot allow them or switch search off.',
+      )
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('searches the sources a project proposes and the user allowed, from the real command', () => {
+    const box = mkSearchBox()
+    try {
+      proposeDecisions(box)
+      const denied = runCli(
+        ['search', 'zebra', '--kind', 'external'],
+        box.project,
+        box.env,
+      )
+      expect(denied.exitCode).toBe(0)
+      expect(denied.stdout).toContain('not in search.allow_project_sources')
+      expect(denied.stdout).toContain(box.project)
+      expect(denied.stdout).not.toContain('decisions (project)')
+
+      writeUserFile(
+        box,
+        'systematic.json',
+        JSON.stringify({ search: { allow_project_sources: [box.project] } }),
+      )
+      const allowed = runCli(
+        ['search', 'zebra', '--kind', 'external'],
+        box.project,
+        box.env,
+      )
+      expect(allowed.exitCode).toBe(0)
+      expect(allowed.stderr).toBe('')
+      expect(allowed.stdout).toContain('decisions (project)')
+      expect(allowed.stdout).toContain('decisions/zebra-rollback.md')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('--kind external also honours search.enabled false from the user config', () => {
+    const box = mkSearchBox()
+    try {
+      proposeDecisions(box)
+      writeUserFile(
+        box,
+        'systematic.json',
+        JSON.stringify({
+          search: { enabled: false, allow_project_sources: [box.project] },
+        }),
+      )
+      const result = runCli(
+        ['search', 'zebra', '--kind', 'external'],
+        box.project,
+        box.env,
+      )
+      expect(result.stdout).toContain('Search is disabled')
+      expect(result.stdout).not.toContain('decisions (project)')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('searchCliInputs', () => {
+  function mkBox() {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-cli-inputs-')),
+    )
+    const project = path.join(root, 'project')
+    const home = path.join(root, 'home')
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(home, '.config/opencode'), { recursive: true })
+    fs.mkdirSync(path.join(project, 'docs/decisions'), { recursive: true })
+    fs.writeFileSync(
+      path.join(project, 'docs/decisions/zebra.md'),
+      '---\ntitle: Zebra decision\n---\n\nzebra\n',
+    )
+    fs.mkdirSync(path.join(project, '.opencode'))
+    fs.writeFileSync(
+      path.join(project, '.opencode/systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            {
+              name: 'decisions',
+              format: 'markdown',
+              roots: ['docs/decisions'],
+            },
+          ],
+        },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(home, '.config/opencode/systematic.json'),
+      JSON.stringify({ search: { allow_project_sources: [project] } }),
+    )
+    return { root, project, home }
+  }
+
+  async function run(
+    options: Parameters<typeof searchCliInputs>[0],
+    cwd: string,
+  ) {
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const status = await runSearchCli({
+      argv: ['zebra', '--kind', 'external'],
+      cwd,
+      usageName: 'systematic search',
+      ...searchCliInputs(options),
+      outputSink: (message) => stdout.push(message),
+      errorSink: (message) => stderr.push(message),
+    })
+    return { status, stdout, stderr }
+  }
+
+  it('hands one config-dir override to the settings loader and to the external reader', async () => {
+    const box = mkBox()
+    try {
+      const inputs = searchCliInputs({
+        homeDir: box.home,
+        userConfigDir: path.join(box.home, '.config/opencode'),
+        customConfigDir: null,
+      })
+      expect(inputs.configOptions).toEqual({
+        homeDir: box.home,
+        userConfigDir: path.join(box.home, '.config/opencode'),
+        customConfigDir: null,
+      })
+
+      // The process home is not `box.home`, so only the override can find the allow list.
+      const withOverride = await run(
+        {
+          homeDir: box.home,
+          userConfigDir: path.join(box.home, '.config/opencode'),
+          customConfigDir: null,
+        },
+        box.project,
+      )
+      expect(withOverride.status).toBe(0)
+      expect(withOverride.stdout[0]).toContain('decisions (project)')
+
+      const other = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-cli-other-'),
+      )
+      try {
+        const withOther = await run(
+          { homeDir: other, customConfigDir: null },
+          box.project,
+        )
+        expect(withOther.stdout[0]).toContain(
+          'not in search.allow_project_sources',
+        )
+      } finally {
+        fs.rmSync(other, { recursive: true, force: true })
+      }
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('with no override it leaves the reader on the environment default', () => {
+    expect(searchCliInputs().configOptions).toEqual({})
   })
 })
 

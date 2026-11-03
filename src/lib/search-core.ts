@@ -218,6 +218,12 @@ export type SearchResponse =
       readonly selector: 'external'
       readonly text: string
       readonly external: ExternalOutcome
+      /**
+       * Present (and `true`) when the project's config file had a structural
+       * error, so it proposed nothing. The reply text already says so; the CLI
+       * and the bin also print one stderr warning for it (KTD16).
+       */
+      readonly projectConfigUnreadable?: true
     }
   | { readonly ok: false; readonly text: string }
 
@@ -748,7 +754,16 @@ function externalFixedReply(
       project: resolution?.project,
     }),
     external: { kind: 'fixed', reply },
+    ...projectUnreadableFlag(resolution),
   }
+}
+
+function projectUnreadableFlag(
+  resolution: ExternalSourcesResolution | undefined,
+): { readonly projectConfigUnreadable?: true } {
+  return resolution?.project.kind === 'config-unreadable'
+    ? { projectConfigUnreadable: true }
+    : {}
 }
 
 interface ActiveLoad {
@@ -886,5 +901,6 @@ async function runExternalSearch(
     selector: 'external',
     text: renderExternalResult(external),
     external: { kind: 'sections', result: external },
+    ...projectUnreadableFlag(resolution),
   }
 }

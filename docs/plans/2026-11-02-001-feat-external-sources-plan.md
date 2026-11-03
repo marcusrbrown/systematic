@@ -658,7 +658,7 @@ flowchart TB
 
 ---
 
-- [ ] U6. Surface wiring and parity
+- [x] U6. Surface wiring and parity
 
 **Goal:** Put all five surfaces on the per-call reader and prove they return the same `external` text, including the Claude Code bin under Node from a foreign directory.
 

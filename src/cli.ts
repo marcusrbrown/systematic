@@ -53,7 +53,11 @@ import {
   type RoutingResolution,
   resolveRouting,
 } from './lib/routing-resolver.js'
-import { runSearchCli, type SearchCliSettingsLoad } from './lib/search-cli.js'
+import {
+  runSearchCli,
+  type SearchCliOptions,
+  type SearchCliSettingsLoad,
+} from './lib/search-cli.js'
 import { resolveSearchRoot } from './lib/search-corpus.js'
 import {
   loadUserLevelSearchSettings,
@@ -119,7 +123,8 @@ Commands:
                                kind together; --kind external searches the external sources you
                                allowed, ranked per source. The project root is the nearest
                                ancestor of --dir (default: the current directory) that holds .git.
-                               Reads user-level search settings; a project config cannot change them.
+                               Reads search settings from your user config. A project config can
+                               propose external sources but cannot allow them or switch search off.
                                Exit statuses: 0 results, no hits, or search disabled; 2 usage error
                                Use -- to end options, for a query that starts with a dash
   validate-review-return       Validate one raw ce:review persona return read from stdin
@@ -571,6 +576,23 @@ export function loadSearchSettingsForCli(
       warnings,
       unreadable: true,
     }
+  }
+}
+
+/**
+ * What `systematic search` hands `runSearchCli` besides its argv: the settings
+ * loader and the config directories `--kind external` reads its allow list and
+ * user sources from. Both take the same override, so one `configOptions`
+ * reaches the settings loader and the external reader alike (KTD2). Left out,
+ * both read the home directory and `OPENCODE_CONFIG_DIR`.
+ */
+export function searchCliInputs(
+  configOptions?: LoadConfigOptions,
+): Pick<SearchCliOptions, 'loadSettings' | 'configOptions'> {
+  return {
+    loadSettings: (startDir) =>
+      loadSearchSettingsForCli(startDir, configOptions),
+    configOptions: userLevelDirOptions(configOptions),
   }
 }
 
@@ -1260,7 +1282,7 @@ function runLegacyCli(args: string[]): void {
         cwd: process.cwd(),
         errorSink: console.error,
         usageName: 'systematic search',
-        loadSettings: loadSearchSettingsForCli,
+        ...searchCliInputs(),
         outputSink: console.log,
       }).then((status) => {
         process.exitCode = status

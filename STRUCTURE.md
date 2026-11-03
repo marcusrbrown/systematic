@@ -55,7 +55,7 @@ subdirectory of core modules.
   `search <query...>`, `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
   CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
 - `src/claude-code-validator.ts` — review-artifact validation for the Claude Code bundle; `src/claude-code-validator-bin.ts` is the bin's entry
-- `src/claude-code-search.ts` — entry of the `systematic-search` Claude Code bin (user-level config only)
+- `src/claude-code-search.ts` — entry of the `systematic-search` Claude Code bin (user-level config; from project config only the proposed external `sources`)
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
@@ -260,7 +260,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `validate-review-return`, `search`, `config`, `setup --harness`, `pi-subagents` commands |
 | `src/claude-code-validator.ts` | Claude Code bundled validator logic — review-artifact validation with isolated dependencies |
 | `src/claude-code-validator-bin.ts` | Entry of the validator bin; holds the entry guard so the logic module stays safe to bundle elsewhere |
-| `src/claude-code-search.ts` | Entry of the `systematic-search` bin — durable-output search over the user-level config only |
+| `src/claude-code-search.ts` | Entry of the `systematic-search` bin — durable-output search over the user-level config, plus the project's proposed external `sources` |
 
 ### Configuration
 

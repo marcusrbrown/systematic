@@ -29,6 +29,7 @@ import {
   SEARCH_TOOL_NAME,
   type SearchSettings,
 } from './search-core.js'
+import type { UserLevelConfigDirOptions } from './search-user-config.js'
 import { isRecord } from './validation.js'
 
 /** Whether the config leaves the tool on. Only an explicit `enabled: false` removes it. */
@@ -40,12 +41,19 @@ export function isSearchEnabled(settings: SearchSettings | undefined): boolean {
  * The one execute path. A missing start directory yields the no-project note
  * and never a guess; any throw (a hostile argument getter included) yields the
  * fixed failure line, with nothing from the error.
+ *
+ * Only `settings` and `unreadable` are fixed at init. For `kind: "external"`
+ * the core reads the allow list, the user sources and the project file again
+ * on every call, from the per-call `startDir` (KTD2). `configOptions` is the
+ * config-directory override that read takes; the hosts leave it out and the
+ * reader uses the home directory and `OPENCODE_CONFIG_DIR`.
  */
 async function executeSearch(
   args: unknown,
   startDir: string | undefined,
   settings: SearchSettings | undefined,
   unreadable: boolean | undefined,
+  configOptions?: UserLevelConfigDirOptions,
 ): Promise<string> {
   try {
     if (startDir === undefined) return SEARCH_NOTICES.noProject
@@ -59,6 +67,7 @@ async function executeSearch(
       {
         startDir,
         settings,
+        configOptions,
         // A user `search` block (or its file) that could not be read: results
         // carry the same `config unreadable` note the CLI and the bin print.
         ...(unreadable === true && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
@@ -81,10 +90,12 @@ export interface SearchToolV1Options {
   readonly settings: SearchSettings | undefined
   /** `config.searchUnreadable`: adds the `config unreadable` note to every result. */
   readonly unreadable?: boolean | undefined
+  /** The config directories `kind: "external"` reads per call. Tests use this; the host entry leaves it out. */
+  readonly configOptions?: UserLevelConfigDirOptions | undefined
 }
 
 export function createSearchTool(options: SearchToolV1Options): ToolDefinition {
-  const { settings, unreadable } = options
+  const { settings, unreadable, configOptions } = options
   return {
     description: SEARCH_TOOL_DESCRIPTION,
     // Double-cast for the same reason as the skill tool: the SDK types its args
@@ -113,6 +124,7 @@ export function createSearchTool(options: SearchToolV1Options): ToolDefinition {
         usableDirectory(context.directory),
         settings,
         unreadable,
+        configOptions,
       )
     },
   }
@@ -225,6 +237,8 @@ export interface SearchToolPiOptions {
   readonly settings: SearchSettings | undefined
   /** `config.searchUnreadable`: adds the `config unreadable` note to every result. */
   readonly unreadable?: boolean | undefined
+  /** The config directories `kind: "external"` reads per call. Tests use this; `src/pi.ts` leaves it out. */
+  readonly configOptions?: UserLevelConfigDirOptions | undefined
   /**
    * typebox's `Type` builder, supplied by the Pi entry. This module is also
    * imported by the OpenCode entries, and typebox is an optional peer that only
@@ -245,7 +259,7 @@ export interface SearchToolPiOptions {
 export function createPiSearchTool(
   options: SearchToolPiOptions,
 ): PiToolDefinition {
-  const { settings, unreadable, Type } = options
+  const { settings, unreadable, configOptions, Type } = options
   return {
     name: SEARCH_TOOL_NAME,
     label: 'Systematic Search',
@@ -259,6 +273,7 @@ export function createPiSearchTool(
         usableDirectory(ctx.cwd),
         settings,
         unreadable,
+        configOptions,
       )
       return { content: [{ type: 'text', text }], details: undefined }
     },
