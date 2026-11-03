@@ -25,7 +25,7 @@
  *   0  every checked ID is in the catalog and not deprecated
  *   1  at least one ID is missing or deprecated, or a variant is not one of the
  *      model's effort values
- *   2  no usable catalog (missing, unparseable, no providers, fetch failed) or bad usage
+ *   2  no usable catalog (missing, unparseable, no providers or no model entries, fetch failed) or bad usage
  *
  * The script never writes: not the files it checks and not OpenCode's cache.
  *
@@ -142,6 +142,11 @@ export function parseCatalog(text: string): ModelCatalog {
   if (Object.keys(providers).length === 0) {
     throw new CatalogError('catalog has no providers with a models map')
   }
+  if (
+    Object.values(providers).every((p) => Object.keys(p.models).length === 0)
+  ) {
+    throw new CatalogError('catalog has no model entries in any provider')
+  }
   return { providers }
 }
 
@@ -196,6 +201,8 @@ export interface Occurrence {
   raw: string
   file: string
   line: number
+  /** Zero-based character offset of the token in the file text. */
+  offset: number
 }
 
 // Provider, then the model after the first `/` (which may itself contain `/`,
@@ -204,12 +211,6 @@ export interface Occurrence {
 // The lookbehind keeps path segments, URLs and `a/b/c` tails out.
 const TOKEN_PATTERN =
   /(?<![\w@./:~+-])([a-z0-9][a-z0-9_-]*)\/([A-Za-z0-9](?:[\w.:@-]*\w)?(?:\/[A-Za-z0-9](?:[\w.:@-]*\w)?)*)(?:\+([A-Za-z][\w-]*))?/g
-
-function lineOf(text: string, offset: number): number {
-  let line = 1
-  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) line++
-  return line
-}
 
 /** The string-valued `model` node and `variant` value of an object node, when it has both. */
 function modelVariantPair(
@@ -232,17 +233,34 @@ function modelVariantPair(
   return { model, variant: variant.value }
 }
 
-/** `model` + sibling `variant` string pairs from a JSON/JSONC document, keyed by the model value's line. */
-function jsonVariantsByLine(text: string): Map<number, string> {
-  const byLine = new Map<number, string>()
+interface JsonModelVariantPair {
+  /** Source range of the `model` string value, quotes included. */
+  start: number
+  end: number
+  variant: string
+}
+
+/**
+ * `model` + sibling `variant` string pairs from a JSON/JSONC document, keyed by
+ * the model value's source range. Offsets, not lines: one line can hold several
+ * model objects.
+ */
+function jsonModelVariantPairs(text: string): JsonModelVariantPair[] {
+  const pairs: JsonModelVariantPair[] = []
   const visit = (node: Node | undefined): void => {
     if (!node) return
     const pair = modelVariantPair(node)
-    if (pair) byLine.set(lineOf(text, pair.model.offset), pair.variant)
+    if (pair) {
+      pairs.push({
+        start: pair.model.offset,
+        end: pair.model.offset + pair.model.length,
+        variant: pair.variant,
+      })
+    }
     for (const child of node.children ?? []) visit(child)
   }
   visit(parseTree(text, [], { allowTrailingComma: true }))
-  return byLine
+  return pairs
 }
 
 /**
@@ -256,6 +274,7 @@ export function extractOccurrences(
   providers: ReadonlySet<string>,
 ): Occurrence[] {
   const found: Occurrence[] = []
+  let lineStart = 0
   text.split('\n').forEach((lineText, index) => {
     for (const match of lineText.matchAll(TOKEN_PATTERN)) {
       const [raw, provider, model, variant] = match
@@ -268,17 +287,20 @@ export function extractOccurrences(
         raw,
         file,
         line: index + 1,
+        offset: lineStart + match.index,
       })
     }
+    lineStart += lineText.length + 1
   })
 
   if (!STRUCTURED_EXTENSIONS.has(path.extname(file))) return found
-  const variants = jsonVariantsByLine(text)
+  const pairs = jsonModelVariantPairs(text)
   return found.map((occurrence) => {
-    const variant = variants.get(occurrence.line)
-    return occurrence.variant || !variant
-      ? occurrence
-      : { ...occurrence, variant }
+    if (occurrence.variant) return occurrence
+    const pair = pairs.find(
+      (p) => occurrence.offset >= p.start && occurrence.offset < p.end,
+    )
+    return pair ? { ...occurrence, variant: pair.variant } : occurrence
   })
 }
 

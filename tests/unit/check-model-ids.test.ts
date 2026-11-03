@@ -145,6 +145,27 @@ describe('extractOccurrences', () => {
     ])
   })
 
+  test('pairs each model with its own variant when several share one line', () => {
+    const text =
+      '{ "a": { "model": "anthropic/claude-opus-5-5", "variant": "max" }, ' +
+      '"b": { "model": "anthropic/claude-opus-5-5", "variant": "bogus" } }'
+    const occ = extractOccurrences('x.json', text, providers)
+    expect(occ.map((o) => o.variant)).toEqual(['max', 'bogus'])
+
+    const result = checkOccurrences(occ, catalog, [])
+    expect(result.findings.map((f) => [f.kind, f.occurrence.variant])).toEqual([
+      ['bad-variant', 'bogus'],
+    ])
+  })
+
+  test('gives a model without a variant none when a neighbour on the same line has one', () => {
+    const text =
+      '{ "a": { "model": "anthropic/claude-opus-5-5" }, ' +
+      '"b": { "model": "anthropic/claude-opus-5-5", "variant": "max" } }'
+    const occ = extractOccurrences('x.json', text, providers)
+    expect(occ.map((o) => o.variant)).toEqual([undefined, 'max'])
+  })
+
   test('does not read variant keys in markdown prose', () => {
     const occ = extractOccurrences(
       'a.mdx',
@@ -307,6 +328,20 @@ describe('parseCatalog', () => {
     expect(() => parseCatalog('{"x": {"name": "no models map"}}')).toThrow(
       /no providers/,
     )
+  })
+
+  test('rejects a catalog whose providers all have empty models maps', () => {
+    expect(() => parseCatalog('{"openai":{"models":{}}}')).toThrow(
+      /no model entries/,
+    )
+    expect(() => parseCatalog('{"a":{"models":{}},"b":{"models":{}}}')).toThrow(
+      CatalogError,
+    )
+  })
+
+  test('accepts an empty provider next to one that has models', () => {
+    const parsed = parseCatalog('{"a":{"models":{}},"b":{"models":{"m":{}}}}')
+    expect(Object.keys(parsed.providers)).toEqual(['a', 'b'])
   })
 
   test('keeps only entries that have a models map', () => {
@@ -532,6 +567,17 @@ describe('runCli', () => {
     const result = await runCli([], deps)
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toMatch(/no providers/i)
+  })
+
+  test('exits 2 for a catalog with providers but no model entries', async () => {
+    const { deps } = makeDeps({
+      catalogText: '{"openai":{"models":{}}}',
+      sources: [{ path: OMO, text: '"model": "openai/gpt-5.3-codex"' }],
+    })
+    const result = await runCli([], deps)
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toMatch(/no model entries/i)
+    expect(result.stdout).toBe('')
   })
 
   test('exits 2 for an unknown flag', async () => {
