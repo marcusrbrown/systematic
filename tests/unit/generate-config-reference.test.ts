@@ -136,6 +136,30 @@ describe('generateConfigReference', () => {
     }
   })
 
+  test('the search section documents each nested field and each source entry field', () => {
+    const content = generateFn('2.11.0')
+    const start = content.indexOf('## search')
+    expect(start).toBeGreaterThan(-1)
+    const rest = content.slice(start + 1)
+    const nextH2 = rest.search(/\n## /)
+    const section = nextH2 === -1 ? rest : rest.slice(0, nextH2)
+    for (const heading of [
+      '### enabled',
+      '### allow_project_sources',
+      '### sources',
+      '#### sources[].name',
+      '#### sources[].format',
+      '#### sources[].roots',
+      '#### sources[].projects',
+    ]) {
+      expect(section).toContain(heading)
+    }
+    // Every nested field carries an example block.
+    expect(section.match(/\*\*Examples:\*\*/g)?.length).toBeGreaterThanOrEqual(
+      8,
+    )
+  })
+
   test('every described field has a non-empty description', () => {
     const content = generateFn('2.11.0')
     expect(checkAllSectionsHaveDescriptions(content)).toBe(true)

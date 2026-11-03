@@ -10,8 +10,12 @@ import {
   writePluginFiles,
 } from '../../scripts/build-claude-code-plugin.js'
 import { runClaudeCodeSearch } from '../../src/claude-code-search.js'
-import { SEARCH_CLI_DISABLED_NOTICE } from '../../src/lib/search-cli.js'
+import {
+  SEARCH_CLI_DISABLED_NOTICE,
+  SEARCH_CLI_PROJECT_CONFIG_WARNING,
+} from '../../src/lib/search-cli.js'
 import { runSearch } from '../../src/lib/search-core.js'
+import type { UserLevelConfigDirOptions } from '../../src/lib/search-user-config.js'
 import { NODE_BIN } from '../helpers/real-node.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
@@ -55,6 +59,59 @@ async function coreText(root: string, query: string): Promise<string> {
   return (await runSearch({ query }, { startDir: root })).text
 }
 
+/** The `external` text the core gives for `root`, reading the user config the bin is pointed at. */
+async function externalCoreText(
+  root: string,
+  query: string,
+  configOptions: UserLevelConfigDirOptions,
+): Promise<string> {
+  return (
+    await runSearch(
+      { query, kind: 'external' },
+      { startDir: root, configOptions },
+    )
+  ).text
+}
+
+/** `docs/decisions/` holds a zebra decision; a project config proposes it as the `decisions` source. */
+function proposeDecisions(root: string, projectFile = 'systematic.json'): void {
+  const decisions = path.join(root, 'docs/decisions')
+  fs.mkdirSync(decisions, { recursive: true })
+  fs.writeFileSync(
+    path.join(decisions, 'zebra-rollback.md'),
+    '---\ntitle: Zebra rollback decision\nstatus: accepted\n---\n\nWe roll the zebra flake fix back when retries overlap.\n',
+  )
+  fs.mkdirSync(path.join(root, '.opencode'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, '.opencode', projectFile),
+    projectFile.endsWith('.jsonc')
+      ? '// the sources this project proposes\n{ "search": { "sources": [ /* one */ { "name": "decisions", "format": "markdown", "roots": ["docs/decisions"] } ] } }\n'
+      : JSON.stringify({
+          search: {
+            sources: [
+              {
+                name: 'decisions',
+                format: 'markdown',
+                roots: ['docs/decisions'],
+              },
+            ],
+          },
+        }),
+  )
+}
+
+/** Allow `root` in the user config of `dirs`, in the file chosen by `file`. */
+function allowProject(
+  directory: string,
+  root: string,
+  file = 'systematic.json',
+): void {
+  fs.writeFileSync(
+    path.join(directory, file),
+    JSON.stringify({ search: { allow_project_sources: [root] } }),
+  )
+}
+
 async function runInProcess(
   root: string,
   dirs: UserDirs,
@@ -75,6 +132,183 @@ async function runInProcess(
   })
   return { status, stdout, stderr }
 }
+
+describe('runClaudeCodeSearch --kind external (in process)', () => {
+  function setup() {
+    const root = makeProject()
+    proposeDecisions(root)
+    const dirs = makeUserDirs()
+    return { root, dirs }
+  }
+
+  it('hands userLevel to the external reader, not only to the settings loader', async () => {
+    const { root, dirs } = setup()
+    allowProject(dirs.userConfigDir, root)
+    const expected = await externalCoreText(root, 'zebra', {
+      homeDir: dirs.home,
+      customConfigDir: null,
+    })
+    expect(expected).toContain('decisions (project)')
+
+    const result = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toEqual([])
+    expect(result.stdout).toEqual([expected])
+  })
+
+  it('reads the allow list from the custom config directory it was given', async () => {
+    const { root, dirs } = setup()
+    allowProject(dirs.customDir, root)
+    const result = await runInProcess(
+      root,
+      dirs,
+      ['zebra', '--kind', 'external'],
+      true,
+    )
+    expect(result.stdout[0]).toContain('decisions (project)')
+
+    const without = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+    expect(without.stdout[0]).toContain('search.allow_project_sources')
+    expect(without.stdout[0]).not.toContain('decisions (project)')
+  })
+
+  it('uses the start directory it is given to find the project file', async () => {
+    const { root, dirs } = setup()
+    allowProject(dirs.userConfigDir, root)
+    const sub = path.join(root, 'docs')
+    const result = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+      '--dir',
+      sub,
+    ])
+    expect(result.stdout[0]).toContain('decisions (project)')
+  })
+
+  it('prints one stderr warning and the aggregate line for a structurally broken project file, for external only', async () => {
+    const root = makeProject()
+    fs.mkdirSync(path.join(root, '.opencode'))
+    fs.writeFileSync(
+      path.join(root, '.opencode/systematic.json'),
+      '{ "search": { "sources": "SECRET-VALUE-not-an-array" } }',
+    )
+    const dirs = makeUserDirs()
+
+    const external = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+    expect(external.status).toBe(0)
+    expect(external.stderr).toHaveLength(1)
+    expect(external.stderr[0]).not.toContain('SECRET-VALUE')
+    expect(external.stdout[0]).toContain(
+      'Project sources: the project config could not be read, so it proposes none.',
+    )
+    expect(external.stdout[0]).not.toContain('SECRET-VALUE')
+
+    const builtin = await runInProcess(root, dirs, ['zebra'])
+    expect(builtin.stderr).toEqual([])
+    expect(builtin.stdout).toEqual([await coreText(root, 'zebra')])
+  })
+
+  it('prints no stderr line for an invalid entry next to a valid one: the entry warning rides in the reply', async () => {
+    const { root, dirs } = setup()
+    fs.writeFileSync(
+      path.join(root, '.opencode/systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            {
+              name: 'decisions',
+              format: 'markdown',
+              roots: ['docs/decisions'],
+            },
+            { name: 'bad', format: 'markdown', roots: ['.'] },
+          ],
+        },
+      }),
+    )
+    allowProject(dirs.userConfigDir, root)
+    const result = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+    expect(result.stderr).toEqual([])
+    expect(result.stdout[0]).toContain('decisions (project)')
+    expect(result.stdout[0]).toContain('Warnings:')
+  })
+
+  it('reads a JSONC project file with comments, and prefers it over the .json beside it', async () => {
+    const { root, dirs } = setup()
+    fs.writeFileSync(
+      path.join(root, '.opencode/systematic.json'),
+      JSON.stringify({ search: { sources: [] } }),
+    )
+    proposeDecisions(root, 'systematic.jsonc')
+    allowProject(dirs.userConfigDir, root)
+    const result = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+    expect(result.stdout[0]).toContain('decisions (project)')
+  })
+
+  it('search.enabled false in the user config suppresses external too', async () => {
+    const { root, dirs } = setup()
+    fs.writeFileSync(
+      path.join(dirs.userConfigDir, 'systematic.json'),
+      JSON.stringify({
+        search: { enabled: false, allow_project_sources: [root] },
+      }),
+    )
+    const result = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+    expect(result.stdout).toEqual([SEARCH_CLI_DISABLED_NOTICE])
+  })
+
+  it('a project file cannot switch search off or allow itself', async () => {
+    const { root, dirs } = setup()
+    fs.writeFileSync(
+      path.join(root, '.opencode/systematic.json'),
+      JSON.stringify({
+        search: {
+          enabled: false,
+          allow_project_sources: [root],
+          sources: [
+            {
+              name: 'decisions',
+              format: 'markdown',
+              roots: ['docs/decisions'],
+            },
+          ],
+        },
+      }),
+    )
+    const result = await runInProcess(root, dirs, [
+      'zebra',
+      '--kind',
+      'external',
+    ])
+    expect(result.stdout[0]).toContain('search.allow_project_sources')
+    expect(result.stdout[0]).not.toContain('decisions (project)')
+  })
+})
 
 describe('runClaudeCodeSearch (in process)', () => {
   it('prints the core text and exits 0 with no config at all', async () => {
@@ -148,7 +382,7 @@ describe('runClaudeCodeSearch (in process)', () => {
     expect(result.stderr).toEqual([])
   })
 
-  it('never reads project config, even one that switches search off', async () => {
+  it('reads only sources from project config: a project file that switches search off changes nothing', async () => {
     const root = makeProject()
     fs.mkdirSync(path.join(root, '.opencode'))
     fs.writeFileSync(
@@ -202,11 +436,15 @@ describe('runClaudeCodeSearch (in process)', () => {
  * jsonc build would crash here.
  */
 describe('built systematic-search bin (foreign directory, real node)', () => {
-  const bundleCache: { bundle?: Promise<Buffer> } = {}
+  const bundleCache: { build?: ReturnType<typeof buildSearchBundle> } = {}
 
-  function bundle(): Promise<Buffer> {
-    bundleCache.bundle ??= buildSearchBundle(ROOT_DIR)
-    return bundleCache.bundle
+  function build(): ReturnType<typeof buildSearchBundle> {
+    bundleCache.build ??= buildSearchBundle(ROOT_DIR)
+    return bundleCache.build
+  }
+
+  async function bundle(): Promise<Buffer> {
+    return (await build()).bundle
   }
 
   /** Writes the bin the way the production build does, into a fresh dir. */
@@ -343,6 +581,58 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     expect(result.stderr).toContain('could not be read')
   }, 60_000)
 
+  it('runs --kind external from a foreign directory: reads the user allow list and the JSONC project file at the start directory it is passed', async () => {
+    const bin = await installBin()
+    const root = makeProject()
+    proposeDecisions(root, 'systematic.jsonc')
+    const dirs = makeUserDirs()
+    allowProject(dirs.userConfigDir, root, 'systematic.jsonc')
+    const expected = await externalCoreText(root, 'zebra', {
+      homeDir: dirs.home,
+      customConfigDir: null,
+    })
+    expect(expected).toContain('decisions (project)')
+    expect(fs.existsSync(path.join(path.dirname(root), 'node_modules'))).toBe(
+      false,
+    )
+
+    const result = runBin(bin, ['zebra', '--kind', 'external'], {
+      cwd: makeDir('claude-code-search-elsewhere-'),
+      home: dirs.home,
+    })
+    // From another directory the bin finds no project at all.
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('no project')
+
+    const here = runBin(bin, ['zebra', '--kind', 'external', '--dir', root], {
+      cwd: makeDir('claude-code-search-elsewhere-'),
+      home: dirs.home,
+    })
+    expect(here.stderr).toBe('')
+    expect(here.status).toBe(0)
+    expect(here.stdout).toBe(`${expected}\n`)
+  }, 60_000)
+
+  it('prints one stderr warning for a structurally broken project file, for external only', async () => {
+    const bin = await installBin()
+    const root = makeProject()
+    fs.mkdirSync(path.join(root, '.opencode'))
+    fs.writeFileSync(path.join(root, '.opencode/systematic.json'), '{ broken')
+    const dirs = makeUserDirs()
+
+    const external = runBin(bin, ['zebra', '--kind', 'external'], {
+      cwd: root,
+      home: dirs.home,
+    })
+    expect(external.status).toBe(0)
+    expect(external.stderr).toBe(`${SEARCH_CLI_PROJECT_CONFIG_WARNING}\n`)
+    expect(external.stdout).toContain('Project sources: the project config')
+
+    const builtin = runBin(bin, ['zebra'], { cwd: root, home: dirs.home })
+    expect(builtin.stderr).toBe('')
+    expect(builtin.stdout).toBe(`${await coreText(root, 'zebra')}\n`)
+  }, 60_000)
+
   it('exits 2 with nothing on stdout for a usage error', async () => {
     const bin = await installBin()
     const result = runBin(bin, ['zebra', '--bogus'], {
@@ -353,5 +643,33 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain('Usage: systematic-search <query...>')
     expect(result.stderr).not.toContain('systematic search')
+  }, 60_000)
+})
+
+/**
+ * The bin's module graph holds the readers it needs and neither config
+ * module. The metafile comes from the same build the bin ships, so this cannot
+ * pass on a graph the bin does not use.
+ */
+describe('built systematic-search bin: module graph', () => {
+  it('bundles the external readers and contains neither config.ts nor config-schema.ts', async () => {
+    const { metafile } = await buildSearchBundle(ROOT_DIR)
+    const modules = Object.keys(metafile.inputs).map((input) =>
+      path.basename(input),
+    )
+
+    for (const required of [
+      'claude-code-search.ts',
+      'search-cli.ts',
+      'search-core.ts',
+      'search-external.ts',
+      'search-external-sources.ts',
+      'search-project-identity.ts',
+      'search-user-config.ts',
+    ]) {
+      expect(modules).toContain(required)
+    }
+    expect(modules).not.toContain('config.ts')
+    expect(modules).not.toContain('config-schema.ts')
   }, 60_000)
 })

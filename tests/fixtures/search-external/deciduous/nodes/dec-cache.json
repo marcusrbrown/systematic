@@ -1,0 +1,10 @@
+{
+  "author": "Fixture",
+  "change_id": "dec-cache",
+  "created_at": "2026-01-01T00:00:00Z",
+  "description": "Chosen after a benchmark of both layers.\nThe pelican layer stays optional.",
+  "node_type": "decision",
+  "status": "pending",
+  "title": "Use a write-through cache",
+  "updated_at": "2026-01-01T00:00:00Z"
+}

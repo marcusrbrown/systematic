@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { TRUNCATION_MARKER } from '../../src/lib/search-render.js'
+import {
+  EXTERNAL_TRUNCATION_MARKER,
+  renderExternalFixedReply,
+  renderExternalResult,
+  TRUNCATION_MARKER,
+} from '../../src/lib/search-render.js'
 
 // These tests pin the prose that wires past-work search into the researcher and
 // the skills that dispatch it. They assert wiring text, not prompt length.
@@ -95,6 +100,10 @@ describe('learnings-researcher Step 0 under past-work', () => {
     expect(step0).toMatch(/missing/i)
   })
 
+  test('the categories are whatever subdirectories exist: no category is assumed', () => {
+    expect(step0).toContain('Do not assume any particular category exists.')
+  })
+
   test('the solutions stop rule is still there', () => {
     expect(step0).toMatch(/does not exist or holds no `.md` files, stop/)
   })
@@ -155,6 +164,14 @@ describe('learnings-researcher Step 1b under past-work', () => {
     expect(row).toMatch(/narrow/i)
   })
 
+  test('the same truncation row recognizes the 12 KB external marker too', () => {
+    const row = step1b
+      .split('\n')
+      .find((line) => line.startsWith('|') && line.includes(TRUNCATION_MARKER))
+    expect(row).toContain(EXTERNAL_TRUNCATION_MARKER)
+    expect(row).toMatch(/do not repeat/i)
+  })
+
   test('Step 3b stays solution-only', () => {
     expect(step1b).toMatch(/Step 3b stays solution-only/)
   })
@@ -183,12 +200,20 @@ describe('learnings-researcher Step 1b under past-work', () => {
     line.includes('call the search tool more than'),
   )
 
-  test('the efficiency rule allows one call in solutions scope and four in past-work scope', () => {
+  test('the efficiency rule allows one call in solutions scope and five in past-work scope', () => {
     expect(efficiencyRule).toBeDefined()
     const rule = efficiencyRule ?? ''
     expect(rule).toMatch(/`solutions` scope/)
     expect(rule).toMatch(/`past-work` scope/)
-    expect(countsNamedIn(rule)).toEqual([1, 4])
+    expect(countsNamedIn(rule)).toEqual([1, 5])
+  })
+
+  test('the efficiency DO list names the external call as the fifth past-work call', () => {
+    const doLine = RESEARCHER.split('\n').find((line) =>
+      line.startsWith('- Try the search tool, when it exists'),
+    )
+    expect(doLine).toBeDefined()
+    expect(doLine).toMatch(/four[^\n]*external/i)
   })
 
   test('no line of the prompt caps past-work at two calls', () => {
@@ -232,6 +257,7 @@ describe('learnings-researcher past-work grep fallback', () => {
 describe('learnings-researcher past-work output', () => {
   const output = section(RESEARCHER, '## Past-Work Output')
 
+  const EXTERNAL_GROUP = 'External records'
   const GROUPS = {
     lessons: 'Proven lessons',
     decisions: 'Recorded decisions and their rationale',
@@ -255,12 +281,38 @@ describe('learnings-researcher past-work output', () => {
     return rows
   }
 
-  test('five groups appear in a fixed order', () => {
-    const positions = Object.values(GROUPS).map((name) =>
+  test('six groups appear in a fixed order, External records last', () => {
+    const positions = [...Object.values(GROUPS), EXTERNAL_GROUP].map((name) =>
       output.indexOf(`### ${name}`),
     )
     expect(positions.every((position) => position !== -1)).toBe(true)
     expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(positions.at(-1)).toBe(output.indexOf('### External records'))
+  })
+
+  test('External records sits outside the status table', () => {
+    const rows = statusRows()
+    for (const groups of rows.values()) {
+      for (const group of groups) {
+        expect(group).not.toContain('External records')
+      }
+    }
+    expect(output).toMatch(/External records[^\n]*outside the status table/i)
+  })
+
+  test('a hit with no recorded status goes to External records as no recorded status, never to a lifecycle group', () => {
+    const rule = paragraph(output, '**External records.**')
+    expect(rule).toContain('no recorded status')
+    expect(rule).toMatch(/never[^\n]*(lifecycle|status table)/i)
+    expect(rule).toMatch(/never infer/i)
+  })
+
+  test('the External records item cites source, path and recorded status or node_type', () => {
+    const rule = paragraph(output, '**External records.**')
+    expect(rule).toContain('source')
+    expect(rule).toContain('path')
+    expect(rule).toContain('`node_type decision`')
+    expect(rule).toContain('no recorded status')
   })
 
   test('each recorded status maps to exactly one group', () => {
@@ -312,9 +364,12 @@ describe('learnings-researcher past-work output', () => {
     expect(output).toMatch(/not[^\n]*(repo|repository)/i)
   })
 
-  test('sets the 12-item and 3-full-read budgets', () => {
-    expect(output).toMatch(/at most 12 items/)
-    expect(output).toMatch(/at most 3 full reads/)
+  test('sets the 16-item total (12 built-in plus at most 4 external) and the 3-full-read budgets', () => {
+    const budget = paragraph(output, '**Budget.**')
+    expect(budget).toMatch(/at most 16 items/)
+    expect(budget).toMatch(/at most 12 from the four built-in kinds/)
+    expect(budget).toMatch(/at most 4 External records/)
+    expect(budget).toMatch(/at most 3 full reads/)
   })
 
   test('states the method once on one line, including the origin lookup form', () => {
@@ -660,6 +715,313 @@ describe('deepening dispatches exclude the plan being deepened', () => {
     expect(text).toMatch(/second line/i)
     expect(text.indexOf('`scope: past-work`')).toBeLessThan(
       text.indexOf('`exclude: <'),
+    )
+  })
+})
+
+describe('the external call in past-work scope', () => {
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const call = paragraph(step1b, '**External call (past-work).**')
+  const rows = step1b.split('\n').filter((line) => line.startsWith('|'))
+  const rowIndex = (needle: string) =>
+    rows.findIndex((line) => line.includes(needle))
+
+  test('is a fifth call with kind external and limit 3, by tool or command', () => {
+    expect(call).toContain('kind: "external"')
+    expect(call).toContain('limit: 3')
+    expect(call).toContain('--kind external')
+    expect(call).toContain('--limit 3')
+    expect(call).toMatch(/fifth/i)
+  })
+
+  test('names its reply prefix, so it is routed apart from the built-in kinds', () => {
+    expect(call).toContain('External sources for')
+  })
+
+  test('runs regardless of Step 0 and of the all-four-none stop', () => {
+    expect(call).toMatch(/regardless|even when/i)
+    expect(call).toMatch(/Step 0/)
+    expect(call).toMatch(/all four[^\n]*`none`/i)
+    const step0 = section(RESEARCHER, '### Step 0')
+    expect(step0).toMatch(/external call/i)
+    const none = rows.find((line) => line.includes('`corpus: none`'))
+    expect(none).toMatch(/external call/i)
+  })
+
+  test('is not made in solutions scope or in overlap mode', () => {
+    expect(call).toMatch(/`past-work` scope only|only in `past-work` scope/i)
+    expect(call).toMatch(/overlap/i)
+  })
+
+  test('a disabled, error, not-allowed or failed external reply goes to Search Context with no grep, glob or retry', () => {
+    const row = rows.find((line) => line.startsWith('| External call'))
+    expect(row).toBeDefined()
+    expect(row).toMatch(/search is disabled/i)
+    expect(row).toContain('`Error:`')
+    expect(row).toContain('search.allow_project_sources')
+    expect(row).toMatch(/call fails/i)
+    expect(row).toContain('Search Context')
+    expect(row).toMatch(/never grep or glob/i)
+    expect(row).toMatch(/never retry|no retry|do not retry/i)
+  })
+
+  test('the external error row sits ahead of the Error-to-grep row', () => {
+    const external = rowIndex('| External call')
+    const errorToGrep = rows.findIndex(
+      (line) =>
+        line.includes('starts with `Error:`') && line.includes('Grep path'),
+    )
+    expect(external).toBeGreaterThan(-1)
+    expect(errorToGrep).toBeGreaterThan(-1)
+    expect(external).toBeLessThan(errorToGrep)
+  })
+
+  test('external replies with hits route to External records; empty ones add no records', () => {
+    const hits = rows.find(
+      (line) =>
+        line.startsWith('| An external reply') &&
+        line.includes('External records'),
+    )
+    expect(hits).toBeDefined()
+    const empty = rows.find(
+      (line) =>
+        line.startsWith('| An external reply') && /no records/i.test(line),
+    )
+    expect(empty).toBeDefined()
+    expect(empty).toContain('no external sources are active')
+  })
+
+  test('the researcher never greps or globs a source folder', () => {
+    const dont = RESEARCHER.split('\n').find((line) =>
+      line.startsWith("- Grep or glob an external source's folders"),
+    )
+    expect(dont).toBeDefined()
+  })
+
+  test('the external call text is not in the solutions or overlap text', () => {
+    const solutionsCall = RESEARCHER.split('\n').find((line) =>
+      line.startsWith('**In `solutions` scope, call it once**'),
+    )
+    expect(solutionsCall).toBeDefined()
+    expect(solutionsCall).not.toMatch(/external/i)
+    const template = RESEARCHER.slice(
+      RESEARCHER.indexOf('## Output Format'),
+      RESEARCHER.indexOf('## Past-Work Output'),
+    )
+    expect(template).not.toMatch(/external/i)
+    const step8 = section(RESEARCHER, '### Step 8')
+    expect(step8).not.toMatch(/external/i)
+    const overlap = paragraph(step1b, 'In overlap mode (the caller asks')
+    expect(overlap).not.toMatch(/external/i)
+  })
+})
+
+describe('grep-path behaviors that stay in the prompt', () => {
+  test('the content search falls back to a broader search when it finds fewer than 3 candidates', () => {
+    const step3 = section(RESEARCHER, '### Step 3:')
+    const fallback = paragraph(step3, '**If search returns <3 candidates:**')
+    expect(fallback).toContain('broader content search')
+    expect(fallback).toContain('not just frontmatter fields')
+  })
+
+  test('a zero-hit search adds no synonym pass', () => {
+    const step1b = section(RESEARCHER, '### Step 1b')
+    expect(step1b).toContain('A zero-hit search adds no synonym pass.')
+  })
+
+  test('high-severity and critical patterns are prioritized', () => {
+    expect(RESEARCHER).toContain(
+      '- Prioritize high-severity and critical patterns',
+    )
+  })
+})
+
+describe('external hits survive absent built-in directories', () => {
+  const step0 = section(RESEARCHER, '### Step 0')
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const rows = step1b.split('\n').filter((line) => line.startsWith('|'))
+
+  /** Each of these says the stop needs the external reply to have no hits too. */
+  function expectsNoExternalHits(text: string | undefined): void {
+    expect(text).toBeDefined()
+    expect(text).toMatch(/external[^\n.]*(no hits|zero hits|no hit)/i)
+    expect(text).toContain('External records')
+    expect(text).toContain('Search Context')
+  }
+
+  test('Step 0 stops only when the four are absent and the external call found nothing', () => {
+    const bullet = paragraph(step0, '- Past-work: list')
+    expect(bullet).toMatch(/none of the four/i)
+    expectsNoExternalHits(bullet)
+  })
+
+  test('the corpus: none row stops only when the external reply has no hits either', () => {
+    const none = rows.find((line) => line.includes('`corpus: none`'))
+    expectsNoExternalHits(none)
+  })
+
+  test('the corpus: empty row stops only when the external reply has no hits either', () => {
+    const empty = rows.find((line) => line.includes('`corpus: empty`'))
+    expectsNoExternalHits(empty)
+  })
+
+  test('the not-allowed fixed reply drops hits only when its first line says nothing was read', () => {
+    const row = rows.find((line) => line.startsWith('| External call'))
+    expect(row).toContain('so nothing was read')
+  })
+})
+
+describe('external state reaches Search Context whatever the hit count', () => {
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const rows = step1b.split('\n').filter((line) => line.startsWith('|'))
+  const row = rows.find((line) => line.startsWith('| Any external reply'))
+
+  /** A result with one section per state, rendered by the real renderer. */
+  const rendered = renderExternalResult({
+    query: 'q',
+    queryTerms: ['q'],
+    homeDir: '/home/me',
+    project: { kind: 'not-allowed', proposals: 1, mainRoot: '/home/me/app' },
+    notes: [],
+    warnings: ['w'],
+    sections: (
+      ['loaded', 'missing', 'empty', 'unreadable', 'dropped'] as const
+    ).map((state) => ({
+      name: state,
+      origin: 'user' as const,
+      roots: [`/home/me/${state}`],
+      state,
+      recordCount: 0,
+      hits:
+        state === 'loaded'
+          ? Array.from({ length: 80 }, (_, i) => i + 1).map((rank) => ({
+              rank,
+              record: {
+                source: state,
+                origin: 'user' as const,
+                path: `${state}/${rank}.md`,
+                title: `T${rank}`,
+                body: 'q '.repeat(1000),
+              },
+            }))
+          : [],
+    })),
+  })
+  const renderedLines = rendered.split('\n')
+
+  test('the row exists and is not limited to replies with hits', () => {
+    expect(row).toBeDefined()
+    expect(row).toMatch(/whatever the hit count/i)
+    expect(row).toContain('Search Context')
+  })
+
+  test('it names the note, project and warning lines the renderer prints', () => {
+    expect(renderedLines.some((l) => l.startsWith('Project sources:'))).toBe(
+      true,
+    )
+    expect(renderedLines).toContain('Warnings:')
+    for (const token of ['`Notes:`', '`Project sources:`', '`Warnings:`']) {
+      expect(row).toContain(token)
+    }
+  })
+
+  test('it names every source-state line exactly as the renderer prints it', () => {
+    const stateLines = renderedLines
+      .filter((l) => /^ {3}(missing|empty|unreadable|dropped):/.test(l))
+      .map((l) => l.trim())
+    expect(stateLines).toHaveLength(4)
+    for (const line of stateLines) expect(row).toContain(line)
+  })
+
+  test('a project config that could not be read is reported', () => {
+    const unreadable = renderExternalFixedReply(
+      { kind: 'no-active-source' },
+      {
+        query: 'q',
+        notes: [],
+        warnings: [],
+        project: { kind: 'config-unreadable' },
+      },
+    )
+    const line = unreadable.split('\n').find((l) => l.startsWith('Project'))
+    expect(line).toContain('the project config could not be read')
+    expect(row).toContain('the project config could not be read')
+  })
+
+  test('hits and a not-allowed project line: route the hits and report the project sources not read', () => {
+    expect(
+      renderedLines.some(
+        (l) =>
+          l.startsWith('Project sources:') &&
+          l.includes('not in search.allow_project_sources'),
+      ),
+    ).toBe(true)
+    expect(row).toContain('not in search.allow_project_sources')
+    expect(row).toMatch(/route the hits/i)
+    expect(row).toContain('project sources not read: not allowed')
+  })
+
+  test('a per-source +N more hits line is a cut, reported like the 12 KB marker', () => {
+    expect(
+      renderedLines.some((l) => /^\+\d+ more hits not shown$/.test(l)),
+    ).toBe(true)
+    expect(row).toContain('+N more hits not shown')
+    expect(row).toContain('12 KB')
+    expect(row).toContain('results cut, narrow the query')
+  })
+
+  test('the zero-hit row no longer says an empty reply adds nothing but records', () => {
+    const empty = rows.find(
+      (line) =>
+        line.startsWith('| An external reply with 0 hits') &&
+        line.includes('no external sources are active'),
+    )
+    expect(empty).toBeDefined()
+    expect(empty).not.toMatch(/adds nothing/i)
+    expect(empty).toMatch(/no records/i)
+  })
+
+  test('Search Context is told to report the cut and the absent kinds', () => {
+    const open = RESEARCHER.split('\n').find((line) =>
+      line.startsWith('Open with `## Past-Work Search Results`'),
+    )
+    expect(open).toContain('absent kinds')
+    expect(open).toContain('results cut, narrow the query')
+    expect(open).toMatch(/source state|source-state/i)
+  })
+})
+
+describe('skills never route external records', () => {
+  test.each([
+    ['ce-review', read('skills/ce-review/SKILL.md')],
+    ['ce-compound', read('skills/ce-compound/SKILL.md')],
+    ['ce-plan', PLAN],
+    ['ce-ideate', IDEATE],
+    ['ce-brainstorm', BRAINSTORM],
+    ['deepen-plan', DEEPEN],
+    ['deepening-workflow', DEEPENING_WORKFLOW],
+  ])('%s does not ask for kind external', (_name, text) => {
+    expect(text).not.toMatch(/kind:? "?external/)
+    expect(text).not.toMatch(/--kind external/)
+    expect(text).not.toContain('External records')
+  })
+})
+
+describe('researcher prompt size', () => {
+  // The ceiling is set on purpose. Raise it only deliberately.
+  const BODY_CEILING_BYTES = 25_000
+
+  test('the body after frontmatter is at most 25,000 bytes', () => {
+    const body = RESEARCHER.replace(/^---\n[\s\S]*?\n---\n/, '')
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(
+      BODY_CEILING_BYTES,
+    )
+  })
+
+  test('the frontmatter strip leaves a body that starts at the opening line', () => {
+    const body = RESEARCHER.replace(/^---\n[\s\S]*?\n---\n/, '')
+    expect(body.trimStart().startsWith('You are an expert institutional')).toBe(
+      true,
     )
   })
 })

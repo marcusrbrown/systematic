@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'bun:test'
 import type { CorpusDocument } from '../../src/lib/search-corpus.js'
+import type { ExternalRecord } from '../../src/lib/search-external.js'
 import {
+  EXTERNAL_MAX_OUTPUT_BYTES,
+  EXTERNAL_REPLIES,
+  EXTERNAL_TRUNCATION_MARKER,
+  type ExternalSearchResult,
+  type ExternalSection,
   extractSnippet,
   MAX_OUTPUT_BYTES,
+  renderExternalFixedReply,
+  renderExternalResult,
   renderSearchResult,
   type SearchHit,
   type SearchResult,
@@ -584,5 +592,473 @@ describe('renderSearchResult: 16 KB cap', () => {
 
   it('leaves small output alone', () => {
     expect(renderSearchResult(makeResult())).not.toContain(TRUNCATION_MARKER)
+  })
+})
+
+// --- External results --------------------------------------------------
+
+const BIDI = '\u202e'
+const ZERO_WIDTH = '\u200b'
+
+function makeRecord(overrides: Partial<ExternalRecord> = {}): ExternalRecord {
+  return {
+    source: 'wiki',
+    origin: 'user',
+    path: 'wiki/rfc/0001-cache.md',
+    title: 'Cache decision',
+    body: 'We decided on a cache layer for the example query.',
+    ...overrides,
+  }
+}
+
+function makeSection(
+  overrides: Partial<ExternalSection> = {},
+  records: readonly ExternalRecord[] = [makeRecord()],
+): ExternalSection {
+  return {
+    name: 'wiki',
+    origin: 'user',
+    roots: ['/home/me/wiki'],
+    state: 'loaded',
+    recordCount: records.length,
+    hits: records.map((record, index) => ({ rank: index + 1, record })),
+    ...overrides,
+  }
+}
+
+function makeExternalResult(
+  overrides: Partial<ExternalSearchResult> = {},
+): ExternalSearchResult {
+  return {
+    query: 'example query',
+    queryTerms: ['example', 'query'],
+    homeDir: '/home/me',
+    project: { kind: 'none' },
+    sections: [makeSection()],
+    notes: [],
+    warnings: [],
+    ...overrides,
+  }
+}
+
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength
+}
+
+const FORBIDDEN_BUILTIN_TOKENS = [
+  'Corpus:',
+  'corpus: none',
+  'corpus: empty',
+  'Search "',
+]
+
+function expectNoBuiltinTokens(text: string): void {
+  for (const token of FORBIDDEN_BUILTIN_TOKENS) {
+    expect(text).not.toContain(token)
+  }
+  expect(text).not.toMatch(/\d+ docs?, \d+ hits?/)
+}
+
+describe('renderExternalResult', () => {
+  it('starts with the external prefix and labels each section with name, origin and root', () => {
+    const text = renderExternalResult(makeExternalResult())
+    expect(text.startsWith('External sources for "example query":')).toBe(true)
+    expect(text).toContain('wiki (user): ~/wiki')
+    expect(text).toContain('1. wiki/rfc/0001-cache.md')
+    expectNoBuiltinTokens(text)
+  })
+
+  it('labels a project source `project` and collapses only a root under the home directory', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        sections: [
+          makeSection(
+            {
+              name: 'decisions',
+              origin: 'project',
+              roots: ['/repo/decisions'],
+            },
+            [makeRecord({ source: 'decisions', origin: 'project' })],
+          ),
+          makeSection({ name: 'home', roots: ['/home/me', '/home/meme/x'] }),
+        ],
+      }),
+    )
+    expect(text).toContain('decisions (project): /repo/decisions')
+    expect(text).toContain('home (user): ~, /home/meme/x')
+  })
+
+  it('prints a recorded status when there is no node_type', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        sections: [makeSection({}, [makeRecord({ status: 'accepted' })])],
+      }),
+    )
+    expect(text).toContain('Title: Cache decision | Status: accepted')
+  })
+
+  it('prints node_type in place of a status', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        sections: [
+          makeSection({}, [
+            makeRecord({ nodeType: 'decision', status: 'pending' }),
+          ]),
+        ],
+      }),
+    )
+    expect(text).toContain('Title: Cache decision | node_type decision')
+    expect(text).not.toContain('pending')
+    expect(text).not.toContain('Status:')
+  })
+
+  it('prints no status at all when a record has neither', () => {
+    const text = renderExternalResult(makeExternalResult())
+    const titleLine = text.split('\n').find((line) => line.includes('Title:'))
+    expect(titleLine?.trim()).toBe('Title: Cache decision')
+  })
+
+  it('shows a snippet window around the query terms', () => {
+    const text = renderExternalResult(makeExternalResult())
+    expect(text).toContain(
+      'Snippet: We decided on a cache layer for the example query.',
+    )
+  })
+
+  it('prints quiet states per source and still renders the others', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        sections: [
+          makeSection({
+            name: 'a-missing',
+            state: 'missing',
+            hits: [],
+            recordCount: 0,
+          }),
+          makeSection({
+            name: 'b-empty',
+            state: 'empty',
+            hits: [],
+            recordCount: 0,
+          }),
+          makeSection({
+            name: 'c-unreadable',
+            state: 'unreadable',
+            hits: [],
+            recordCount: 0,
+          }),
+          makeSection({
+            name: 'd-dropped',
+            state: 'dropped',
+            hits: [],
+            recordCount: 0,
+          }),
+          makeSection({
+            name: 'e-nohits',
+            state: 'loaded',
+            hits: [],
+            recordCount: 7,
+          }),
+          makeSection({ name: 'f-live' }),
+        ],
+      }),
+    )
+    expect(text).toContain(
+      'a-missing (user): ~/wiki\n   missing: root not found.',
+    )
+    expect(text).toContain(
+      'b-empty (user): ~/wiki\n   empty: no readable records.',
+    )
+    expect(text).toContain(
+      'c-unreadable (user): ~/wiki\n   unreadable: root could not be read.',
+    )
+    expect(text).toContain(
+      'd-dropped (user): ~/wiki\n   dropped: see the warnings.',
+    )
+    expect(text).toContain('e-nohits (user): ~/wiki\n   No matching records.')
+    expect(text).toContain('1. wiki/rfc/0001-cache.md')
+    expect(
+      text.startsWith(
+        'External sources for "example query": 6 sources, 1 hit.',
+      ),
+    ).toBe(true)
+  })
+
+  it('prints notes, the project-level state line and bounded warnings in that order', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        notes: ['config unreadable'],
+        project: { kind: 'not-allowed', proposals: 2, mainRoot: '/repo' },
+        warnings: ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7'],
+      }),
+    )
+    const lines = text.split('\n')
+    expect(lines[1]).toBe('Notes: config unreadable')
+    expect(lines[2]).toBe(
+      'Project sources: 2 proposed sources not read: this project is not in search.allow_project_sources. To allow them, add "/repo" to search.allow_project_sources in your user config.',
+    )
+    expect(lines[3]).toBe('Warnings:')
+    expect(lines.slice(4, 10)).toEqual([
+      '- w1',
+      '- w2',
+      '- w3',
+      '- w4',
+      '- w5',
+      '- +2 more',
+    ])
+  })
+
+  it('names an unreadable project config without echoing anything from it', () => {
+    const text = renderExternalResult(
+      makeExternalResult({ project: { kind: 'config-unreadable' } }),
+    )
+    expect(text).toContain(
+      'Project sources: the project config could not be read, so it proposes none.',
+    )
+  })
+
+  it('shows the not-allowed line without a path when the identity is unresolved', () => {
+    const text = renderExternalResult(
+      makeExternalResult({ project: { kind: 'not-allowed', proposals: 1 } }),
+    )
+    expect(text).toContain(
+      'Project sources: 1 proposed source not read: this project is not in search.allow_project_sources. Its identity could not be verified, so it cannot be allowed.',
+    )
+  })
+
+  it('sanitizes and caps every echoed string', () => {
+    const evil = `${ESC}[31mevil${ESC}]52;c;QUJD${BEL}${BIDI}${ZERO_WIDTH}name`
+    const text = renderExternalResult(
+      makeExternalResult({
+        query: `q${ESC}[2J${BIDI}${NUL}uery ${'x'.repeat(400)}`,
+        notes: [`note${ESC}[0m${BIDI}`],
+        warnings: [`warn${ESC}[1m${BIDI}`],
+        sections: [
+          makeSection({ name: evil, roots: [`/r${ESC}[31m${BIDI}oot`] }, [
+            makeRecord({
+              path: `wiki/${evil}.md`,
+              title: `${evil}${'t'.repeat(300)}`,
+              status: `${evil}${'s'.repeat(80)}`,
+              body: `example ${evil} query`,
+            }),
+          ]),
+        ],
+      }),
+    )
+    expect(hasControlCharacter(text)).toBe(false)
+    expect(text).not.toContain(BIDI)
+    expect(text).not.toContain(ZERO_WIDTH)
+    expect(text).toContain(`Title: evil`)
+    expect(text.split('\n')[0]?.length).toBeLessThanOrEqual(
+      'External sources for "": 1 source, 1 hit.'.length + 200,
+    )
+    expect(text).toContain(`Status: evil`)
+    expect(text).toContain(`${'t'.repeat(60)}`)
+    expect(text).not.toContain('t'.repeat(300))
+    expect(text).not.toContain('s'.repeat(80))
+  })
+
+  it('caps the title at 160 characters and the status at 40', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        sections: [
+          makeSection({}, [
+            makeRecord({ title: 't'.repeat(200), status: 's'.repeat(60) }),
+          ]),
+        ],
+      }),
+    )
+    expect(text).toContain(`Title: ${'t'.repeat(159)}…`)
+    expect(text).toContain(`Status: ${'s'.repeat(39)}…`)
+  })
+})
+
+describe('renderExternalResult: the 12 KB allowance', () => {
+  function bigRecords(source: string, count: number): ExternalRecord[] {
+    return Array.from({ length: count }, (_, i) =>
+      makeRecord({
+        source,
+        path: `${source}/${'p'.repeat(100)}-${i}.md`,
+        title: 'é'.repeat(160),
+        status: 'accepted',
+        body: `example ${'ü'.repeat(400)}`,
+      }),
+    )
+  }
+
+  it('pins the allowance and its marker at 12 KB', () => {
+    expect(EXTERNAL_MAX_OUTPUT_BYTES).toBe(12_288)
+    expect(EXTERNAL_TRUNCATION_MARKER).toBe(
+      '[Systematic: search output truncated at 12 KB]',
+    )
+  })
+
+  it('no source takes all of the allowance, and a source past its share drops whole hits', () => {
+    const sections = Array.from({ length: 8 }, (_, index) =>
+      makeSection({ name: `src-${index}` }, bigRecords(`src-${index}`, 5)),
+    )
+    const text = renderExternalResult(makeExternalResult({ sections }))
+    expect(byteLength(text)).toBeLessThanOrEqual(EXTERNAL_MAX_OUTPUT_BYTES)
+    expect(text).not.toContain(EXTERNAL_TRUNCATION_MARKER)
+    expect(text).not.toContain(TRUNCATION_MARKER)
+    for (let index = 0; index < 8; index++) {
+      expect(text).toContain(`src-${index} (user)`)
+      // The top hit of every source survives.
+      expect(text).toContain(`src-${index}/${'p'.repeat(100)}-0.md`)
+    }
+    const more = [...text.matchAll(/^\+(\d+) more hits not shown$/gm)]
+    expect(more.length).toBeGreaterThan(0)
+    // Whole hits are dropped: every printed hit is complete.
+    const shown = [...text.matchAll(/^\d+\. src-/gm)].length
+    const dropped = more.reduce((sum, match) => sum + Number(match[1]), 0)
+    expect(shown + dropped).toBe(40)
+  })
+
+  it('splits evenly: a short source keeps all its hits next to a long one', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        sections: [
+          makeSection({ name: 'big' }, bigRecords('big', 5)),
+          makeSection({ name: 'small' }, [
+            makeRecord({ source: 'small', path: 'small/a.md' }),
+            makeRecord({ source: 'small', path: 'small/b.md' }),
+          ]),
+        ],
+      }),
+    )
+    expect(text).toContain('2. small/b.md')
+    expect(text).not.toContain('more hits not shown')
+  })
+
+  it('a truncated external reply carries the 12 KB marker and never the 16 KB one', () => {
+    const text = renderExternalResult(
+      makeExternalResult({
+        notes: Array.from({ length: 80 }, (_, i) => `${'n'.repeat(190)}${i}`),
+      }),
+    )
+    const bytes = new TextEncoder().encode(text)
+    expect(bytes.byteLength).toBeLessThanOrEqual(EXTERNAL_MAX_OUTPUT_BYTES)
+    expect(text.endsWith(EXTERNAL_TRUNCATION_MARKER)).toBe(true)
+    expect(text).not.toContain(TRUNCATION_MARKER)
+    expect(() =>
+      new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+    ).not.toThrow()
+  })
+
+  it('leaves an in-budget reply without any marker', () => {
+    const text = renderExternalResult(makeExternalResult())
+    expect(text).not.toContain('truncated')
+  })
+})
+
+describe('renderExternalFixedReply', () => {
+  const quiet = { query: 'cache layer', notes: [], warnings: [] }
+
+  it('pins the three fixed replies', () => {
+    expect(renderExternalFixedReply({ kind: 'no-project' }, quiet)).toBe(
+      'External sources for "cache layer": no project: there is no .git directory at or above the start directory, so there are no external sources to search.',
+    )
+    expect(renderExternalFixedReply({ kind: 'no-active-source' }, quiet)).toBe(
+      'External sources for "cache layer": no external sources are active for this project.',
+    )
+  })
+
+  it('pins the verified not-allowed variant: count and the exact main-root string', () => {
+    expect(
+      renderExternalFixedReply(
+        { kind: 'not-allowed', proposals: 2, mainRoot: '/repo/main' },
+        quiet,
+      ),
+    ).toBe(
+      'External sources for "cache layer": this project proposes 2 external sources, but it is not in search.allow_project_sources, so nothing was read. To allow them, add "/repo/main" to search.allow_project_sources in your user config.',
+    )
+  })
+
+  it('pins the unresolved not-allowed variant: the same reply with no path', () => {
+    expect(
+      renderExternalFixedReply({ kind: 'not-allowed', proposals: 1 }, quiet),
+    ).toBe(
+      'External sources for "cache layer": this project proposes 1 external source, but it is not in search.allow_project_sources, so nothing was read. Its identity could not be verified, so it cannot be allowed.',
+    )
+  })
+
+  it('exports the templates and none of them carries a built-in routing token', () => {
+    const samples = [
+      EXTERNAL_REPLIES.noProject,
+      EXTERNAL_REPLIES.noActiveSource,
+      EXTERNAL_REPLIES.notAllowed(3, '/repo'),
+      EXTERNAL_REPLIES.notAllowed(3),
+    ]
+    for (const sample of samples) expectNoBuiltinTokens(sample)
+    for (const reply of [
+      renderExternalFixedReply({ kind: 'no-project' }, quiet),
+      renderExternalFixedReply({ kind: 'no-active-source' }, quiet),
+      renderExternalFixedReply({ kind: 'not-allowed', proposals: 1 }, quiet),
+    ]) {
+      expect(reply.startsWith('External sources for "cache layer":')).toBe(true)
+      expectNoBuiltinTokens(reply)
+    }
+  })
+
+  it('never echoes source names or roots: the not-allowed reply takes no warnings', () => {
+    const text = renderExternalFixedReply(
+      { kind: 'not-allowed', proposals: 1, mainRoot: '/repo' },
+      { ...quiet, warnings: ['secret-name: bad root /secret/root'] },
+    )
+    expect(text).not.toContain('secret')
+  })
+
+  it('adds notes, and for no-active-source the project state and warnings', () => {
+    const text = renderExternalFixedReply(
+      { kind: 'no-active-source' },
+      {
+        query: 'q',
+        notes: ['config unreadable'],
+        warnings: ['w1'],
+        project: { kind: 'config-unreadable' },
+      },
+    )
+    expect(text.split('\n')).toEqual([
+      'External sources for "q": no external sources are active for this project.',
+      'Notes: config unreadable',
+      'Project sources: the project config could not be read, so it proposes none.',
+      'Warnings:',
+      '- w1',
+    ])
+  })
+
+  it('sanitizes the query, the count and the main-root string, including a non-string query', () => {
+    const evil = `${ESC}[31m${BIDI}q${NUL}${'x'.repeat(400)}`
+    for (const reply of [
+      renderExternalFixedReply(
+        { kind: 'no-project' },
+        { ...quiet, query: evil },
+      ),
+      renderExternalFixedReply(
+        { kind: 'no-active-source' },
+        { ...quiet, query: evil },
+      ),
+      renderExternalFixedReply(
+        {
+          kind: 'not-allowed',
+          proposals: 1,
+          mainRoot: `/r${ESC}[31m${BIDI}oot${'y'.repeat(600)}`,
+        },
+        { ...quiet, query: evil },
+      ),
+    ]) {
+      expect(hasControlCharacter(reply)).toBe(false)
+      expect(reply).not.toContain(BIDI)
+      expect(reply).not.toContain('x'.repeat(400))
+      expect(reply).not.toContain('y'.repeat(500))
+    }
+    for (const query of [undefined, null, 42, '', '   ']) {
+      expect(
+        renderExternalFixedReply(
+          { kind: 'no-project' },
+          { ...quiet, query },
+        ).startsWith('External sources for "":'),
+      ).toBe(true)
+    }
   })
 })

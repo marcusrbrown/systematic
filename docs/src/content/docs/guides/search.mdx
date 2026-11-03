@@ -1,6 +1,6 @@
 ---
 title: Search your past work
-description: Search your docs/solutions, docs/plans, docs/brainstorms and docs/ideation by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line. Search runs on your machine and needs no setup.
+description: Search your docs/solutions, docs/plans, docs/brainstorms and docs/ideation by symptom, error text or topic from OpenCode, Pi, Claude Code and the command line, and opt in to search your own Markdown folders and Deciduous graphs. Search runs on your machine and needs no setup.
 sidebar:
   order: 12
 ---
@@ -8,6 +8,8 @@ sidebar:
 Systematic can search the durable outputs that its own workflows write: the learnings in `docs/solutions/`, the plans in `docs/plans/`, the brainstorms in `docs/brainstorms/` and the ideation documents in `docs/ideation/`. You type a symptom, an error message, a module name or a topic. You get ranked hits with the path, title, kind, a snippet, tags and status. Agents use the same search, so the `learnings-researcher` finds a past fix, or a direction you already rejected, before it greps.
 
 Search needs no setup. It ranks documents with a lexical method (BM25F) that runs in the plugin itself. It makes no network call, downloads no model and writes no cache.
+
+The four kinds cover what Systematic itself writes. Decisions often live somewhere else: an RFC folder, a wiki, a set of runbooks or a Deciduous decision graph. You can opt in to search those too, with `kind: external`. Nothing outside the four kinds is read until you set that up. See [External sources](#external-sources).
 
 ```bash
 npx @fro.bot/systematic search "tests fail only on retry"
@@ -98,10 +100,10 @@ The tool takes these arguments. The command takes the same three as flags, plus 
 | Argument | Required | Meaning |
 |---|---|---|
 | `query` | yes | What to look for, in plain words. At most 2,000 characters. |
-| `kind` | no | `solution`, `plan`, `brainstorm`, `ideation`, or `all`. The default is `solution`. |
-| `limit` | no | How many hits to return, an integer from 1 to 20. The default is 8. |
+| `kind` | no | `solution`, `plan`, `brainstorm`, `ideation`, `all`, or `external`. The default is `solution`. |
+| `limit` | no | How many hits to return, an integer from 1 to 20. The default is 8. With `kind: external` it applies to each source instead, and at most 5 hits per source are returned. |
 
-Leaving `kind` out searches solutions only, so existing calls return what they always did. `all` is not a fifth kind. It searches the four kinds in one ranking, and each hit names its kind. An unknown `kind` and an out-of-range `limit` are rejected with a fixed error on every surface. On the command line they exit with status 2. A reply is at most 16 KB, and a cut reply ends with a marker line that says so. With `all`, that one cap covers the whole reply.
+Leaving `kind` out searches solutions only, so existing calls return what they always did. `all` is not a fifth kind. It searches the four kinds in one ranking, and each hit names its kind. `external` is not a kind either, and it never combines with another `kind` or with `all`: it searches only the [external sources](#external-sources) you allowed, and every source is ranked on its own. A call with any other `kind` never returns an external record. An unknown `kind` and an out-of-range `limit` are rejected with a fixed error on every surface. On the command line they exit with status 2. A reply is at most 16 KB, and a cut reply ends with a marker line that says so. With `all`, that one cap covers the whole reply. A reply for `external` has its own cap of 12 KB and its own marker.
 
 ```bash
 systematic search flaky retry --limit 5
@@ -126,34 +128,244 @@ When every searched directory is missing, the reply says `corpus: none`. When at
 The `learnings-researcher` agent takes a scope on the first line of its prompt, `scope: solutions` or `scope: past-work`. Without that line it searches solutions only, as before.
 
 - `solutions` searches `docs/solutions/` once. `ce:review` and `ce:compound` use it, and so does the overlap check that `ce:compound` runs.
-- `past-work` searches all four kinds with one search per kind (`solution`, `plan`, `brainstorm` and `ideation`, five hits each), so long plans do not crowd the other kinds out of the top results. It never searches `all`. It groups what it finds by kind and recorded status: completed work, rejected, deferred or superseded directions, proposals that were never finished, and solutions. Every item carries its path and status, and nothing proposed is described as shipped. Its reply says once whether it used search or fell back to grep.
+- `past-work` searches all four kinds with one search per kind (`solution`, `plan`, `brainstorm` and `ideation`, five hits each), so long plans do not crowd the other kinds out of the top results. It never searches `all`. It then makes one more call, `kind: external` with `limit: 3`, which returns a fixed one-line reply and adds nothing when you have set up no external source. It groups what it finds by kind and recorded status: completed work, rejected, deferred or superseded directions, proposals that were never finished, and solutions. External hits go in a separate **External records** group, at most four of them, and each item names its source, its path and either its recorded status or its Deciduous `node_type`. The researcher never infers a status for an external record. It never greps, globs or reads an external source's folders, and it never retries a failed external call. Every item carries its path and status, and nothing proposed is described as shipped. Its reply says once whether it used search or fell back to grep.
+
+`solutions` scope, the overlap check in `ce:compound` and `ce:review` never call `external`.
 
 Four skills dispatch the researcher with `scope: past-work`: `ce:plan`, `ce:ideate`, `ce:brainstorm` (at Standard and Deep scope; at Lightweight scope it calls search directly with `kind: all`) and `deepen-plan`. When a result shows a rejected, deferred, superseded or completed item that overlaps the new work, the skill cites it by path and status and says how the new work differs. It never blocks the work. A cite names the path and the status and does not quote text from a file that git ignores.
 
 Exit statuses: `0` for results, no hits and a disabled search; `1` for a failure; `2` for a usage error.
 
+## External sources
+
+An external source is a folder you point search at. It holds either Markdown files (an RFC folder, a wiki, runbooks) or the sync folder of a Deciduous decision graph. A source is opt in. With none set up, `kind: external` returns one fixed line and reads nothing.
+
+Three rules decide what gets read:
+
+1. **A repository proposes.** A project's own config may list sources that live inside its own checkout. A proposal alone reads nothing.
+2. **You allow.** A project's proposals are read only after you add that project to `search.allow_project_sources` in your user config.
+3. **Your own roots are unrestricted.** A source you write in your user config may point at any folder on your machine. You wrote it, so it needs no allow step. It still has to name the projects it applies to.
+
+### Declare sources in your user config
+
+Put this in `~/.config/opencode/systematic.jsonc` (or in the file inside `OPENCODE_CONFIG_DIR`). A user source needs a `projects` list with at least one project root. A user source without one is dropped with a warning, so a source can never apply to every project by accident.
+
+```jsonc
+{
+  "search": {
+    "sources": [
+      {
+        "name": "runbooks",
+        "format": "markdown",
+        "roots": ["~/wiki/runbooks", "/srv/team/runbooks"],
+        "projects": ["~/src/github.com/me/app"]
+      },
+      {
+        "name": "decisions",
+        "format": "deciduous",
+        "roots": ["~/src/github.com/me/app/.deciduous/sync"],
+        "projects": ["~/src/github.com/me/app"]
+      }
+    ]
+  }
+}
+```
+
+- `name` is 1 to 40 letters, digits, `-` or `_`. It is case-sensitive, and it labels the source in every reply.
+- `format` is `markdown` or `deciduous`.
+- `roots` holds 1 to 8 folders. In user config each root is an absolute path or starts with `~`. A relative root is rejected.
+- `projects` holds the main repository roots the source applies to, written as absolute or `~` paths. A linked worktree counts as its main checkout (see [Allow a project](#allow-a-project)).
+
+### Let a project propose sources
+
+A repository can ship its own list in `.opencode/systematic.jsonc` (or `.json`) inside the checkout. A project may set `sources` and nothing else under `search`.
+
+```jsonc
+{
+  "search": {
+    "sources": [
+      { "name": "rfcs", "format": "markdown", "roots": ["docs/rfcs"] },
+      { "name": "graph", "format": "deciduous", "roots": [".deciduous/sync"] }
+    ]
+  }
+}
+```
+
+A project root is a relative folder inside the checkout, and the rules are strict:
+
+- It may not be `.`, may not be absolute, and may not contain `..`.
+- It may not contain any dot segment, such as `.slim/clonedeps`. There is one exception: a `deciduous` source may use a folder under `.deciduous/`, such as `.deciduous/sync`. `.deciduous` alone, `.deciduous/.cache` and a `markdown` source under `.deciduous/` are all rejected.
+- A root that is itself a symlink, that has a symlink anywhere between the checkout and the root (such as `docs` linking to a hidden folder, with the root `docs/private`), or that resolves outside the checkout, drops the source with a warning. User roots are not held to this rule.
+- A project entry cannot set `projects`. That field is for user config.
+
+A bad entry drops only itself. Its valid siblings still load, and the reply carries a warning that names the source and never a value.
+
+### Allow a project
+
+A project's proposals are read only when its main repository root is in `search.allow_project_sources`, which lives in your user config:
+
+```jsonc
+{
+  "search": {
+    "allow_project_sources": ["~/src/github.com/me/app"]
+  }
+}
+```
+
+Entries are absolute or `~` paths. Matching is exact, after both sides are resolved to real paths. Systematic combines the lists in the two user-level files. Neither a project config nor anything inside a repository can add to this list.
+
+If you skip this step, `kind: external` says so and reads nothing:
+
+```text
+External sources for "retry cache": this project proposes 2 external sources, but it is not in search.allow_project_sources, so nothing was read. To allow them, add "/Users/me/src/github.com/me/app" to search.allow_project_sources in your user config.
+```
+
+The reply never repeats a source name or root that the project wrote. It prints the main-root path only after it has verified the project's identity. If it cannot verify it, the reply says "Its identity could not be verified, so it cannot be allowed." and prints no path.
+
+**Identity is the main root.** Systematic reads the `.git` entry and works out the main repository root without running git. A linked worktree matches its main checkout, so one allow entry covers `.worktrees/feature-x` too. A submodule or a nested repository is its own project. These never verify, and so never match: a worktree of a bare repository or of a repository with a separate git directory, a repository whose config sets `core.worktree`, a `.git` that is a symlink, and a `.git` file that does not agree with the repository it names.
+
+User sources use the same rule through `projects`: a source applies to a checkout when one of its `projects` entries matches that checkout's main root. A user source that has the same name as a project source and applies to the current project replaces the project source.
+
+### Markdown sources
+
+A `markdown` source indexes every `.md` file under each root, to a depth of 6.
+
+- The title is the frontmatter `title`, else the first level-1 heading (outside a code fence), else the file name.
+- The status is the frontmatter `status` string exactly as written, and a hit with none prints no status. Search never infers a status, and it does not follow `superseded_by` links in an external source.
+- Nothing is excluded by name: a `README.md` is searchable, and so is a folder called `_archived`.
+- Symlinks are skipped at every depth. A file with invalid frontmatter is skipped, and the reply counts it in one warning.
+- A hit path is `<source>/<path inside a root>`. The source name comes first, so the path is not relative to the root as it stands. To find the file, strip the source name; what is left is a path inside one of the source's roots, which the section header lists. The reply does not say which root a hit came from. If two roots of one source provide the same path, the first root wins, so with several roots the file is under the first listed root that has it.
+
+### Deciduous sources
+
+A `deciduous` source reads the sync folder of a Deciduous graph. The root is the folder that holds `nodes/` and `edges/`, and each holds one `<id>.json` file per node or edge. Ids may use letters, digits, `-` and `_`, up to 64 characters. A file with any other name is skipped, and no file is ever opened by an id read from its contents.
+
+- Only nodes of type `decision`, `option`, `outcome` and `goal` become records. `action` and `observation` nodes never do. A node with a `deleted_at` value is skipped.
+- The title is `title`, else the first line of `description`, else the `change_id`. A hit prints `node_type decision` (or `option`, `outcome`, `goal`) where a Markdown hit prints its status.
+- An edge is not a record. Its `rationale` text becomes searchable text on the nodes it links, as long as the other end of the edge is a live node. Each edge adds up to 300 characters, each node takes up to 20 edges and 2 KB of rationale, and deleted nodes and edges add nothing.
+- A hit path is `<source>/nodes/<id>.json`. Strip the source name to get `nodes/<id>.json`, a path inside one of the source's roots. The reply does not say which root, so with several roots it is the first listed root that has the file.
+- A missing `nodes/` folder makes the source empty with a warning. A missing `edges/` folder gives records without rationale, with a warning.
+- A `nodes/` folder that exists but cannot be listed makes the source `unreadable`, the same state a Markdown root gets when it cannot be read. An `edges/` folder that exists but cannot be listed adds the warning `could not read an edges/ folder; records load without its rationale`, and the records still load. With several roots, the source is `unreadable` only when no root had a `nodes/` folder that could be listed.
+- The scan visits the `nodes/` folder of every root, in root order, and then the `edges/` folder of every root, sharing one limit of 8,000 files. A large `edges/` folder in the first root cannot use up the limit before a later root's nodes are scanned.
+
+### Limits
+
+| Limit | Value |
+|---|---|
+| Active sources in one call | 8. User sources come before project sources, and the extra ones are dropped with a warning that names them. |
+| Roots per source | 8 |
+| Size of one external file | 1 MB. A larger file is skipped with a warning, including a file that grew past the limit after search first saw it. Search reads at most one byte more than the limit. (The four built-in kinds keep their 256 KB limit.) |
+| Bytes read in one call, all sources together | 32 MB. Before any file is read, the file sizes of a source are added up, and a source that does not fit what is left is dropped whole. Later, smaller sources are still tried. Each read is limited to what the budget and the 16 MB source limit leave, so a file that grew after it was sized is rejected, not indexed, and nothing after it is read. The budget is charged the bytes actually read. |
+| Files per source | 2,000 Markdown files, or 2,000 Deciduous records out of up to 8,000 files scanned |
+| Directory entries examined per source | 32,000 in total, across every folder and every root of one external source. The source stops at the limit with one warning that names the source. Built-in kinds list a folder whole. |
+| Text per source | 16 MB |
+| Hits per source | At most 5, even when `limit` asks for more. `limit` applies to each source, not to the whole reply. |
+| Reply size | 12 KB, shared evenly by the sources that have hits |
+| Project config file | 1 MB |
+
+A source that goes past its share of the 12 KB drops whole hits from the end and prints `+N more hits not shown`. If the reply is cut anyway, it ends with `[Systematic: search output truncated at 12 KB]`.
+
+### Reply shapes
+
+Every `external` reply starts with `External sources for "<query>":`. It never contains the header tokens of a built-in search (`Corpus:`, `corpus: none`, `corpus: empty` or `Search "`). Every expected state below is a normal reply with exit status 0, not an error. An empty query, an unknown `kind` and an out-of-range `limit` are still rejected as usual, with status 2 on the command line.
+
+With hits, each active source gets its own section. Sections are sorted by source name, and each header shows the source's origin (`project` or `user`) and its roots, with your home directory shortened to `~`:
+
+```text
+External sources for "retry cache": 3 sources, 3 hits.
+
+graph (project): ~/src/github.com/me/app/.deciduous/sync
+
+1. graph/nodes/dec-cache.json
+   Title: Keep the retry cache | node_type decision
+   Snippet: Keep the retry cache
+
+rfcs (project): ~/src/github.com/me/app/docs/rfcs
+
+1. rfcs/cache.md
+   Title: Use a write-through cache | Status: accepted
+   Snippet: We chose a write-through cache because reads dominate and retries must stay idempotent.
+
+runbooks (user): ~/wiki/runbooks
+
+1. runbooks/runbook.md
+   Title: Retry runbook
+   Snippet: # Retry runbook When retries overlap, the cache can serve a stale entry. Flush the cache first.
+```
+
+Scores are not comparable across sources, so each source is ranked on its own and no source outranks another. The fixed lines are:
+
+| Situation | Reply after the prefix |
+|---|---|
+| No `.git` at or above the start directory | `no project: there is no .git directory at or above the start directory, so there are no external sources to search.` This is checked before the query and `limit`. |
+| The project proposes sources and is not allowed, and nothing else is active | The not-allowed reply above. |
+| The project proposes sources and is not allowed, but a source of yours is active | The normal sections for your sources, plus a line such as `Project sources: 1 proposed source not read: this project is not in search.allow_project_sources.` followed by the same advice. |
+| No source is active | `no external sources are active for this project.` |
+| A source has no match | The section stays, with `No matching records.` |
+| A source's folder does not exist | `missing: root not found.` A missing folder is quiet, and the other sources still load. |
+| A source has no readable record | `empty: no readable records.` |
+| A source could not be read | `unreadable: root could not be read.` This includes a Deciduous source whose `nodes/` folder exists but cannot be listed. |
+| A source was not read | `dropped: see the warnings.` The warning names the source and says why (a bad root, or no room in the 32 MB budget). |
+| The project's own config file could not be read | `Project sources: the project config could not be read, so it proposes none.` |
+
+A gitignored folder does not exist in a fresh worktree, so a source that points at one shows as missing there. The usual `Notes:` and `Warnings:` lines apply. Warnings that explain a dropped source come first.
+
+### What is read when
+
+External search reads fresh on every call:
+
+- The start directory and the project it belongs to, including its identity.
+- Both user-level config files, so edits to `allow_project_sources` and to your user sources take effect on the next call.
+- The project config file.
+- The record files themselves. Nothing is cached.
+
+A few things are fixed when the harness starts: `search.enabled`, whether the `systematic_search` tool exists and how it is described, and the `config unreadable` note recorded at startup, which built-in searches keep printing. In a host plugin, an external call decides that note from its own read of the user config and ignores the startup note, so a repair clears the note on the next external call without a restart. The `systematic search` and `systematic-search` commands read everything on every run.
+
+### When setup fails and when it does not
+
+A project config that parses but holds an invalid `search.sources` never fails plugin setup. This holds on OpenCode v2, where it is tested. Systematic drops the bad entries, warns, and loads everything else. A project config that cannot be parsed at all fails setup exactly as it always has. External search cannot rescue a plugin that never started: if setup failed, there is no tool to call.
+
+### Known limits
+
+These are accepted trade-offs. Read them before you allow a project.
+
+- **Every worktree of an allowed project contributes.** A worktree reads its own copy of `.opencode/systematic.jsonc` and its own Markdown. That includes a worktree you made to review someone else's pull request. Allowing a project covers whatever any of its branches proposes. Roots still pass the rules above, so a branch cannot reach outside its checkout, but it can point at any folder inside it.
+- **A stale allow entry trusts whatever repository is cloned to that path later.** The entry is an exact path. Remove entries for paths you no longer use.
+- **Plugin hosts read the standard config directories.** On OpenCode v1, OpenCode v2 and Pi, external search reads `~/.config/opencode` and `OPENCODE_CONFIG_DIR`. The OpenCode v2 plugin has no config-directory override for this read.
+- **No redaction.** An external source is text you chose to expose. Text in a hit can contain instructions, and Systematic does not strip anything from it. Point it only at stores you trust.
+
+### Privacy
+
+External sources read local files and send nothing anywhere. Search opens no network connection, runs no command and writes nothing. The text of a hit goes where any tool result goes: to the agent that called search, and so to your model provider. Systematic does not redact secrets from an excerpt, and an agent can copy that text into a plan. Keep secrets out of any folder you add as a source. See also the [privacy page](/systematic/privacy/).
+
 ## Configure search
 
-Search has one setting, `search.enabled`. It lives in your **user-level** config only. Systematic reads it from these files, in this order, and merges them:
+Search reads its settings from your **user-level** config. Systematic reads them from these files, in this order, and merges them:
 
 1. `~/.config/opencode/systematic.jsonc`, or `systematic.json` if there is no `.jsonc`.
 2. The same file name inside the directory named by `OPENCODE_CONFIG_DIR`, if that variable is set and not blank.
 
-The second file overrides the first. `enabled` takes the last file that sets it.
+The second file overrides the first. `enabled` takes the last file that sets it, `allow_project_sources` combines the lists in both files, and `sources` merge by name with the second file winning.
 
-A project config cannot set `search`. If `.opencode/systematic.jsonc` or `.opencode/systematic.json` has a `search` block, Systematic ignores the whole block and prints a warning. This is on purpose. Otherwise a repository you clone could switch search off.
+A project config may set `search.sources` and nothing else. `search.enabled` and `search.allow_project_sources` belong to you. If `.opencode/systematic.jsonc` or `.opencode/systematic.json` sets either one, Systematic ignores that field and prints a warning that names it. This is on purpose. Otherwise a repository you clone could switch search off, or allow its own sources.
 
-The `systematic-search` command in Claude Code reads the two user-level files and never opens project config. For that reason it cannot print the project-config warning that `systematic search` prints.
+The `systematic-search` command in Claude Code reads the two user-level files. From project config it reads one thing, and only for `--kind external`: the `sources` the project proposes. It does not read project config for anything else, so it cannot print the warning about ignored user-only fields that `systematic search` prints. If it cannot read the project file, it prints one warning on stderr and treats the project as proposing no sources.
 
 ### Fields
 
-`search` accepts only the field below. An unknown field makes the whole block invalid.
+An unknown field makes the `search` block invalid.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `search.enabled` | boolean | `true` | `false` removes search. See [Turn search off](#turn-search-off). |
+| `search.enabled` | boolean | `true` | `false` removes search. See [Turn search off](#turn-search-off). User config only. |
+| `search.allow_project_sources` | array of paths | none | Main repository roots whose project config may propose sources. See [Allow a project](#allow-a-project). User config only. |
+| `search.sources` | array of sources | none | The external sources. See [External sources](#external-sources). A project may set this field. |
+| `search.sources[].name` | string | none | Required. 1 to 40 letters, digits, `-` or `_`. |
+| `search.sources[].format` | `markdown` or `deciduous` | none | Required. |
+| `search.sources[].roots` | array of paths | none | Required, 1 to 8 folders. Relative in a project, absolute or `~` in user config. |
+| `search.sources[].projects` | array of paths | none | Required in user config, where it needs at least one entry. Not allowed in a project. |
 
-If the `search` block fails its check, Systematic drops that block, prints one warning that names the field and never its value, and loads the rest of the file. Search then runs with its defaults, and each result carries the note `config unreadable`. The `systematic-search` command does the same. It also treats a user-level file it cannot parse as unreadable. Search never stops the plugin from loading.
+A field or an entry that fails its check is dropped alone. `enabled: false` survives a typo in `sources`, and one bad source leaves its valid siblings in place. Systematic prints one warning that names the field or the source and never its value, and loads the rest of the file. If a dropped setting changes what search does (a bad `enabled`, a bad allow entry, a `sources` that is not an array, an unknown field), results carry the note `config unreadable`. A bad allow entry allows nothing. A source entry that is dropped on its own sets no note. The `systematic-search` command does the same. It also treats a user-level file it cannot parse as unreadable. Search never stops the plugin from loading.
 
 ### Turn search off
 
@@ -163,11 +375,11 @@ Set `search.enabled` to `false`:
 { "search": { "enabled": false } }
 ```
 
-This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from Pi delegates, with no note. `systematic search` and `systematic-search` print that search is disabled and exit with status 0. The `learnings-researcher` then falls back to grep. In `past-work` scope it greps each of the four directories that exists.
+This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from Pi delegates, with no note. `systematic search` and `systematic-search` print that search is disabled and exit with status 0. The `learnings-researcher` then falls back to grep. In `past-work` scope it greps each of the four directories that exists. It never greps external source folders, so with search off there are no external records.
 
 ### Restart after you change config
 
-OpenCode and Pi read config once when they start. Restart the harness after you change `search`. The `systematic search` command and the `systematic-search` command read config on every run, so they need no restart.
+OpenCode and Pi read config once when they start. Restart the harness after you change `search.enabled`. Changes to `allow_project_sources`, to your user `sources` and to a project's `sources` need no restart for `kind: external`, because that call reads them again every time (see [What is read when](#what-is-read-when)). The `systematic search` command and the `systematic-search` command read config on every run, so they need no restart.
 
 ## Notes
 
@@ -177,6 +389,8 @@ Notes appear on the `Notes:` line of a result, separated by semicolons. They use
 |---|---|
 | `config unreadable` | A `search` block or a user-level config file could not be read. The warning on stderr, or in the host log, names the field. |
 | `query cut to its first 64 distinct terms` | The query had more than 64 distinct terms. The extra terms were ignored. |
+
+Both notes apply to `external` replies too. `config unreadable` there also covers a bad allow entry and an unreadable user-level file, and in a host plugin an external reply takes it from that call's own read of the config, so it disappears once the config is repaired.
 
 A result can also carry up to five warnings from the corpus loader, followed by `+N more`. Warnings about a directory that cannot be read, or about a limit that was reached, come first and name the directory. After them comes one line per kind that counts its skipped files by reason, such as `docs/plans: skipped 2 files (1 invalid frontmatter, 1 larger than 262144 bytes)`.
 
@@ -189,6 +403,7 @@ The `systematic-search` command in the Claude Code plugin is a single bundled fi
 ## What search does not do
 
 - It does not use embeddings or a semantic index. It matches terms, so a learning that describes the same problem in other words can be missed.
-- It does not send anything off your machine.
-- It searches the four kinds above only. Todos, review artifacts and instruction files such as `AGENTS.md` are not indexed.
+- It does not send anything off your machine. The text of a hit reaches your model provider when an agent reads it, as any tool result does.
+- It searches the four kinds above and the [external sources](#external-sources) you opted in to, and nothing else. Todos, review artifacts and instruction files such as `AGENTS.md` are not indexed.
+- It does not read an external source through a command, a network service or an MCP server, and it never writes to one.
 - It does not weigh one kind against another. In a search of `all`, a long plan can outrank a short solution on common words. Search a single kind when you want one.

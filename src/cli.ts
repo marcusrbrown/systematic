@@ -53,7 +53,11 @@ import {
   type RoutingResolution,
   resolveRouting,
 } from './lib/routing-resolver.js'
-import { runSearchCli, type SearchCliSettingsLoad } from './lib/search-cli.js'
+import {
+  runSearchCli,
+  type SearchCliOptions,
+  type SearchCliSettingsLoad,
+} from './lib/search-cli.js'
 import { resolveSearchRoot } from './lib/search-corpus.js'
 import {
   loadUserLevelSearchSettings,
@@ -112,13 +116,18 @@ Commands:
                                CI, issues, or fixtures. Not for the ce:review parent's own run artifact.
                                Exit statuses: 0 valid artifact, 1 validation failure,
                                2 operational failure, 3 legacy artifact with no schema_version
-  search <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all] [--limit <1-20>]
+  search <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all|external] [--limit <1-20>]
                                Search the project's past work by symptom, error text, module or topic,
                                and print ranked hits: docs/solutions learnings (the default kind),
                                docs/plans, docs/brainstorms and docs/ideation. --kind all ranks every
-                               kind together. The project root is the nearest ancestor of --dir
-                               (default: the current directory) that holds .git.
-                               Reads user-level search settings; a project config cannot change them.
+                               kind together; --kind external searches the external sources you
+                               allowed, ranked per source; --limit then applies to each source,
+                               at most 5 per source. An external hit prints as <source>/<path>; strip the
+                               source name for a path inside one of the source's roots (with several
+                               roots, the first that has the file). The project root is the nearest
+                               ancestor of --dir (default: the current directory) that holds .git.
+                               Reads search settings from your user config. A project config can
+                               propose external sources but cannot allow them or switch search off.
                                Exit statuses: 0 results, no hits, or search disabled; 2 usage error
                                Use -- to end options, for a query that starts with a dash
   validate-review-return       Validate one raw ce:review persona return read from stdin
@@ -520,12 +529,15 @@ function userLevelDirOptions(
 
 /**
  * The settings loader `systematic search` injects into `runSearchCli`: the
- * full config loader, so the project-config strip warning for a `search` block
- * reaches stderr (AE2). Config is read at the project root, resolved the same
- * way the corpus root is. A thrown load, an invalid user or custom source, or
- * an invalid `search` block all give `unreadable: true`, which makes the core
- * add the `config unreadable` note to the results. A project source never
- * counts: project config has no effect on search.
+ * full config loader, so the project-config strip warning for `search.enabled`
+ * or `search.allow_project_sources` reaches stderr. Config is read at the
+ * project root, resolved the same way the corpus root is. A thrown load, an
+ * invalid user or custom source, or an invalid `search` block all give
+ * `unreadable: true`, which makes the core add the `config unreadable` note to
+ * the results. A project source never counts toward `unreadable`, and a
+ * project config cannot change `enabled` or the allow list. It may propose
+ * `search.sources`, but the loader validates and discards them: the per-call
+ * external reader is their only consumer, and nothing here reads them.
  *
  * The full loader drops a whole file that fails validation, so a valid
  * `search.enabled: false` next to a bad sibling key would be lost. When a
@@ -567,6 +579,23 @@ export function loadSearchSettingsForCli(
       warnings,
       unreadable: true,
     }
+  }
+}
+
+/**
+ * What `systematic search` hands `runSearchCli` besides its argv: the settings
+ * loader and the config directories `--kind external` reads its allow list and
+ * user sources from. Both take the same override, so one `configOptions`
+ * reaches the settings loader and the external reader alike. Left out,
+ * both read the home directory and `OPENCODE_CONFIG_DIR`.
+ */
+export function searchCliInputs(
+  configOptions?: LoadConfigOptions,
+): Pick<SearchCliOptions, 'loadSettings' | 'configOptions'> {
+  return {
+    loadSettings: (startDir) =>
+      loadSearchSettingsForCli(startDir, configOptions),
+    configOptions: userLevelDirOptions(configOptions),
   }
 }
 
@@ -1256,7 +1285,7 @@ function runLegacyCli(args: string[]): void {
         cwd: process.cwd(),
         errorSink: console.error,
         usageName: 'systematic search',
-        loadSettings: loadSearchSettingsForCli,
+        ...searchCliInputs(),
         outputSink: console.log,
       }).then((status) => {
         process.exitCode = status

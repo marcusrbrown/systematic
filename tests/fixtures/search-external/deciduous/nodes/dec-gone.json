@@ -1,0 +1,8 @@
+{
+  "change_id": "dec-gone",
+  "deleted_at": "2026-02-01T00:00:00Z",
+  "description": "A tombstone: this text mentions the aardvark.",
+  "node_type": "decision",
+  "status": "pending",
+  "title": "Removed decision"
+}

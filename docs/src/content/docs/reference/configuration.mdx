@@ -896,7 +896,7 @@ false
 
 ## search
 
-Durable-output search settings. Only user config and OPENCODE_CONFIG_DIR config may set this field; a project config that sets it has the whole field ignored with a warning, so a repository cannot switch search off. An invalid block is dropped with a warning; the rest of the file still loads.
+Search settings. `enabled` and `allow_project_sources` are user-owned: only user config and OPENCODE_CONFIG_DIR config may set them, and a project config that sets either has that field ignored with a warning. A project config may set `sources`. An invalid field or entry is dropped with a warning; the rest of the file still loads.
 
 **Type:** `object`
 **Examples:**
@@ -905,6 +905,162 @@ Durable-output search settings. Only user config and OPENCODE_CONFIG_DIR config 
 {
   "enabled": false
 }
+```
+
+```json
+{
+  "allow_project_sources": [
+    "~/src/github.com/me/app"
+  ],
+  "sources": [
+    {
+      "name": "team-rfcs",
+      "format": "markdown",
+      "roots": [
+        "/srv/rfcs"
+      ],
+      "projects": [
+        "~/src/github.com/me/app"
+      ]
+    }
+  ]
+}
+```
+
+
+### enabled
+
+Set to false to remove the search tool. Defaults to true when unset. User-owned: only valid in user config or OPENCODE_CONFIG_DIR config.
+
+**Type:** `boolean`
+
+**Examples:**
+
+```json
+false
+```
+
+
+### allow_project_sources
+
+Main repository roots (absolute or `~`-prefixed) whose project config may propose `search.sources`. A project's sources are read only when its main root is listed here; matching is exact, a linked worktree matches its main checkout, and an allowed project covers whatever any of its branches proposes. User-owned: only valid in user config or OPENCODE_CONFIG_DIR config; the lists in both are combined.
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "~/src/github.com/me/app"
+]
+```
+
+
+### sources
+
+Opt-in external decision sources for `kind: "external"` search: folders of Markdown or Deciduous sync JSON. A project config may propose sources inside its own checkout, but none is read until the user lists that project in `allow_project_sources`. User config may map folders anywhere on disk to projects with `projects`, which every user source must list (at least one project root). An invalid entry is dropped with a warning and its valid siblings stay.
+
+**Type:** `object`[]
+
+**Examples:**
+
+```json
+[
+  {
+    "name": "team-rfcs",
+    "format": "markdown",
+    "roots": [
+      "docs/rfcs"
+    ]
+  }
+]
+```
+
+```json
+[
+  {
+    "name": "decisions",
+    "format": "deciduous",
+    "roots": [
+      "~/src/github.com/me/app/.deciduous/sync"
+    ],
+    "projects": [
+      "~/src/github.com/me/app"
+    ]
+  }
+]
+```
+
+#### sources[].name
+
+Source name: letters, digits, `-` and `_`, at most 40 characters. Case-sensitive. Search results label the source with it, and a user source with the same name as a project source replaces it when the user source is mapped to the project.
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+team-rfcs
+```
+
+```json
+ops_runbooks
+```
+
+
+#### sources[].format
+
+How the source stores records. `markdown` reads `.md` files under each root; `deciduous` reads Deciduous sync JSON (`nodes/` and `edges/`).
+
+**Type:** `string`
+
+**Valid values:** `markdown`, `deciduous`
+
+**Examples:**
+
+```json
+markdown
+```
+
+```json
+deciduous
+```
+
+
+#### sources[].roots
+
+One to eight folders to read. In a project config each root is a relative path under the checkout (no `.`, no `..`, no dot segment, except `.deciduous/<subfolder>` for a `deciduous` source). In user config each root is an absolute or `~`-prefixed path. Symlinks inside a root are skipped.
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "docs/rfcs"
+]
+```
+
+```json
+[
+  "~/src/wiki/pages",
+  "/srv/runbooks"
+]
+```
+
+
+#### sources[].projects
+
+User config only, and required there: at least one absolute or `~`-prefixed main repository root this source applies to. A user source that omits it or leaves it empty is dropped with a warning, so a source can never apply to every project by accident. A project config may not set it.
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "~/src/github.com/me/app"
+]
 ```
 
 

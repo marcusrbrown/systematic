@@ -372,6 +372,30 @@ describe('generateSchemaContent', () => {
     expect(props).toHaveProperty('bootstrap')
   })
 
+  test('the search field lists allow_project_sources and sources with trust tags only on the user-only fields', () => {
+    const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
+    const definitions = parsed.definitions as Record<
+      string,
+      Record<string, unknown>
+    >
+    // The generator emits shared definitions; follow a `$ref` to its target.
+    const resolve = (node: Record<string, unknown> | undefined) => {
+      const ref = node?.$ref
+      if (typeof ref !== 'string') return node
+      return definitions[ref.replace('#/definitions/', '')]
+    }
+    const props = parsed.properties as Record<string, Record<string, unknown>>
+    const search = resolve(props.search)
+    const fields = search?.properties as Record<string, Record<string, unknown>>
+    expect(search?.trust).toBeUndefined()
+    expect(resolve(fields.enabled)?.trust).toBe('project-or-higher')
+    expect(resolve(fields.allow_project_sources)?.trust).toBe(
+      'project-or-higher',
+    )
+    expect(resolve(fields.sources)?.trust).toBeUndefined()
+    expect(resolve(fields.sources)?.examples).toBeDefined()
+  })
+
   test('the removed workflow_guard key stays a property, marked deprecated, with a description and no suggested value', () => {
     const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
     const props = parsed.properties as Record<string, Record<string, unknown>>

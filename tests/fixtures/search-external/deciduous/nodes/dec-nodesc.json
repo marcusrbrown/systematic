@@ -1,0 +1,6 @@
+{
+  "change_id": "dec-nodesc",
+  "description": "\n\nAdopt the lemur retry policy\nSecond line of the description.",
+  "node_type": "decision",
+  "status": "pending"
+}

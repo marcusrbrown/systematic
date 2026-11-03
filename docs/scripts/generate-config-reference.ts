@@ -119,6 +119,21 @@ const PI_SUBAGENTS_OVERLAY_FIELD_KEYS = [
   'skills',
 ] as const
 
+/** `search` sub-fields, in display order. */
+const SEARCH_SUB_FIELDS = [
+  'enabled',
+  'allow_project_sources',
+  'sources',
+] as const
+
+/** Fields of one `search.sources[]` entry, in display order. */
+const SEARCH_SOURCE_ENTRY_FIELDS = [
+  'name',
+  'format',
+  'roots',
+  'projects',
+] as const
+
 /**
  * Format a JSON Schema type annotation for display.
  */
@@ -280,6 +295,40 @@ function getNestedSchema(
 }
 
 /**
+ * Render the `search` sub-field sections: each nested field under `###`, and
+ * the entry fields of `sources[]` under `####` with a `sources[].` prefix.
+ */
+function renderSearchSubFields(searchSchema: Record<string, unknown>): string {
+  const props = searchSchema.properties as Record<string, unknown> | undefined
+  if (!props) return ''
+  return `\n\n${renderSearchSubSections(props)}`
+}
+
+function renderSearchSubSections(props: Record<string, unknown>): string {
+  return SEARCH_SUB_FIELDS.map((subKey) => {
+    const subSchema = props[subKey] as Record<string, unknown> | undefined
+    if (!subSchema) return null
+    const own = renderFieldSection(`### ${subKey}`, subSchema)
+    const items = subSchema.items as Record<string, unknown> | undefined
+    const entryProps = items?.properties as Record<string, unknown> | undefined
+    if (subKey !== 'sources' || !entryProps) return own
+    const entries = SEARCH_SOURCE_ENTRY_FIELDS.map((entryKey) => {
+      const entrySchema = entryProps[entryKey] as
+        | Record<string, unknown>
+        | undefined
+      return entrySchema
+        ? renderFieldSection(`#### sources[].${entryKey}`, entrySchema)
+        : null
+    })
+      .filter(Boolean)
+      .join('\n\n')
+    return `${own}\n${entries}`
+  })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/**
  * Render a top-level config field section (## section) with its description,
  * type, default, examples, and any sub-fields or cross-references.
  *
@@ -352,6 +401,10 @@ function renderTopLevelSection(
         .filter(Boolean)
         .join('\n\n')
   }
+
+  // search sub-fields (`enabled`, `allow_project_sources`, `sources`), then
+  // the fields of one `sources[]` entry one heading level deeper.
+  if (key === 'search') subFields = renderSearchSubFields(propSchema)
 
   // Cross-reference for agent/category overlay sections.
   // The Overlay Fields block renders before the agents/categories sections in

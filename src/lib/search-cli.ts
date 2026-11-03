@@ -13,7 +13,7 @@
  * failure; 2 for usage errors. There is no `--json`.
  *
  * Import rule: this module is bundled into the `systematic-search` bin, so it
- * may import only `search-core.ts` and node builtins.
+ * may import only `search-core.ts`, node builtins and types.
  */
 
 import path from 'node:path'
@@ -26,6 +26,7 @@ import {
   SEARCH_NOTICES,
   type SearchSettings,
 } from './search-core.js'
+import type { UserLevelConfigDirOptions } from './search-user-config.js'
 
 /**
  * The usage text for one surface. `commandName` is what that surface's users
@@ -33,7 +34,7 @@ import {
  * bin user to run a command they may not have.
  */
 export function searchCliUsage(commandName: string): string {
-  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
+  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all|external] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
 
 Searches the project's past work by symptom, error text, module or topic, and
 prints ranked hits: the docs/solutions learnings, and the docs/plans,
@@ -44,8 +45,13 @@ Options:
                    The project root is the nearest ancestor holding .git.
   --kind <kind>    The kind of durable output to search: solution (docs/solutions,
                    the default), plan (docs/plans), brainstorm (docs/brainstorms),
-                   ideation (docs/ideation), or all to rank every kind together.
-  --limit <n>      How many hits to return, ${MIN_LIMIT} to ${MAX_LIMIT} (default: 8).
+                   ideation (docs/ideation), all to rank every kind together, or
+                   external for the external sources you allowed, ranked per source.
+                   An external hit prints as <source>/<path>: strip the source name for a
+                   path inside one of that source's roots (with several roots, the first
+                   that has the file).
+  --limit <n>      How many hits to return, ${MIN_LIMIT} to ${MAX_LIMIT} (default: 8). With
+                   --kind external it applies to each source, at most 5 per source.
   --               End of options; everything after it is part of the query.
   -h, --help       Show this help.
 
@@ -55,6 +61,14 @@ Exit statuses: 0 results, no hits, or search disabled; 2 usage error`
 /** What `search.enabled: false` prints. The researcher falls back to grep on it. */
 export const SEARCH_CLI_DISABLED_NOTICE =
   'Search is disabled (search.enabled is false in your Systematic config), so there is nothing to search.'
+
+/**
+ * Printed once to stderr when `--kind external` finds the project's config
+ * file structurally broken. Fixed text: no path, no value. The reply
+ * carries the aggregate line and the bounded warnings.
+ */
+export const SEARCH_CLI_PROJECT_CONFIG_WARNING =
+  '[systematic] The project Systematic config could not be read, so it proposes no external sources.'
 
 /** What a settings loader returns. The bin's user-level reader returns the same shape. */
 export interface SearchCliSettingsLoad {
@@ -77,6 +91,12 @@ export interface SearchCliOptions {
   /** The command the usage text names: `systematic search` or `systematic-search`. */
   readonly usageName: string
   readonly loadSettings: SearchCliSettingsLoader
+  /**
+   * The user-level config directories `--kind external` reads its allow list
+   * and user sources from. The caller passes the same options it gives its
+   * settings loader, so one override reaches both.
+   */
+  readonly configOptions?: UserLevelConfigDirOptions | undefined
   readonly outputSink?: (message: string) => void
   readonly errorSink?: (message: string) => void
 }
@@ -231,6 +251,7 @@ export async function runSearchCli(options: SearchCliOptions): Promise<number> {
       {
         startDir,
         settings: load.settings,
+        configOptions: options.configOptions,
         ...(load.unreadable && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
       },
     )
@@ -238,6 +259,9 @@ export async function runSearchCli(options: SearchCliOptions): Promise<number> {
       // `runSearch` rejects only a bad request: the caller's mistake.
       errorSink(response.text)
       return 2
+    }
+    if (response.selector === 'external' && response.projectConfigUnreadable) {
+      errorSink(SEARCH_CLI_PROJECT_CONFIG_WARNING)
     }
     outputSink(response.text)
     return 0

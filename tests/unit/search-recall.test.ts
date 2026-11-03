@@ -58,6 +58,7 @@ import path from 'node:path'
 import { runSearch } from '../../src/lib/search-core.js'
 import { loadCorpus } from '../../src/lib/search-corpus.js'
 import { tokenize } from '../../src/lib/search-lexical.js'
+import { builtinResult } from '../helpers/search-response.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 
@@ -204,7 +205,7 @@ async function measure(entry: QueryEntry): Promise<Outcome> {
     { startDir: ROOT_DIR },
   )
   if (!response.ok) throw new Error(response.text)
-  const top = response.result.hits.map((hit) => hit.document.path)
+  const top = builtinResult(response).hits.map((hit) => hit.document.path)
   const index = top.findIndex((hit) => entry.relevant.includes(hit))
   return {
     entry,

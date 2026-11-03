@@ -6,10 +6,14 @@
  * with no `node_modules`.
  *
  * It reads search settings from the two user-level files only (through
- * `loadUserLevelSearchSettings`) and never reads project config, so a
- * repository cannot switch it off. Because it
- * never reads the project file it also cannot print the project-config strip
- * warning that `systematic search` prints; that asymmetry is accepted.
+ * `loadUserLevelSearchSettings`), so a repository cannot switch it off or
+ * allow itself. From project config it reads one thing, and only for
+ * `--kind external`: the `sources` the project proposes, through the bin-safe
+ * reader in `search-user-config.ts`. It does not read the project
+ * config for anything else, so it cannot print the strip warning that
+ * `systematic search` prints for `enabled` or `allow_project_sources`; that
+ * asymmetry is accepted. `userLevel` reaches the external reader as well as
+ * the settings loader, so one override selects the allow list for both.
  *
  * Import rule: nothing here may import `config.ts` or `config-schema.ts`.
  * The bundle would then carry the config loader and its UMD jsonc build, which
@@ -44,6 +48,7 @@ export function runClaudeCodeSearch(
     outputSink: options.outputSink,
     errorSink: options.errorSink,
     loadSettings: () => loadUserLevelSearchSettings(options.userLevel),
+    configOptions: options.userLevel,
   })
 }
 

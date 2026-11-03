@@ -22,7 +22,13 @@
  *
  * What this does not prove: a live model choosing to call the tool. The
  * scripted model makes the call.
+ *
+ * The proof has two modes. The default mode is the built-in search proof the
+ * v1, v2 and Pi files run. The external mode searches `kind: "external"`
+ * against a planted source folder; it differs in four things only (see
+ * `DelegatedSearchMode`).
  */
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -62,6 +68,72 @@ export const DELEGATED_SEARCH_REQUEST_CAP = 10
 /** What the scripted parent's final answer starts with, ahead of the paths it read. */
 export const PARENT_FINAL_MARKER = 'PARENT-FINAL'
 
+/**
+ * The four things that differ between the built-in proof and the external one:
+ * the header the child's tool message must start with, the pattern that finds
+ * a result path in a tool message, the arguments the scripted child sends, and
+ * the labels each planted hit must print. `expectedLabels` also says which
+ * planted paths the proof requires: `solution` is the observation's
+ * `plantedPath` and `brainstorm` is its `plantedBrainstormPath`. An empty label
+ * list requires the path to head a hit and nothing more.
+ */
+export interface DelegatedSearchMode {
+  readonly headerPrefix: string
+  /** Global; finds each result path in a tool message. */
+  readonly pathPattern: RegExp
+  readonly searchArguments: Readonly<Record<string, unknown>>
+  readonly expectedLabels: readonly {
+    readonly path: 'solution' | 'brainstorm'
+    readonly labels: readonly string[]
+  }[]
+}
+
+/** Today's constants: what the v1, v2 and Pi proofs have always checked. */
+export const DEFAULT_DELEGATED_SEARCH_MODE: DelegatedSearchMode = {
+  headerPrefix: 'Search "',
+  pathPattern: /docs\/[a-z]+\/[\w.-]+\.md/g,
+  searchArguments: DELEGATED_SEARCH_FIXTURE.searchArguments,
+  expectedLabels: [
+    {
+      path: 'solution',
+      labels: [`Kind: ${DELEGATED_SEARCH_FIXTURE.solution.kind}`],
+    },
+    {
+      path: 'brainstorm',
+      labels: [
+        `Kind: ${DELEGATED_SEARCH_FIXTURE.brainstorm.kind}`,
+        `Status: ${DELEGATED_SEARCH_FIXTURE.brainstorm.status}`,
+      ],
+    },
+  ],
+}
+
+/** The planted external source: a Markdown folder that the project file proposes. */
+export const DELEGATED_EXTERNAL_FIXTURE = {
+  sourceName: 'zebra-wiki',
+  /** The source root, relative to the project. */
+  rootDir: 'wiki',
+  fileName: 'zebra-notes.md',
+  /** The path the renderer prints for the planted record: `<source>/<relative path>`. */
+  hitPath: 'zebra-wiki/zebra-notes.md',
+  content:
+    '---\ntitle: Zebra field notes\n---\n\nThe zebra flake appears when retries overlap.\n',
+  /** The proposing project file, relative to the project. */
+  projectConfigFile: '.opencode/systematic.jsonc',
+} as const
+
+/**
+ * Searches `kind: "external"`. The reply starts with the external prefix, the
+ * hit path is `<source>/<file>.md` (one slash, so a built-in `docs/...` path
+ * never matches), and an external hit prints no `Kind:` or `Status:` label.
+ */
+export const EXTERNAL_DELEGATED_SEARCH_MODE: DelegatedSearchMode = {
+  headerPrefix: 'External sources for "',
+  pathPattern: /(?<![\w./-])[a-z][\w-]*\/[\w.-]+\.md(?![\w/])/g,
+  searchArguments: { query: 'zebra flake retry', kind: 'external' },
+  expectedLabels: [{ path: 'solution', labels: [] }],
+}
+
 /** Writes the planted solution and brainstorm under a fixture project. */
 export function plantDelegatedSearchFixture(projectDir: string): void {
   for (const doc of [
@@ -71,6 +143,42 @@ export function plantDelegatedSearchFixture(projectDir: string): void {
     const target = path.join(projectDir, doc.path)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.writeFileSync(target, doc.content)
+  }
+}
+
+/**
+ * Plants the external source folder, the project file that proposes it, and a
+ * checkout root. The checkout root is a real `git init` so a host that runs
+ * git in the project sees a valid repository, and the project identity
+ * resolves. The user's allow entry is not planted here: a run adds it to its
+ * own user config, and the negative control leaves it out.
+ */
+export function plantDelegatedExternalFixture(projectDir: string): void {
+  const fixture = DELEGATED_EXTERNAL_FIXTURE
+  const note = path.join(projectDir, fixture.rootDir, fixture.fileName)
+  fs.mkdirSync(path.dirname(note), { recursive: true })
+  fs.writeFileSync(note, fixture.content)
+
+  const projectConfig = path.join(projectDir, fixture.projectConfigFile)
+  fs.mkdirSync(path.dirname(projectConfig), { recursive: true })
+  fs.writeFileSync(
+    projectConfig,
+    JSON.stringify({
+      search: {
+        sources: [
+          {
+            name: fixture.sourceName,
+            format: 'markdown',
+            roots: [fixture.rootDir],
+          },
+        ],
+      },
+    }),
+  )
+
+  const init = spawnSync('git', ['init', '-q'], { cwd: projectDir })
+  if (init.status !== 0) {
+    throw new Error(`git init failed in ${projectDir}: ${init.stderr}`)
   }
 }
 
@@ -197,9 +305,10 @@ export interface DelegatedSearchObservation {
    * host's own output. Absent means the run never captured one, which fails.
    */
   parentAnswer?: string
+  /** Which proof to apply. Absent means the default (built-in search) mode. */
+  mode?: DelegatedSearchMode
 }
 
-const SEARCH_HEADER_PREFIX = 'Search "'
 /** What the renderer joins a hit's label fields with. */
 const HIT_FIELD_SEPARATOR = ' | '
 
@@ -259,6 +368,12 @@ function checkHitLabels(
   expected: readonly string[],
 ): DelegatedSearchVerdict | undefined {
   const printed = hitLabels(toolText, hitPath)
+  if (printed === undefined && expected.length === 0) {
+    return fail(
+      'bad-label',
+      `${hitPath} does not head a hit in the child's tool message: ${toolText.slice(0, 160)}`,
+    )
+  }
   const missing = expected.filter((label) => !printed?.includes(label))
   if (missing.length === 0) return undefined
   return fail(
@@ -270,9 +385,8 @@ function checkHitLabels(
 /** Checks the child's tool message: a search result holding both planted hits. */
 function checkChildResult(
   toolText: string,
-  plantedPaths: readonly string[],
-  solutionPath: string,
-  brainstormPath: string,
+  mode: DelegatedSearchMode,
+  plantedPaths: Readonly<Record<'solution' | 'brainstorm', string>>,
 ): DelegatedSearchVerdict | undefined {
   if (toolText.startsWith('Error:')) {
     return fail(
@@ -280,28 +394,26 @@ function checkChildResult(
       `the child's tool message is an error: ${toolText.slice(0, 160)}`,
     )
   }
-  if (!toolText.startsWith(SEARCH_HEADER_PREFIX)) {
+  if (!toolText.startsWith(mode.headerPrefix)) {
     return fail(
       'bad-header',
-      `the child's tool message does not start with ${SEARCH_HEADER_PREFIX}: ${toolText.slice(0, 160)}`,
+      `the child's tool message does not start with ${mode.headerPrefix}: ${toolText.slice(0, 160)}`,
     )
   }
-  const absent = plantedPaths.find((planted) => !toolText.includes(planted))
+  const absent = mode.expectedLabels
+    .map(({ path: role }) => plantedPaths[role])
+    .find((planted) => !toolText.includes(planted))
   if (absent !== undefined) {
     return fail(
       'path-missing',
       `the child's tool message does not contain ${absent}: ${toolText.slice(0, 160)}`,
     )
   }
-  return (
-    checkHitLabels(toolText, solutionPath, [
-      `Kind: ${DELEGATED_SEARCH_FIXTURE.solution.kind}`,
-    ]) ??
-    checkHitLabels(toolText, brainstormPath, [
-      `Kind: ${DELEGATED_SEARCH_FIXTURE.brainstorm.kind}`,
-      `Status: ${DELEGATED_SEARCH_FIXTURE.brainstorm.status}`,
-    ])
-  )
+  for (const { path: role, labels } of mode.expectedLabels) {
+    const verdict = checkHitLabels(toolText, plantedPaths[role], labels)
+    if (verdict !== undefined) return verdict
+  }
+  return undefined
 }
 
 /**
@@ -353,12 +465,16 @@ function checkParentFinal(
 export function evaluateDelegatedSearchProof(
   observation: DelegatedSearchObservation,
 ): DelegatedSearchVerdict {
-  const brainstormPath =
-    observation.plantedBrainstormPath ??
-    DELEGATED_SEARCH_FIXTURE.brainstorm.path
-  const solutionPath =
-    observation.plantedPath ?? DELEGATED_SEARCH_FIXTURE.solution.path
-  const plantedPaths = [solutionPath, brainstormPath]
+  const mode = observation.mode ?? DEFAULT_DELEGATED_SEARCH_MODE
+  const pathsByRole = {
+    solution: observation.plantedPath ?? DELEGATED_SEARCH_FIXTURE.solution.path,
+    brainstorm:
+      observation.plantedBrainstormPath ??
+      DELEGATED_SEARCH_FIXTURE.brainstorm.path,
+  }
+  const plantedPaths = mode.expectedLabels.map(
+    ({ path: role }) => pathsByRole[role],
+  )
   const { childRequests, parentRequests } = observation
 
   if (observation.requestCount > observation.requestCap) {
@@ -382,7 +498,7 @@ export function evaluateDelegatedSearchProof(
   if (toolText === undefined) return diagnoseMissingDelivery(first)
 
   return (
-    checkChildResult(toolText, plantedPaths, solutionPath, brainstormPath) ??
+    checkChildResult(toolText, mode, pathsByRole) ??
     checkParentFinal(
       parentRequests,
       plantedPaths,
@@ -421,6 +537,8 @@ export interface DelegatedSearchScriptOptions {
   /** Tells the researcher child's requests from the parent's on this host. */
   isChildRequest: (request: ChatRequest) => boolean
   requestCap?: number
+  /** Which proof the script drives. Defaults to the built-in search mode. */
+  mode?: DelegatedSearchMode
 }
 
 export interface DelegatedSearchScript {
@@ -430,20 +548,23 @@ export interface DelegatedSearchScript {
   observation(): DelegatedSearchObservation
 }
 
-const PATH_PATTERN = /docs\/[a-z]+\/[\w.-]+\.md/g
-
 /**
  * Each distinct path in the request's latest tool result, in the order they
  * appear, or a marker when there is none.
  */
-function pathsInLastResult(request: ChatRequest): string {
-  const found = new Set(lastToolText(request)?.match(PATH_PATTERN))
+function pathsInLastResult(request: ChatRequest, pattern: RegExp): string {
+  const found = new Set(lastToolText(request)?.match(pattern))
   return found.size === 0 ? 'NO-PATH' : [...found].join(' ')
 }
 
-function childTurn(request: ChatRequest): ScriptedTurn {
+function childTurn(
+  request: ChatRequest,
+  mode: DelegatedSearchMode,
+): ScriptedTurn {
   if (lastMessageRole(request) === 'tool') {
-    return { text: `CHILD-FOUND ${pathsInLastResult(request)}` }
+    return {
+      text: `CHILD-FOUND ${pathsInLastResult(request, mode.pathPattern)}`,
+    }
   }
   if (!toolNamesOf(request).includes(SEARCH_TOOL_NAME)) {
     return { text: 'CHILD-ANSWERED-WITHOUT-SEARCH' }
@@ -453,7 +574,7 @@ function childTurn(request: ChatRequest): ScriptedTurn {
       {
         id: 'delegated-search-call',
         name: SEARCH_TOOL_NAME,
-        arguments: { ...DELEGATED_SEARCH_FIXTURE.searchArguments },
+        arguments: { ...mode.searchArguments },
       },
     ],
   }
@@ -469,6 +590,7 @@ export function createDelegatedSearchScript(
   options: DelegatedSearchScriptOptions,
 ): DelegatedSearchScript {
   const requestCap = options.requestCap ?? DELEGATED_SEARCH_REQUEST_CAP
+  const mode = options.mode ?? DEFAULT_DELEGATED_SEARCH_MODE
   const childRequests: ChatRequest[] = []
   const parentRequests: ChatRequest[] = []
   let requestCount = 0
@@ -477,7 +599,7 @@ export function createDelegatedSearchScript(
   function parentTurn(request: ChatRequest): ScriptedTurn {
     if (lastMessageRole(request) === 'tool') {
       return {
-        text: `${PARENT_FINAL_MARKER} ${pathsInLastResult(request)}`,
+        text: `${PARENT_FINAL_MARKER} ${pathsInLastResult(request, mode.pathPattern)}`,
       }
     }
     if (dispatched) return { text: 'PARENT-UNEXPECTED-TURN' }
@@ -499,7 +621,7 @@ export function createDelegatedSearchScript(
     if (toolNamesOf(request).length === 0) return { text: 'Scripted title' }
     if (options.isChildRequest(request)) {
       childRequests.push(request)
-      return childTurn(request)
+      return childTurn(request, mode)
     }
     parentRequests.push(request)
     return parentTurn(request)
@@ -512,6 +634,7 @@ export function createDelegatedSearchScript(
       requestCap,
       childRequests: [...childRequests],
       parentRequests: [...parentRequests],
+      ...(options.mode !== undefined && { mode: options.mode }),
     }),
   }
 }

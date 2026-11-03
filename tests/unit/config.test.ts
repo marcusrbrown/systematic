@@ -6522,21 +6522,145 @@ describe('search config field', () => {
     expect(t.load(true).config.search).toEqual({ enabled: false })
   })
 
-  describe('project config can never set it', () => {
-    test('AE2: a project search block is stripped with one warning and the user value is used', () => {
+  describe('project config can never set the user-only search fields', () => {
+    test('a project search.enabled is stripped with one per-path warning and the user value is used', () => {
       const t = setup()
       t.user({ search: { enabled: false } })
       t.project({ search: { enabled: true } })
       const { config, metadata } = t.load()
       expect(config.search).toEqual({ enabled: false })
       expect(t.warnings).toHaveLength(1)
-      expect(t.warnings[0]).toContain('`search`')
+      expect(t.warnings[0]).toContain('`search.enabled`')
       expect(t.warnings[0]).toContain('project config')
       expect(metadata.protectedFields).toContainEqual({
-        fieldPath: 'search',
+        fieldPath: 'search.enabled',
         outcome: 'blocked',
         sourceKind: 'project',
       })
+    })
+
+    test('a project search.allow_project_sources is stripped with its own warning and allows nothing', () => {
+      const t = setup()
+      t.user({ search: { allow_project_sources: ['/work/app'] } })
+      t.project({ search: { allow_project_sources: ['/work/evil'] } })
+      const { config, metadata } = t.load()
+      expect(config.search).toEqual({ allow_project_sources: ['/work/app'] })
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('`search.allow_project_sources`')
+      expect(metadata.protectedFields).toContainEqual({
+        fieldPath: 'search.allow_project_sources',
+        outcome: 'blocked',
+        sourceKind: 'project',
+      })
+    })
+
+    test('a project that sets enabled, allow_project_sources and sources has exactly the two user-only fields stripped', () => {
+      const t = setup()
+      t.project({
+        search: {
+          enabled: false,
+          allow_project_sources: ['/work/evil'],
+          sources: [{ name: 'rfcs', format: 'markdown', roots: ['docs/rfcs'] }],
+        },
+      })
+      const { config, metadata } = t.load()
+      expect(t.warnings).toHaveLength(2)
+      expect(t.warnings.some((w) => w.includes('`search.enabled`'))).toBe(true)
+      expect(
+        t.warnings.some((w) => w.includes('`search.allow_project_sources`')),
+      ).toBe(true)
+      expect(
+        t.warnings.every((w) =>
+          /^\[systematic\] `search\.(enabled|allow_project_sources)` /.test(w),
+        ),
+      ).toBe(true)
+      expect(
+        metadata.protectedFields
+          .filter((f) => f.fieldPath.startsWith('search'))
+          .map((f) => f.fieldPath)
+          .sort(),
+      ).toEqual(['search.allow_project_sources', 'search.enabled'])
+      expect(config).not.toHaveProperty('search')
+    })
+
+    test('project search.sources alone raises no warning and is not merged into the resolved config', () => {
+      const t = setup()
+      t.user({ search: { enabled: false } })
+      t.project({
+        search: {
+          sources: [{ name: 'rfcs', format: 'markdown', roots: ['docs/rfcs'] }],
+        },
+      })
+      const { config, metadata } = t.load()
+      expect(t.warnings).toEqual([])
+      expect(config.search).toEqual({ enabled: false })
+      expect(JSON.stringify(config)).not.toContain('rfcs')
+      expect(
+        metadata.protectedFields.filter((f) =>
+          f.fieldPath.startsWith('search'),
+        ),
+      ).toEqual([])
+    })
+
+    test('a project with only valid sources leaves the config with no search key', () => {
+      const t = setup()
+      t.project({
+        search: {
+          sources: [{ name: 'rfcs', format: 'markdown', roots: ['docs/rfcs'] }],
+        },
+      })
+      const { config } = t.load()
+      expect(config).not.toHaveProperty('search')
+      expect(config).not.toHaveProperty('searchUnreadable')
+    })
+
+    test('a project file with an invalid search.sources loads without throwing and keeps its other fields', () => {
+      const t = setup()
+      t.project({
+        disabled_skills: ['ce:plan'],
+        search: {
+          sources: [
+            { name: 'dot', format: 'markdown', roots: ['.'] },
+            { name: 'good', format: 'markdown', roots: ['docs'] },
+          ],
+        },
+      })
+      const { config } = loadConfigWithSources(t.paths.projectDir, {
+        homeDir: t.paths.homeDir,
+        customConfigDir: null,
+        invalidSource: 'throw',
+        warningSink: (message) => t.warnings.push(message),
+      })
+      expect(config.disabled_skills).toEqual(['ce:plan'])
+      expect(config).not.toHaveProperty('search')
+      expect(config).not.toHaveProperty('searchUnreadable')
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('"dot"')
+      expect(t.warnings[0]).not.toContain('"good"')
+    })
+
+    test('a project sources value that is not an array loads, warns, and loses nothing else', () => {
+      const t = setup()
+      t.project({ disabled_skills: ['ce:plan'], search: { sources: 'docs' } })
+      const { config } = t.load()
+      expect(config.disabled_skills).toEqual(['ce:plan'])
+      expect(config).not.toHaveProperty('search')
+      expect(t.warnings).toHaveLength(1)
+    })
+
+    test('a project file that cannot be parsed still fails exactly as before', () => {
+      const t = setup()
+      fs.writeFileSync(
+        path.join(t.paths.projectDir, '.opencode/systematic.json'),
+        '{ "search": { "sources": ',
+      )
+      expect(() =>
+        loadConfigWithSources(t.paths.projectDir, {
+          homeDir: t.paths.homeDir,
+          customConfigDir: null,
+          warningSink: () => {},
+        }),
+      ).toThrow(/JSONC parse error/)
     })
 
     test.each([
@@ -6544,7 +6668,7 @@ describe('search config field', () => {
       ['an array', [1, 2]],
       ['a number', 7],
     ])(
-      'a malformed project search (%s) is stripped and the load succeeds',
+      'a malformed project search (%s) is dropped with one warning and the load succeeds',
       (_label, value) => {
         const t = setup()
         t.project({ search: value, disabled_skills: [] })
@@ -6564,18 +6688,18 @@ describe('search config field', () => {
     })
 
     test.each([
-      ['search: null', null],
-      ['search: {}', {}],
-      ['search: {enabled: true}', { enabled: true }],
+      ['search: null', null, 1],
+      ['search: {}', {}, 0],
+      ['search: {enabled: true}', { enabled: true }, 1],
     ])(
-      'erase attempt (%s) keeps the user value and emits exactly one warning',
-      (_label, value) => {
+      'erase attempt (%s) keeps the user value and emits the expected warnings',
+      (_label, value, warningCount) => {
         const t = setup()
         t.user({ search: { enabled: false } })
         t.project({ search: value })
         const { config } = t.load()
         expect(config.search).toEqual({ enabled: false })
-        expect(t.warnings).toHaveLength(1)
+        expect(t.warnings).toHaveLength(warningCount)
       },
     )
 
@@ -6584,6 +6708,101 @@ describe('search config field', () => {
       t.project({ disabled_skills: [] })
       t.load()
       expect(t.warnings).toEqual([])
+    })
+  })
+
+  describe('user and custom sources and allow list', () => {
+    test('allow_project_sources unions and sources merge by name, custom winning', () => {
+      const t = setup()
+      t.user({
+        search: {
+          enabled: false,
+          allow_project_sources: ['/work/a'],
+          sources: [
+            {
+              name: 'wiki',
+              format: 'markdown',
+              roots: ['/user/wiki'],
+              projects: ['/work/a'],
+            },
+            {
+              name: 'only-user',
+              format: 'markdown',
+              roots: ['/user/x'],
+              projects: ['/work/a'],
+            },
+          ],
+        },
+      })
+      t.custom({
+        search: {
+          allow_project_sources: ['/work/b'],
+          sources: [
+            {
+              name: 'wiki',
+              format: 'markdown',
+              roots: ['/custom/wiki'],
+              projects: ['/work/a'],
+            },
+          ],
+        },
+      })
+      const { config } = t.load(true)
+      expect(config.search).toEqual({
+        enabled: false,
+        allow_project_sources: ['/work/a', '/work/b'],
+        sources: [
+          {
+            name: 'wiki',
+            format: 'markdown',
+            roots: ['/custom/wiki'],
+            projects: ['/work/a'],
+          },
+          {
+            name: 'only-user',
+            format: 'markdown',
+            roots: ['/user/x'],
+            projects: ['/work/a'],
+          },
+        ],
+      })
+      expect(t.warnings).toEqual([])
+    })
+
+    test('an invalid source entry in a user file drops only that entry and keeps enabled:false', () => {
+      const t = setup()
+      t.user({
+        search: {
+          enabled: false,
+          sources: [
+            {
+              name: 'bad',
+              format: 'yaml',
+              roots: ['/x'],
+              projects: ['/work/a'],
+            },
+            {
+              name: 'good',
+              format: 'markdown',
+              roots: ['/y'],
+              projects: ['/work/a'],
+            },
+          ],
+        },
+      })
+      const { config } = t.load()
+      expect(config.search).toEqual({
+        enabled: false,
+        sources: [
+          {
+            name: 'good',
+            format: 'markdown',
+            roots: ['/y'],
+            projects: ['/work/a'],
+          },
+        ],
+      })
+      expect(t.warnings).toHaveLength(1)
     })
   })
 

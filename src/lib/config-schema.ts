@@ -601,7 +601,9 @@ export function createSystematicConfigSchema(
           examples: [true, false],
         }),
       ).default(false),
-      search: trustProtected(SearchSettingsSchema).optional(),
+      // Trust is per nested field (`enabled`, `allow_project_sources`), tagged
+      // inline in `SearchSettingsSchema`; a project may set `sources`.
+      search: SearchSettingsSchema.optional(),
       disabled_skills: z
         // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
         // by the sanity check in generateBundledNamesContent. Removed names are

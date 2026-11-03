@@ -42,23 +42,23 @@ Search now also covers plans, brainstorms and ideation docs, and it resolves suc
 
 Write each check as a step at the point where the agent acts on a pointer.
 
-1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1949`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:138`, quoted with an elision):
+1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1949`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:130`, quoted with an elision):
 
    ```md
    2. At every hop, before taking the target as the successor, check that it passes the form rule above for the current doc's kind. [...] Otherwise check that the file exists. [...] A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.
    ```
 
-2. **Read lifecycle fields from parsed frontmatter, and use search only to find files.** Values lifted from matched lines misread `status: superseded # retired`, folded scalars and `status:` lines inside a body example. The researcher's Step 4 uses search only to choose files, then reads each doc's frontmatter (`agents/research/learnings-researcher.md:113-125`).
+2. **Read lifecycle fields from parsed frontmatter, and use search only to find files.** Values lifted from matched lines misread `status: superseded # retired`, folded scalars and `status:` lines inside a body example. The researcher's Step 4 uses search only to choose files, then reads each doc's frontmatter (`agents/research/learnings-researcher.md:115-117`).
 
-3. **Write out the exclusions.** The validator's solution set leaves out every `README.md` (`scripts/content-integrity.ts:2019-2024`). The researcher's form rule names that exclusion and also skips `_archived/` as a defensive check, even though no such directory exists here (`agents/research/learnings-researcher.md:135`).
+3. **Write out the exclusions.** The validator's solution set leaves out every `README.md` (`scripts/content-integrity.ts:2019-2024`). The researcher's form rule names that exclusion and also skips `_archived/` as a defensive check, even though no such directory exists here (`agents/research/learnings-researcher.md:127`).
 
 4. **Delete only after every prerequisite write succeeded.** Refresh retargets `superseded_by` before Replace or Consolidate removes a doc, and it removes the doc only once the survivor exists and every write succeeded. That rule overrides autofix's record-and-continue rule (`skills/ce-compound-refresh/SKILL.md:546`).
 
 5. **Bound and order every cascade.** A plain Delete collects the pointing docs transitively with a visited set. It defers the whole Delete when any of them must remain. Otherwise it deletes the farthest dependents first and the target last, and stops at the first failure (`skills/ce-compound-refresh/SKILL.md:547`).
 
-6. **State a shared rule once and reference it from the other path.** Step 4 owns successor resolution (`agents/research/learnings-researcher.md:135`), and the past-work grep fallback points back with "Step 4's rule holds in each" (`agents/research/learnings-researcher.md:220`). This does not replace step 1: each path still carries the check that acts on its pointer. The wiring test pins that every place that restates the rule agrees, and that the old solution-only phrases are gone (`describe('one successor rule on the search path and the grep path')`, `tests/unit/past-work-wiring-contract.test.ts:548-623`).
+6. **State a shared rule once and reference it from the other path.** Step 4 owns successor resolution (`agents/research/learnings-researcher.md:127`), and the past-work grep fallback points back with "Step 4's rule holds in each" (`agents/research/learnings-researcher.md:196`). This does not replace step 1: each path still carries the check that acts on its pointer. The wiring test pins that every place that restates the rule agrees, and that the old solution-only phrases are gone (`describe('one successor rule on the search path and the grep path')`, `tests/unit/past-work-wiring-contract.test.ts:603-678`).
 
-7. **When a count or limit changes, search every occurrence.** After the researcher moved from two search calls to one per kind, a line in the efficiency list still capped past-work at two. Grep the prompt for the words that name the count (`once`, `twice`, `two`), not only the section you edited. The wiring test reads the call counts out of that line and asserts `[1, 4]`, with a self-test that the reader catches a stale cap (`tests/unit/past-work-wiring-contract.test.ts:162-205`).
+7. **When a count or limit changes, search every occurrence.** After the researcher moved from two search calls to one per kind, a line in the efficiency list still capped past-work at two. Grep the prompt for the words that name the count (`once`, `twice`, `two`), not only the section you edited. The wiring test reads the call counts out of that line and asserts `[1, 4]`, with a self-test that the reader catches a stale cap (`tests/unit/past-work-wiring-contract.test.ts:168-211`).
 
 8. **After a prompt trim, review each removed instruction.** A byte budget is review guidance, not a test (`docs/plans/2026-10-30-001-feat-search-past-work-plan.md:207`), and a byte count cannot say whether a removed line was a duplicate, stale or deliberate. A trim once removed "Do not assume any particular category exists" (`agents/research/learnings-researcher.md:33`), and no wiring test pins it. Regenerated whole-prompt fixtures cannot detect a removed instruction, because they are rebuilt from the trimmed prompt. Pin the stack-neutral and negative rules you intend to keep.
 
@@ -91,7 +91,7 @@ if (successor.status === 'superseded') {
 }
 ```
 
-The researcher follows one, for up to 5 hops with a visited set, because a repo that never ran the validator can contain chains (`agents/research/learnings-researcher.md:140`):
+The researcher follows one, for up to 5 hops with a visited set, because a repo that never ran the validator can contain chains (`agents/research/learnings-researcher.md:132`):
 
 ```md
 4. Read the target's frontmatter and take its `status`. If it is `superseded`, follow its `superseded_by` and repeat from step 2.

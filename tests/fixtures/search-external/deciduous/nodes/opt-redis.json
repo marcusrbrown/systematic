@@ -1,0 +1,7 @@
+{
+  "change_id": "opt-redis",
+  "description": "Run an external store for the cache.",
+  "node_type": "option",
+  "status": "pending",
+  "title": "Option: external store"
+}

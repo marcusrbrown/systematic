@@ -29,14 +29,14 @@ Two earlier docs already cover a real host, a mock model and a negative control:
 
 ## Guidance
 
-Script the model and keep the host real. One state machine serves every host: the parent dispatches the researcher, the child calls the tool, the child answers, and the parent answers (`createDelegatedSearchScript`, `tests/helpers/delegated-search-proof.ts:468-506`).
+Script the model and keep the host real. One state machine serves every host: the parent dispatches the researcher, the child calls the tool, the child answers, and the parent answers (`createDelegatedSearchScript`, `tests/helpers/delegated-search-proof.ts:589-640`).
 
-1. **Make the content of the tool result and the parent's answer the pass gate.** The child calls the tool with a marker query against two planted documents (`DELEGATED_SEARCH_FIXTURE`, `tests/helpers/delegated-search-proof.ts:34-53`). Its tool message must start with `Search "`, must not be an error, and must head both planted hits with their `Kind:` and `Status:` labels (`checkChildResult` and `checkHitLabels`, `tests/helpers/delegated-search-proof.ts:256-305`). The parent's last request and the answer the host returns must both carry both paths (`checkParentFinal`, `tests/helpers/delegated-search-proof.ts:312-350`).
-2. **Treat tool advertisement as a diagnostic, never as a pass.** `diagnoseMissingDelivery` names `tool-not-advertised` or `no-tool-call` after a failure, and the verdict is already a failure by then (`tests/helpers/delegated-search-proof.ts:217-229`).
+1. **Make the content of the tool result and the parent's answer the pass gate.** The child calls the tool with a marker query against two planted documents (`DELEGATED_SEARCH_FIXTURE`, `tests/helpers/delegated-search-proof.ts:40-59`). Its tool message must start with `Search "`, must not be an error, and must head both planted hits with their `Kind:` and `Status:` labels (`checkChildResult` and `checkHitLabels`, `tests/helpers/delegated-search-proof.ts:365-417`). The parent's last request and the answer the host returns must both carry both paths (`checkParentFinal`, `tests/helpers/delegated-search-proof.ts:424-462`).
+2. **Treat tool advertisement as a diagnostic, never as a pass.** `diagnoseMissingDelivery` names `tool-not-advertised` or `no-tool-call` after a failure, and the verdict is already a failure by then (`tests/helpers/delegated-search-proof.ts:326-338`).
 3. **Add a negative control that must fail, and fail with the right name.** With `{ search: { enabled: false } }` the proof must return `tool-not-advertised`, and the child must still have been reached, so the failure is the missing tool and not a missed dispatch (`tests/integration/opencode-v1.test.ts:585-612`, `tests/integration/opencode-v2.test.ts:764-790`, `tests/integration/pi.test.ts:1131-1153`).
-4. **Tell child from parent per host.** OpenCode v2 marks the child by its prompt text (`tests/integration/opencode-v2.test.ts:664-695`). Pi hides the child's tool events over RPC, so it reads the mock model's request log and identifies the child by the researcher's opening line, read from the agent file so the marker cannot drift (`researcherSystemMarker`, `tests/helpers/delegated-search-proof.ts:82-91`; `runDelegatedSearch`, `tests/integration/pi.test.ts:1069-1110`).
+4. **Tell child from parent per host.** OpenCode v2 marks the child by its prompt text (`tests/integration/opencode-v2.test.ts:671-707`). Pi hides the child's tool events over RPC, so it reads the mock model's request log and identifies the child by the researcher's opening line, read from the agent file so the marker cannot drift (`researcherSystemMarker`, `tests/helpers/delegated-search-proof.ts:190-199`; `runDelegatedSearch`, `tests/integration/pi.test.ts:1069-1110`).
 
-Cap the model's requests (`DELEGATED_SEARCH_REQUEST_CAP`, `tests/helpers/delegated-search-proof.ts:60`) so a looping script stops in seconds.
+Cap the model's requests (`DELEGATED_SEARCH_REQUEST_CAP`, `tests/helpers/delegated-search-proof.ts:66`) so a looping script stops in seconds.
 
 ## Why This Matters
 
@@ -45,7 +45,7 @@ Without the content gate, a child that answered from grep would pass. Without th
 The proof has limits, and the header comment of the harness helper says so:
 
 - It shows reach only. A scripted model makes the call, so it says nothing about a live model choosing to call the tool.
-- The child searches `kind: all`, which the researcher prompt forbids (`agents/research/learnings-researcher.md:53`). The per-kind strategy is not exercised on these hosts.
+- The child searches `kind: all`, which the researcher prompt forbids (`agents/research/learnings-researcher.md:49`). The per-kind strategy is not exercised on these hosts.
 
 ## When to Apply
 

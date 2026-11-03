@@ -1,0 +1,7 @@
+{
+  "change_id": "goal-speed",
+  "description": "Reads feel instant.",
+  "node_type": "goal",
+  "status": "pending",
+  "title": "Goal: fast reads"
+}

@@ -1,0 +1,8 @@
+{
+  "deleted_at": "2026-02-01T00:00:00Z",
+  "edge_id": "e-tombstone",
+  "edge_type": "leads_to",
+  "from_change_id": "dec-cache",
+  "rationale": "A removed edge pangolin",
+  "to_change_id": "act-linked"
+}

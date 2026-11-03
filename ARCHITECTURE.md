@@ -167,10 +167,15 @@ Pi adapter
 
 Durable-output search
   src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
-  src/lib/search-corpus.ts         — project root walk-up, the `kind` table (`solution`, `plan`, `brainstorm`, `ideation`: directory and exclusions per kind) and a bounded, symlink-safe loader that reads one kind per call, with a narrowing frontmatter wrapper (title is `title`, else `topic`, else the file name)
-  src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns; the header names the corpus directory, or one count per kind for `all`
-  src/lib/search-core.ts           — host-neutral search composition: validate `kind` (one kind or the `all` selector), load each requested kind through the loader, rank the merged documents as one corpus, per-kind lifecycle resolver, render
-  src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a reader that never touches project config (imports only zod, jsonc-parser and node builtins)
+  src/lib/search-bounded-read.ts   — the one bounded file read (`readBytesBounded`): a non-blocking open, a regular-file check on the fd, and at most `maxBytes + 1` bytes read, so a file that is too large or grows while being read is rejected and a FIFO cannot hang the reader; used by the project config reader, the project identity reads and the corpus and external file reads (node builtins only, bundled into the bin)
+  src/lib/search-corpus.ts         — project root walk-up, the `kind` table (`solution`, `plan`, `brainstorm`, `ideation`: directory and exclusions per kind) and a bounded, symlink-safe walk-and-read core (`discoverSourceFiles`, `readSourceFiles`, `loadSourceFiles`; every file is read through `search-bounded-read.ts`, and an external source shares one entry budget across all its directories and roots, and every read is limited to what the byte budgets leave) that `loadCorpus` calls for one kind per call and the external loader calls per source, with a narrowing frontmatter wrapper (title is `title`, else `topic`, else the file name) built on a shared BOM, newline and YAML step
+  src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns; the header names the corpus directory, or one count per kind for `all`; `external` replies render separately, with their own prefix, per-source sections and a 12 KB allowance
+  src/lib/search-core.ts           — host-neutral search composition: validate `kind` (one kind, the `all` selector or the exclusive `external` selector), load each requested kind through the loader, rank the merged documents as one corpus, per-kind lifecycle resolver, render; `external` resolves and loads its sources per call and ranks each source on its own index
+  src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a user-level reader that never touches project config, and a bin-safe project reader capped at 1 MB (imports only zod, jsonc-parser, node builtins and `search-bounded-read.ts`)
+  src/lib/search-project-identity.ts — project identity for external sources: a checkout's main repository root from filesystem reads alone (linked worktree verified from the common-directory side, `core.worktree` refused, submodule and nested repo are their own roots) and the exact realpath allow-list match (node builtins and `search-bounded-read.ts` only, bundled into the bin; identity files are read through the bounded fd read, so a FIFO is `unresolved`)
+  src/lib/search-external-sources.ts — the per-call reader for `kind: "external"`: re-reads the user files, the project file (via the bounded, bin-safe `loadProjectSearchSources`) and the project identity on every call, then applies a fixed order (drop proposals of a non-allowed project, user-mapped sources shadow, user before project, cap at 8) and returns the active sources plus project states and warnings (never imports `config.ts` or `config-schema.ts`; bundled into the bin)
+  src/lib/search-external.ts       — the external source loader behind `kind: "external"`: Markdown files under each resolved source root become bounded records (title from `title`, else the first H1, else the file name; recorded status only), with a 1 MB per-file cap, per-source caps and one 32 MB read budget shared by the call (a source that does not fit is dropped whole before any file is read); a `deciduous` source goes to `search-external-deciduous.ts`. Reads files only; imports node builtins, `search-corpus.ts` and the Deciduous reader (types aside) and is bundled into the bin
+  src/lib/search-external-deciduous.ts — the Deciduous reader behind `format: "deciduous"`: its own scan of `nodes/` then `edges/` (explicit order, not a path sort; `MAX_DISCOVERED_FILES` bounds files scanned, `MAX_FILES` bounds kept records), keeps live `decision`, `option`, `outcome` and `goal` nodes only (never `action` or `observation`; `deleted_at` tombstones skipped), and folds edge rationale into both endpoints' body (300 characters per edge, 20 edges and 2 KB per node, other endpoint must be a live node); ids must match `[A-Za-z0-9_-]{1,64}`, display paths come from validated file stems only and no file is opened by an id read from content. Reads files only; imports node builtins, `search-bounded-read.ts` and `search-corpus.ts`, never the dispatcher; bundled into the bin
   src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
   src/lib/search-cli.ts            — `systematic search` and the `systematic-search` bin's shared runner: flag parsing, an injected settings loader, exit codes, the core's text unchanged (imports only `search-core.ts`)
   src/lib/main-module.ts           — the realpath entry guard that replaces `import.meta.main` (Node gained it only in 24.2); used by `cli.ts`, `claude-code-validator-bin.ts` and `claude-code-search.ts`
@@ -245,7 +250,7 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    `systematic.json` (mirroring v1's throw at load); every other v2 callback is wrapped by
    `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
 
-6. **Search reads the disk on every call, protects its config as a whole, and avoids `Math.log`.**
+6. **Search reads the disk on every call, protects its config per field, and avoids `Math.log`.**
    Search covers four kinds, each with its own directory in the `KIND_TABLE` of `search-corpus.ts`:
    `solution` (`docs/solutions/`), `plan` (`docs/plans/`), `brainstorm` (`docs/brainstorms/`) and
    `ideation` (`docs/ideation/`). The loader reads one kind per call, from disk, with no memo and no
@@ -262,9 +267,17 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    a `Successor: <path>` line and no existence check. A link that fits no kind, or a same-kind link
    to a missing file, keeps `Caution: successor unresolved`. The header reads `Corpus: <dir>.` for one
    kind and one token per kind for `all` (`solution 128, plan 102, brainstorm none, ideation 1`),
-   where `none` means no directory and `empty` means a directory with no indexable document. The
-   `search` config block is stripped whole from project config, so a repository cannot switch it
-   off. The search modules use a hand-written `ln` and no `Math.log`, so scores and ranks are
+   where `none` means no directory and `empty` means a directory with no indexable document.
+   `external` is a second selector, exclusive and never a `KIND_TABLE` key, so the kind table, `all`
+   and the built-in render path are untouched and built-in output cannot change. It reads
+   user-allowed folders of Markdown and Deciduous sync JSON, ranks each source on its own index,
+   caps hits at 5 per source and renders at most 12 KB. Its per-call reader re-reads the user files,
+   the project file, the project's identity and the record files on every call; only
+   `search.enabled`, tool registration and the registration-time `config unreadable` note are fixed
+   at init. Sources read files only, with no command, network or write. The
+   `search.enabled` and `search.allow_project_sources` are stripped from project config, so a
+   repository can neither switch search off nor allow its own sources; a project may set
+   `search.sources` only, and none is read until the user allows that project. The search modules use a hand-written `ln` and no `Math.log`, so scores and ranks are
    identical on Bun and Node. Each host reaches the one `search-core.ts` composition, so every
    surface returns the same text. The learnings-researcher calls search first and falls back to its
    grep steps when search has no hits, is disabled, errors or is absent. Its default scope is
@@ -476,7 +489,7 @@ the Demo section through a description rewrite; its narrative excludes `docs/evi
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
 or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
 The bundle ships two narrow bins under `bin/`: the review-artifact validator and `systematic-search`
-(`src/claude-code-search.ts`, which reads the two user-level config files and never project config).
+(`src/claude-code-search.ts`, which reads the two user-level config files and, from project config, only the `sources` a project proposes, for `--kind external`).
 Entries under `bin/` are written with executable mode (`0o755`); nothing else in the bundle changes
 mode. The search bin bundles `jsonc-parser` through its ESM build, because the UMD build crashes when
 bundled and run from a directory with no `node_modules`. The CI pre-publish guard checks that both
@@ -603,6 +616,23 @@ routing-relevant leaves only — flat `model`/`variant` and the four `opencode`/
 updated in lockstep with the merged value itself rather than derived afterward from the overlay
 entry's `sourcePath` — `sourcePath` is last-writer-wins across the whole entry and would misattribute
 a field whose value survived from an earlier merge step than whichever source touched that key last.
+
+**Opt-in project search sources** (`search.allow_project_sources`, `src/lib/search-user-config.ts`,
+`src/lib/search-external-sources.ts`, `src/lib/search-project-identity.ts`) — the same allow-list idea as
+`allow_project_profiles`, with a list of paths instead of a boolean. `search.enabled` and
+`search.allow_project_sources` carry the user-only trust tag and are stripped from a project source with
+a per-path warning, while `search.sources` is the one search field a project may set. `config.ts`
+validates a project's `sources` with the shared validators and then discards them: nothing in
+`config.ts` merges or reads them afterwards, and a project file that parses never fails plugin setup
+over them. The per-call reader is their only consumer. It reads the project file itself (capped at
+1 MB), so a project can neither edit the allow list nor force a restart to change what is read.
+The allow list is the union of the user and custom config lists. An entry matches only when its real
+path equals the project's main repository root, which `search-project-identity.ts` derives from
+filesystem reads alone. A linked worktree maps to its main checkout, verified from the
+common-directory side so a forged `.git` file cannot inherit an allowed identity; a bare repository,
+`core.worktree`, a symlinked `.git` and any inconsistency are unresolved and never match. A stale
+entry matches nothing silently. Accepted limits: every worktree of an allowed project contributes its
+own proposals and Markdown, and an entry trusts whatever repository is later cloned to its path.
 
 **Host-contract gate** (`.github/workflows/main.yaml` `host-contract-gate`, `host-contract-shard`,
 and `host-contract` jobs, `scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`,

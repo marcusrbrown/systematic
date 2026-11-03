@@ -1,0 +1,7 @@
+{
+  "change_id": "out-latency",
+  "description": "Median latency fell after the change.",
+  "node_type": "outcome",
+  "status": "pending",
+  "title": "Latency outcome"
+}

@@ -13,6 +13,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from './frontmatter.js'
+import { readBytesBounded } from './search-bounded-read.js'
 import { isRecord } from './validation.js'
 
 /** Largest single file loaded, in bytes. */
@@ -24,17 +25,32 @@ export const MAX_DEPTH = 6
 /** Total bytes of text loaded per call. */
 export const MAX_TOTAL_BYTES = 16 * 1024 * 1024
 /** Discovery stops here so a hostile tree cannot make the walk itself unbounded. */
-const MAX_DISCOVERED_FILES = MAX_FILES * 4
+export const MAX_DISCOVERED_FILES = MAX_FILES * 4
+/**
+ * Most directory entries one external source may examine in total, across every
+ * directory and every root of the source. The discovery ceiling counts accepted
+ * candidates only, so this bounds the work a tree of non-matching entries can
+ * cost.
+ */
+export const MAX_LISTED_ENTRIES = MAX_DISCOVERED_FILES * 4
 /** Longest warning, in characters, after sanitising. */
 const MAX_WARNING_LENGTH = 200
+/** Indexed when a walk names no extensions. */
+const DEFAULT_EXTENSIONS = ['.md'] as const
 
-interface KindSpec {
-  /** Root-relative directory holding the kind, with `/` separators. */
-  readonly dir: string
+/** What a walk skips and what it indexes; the part of a kind a source shares. */
+interface WalkSpec {
   /** Lower-case file names that are never indexed. */
   readonly excludedFiles: readonly string[]
   /** Directory names that are never descended into. */
   readonly excludedDirs: readonly string[]
+  /** Lower-case file extensions that are indexed, dot included. Defaults to `.md`. */
+  readonly extensions?: readonly string[]
+}
+
+interface KindSpec extends WalkSpec {
+  /** Root-relative directory holding the kind, with `/` separators. */
+  readonly dir: string
   /** Whether `status` / `superseded_by` / `stale_reason` apply to the kind. */
   readonly lifecycle: boolean
 }
@@ -125,19 +141,19 @@ const CONTROL_CHARACTERS =
   /[\u0000-\u001f\u007f-\u009f]/g
 
 /** Strip terminal escapes and control characters, then cap the length. */
-function cleanForWarning(text: string): string {
+export function cleanForWarning(text: string): string {
   const clean = text.replace(ANSI_SEQUENCE, '').replace(CONTROL_CHARACTERS, '')
   return clean.length > MAX_WARNING_LENGTH
     ? `${clean.slice(0, MAX_WARNING_LENGTH)}…`
     : clean
 }
 
-function compareCodeUnits(a: string, b: string): number {
+export function compareCodeUnits(a: string, b: string): number {
   if (a < b) return -1
   return a > b ? 1 : 0
 }
 
-function safeLstat(target: string): fs.Stats | null {
+export function safeLstat(target: string): fs.Stats | null {
   try {
     return fs.lstatSync(target, { throwIfNoEntry: false }) ?? null
   } catch {
@@ -184,11 +200,94 @@ function probeLstat(target: string): Probe<fs.Stats> {
   }
 }
 
-function safeReaddir(target: string): string[] | null {
+export function safeReaddir(target: string): string[] | null {
   try {
     return fs.readdirSync(target)
   } catch {
     return null
+  }
+}
+
+/**
+ * The entries one external source may still examine. One budget is shared by
+ * every directory and root of the source; the built-in kinds have none and list
+ * a directory whole.
+ */
+export interface EntryBudget {
+  remaining: number
+  /** True once a listing was cut short or skipped for want of budget. */
+  exhausted: boolean
+}
+
+export function newEntryBudget(
+  limit: number = MAX_LISTED_ENTRIES,
+): EntryBudget {
+  return { remaining: limit, exhausted: false }
+}
+
+/**
+ * List a directory against a budget: at most `budget.remaining` names, which
+ * are then taken off the budget. A directory with more entries, or one reached
+ * after the budget ran out, marks the budget exhausted; a spent budget opens
+ * nothing. `null` when the directory cannot be read.
+ */
+export function listDirectoryWithin(
+  target: string,
+  budget: EntryBudget,
+): BoundedListing | null {
+  if (budget.remaining <= 0) {
+    budget.exhausted = true
+    return { names: [], truncated: true }
+  }
+  const listing = listDirectoryBounded(target, budget.remaining)
+  if (listing === null) return null
+  budget.remaining -= listing.names.length
+  if (listing.truncated) {
+    budget.remaining = 0
+    budget.exhausted = true
+  }
+  return listing
+}
+
+export interface BoundedListing {
+  readonly names: string[]
+  /** True when the directory held more than `limit` entries, so `names` is a subset. */
+  readonly truncated: boolean
+}
+
+/**
+ * List a directory, holding at most `limit` names. Entries stream from the
+ * directory handle, so a folder of millions of entries is never materialized.
+ * A listing cut at `limit` is a subset in directory order; the caller sorts
+ * what it got and says the listing was cut. `null` when the directory cannot
+ * be opened or read.
+ */
+export function listDirectoryBounded(
+  target: string,
+  limit: number,
+): BoundedListing | null {
+  let directory: fs.Dir
+  try {
+    directory = fs.opendirSync(target)
+  } catch {
+    return null
+  }
+  const names: string[] = []
+  try {
+    while (true) {
+      const entry = directory.readSync()
+      if (entry === null) return { names, truncated: false }
+      if (names.length >= limit) return { names, truncated: true }
+      names.push(entry.name)
+    }
+  } catch {
+    return null
+  } finally {
+    try {
+      directory.closeSync()
+    } catch {
+      // Nothing useful to do: the listing is already decided.
+    }
   }
 }
 
@@ -221,7 +320,7 @@ export function resolveSearchRoot(startDir: string): string {
   }
 }
 
-function isInside(root: string, candidate: string): boolean {
+export function isInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate)
   return (
     relative !== '' &&
@@ -231,24 +330,55 @@ function isInside(root: string, candidate: string): boolean {
   )
 }
 
-interface Candidate {
-  /** Path relative to the kind directory, with `/` separators. */
+export type SymlinkedComponent = 'root' | 'ancestor'
+
+/**
+ * Whether a component of the path from `container` down to `target` is a
+ * symlink, checked with `lstat` one component at a time: `root` when the final
+ * component is, `ancestor` when one above it is. A `target` that is not lexically
+ * inside `container` has no components to check; the realpath containment check
+ * owns it. A component that is missing or cannot be inspected ends the check.
+ */
+export function symlinkedComponent(
+  container: string,
+  target: string,
+): SymlinkedComponent | undefined {
+  if (!isInside(container, target)) return undefined
+  const segments = path.relative(container, target).split(path.sep)
+  let current = container
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment)
+    const stat = safeLstat(current)
+    if (stat === null) return undefined
+    if (stat.isSymbolicLink()) {
+      return index === segments.length - 1 ? 'root' : 'ancestor'
+    }
+  }
+  return undefined
+}
+
+export interface SourceFileCandidate {
+  /** Path relative to the walked directory, with `/` separators. */
   readonly relative: string
   readonly absolute: string
   readonly size: number
 }
 
 interface Discovery {
-  readonly candidates: Candidate[]
+  readonly candidates: SourceFileCandidate[]
   /** True when discovery stopped at the cap, so counts are lower bounds. */
   truncated: boolean
+  /** True when the walked directory itself could not be listed. */
+  rootUnreadable: boolean
+  /** Set for an external source: the entries every directory of the walk shares. */
+  readonly budget?: EntryBudget | undefined
 }
 
 type EntryKind = 'file' | 'directory' | 'ignored'
 
 /** Classify one entry without following symlinks; symlinks are ignored. */
 function classifyEntry(
-  spec: KindSpec,
+  spec: WalkSpec,
   name: string,
   stat: fs.Stats | null,
 ): EntryKind {
@@ -259,23 +389,63 @@ function classifyEntry(
   }
   if (!stat.isFile()) return 'ignored'
   const lower = name.toLowerCase()
-  const indexable = lower.endsWith('.md') && !spec.excludedFiles.includes(lower)
+  const extensions = spec.extensions ?? DEFAULT_EXTENSIONS
+  const indexable =
+    extensions.some((extension) => lower.endsWith(extension)) &&
+    !spec.excludedFiles.includes(lower)
   return indexable ? 'file' : 'ignored'
 }
 
+function wholeListing(directory: string): BoundedListing | null {
+  const names = safeReaddir(directory)
+  return names === null ? null : { names, truncated: false }
+}
+
+/**
+ * The entry names of one walked directory, or `null` when it cannot be read.
+ * A subdirectory that cannot be read gets a warning here; the walked directory
+ * itself is reported by `discoverSourceFiles`. With a budget, the listing takes
+ * its names from it; the caller says once that the budget ran out.
+ */
+function listWalkedDirectory(
+  budget: EntryBudget | undefined,
+  label: string,
+  directory: string,
+  prefix: string,
+  warnings: string[],
+): string[] | null {
+  const listing =
+    budget === undefined
+      ? wholeListing(directory)
+      : listDirectoryWithin(directory, budget)
+  if (listing === null) {
+    if (prefix !== '') {
+      const shown = `${label}/${prefix.slice(0, -1)}`
+      warnings.push(cleanForWarning(`could not read directory ${shown}`))
+    }
+    return null
+  }
+  return listing.names
+}
+
 function discoverFiles(
-  spec: KindSpec,
+  spec: WalkSpec,
+  label: string,
   directory: string,
   prefix: string,
   depth: number,
   found: Discovery,
   warnings: string[],
 ): void {
-  const names = safeReaddir(directory)
+  const names = listWalkedDirectory(
+    found.budget,
+    label,
+    directory,
+    prefix,
+    warnings,
+  )
   if (names === null) {
-    const shown =
-      prefix === '' ? spec.dir : `${spec.dir}/${prefix.slice(0, -1)}`
-    warnings.push(cleanForWarning(`could not read directory ${shown}`))
+    if (depth === 0) found.rootUnreadable = true
     return
   }
   names.sort(compareCodeUnits)
@@ -286,7 +456,7 @@ function discoverFiles(
     const entryKind = classifyEntry(spec, name, stat)
     if (entryKind === 'directory' && depth + 1 <= MAX_DEPTH) {
       const child = `${prefix}${name}/`
-      discoverFiles(spec, absolute, child, depth + 1, found, warnings)
+      discoverFiles(spec, label, absolute, child, depth + 1, found, warnings)
     } else if (entryKind === 'file' && stat !== null) {
       if (found.candidates.length >= MAX_DISCOVERED_FILES) {
         found.truncated = true
@@ -301,12 +471,12 @@ function discoverFiles(
   }
 }
 
-function narrowString(value: unknown): string | undefined {
+export function narrowString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
 /** A string with something in it after trimming; anything else is `undefined`. */
-function narrowNonEmptyString(value: unknown): string | undefined {
+export function narrowNonEmptyString(value: unknown): string | undefined {
   const trimmed = narrowString(value)?.trim()
   return trimmed ? trimmed : undefined
 }
@@ -333,22 +503,23 @@ function narrowSupersededBy(value: unknown): SupersededByField {
   return { state: 'invalid' }
 }
 
-export type ParsedDocument =
-  | { readonly ok: true; readonly document: CorpusDocument }
+export type ParsedMarkdown =
+  | {
+      readonly ok: true
+      readonly data: Record<string, unknown>
+      /** Text after the frontmatter block, or the whole file when there is none. */
+      readonly body: string
+    }
   | { readonly ok: false; readonly reason: string }
 
 /**
- * Parse one file. Wraps `parseFrontmatter`: strips a leading BOM, supplies the
- * newline its regex needs when the closing `---` is the last line, and reads
- * only known fields, narrowing each. No frontmatter means a body-only document
- * with no warning. Invalid YAML, or a frontmatter block that is not a mapping,
- * is not indexable.
+ * The frontmatter step both the built-in kinds and the external Markdown
+ * sources share: strips a leading BOM, supplies the newline `parseFrontmatter`'s
+ * regex needs when the closing `---` is the last line, and rejects invalid YAML
+ * and a block that is not a mapping. No frontmatter is a body-only file with
+ * empty data, with no warning.
  */
-export function parseCorpusDocument(
-  kind: DocumentKind,
-  relativePath: string,
-  content: string,
-): ParsedDocument {
+export function parseMarkdownFrontmatter(content: string): ParsedMarkdown {
   let text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content
   if (!text.endsWith('\n')) text += '\n'
 
@@ -357,7 +528,31 @@ export function parseCorpusDocument(
   if (parsed.hadFrontmatter && !isRecord(parsed.data)) {
     return { ok: false, reason: 'frontmatter is not a mapping' }
   }
-  const data: Record<string, unknown> = isRecord(parsed.data) ? parsed.data : {}
+  return {
+    ok: true,
+    data: isRecord(parsed.data) ? parsed.data : {},
+    body: parsed.body,
+  }
+}
+
+export type ParsedDocument =
+  | { readonly ok: true; readonly document: CorpusDocument }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Parse one file. Wraps `parseMarkdownFrontmatter` and reads only known
+ * fields, narrowing each. No frontmatter means a body-only document with no
+ * warning. Invalid YAML, or a frontmatter block that is not a mapping, is not
+ * indexable.
+ */
+export function parseCorpusDocument(
+  kind: DocumentKind,
+  relativePath: string,
+  content: string,
+): ParsedDocument {
+  const parsed = parseMarkdownFrontmatter(content)
+  if (!parsed.ok) return parsed
+  const data = parsed.data
 
   const fileName = relativePath.slice(relativePath.lastIndexOf('/') + 1)
   const title =
@@ -384,56 +579,323 @@ export function parseCorpusDocument(
   }
 }
 
-interface ReadOutcome {
-  readonly documents: CorpusDocument[]
-  readonly budgetSkipped: number
+export type ParsedSourceFile<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: string }
+
+export interface DiscoverSourceFilesOptions {
+  /** The directory to walk. Not yet resolved: this function takes its realpath. */
+  readonly directory: string
+  /**
+   * When set, the walked directory's realpath must lie strictly inside this
+   * directory's realpath, or nothing is loaded. Built-in kinds and project
+   * roots set it; user roots do not.
+   */
+  readonly containedIn?: string | undefined
+  readonly walk: WalkSpec
+  /**
+   * An external source's entry budget, shared with the other roots of the same
+   * source. Left out, every directory is listed whole.
+   */
+  readonly entryBudget?: EntryBudget | undefined
+  /** Names the directory in warnings: `spec.dir` for a built-in kind, the source name for an external one. */
+  readonly label: string
 }
 
-/** Read the first `considered` candidates in order, within the size and byte caps. */
-function readCandidates(
-  spec: KindSpec,
-  kind: DocumentKind,
-  candidates: readonly Candidate[],
+export type SourceDiscovery =
+  | {
+      /**
+       * `missing`: nothing is there (or it is not a directory). `unreadable`:
+       * an access or I/O failure. `outside`: the realpath left `containedIn`.
+       */
+      readonly state: 'missing' | 'unreadable' | 'outside'
+    }
+  | {
+      readonly state: 'found'
+      /** Sorted by relative path in code-unit order; every file the walk found, before any cap. */
+      readonly candidates: SourceFileCandidate[]
+      /** True when discovery stopped at its ceiling, so counts are lower bounds. */
+      readonly truncated: boolean
+    }
+
+/**
+ * Probe one directory and walk it without reading any file. Symlinks are
+ * skipped at every depth. Absence is a quiet `missing`; any other failure is
+ * `unreadable` and says so once, in fixed text with no error detail. Never
+ * throws.
+ */
+export function discoverSourceFiles(
+  options: DiscoverSourceFilesOptions,
+  warnings: string[],
+): SourceDiscovery {
+  const { directory, containedIn, walk, label, entryBudget } = options
+  const directoryProbe = probeRealpath(directory)
+  const containerProbe =
+    containedIn === undefined ? undefined : probeRealpath(containedIn)
+  if (containerProbe?.kind === 'failed' || directoryProbe.kind === 'failed') {
+    warnings.push(`could not read ${label}; not loaded`)
+    return { state: 'unreadable' }
+  }
+  if (
+    (containerProbe !== undefined && containerProbe.kind !== 'ok') ||
+    directoryProbe.kind !== 'ok'
+  ) {
+    return { state: 'missing' }
+  }
+  const directoryReal = directoryProbe.value
+  const statProbe = probeLstat(directoryReal)
+  if (statProbe.kind === 'failed') {
+    warnings.push(`could not read ${label}; not loaded`)
+    return { state: 'unreadable' }
+  }
+  if (statProbe.kind !== 'ok' || !statProbe.value.isDirectory()) {
+    return { state: 'missing' }
+  }
+
+  // A committed symlink must not pull text from outside the project into output.
+  if (
+    containerProbe !== undefined &&
+    !isInside(containerProbe.value, directoryReal)
+  ) {
+    warnings.push(`${label} resolves outside the project root; not loaded`)
+    return { state: 'outside' }
+  }
+
+  const found: Discovery = {
+    candidates: [],
+    truncated: false,
+    rootUnreadable: false,
+    budget: entryBudget,
+  }
+  discoverFiles(walk, label, directoryReal, '', 0, found, warnings)
+  // Whether `realpath` of a locked directory fails depends on the platform; a
+  // directory that exists but cannot be listed is `unreadable` on all of them.
+  if (found.rootUnreadable) {
+    warnings.push(`could not read ${label}; not loaded`)
+    return { state: 'unreadable' }
+  }
+  return {
+    state: 'found',
+    candidates: found.candidates.sort((a, b) =>
+      compareCodeUnits(a.relative, b.relative),
+    ),
+    truncated: found.truncated,
+  }
+}
+
+export interface ReadSourceFilesOptions<T> {
+  /** Prepended to a candidate's relative path to form the path a record carries. */
+  readonly displayPrefix: string
+  /** Names the source in the file-limit and text-budget warnings. */
+  readonly label: string
+  /** Largest single file read, in bytes. */
+  readonly maxFileBytes: number
+  /**
+   * Bytes of a read budget shared with other sources that this call may still
+   * use. Left out for the built-in kinds, which share none.
+   */
+  readonly sharedBytes?: number | undefined
+  /** Parses one file; `displayPath` is `displayPrefix/relative`. */
+  readonly parse: (displayPath: string, content: string) => ParsedSourceFile<T>
+}
+
+export interface SourceFilesRead<T> {
+  readonly items: T[]
+  /** Stat bytes of the files opened, the figure a shared read budget draws on. */
+  readonly bytesRead: number
+}
+
+/** What bounds a read: the per-file cap, the per-source text budget or the budget shared with other sources. */
+export type ReadBound = 'file' | 'source' | 'shared'
+
+export interface ReadAllowance {
+  /** The most a file may hold: a read stops at one byte past it. */
+  readonly limit: number
+  readonly bound: ReadBound
+}
+
+/**
+ * How much the next file may hold, given the bytes this source has already
+ * used: the smallest of the per-file cap and what is left of the per-source
+ * text budget and of the shared budget. The size seen at discovery is not part
+ * of it, because a file can grow after discovery.
+ */
+export function readAllowance(
+  used: number,
+  maxFileBytes: number,
+  sharedBytes?: number,
+): ReadAllowance {
+  const source = MAX_TOTAL_BYTES - used
+  const shared = sharedBytes === undefined ? Infinity : sharedBytes - used
+  const left = Math.max(Math.min(source, shared), 0)
+  if (maxFileBytes <= left) return { limit: maxFileBytes, bound: 'file' }
+  return { limit: left, bound: shared < source ? 'shared' : 'source' }
+}
+
+interface ReadOutcome<T> extends SourceFilesRead<T> {
+  readonly budgetSkipped: number
+  readonly budgetBound: ReadBound
+}
+
+type BudgetedRead =
+  | { readonly kind: 'text'; readonly text: string; readonly bytes: number }
+  | { readonly kind: 'skip'; readonly reason: string; readonly bytes: number }
+  | { readonly kind: 'stop'; readonly bound: ReadBound; readonly bytes: number }
+
+/**
+ * Read one file within the per-file cap and what is left of the per-source and
+ * shared budgets. `bytes` is what the read charges. The size seen at discovery
+ * can be out of date, so the read itself is limited to what the budgets leave:
+ * a file that crosses a budget stops the source, charged what was left.
+ */
+function readWithinBudgets<T>(
+  options: ReadSourceFilesOptions<T>,
+  candidate: SourceFileCandidate,
+  used: number,
+): BudgetedRead {
+  const { maxFileBytes, sharedBytes } = options
+  const tooLarge = `larger than ${maxFileBytes} bytes`
+  if (candidate.size > maxFileBytes) {
+    return { kind: 'skip', reason: tooLarge, bytes: 0 }
+  }
+  if (used + candidate.size > MAX_TOTAL_BYTES) {
+    return { kind: 'stop', bound: 'source', bytes: 0 }
+  }
+  if (sharedBytes !== undefined && used + candidate.size > sharedBytes) {
+    return { kind: 'stop', bound: 'shared', bytes: 0 }
+  }
+  const allowance = readAllowance(used, maxFileBytes, sharedBytes)
+  const read = readBytesBounded(candidate.absolute, allowance.limit)
+  if (read.kind === 'too-large') {
+    return allowance.bound === 'file'
+      ? { kind: 'skip', reason: tooLarge, bytes: read.bytesRead }
+      : { kind: 'stop', bound: allowance.bound, bytes: allowance.limit }
+  }
+  if (read.kind !== 'bytes') {
+    return { kind: 'skip', reason: 'could not be read', bytes: 0 }
+  }
+  return {
+    kind: 'text',
+    text: read.bytes.toString('utf8'),
+    bytes: read.bytes.byteLength,
+  }
+}
+
+/**
+ * Read the first `considered` candidates in order, each within the budgets
+ * (see `readWithinBudgets`). A file that crosses a budget is rejected and
+ * nothing after it is read.
+ */
+function readCandidates<T>(
+  options: ReadSourceFilesOptions<T>,
+  candidates: readonly SourceFileCandidate[],
   considered: number,
   warnings: string[],
-): ReadOutcome {
-  const documents: CorpusDocument[] = []
+): ReadOutcome<T> {
+  const items: T[] = []
   let totalBytes = 0
   for (let index = 0; index < considered; index++) {
     const candidate = candidates[index]
     if (candidate === undefined) break
-    const logicalPath = `${spec.dir}/${candidate.relative}`
+    const logicalPath = `${options.displayPrefix}/${candidate.relative}`
     const display = cleanForWarning(logicalPath)
-    if (candidate.size > MAX_FILE_BYTES) {
-      warnings.push(`skipped ${display}: larger than ${MAX_FILE_BYTES} bytes`)
+    const read = readWithinBudgets(options, candidate, totalBytes)
+    totalBytes += read.bytes
+    if (read.kind === 'stop') {
+      return {
+        items,
+        bytesRead: totalBytes,
+        budgetSkipped: considered - index,
+        budgetBound: read.bound,
+      }
+    }
+    if (read.kind === 'skip') {
+      warnings.push(`skipped ${display}: ${read.reason}`)
       continue
     }
-    if (totalBytes + candidate.size > MAX_TOTAL_BYTES) {
-      return { documents, budgetSkipped: considered - index }
-    }
-    totalBytes += candidate.size
-
-    let bytes: Buffer
-    try {
-      bytes = fs.readFileSync(candidate.absolute)
-    } catch {
-      warnings.push(`skipped ${display}: could not be read`)
-      continue
-    }
-    // The file may have grown since lstat.
-    if (bytes.byteLength > MAX_FILE_BYTES) {
-      warnings.push(`skipped ${display}: larger than ${MAX_FILE_BYTES} bytes`)
-      continue
-    }
-    const parsed = parseCorpusDocument(
-      kind,
-      logicalPath,
-      bytes.toString('utf8'),
-    )
-    if (parsed.ok) documents.push(parsed.document)
+    const parsed = options.parse(logicalPath, read.text)
+    if (parsed.ok) items.push(parsed.value)
     else warnings.push(`skipped ${display}: ${parsed.reason}`)
   }
-  return { documents, budgetSkipped: 0 }
+  return {
+    items,
+    bytesRead: totalBytes,
+    budgetSkipped: 0,
+    budgetBound: 'source',
+  }
+}
+
+/**
+ * Read the first `MAX_FILES` of `candidates` (already sorted), within the
+ * per-file cap and the per-call `MAX_TOTAL_BYTES`, and warn about whatever the
+ * file limit or the text budget left out. `truncated` is the discovery flag.
+ * Never throws.
+ */
+export function readSourceFiles<T>(
+  options: ReadSourceFilesOptions<T>,
+  candidates: readonly SourceFileCandidate[],
+  truncated: boolean,
+  warnings: string[],
+): SourceFilesRead<T> {
+  const considered = Math.min(candidates.length, MAX_FILES)
+  const { items, bytesRead, budgetSkipped, budgetBound } = readCandidates(
+    options,
+    candidates,
+    considered,
+    warnings,
+  )
+
+  const capSkipped = candidates.length - considered
+  if (capSkipped > 0) {
+    const atLeast = truncated ? 'at least ' : ''
+    warnings.push(
+      `${options.label}: file limit of ${MAX_FILES} reached; skipped ${atLeast}${capSkipped} files`,
+    )
+  }
+  if (budgetSkipped > 0) {
+    warnings.push(
+      budgetBound === 'shared'
+        ? `${options.label}: read budget of this call reached; skipped ${budgetSkipped} files`
+        : `${options.label}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${budgetSkipped} files`,
+    )
+  }
+  return { items, bytesRead }
+}
+
+export type SourceFilesLoad<T> =
+  | {
+      readonly state: 'missing' | 'unreadable' | 'outside'
+      readonly warnings: string[]
+    }
+  | {
+      readonly state: 'loaded'
+      readonly items: T[]
+      readonly bytesRead: number
+      readonly warnings: string[]
+    }
+
+/**
+ * The shared walk-and-read core: discover one directory, then read what the
+ * caps allow. `loadCorpus` is a caller of it for the built-in kinds; the
+ * external loader uses `discoverSourceFiles` and `readSourceFiles` directly so
+ * it can merge several roots and check a shared budget before reading.
+ */
+export function loadSourceFiles<T>(
+  discover: DiscoverSourceFilesOptions,
+  read: ReadSourceFilesOptions<T>,
+): SourceFilesLoad<T> {
+  const warnings: string[] = []
+  const discovery = discoverSourceFiles(discover, warnings)
+  if (discovery.state !== 'found') {
+    return { state: discovery.state, warnings }
+  }
+  const { items, bytesRead } = readSourceFiles(
+    read,
+    discovery.candidates,
+    discovery.truncated,
+    warnings,
+  )
+  return { state: 'loaded', items, bytesRead, warnings }
 }
 
 /**
@@ -446,60 +908,31 @@ export function loadCorpus(
   kind: DocumentKind = 'solution',
 ): CorpusLoad {
   const spec: KindSpec = KIND_TABLE[kind]
-  const warnings: string[] = []
-  const none: CorpusLoad = { state: 'none', documents: [], warnings }
-
-  // Absence is a quiet `none`. Any other failure stays `none` too, but says so
-  // once, in fixed text with no error detail.
-  const unreadable = (): CorpusLoad => {
-    warnings.push(`could not read ${spec.dir}; not loaded`)
-    return none
-  }
-  const rootProbe = probeRealpath(root)
-  const directoryProbe = probeRealpath(path.join(root, ...spec.dir.split('/')))
-  if (rootProbe.kind === 'failed' || directoryProbe.kind === 'failed') {
-    return unreadable()
-  }
-  if (rootProbe.kind !== 'ok' || directoryProbe.kind !== 'ok') return none
-  const rootReal = rootProbe.value
-  const directoryReal = directoryProbe.value
-  const statProbe = probeLstat(directoryReal)
-  if (statProbe.kind === 'failed') return unreadable()
-  if (statProbe.kind !== 'ok' || !statProbe.value.isDirectory()) return none
-
-  // A committed symlink must not pull text from outside the project into output.
-  if (!isInside(rootReal, directoryReal)) {
-    warnings.push(`${spec.dir} resolves outside the project root; not loaded`)
-    return none
-  }
-
-  const found: Discovery = { candidates: [], truncated: false }
-  discoverFiles(spec, directoryReal, '', 0, found, warnings)
-  const candidates = found.candidates.sort((a, b) =>
-    compareCodeUnits(a.relative, b.relative),
+  const loaded = loadSourceFiles<CorpusDocument>(
+    {
+      directory: path.join(root, ...spec.dir.split('/')),
+      containedIn: root,
+      walk: spec,
+      label: spec.dir,
+    },
+    {
+      displayPrefix: spec.dir,
+      label: spec.dir,
+      maxFileBytes: MAX_FILE_BYTES,
+      parse: (displayPath, content) => {
+        const parsed = parseCorpusDocument(kind, displayPath, content)
+        return parsed.ok
+          ? { ok: true, value: parsed.document }
+          : { ok: false, reason: parsed.reason }
+      },
+    },
   )
-
-  const considered = Math.min(candidates.length, MAX_FILES)
-  const { documents, budgetSkipped } = readCandidates(
-    spec,
-    kind,
-    candidates,
-    considered,
-    warnings,
-  )
-
-  const capSkipped = candidates.length - considered
-  if (capSkipped > 0) {
-    const atLeast = found.truncated ? 'at least ' : ''
-    warnings.push(
-      `${spec.dir}: file limit of ${MAX_FILES} reached; skipped ${atLeast}${capSkipped} files`,
-    )
+  if (loaded.state !== 'loaded') {
+    return { state: 'none', documents: [], warnings: loaded.warnings }
   }
-  if (budgetSkipped > 0) {
-    warnings.push(
-      `${spec.dir}: text budget of ${MAX_TOTAL_BYTES} bytes reached; skipped ${budgetSkipped} files`,
-    )
+  return {
+    state: 'loaded',
+    documents: loaded.items,
+    warnings: loaded.warnings,
   }
-
-  return { state: 'loaded', documents, warnings }
 }

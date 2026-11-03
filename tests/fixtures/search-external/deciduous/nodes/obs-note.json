@@ -1,0 +1,7 @@
+{
+  "change_id": "obs-note",
+  "description": "An observation about the zebra.",
+  "node_type": "observation",
+  "status": "pending",
+  "title": "Observation zebra"
+}

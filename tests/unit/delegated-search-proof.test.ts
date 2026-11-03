@@ -7,12 +7,16 @@ import {
   assertDelegatedSearchProof,
   type ChatRequest,
   createDelegatedSearchScript,
+  DEFAULT_DELEGATED_SEARCH_MODE,
+  DELEGATED_EXTERNAL_FIXTURE,
   DELEGATED_SEARCH_FIXTURE,
   DELEGATED_SEARCH_REQUEST_CAP,
   type DelegatedSearchObservation,
+  EXTERNAL_DELEGATED_SEARCH_MODE,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
   PARENT_FINAL_MARKER,
+  plantDelegatedExternalFixture,
   plantDelegatedSearchFixture,
   researcherSystemMarker,
   systemTextOf,
@@ -519,6 +523,230 @@ describe('createDelegatedSearchScript', () => {
   })
 })
 
+describe('default mode', () => {
+  test("is today's constants, so the v1, v2 and Pi proofs stay byte-stable", () => {
+    expect(DEFAULT_DELEGATED_SEARCH_MODE.headerPrefix).toBe('Search "')
+    expect(DEFAULT_DELEGATED_SEARCH_MODE.pathPattern.source).toBe(
+      'docs\\/[a-z]+\\/[\\w.-]+\\.md',
+    )
+    expect(DEFAULT_DELEGATED_SEARCH_MODE.pathPattern.flags).toBe('g')
+    expect(DEFAULT_DELEGATED_SEARCH_MODE.searchArguments).toEqual({
+      query: 'zebra flake retry',
+      kind: 'all',
+    })
+    expect(DEFAULT_DELEGATED_SEARCH_MODE.expectedLabels).toEqual([
+      { path: 'solution', labels: ['Kind: solution'] },
+      {
+        path: 'brainstorm',
+        labels: ['Kind: brainstorm', 'Status: abandoned'],
+      },
+    ])
+    // The fixture's own search arguments are the default mode's.
+    expect(JSON.stringify(DEFAULT_DELEGATED_SEARCH_MODE.searchArguments)).toBe(
+      JSON.stringify(DELEGATED_SEARCH_FIXTURE.searchArguments),
+    )
+  })
+
+  test('the observation a default script records has no mode key', () => {
+    const s = createDelegatedSearchScript({
+      dispatch: { tool: 'task', arguments: {} },
+      isChildRequest: (r) => hasResearcherSystemMarker(r, MARKER),
+    })
+    expect('mode' in s.observation()).toBe(false)
+  })
+
+  test('an external reply is not a pass in the default mode', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      childRequests: [childFirst(), childNext(EXTERNAL_FOUND_MESSAGE)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-header' })
+  })
+})
+
+const EXTERNAL_PATH = DELEGATED_EXTERNAL_FIXTURE.hitPath
+const EXTERNAL_HIT = `1. ${EXTERNAL_PATH}\n   Title: Zebra field notes\n   Snippet: The zebra flake appears when retries overlap.`
+const EXTERNAL_FOUND_MESSAGE = `External sources for "zebra flake retry": 1 source, 1 hit.\n\n${DELEGATED_EXTERNAL_FIXTURE.sourceName} (project): /tmp/x/wiki\n\n${EXTERNAL_HIT}`
+const EXTERNAL_NOT_ALLOWED =
+  'External sources for "zebra flake retry": this project proposes 1 external source, but it is not in search.allow_project_sources, so nothing was read. To allow it, add "/tmp/x" to search.allow_project_sources in your user config.'
+
+function externalPassing(): DelegatedSearchObservation {
+  return {
+    requestCount: 5,
+    requestCap: DELEGATED_SEARCH_REQUEST_CAP,
+    mode: EXTERNAL_DELEGATED_SEARCH_MODE,
+    childRequests: [childFirst(), childNext(EXTERNAL_FOUND_MESSAGE)],
+    parentRequests: [
+      parentFirst(),
+      parentFinal(`<task_result>CHILD-FOUND ${EXTERNAL_PATH}</task_result>`),
+    ],
+    parentAnswer: `${PARENT_FINAL_MARKER} ${EXTERNAL_PATH}`,
+  }
+}
+
+describe('external mode', () => {
+  test('the mode sets all four fields for external search', () => {
+    expect(EXTERNAL_DELEGATED_SEARCH_MODE.headerPrefix).toBe(
+      'External sources for "',
+    )
+    expect(EXTERNAL_DELEGATED_SEARCH_MODE.searchArguments).toEqual({
+      query: 'zebra flake retry',
+      kind: 'external',
+    })
+    expect(EXTERNAL_DELEGATED_SEARCH_MODE.expectedLabels).toEqual([
+      { path: 'solution', labels: [] },
+    ])
+    expect(
+      EXTERNAL_PATH.match(EXTERNAL_DELEGATED_SEARCH_MODE.pathPattern),
+    ).toEqual([EXTERNAL_PATH])
+    expect(
+      EXTERNAL_PATH.startsWith(DELEGATED_EXTERNAL_FIXTURE.sourceName),
+    ).toBe(true)
+  })
+
+  test('the external path pattern does not match a built-in doc path', () => {
+    expect(PATH.match(EXTERNAL_DELEGATED_SEARCH_MODE.pathPattern)).toBe(null)
+  })
+
+  test('a delivered external hit and a parent answer naming its path pass', () => {
+    expect(
+      evaluateDelegatedSearchProof({
+        ...externalPassing(),
+        plantedPath: EXTERNAL_PATH,
+      }),
+    ).toEqual({ ok: true })
+  })
+
+  test('no Kind: or Status: label is required on the external hit', () => {
+    expect(EXTERNAL_FOUND_MESSAGE).not.toContain('Kind:')
+    expect(EXTERNAL_FOUND_MESSAGE).not.toContain('Status:')
+    expect(
+      evaluateDelegatedSearchProof({
+        ...externalPassing(),
+        plantedPath: EXTERNAL_PATH,
+      }),
+    ).toEqual({ ok: true })
+  })
+
+  test('a Search " header is not an external reply', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      childRequests: [
+        childFirst(),
+        childNext(`Search "zebra": 1 doc, 1 hit.\n${EXTERNAL_HIT}`),
+      ],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-header' })
+    if (!verdict.ok) {
+      expect(verdict.message).toContain('External sources for "')
+    }
+  })
+
+  test('the not-allowed reply fails with path-missing and names the allow list', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      childRequests: [childFirst(), childNext(EXTERNAL_NOT_ALLOWED)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'path-missing' })
+    if (!verdict.ok) {
+      expect(verdict.message).toContain('not in search.allow_project_sources')
+    }
+  })
+
+  test('a path only quoted in a warning, not heading a hit, fails', () => {
+    const quoted = `External sources for "zebra flake retry": 1 source, 0 hits.\nWarnings:\n- skipped ${EXTERNAL_PATH}\n\n${DELEGATED_EXTERNAL_FIXTURE.sourceName} (project): /tmp/x/wiki\n   No matching records.`
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      childRequests: [childFirst(), childNext(quoted)],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+    if (!verdict.ok) expect(verdict.message).toContain('does not head a hit')
+  })
+
+  test('an Error: reply fails with error-result', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      childRequests: [childFirst(), childNext('Error: search failed.')],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'error-result' })
+  })
+
+  test('the planted built-in brainstorm path is not required in external mode', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      plantedBrainstormPath: 'docs/brainstorms/unrelated.md',
+    })
+    expect(verdict).toEqual({ ok: true })
+  })
+
+  test('a final answer without the external path fails', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      parentAnswer: `${PARENT_FINAL_MARKER} NO-PATH`,
+    })
+    expect(verdict).toMatchObject({
+      ok: false,
+      code: 'final-answer-missing-path',
+    })
+  })
+
+  test('a mode with a label requirement still checks the hit heading', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...externalPassing(),
+      plantedPath: EXTERNAL_PATH,
+      mode: {
+        ...EXTERNAL_DELEGATED_SEARCH_MODE,
+        expectedLabels: [{ path: 'solution', labels: ['node_type decision'] }],
+      },
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'bad-label' })
+  })
+
+  test('the script calls the search tool with kind external and echoes the external path', () => {
+    const s = createDelegatedSearchScript({
+      dispatch: { tool: 'task', arguments: {} },
+      isChildRequest: (r) => hasResearcherSystemMarker(r, MARKER),
+      mode: EXTERNAL_DELEGATED_SEARCH_MODE,
+    })
+    s.respond(parentFirst())
+    expect(s.respond(childFirst())).toEqual({
+      toolCalls: [
+        {
+          id: 'delegated-search-call',
+          name: SEARCH_TOOL,
+          arguments: { query: 'zebra flake retry', kind: 'external' },
+        },
+      ],
+    })
+    expect(s.respond(childNext(EXTERNAL_FOUND_MESSAGE))).toEqual({
+      text: `CHILD-FOUND ${EXTERNAL_PATH}`,
+    })
+    expect(
+      s.respond(
+        parentFinal(`<task_result>CHILD-FOUND ${EXTERNAL_PATH}</task_result>`),
+      ),
+    ).toEqual({ text: `PARENT-FINAL ${EXTERNAL_PATH}` })
+    expect(s.observation().mode).toBe(EXTERNAL_DELEGATED_SEARCH_MODE)
+  })
+
+  test('the not-allowed reply makes the scripted child echo NO-PATH', () => {
+    const s = createDelegatedSearchScript({
+      dispatch: { tool: 'task', arguments: {} },
+      isChildRequest: (r) => hasResearcherSystemMarker(r, MARKER),
+      mode: EXTERNAL_DELEGATED_SEARCH_MODE,
+    })
+    expect(s.respond(childNext(EXTERNAL_NOT_ALLOWED))).toEqual({
+      text: 'CHILD-FOUND NO-PATH',
+    })
+  })
+})
+
 describe('request readers and fixture', () => {
   const temp = createTempDirTracker()
   afterEach(() => temp.cleanup())
@@ -566,6 +794,34 @@ describe('request readers and fixture', () => {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, '---\nname: r\n---\n')
     expect(() => researcherSystemMarker(root)).toThrow('no body')
+  })
+
+  test('planting the external fixture writes the source folder and the proposing project file', () => {
+    const root = temp.track(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'delegated-proof-')),
+    )
+    plantDelegatedExternalFixture(root)
+    const note = fs.readFileSync(
+      path.join(
+        root,
+        DELEGATED_EXTERNAL_FIXTURE.rootDir,
+        DELEGATED_EXTERNAL_FIXTURE.fileName,
+      ),
+      'utf8',
+    )
+    expect(note).toContain('zebra flake')
+    const config = JSON.parse(
+      fs.readFileSync(path.join(root, '.opencode/systematic.jsonc'), 'utf8'),
+    ) as { search: { sources: unknown[] } }
+    expect(config.search.sources).toEqual([
+      {
+        name: DELEGATED_EXTERNAL_FIXTURE.sourceName,
+        format: 'markdown',
+        roots: [DELEGATED_EXTERNAL_FIXTURE.rootDir],
+      },
+    ])
+    // A checkout root is what makes the project identity resolvable.
+    expect(fs.existsSync(path.join(root, '.git'))).toBe(true)
   })
 
   test('planting writes the solution and the abandoned brainstorm', () => {
