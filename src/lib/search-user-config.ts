@@ -284,7 +284,7 @@ function isAbsoluteAnywhere(value: string): boolean {
 }
 
 /**
- * Whether a project root is a strict, dot-free subfolder (KTD9). Both
+ * Whether a project root is a strict, dot-free subfolder. Both
  * separators count. One named exception: a `deciduous` source may start with
  * `.deciduous/` when at least one non-dot segment follows.
  */
@@ -528,7 +528,7 @@ function validateUserOnlyFields(
 }
 
 /**
- * Validate a raw `search` value field by field and entry by entry (KTD3), so a
+ * Validate a raw `search` value field by field and entry by entry, so a
  * typo in `sources` can never lose `enabled: false`. This is the one
  * validator `config.ts` and the per-call reader both call.
  *
@@ -719,7 +719,7 @@ function errorCode(error: unknown): unknown {
   return error instanceof Error && 'code' in error ? error.code : undefined
 }
 
-/** Largest project config file the bin-safe project reader accepts (KTD16). */
+/** Largest project config file the bin-safe project reader accepts. */
 export const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024
 
 const READ_CHUNK_BYTES = 64 * 1024

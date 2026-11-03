@@ -827,7 +827,7 @@ describe('skills never route external records', () => {
 })
 
 describe('researcher prompt size', () => {
-  // KTD18: the ceiling is set on purpose. Raise it only with a plan decision.
+  // The ceiling is set on purpose. Raise it only deliberately.
   const BODY_CEILING_BYTES = 25_000
 
   test('the body after frontmatter is at most 25,000 bytes', () => {

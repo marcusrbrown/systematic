@@ -83,7 +83,7 @@ function names(sources: readonly ActiveSource[]): string[] {
 }
 
 describe('resolveExternalSources: project proposals', () => {
-  test('AE1: an allowed project resolves its proposal as a project source', () => {
+  test('an allowed project resolves its proposal as a project source', () => {
     const env = makeEnv()
     writeProject(env.repo, { sources: [projectSource('decisions')] })
     writeUser(env, { allow_project_sources: [env.repo] })
@@ -122,7 +122,7 @@ describe('resolveExternalSources: project proposals', () => {
     ])
   })
 
-  test('AE2: with no allow entry the proposal resolves to nothing and echoes no names or roots', () => {
+  test('with no allow entry the proposal resolves to nothing and echoes no names or roots', () => {
     const env = makeEnv()
     writeProject(env.repo, {
       sources: [
@@ -301,7 +301,7 @@ describe('resolveExternalSources: project file problems', () => {
   })
 })
 
-describe('resolveExternalSources: worktrees (AE4)', () => {
+describe('resolveExternalSources: worktrees', () => {
   function worktreeOf(main: string): string {
     const target = path.join(makeDir('extsrc-wt-'), 'wt')
     git(main, ['worktree', 'add', '-q', '-b', 'feature', target])
@@ -633,7 +633,7 @@ describe('resolveExternalSources: user and custom config dirs', () => {
   })
 })
 
-describe('resolveExternalSources: user config problems (KTD3, KTD21)', () => {
+describe('resolveExternalSources: user config problems', () => {
   test('a bad allow entry allows nothing, sets the user note, and keeps valid siblings', () => {
     const env = makeEnv()
     writeProject(env.repo, { sources: [projectSource('proj')] })

@@ -9,7 +9,7 @@
  * `loadUserLevelSearchSettings`), so a repository cannot switch it off or
  * allow itself. From project config it reads one thing, and only for
  * `--kind external`: the `sources` the project proposes, through the bin-safe
- * reader in `search-user-config.ts` (KTD16). It does not read the project
+ * reader in `search-user-config.ts`. It does not read the project
  * config for anything else, so it cannot print the strip warning that
  * `systematic search` prints for `enabled` or `allow_project_sources`; that
  * asymmetry is accepted. `userLevel` reaches the external reader as well as

@@ -121,7 +121,7 @@ describe('loadExternalSources: Markdown records', () => {
     expect(plain.nodeType).toBeUndefined()
   })
 
-  test('AE10 input: a runbook with an H1 and no frontmatter has a title and no status', () => {
+  test('a runbook with an H1 and no frontmatter has a title and no status', () => {
     const env = makeEnv()
     const root = path.join(env.outside, 'runbooks')
     write(root, 'restart.md', '# Restarting the gateway\n\nStep one.\n')
@@ -272,7 +272,7 @@ describe('loadExternalSources: caps', () => {
     )
   })
 
-  test('R12: the file limit applies to a source, with a named warning', () => {
+  test('the file limit applies to a source, with a named warning', () => {
     const env = makeEnv()
     const root = path.join(env.outside, 'many')
     fs.mkdirSync(root, { recursive: true })
@@ -563,7 +563,7 @@ describe('loadExternalSources: states', () => {
 })
 
 describe('loadExternalSources: symlinks and containment', () => {
-  test('AE5: a symlinked file and a symlinked directory inside a root yield nothing and no warning names the target', () => {
+  test('a symlinked file and a symlinked directory inside a root yield nothing and no warning names the target', () => {
     const env = makeEnv()
     const root = path.join(env.checkout, 'docs/decisions')
     write(root, 'real.md', '# Real\n')

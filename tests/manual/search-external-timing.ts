@@ -1,10 +1,10 @@
 /**
- * Timing harness for the external-sources measurement gate (KTD22, U6). Not a
+ * Timing harness for the external-sources measurement gate. Not a
  * CI test: run it by hand, record the numbers in the PR notes.
  *
  *   bun tests/manual/search-external-timing.ts
  *   bun tests/manual/search-external-timing.ts --warm 40 --cold 10 --json
- *   bun tests/manual/search-external-timing.ts --markdown-only   # the U6 stores alone
+ *   bun tests/manual/search-external-timing.ts --markdown-only   # the Markdown stores alone
  *
  * It runs the built-in `plan` kind and `kind: "external"` on the same machine
  * in the same run, interleaved so drift hits both alike, and reports p50 and
@@ -15,7 +15,7 @@
  *   real Node and for the built `systematic search` CLI under Bun. "Cold" means
  *   a new process, not an empty disk cache: the OS page cache stays warm.
  *
- * Budgets (KTD22) are ratios, not absolute times: external p95 at or under 2x
+ * Budgets are ratios, not absolute times: external p95 at or under 2x
  * the built-in `plan` p95, warm and cold.
  *
  * Safety. The store clones are read-only inputs and are never written. All
@@ -50,9 +50,9 @@ interface Store {
 }
 
 /**
- * The Markdown stores U6 measures plus the Deciduous sync folder U7 adds
- * (read-only: the harness never writes into it). `--markdown-only` drops the
- * Deciduous store to reproduce the U6 numbers.
+ * The Markdown stores plus the Deciduous sync folder (read-only: the harness
+ * never writes into it). `--markdown-only` drops the Deciduous store to
+ * reproduce the Markdown-only numbers.
  */
 const ALL_STORES: readonly Store[] = [
   {
@@ -404,7 +404,7 @@ function printReport(
 ): void {
   const planInventory = inventory(path.join(ROOT_DIR, 'docs/plans'))
   const lines: string[] = [
-    '# External sources timing (KTD22 gate)',
+    '# External sources timing',
     '',
     `Date: ${new Date().toISOString()}`,
     `Machine: ${os.cpus()[0]?.model ?? 'unknown cpu'} x${os.cpus().length}, ${os.platform()} ${os.release()}`,

@@ -97,7 +97,7 @@ export const KIND_SELECTOR_ALL = 'all'
  */
 export const KIND_SELECTOR_EXTERNAL = 'external'
 
-/** Most hits one external source returns, whatever `limit` asks for (KTD11). */
+/** Most hits one external source returns, whatever `limit` asks for. */
 export const MAX_EXTERNAL_HITS_PER_SOURCE = 5
 
 const DOCUMENT_KINDS = Object.keys(KIND_TABLE).filter(isDocumentKind)
@@ -189,7 +189,7 @@ export type ExternalResolver = (
   input: ExternalSourcesInput,
 ) => ExternalSourcesResolution
 
-/** The default resolver: U3's composer. */
+/** The default resolver: the per-call reader in `search-external-sources.ts`. */
 export const defaultExternalResolver: ExternalResolver = resolveExternalSources
 
 /**
@@ -221,7 +221,7 @@ export type SearchResponse =
       /**
        * Present (and `true`) when the project's config file had a structural
        * error, so it proposed nothing. The reply text already says so; the CLI
-       * and the bin also print one stderr warning for it (KTD16).
+       * and the bin also print one stderr warning for it.
        */
       readonly projectConfigUnreadable?: true
     }
@@ -629,7 +629,7 @@ export async function runSearch(
   options: SearchOptions,
 ): Promise<SearchResponse> {
   // `external` is decided before validation: with no project there is nothing
-  // to search, whatever the query and limit hold (KTD12).
+  // to search, whatever the query and limit hold.
   if (
     request.kind === KIND_SELECTOR_EXTERNAL &&
     !hasCheckout(options.startDir)
@@ -829,7 +829,7 @@ export function rankExternalSources(
 
 /**
  * Warnings in print order. A dropped source's own warnings lead, because a
- * source that was not read is the most useful thing to know (KTD13); then the
+ * source that was not read is the most useful thing to know; then the
  * resolver's, then the other sources'.
  */
 function externalWarnings(

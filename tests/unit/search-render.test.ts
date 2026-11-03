@@ -595,7 +595,7 @@ describe('renderSearchResult: 16 KB cap', () => {
   })
 })
 
-// --- External results (U5) --------------------------------------------------
+// --- External results --------------------------------------------------
 
 const BIDI = '\u202e'
 const ZERO_WIDTH = '\u200b'
@@ -697,7 +697,7 @@ describe('renderExternalResult', () => {
     expect(text).toContain('Title: Cache decision | Status: accepted')
   })
 
-  it('AE8: prints node_type in place of a status', () => {
+  it('prints node_type in place of a status', () => {
     const text = renderExternalResult(
       makeExternalResult({
         sections: [
@@ -893,7 +893,7 @@ describe('renderExternalResult: the 12 KB allowance', () => {
     )
   })
 
-  it('AE6: no source takes all of the allowance, and a source past its share drops whole hits', () => {
+  it('no source takes all of the allowance, and a source past its share drops whole hits', () => {
     const sections = Array.from({ length: 8 }, (_, index) =>
       makeSection({ name: `src-${index}` }, bigRecords(`src-${index}`, 5)),
     )

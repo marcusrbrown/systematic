@@ -571,7 +571,7 @@ describe('runSearchCli: kind external', () => {
     expect(withOther.stdout[0]).toContain(EXTERNAL_REPLIES.noActiveSource)
   })
 
-  describe('precedence (KTD12), one case per step', () => {
+  describe('precedence, one case per step', () => {
     it('1. disabled wins over everything: the existing notice for an empty query', async () => {
       const bare = temp.track(
         fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-bare-'))),
@@ -631,7 +631,7 @@ describe('runSearchCli: kind external', () => {
     })
   })
 
-  describe('a structurally broken project config (KTD16)', () => {
+  describe('a structurally broken project config', () => {
     function brokenProject() {
       const env = makeExternalEnv(temp)
       fs.mkdirSync(path.join(env.repo, '.opencode'))
@@ -676,7 +676,7 @@ describe('runSearchCli: kind external', () => {
     })
   })
 
-  describe('a throwing settings loader (KTD21)', () => {
+  describe('a throwing settings loader', () => {
     it('reports config unreadable, runs the external call with the user sources it can read, and prints no fixed failure line', async () => {
       const env = makeExternalEnv(temp)
       const wiki = path.join(env.root, 'wiki')

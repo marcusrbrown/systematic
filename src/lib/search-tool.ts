@@ -44,7 +44,7 @@ export function isSearchEnabled(settings: SearchSettings | undefined): boolean {
  *
  * Only `settings` and `unreadable` are fixed at init. For `kind: "external"`
  * the core reads the allow list, the user sources and the project file again
- * on every call, from the per-call `startDir` (KTD2). `configOptions` is the
+ * on every call, from the per-call `startDir`. `configOptions` is the
  * config-directory override that read takes; the hosts leave it out and the
  * reader uses the home directory and `OPENCODE_CONFIG_DIR`.
  */

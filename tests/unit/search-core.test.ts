@@ -1152,7 +1152,7 @@ describe('runSearch: warnings per kind', () => {
   })
 })
 
-// --- kind: "external" (U5) --------------------------------------------------
+// --- kind: "external" --------------------------------------------------
 
 const BIDI = '\u202e'
 const ZERO_WIDTH = '\u200b'
@@ -1229,7 +1229,7 @@ describe('runSearch: kind external', () => {
     }
   })
 
-  it('AE6: each source appears in its own section and no source takes all of the output', async () => {
+  it('each source appears in its own section and no source takes all of the output', async () => {
     const env = makeExternalEnv(temp)
     const wiki = path.join(env.root, 'wiki')
     const decisions = path.join(env.root, 'decisions')
@@ -1330,7 +1330,7 @@ describe('runSearch: kind external', () => {
     ])
   })
 
-  it('labels a project source and a user source by origin (AE1)', async () => {
+  it('labels a project source and a user source by origin', async () => {
     const env = makeExternalEnv(temp)
     const adrs = path.join(env.repo, 'docs/adrs')
     writeMarkdown(adrs, 'one.md', { title: 'ADR one', body: 'queue decision' })
@@ -1438,7 +1438,7 @@ describe('runSearch: kind external', () => {
     expect(response.text).toContain('\n   dropped: see the warnings.')
   })
 
-  it('AE7: no active source returns the fixed ok reply; a missing declared root is still active', async () => {
+  it('no active source returns the fixed ok reply; a missing declared root is still active', async () => {
     const env = makeExternalEnv(temp)
     const none = await externalSearch(env, 'anything')
     expect(none).toMatchObject({ ok: true })
@@ -1456,7 +1456,7 @@ describe('runSearch: kind external', () => {
     expect(missing.text).toContain('missing: root not found.')
   })
 
-  it('AE2: a project that proposes sources but is not allowed gets the fixed reply with the count and the main root and no names or roots', async () => {
+  it('a project that proposes sources but is not allowed gets the fixed reply with the count and the main root and no names or roots', async () => {
     const env = makeExternalEnv(temp)
     writeProjectSearch(env, {
       sources: [
@@ -1528,7 +1528,7 @@ describe('runSearch: kind external', () => {
     )
   })
 
-  describe('precedence (KTD12)', () => {
+  describe('precedence', () => {
     it('no project beats an empty query and a bad limit', async () => {
       const bare = temp.track(
         fs.realpathSync(

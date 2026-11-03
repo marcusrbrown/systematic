@@ -11,10 +11,10 @@
  *
  * It holds no state. Every call re-reads the user files (the allow list and
  * the user sources), the project file and the project identity, so editing
- * any of them takes effect on the next call (KTD2). `search.enabled` is not
+ * any of them takes effect on the next call. `search.enabled` is not
  * read here: it is fixed at init by each surface and never changes per call.
  *
- * Resolution follows KTD7: proposals of a project that is not allowed are
+ * Resolution order: proposals of a project that is not allowed are
  * dropped, a user source mapped to this project shadows a same-named project
  * source, user sources come before project sources, and the list caps at
  * `MAX_ACTIVE_SOURCES`. Project-source problems never throw and never touch
@@ -41,7 +41,7 @@ import {
   type UserLevelConfigDirOptions,
 } from './search-user-config.js'
 
-/** At most this many sources are active in one call (KTD7). */
+/** At most this many sources are active in one call. */
 export const MAX_ACTIVE_SOURCES = 8
 
 /** Names listed in the cap warning before it says how many more were dropped. */
@@ -85,13 +85,13 @@ export interface ExternalSourcesResolution {
   readonly project: ProjectState
   /**
    * The user-level files this call read had a problem that changes what
-   * search does (KTD3): a parse error, a bad allow entry, a non-array
+   * search does: a parse error, a bad allow entry, a non-array
    * `sources`, an unknown key. The caller prints one `config unreadable`
    * note; a repair between calls clears it.
    */
   readonly userConfigUnreadable: boolean
   /**
-   * Bounded warnings, the source-cap warning first (KTD13), then user-file
+   * Bounded warnings, the source-cap warning first, then user-file
    * and project-file warnings. They name fields and source names, never a
    * value. Each file's own list is bounded by its validator.
    */

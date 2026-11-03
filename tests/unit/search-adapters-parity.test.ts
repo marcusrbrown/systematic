@@ -1068,7 +1068,7 @@ function expectIdentical(
 }
 
 describe('search adapters parity: kind external', () => {
-  test('AE1: the same fixture gives byte-identical external text on every surface, built bin included, and the symlink plant stays out', async () => {
+  test('the same fixture gives byte-identical external text on every surface, built bin included, and the symlink plant stays out', async () => {
     const { root } = makeExternalProject()
     const surfaces = await externalSurfaces(root)
     const texts = await externalTexts(surfaces, root)
@@ -1082,7 +1082,7 @@ describe('search adapters parity: kind external', () => {
     expectIdentical(surfaces, texts)
   }, 120_000)
 
-  test('AE2: with the allow entry removed every surface gives the identical not-allowed text and reads nothing from the project', async () => {
+  test('with the allow entry removed every surface gives the identical not-allowed text and reads nothing from the project', async () => {
     const { root } = makeExternalProject({ allow: false })
     const surfaces = await externalSurfaces(root)
     const texts = await externalTexts(surfaces, root)
@@ -1095,7 +1095,7 @@ describe('search adapters parity: kind external', () => {
     expectIdentical(surfaces, texts)
   }, 120_000)
 
-  test('AE2: with no user source either, every surface returns the identical fixed not-allowed reply', async () => {
+  test('with no user source either, every surface returns the identical fixed not-allowed reply', async () => {
     const { root } = makeExternalProject({ allow: false, userSource: false })
     const surfaces = await externalSurfaces(root)
     const texts = await externalTexts(surfaces, root)
@@ -1106,7 +1106,7 @@ describe('search adapters parity: kind external', () => {
     expectIdentical(surfaces, texts)
   }, 120_000)
 
-  test('AE11: with sources active, every built-in selector is byte-identical to its output with none', async () => {
+  test('with sources active, every built-in selector is byte-identical to its output with none', async () => {
     const root = makeMixedProject()
     const surfaces = await everySurface(root)
     const kinds = [

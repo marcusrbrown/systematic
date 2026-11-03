@@ -816,7 +816,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         : proofMessageText(delivered.messages?.at(-1))
     }
 
-    // KTD19: one real-host proof that the external call reaches the parent's
+    // One real-host proof that the external call reaches the parent's
     // final answer, and a control that fails when the user has not allowed the
     // project. The scripted model makes the call, so this shows reach and
     // plumbing, not that a live model chooses `external`.

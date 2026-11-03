@@ -60,7 +60,7 @@ export const SEARCH_CLI_DISABLED_NOTICE =
 
 /**
  * Printed once to stderr when `--kind external` finds the project's config
- * file structurally broken (KTD16). Fixed text: no path, no value. The reply
+ * file structurally broken. Fixed text: no path, no value. The reply
  * carries the aggregate line and the bounded warnings.
  */
 export const SEARCH_CLI_PROJECT_CONFIG_WARNING =

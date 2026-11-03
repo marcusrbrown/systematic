@@ -258,7 +258,7 @@ describe('setupOpenCodeV2 search slot', () => {
 })
 
 /**
- * KTD23: a project file that parses but holds a bad `search.sources` never
+ * A project file that parses but holds a bad `search.sources` never
  * fails v2 setup. One that cannot be parsed fails as it always has, because the
  * whole project config loads before `search` is split out.
  */

@@ -7,7 +7,7 @@
  * a source never reads past the file and byte limits. Sources only read files:
  * nothing here spawns a process, opens a network connection or writes.
  *
- * Bounds (KTD8): an external file may be 1 MB (built-in kinds stay at 256
+ * Bounds: an external file may be 1 MB (built-in kinds stay at 256
  * KiB), a source keeps the per-source `MAX_FILES` and `MAX_TOTAL_BYTES` caps,
  * and every file the loader opens draws on one 32 MB budget shared by the
  * sources of the call. A source that does not fit the remaining budget is
@@ -147,7 +147,7 @@ function firstHeading(body: string): string | undefined {
 }
 
 /**
- * Parse one Markdown file into a record (KTD14). The frontmatter step is the
+ * Parse one Markdown file into a record. The frontmatter step is the
  * corpus parser's own, so a BOM, a missing trailing newline, invalid YAML and a
  * non-mapping block behave the same. The title is a string `title`, then the
  * first H1, then the file name; the status is a string `status` and nothing
@@ -335,7 +335,7 @@ function loadMarkdownSource(
 }
 
 /**
- * The Deciduous reader owns its scan (KTD15). A project source stays inside the
+ * The Deciduous reader owns its scan. A project source stays inside the
  * checkout; the reader's result gains the source and origin here.
  */
 function loadDeciduousSource(

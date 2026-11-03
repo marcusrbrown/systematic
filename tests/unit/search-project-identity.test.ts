@@ -97,7 +97,7 @@ describe('resolveProjectIdentity: own root', () => {
 })
 
 describe('resolveProjectIdentity: linked worktrees', () => {
-  it('maps a git worktree to the main checkout (AE4)', () => {
+  it('maps a git worktree to the main checkout', () => {
     const repo = createRepo()
     const wt = addWorktree(repo.work, 'feat/a')
     expect(fs.statSync(path.join(wt, '.git')).isFile()).toBe(true)

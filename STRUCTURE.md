@@ -84,14 +84,17 @@ subdirectory of core modules.
 - `src/lib/validation.ts` — agent config validation + type guards
 - `src/lib/agent-colors.ts` — `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS`
 - `src/lib/search-*.ts` — durable-output search over four kinds (`docs/solutions/`, `docs/plans/`,
-  `docs/brainstorms/` and `docs/ideation/`, or all of them with `kind: all`): `search-core.ts` is the
+  `docs/brainstorms/` and `docs/ideation/`, or all of them with `kind: all`), plus the opt-in
+  `kind: external` selector over user-allowed Markdown and Deciduous folders
+  (`search-external-sources.ts`, `search-external.ts`, `search-external-deciduous.ts` and
+  `search-project-identity.ts`): `search-core.ts` is the
   one host-neutral composition (validate, load each kind, lexical lane, per-kind lifecycle resolver,
   render) that the host
   adapters in `search-tool.ts` (OpenCode v1, v2, Pi) and `search-cli.ts` (`systematic search` and
   the `systematic-search` bin) all call, and the learnings-researcher agent reaches through the tool
   or the bin (`scope: past-work` for plans, brainstorms and ideation as well); `search-corpus.ts`,
   `search-lexical.ts` and `search-render.ts` are its parts; `search-user-config.ts` holds the
-  `search` config field's schema piece and the user-level reader. See the `ARCHITECTURE.md` codemap
+  `search` config field's schema piece, the user-level reader and the bounded project-sources reader. See the `ARCHITECTURE.md` codemap
   for each module
 - `src/lib/review-return-validator.ts` — bounded stdin validator for one raw `ce:review` persona
   return, backing `systematic validate-review-return` (`runReviewReturnValidator`,

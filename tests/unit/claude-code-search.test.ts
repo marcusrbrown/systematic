@@ -647,7 +647,7 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
 })
 
 /**
- * KTD24: the bin's module graph holds the readers it needs and neither config
+ * The bin's module graph holds the readers it needs and neither config
  * module. The metafile comes from the same build the bin ships, so this cannot
  * pass on a graph the bin does not use.
  */

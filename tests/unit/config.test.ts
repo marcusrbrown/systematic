@@ -6523,7 +6523,7 @@ describe('search config field', () => {
   })
 
   describe('project config can never set the user-only search fields', () => {
-    test('AE2: a project search.enabled is stripped with one per-path warning and the user value is used', () => {
+    test('a project search.enabled is stripped with one per-path warning and the user value is used', () => {
       const t = setup()
       t.user({ search: { enabled: false } })
       t.project({ search: { enabled: true } })

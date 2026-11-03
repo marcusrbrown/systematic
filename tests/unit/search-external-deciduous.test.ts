@@ -103,7 +103,7 @@ function byPath(result: SourceLoad, relative: string) {
   return found
 }
 
-describe('Deciduous loader: records (AE8)', () => {
+describe('Deciduous loader: records', () => {
   test('keeps decision, option, outcome and goal nodes and never indexes action or observation nodes', () => {
     const env = makeEnv()
     const result = load(env, source([FIXTURE]))
@@ -196,7 +196,7 @@ describe('Deciduous loader: records (AE8)', () => {
   })
 })
 
-describe('Deciduous loader: rationale (AE9)', () => {
+describe('Deciduous loader: rationale', () => {
   test('an incoming edge and an outgoing edge both put their rationale in the node body', () => {
     const env = makeEnv()
     const result = load(env, source([FIXTURE]))
@@ -335,7 +335,7 @@ describe('Deciduous loader: rationale (AE9)', () => {
   })
 })
 
-describe('Deciduous loader: scale (KTD15)', () => {
+describe('Deciduous loader: scale', () => {
   test('2,146 node files and 664 edge files load every decision-shaped node', () => {
     const env = makeEnv()
     const root = path.join(env.root, 'big')

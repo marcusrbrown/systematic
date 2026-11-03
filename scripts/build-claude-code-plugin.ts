@@ -700,7 +700,7 @@ export interface SearchBundleBuild {
 
 /**
  * Bundles `src/claude-code-search.ts` for Node into one self-contained file.
- * Also returns the build metafile (KTD24: the module graph test pins that
+ * Also returns the build metafile (the module graph test pins that
  * neither `config.ts` nor `config-schema.ts` is in it).
  *
  * `jsonc-parser` is aliased to its ESM build. Its default entry is a UMD file

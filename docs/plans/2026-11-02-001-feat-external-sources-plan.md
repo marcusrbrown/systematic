@@ -1,7 +1,7 @@
 ---
 title: "feat: search opt-in external decision sources"
 type: feat
-status: active
+status: completed
 date: 2026-11-02
 origin: docs/brainstorms/2026-11-02-external-sources-requirements.md
 deepened: 2026-11-02
@@ -815,7 +815,7 @@ flowchart TB
 
 ---
 
-- [ ] U9. Documentation
+- [x] U9. Documentation
 
 **Goal:** Document the feature in the search guide and bring every contributor and harness doc in line with the new behavior.
 

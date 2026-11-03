@@ -527,7 +527,7 @@ function userLevelDirOptions(
 /**
  * The settings loader `systematic search` injects into `runSearchCli`: the
  * full config loader, so the project-config strip warning for `search.enabled`
- * or `search.allow_project_sources` reaches stderr (AE2). Config is read at the
+ * or `search.allow_project_sources` reaches stderr. Config is read at the
  * project root, resolved the same way the corpus root is. A thrown load, an
  * invalid user or custom source, or an invalid `search` block all give
  * `unreadable: true`, which makes the core add the `config unreadable` note to
@@ -583,7 +583,7 @@ export function loadSearchSettingsForCli(
  * What `systematic search` hands `runSearchCli` besides its argv: the settings
  * loader and the config directories `--kind external` reads its allow list and
  * user sources from. Both take the same override, so one `configOptions`
- * reaches the settings loader and the external reader alike (KTD2). Left out,
+ * reaches the settings loader and the external reader alike. Left out,
  * both read the home directory and `OPENCODE_CONFIG_DIR`.
  */
 export function searchCliInputs(

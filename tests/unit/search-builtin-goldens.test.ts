@@ -19,7 +19,7 @@ import { createTempDirTracker } from '../helpers/temp-dirs.js'
 // `external` and was re-recorded on purpose (seven error cases).
 //
 // The second block replays every case with an external source active for the
-// project (AE11): built-in output must not move, and a built-in request must
+// project: built-in output must not move, and a built-in request must
 // never reach the external resolver.
 //
 // To re-record after a deliberate change:
@@ -557,7 +557,7 @@ describe('built-in search output is unchanged', () => {
   }
 })
 
-// AE11: the same cases with an external source active for the project.
+// The same cases with an external source active for the project.
 describe('built-in search output is unchanged with external sources active', () => {
   const home = temp.track(
     fs.realpathSync(

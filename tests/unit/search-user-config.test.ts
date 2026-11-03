@@ -381,7 +381,7 @@ describe('validateSearchConfig (project trust)', () => {
     expect(result.warnings).toHaveLength(1)
   })
 
-  test('AE3: three bad roots each drop only their own source and a valid sibling stays', () => {
+  test('three bad roots each drop only their own source and a valid sibling stays', () => {
     const result = project({
       sources: [
         { name: 'dot', format: 'markdown', roots: ['.'] },

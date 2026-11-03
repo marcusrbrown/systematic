@@ -1,7 +1,7 @@
 /**
  * The Deciduous reader behind `format: "deciduous"` external sources: turns a
  * sync folder (`nodes/<change_id>.json` and `edges/<edge_id>.json`) into
- * decision-shaped records with edge rationale as searchable text (KTD15).
+ * decision-shaped records with edge rationale as searchable text.
  *
  * It has its own scan instead of the shared `min(candidates, MAX_FILES)` cut:
  * `nodes/` first and then `edges/`, in that explicit order and not a path sort.
