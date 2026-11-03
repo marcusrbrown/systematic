@@ -1,0 +1,7 @@
+{
+  "change_id": "act-deploy",
+  "description": "Run the zebra deploy script.",
+  "node_type": "action",
+  "status": "pending",
+  "title": "Deploy script zebra"
+}

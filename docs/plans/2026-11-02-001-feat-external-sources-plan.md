@@ -712,7 +712,7 @@ flowchart TB
 
 ### Phase D: Deciduous
 
-- [ ] U7. Deciduous loader
+- [x] U7. Deciduous loader
 
 **Goal:** Read a Deciduous sync folder into external records: decision-shaped nodes only, with edge rationale as searchable text.
 

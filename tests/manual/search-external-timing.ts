@@ -4,6 +4,7 @@
  *
  *   bun tests/manual/search-external-timing.ts
  *   bun tests/manual/search-external-timing.ts --warm 40 --cold 10 --json
+ *   bun tests/manual/search-external-timing.ts --markdown-only   # the U6 stores alone
  *
  * It runs the built-in `plan` kind and `kind: "external"` on the same machine
  * in the same run, interleaved so drift hits both alike, and reports p50 and
@@ -40,29 +41,49 @@ import { NODE_BIN } from '../helpers/real-node.js'
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const GITHUB_ROOT = path.join(os.homedir(), 'src/github.com')
 
+type StoreFormat = 'markdown' | 'deciduous'
+
 interface Store {
   readonly name: string
+  readonly format: StoreFormat
   readonly root: string
 }
 
-/** The Markdown stores U6 measures. The Deciduous graph is measured in U7. */
-const STORES: readonly Store[] = [
-  { name: 'agent-rfcs', root: path.join(GITHUB_ROOT, 'fro-bot/agent/RFCs') },
+/**
+ * The Markdown stores U6 measures plus the Deciduous sync folder U7 adds
+ * (read-only: the harness never writes into it). `--markdown-only` drops the
+ * Deciduous store to reproduce the U6 numbers.
+ */
+const ALL_STORES: readonly Store[] = [
+  {
+    name: 'agent-rfcs',
+    format: 'markdown',
+    root: path.join(GITHUB_ROOT, 'fro-bot/agent/RFCs'),
+  },
   {
     name: 'agent-decisions',
+    format: 'markdown',
     root: path.join(GITHUB_ROOT, 'fro-bot/agent/docs/decisions'),
   },
   {
     name: 'agent-wiki',
+    format: 'markdown',
     root: path.join(GITHUB_ROOT, 'fro-bot/agent/docs/wiki'),
   },
   {
     name: 'github-wiki',
+    format: 'markdown',
     root: path.join(GITHUB_ROOT, 'fro-bot/.github/knowledge/wiki'),
   },
   {
     name: 'infra-runbooks',
+    format: 'markdown',
     root: path.join(GITHUB_ROOT, 'marcusrbrown/infra/docs/runbooks'),
+  },
+  {
+    name: 'sparkle-decisions',
+    format: 'deciduous',
+    root: path.join(GITHUB_ROOT, 'marcusrbrown/sparkle/.deciduous/sync'),
   },
 ]
 
@@ -81,6 +102,7 @@ interface Options {
   readonly warm: number
   readonly cold: number
   readonly json: boolean
+  readonly markdownOnly: boolean
 }
 
 function parseOptions(argv: readonly string[]): Options {
@@ -97,6 +119,7 @@ function parseOptions(argv: readonly string[]): Options {
     warm: read('--warm', 25),
     cold: read('--cold', 8),
     json: argv.includes('--json'),
+    markdownOnly: argv.includes('--markdown-only'),
   }
 }
 
@@ -104,20 +127,24 @@ function parseOptions(argv: readonly string[]): Options {
 
 interface StoreSize {
   readonly name: string
+  readonly format: StoreFormat
   readonly root: string
   readonly exists: boolean
   readonly files: number
   readonly bytes: number
 }
 
-function inventory(root: string): { files: number; bytes: number } {
+function inventory(
+  root: string,
+  extension = '.md',
+): { files: number; bytes: number } {
   let files = 0
   let bytes = 0
   const visit = (directory: string): void => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const full = path.join(directory, entry.name)
       if (entry.isDirectory()) visit(full)
-      else if (entry.isFile() && entry.name.endsWith('.md')) {
+      else if (entry.isFile() && entry.name.endsWith(extension)) {
         files += 1
         bytes += fs.statSync(full).size
       }
@@ -127,14 +154,16 @@ function inventory(root: string): { files: number; bytes: number } {
   return { files, bytes }
 }
 
-function measureStores(): StoreSize[] {
-  return STORES.map((store) => {
+function measureStores(stores: readonly Store[]): StoreSize[] {
+  return stores.map((store) => {
     const exists =
       fs.existsSync(store.root) && fs.statSync(store.root).isDirectory()
     return {
       ...store,
       exists,
-      ...(exists ? inventory(store.root) : { files: 0, bytes: 0 }),
+      ...(exists
+        ? inventory(store.root, store.format === 'deciduous' ? '.json' : '.md')
+        : { files: 0, bytes: 0 }),
     }
   })
 }
@@ -185,7 +214,7 @@ function makeEnv(stores: readonly StoreSize[]): Env {
       search: {
         sources: stores.map((store) => ({
           name: store.name,
-          format: 'markdown',
+          format: store.format,
           roots: [store.root],
           projects: [project],
         })),
@@ -296,6 +325,7 @@ function coldEnv(env: Env): Record<string, string> {
 function measureCold(
   target: ColdTarget,
   env: Env,
+  stores: readonly StoreSize[],
   iterations: number,
 ): Record<Selector, number[]> {
   const samples: Record<Selector, number[]> = { plan: [], external: [] }
@@ -322,7 +352,7 @@ function measureCold(
       )
     }
     if (selector === 'external') {
-      for (const store of STORES) {
+      for (const store of stores) {
         if (!result.stdout.includes(store.name)) {
           throw new Error(
             `cold ${target.label} external output lacks source ${store.name}`,
@@ -381,11 +411,11 @@ function printReport(
     `Runtimes: bun ${Bun.version}, node ${spawnSync(NODE_BIN, ['--version'], { encoding: 'utf8' }).stdout.trim()}`,
     `Samples: warm ${options.warm} iterations x ${QUERIES.length} queries per selector; cold ${options.cold} iterations x ${QUERIES.length} queries per selector, per surface`,
     '',
-    'Stores read by `external` (Markdown only):',
+    'Stores read by `external` (Deciduous counts the `.json` files under the sync folder):',
   ]
   for (const store of stores) {
     lines.push(
-      `  ${store.name}: ${store.files} files, ${(store.bytes / 1024).toFixed(0)} KiB  ${store.root}`,
+      `  ${store.name} [${store.format}]: ${store.files} files, ${(store.bytes / 1024).toFixed(0)} KiB  ${store.root}`,
     )
   }
   const totalBytes = stores.reduce((sum, store) => sum + store.bytes, 0)
@@ -413,7 +443,11 @@ function printReport(
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2))
-  const stores = measureStores()
+  const stores = measureStores(
+    options.markdownOnly
+      ? ALL_STORES.filter((store) => store.format === 'markdown')
+      : ALL_STORES,
+  )
   const missing = stores.filter((store) => !store.exists)
   if (missing.length > 0) {
     for (const store of missing) {
@@ -453,13 +487,13 @@ async function main(): Promise<void> {
       ],
     }
 
-    const coldBin = measureCold(binTarget, env, options.cold)
+    const coldBin = measureCold(binTarget, env, stores, options.cold)
     rows.push({
       label: 'cold, built bin under Node',
       plan: summarize(coldBin.plan),
       external: summarize(coldBin.external),
     })
-    const coldCli = measureCold(cliTarget, env, options.cold)
+    const coldCli = measureCold(cliTarget, env, stores, options.cold)
     rows.push({
       label: 'cold, built CLI under Bun',
       plan: summarize(coldCli.plan),

@@ -390,29 +390,69 @@ describe('loadExternalSources: shared read budget', () => {
 })
 
 describe('loadExternalSources: states', () => {
-  test('a format: deciduous source reports the dropped state with a named warning; others still load', () => {
+  test('a format: deciduous source loads through its own reader; others still load', () => {
     const env = makeEnv()
-    const nodes = path.join(env.outside, 'graph')
+    const graph = path.join(env.outside, 'graph')
     const wiki = path.join(env.outside, 'wiki')
-    write(nodes, 'nodes/n1.json', '{}')
+    write(
+      graph,
+      'nodes/n1.json',
+      JSON.stringify({ change_id: 'n1', node_type: 'decision', title: 'N1' }),
+    )
+    write(
+      graph,
+      'nodes/a1.json',
+      JSON.stringify({ change_id: 'a1', node_type: 'action' }),
+    )
     write(wiki, 'a.md', '# A\n')
 
     const loads = loadExternalSources({
       sources: [
-        source('graph', [nodes], { format: 'deciduous' }),
+        source('graph', [graph], { format: 'deciduous' }),
         source('wiki', [wiki]),
       ],
       checkoutRoot: env.checkout,
     })
 
-    expect(loads[0]).toMatchObject({
-      name: 'graph',
-      state: 'dropped',
-      records: [],
-    })
-    expect(loads[0]?.warnings.join('\n')).toContain('graph')
+    expect(loads[0]).toMatchObject({ name: 'graph', state: 'loaded' })
+    expect(loads[0]?.records).toEqual([
+      {
+        source: 'graph',
+        origin: 'user',
+        path: 'graph/nodes/n1.json',
+        title: 'N1',
+        nodeType: 'decision',
+        body: '',
+      },
+    ])
+    expect(loads[0]?.warnings.join('\n')).not.toContain('not supported')
     expect(loads[1]?.state).toBe('loaded')
     expect(loads[1]?.records).toHaveLength(1)
+  })
+
+  test('a Deciduous source and a Markdown source share one read budget in source order', () => {
+    const env = makeEnv()
+    const graph = path.join(env.outside, 'graph')
+    const wiki = path.join(env.outside, 'wiki')
+    write(
+      graph,
+      'nodes/n1.json',
+      JSON.stringify({ change_id: 'n1', node_type: 'decision' }),
+    )
+    write(wiki, 'a.md', `# A\n${'x'.repeat(500)}\n`)
+    const graphBytes = fs.statSync(path.join(graph, 'nodes/n1.json')).size
+
+    const loads = loadExternalSources({
+      sources: [
+        source('graph', [graph], { format: 'deciduous' }),
+        source('wiki', [wiki]),
+      ],
+      checkoutRoot: env.checkout,
+      budgetBytes: graphBytes + 10,
+    })
+
+    expect(loads[0]?.state).toBe('loaded')
+    expect(loads[1]?.state).toBe('dropped')
   })
 
   test('a missing root is missing and a root with no readable records is empty; others still load', () => {

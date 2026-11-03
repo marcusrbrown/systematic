@@ -14,14 +14,14 @@
  * dropped whole, before any of its files is read, and later, smaller sources
  * are still tried.
  *
- * Import rule: node builtins and `search-corpus.ts` only, plus types. The
- * Deciduous loader (a later unit) imports the corpus helpers and never this
- * module. The loader holds no state, so each call re-reads the stores.
+ * Import rule: node builtins, `search-corpus.ts` and the Deciduous reader
+ * (`search-external-deciduous.ts`), plus types. The Deciduous reader imports the
+ * corpus helpers and never this module. The loader holds no state, so each
+ * call re-reads the stores.
  */
 
 import path from 'node:path'
 import {
-  cleanForWarning,
   compareCodeUnits,
   discoverSourceFiles,
   MAX_FILES,
@@ -33,6 +33,7 @@ import {
   type SourceFileCandidate,
   safeLstat,
 } from './search-corpus.js'
+import { loadDeciduousRecords } from './search-external-deciduous.js'
 import type { ActiveSource, SourceOrigin } from './search-external-sources.js'
 
 /** Largest single external file read, in bytes. Built-in kinds keep `MAX_FILE_BYTES`. */
@@ -62,8 +63,8 @@ export interface ExternalRecord {
  * - `empty`: the root exists and holds no readable record.
  * - `missing`: no root exists (quiet).
  * - `unreadable`: no root could be read for an access or I/O reason.
- * - `dropped`: the source was not read: a bad root, a format with no loader
- *   yet, or no room in the shared budget. A named warning says which.
+ * - `dropped`: the source was not read: a bad root or no room in the shared
+ *   budget. A named warning says which.
  */
 export type SourceState =
   | 'loaded'
@@ -334,24 +335,41 @@ function loadMarkdownSource(
 }
 
 /**
- * One loader per format. A format with no entry is dropped with a named
- * warning; until the Deciduous loader lands, that is the Deciduous state.
+ * The Deciduous reader owns its scan (KTD15). A project source stays inside the
+ * checkout; the reader's result gains the source and origin here.
  */
-const LOADERS: { readonly [format in ActiveSource['format']]?: SourceLoader } =
-  {
-    markdown: loadMarkdownSource,
+function loadDeciduousSource(
+  source: ActiveSource,
+  context: LoadContext,
+): SourceOutcome {
+  const { name, origin } = source
+  const load = loadDeciduousRecords({
+    name,
+    roots: source.roots,
+    containedIn: origin === 'project' ? context.checkoutRoot : undefined,
+    remainingBytes: context.remainingBytes,
+    maxFileBytes: EXTERNAL_MAX_FILE_BYTES,
+  })
+  return {
+    name,
+    origin,
+    state: load.state,
+    records: load.records.map(
+      (record): ExternalRecord => ({ source: name, origin, ...record }),
+    ),
+    warnings: load.warnings,
+    bytesUsed: load.bytesUsed,
   }
+}
+
+/** One loader per format. */
+const LOADERS: { readonly [format in ActiveSource['format']]: SourceLoader } = {
+  markdown: loadMarkdownSource,
+  deciduous: loadDeciduousSource,
+}
 
 function loadSource(source: ActiveSource, context: LoadContext): SourceOutcome {
-  const loader = LOADERS[source.format]
-  if (loader === undefined) {
-    return nothing(source, 'dropped', [
-      cleanForWarning(
-        `${source.name}: format ${source.format} is not supported yet; source dropped`,
-      ),
-    ])
-  }
-  return loader(source, context)
+  return LOADERS[source.format](source, context)
 }
 
 /**

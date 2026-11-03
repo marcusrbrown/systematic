@@ -1,0 +1,7 @@
+{
+  "edge_id": "e-dead-node",
+  "edge_type": "leads_to",
+  "from_change_id": "dec-cache",
+  "rationale": "Pointing at a tombstone narwhal",
+  "to_change_id": "dec-gone"
+}
