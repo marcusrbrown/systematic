@@ -603,7 +603,7 @@ flowchart TB
 
 ### Phase C: Core, render and surfaces
 
-- [ ] U5. Core selector and external render
+- [x] U5. Core selector and external render
 
 **Goal:** Add the `external` selector to validation and `runSearch`, rank each source separately, and render sections inside the external allowance with the fixed replies and prefix.
 

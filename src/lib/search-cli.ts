@@ -13,7 +13,7 @@
  * failure; 2 for usage errors. There is no `--json`.
  *
  * Import rule: this module is bundled into the `systematic-search` bin, so it
- * may import only `search-core.ts` and node builtins.
+ * may import only `search-core.ts`, node builtins and types.
  */
 
 import path from 'node:path'
@@ -26,6 +26,7 @@ import {
   SEARCH_NOTICES,
   type SearchSettings,
 } from './search-core.js'
+import type { UserLevelConfigDirOptions } from './search-user-config.js'
 
 /**
  * The usage text for one surface. `commandName` is what that surface's users
@@ -33,7 +34,7 @@ import {
  * bin user to run a command they may not have.
  */
 export function searchCliUsage(commandName: string): string {
-  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
+  return `Usage: ${commandName} <query...> [--dir <path>] [--kind solution|plan|brainstorm|ideation|all|external] [--limit <${MIN_LIMIT}-${MAX_LIMIT}>] [--]
 
 Searches the project's past work by symptom, error text, module or topic, and
 prints ranked hits: the docs/solutions learnings, and the docs/plans,
@@ -44,7 +45,8 @@ Options:
                    The project root is the nearest ancestor holding .git.
   --kind <kind>    The kind of durable output to search: solution (docs/solutions,
                    the default), plan (docs/plans), brainstorm (docs/brainstorms),
-                   ideation (docs/ideation), or all to rank every kind together.
+                   ideation (docs/ideation), all to rank every kind together, or
+                   external for the external sources you allowed, ranked per source.
   --limit <n>      How many hits to return, ${MIN_LIMIT} to ${MAX_LIMIT} (default: 8).
   --               End of options; everything after it is part of the query.
   -h, --help       Show this help.
@@ -77,6 +79,12 @@ export interface SearchCliOptions {
   /** The command the usage text names: `systematic search` or `systematic-search`. */
   readonly usageName: string
   readonly loadSettings: SearchCliSettingsLoader
+  /**
+   * The user-level config directories `--kind external` reads its allow list
+   * and user sources from. The caller passes the same options it gives its
+   * settings loader, so one override reaches both.
+   */
+  readonly configOptions?: UserLevelConfigDirOptions | undefined
   readonly outputSink?: (message: string) => void
   readonly errorSink?: (message: string) => void
 }
@@ -231,6 +239,7 @@ export async function runSearchCli(options: SearchCliOptions): Promise<number> {
       {
         startDir,
         settings: load.settings,
+        configOptions: options.configOptions,
         ...(load.unreadable && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
       },
     )

@@ -251,7 +251,7 @@ export function createPiSearchTool(
     label: 'Systematic Search',
     description: SEARCH_TOOL_DESCRIPTION,
     promptSnippet:
-      'Use `systematic_search` to find past learnings (docs/solutions), plans, brainstorms and ideation (docs/plans, docs/brainstorms, docs/ideation). Pass kind "all" to search them together.',
+      'Use `systematic_search` to find past learnings (docs/solutions), plans, brainstorms and ideation (docs/plans, docs/brainstorms, docs/ideation). Pass kind "all" to search them together, or kind "external" to search the external decision sources the user allowed.',
     parameters: buildPiParameters(Type),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const text = await executeSearch(

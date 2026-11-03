@@ -795,7 +795,14 @@ describe('search adapters: registration', () => {
 })
 
 describe('search adapters: tool text names every kind', () => {
-  const WORDS = ['solution', 'plan', 'brainstorm', 'ideation', 'all']
+  const WORDS = [
+    'solution',
+    'plan',
+    'brainstorm',
+    'ideation',
+    'all',
+    'external',
+  ]
 
   function expectKindText(text: string): void {
     for (const word of WORDS) expect(text).toContain(`"${word}"`)
@@ -841,6 +848,7 @@ describe('search adapters: tool text names every kind', () => {
     expect(tool.description).toContain('docs/brainstorms')
     expect(tool.promptSnippet).toContain('docs/plans')
     expect(tool.promptSnippet).toContain('all')
+    expect(tool.promptSnippet).toContain('"external"')
   })
 })
 

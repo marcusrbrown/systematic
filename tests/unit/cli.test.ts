@@ -2856,7 +2856,7 @@ describe('cli search', () => {
       expect(result.stdout).toContain('--kind')
       expect(result.stdout).toContain('systematic search ')
       expect(result.stdout).toContain(
-        '[--kind solution|plan|brainstorm|ideation|all]',
+        '[--kind solution|plan|brainstorm|ideation|all|external]',
       )
       expect(result.stdout).toContain('docs/plans')
       expect(result.stdout).toContain('docs/brainstorms')
@@ -2914,7 +2914,7 @@ describe('cli search', () => {
       )
       expect(bogus.exitCode).toBe(2)
       expect(bogus.stderr).toContain(
-        'kind must be one of: solution, plan, brainstorm, ideation, all.',
+        'kind must be one of: solution, plan, brainstorm, ideation, all, external.',
       )
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })

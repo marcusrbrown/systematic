@@ -2,16 +2,25 @@ import { afterAll, describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runSearch } from '../../src/lib/search-core.js'
+import {
+  defaultExternalResolver,
+  runSearch,
+  type SearchOptions,
+} from '../../src/lib/search-core.js'
 import { MAX_FILE_BYTES } from '../../src/lib/search-corpus.js'
+import { resolveExternalSources } from '../../src/lib/search-external-sources.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 // Byte-exact goldens for every built-in search path: the four kinds, `all`,
 // the default (`solution`) request, and the request errors. They were recorded
 // from the code as it stood before external sources, and they compare exact
 // bytes with no normalization. A later unit that changes built-in output fails
-// here; the one expected change is the bad-kind error text (it will list
-// `external`), which that unit re-records on purpose.
+// here; the one expected change was the bad-kind error text, which now lists
+// `external` and was re-recorded on purpose (seven error cases).
+//
+// The second block replays every case with an external source active for the
+// project (AE11): built-in output must not move, and a built-in request must
+// never reach the external resolver.
 //
 // To re-record after a deliberate change:
 //   RECORD_BUILTIN_GOLDENS=1 bun test tests/unit/search-builtin-goldens.test.ts
@@ -482,7 +491,10 @@ async function runCase(entry: GoldenCase): Promise<Golden> {
     ...entry,
     ok: response.ok,
     text: response.text,
-    warnings: response.ok ? response.result.warnings : [],
+    warnings:
+      response.ok && response.selector === 'builtin'
+        ? response.result.warnings
+        : [],
   }
 }
 
@@ -541,6 +553,84 @@ describe('built-in search output is unchanged', () => {
       expect(actual.ok).toBe(recorded.ok)
       expect(actual.text).toBe(recorded.text)
       expect(actual.warnings).toEqual(recorded.warnings)
+    })
+  }
+})
+
+// AE11: the same cases with an external source active for the project.
+describe('built-in search output is unchanged with external sources active', () => {
+  const home = temp.track(
+    fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'search-golden-home-')),
+    ),
+  )
+  const external = temp.track(
+    fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'search-golden-ext-')),
+    ),
+  )
+  put(
+    external,
+    'needle.md',
+    '---\ntitle: External needle quartz alpha lifecycle\n---\n\nneedle quartz alpha lifecycle-fixture external body.\n',
+  )
+  const configOptions = { homeDir: home, customConfigDir: null } as const
+
+  /** Map the source to `root` in the user config, so it is active for that project. */
+  function activate(root: string): void {
+    const dir = path.join(home, '.config/opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            {
+              name: 'ext',
+              format: 'markdown',
+              roots: [external],
+              projects: [root],
+            },
+          ],
+        },
+      }),
+    )
+  }
+
+  it('really has the source active for a project', () => {
+    const root = projectRoot('bare')
+    activate(root)
+    const { sources } = resolveExternalSources({
+      startDir: root,
+      configOptions,
+    })
+    expect(sources.map((source) => source.name)).toEqual(['ext'])
+  })
+
+  for (const entry of CASES) {
+    it(`${entry.id} still reproduces its recorded text and never reaches the external resolver`, async () => {
+      const recorded = goldenById.get(entry.id)
+      if (recorded === undefined) throw new Error('no recorded output')
+      const root = projectRoot(entry.project)
+      activate(root)
+      let resolverCalls = 0
+      const options: SearchOptions = {
+        startDir: root,
+        configOptions,
+        externalResolver: (input) => {
+          resolverCalls += 1
+          return defaultExternalResolver(input)
+        },
+      }
+      const response = await runSearch({ ...entry.request }, options)
+      expect(response.ok).toBe(recorded.ok)
+      expect(response.text).toBe(recorded.text)
+      expect(
+        response.ok && response.selector === 'builtin'
+          ? response.result.warnings
+          : [],
+      ).toEqual(recorded.warnings)
+      expect(resolverCalls).toBe(0)
     })
   }
 })

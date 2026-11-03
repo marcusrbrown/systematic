@@ -4,7 +4,12 @@
  * Turns the core's structured result into the one text every surface returns.
  * Owns sanitising, field caps, the snippet window, the warning cap and the
  * 16 KB cut with Systematic's own marker. Imports only types from the corpus
- * module, so render tests never load filesystem code.
+ * and external modules, so render tests never load filesystem code.
+ *
+ * `renderExternalResult` and `renderExternalFixedReply` render `kind:
+ * "external"` the same way, with their own 12 KB allowance and marker. They
+ * share the sanitizer, the field caps and the cut, and leave
+ * `renderSearchResult` alone.
  *
  * Everything echoed passes `sanitizeInline` first, because titles, tags, file
  * names and bodies are untrusted text that ends up in an agent's context and
@@ -12,6 +17,8 @@
  */
 
 import type { CorpusDocument, DocumentKind } from './search-corpus.js'
+import type { ExternalRecord, SourceState } from './search-external.js'
+import type { ProjectState, SourceOrigin } from './search-external-sources.js'
 
 /** Hard cap on rendered output, in UTF-8 bytes. */
 export const MAX_OUTPUT_BYTES = 16 * 1024
@@ -440,4 +447,344 @@ export function renderSearchResult(result: SearchResult): string {
   }
 
   return truncateUtf8(lines.join('\n'), MAX_OUTPUT_BYTES, TRUNCATION_MARKER)
+}
+
+// --- External sources -------------------------------------------------------
+
+/** Hard cap on a rendered `external` reply, in UTF-8 bytes. Built-in output keeps 16 KB. */
+export const EXTERNAL_MAX_OUTPUT_BYTES = 12 * 1024
+/** Appended on its own line when an `external` reply is cut. It says 12 KB, never 16 KB. */
+export const EXTERNAL_TRUNCATION_MARKER =
+  '[Systematic: search output truncated at 12 KB]'
+
+const EXTERNAL_PREFIX = 'External sources for'
+const MAX_SECTION_NAME_CHARS = 40
+const MAX_ROOTS_CHARS = 400
+const MAX_NODE_TYPE_CHARS = 40
+
+/** One returned hit of one external source. `rank` is 1-based within its source. */
+export interface ExternalHit {
+  readonly rank: number
+  readonly record: ExternalRecord
+}
+
+/**
+ * One active source in a reply. `hits` is the ranked list after the per-source
+ * limit; the renderer drops whole hits from the end when the source goes past
+ * its share of the allowance.
+ */
+export interface ExternalSection {
+  readonly name: string
+  readonly origin: SourceOrigin
+  /** Absolute roots, as resolved. The renderer collapses the home directory to `~`. */
+  readonly roots: readonly string[]
+  readonly state: SourceState
+  /** Records the source loaded; reported only for a loaded source with no hit. */
+  readonly recordCount: number
+  readonly hits: readonly ExternalHit[]
+}
+
+export interface ExternalSearchResult {
+  /** The query as the caller sent it; sanitised and capped when echoed. */
+  readonly query: string
+  /** Unique, sorted query terms, used to pick snippet windows. */
+  readonly queryTerms: readonly string[]
+  /** The home directory `~` stands for in a section root. */
+  readonly homeDir: string
+  readonly project: ProjectState
+  /** In the order they print. */
+  readonly sections: readonly ExternalSection[]
+  readonly notes: readonly string[]
+  readonly warnings: readonly string[]
+}
+
+/** The replies the core owns, all `ok: true`. */
+export type ExternalFixedReply =
+  | { readonly kind: 'no-project' }
+  | { readonly kind: 'no-active-source' }
+  | {
+      readonly kind: 'not-allowed'
+      readonly proposals: number
+      /** The verified main-root string; absent when the identity is unresolved. */
+      readonly mainRoot?: string | undefined
+    }
+
+export interface ExternalReplyContext {
+  /** Raw: a reply can be produced before the query is validated, so it may not be a string. */
+  readonly query: unknown
+  readonly notes: readonly string[]
+  readonly warnings: readonly string[]
+  readonly project?: ProjectState | undefined
+}
+
+/** The proposal count as a non-negative integer; anything else prints as 0. */
+function proposalCount(count: number): number {
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0
+}
+
+function proposedNoun(count: number, singular: string): string {
+  return count === 1 ? singular : `${singular}s`
+}
+
+/** What to do about a not-allowed project: the exact root to add, or why it cannot be allowed. */
+function allowAdvice(count: number, mainRoot: string | undefined): string {
+  if (mainRoot === undefined) {
+    return 'Its identity could not be verified, so it cannot be allowed.'
+  }
+  const root = sanitizeInline(mainRoot, MAX_PATH_CHARS)
+  return `To allow ${count === 1 ? 'it' : 'them'}, add "${root}" to search.allow_project_sources in your user config.`
+}
+
+/**
+ * The fixed texts of the external replies. The first two are constants; the
+ * not-allowed text takes the proposal count and, when the project identity is
+ * verified, the exact main-root string to add. Every interpolation is
+ * sanitized, and none of them carries a source name or a root. No text holds a
+ * built-in routing token (`Corpus:`, `corpus: none`, `corpus: empty`,
+ * `N docs, M hits`, `Search "`).
+ */
+export const EXTERNAL_REPLIES = {
+  noProject:
+    'no project: there is no .git directory at or above the start directory, so there are no external sources to search.',
+  noActiveSource: 'no external sources are active for this project.',
+  notAllowed(proposals: number, mainRoot?: string): string {
+    const count = proposalCount(proposals)
+    return `this project proposes ${count} ${proposedNoun(count, 'external source')}, but it is not in search.allow_project_sources, so nothing was read. ${allowAdvice(count, mainRoot)}`
+  },
+} as const
+
+function externalPrefix(query: unknown): string {
+  const echoed =
+    typeof query === 'string' ? sanitizeInline(query, MAX_QUERY_ECHO_CHARS) : ''
+  return `${EXTERNAL_PREFIX} "${echoed}":`
+}
+
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength
+}
+
+/** `Project sources: ...` for the project-level states, or `undefined` when there is nothing to say. */
+function projectLine(project: ProjectState): string | undefined {
+  switch (project.kind) {
+    case 'none':
+    case 'allowed':
+      return undefined
+    case 'config-unreadable':
+      return 'Project sources: the project config could not be read, so it proposes none.'
+    case 'not-allowed': {
+      const count = proposalCount(project.proposals)
+      return `Project sources: ${count} ${proposedNoun(count, 'proposed source')} not read: this project is not in search.allow_project_sources. ${allowAdvice(count, project.mainRoot)}`
+    }
+  }
+}
+
+/** Notes, then bounded warnings: the lines every external reply shares after its first line. */
+function noteAndWarningLines(
+  notes: readonly string[],
+  warnings: readonly string[],
+  middle: readonly string[] = [],
+): string[] {
+  const lines: string[] = []
+  if (notes.length > 0) {
+    lines.push(
+      `Notes: ${notes.map((note) => sanitizeInline(note, MAX_NOTE_CHARS)).join('; ')}`,
+    )
+  }
+  lines.push(...middle)
+  if (warnings.length > 0) {
+    lines.push('Warnings:')
+    for (const warning of warnings.slice(0, MAX_WARNINGS)) {
+      lines.push(`- ${sanitizeInline(warning, MAX_WARNING_CHARS)}`)
+    }
+    const hidden = warnings.length - MAX_WARNINGS
+    if (hidden > 0) lines.push(`- +${hidden} more`)
+  }
+  return lines
+}
+
+/**
+ * Render one of the core's fixed replies. The first line is the prefix and the
+ * fixed text. No-project and not-allowed add notes only: the not-allowed reply
+ * never echoes a source name or a root, so it takes no warnings. The
+ * no-active-source reply also carries the project-level config state and the
+ * bounded warnings, because those say why nothing is active.
+ */
+export function renderExternalFixedReply(
+  reply: ExternalFixedReply,
+  context: ExternalReplyContext,
+): string {
+  const prefix = externalPrefix(context.query)
+  let lines: string[]
+  switch (reply.kind) {
+    case 'no-project':
+      lines = [
+        `${prefix} ${EXTERNAL_REPLIES.noProject}`,
+        ...noteAndWarningLines(context.notes, []),
+      ]
+      break
+    case 'not-allowed':
+      lines = [
+        `${prefix} ${EXTERNAL_REPLIES.notAllowed(reply.proposals, reply.mainRoot)}`,
+        ...noteAndWarningLines(context.notes, []),
+      ]
+      break
+    case 'no-active-source': {
+      const state =
+        context.project === undefined ? undefined : projectLine(context.project)
+      lines = [
+        `${prefix} ${EXTERNAL_REPLIES.noActiveSource}`,
+        ...noteAndWarningLines(
+          context.notes,
+          context.warnings,
+          state === undefined ? [] : [state],
+        ),
+      ]
+      break
+    }
+  }
+  return truncateUtf8(
+    lines.join('\n'),
+    EXTERNAL_MAX_OUTPUT_BYTES,
+    EXTERNAL_TRUNCATION_MARKER,
+  )
+}
+
+/** `/home/me/wiki` becomes `~/wiki` when `homeDir` is `/home/me`; a sibling like `/home/meme` is left alone. */
+function collapseHome(root: string, homeDir: string): string {
+  if (homeDir === '') return root
+  if (root === homeDir) return '~'
+  for (const separator of ['/', '\\']) {
+    if (root.startsWith(`${homeDir}${separator}`)) {
+      return `~${root.slice(homeDir.length)}`
+    }
+  }
+  return root
+}
+
+function sectionHeader(section: ExternalSection, homeDir: string): string {
+  const roots = section.roots
+    .map((root) => collapseHome(root, homeDir))
+    .join(', ')
+  return `${sanitizeInline(section.name, MAX_SECTION_NAME_CHARS)} (${section.origin}): ${sanitizeInline(roots, MAX_ROOTS_CHARS)}`
+}
+
+function sectionStateLine(section: ExternalSection): string | undefined {
+  switch (section.state) {
+    case 'missing':
+      return '   missing: root not found.'
+    case 'empty':
+      return '   empty: no readable records.'
+    case 'unreadable':
+      return '   unreadable: root could not be read.'
+    case 'dropped':
+      return '   dropped: see the warnings.'
+    case 'loaded':
+      return section.hits.length === 0 ? '   No matching records.' : undefined
+  }
+}
+
+/** A record prints `node_type` where it has one, else its recorded status, else neither. */
+function renderExternalHit(
+  hit: ExternalHit,
+  queryTerms: readonly string[],
+): string[] {
+  const { record } = hit
+  const title = `Title: ${sanitizeInline(record.title, MAX_TITLE_CHARS)}`
+  const label =
+    record.nodeType !== undefined
+      ? `node_type ${sanitizeInline(record.nodeType, MAX_NODE_TYPE_CHARS)}`
+      : record.status !== undefined
+        ? `Status: ${sanitizeInline(record.status, MAX_LABEL_CHARS)}`
+        : undefined
+  return [
+    `${hit.rank}. ${sanitizeInline(record.path, MAX_PATH_CHARS)}`,
+    `   ${label === undefined ? title : `${title} | ${label}`}`,
+    `   Snippet: ${extractSnippet({ body: record.body, symptoms: [], title: record.title }, queryTerms)}`,
+  ]
+}
+
+function moreHitsLine(count: number): string {
+  return `+${count} more hits not shown`
+}
+
+/** Bytes one hit adds to a section: a blank line and the hit, each after a line break. */
+function hitCost(lines: readonly string[]): number {
+  return 2 + byteLength(lines.join('\n'))
+}
+
+/**
+ * The longest prefix of `hits` that fits in `share` bytes together with the
+ * `+N more hits not shown` line for whatever it leaves out. Whole hits only.
+ */
+function fitHits(
+  hits: readonly (readonly string[])[],
+  share: number,
+): { readonly kept: number; readonly more: number } {
+  for (let kept = hits.length; kept > 0; kept--) {
+    const used = hits
+      .slice(0, kept)
+      .reduce((sum, lines) => sum + hitCost(lines), 0)
+    const more = hits.length - kept
+    const reserve = more > 0 ? 1 + byteLength(moreHitsLine(more)) : 0
+    if (used + reserve <= share) return { kept, more }
+  }
+  return { kept: 0, more: hits.length }
+}
+
+/**
+ * Render an `external` result: the prefix with the source and hit counts, the
+ * notes, the project-level state line, the bounded warnings, then one section
+ * per active source in the order given. The text is at most 12 KB. Every
+ * source with hits gets an equal share of what the fixed lines leave; a
+ * source past its share drops whole hits from the end and prints `+N more hits
+ * not shown`. If the fixed lines alone overflow, the cut falls back to the
+ * 12 KB marker, so the marker is only ever printed when text was lost.
+ */
+export function renderExternalResult(result: ExternalSearchResult): string {
+  const { sections } = result
+  const hitTotal = sections.reduce((sum, { hits }) => sum + hits.length, 0)
+  const state = projectLine(result.project)
+  const head = [
+    `${externalPrefix(result.query)} ${plural(sections.length, 'source')}, ${plural(hitTotal, 'hit')}.`,
+    ...noteAndWarningLines(
+      result.notes,
+      result.warnings,
+      state === undefined ? [] : [state],
+    ),
+  ]
+
+  const fixed = sections.map((section) => {
+    const line = sectionStateLine(section)
+    return [
+      sectionHeader(section, result.homeDir),
+      ...(line === undefined ? [] : [line]),
+    ]
+  })
+  const baseBytes = byteLength(
+    [...head, ...fixed.flatMap((lines) => ['', ...lines])].join('\n'),
+  )
+  const withHits = sections.filter(({ hits }) => hits.length > 0).length
+  const share =
+    withHits === 0
+      ? 0
+      : Math.floor(
+          Math.max(0, EXTERNAL_MAX_OUTPUT_BYTES - baseBytes) / withHits,
+        )
+
+  const lines = [...head]
+  sections.forEach((section, index) => {
+    lines.push('', ...(fixed[index] ?? []))
+    const rendered = section.hits.map((hit) =>
+      renderExternalHit(hit, result.queryTerms),
+    )
+    const { kept, more } = fitHits(rendered, share)
+    for (const hit of rendered.slice(0, kept)) lines.push('', ...hit)
+    if (more > 0) lines.push(moreHitsLine(more))
+  })
+
+  return truncateUtf8(
+    lines.join('\n'),
+    EXTERNAL_MAX_OUTPUT_BYTES,
+    EXTERNAL_TRUNCATION_MARKER,
+  )
 }

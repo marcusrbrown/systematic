@@ -15,6 +15,14 @@ import {
   SEARCH_NOTICES,
   type SearchSettings,
 } from '../../src/lib/search-core.js'
+import { EXTERNAL_REPLIES } from '../../src/lib/search-render.js'
+import type { UserLevelConfigDirOptions } from '../../src/lib/search-user-config.js'
+import {
+  makeExternalEnv,
+  userSource,
+  writeMarkdown,
+  writeUserSearch,
+} from '../helpers/search-external-env.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const temp = createTempDirTracker()
@@ -60,6 +68,7 @@ async function run(
     readonly cwd: string
     readonly load?: SearchCliSettingsLoad | SearchCliSettingsLoader
     readonly usageName?: string
+    readonly configOptions?: UserLevelConfigDirOptions
   },
 ): Promise<Run> {
   const stdout: string[] = []
@@ -70,6 +79,9 @@ async function run(
     argv,
     cwd: options.cwd,
     usageName: options.usageName ?? USAGE_NAME,
+    ...(options.configOptions !== undefined && {
+      configOptions: options.configOptions,
+    }),
     loadSettings: (dir) => {
       loadedWith.push(dir)
       return typeof load === 'function' ? load(dir) : load
@@ -253,8 +265,17 @@ describe('searchCliUsage', () => {
 
   it('names every kind, all and the default in the usage text', () => {
     const usage = searchCliUsage('systematic-search')
-    expect(usage).toContain('[--kind solution|plan|brainstorm|ideation|all]')
-    for (const word of ['plan', 'brainstorm', 'ideation', 'all', 'default']) {
+    expect(usage).toContain(
+      '[--kind solution|plan|brainstorm|ideation|all|external]',
+    )
+    for (const word of [
+      'plan',
+      'brainstorm',
+      'ideation',
+      'all',
+      'external',
+      'default',
+    ]) {
       expect(usage).toContain(word)
     }
     expect(usage).not.toContain('Only "solution" exists')
@@ -488,5 +509,168 @@ describe('runSearchCli: settings', () => {
     expect(result.status).toBe(1)
     expect(result.stdout).toEqual([])
     expect(result.stderr).toEqual([SEARCH_NOTICES.failed])
+  })
+})
+
+describe('runSearchCli: kind external', () => {
+  const ENABLED: SearchCliSettingsLoad = {
+    settings: { enabled: true },
+    warnings: [],
+    unreadable: false,
+  }
+  const DISABLED: SearchCliSettingsLoad = {
+    settings: { enabled: false },
+    warnings: [],
+    unreadable: false,
+  }
+
+  it('accepts --kind external in both flag forms and prints the core text', async () => {
+    const env = makeExternalEnv(temp)
+    const wiki = path.join(env.root, 'wiki')
+    writeMarkdown(wiki, 'a.md', { title: 'Zebra decision', body: 'zebra' })
+    writeUserSearch(env, { sources: [userSource(env, 'wiki', wiki)] })
+    const expected = (
+      await runSearch(
+        { query: 'zebra', kind: 'external' },
+        { startDir: env.repo, configOptions: env.configOptions },
+      )
+    ).text
+    expect(expected).toContain('wiki (user)')
+
+    for (const argv of [
+      ['zebra', '--kind', 'external'],
+      ['--kind=external', 'zebra'],
+    ]) {
+      const result = await run(argv, {
+        cwd: env.repo,
+        configOptions: env.configOptions,
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout).toEqual([expected])
+    }
+  })
+
+  it('hands its config-dir option to the external reader', async () => {
+    const env = makeExternalEnv(temp)
+    const wiki = path.join(env.root, 'wiki')
+    writeMarkdown(wiki, 'a.md', { title: 'Zebra decision', body: 'zebra' })
+    writeUserSearch(env, { sources: [userSource(env, 'wiki', wiki)] })
+
+    const withDir = await run(['zebra', '--kind', 'external'], {
+      cwd: env.repo,
+      configOptions: env.configOptions,
+    })
+    const other = makeExternalEnv(temp)
+    const withOther = await run(['zebra', '--kind', 'external'], {
+      cwd: env.repo,
+      configOptions: other.configOptions,
+    })
+
+    expect(withDir.stdout[0]).toContain('wiki (user)')
+    expect(withOther.stdout[0]).toContain(EXTERNAL_REPLIES.noActiveSource)
+  })
+
+  describe('precedence (KTD12), one case per step', () => {
+    it('1. disabled wins over everything: the existing notice for an empty query', async () => {
+      const bare = temp.track(
+        fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-bare-'))),
+      )
+      const result = await run(['--kind', 'external'], {
+        cwd: bare,
+        load: DISABLED,
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout).toEqual([SEARCH_CLI_DISABLED_NOTICE])
+    })
+
+    it('2. with search enabled, no .git ancestor and an empty query, the core no-project reply wins', async () => {
+      const env = makeExternalEnv(temp)
+      const bare = temp.track(
+        fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-bare-'))),
+      )
+      const result = await run(['--kind', 'external'], {
+        cwd: bare,
+        load: ENABLED,
+        configOptions: env.configOptions,
+      })
+      expect(result.status).toBe(0)
+      expect(result.stderr).toEqual([])
+      expect(result.stdout).toEqual([
+        `External sources for "": ${EXTERNAL_REPLIES.noProject}`,
+      ])
+    })
+
+    it('3. with a project and an empty query, the core validation error wins over any per-source state', async () => {
+      const env = makeExternalEnv(temp)
+      writeUserSearch(env, {
+        sources: [userSource(env, 'gone', path.join(env.root, 'nope'))],
+      })
+      const result = await run(['--kind', 'external'], {
+        cwd: env.repo,
+        load: ENABLED,
+        configOptions: env.configOptions,
+      })
+      expect(result.status).toBe(2)
+      expect(result.stdout).toEqual([])
+      expect(result.stderr).toEqual([SEARCH_ERRORS.queryEmpty])
+    })
+
+    it('4. with a project and a valid query, per-source states render', async () => {
+      const env = makeExternalEnv(temp)
+      writeUserSearch(env, {
+        sources: [userSource(env, 'gone', path.join(env.root, 'nope'))],
+      })
+      const result = await run(['zebra', '--kind', 'external'], {
+        cwd: env.repo,
+        load: ENABLED,
+        configOptions: env.configOptions,
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout[0]).toContain('missing: root not found.')
+    })
+  })
+
+  describe('a throwing settings loader (KTD21)', () => {
+    it('reports config unreadable, runs the external call with the user sources it can read, and prints no fixed failure line', async () => {
+      const env = makeExternalEnv(temp)
+      const wiki = path.join(env.root, 'wiki')
+      writeMarkdown(wiki, 'a.md', { title: 'Zebra decision', body: 'zebra' })
+      writeUserSearch(env, { sources: [userSource(env, 'wiki', wiki)] })
+
+      const result = await run(['zebra', '--kind', 'external'], {
+        cwd: env.repo,
+        configOptions: env.configOptions,
+        load: () => {
+          throw new Error('boom')
+        },
+      })
+
+      expect(result.status).toBe(0)
+      expect(result.stderr).toEqual([])
+      expect(result.stdout[0]).toContain('Notes: config unreadable')
+      expect(result.stdout[0]).toContain('wiki (user)')
+      expect(result.stdout[0]).not.toContain(SEARCH_NOTICES.failed)
+    })
+
+    it('with nothing readable it returns no sources plus the note', async () => {
+      const env = makeExternalEnv(temp)
+      writeUserSearch(env, '{ broken')
+      const result = await run(['zebra', '--kind', 'external'], {
+        cwd: env.repo,
+        configOptions: env.configOptions,
+        load: () => {
+          throw new Error('boom')
+        },
+      })
+      expect(result.status).toBe(0)
+      expect(result.stderr).toEqual([])
+      const lines = result.stdout[0]?.split('\n') ?? []
+      expect(lines.slice(0, 3)).toEqual([
+        `External sources for "zebra": ${EXTERNAL_REPLIES.noActiveSource}`,
+        'Notes: config unreadable',
+        'Warnings:',
+      ])
+      expect(lines[3]).toContain('could not be read')
+    })
   })
 })

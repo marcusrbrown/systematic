@@ -8,6 +8,12 @@
  * I/O: the start directory, the settings, and mapping the response to its
  * host's return shape. Adapters never format text themselves.
  *
+ * `kind: "external"` is a selector beside the four kinds, not a fifth kind. It
+ * takes its own branch: the core resolves the active sources for the call
+ * through an injectable resolver, loads each one, ranks each source on its own
+ * index, and hands the sections to `renderExternalResult`. Built-in kinds never
+ * reach that branch, so their output is unchanged.
+ *
  * This module also owns the `SearchSettings` type, the tool name and argument
  * constants, and the lifecycle constants and resolver. The resolver follows
  * the learnings-researcher's rules: at most 5 hops, a visited set, and a form
@@ -18,6 +24,8 @@
  * `Caution: successor unresolved`. Nothing is dropped.
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   type CorpusDocument,
   type CorpusLoad,
@@ -27,6 +35,13 @@ import {
   loadCorpus,
   resolveSearchRoot,
 } from './search-corpus.js'
+import { loadExternalSources, type SourceLoad } from './search-external.js'
+import {
+  type ActiveSource,
+  type ExternalSourcesInput,
+  type ExternalSourcesResolution,
+  resolveExternalSources,
+} from './search-external-sources.js'
 import {
   BM25F_PARAMS,
   type Bm25fParams,
@@ -36,7 +51,12 @@ import {
   uniqueQueryTerms,
 } from './search-lexical.js'
 import {
+  type ExternalFixedReply,
+  type ExternalSearchResult,
+  type ExternalSection,
   type KindCorpus,
+  renderExternalFixedReply,
+  renderExternalResult,
   renderSearchResult,
   type SearchHit,
   type SearchHitStatus,
@@ -45,6 +65,10 @@ import {
   SUPERSEDES_LABEL,
   sanitizeInline,
 } from './search-render.js'
+import {
+  resolveUserLevelConfigDirs,
+  type UserLevelConfigDirOptions,
+} from './search-user-config.js'
 
 export type { SearchHit, SearchResult } from './search-render.js'
 export { SUCCESSOR_LABEL, SUPERSEDES_LABEL }
@@ -66,8 +90,22 @@ export const MAX_QUERY_CHARS = 2000
 /** The `kind` value that searches every kind in one ranking. It is a selector, not a table key. */
 export const KIND_SELECTOR_ALL = 'all'
 
+/**
+ * The `kind` value that searches the user-allowed external sources. Like `all`
+ * it is a selector, not a table key, and it is exclusive: it does not combine
+ * with a kind or with `all`.
+ */
+export const KIND_SELECTOR_EXTERNAL = 'external'
+
+/** Most hits one external source returns, whatever `limit` asks for (KTD11). */
+export const MAX_EXTERNAL_HITS_PER_SOURCE = 5
+
 const DOCUMENT_KINDS = Object.keys(KIND_TABLE).filter(isDocumentKind)
-const KIND_NAMES = [...DOCUMENT_KINDS, KIND_SELECTOR_ALL]
+const KIND_NAMES = [
+  ...DOCUMENT_KINDS,
+  KIND_SELECTOR_ALL,
+  KIND_SELECTOR_EXTERNAL,
+]
 
 /**
  * The tool text every host surface shows the model. `limit` is a plain integer
@@ -78,7 +116,7 @@ export const SEARCH_TOOL_DESCRIPTION =
   "Search this project's durable outputs by symptom, error text, module or topic: the docs/solutions learnings, and the docs/plans, docs/brainstorms and docs/ideation documents that earlier work wrote. Returns ranked hits with path, title, kind, snippet, tags and status. A superseded document is replaced by its successor in the same kind, a successor in another kind is named on a Successor line, and a stale one carries a caution. Read a hit's path for the full text. Use it before debugging a failure or planning work that a past learning, plan, brainstorm or ideation doc may already cover."
 export const SEARCH_ARG_DESCRIPTIONS = {
   query: `What to look for: a symptom, error message, module or topic, in plain words. At most ${MAX_QUERY_CHARS} characters.`,
-  kind: `Optional. The kind of durable output to search: ${DOCUMENT_KINDS.map((kind) => `"${kind}" (${KIND_TABLE[kind].dir}/)`).join(', ')}, or "${KIND_SELECTOR_ALL}" for every kind in one ranking. Defaults to "solution".`,
+  kind: `Optional. The kind of durable output to search: ${DOCUMENT_KINDS.map((kind) => `"${kind}" (${KIND_TABLE[kind].dir}/)`).join(', ')}, or "${KIND_SELECTOR_ALL}" for every kind in one ranking, or "${KIND_SELECTOR_EXTERNAL}" for the external decision sources the user allowed, each ranked on its own. Defaults to "solution".`,
   limit: `Optional. How many hits to return, an integer from ${MIN_LIMIT} to ${MAX_LIMIT}. Defaults to ${DEFAULT_LIMIT}.`,
 } as const
 
@@ -132,10 +170,55 @@ export interface SearchOptions {
   readonly corpusLoader?:
     | ((root: string, kind: DocumentKind) => CorpusLoad)
     | undefined
+  /**
+   * The user-level config directories `kind: "external"` reads its allow list
+   * and user sources from. A host or CLI config-dir override goes here; left
+   * out, the reader uses the home directory and `OPENCODE_CONFIG_DIR`.
+   */
+  readonly configOptions?: UserLevelConfigDirOptions | undefined
+  /**
+   * Replace the per-call external reader. The default resolves the active
+   * sources from the user files, the project file and the project identity.
+   * Tests use this to control what a call sees.
+   */
+  readonly externalResolver?: ExternalResolver | undefined
 }
 
+/** Reads everything for one `external` call and returns the active sources. The default never throws. */
+export type ExternalResolver = (
+  input: ExternalSourcesInput,
+) => ExternalSourcesResolution
+
+/** The default resolver: U3's composer. */
+export const defaultExternalResolver: ExternalResolver = resolveExternalSources
+
+/**
+ * What an `external` call produced: one of the core's fixed replies, or the
+ * ranked sections of the active sources.
+ */
+export type ExternalOutcome =
+  | { readonly kind: 'fixed'; readonly reply: ExternalFixedReply }
+  | { readonly kind: 'sections'; readonly result: ExternalSearchResult }
+
+/**
+ * A response is tagged by `ok`, then by `selector`: a built-in response carries
+ * `result` and an external one carries `external`, and neither carries the
+ * other, so a consumer must narrow on `selector` before reading either. Every
+ * response carries `text`, which is all the adapters read.
+ */
 export type SearchResponse =
-  | { readonly ok: true; readonly text: string; readonly result: SearchResult }
+  | {
+      readonly ok: true
+      readonly selector: 'builtin'
+      readonly text: string
+      readonly result: SearchResult
+    }
+  | {
+      readonly ok: true
+      readonly selector: 'external'
+      readonly text: string
+      readonly external: ExternalOutcome
+    }
   | { readonly ok: false; readonly text: string }
 
 /**
@@ -400,9 +483,16 @@ function toLexicalDocument(document: CorpusDocument): LexicalDocument {
 type Validated =
   | {
       readonly ok: true
+      readonly scope: 'builtin'
       readonly query: string
       /** The kinds to load, in table order. One for a single kind, every kind for `all`. */
       readonly kinds: readonly DocumentKind[]
+      readonly limit: number
+    }
+  | {
+      readonly ok: true
+      readonly scope: 'external'
+      readonly query: string
       readonly limit: number
     }
   | { readonly ok: false; readonly error: string }
@@ -414,6 +504,20 @@ function requestedKinds(value: unknown): readonly DocumentKind[] | undefined {
   return isDocumentKind(value) ? [value] : undefined
 }
 
+/** The checked limit, `DEFAULT_LIMIT` when omitted, or `undefined` for a bad value. */
+function requestedLimit(value: unknown): number | undefined {
+  if (value === undefined) return DEFAULT_LIMIT
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < MIN_LIMIT ||
+    value > MAX_LIMIT
+  ) {
+    return undefined
+  }
+  return value
+}
+
 function validate(request: SearchRequest): Validated {
   const { query } = request
   if (typeof query !== 'string' || query.trim() === '') {
@@ -423,25 +527,19 @@ function validate(request: SearchRequest): Validated {
     return { ok: false, error: SEARCH_ERRORS.queryTooLong }
   }
 
-  const kinds = requestedKinds(request.kind)
+  const external = request.kind === KIND_SELECTOR_EXTERNAL
+  const kinds = external ? [] : requestedKinds(request.kind)
   if (kinds === undefined) {
     return { ok: false, error: SEARCH_ERRORS.kindUnknown }
   }
 
-  let limit = DEFAULT_LIMIT
-  if (request.limit !== undefined) {
-    const value = request.limit
-    if (
-      typeof value !== 'number' ||
-      !Number.isInteger(value) ||
-      value < MIN_LIMIT ||
-      value > MAX_LIMIT
-    ) {
-      return { ok: false, error: SEARCH_ERRORS.limitInvalid }
-    }
-    limit = value
+  const limit = requestedLimit(request.limit)
+  if (limit === undefined) {
+    return { ok: false, error: SEARCH_ERRORS.limitInvalid }
   }
-  return { ok: true, query, kinds, limit }
+  return external
+    ? { ok: true, scope: 'external', query, limit }
+    : { ok: true, scope: 'builtin', query, kinds, limit }
 }
 
 interface KindLoad {
@@ -524,8 +622,17 @@ export async function runSearch(
   request: SearchRequest,
   options: SearchOptions,
 ): Promise<SearchResponse> {
+  // `external` is decided before validation: with no project there is nothing
+  // to search, whatever the query and limit hold (KTD12).
+  if (
+    request.kind === KIND_SELECTOR_EXTERNAL &&
+    !hasCheckout(options.startDir)
+  ) {
+    return externalFixedReply({ kind: 'no-project' }, request.query, options)
+  }
   const checked = validate(request)
   if (!checked.ok) return { ok: false, text: checked.error }
+  if (checked.scope === 'external') return runExternalSearch(checked, options)
   const { query, kinds, limit } = checked
 
   const root = resolveSearchRoot(options.startDir)
@@ -549,6 +656,7 @@ export async function runSearch(
 
   const finish = (result: SearchResult): SearchResponse => ({
     ok: true,
+    selector: 'builtin',
     text: renderSearchResult(result),
     result,
   })
@@ -587,4 +695,196 @@ export async function runSearch(
     }))
 
   return finish({ ...base, corpus, hits, notes: noteList })
+}
+
+// --- kind: "external" --------------------------------------------------------
+
+/**
+ * Whether the start directory has a `.git` ancestor. `resolveSearchRoot` falls
+ * back to the start directory when there is none, so it cannot say; the entry
+ * at the root it returns can.
+ */
+function hasCheckout(startDir: string): boolean {
+  try {
+    const root = resolveSearchRoot(startDir)
+    return (
+      fs.lstatSync(path.join(root, '.git'), { throwIfNoEntry: false }) !==
+      undefined
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Notes ahead of the core's own; a per-call `config unreadable` joins the registration one without repeating it. */
+function externalNotes(
+  options: SearchOptions,
+  userConfigUnreadable: boolean,
+): string[] {
+  const notes = [...(options.notes ?? [])]
+  if (userConfigUnreadable && !notes.includes(SEARCH_CONFIG_UNREADABLE_NOTE)) {
+    notes.push(SEARCH_CONFIG_UNREADABLE_NOTE)
+  }
+  return notes
+}
+
+function externalFixedReply(
+  reply: ExternalFixedReply,
+  query: unknown,
+  options: SearchOptions,
+  resolution?: ExternalSourcesResolution,
+): SearchResponse {
+  const notes = externalNotes(
+    options,
+    resolution?.userConfigUnreadable === true,
+  )
+  return {
+    ok: true,
+    selector: 'external',
+    text: renderExternalFixedReply(reply, {
+      query,
+      notes,
+      warnings: resolution?.warnings ?? [],
+      project: resolution?.project,
+    }),
+    external: { kind: 'fixed', reply },
+  }
+}
+
+interface ActiveLoad {
+  readonly source: ActiveSource
+  readonly load: SourceLoad
+}
+
+function compareSections(a: ExternalSection, b: ExternalSection): number {
+  return (
+    compareCodeUnits(a.name, b.name) || compareCodeUnits(a.origin, b.origin)
+  )
+}
+
+/**
+ * Rank every source on its own and build the sections, ordered by name in
+ * code-unit order (then origin). Scores are not comparable across sources, so
+ * each source gets its own lexical index: `title` to title, `node_type` to
+ * tags and `body` to body. Hits within a section come best first with ties by
+ * path, capped at `limit` and at `MAX_EXTERNAL_HITS_PER_SOURCE`. A source that
+ * loaded no record is a state-only section.
+ */
+export function rankExternalSources(
+  entries: readonly ActiveLoad[],
+  queryTerms: readonly string[],
+  limit: number,
+  params: Bm25fParams = BM25F_PARAMS,
+): ExternalSection[] {
+  const cap = Math.min(limit, MAX_EXTERNAL_HITS_PER_SOURCE)
+  return entries
+    .map(({ source, load }): ExternalSection => {
+      const records = new Map(
+        load.records.map((record) => [record.path, record]),
+      )
+      const index = buildLexicalIndex(
+        load.records.map((record) => ({
+          id: record.path,
+          fields: {
+            title: record.title,
+            tags: record.nodeType ?? '',
+            body: record.body,
+          },
+        })),
+        params,
+      )
+      const hits = searchLexical(index, queryTerms)
+        .flatMap((hit) => {
+          const record = records.get(hit.id)
+          return record === undefined ? [] : [record]
+        })
+        .slice(0, cap)
+        .map((record, position) => ({ rank: position + 1, record }))
+      return {
+        name: source.name,
+        origin: source.origin,
+        roots: source.roots,
+        state: load.state,
+        recordCount: load.records.length,
+        hits,
+      }
+    })
+    .sort(compareSections)
+}
+
+/**
+ * Warnings in print order. A dropped source's own warnings lead, because a
+ * source that was not read is the most useful thing to know (KTD13); then the
+ * resolver's, then the other sources'.
+ */
+function externalWarnings(
+  resolution: ExternalSourcesResolution,
+  loads: readonly SourceLoad[],
+): string[] {
+  const dropped = loads.filter(({ state }) => state === 'dropped')
+  const others = loads.filter(({ state }) => state !== 'dropped')
+  return [
+    ...dropped.flatMap(({ warnings }) => warnings),
+    ...resolution.warnings,
+    ...others.flatMap(({ warnings }) => warnings),
+  ]
+}
+
+async function runExternalSearch(
+  checked: Extract<Validated, { scope: 'external' }>,
+  options: SearchOptions,
+): Promise<SearchResponse> {
+  const { query, limit } = checked
+  const resolver = options.externalResolver ?? defaultExternalResolver
+  const resolution = resolver({
+    startDir: options.startDir,
+    configOptions: options.configOptions,
+  })
+
+  if (resolution.sources.length === 0) {
+    const { project } = resolution
+    const reply: ExternalFixedReply =
+      project.kind === 'not-allowed'
+        ? {
+            kind: 'not-allowed',
+            proposals: project.proposals,
+            mainRoot: project.mainRoot,
+          }
+        : { kind: 'no-active-source' }
+    return externalFixedReply(reply, query, options, resolution)
+  }
+
+  const loads = loadExternalSources({
+    sources: resolution.sources,
+    checkoutRoot: resolveSearchRoot(options.startDir),
+  })
+  const { terms, truncated } = uniqueQueryTerms(query)
+  const entries = resolution.sources.flatMap((source, position) => {
+    const load = loads[position]
+    return load === undefined ? [] : [{ source, load }]
+  })
+  const sections = rankExternalSources(
+    entries,
+    terms,
+    limit,
+    options.lexicalParams ?? BM25F_PARAMS,
+  )
+  const notes = externalNotes(options, resolution.userConfigUnreadable)
+  if (truncated) notes.push('query cut to its first 64 distinct terms')
+  const warnings = externalWarnings(resolution, loads)
+  const external: ExternalSearchResult = {
+    query,
+    queryTerms: terms,
+    homeDir: resolveUserLevelConfigDirs(options.configOptions).homeDir,
+    project: resolution.project,
+    sections,
+    notes,
+    warnings,
+  }
+  return {
+    ok: true,
+    selector: 'external',
+    text: renderExternalResult(external),
+    external: { kind: 'sections', result: external },
+  }
 }
