@@ -1357,7 +1357,7 @@ describe('search adapters: config-dir option and note merge', () => {
     expect(await callV1(plain, root)).not.toContain('altwiki')
   })
 
-  test('a registration-time note and a per-call failure print one note; a repair clears only the per-call part', async () => {
+  test('a registration-time note and a per-call failure print one note; a repair clears the note from the next external call but not from built-in calls', async () => {
     const { root, wiki } = makeExternalProject({
       allow: false,
       userSource: false,
@@ -1384,6 +1384,17 @@ describe('search adapters: config-dir option and note merge', () => {
 
     fs.writeFileSync(configFile, good)
     expect(count(await callV1(unflagged, root))).toBe(0)
-    expect(count(await callV1(flagged, root))).toBe(1)
+    expect(count(await callV1(flagged, root))).toBe(0)
+
+    // Built-in calls keep the init-time note: they read no per-call config.
+    const builtIn = async (tool: ReturnType<typeof createSearchTool>) => {
+      const result = await tool.execute(
+        { query: EXTERNAL_QUERY } as never,
+        toolContext(root) as never,
+      )
+      return typeof result === 'string' ? result : result.output
+    }
+    expect(count(await builtIn(flagged))).toBe(1)
+    expect(count(await builtIn(unflagged))).toBe(0)
   })
 })

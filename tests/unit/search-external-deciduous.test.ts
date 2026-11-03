@@ -2,7 +2,11 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runSearch } from '../../src/lib/search-core.js'
-import { MAX_DISCOVERED_FILES, MAX_FILES } from '../../src/lib/search-corpus.js'
+import {
+  MAX_DISCOVERED_FILES,
+  MAX_FILES,
+  MAX_LISTED_ENTRIES,
+} from '../../src/lib/search-corpus.js'
 import {
   EXTERNAL_MAX_FILE_BYTES,
   loadExternalSources,
@@ -93,6 +97,20 @@ function edge(
       ...fields,
     }),
   )
+}
+
+/** Fill `directory` with `count` empty entries named `x<index>.<extension>`. */
+function fillWithEntries(
+  directory: string,
+  count: number,
+  extension: string,
+): void {
+  fs.mkdirSync(directory, { recursive: true })
+  for (let index = 0; index < count; index++) {
+    fs.closeSync(
+      fs.openSync(path.join(directory, `x${index}.${extension}`), 'w'),
+    )
+  }
 }
 
 function byPath(result: SourceLoad, relative: string) {
@@ -435,7 +453,7 @@ describe('Deciduous loader: order and determinism', () => {
     edge(root, 'a-edge', 'a-node', 'b-node', 'r1')
     edge(root, 'Z-edge', 'a-node', 'B-upper', 'r2')
 
-    const spy = spyOn(fs, 'readFileSync')
+    const spy = spyOn(fs, 'openSync')
     try {
       load(env, source([root]))
       const opened = spy.mock.calls
@@ -526,7 +544,7 @@ describe('Deciduous loader: states and skips', () => {
     )
     fs.symlinkSync(outside, path.join(root, 'nodes/linked.json'))
     write(root, 'edges/ok.json', '{ broken')
-    const spy = spyOn(fs, 'readFileSync')
+    const spy = spyOn(fs, 'openSync')
     let opened: string[]
     let result: SourceLoad
     try {
@@ -572,7 +590,7 @@ describe('Deciduous loader: states and skips', () => {
     const secret = path.join(env.root, 'secret.json')
     fs.writeFileSync(secret, '{}')
 
-    const spy = spyOn(fs, 'readFileSync')
+    const spy = spyOn(fs, 'openSync')
     try {
       const result = load(env, source([root]))
       const opened = spy.mock.calls.map((call) => String(call[0]))
@@ -639,7 +657,7 @@ describe('Deciduous loader: states and skips', () => {
     const env = makeEnv()
     const root = path.join(env.root, 'graph')
     node(root, 'good')
-    const spy = spyOn(fs, 'readFileSync')
+    const spy = spyOn(fs, 'openSync')
     try {
       const result = load(env, source([root]), 10)
       const opened = spy.mock.calls
@@ -706,6 +724,216 @@ describe('Deciduous loader: states and skips', () => {
     const result = load(env, source([one, two]))
 
     expect(result.records.map((r) => r.title)).toEqual(['From one', 'Only two'])
+  })
+})
+
+describe('Deciduous loader: bounded work', () => {
+  test('nodes of every root are scanned before any root edges, so a large first root cannot starve a later root', () => {
+    const env = makeEnv()
+    const one = path.join(env.root, 'one')
+    const two = path.join(env.root, 'two')
+    node(one, 'first-node', { title: 'From the first root' })
+    fs.mkdirSync(path.join(one, 'edges'), { recursive: true })
+    // The first root's edges alone use the whole scan ceiling.
+    for (let index = 0; index < MAX_DISCOVERED_FILES + 10; index++) {
+      fs.writeFileSync(
+        path.join(one, 'edges', `e${String(index).padStart(5, '0')}.json`),
+        '{}',
+      )
+    }
+    node(two, 'second-node', { title: 'From the second root' })
+
+    const result = load(env, source([one, two]))
+
+    expect(result.records.map((r) => r.title)).toEqual([
+      'From the first root',
+      'From the second root',
+    ])
+    expect(result.warnings.join('\n')).toContain(
+      `graph: scan limit of ${MAX_DISCOVERED_FILES} files reached`,
+    )
+  })
+
+  test('a folder of many non-.json entries stops at the entry bound with a warning', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    fillWithEntries(path.join(root, 'nodes'), MAX_LISTED_ENTRIES + 1, 'txt')
+
+    const result = load(env, source([root]))
+
+    expect(result.state).toBe('empty')
+    expect(result.warnings.join('\n')).toContain(
+      `graph: nodes/ listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
+    )
+  }, 30_000)
+
+  test('a file that grows past the per-file cap after discovery is rejected and the bytes read are charged', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'good', { title: 'Good' })
+    node(root, 'grows', { title: 'Grows' })
+    const target = path.join(fs.realpathSync(root), 'nodes/grows.json')
+    const realOpen = fs.openSync.bind(fs)
+    const spy = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === target) {
+        fs.appendFileSync(target, ' '.repeat(EXTERNAL_MAX_FILE_BYTES))
+      }
+      return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+    }) as typeof fs.openSync)
+    let result: SourceLoad
+    try {
+      result = load(env, source([root]))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(result.records.map((r) => r.title)).toEqual(['Good'])
+    expect(result.warnings.join('\n')).toContain(
+      `graph: skipped 1 file larger than ${EXTERNAL_MAX_FILE_BYTES} bytes`,
+    )
+  })
+
+  test('the shared budget is charged the bytes actually read, not the stat size', () => {
+    const env = makeEnv()
+    const grown = path.join(env.root, 'grown')
+    const later = path.join(env.root, 'later')
+    node(grown, 'a')
+    node(later, 'b', { description: 'x'.repeat(300) })
+    const target = path.join(fs.realpathSync(grown), 'nodes/a.json')
+    const statSize = fs.statSync(target).size
+    const laterSize = fs.statSync(path.join(later, 'nodes/b.json')).size
+    // Room for the later source only if the first one is charged its stat size.
+    const budget = statSize + laterSize + 10
+    const realOpen = fs.openSync.bind(fs)
+    const spy = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === target) fs.appendFileSync(target, ' '.repeat(400))
+      return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+    }) as typeof fs.openSync)
+    let loads: SourceLoad[]
+    try {
+      loads = loadExternalSources({
+        sources: [
+          source([grown], { name: 'grown' }),
+          source([later], { name: 'later' }),
+        ],
+        checkoutRoot: env.repo,
+        budgetBytes: budget,
+      })
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(loads[0]?.state).toBe('loaded')
+    expect(loads[1]?.state).toBe('dropped')
+  })
+})
+
+describe('Deciduous loader: unreadable folders', () => {
+  const isRoot = process.getuid?.() === 0
+  const test_ = isRoot ? test.skip : test
+
+  function withoutAccess(directory: string, run: () => void): void {
+    fs.chmodSync(directory, 0o000)
+    try {
+      run()
+    } finally {
+      fs.chmodSync(directory, 0o755)
+    }
+  }
+
+  test_(
+    'a nodes/ folder that exists and cannot be listed makes the source unreadable',
+    () => {
+      const env = makeEnv()
+      const root = path.join(env.root, 'graph')
+      node(root, 'a')
+      fs.mkdirSync(path.join(root, 'edges'), { recursive: true })
+
+      withoutAccess(path.join(root, 'nodes'), () => {
+        const result = load(env, source([root]))
+
+        expect(result.state).toBe('unreadable')
+        expect(result.records).toEqual([])
+        const warnings = result.warnings.join('\n')
+        expect(warnings).toContain('graph: could not read a nodes/ folder')
+        expect(warnings).not.toContain('no nodes/ folder')
+      })
+    },
+  )
+
+  test_(
+    'an edges/ folder that exists and cannot be listed loads the records with a warning',
+    () => {
+      const env = makeEnv()
+      const root = path.join(env.root, 'graph')
+      node(root, 'a', { title: 'Alone' })
+      edge(root, 'e1', 'a', 'a', 'a rationale')
+
+      withoutAccess(path.join(root, 'edges'), () => {
+        const result = load(env, source([root]))
+
+        expect(result.state).toBe('loaded')
+        expect(result.records.map((r) => r.title)).toEqual(['Alone'])
+        expect(result.records[0]?.body).not.toContain('rationale')
+        const warnings = result.warnings.join('\n')
+        expect(warnings).toContain(
+          'graph: could not read an edges/ folder; records load without its rationale',
+        )
+        expect(warnings).not.toContain('no edges/ folder')
+      })
+    },
+  )
+
+  test('a folder that is absent is still absent: no unreadable warning', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'a')
+    const result = load(env, source([root]))
+
+    expect(result.state).toBe('loaded')
+    expect(result.warnings.join('\n')).not.toContain('could not read')
+  })
+})
+
+describe('Deciduous loader: symlinked ancestors of a project root', () => {
+  test('a project root below a symlinked directory is dropped, even when the link stays inside the checkout', () => {
+    const env = makeEnv()
+    node(path.join(env.repo, '.hidden/private'), 'secret')
+    fs.symlinkSync(path.join(env.repo, '.hidden'), path.join(env.repo, 'docs'))
+
+    const result = load(
+      env,
+      source([path.join(env.repo, 'docs/private')], { origin: 'project' }),
+    )
+
+    expect(result.state).toBe('dropped')
+    expect(result.records).toEqual([])
+    expect(result.warnings.join('\n')).toContain(
+      'graph: a project root passes through a symlink; source dropped',
+    )
+  })
+
+  test('the same layout without a symlink loads, and a user root below a symlink is followed', () => {
+    const env = makeEnv()
+    node(path.join(env.repo, 'docs/private'), 'plain')
+    const real = path.join(env.root, 'real')
+    node(path.join(real, 'inner'), 'viauser')
+    fs.symlinkSync(real, path.join(env.root, 'link'))
+
+    const project = load(
+      env,
+      source([path.join(env.repo, 'docs/private')], { origin: 'project' }),
+    )
+    const user = load(env, source([path.join(env.root, 'link/inner')]))
+
+    expect(project.records).toHaveLength(1)
+    expect(user.records).toHaveLength(1)
   })
 })
 

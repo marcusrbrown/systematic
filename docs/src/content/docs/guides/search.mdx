@@ -195,7 +195,7 @@ A project root is a relative folder inside the checkout, and the rules are stric
 
 - It may not be `.`, may not be absolute, and may not contain `..`.
 - It may not contain any dot segment, such as `.slim/clonedeps`. There is one exception: a `deciduous` source may use a folder under `.deciduous/`, such as `.deciduous/sync`. `.deciduous` alone, `.deciduous/.cache` and a `markdown` source under `.deciduous/` are all rejected.
-- A root that is itself a symlink, or that resolves outside the checkout, drops the source with a warning.
+- A root that is itself a symlink, that has a symlink anywhere between the checkout and the root (such as `docs` linking to a hidden folder, with the root `docs/private`), or that resolves outside the checkout, drops the source with a warning. User roots are not held to this rule.
 - A project entry cannot set `projects`. That field is for user config.
 
 A bad entry drops only itself. Its valid siblings still load, and the reply carries a warning that names the source and never a value.
@@ -245,6 +245,8 @@ A `deciduous` source reads the sync folder of a Deciduous graph. The root is the
 - An edge is not a record. Its `rationale` text becomes searchable text on the nodes it links, as long as the other end of the edge is a live node. Each edge adds up to 300 characters, each node takes up to 20 edges and 2 KB of rationale, and deleted nodes and edges add nothing.
 - A hit path is `<source>/nodes/<id>.json`.
 - A missing `nodes/` folder makes the source empty with a warning. A missing `edges/` folder gives records without rationale, with a warning.
+- A `nodes/` folder that exists but cannot be listed makes the source `unreadable`, the same state a Markdown root gets when it cannot be read. An `edges/` folder that exists but cannot be listed adds the warning `could not read an edges/ folder; records load without its rationale`, and the records still load. With several roots, the source is `unreadable` only when no root had a `nodes/` folder that could be listed.
+- The scan visits the `nodes/` folder of every root, in root order, and then the `edges/` folder of every root, sharing one limit of 8,000 files. A large `edges/` folder in the first root cannot use up the limit before a later root's nodes are scanned.
 
 ### Limits
 
@@ -252,9 +254,10 @@ A `deciduous` source reads the sync folder of a Deciduous graph. The root is the
 |---|---|
 | Active sources in one call | 8. User sources come before project sources, and the extra ones are dropped with a warning that names them. |
 | Roots per source | 8 |
-| Size of one external file | 1 MB. A larger file is skipped with a warning. (The four built-in kinds keep their 256 KB limit.) |
-| Bytes read in one call, all sources together | 32 MB, counted from file sizes. A source that does not fit what is left is dropped whole, before any file is read, and later, smaller sources are still tried. |
+| Size of one external file | 1 MB. A larger file is skipped with a warning, including a file that grew past the limit after search first saw it. Search reads at most one byte more than the limit. (The four built-in kinds keep their 256 KB limit.) |
+| Bytes read in one call, all sources together | 32 MB. Before any file is read, the file sizes of a source are added up, and a source that does not fit what is left is dropped whole. Later, smaller sources are still tried. Once a file is read, the budget is charged the bytes actually read, not the size seen earlier. |
 | Files per source | 2,000 Markdown files, or 2,000 Deciduous records out of up to 8,000 files scanned |
+| Directory entries examined in one folder | 32,000, for external sources. A folder with more entries than that, of any name, stops at the limit with a warning that names the folder. Built-in kinds list a folder whole. |
 | Text per source | 16 MB |
 | Hits per source | At most 5, even when `limit` asks for more. `limit` applies to each source, not to the whole reply. |
 | Reply size | 12 KB, shared evenly by the sources that have hits |
@@ -301,7 +304,7 @@ Scores are not comparable across sources, so each source is ranked on its own an
 | A source has no match | The section stays, with `No matching records.` |
 | A source's folder does not exist | `missing: root not found.` A missing folder is quiet, and the other sources still load. |
 | A source has no readable record | `empty: no readable records.` |
-| A source could not be read | `unreadable: root could not be read.` |
+| A source could not be read | `unreadable: root could not be read.` This includes a Deciduous source whose `nodes/` folder exists but cannot be listed. |
 | A source was not read | `dropped: see the warnings.` The warning names the source and says why (a bad root, or no room in the 32 MB budget). |
 | The project's own config file could not be read | `Project sources: the project config could not be read, so it proposes none.` |
 
@@ -316,7 +319,7 @@ External search reads fresh on every call:
 - The project config file.
 - The record files themselves. Nothing is cached.
 
-A few things are fixed when the harness starts: `search.enabled`, whether the `systematic_search` tool exists and how it is described, and the `config unreadable` note recorded at startup. A per-call problem with a config file adds its own note, and a repair clears it on the next call. The `systematic search` and `systematic-search` commands read everything on every run.
+A few things are fixed when the harness starts: `search.enabled`, whether the `systematic_search` tool exists and how it is described, and the `config unreadable` note recorded at startup, which built-in searches keep printing. In a host plugin, an external call decides that note from its own read of the user config and ignores the startup note, so a repair clears the note on the next external call without a restart. The `systematic search` and `systematic-search` commands read everything on every run.
 
 ### When setup fails and when it does not
 
@@ -387,7 +390,7 @@ Notes appear on the `Notes:` line of a result, separated by semicolons. They use
 | `config unreadable` | A `search` block or a user-level config file could not be read. The warning on stderr, or in the host log, names the field. |
 | `query cut to its first 64 distinct terms` | The query had more than 64 distinct terms. The extra terms were ignored. |
 
-Both notes apply to `external` replies too. `config unreadable` there also covers a bad allow entry and an unreadable user-level file.
+Both notes apply to `external` replies too. `config unreadable` there also covers a bad allow entry and an unreadable user-level file, and in a host plugin an external reply takes it from that call's own read of the config, so it disappears once the config is repaired.
 
 A result can also carry up to five warnings from the corpus loader, followed by `+N more`. Warnings about a directory that cannot be read, or about a limit that was reached, come first and name the directory. After them comes one line per kind that counts its skipped files by reason, such as `docs/plans: skipped 2 files (1 invalid frontmatter, 1 larger than 262144 bytes)`.
 

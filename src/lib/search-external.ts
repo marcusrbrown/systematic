@@ -25,13 +25,14 @@ import {
   compareCodeUnits,
   discoverSourceFiles,
   MAX_FILES,
+  MAX_LISTED_ENTRIES,
   narrowNonEmptyString,
   type ParsedSourceFile,
   parseMarkdownFrontmatter,
   readSourceFiles,
   type SourceDiscovery,
   type SourceFileCandidate,
-  safeLstat,
+  symlinkedComponent,
 } from './search-corpus.js'
 import { loadDeciduousRecords } from './search-external-deciduous.js'
 import type { ActiveSource, SourceOrigin } from './search-external-sources.js'
@@ -106,7 +107,11 @@ type SourceLoader = (
   context: LoadContext,
 ) => SourceOutcome
 
-const MARKDOWN_WALK = { excludedFiles: [], excludedDirs: [] } as const
+const MARKDOWN_WALK = {
+  excludedFiles: [],
+  excludedDirs: [],
+  maxListedEntries: MAX_LISTED_ENTRIES,
+} as const
 
 /** Everything but the state is empty: the source produced nothing and read nothing. */
 function nothing(
@@ -237,9 +242,9 @@ function finishGather(
 /**
  * Walk every root and merge the candidates into one set, so every cap and the
  * budget check apply to the source as a whole. The first root to provide a
- * path keeps it. A bad root (a project root that is a symlink or lies outside
- * the checkout) drops the source; a missing or unreadable root only matters
- * when no root is found.
+ * path keeps it. A bad root (a project root that is a symlink, passes through
+ * one below the checkout, or lies outside the checkout) drops the source; a
+ * missing or unreadable root only matters when no root is found.
  */
 function gatherCandidates(
   source: ActiveSource,
@@ -259,8 +264,18 @@ function gatherCandidates(
     outcome: nothing(source, 'dropped', warnings),
   })
   for (const root of source.roots) {
-    if (origin === 'project' && safeLstat(root)?.isSymbolicLink()) {
+    const symlinked =
+      origin === 'project'
+        ? symlinkedComponent(context.checkoutRoot, root)
+        : undefined
+    if (symlinked === 'root') {
       warnings.push(`${name}: a project root is a symlink; source dropped`)
+      return drop()
+    }
+    if (symlinked === 'ancestor') {
+      warnings.push(
+        `${name}: a project root passes through a symlink; source dropped`,
+      )
       return drop()
     }
     const discovery = discoverSourceFiles(

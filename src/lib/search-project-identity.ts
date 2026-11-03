@@ -2,9 +2,10 @@
  * Project identity for external search sources: the main repository root of a
  * checkout, derived by filesystem reads alone, and the exact-path allow match.
  *
- * Imports node builtins only, because the `systematic-search` bin bundles it.
- * Never throws: anything corrupt, inconsistent or unreadable is `unresolved`,
- * and an unresolved identity matches no allow entry.
+ * Imports node builtins and `search-bounded-read.ts` (node builtins only)
+ * only, because the `systematic-search` bin bundles it. Never throws: anything
+ * corrupt, inconsistent or unreadable is `unresolved`, and an unresolved
+ * identity matches no allow entry.
  *
  * A linked worktree is verified from the common-directory side. The `.git`
  * file is attacker-writable (it ships inside a cloned project), so it is only
@@ -17,6 +18,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { readBytesBounded } from './search-bounded-read.js'
 
 /** Largest identity file read (`.git` file, `commondir`, back-pointer, `config`). */
 const MAX_IDENTITY_FILE_BYTES = 1024 * 1024
@@ -48,12 +50,18 @@ function realpath(target: string): string {
   return fs.realpathSync.native(target)
 }
 
-/** Reads a small text file; a larger file is refused rather than truncated. */
+/**
+ * Reads a small text file through the bounded fd read. A larger file, a
+ * non-regular file (a FIFO planted at the path would block a plain read) and
+ * any read failure throw, which `resolveProjectIdentity` turns into
+ * `unresolved`.
+ */
 function readSmallFile(file: string): string {
-  if (fs.statSync(file).size > MAX_IDENTITY_FILE_BYTES) {
-    throw new Error(`${path.basename(file)} exceeds the identity read cap`)
+  const read = readBytesBounded(file, MAX_IDENTITY_FILE_BYTES)
+  if (read.kind !== 'bytes') {
+    throw new Error(`${path.basename(file)} cannot be read as an identity file`)
   }
-  return fs.readFileSync(file, 'utf8')
+  return read.bytes.toString('utf8')
 }
 
 function firstLine(text: string): string {

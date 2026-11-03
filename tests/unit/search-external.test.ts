@@ -6,6 +6,7 @@ import {
   loadCorpus,
   MAX_FILE_BYTES,
   MAX_FILES,
+  MAX_LISTED_ENTRIES,
 } from '../../src/lib/search-corpus.js'
 import {
   EXTERNAL_MAX_FILE_BYTES,
@@ -305,14 +306,14 @@ describe('loadExternalSources: shared read budget', () => {
     write(big, 'two.md', 'y'.repeat(600))
     write(small, 'tiny.md', '# Tiny\n')
     const reads: string[] = []
-    const original = fs.readFileSync
-    const spy = spyOn(fs, 'readFileSync').mockImplementation(((
-      file: fs.PathOrFileDescriptor,
+    const original = fs.openSync
+    const spy = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
       ...rest: unknown[]
     ) => {
       reads.push(String(file))
-      return (original as (...args: unknown[]) => unknown)(file, ...rest)
-    }) as typeof fs.readFileSync)
+      return (original as (...args: unknown[]) => number)(file, ...rest)
+    }) as typeof fs.openSync)
 
     let loads: SourceLoad[]
     try {
@@ -674,6 +675,194 @@ describe('loadExternalSources: symlinks and containment', () => {
     )
 
     expect(load).toMatchObject({ state: 'dropped', records: [] })
+  })
+})
+
+describe('loadExternalSources: bounded work', () => {
+  test('a folder of many non-Markdown entries stops at the entry bound with a warning', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'assets')
+    fs.mkdirSync(root, { recursive: true })
+    for (let index = 0; index < MAX_LISTED_ENTRIES + 1; index++) {
+      fs.closeSync(fs.openSync(path.join(root, `x${index}.png`), 'w'))
+    }
+
+    const load = loadOne(env, source('assets', [root]))
+
+    expect(load.state).toBe('empty')
+    expect(load.warnings).toContain(
+      `assets: directory listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
+    )
+  }, 30_000)
+
+  test('a nested folder reports its own listing limit with its path', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'top.md', '# Top\n')
+    const nested = path.join(root, 'media')
+    fs.mkdirSync(nested, { recursive: true })
+    for (let index = 0; index < MAX_LISTED_ENTRIES + 1; index++) {
+      fs.closeSync(fs.openSync(path.join(nested, `x${index}.png`), 'w'))
+    }
+
+    const load = loadOne(env, source('wiki', [root]))
+
+    expect(load.records.map((r) => r.path)).toEqual(['wiki/top.md'])
+    expect(load.warnings).toContain(
+      `wiki/media: directory listing limit of ${MAX_LISTED_ENTRIES} entries reached; some entries were not examined`,
+    )
+  }, 30_000)
+
+  test('built-in kinds still list a directory whole: no entry bound, no listing warning', () => {
+    const env = makeEnv()
+    write(env.checkout, 'docs/solutions/a.md', '# A\n')
+
+    const builtIn = loadCorpus(env.checkout, 'solution')
+
+    expect(builtIn.documents).toHaveLength(1)
+    expect(builtIn.warnings).toEqual([])
+  })
+
+  test('a file that grows past the per-file cap after discovery is rejected', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'docs')
+    write(root, 'good.md', '# Good\n')
+    write(root, 'grows.md', '# Grows\n')
+    const target = path.join(fs.realpathSync(root), 'grows.md')
+    const realOpen = fs.openSync.bind(fs)
+    const spy = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === target) {
+        fs.appendFileSync(target, 'x'.repeat(EXTERNAL_MAX_FILE_BYTES))
+      }
+      return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+    }) as typeof fs.openSync)
+    let load: SourceLoad
+    try {
+      load = loadOne(env, source('docs', [root]))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(load.records.map((r) => r.path)).toEqual(['docs/good.md'])
+    expect(load.warnings).toContain(
+      `skipped docs/grows.md: larger than ${EXTERNAL_MAX_FILE_BYTES} bytes`,
+    )
+  })
+
+  test('the shared budget is charged the bytes actually read, not the stat size', () => {
+    const env = makeEnv()
+    const grown = path.join(env.outside, 'grown')
+    const later = path.join(env.outside, 'later')
+    write(grown, 'a.md', 'a'.repeat(100))
+    write(later, 'b.md', 'b'.repeat(500))
+    const target = path.join(fs.realpathSync(grown), 'a.md')
+    const realOpen = fs.openSync.bind(fs)
+    const spy = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === target) fs.appendFileSync(target, 'a'.repeat(500))
+      return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+    }) as typeof fs.openSync)
+    let loads: SourceLoad[]
+    try {
+      loads = loadExternalSources({
+        sources: [source('grown', [grown]), source('later', [later])],
+        checkoutRoot: env.checkout,
+        // The stat size of 100 would leave room for the 500-byte later source.
+        budgetBytes: 1000,
+      })
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(loads.map((l) => [l.name, l.state])).toEqual([
+      ['grown', 'loaded'],
+      ['later', 'dropped'],
+    ])
+  })
+
+  test('a built-in file that grows past the cap after discovery is rejected too', () => {
+    const env = makeEnv()
+    write(env.checkout, 'docs/solutions/good.md', '# Good\n')
+    write(env.checkout, 'docs/solutions/grows.md', '# Grows\n')
+    const target = path.join(
+      fs.realpathSync(env.checkout),
+      'docs/solutions/grows.md',
+    )
+    const realOpen = fs.openSync.bind(fs)
+    const spy = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === target) {
+        fs.appendFileSync(target, 'x'.repeat(MAX_FILE_BYTES))
+      }
+      return (realOpen as (...args: unknown[]) => number)(file, ...rest)
+    }) as typeof fs.openSync)
+    let builtIn: ReturnType<typeof loadCorpus>
+    try {
+      builtIn = loadCorpus(env.checkout, 'solution')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(builtIn.documents.map((d) => d.path)).toEqual([
+      'docs/solutions/good.md',
+    ])
+    expect(builtIn.warnings).toContain(
+      `skipped docs/solutions/grows.md: larger than ${MAX_FILE_BYTES} bytes`,
+    )
+  })
+})
+
+describe('loadExternalSources: symlinked ancestors of a project root', () => {
+  test('a project root below a symlinked directory is dropped, even when the link stays inside the checkout', () => {
+    const env = makeEnv()
+    write(env.checkout, '.hidden/private/secret.md', '# Secret\n')
+    fs.symlinkSync(
+      path.join(env.checkout, '.hidden'),
+      path.join(env.checkout, 'docs'),
+    )
+
+    const load = loadOne(
+      env,
+      source('docs', [path.join(env.checkout, 'docs/private')], {
+        origin: 'project',
+      }),
+    )
+
+    expect(load).toMatchObject({ state: 'dropped', records: [] })
+    expect(load.warnings).toContain(
+      'docs: a project root passes through a symlink; source dropped',
+    )
+  })
+
+  test('the same layout without a symlink loads, and a user root below a symlink is followed', () => {
+    const env = makeEnv()
+    write(env.checkout, 'docs/private/plain.md', '# Plain\n')
+    write(env.outside, 'real/inner/user.md', '# User\n')
+    fs.symlinkSync(
+      path.join(env.outside, 'real'),
+      path.join(env.outside, 'link'),
+    )
+
+    const project = loadOne(
+      env,
+      source('docs', [path.join(env.checkout, 'docs/private')], {
+        origin: 'project',
+      }),
+    )
+    const user = loadOne(
+      env,
+      source('wiki', [path.join(env.outside, 'link/inner')]),
+    )
+
+    expect(project.records.map((r) => r.path)).toEqual(['docs/plain.md'])
+    expect(user.records.map((r) => r.path)).toEqual(['wiki/user.md'])
   })
 })
 

@@ -2,8 +2,8 @@
  * The `search` config field: its zod schema piece, the pure merge rule, the
  * user-level file selection, and a reader that never touches project config.
  *
- * Import rule: this module may import only zod, jsonc-parser, node builtins
- * and TYPES from `search-core.ts`. It must never import `config.ts` or
+ * Import rule: this module may import only zod, jsonc-parser, node builtins,
+ * `search-bounded-read.ts` (node builtins only) and TYPES from `search-core.ts`. It must never import `config.ts` or
  * `config-schema.ts`; both of those import this module, never the reverse.
  * The `systematic-search` bin bundles it, and pulling in `config.ts` would
  * drag the whole config loader (and its jsonc build) into that bundle.
@@ -35,6 +35,7 @@ import {
   printParseErrorCode,
 } from 'jsonc-parser'
 import { z } from 'zod'
+import { readBytesBounded } from './search-bounded-read.js'
 
 /** The two formats a source may declare. */
 export const SEARCH_SOURCE_FORMATS = ['markdown', 'deciduous'] as const
@@ -722,58 +723,27 @@ function errorCode(error: unknown): unknown {
 /** Largest project config file the bin-safe project reader accepts. */
 export const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024
 
-const READ_CHUNK_BYTES = 64 * 1024
-
 /**
- * Read a text file through an open fd, never more than `maxBytes + 1` bytes.
- * Reaching `maxBytes + 1` rejects the file, so a file that is already too
- * large and one that grows past the cap while it is being read fail the same
- * way, and the size is never trusted from a `stat`. The fd must be a regular
- * file; the open is non-blocking so a FIFO planted at the path cannot hang the
- * reader.
+ * Read a text file with the shared bounded fd read: never more than
+ * `maxBytes + 1` bytes, regular files only, and a non-blocking open so a FIFO
+ * planted at the path cannot hang the reader.
  */
 function readTextBounded(filePath: string, maxBytes: number): TextRead {
-  let fd: number
-  try {
-    fd = fs.openSync(
-      filePath,
-      fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0),
-    )
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return { kind: 'absent' }
-    return { kind: 'failed', reason: 'unable to read file' }
-  }
-  try {
-    if (!fs.fstatSync(fd).isFile()) {
+  const read = readBytesBounded(filePath, maxBytes)
+  switch (read.kind) {
+    case 'bytes':
+      return { kind: 'text', content: read.bytes.toString('utf-8') }
+    case 'absent':
+      return { kind: 'absent' }
+    case 'not-regular':
       return { kind: 'failed', reason: 'not a regular file' }
-    }
-    const limit = maxBytes + 1
-    const chunks: Buffer[] = []
-    let total = 0
-    while (total < limit) {
-      const chunk = Buffer.allocUnsafe(
-        Math.min(READ_CHUNK_BYTES, limit - total),
-      )
-      const count = fs.readSync(fd, chunk, 0, chunk.length, null)
-      if (count === 0) break
-      chunks.push(chunk.subarray(0, count))
-      total += count
-    }
-    if (total >= limit) {
+    case 'too-large':
       return {
         kind: 'failed',
         reason: `file is larger than ${maxBytes / (1024 * 1024)} MB`,
       }
-    }
-    return { kind: 'text', content: Buffer.concat(chunks).toString('utf-8') }
-  } catch {
-    return { kind: 'failed', reason: 'unable to read file' }
-  } finally {
-    try {
-      fs.closeSync(fd)
-    } catch {
-      // Nothing useful to do: the read result is already decided.
-    }
+    case 'failed':
+      return { kind: 'failed', reason: 'unable to read file' }
   }
 }
 

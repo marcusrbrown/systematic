@@ -13,6 +13,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from './frontmatter.js'
+import { readBytesBounded } from './search-bounded-read.js'
 import { isRecord } from './validation.js'
 
 /** Largest single file loaded, in bytes. */
@@ -25,6 +26,12 @@ export const MAX_DEPTH = 6
 export const MAX_TOTAL_BYTES = 16 * 1024 * 1024
 /** Discovery stops here so a hostile tree cannot make the walk itself unbounded. */
 export const MAX_DISCOVERED_FILES = MAX_FILES * 4
+/**
+ * Most directory entries one external listing may examine. The discovery
+ * ceiling counts accepted candidates only, so this bounds the work a folder of
+ * non-matching entries can cost.
+ */
+export const MAX_LISTED_ENTRIES = MAX_DISCOVERED_FILES * 4
 /** Longest warning, in characters, after sanitising. */
 const MAX_WARNING_LENGTH = 200
 /** Indexed when a walk names no extensions. */
@@ -38,6 +45,12 @@ interface WalkSpec {
   readonly excludedDirs: readonly string[]
   /** Lower-case file extensions that are indexed, dot included. Defaults to `.md`. */
   readonly extensions?: readonly string[]
+  /**
+   * Most entries one directory listing may examine. A listing that reaches it
+   * stops with a warning. Unset for the built-in kinds, which list a directory
+   * whole.
+   */
+  readonly maxListedEntries?: number
 }
 
 interface KindSpec extends WalkSpec {
@@ -200,6 +213,48 @@ export function safeReaddir(target: string): string[] | null {
   }
 }
 
+export interface BoundedListing {
+  readonly names: string[]
+  /** True when the directory held more than `limit` entries, so `names` is a subset. */
+  readonly truncated: boolean
+}
+
+/**
+ * List a directory, holding at most `limit` names. Entries stream from the
+ * directory handle, so a folder of millions of entries is never materialized.
+ * A listing cut at `limit` is a subset in directory order; the caller sorts
+ * what it got and says the listing was cut. `null` when the directory cannot
+ * be opened or read.
+ */
+export function listDirectoryBounded(
+  target: string,
+  limit: number,
+): BoundedListing | null {
+  let directory: fs.Dir
+  try {
+    directory = fs.opendirSync(target)
+  } catch {
+    return null
+  }
+  const names: string[] = []
+  try {
+    while (true) {
+      const entry = directory.readSync()
+      if (entry === null) return { names, truncated: false }
+      if (names.length >= limit) return { names, truncated: true }
+      names.push(entry.name)
+    }
+  } catch {
+    return null
+  } finally {
+    try {
+      directory.closeSync()
+    } catch {
+      // Nothing useful to do: the listing is already decided.
+    }
+  }
+}
+
 /**
  * The project root: the nearest ancestor of `startDir` holding `.git` (a
  * directory, or a file for a worktree), resolved with `realpath`; otherwise
@@ -239,6 +294,33 @@ export function isInside(root: string, candidate: string): boolean {
   )
 }
 
+export type SymlinkedComponent = 'root' | 'ancestor'
+
+/**
+ * Whether a component of the path from `container` down to `target` is a
+ * symlink, checked with `lstat` one component at a time: `root` when the final
+ * component is, `ancestor` when one above it is. A `target` that is not lexically
+ * inside `container` has no components to check; the realpath containment check
+ * owns it. A component that is missing or cannot be inspected ends the check.
+ */
+export function symlinkedComponent(
+  container: string,
+  target: string,
+): SymlinkedComponent | undefined {
+  if (!isInside(container, target)) return undefined
+  const segments = path.relative(container, target).split(path.sep)
+  let current = container
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment)
+    const stat = safeLstat(current)
+    if (stat === null) return undefined
+    if (stat.isSymbolicLink()) {
+      return index === segments.length - 1 ? 'root' : 'ancestor'
+    }
+  }
+  return undefined
+}
+
 export interface SourceFileCandidate {
   /** Path relative to the walked directory, with `/` separators. */
   readonly relative: string
@@ -274,6 +356,41 @@ function classifyEntry(
   return indexable ? 'file' : 'ignored'
 }
 
+function wholeListing(directory: string): BoundedListing | null {
+  const names = safeReaddir(directory)
+  return names === null ? null : { names, truncated: false }
+}
+
+/**
+ * The entry names of one walked directory, or `null` after a warning when it
+ * cannot be read. A bounded listing that was cut says so once.
+ */
+function listWalkedDirectory(
+  spec: WalkSpec,
+  label: string,
+  directory: string,
+  prefix: string,
+  warnings: string[],
+): string[] | null {
+  const shown = prefix === '' ? label : `${label}/${prefix.slice(0, -1)}`
+  const listing =
+    spec.maxListedEntries === undefined
+      ? wholeListing(directory)
+      : listDirectoryBounded(directory, spec.maxListedEntries)
+  if (listing === null) {
+    warnings.push(cleanForWarning(`could not read directory ${shown}`))
+    return null
+  }
+  if (listing.truncated) {
+    warnings.push(
+      cleanForWarning(
+        `${shown}: directory listing limit of ${spec.maxListedEntries} entries reached; some entries were not examined`,
+      ),
+    )
+  }
+  return listing.names
+}
+
 function discoverFiles(
   spec: WalkSpec,
   label: string,
@@ -283,12 +400,8 @@ function discoverFiles(
   found: Discovery,
   warnings: string[],
 ): void {
-  const names = safeReaddir(directory)
-  if (names === null) {
-    const shown = prefix === '' ? label : `${label}/${prefix.slice(0, -1)}`
-    warnings.push(cleanForWarning(`could not read directory ${shown}`))
-    return
-  }
+  const names = listWalkedDirectory(spec, label, directory, prefix, warnings)
+  if (names === null) return
   names.sort(compareCodeUnits)
   for (const name of names) {
     if (found.truncated) return
@@ -551,20 +664,21 @@ function readCandidates<T>(
     if (totalBytes + candidate.size > MAX_TOTAL_BYTES) {
       return { items, bytesRead: totalBytes, budgetSkipped: considered - index }
     }
-    totalBytes += candidate.size
 
-    let bytes: Buffer
-    try {
-      bytes = fs.readFileSync(candidate.absolute)
-    } catch {
-      warnings.push(`skipped ${display}: could not be read`)
-      continue
-    }
-    // The file may have grown since lstat.
-    if (bytes.byteLength > maxFileBytes) {
+    // The size came from an earlier lstat. The read is bounded on its own, and
+    // the budget is charged the bytes actually read.
+    const read = readBytesBounded(candidate.absolute, maxFileBytes)
+    if (read.kind === 'too-large') {
+      totalBytes += read.bytesRead
       warnings.push(`skipped ${display}: larger than ${maxFileBytes} bytes`)
       continue
     }
+    if (read.kind !== 'bytes') {
+      warnings.push(`skipped ${display}: could not be read`)
+      continue
+    }
+    const bytes = read.bytes
+    totalBytes += bytes.byteLength
     const parsed = parse(logicalPath, bytes.toString('utf8'))
     if (parsed.ok) items.push(parsed.value)
     else warnings.push(`skipped ${display}: ${parsed.reason}`)

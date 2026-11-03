@@ -20,6 +20,7 @@ import { z } from 'zod'
 import type { V2Installer } from './opencode-v2.js'
 import type { V2ToolDefinition, V2ToolEditor } from './opencode-v2-skills.js'
 import {
+  KIND_SELECTOR_EXTERNAL,
   runSearch,
   SEARCH_ARG_DESCRIPTIONS,
   SEARCH_ARGS,
@@ -44,7 +45,8 @@ export function isSearchEnabled(settings: SearchSettings | undefined): boolean {
  *
  * Only `settings` and `unreadable` are fixed at init. For `kind: "external"`
  * the core reads the allow list, the user sources and the project file again
- * on every call, from the per-call `startDir`. `configOptions` is the
+ * on every call, from the per-call `startDir`, and takes the `config unreadable`
+ * note from that read, not from `unreadable`. `configOptions` is the
  * config-directory override that read takes; the hosts leave it out and the
  * reader uses the home directory and `OPENCODE_CONFIG_DIR`.
  */
@@ -58,6 +60,7 @@ async function executeSearch(
   try {
     if (startDir === undefined) return SEARCH_NOTICES.noProject
     const record = isRecord(args) ? args : {}
+    const external = record[SEARCH_ARGS.kind] === KIND_SELECTOR_EXTERNAL
     const response = await runSearch(
       {
         query: record[SEARCH_ARGS.query],
@@ -68,9 +71,12 @@ async function executeSearch(
         startDir,
         settings,
         configOptions,
-        // A user `search` block (or its file) that could not be read: results
-        // carry the same `config unreadable` note the CLI and the bin print.
-        ...(unreadable === true && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
+        // A user `search` block (or its file) that could not be read at init:
+        // built-in results carry the same `config unreadable` note the CLI and
+        // the bin print. An external call re-reads the config and decides the
+        // note itself, so a repair clears it without a restart.
+        ...(unreadable === true &&
+          !external && { notes: [SEARCH_CONFIG_UNREADABLE_NOTE] }),
       },
     )
     return response.text

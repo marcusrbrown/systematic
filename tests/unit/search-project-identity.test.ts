@@ -398,6 +398,50 @@ describe('resolveProjectIdentity: forgery and fail-closed', () => {
     )
     expectUnresolved(resolveProjectIdentity(dir))
   })
+
+  // A FIFO blocks a plain read forever, and a blocked synchronous read cannot
+  // be interrupted by a test timeout. The identity runs in a child process
+  // with a kill timeout, so a regression fails here instead of hanging the run.
+  const identityScript = `import { resolveProjectIdentity } from ${JSON.stringify(
+    path.resolve(
+      import.meta.dirname,
+      '../../src/lib/search-project-identity.ts',
+    ),
+  )}
+console.log(JSON.stringify(resolveProjectIdentity(process.env.CHECKOUT ?? '')))`
+
+  function identityInChild(checkout: string) {
+    return spawnSync(process.execPath, ['-e', identityScript], {
+      env: { ...process.env, CHECKOUT: checkout },
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+  }
+
+  it.each([
+    ['commondir', 'commondir'],
+    ['back-pointer', 'gitdir'],
+    ['config', '../../config'],
+  ])(
+    'returns unresolved, without blocking, when the %s is a FIFO',
+    (_label, relative) => {
+      const repo = createRepo()
+      const wt = addWorktree(repo.work, 'feat/a')
+      const target = path.join(repo.work, '.git/worktrees/wt', relative)
+      fs.rmSync(target)
+      expect(spawnSync('mkfifo', [target]).status).toBe(0)
+
+      const child = identityInChild(wt)
+
+      expect(child.signal).toBeNull()
+      expect(child.status).toBe(0)
+      expect(JSON.parse(child.stdout)).toEqual({
+        status: 'unresolved',
+        reason: 'unreadable',
+      })
+    },
+    20_000,
+  )
 })
 
 describe('isAllowedProject', () => {
