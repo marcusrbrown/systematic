@@ -1,7 +1,7 @@
 ---
 title: Restate CI-only validator rules in agent prose at the step that acts on each pointer
 date: 2026-10-26
-last_updated: 2026-10-31
+last_updated: 2026-11-03
 category: best-practices
 module: content-integrity
 problem_type: best_practice
@@ -60,7 +60,9 @@ Write each check as a step at the point where the agent acts on a pointer.
 
 7. **When a count or limit changes, search every occurrence.** After the researcher moved from two search calls to one per kind, a line in the efficiency list still capped past-work at two. Grep the prompt for the words that name the count (`once`, `twice`, `two`), not only the section you edited. The wiring test reads the call counts out of that line and asserts `[1, 4]`, with a self-test that the reader catches a stale cap (`tests/unit/past-work-wiring-contract.test.ts:168-211`).
 
-8. **After a prompt trim, review each removed instruction.** A byte budget is review guidance, not a test (`docs/plans/2026-10-30-001-feat-search-past-work-plan.md:207`), and a byte count cannot say whether a removed line was a duplicate, stale or deliberate. A trim once removed "Do not assume any particular category exists" (`agents/research/learnings-researcher.md:33`), and no wiring test pins it. Regenerated whole-prompt fixtures cannot detect a removed instruction, because they are rebuilt from the trimmed prompt. Pin the stack-neutral and negative rules you intend to keep.
+8. **After a prompt trim, review each removed instruction.** A body-size test checks size, not whether a removed rule was deliberate, and regenerated whole-prompt fixtures cannot detect the loss either, because they are rebuilt from the trimmed prompt. Review for behavior the change did not own, and pin each kept rule to the section that acts on it.
+
+   Example: a trim once removed "Do not assume any particular category exists" (`agents/research/learnings-researcher.md:33`), and no test pinned it. A later trim, made to stay under the 25,000-byte body test (`tests/unit/past-work-wiring-contract.test.ts:1010-1019`, `BODY_CEILING_BYTES`), cut the broader-search fallback, the zero-hit rule and the high-severity line. They were restored and pinned in the `grep-path behaviors that stay in the prompt` block (`tests/unit/past-work-wiring-contract.test.ts:819-837`). The fallback is checked within its Step 3 paragraph and the zero-hit rule within Step 1b. The high-severity line is checked against the whole prompt, a weaker pin.
 
 ## Why This Matters
 
