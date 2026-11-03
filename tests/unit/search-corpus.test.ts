@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -373,6 +373,55 @@ describe('loadCorpus: access failures versus absence', () => {
         'could not read docs/solutions; not loaded',
       ])
       expect(JSON.stringify(result)).not.toMatch(/EACCES|permission|errno/i)
+    },
+  )
+
+  // A locked directory fails `realpath` on macOS but not on Linux; failing the
+  // listing directly holds the same result on both.
+  it('treats a kind directory that exists but cannot be listed like one that cannot be traversed', () => {
+    const root = makeTemp()
+    writeFile(root, 'docs/solutions/ok.md', doc('Ok'))
+    const target = path.join(fs.realpathSync(root), 'docs/solutions')
+    const realReaddir = fs.readdirSync.bind(fs)
+    const spy = spyOn(fs, 'readdirSync').mockImplementation(((
+      dir: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(dir) === target) {
+        throw Object.assign(new Error('EACCES: permission denied'), {
+          code: 'EACCES',
+        })
+      }
+      return (realReaddir as (...args: unknown[]) => unknown)(dir, ...rest)
+    }) as typeof fs.readdirSync)
+    let result: ReturnType<typeof loadCorpus>
+    try {
+      result = loadCorpus(root)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(result.state).toBe('none')
+    expect(result.documents).toEqual([])
+    expect(result.warnings).toEqual([
+      'could not read docs/solutions; not loaded',
+    ])
+  })
+
+  it.skipIf(process.getuid?.() === 0)(
+    'reports a locked kind directory the same way whatever the platform does with realpath',
+    () => {
+      const root = makeTemp()
+      writeFile(root, 'docs/solutions/ok.md', doc('Ok'))
+      const solutions = path.join(root, 'docs/solutions')
+      lockedModes.push({ target: solutions, mode: 0o755 })
+      fs.chmodSync(solutions, 0o000)
+
+      const result = loadCorpus(root)
+      expect(result.state).toBe('none')
+      expect(result.warnings).toEqual([
+        'could not read docs/solutions; not loaded',
+      ])
     },
   )
 

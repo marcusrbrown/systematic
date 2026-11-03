@@ -513,6 +513,38 @@ describe('loadExternalSources: states', () => {
     },
   )
 
+  // Locking a directory makes `realpath` fail on macOS but not on Linux, so a
+  // chmod alone reaches the listing on one platform and the probe on the other.
+  // Failing the listing directly pins the same state on both.
+  test('a root that exists but cannot be listed is unreadable, with fixed text and no error detail', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'a.md', '# A\n')
+    const realRoot = fs.realpathSync(root)
+    const realOpendir = fs.opendirSync.bind(fs)
+    const spy = spyOn(fs, 'opendirSync').mockImplementation(((
+      target: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(target) === realRoot) {
+        throw Object.assign(new Error('EACCES: permission denied'), {
+          code: 'EACCES',
+        })
+      }
+      return (realOpendir as (...args: unknown[]) => fs.Dir)(target, ...rest)
+    }) as typeof fs.opendirSync)
+    let load: SourceLoad
+    try {
+      load = loadOne(env, source('wiki', [root]))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(load.state).toBe('unreadable')
+    expect(load.records).toEqual([])
+    expect(load.warnings).toEqual(['could not read wiki; not loaded'])
+  })
+
   test('with several roots, a missing one does not hide the others', () => {
     const env = makeEnv()
     const present = path.join(env.outside, 'present')

@@ -116,6 +116,11 @@ function writeUserConfig(config: unknown): void {
   fs.writeFileSync(path.join(dir, 'systematic.json'), JSON.stringify(config))
 }
 
+/** The `Notes:` lines of a reply. */
+function noteLines(text: string | undefined): string[] {
+  return (text ?? '').split('\n').filter((line) => line.startsWith('Notes:'))
+}
+
 function writeDoc(root: string, name: string, content: string): void {
   const dir = path.join(root, 'docs/solutions')
   fs.mkdirSync(dir, { recursive: true })
@@ -1200,8 +1205,9 @@ describe('search adapters parity: kind external', () => {
     try {
       const surfaces = await everySurface(root)
       const texts = await externalTexts(surfaces, root)
-      expect(texts[0]).toContain('Notes: config unreadable')
-      expect((texts[0] ?? '').match(/config unreadable/g)).toHaveLength(1)
+      // The note is the `Notes:` line. A warning may mention the same words, and
+      // whether the 200-character cap cuts it short depends on the path length.
+      expect(noteLines(texts[0])).toEqual(['Notes: config unreadable'])
       expect(texts[0]).toContain('wiki (user)')
       expect(texts[0]).toContain('decisions (project)')
       expect(texts[0]).not.toContain(SEARCH_NOTICES.failed)
@@ -1369,7 +1375,8 @@ describe('search adapters: config-dir option and note merge', () => {
     )
     const good = fs.readFileSync(configFile, 'utf8')
     const count = (text: string) =>
-      (text.match(/config unreadable/g) ?? []).length
+      noteLines(text).filter((line) => line.includes('config unreadable'))
+        .length
 
     const unflagged = createSearchTool({ settings: undefined, configOptions })
     const flagged = createSearchTool({

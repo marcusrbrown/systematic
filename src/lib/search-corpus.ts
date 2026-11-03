@@ -332,6 +332,8 @@ interface Discovery {
   readonly candidates: SourceFileCandidate[]
   /** True when discovery stopped at the cap, so counts are lower bounds. */
   truncated: boolean
+  /** True when the walked directory itself could not be listed. */
+  rootUnreadable: boolean
 }
 
 type EntryKind = 'file' | 'directory' | 'ignored'
@@ -362,8 +364,10 @@ function wholeListing(directory: string): BoundedListing | null {
 }
 
 /**
- * The entry names of one walked directory, or `null` after a warning when it
- * cannot be read. A bounded listing that was cut says so once.
+ * The entry names of one walked directory, or `null` when it cannot be read.
+ * A subdirectory that cannot be read gets a warning here; the walked directory
+ * itself is reported by `discoverSourceFiles`. A bounded listing that was cut
+ * says so once.
  */
 function listWalkedDirectory(
   spec: WalkSpec,
@@ -378,7 +382,9 @@ function listWalkedDirectory(
       ? wholeListing(directory)
       : listDirectoryBounded(directory, spec.maxListedEntries)
   if (listing === null) {
-    warnings.push(cleanForWarning(`could not read directory ${shown}`))
+    if (prefix !== '') {
+      warnings.push(cleanForWarning(`could not read directory ${shown}`))
+    }
     return null
   }
   if (listing.truncated) {
@@ -401,7 +407,10 @@ function discoverFiles(
   warnings: string[],
 ): void {
   const names = listWalkedDirectory(spec, label, directory, prefix, warnings)
-  if (names === null) return
+  if (names === null) {
+    if (depth === 0) found.rootUnreadable = true
+    return
+  }
   names.sort(compareCodeUnits)
   for (const name of names) {
     if (found.truncated) return
@@ -610,8 +619,18 @@ export function discoverSourceFiles(
     return { state: 'outside' }
   }
 
-  const found: Discovery = { candidates: [], truncated: false }
+  const found: Discovery = {
+    candidates: [],
+    truncated: false,
+    rootUnreadable: false,
+  }
   discoverFiles(walk, label, directoryReal, '', 0, found, warnings)
+  // Whether `realpath` of a locked directory fails depends on the platform; a
+  // directory that exists but cannot be listed is `unreadable` on all of them.
+  if (found.rootUnreadable) {
+    warnings.push(`could not read ${label}; not loaded`)
+    return { state: 'unreadable' }
+  }
   return {
     state: 'found',
     candidates: found.candidates.sort((a, b) =>
