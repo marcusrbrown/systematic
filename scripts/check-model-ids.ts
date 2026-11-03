@@ -683,16 +683,28 @@ async function listRepoSources(): Promise<string[]> {
   const files = [...new Set(listing.split('\0').filter(Boolean))]
     .filter((file) => SCANNED_EXTENSIONS.has(path.extname(file)))
     .sort()
-  // `--cached` also lists a file that is deleted from the working tree.
+  return keepPresent(files, (file) => fs.access(path.join(ROOT_DIR, file)))
+}
+
+/**
+ * `git ls-files --cached` also lists files deleted from the working tree. Skip
+ * only those (ENOENT); any other access failure would silently shrink the scan,
+ * so it is rethrown with the path and `runCli` exits 2.
+ */
+export async function keepPresent(
+  files: readonly string[],
+  access: (file: string) => Promise<unknown>,
+): Promise<string[]> {
   const present: string[] = []
   for (const file of files) {
-    if (
-      await fs.access(path.join(ROOT_DIR, file)).then(
-        () => true,
-        () => false,
-      )
-    ) {
+    try {
+      await access(file)
       present.push(file)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw new Error(
+        `${file}: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
   return present

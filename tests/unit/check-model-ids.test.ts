@@ -14,6 +14,7 @@ import {
   EXCEPTIONS,
   exitCodeFor,
   extractOccurrences,
+  keepPresent,
   type ModelIdException,
   parseCatalog,
   resolveCatalogPath,
@@ -444,6 +445,30 @@ describe('parseCatalog', () => {
     )
     expect(Object.keys(parsed.providers)).toEqual(['a'])
   })
+})
+
+describe('keepPresent', () => {
+  const failWith = (code: string) => () =>
+    Promise.reject(Object.assign(new Error(`${code}: failed`), { code }))
+
+  test('skips a file that is gone from the working tree (ENOENT)', async () => {
+    const access = (file: string) =>
+      file === 'gone.md' ? failWith('ENOENT')() : Promise.resolve()
+    expect(await keepPresent(['a.md', 'gone.md', 'b.md'], access)).toEqual([
+      'a.md',
+      'b.md',
+    ])
+  })
+
+  for (const code of ['EACCES', 'EIO']) {
+    test(`rethrows ${code} with the path instead of dropping the file`, async () => {
+      const access = (file: string) =>
+        file === 'locked.md' ? failWith(code)() : Promise.resolve()
+      await expect(keepPresent(['a.md', 'locked.md'], access)).rejects.toThrow(
+        `locked.md: ${code}: failed`,
+      )
+    })
+  }
 })
 
 describe('resolveCatalogPath', () => {
