@@ -4,6 +4,21 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.30.0](https://github.com/marcusrbrown/systematic/compare/v3.29.1...v3.30.0) (2026-11-03)
+
+### Features
+
+* search opt-in external decision sources ([#1289](https://github.com/marcusrbrown/systematic/issues/1289)) ([b07272b](https://github.com/marcusrbrown/systematic/commit/b07272b0e1b7230fb344d86a26909eda812c4dd1))
+
+### Build System
+
+* **deps:** update OpenCode v2 to v2.2.5 ([#1288](https://github.com/marcusrbrown/systematic/issues/1288)) ([8fbd4d7](https://github.com/marcusrbrown/systematic/commit/8fbd4d7c882f90c3ea6f0621a4183e182fe94883))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.133.1 ([#1287](https://github.com/marcusrbrown/systematic/issues/1287)) ([544d4b0](https://github.com/marcusrbrown/systematic/commit/544d4b0aea8f675c184d8637284efc9bf2a43edf))
+* **dev:** update dependency @tintinweb/pi-subagents to v0.22.1 ([#1286](https://github.com/marcusrbrown/systematic/issues/1286)) ([b844095](https://github.com/marcusrbrown/systematic/commit/b84409583eea71d2dba80ada0331caa4f05f296e))
+
 ## [3.29.1](https://github.com/marcusrbrown/systematic/compare/v3.29.0...v3.29.1) (2026-11-02)
 
 ### Build System
