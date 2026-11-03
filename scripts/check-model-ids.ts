@@ -23,9 +23,11 @@
  *
  * Exit codes:
  *   0  every checked ID is in the catalog and not deprecated
- *   1  at least one ID is missing or deprecated, or a variant is not one of the
- *      model's effort values
- *   2  no usable catalog (missing, unparseable, no providers or no model entries, fetch failed) or bad usage
+ *   1  at least one ID is missing (or is not a complete token) or deprecated, or
+ *      a variant is not one of the model's effort values
+ *   2  no usable catalog (missing, unparseable, no providers, no model entries, a
+ *      malformed model entry, fetch failed), a source-discovery or file-read
+ *      failure, or bad usage
  *
  * The script never writes: not the files it checks and not OpenCode's cache.
  *
@@ -114,38 +116,42 @@ export interface ModelCatalog {
   providers: Record<string, { models: Record<string, CatalogModel> }>
 }
 
-export class CatalogError extends Error {}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Parse models.dev / OpenCode `models.json`: an object keyed by provider, each with a `models` map. */
+/** Parse models.dev / OpenCode `models.json`: an object keyed by provider, each with a `models` map of model objects. */
 export function parseCatalog(text: string): ModelCatalog {
   let raw: unknown
   try {
     raw = JSON.parse(text)
   } catch (error) {
-    throw new CatalogError(
+    throw new Error(
       `catalog could not be parsed as JSON: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
   if (!isRecord(raw)) {
-    throw new CatalogError('catalog is not a JSON object keyed by provider')
+    throw new Error('catalog is not a JSON object keyed by provider')
   }
   const providers: ModelCatalog['providers'] = {}
   for (const [name, value] of Object.entries(raw)) {
-    if (isRecord(value) && isRecord(value.models)) {
-      providers[name] = { models: value.models as Record<string, CatalogModel> }
+    if (!isRecord(value) || !isRecord(value.models)) continue
+    for (const [modelName, entry] of Object.entries(value.models)) {
+      if (!isRecord(entry)) {
+        throw new Error(
+          `catalog has a malformed model entry: ${name}/${modelName} is not an object`,
+        )
+      }
     }
+    providers[name] = { models: value.models as Record<string, CatalogModel> }
   }
   if (Object.keys(providers).length === 0) {
-    throw new CatalogError('catalog has no providers with a models map')
+    throw new Error('catalog has no providers with a models map')
   }
   if (
     Object.values(providers).every((p) => Object.keys(p.models).length === 0)
   ) {
-    throw new CatalogError('catalog has no model entries in any provider')
+    throw new Error('catalog has no model entries in any provider')
   }
   return { providers }
 }
@@ -203,19 +209,94 @@ export interface Occurrence {
   line: number
   /** Zero-based character offset of the token in the file text. */
   offset: number
+  /**
+   * Set when the text names a known provider but is not a complete token: stray
+   * characters follow it, or a JSON `model` value has characters left over.
+   * `raw` is then the whole offending text, and the check reports it as missing.
+   */
+  malformed?: true
 }
 
 // Provider, then the model after the first `/` (which may itself contain `/`,
 // as in `openrouter/anthropic/...`), then an optional `+variant`. Model parts
 // end on a letter, digit or underscore so sentence punctuation is not taken.
-// The lookbehind keeps path segments, URLs and `a/b/c` tails out.
-const TOKEN_PATTERN =
-  /(?<![\w@./:~+-])([a-z0-9][a-z0-9_-]*)\/([A-Za-z0-9](?:[\w.:@-]*\w)?(?:\/[A-Za-z0-9](?:[\w.:@-]*\w)?)*)(?:\+([A-Za-z][\w-]*))?/g
+const SEGMENT = '[A-Za-z0-9](?:[\\w.:@-]*\\w)?'
+const TOKEN_BODY = `([a-z0-9][a-z0-9_-]*)\\/(${SEGMENT}(?:\\/${SEGMENT})*)(?:\\+([A-Za-z][\\w-]*))?`
+// In prose the lookbehind keeps path segments, URLs and `a/b/c` tails out.
+const TOKEN_PATTERN = new RegExp(`(?<![\\w@./:~+-])${TOKEN_BODY}`, 'g')
+// A JSON `model` value must be exactly one token.
+const TOKEN_WHOLE = new RegExp(`^${TOKEN_BODY}$`)
+// What may not directly follow a token in prose: a character the pattern left
+// unconsumed that would make it a longer, different token. Sentence
+// punctuation (a `.` or `:` before a space) is fine.
+const STRAY_AFTER = /^(?:[-+@/]|[.:]\w)/
+const STRAY_RUN = /^[\w.:@+/-]*/
 
-/** The string-valued `model` node and `variant` value of an object node, when it has both. */
-function modelVariantPair(
-  node: Node,
-): { model: Node; variant: string } | undefined {
+function lineOf(text: string, offset: number): number {
+  let line = 1
+  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) line++
+  return line
+}
+
+/** Occurrences found in running text, including malformed ones. */
+function scanText(
+  file: string,
+  text: string,
+  providers: ReadonlySet<string>,
+): Occurrence[] {
+  const found: Occurrence[] = []
+  let lineStart = 0
+  text.split('\n').forEach((lineText, index) => {
+    for (const match of lineText.matchAll(TOKEN_PATTERN)) {
+      const [matched, provider, model, variant] = match
+      if (!provider || !model || !providers.has(provider)) continue
+      const where = {
+        file,
+        line: index + 1,
+        offset: lineStart + match.index,
+      }
+      const rest = lineText.slice(match.index + matched.length)
+      if (STRAY_AFTER.test(rest)) {
+        const raw = (matched + (STRAY_RUN.exec(rest)?.[0] ?? '')).replace(
+          /[.:]+$/,
+          '',
+        )
+        found.push({
+          id: raw,
+          provider,
+          model: raw.slice(provider.length + 1),
+          raw,
+          malformed: true,
+          ...where,
+        })
+        continue
+      }
+      found.push({
+        id: `${provider}/${model}`,
+        provider,
+        model,
+        ...(variant ? { variant } : {}),
+        raw: matched,
+        ...where,
+      })
+    }
+    lineStart += lineText.length + 1
+  })
+  return found
+}
+
+interface JsonModelValue {
+  /** Source range of the `model` string value, quotes included. */
+  start: number
+  end: number
+  /** The decoded string. */
+  value: string
+  /** The sibling `variant` string, when the object has one. */
+  variant?: string
+}
+
+/** The string-valued `model` node of an object node, with its sibling `variant` string if any. */
+function modelValueOf(node: Node): JsonModelValue | undefined {
   if (node.type !== 'object') return undefined
   const values = new Map<string, Node>()
   for (const property of node.children ?? []) {
@@ -225,83 +306,96 @@ function modelVariantPair(
     }
   }
   const model = values.get('model')
-  const variant = values.get('variant')
-  if (model?.type !== 'string') return undefined
-  if (variant?.type !== 'string' || typeof variant.value !== 'string') {
+  if (model?.type !== 'string' || typeof model.value !== 'string') {
     return undefined
   }
-  return { model, variant: variant.value }
-}
-
-interface JsonModelVariantPair {
-  /** Source range of the `model` string value, quotes included. */
-  start: number
-  end: number
-  variant: string
+  const variant = values.get('variant')
+  return {
+    start: model.offset,
+    end: model.offset + model.length,
+    value: model.value,
+    ...(variant?.type === 'string' && typeof variant.value === 'string'
+      ? { variant: variant.value }
+      : {}),
+  }
 }
 
 /**
- * `model` + sibling `variant` string pairs from a JSON/JSONC document, keyed by
- * the model value's source range. Offsets, not lines: one line can hold several
- * model objects.
+ * Every string `model` value in a JSON/JSONC document, keyed by source range.
+ * Offsets, not lines: one line can hold several model objects.
  */
-function jsonModelVariantPairs(text: string): JsonModelVariantPair[] {
-  const pairs: JsonModelVariantPair[] = []
+function jsonModelValues(text: string): JsonModelValue[] {
+  const values: JsonModelValue[] = []
   const visit = (node: Node | undefined): void => {
     if (!node) return
-    const pair = modelVariantPair(node)
-    if (pair) {
-      pairs.push({
-        start: pair.model.offset,
-        end: pair.model.offset + pair.model.length,
-        variant: pair.variant,
-      })
-    }
+    const entry = modelValueOf(node)
+    if (entry) values.push(entry)
     for (const child of node.children ?? []) visit(child)
   }
   visit(parseTree(text, [], { allowTrailingComma: true }))
-  return pairs
+  return values
+}
+
+/**
+ * In JSON/JSONC, a `model` value must be one complete token. Where it is, it
+ * picks up its sibling `variant`. Where it is not but still holds a known
+ * provider's token (a trailing `-`, a leading space, two IDs), the text inside
+ * is replaced by one malformed occurrence with the whole value as `raw`.
+ */
+function applyJsonModelValues(
+  file: string,
+  text: string,
+  found: Occurrence[],
+  providers: ReadonlySet<string>,
+): Occurrence[] {
+  let result = found
+  for (const entry of jsonModelValues(text)) {
+    const inside = (o: Occurrence) =>
+      o.offset >= entry.start && o.offset < entry.end
+    const whole = TOKEN_WHOLE.exec(entry.value)
+    if (whole?.[1] && providers.has(whole[1])) {
+      const { variant } = entry
+      if (variant) {
+        result = result.map((o) =>
+          inside(o) && !o.variant ? { ...o, variant } : o,
+        )
+      }
+    } else if (result.some(inside)) {
+      const slash = entry.value.indexOf('/')
+      result = [
+        ...result.filter((o) => !inside(o)),
+        {
+          id: entry.value,
+          provider: entry.value.slice(0, slash),
+          model: entry.value.slice(slash + 1),
+          raw: entry.value,
+          malformed: true,
+          file,
+          line: lineOf(text, entry.start),
+          offset: entry.start,
+        },
+      ]
+    }
+  }
+  return result.sort((a, b) => a.offset - b.offset)
 }
 
 /**
  * Every `provider/model[+variant]` token whose provider is in `providers`.
- * Every occurrence is reported; dedup is the caller's concern. In `.json` and
- * `.jsonc` files a `model` value also picks up its sibling `variant` key.
+ * Every occurrence is reported; dedup is the caller's concern. A token must be
+ * complete: stray characters after it make it malformed instead of letting its
+ * valid prefix pass. In `.json` and `.jsonc` files a `model` value is checked
+ * whole and also picks up its sibling `variant` key.
  */
 export function extractOccurrences(
   file: string,
   text: string,
   providers: ReadonlySet<string>,
 ): Occurrence[] {
-  const found: Occurrence[] = []
-  let lineStart = 0
-  text.split('\n').forEach((lineText, index) => {
-    for (const match of lineText.matchAll(TOKEN_PATTERN)) {
-      const [raw, provider, model, variant] = match
-      if (!provider || !model || !providers.has(provider)) continue
-      found.push({
-        id: `${provider}/${model}`,
-        provider,
-        model,
-        ...(variant ? { variant } : {}),
-        raw,
-        file,
-        line: index + 1,
-        offset: lineStart + match.index,
-      })
-    }
-    lineStart += lineText.length + 1
-  })
-
-  if (!STRUCTURED_EXTENSIONS.has(path.extname(file))) return found
-  const pairs = jsonModelVariantPairs(text)
-  return found.map((occurrence) => {
-    if (occurrence.variant) return occurrence
-    const pair = pairs.find(
-      (p) => occurrence.offset >= p.start && occurrence.offset < p.end,
-    )
-    return pair ? { ...occurrence, variant: pair.variant } : occurrence
-  })
+  const found = scanText(file, text, providers)
+  return STRUCTURED_EXTENSIONS.has(path.extname(file))
+    ? applyJsonModelValues(file, text, found, providers)
+    : found
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +441,14 @@ export function checkOccurrences(
     }
     result.checked.push(occurrence)
 
+    if (occurrence.malformed) {
+      result.findings.push({
+        kind: 'missing',
+        occurrence,
+        detail: 'not a complete provider/model ID',
+      })
+      continue
+    }
     const model = lookupModel(catalog, occurrence.provider, occurrence.model)
     if (!model) {
       result.findings.push({ kind: 'missing', occurrence })
@@ -392,7 +494,10 @@ export interface CliDeps {
   readText(filePath: string): Promise<string>
   mtime(filePath: string): Promise<Date>
   fetchText(url: string): Promise<string>
-  listSources(): Promise<SourceFile[]>
+  /** Repo-relative paths of the files to scan. */
+  listSources(): Promise<string[]>
+  /** Text of one path returned by `listSources`. */
+  readSource(file: string): Promise<string>
 }
 
 export interface CliResult {
@@ -407,7 +512,7 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Load the catalog and describe where it came from. Throws `CatalogError` when none is usable. */
+/** Load the catalog and describe where it came from. Throws when none is usable. */
 async function loadCatalog(
   useFetch: boolean,
   deps: CliDeps,
@@ -418,7 +523,7 @@ async function loadCatalog(
     try {
       text = await deps.fetchText(url)
     } catch (error) {
-      throw new CatalogError(
+      throw new Error(
         `no catalog available: fetch failed (${describeError(error)})`,
       )
     }
@@ -435,7 +540,7 @@ async function loadCatalog(
     text = await deps.readText(catalogPath)
     modified = await deps.mtime(catalogPath)
   } catch (error) {
-    throw new CatalogError(
+    throw new Error(
       `no catalog available: could not read ${catalogPath} (${describeError(error)}). Install or run OpenCode to create it, set OPENCODE_MODELS_PATH, or pass --fetch.`,
     )
   }
@@ -510,11 +615,17 @@ export async function runCli(
   try {
     loaded = await loadCatalog(argv.includes('--fetch'), deps)
   } catch (error) {
-    return { exitCode: 2, stdout: '', stderr: `${describeError(error)}\n` }
+    return fail(describeError(error))
+  }
+
+  let sources: SourceFile[]
+  try {
+    sources = await readSources(deps)
+  } catch (error) {
+    return fail(describeError(error))
   }
 
   const providers = new Set(Object.keys(loaded.catalog.providers))
-  const sources = await deps.listSources()
   const result = checkOccurrences(
     sources.flatMap((file) =>
       extractOccurrences(file.path, file.text, providers),
@@ -528,7 +639,30 @@ export async function runCli(
   }
 }
 
-async function listRepoSources(): Promise<SourceFile[]> {
+function fail(message: string): CliResult {
+  return { exitCode: 2, stdout: '', stderr: `${message}\n` }
+}
+
+/** List the files to scan and read them. Any failure names the step or the file. */
+async function readSources(deps: CliDeps): Promise<SourceFile[]> {
+  let paths: string[]
+  try {
+    paths = await deps.listSources()
+  } catch (error) {
+    throw new Error(`source discovery failed: ${describeError(error)}`)
+  }
+  const sources: SourceFile[] = []
+  for (const file of paths) {
+    try {
+      sources.push({ path: file, text: await deps.readSource(file) })
+    } catch (error) {
+      throw new Error(`could not read ${file}: ${describeError(error)}`)
+    }
+  }
+  return sources
+}
+
+async function listRepoSources(): Promise<string[]> {
   // git decides what is a source file: it skips ignored output such as the
   // docs pages generated from skills/**, and needs no hand-written globs.
   const listing = execFileSync(
@@ -549,19 +683,19 @@ async function listRepoSources(): Promise<SourceFile[]> {
   const files = [...new Set(listing.split('\0').filter(Boolean))]
     .filter((file) => SCANNED_EXTENSIONS.has(path.extname(file)))
     .sort()
-  const sources: SourceFile[] = []
+  // `--cached` also lists a file that is deleted from the working tree.
+  const present: string[] = []
   for (const file of files) {
-    try {
-      sources.push({
-        path: file,
-        text: await fs.readFile(path.join(ROOT_DIR, file), 'utf8'),
-      })
-    } catch (error) {
-      // A file git still lists but that is deleted from the working tree.
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (
+      await fs.access(path.join(ROOT_DIR, file)).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      present.push(file)
     }
   }
-  return sources
+  return present
 }
 
 const realDeps: CliDeps = {
@@ -577,6 +711,7 @@ const realDeps: CliDeps = {
     return response.text()
   },
   listSources: listRepoSources,
+  readSource: (file) => fs.readFile(path.join(ROOT_DIR, file), 'utf8'),
 }
 
 if (import.meta.main) {

@@ -8,7 +8,6 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
-  CatalogError,
   type CliDeps,
   checkOccurrences,
   DEFAULT_MODELS_URL,
@@ -166,6 +165,85 @@ describe('extractOccurrences', () => {
     expect(occ.map((o) => o.variant)).toEqual([undefined, 'max'])
   })
 
+  describe('complete tokens', () => {
+    const only = (file: string, text: string) =>
+      extractOccurrences(file, text, providers)
+
+    test('prose: a token followed by stray identifier characters is malformed, with the whole raw text', () => {
+      for (const raw of [
+        'anthropic/claude-opus-5-5-',
+        'anthropic/claude-opus-5-5+123',
+        'anthropic/claude-opus-5-5+max+x',
+        'anthropic/claude-opus-5-5/',
+        'anthropic/claude-opus-5-5+max.5',
+      ]) {
+        const occ = only('a.mdx', `use ${raw} now`)
+        expect(occ).toHaveLength(1)
+        expect(occ[0]).toMatchObject({ raw, malformed: true, line: 1 })
+        expect(occ[0]?.variant).toBeUndefined()
+      }
+    })
+
+    test('prose: sentence punctuation after a token is not malformed', () => {
+      const occ = only(
+        'a.mdx',
+        'a anthropic/claude-opus-5-5. b (anthropic/claude-opus-5-5+max), c anthropic/claude-opus-5-5: d anthropic/claude-opus-5-5, "anthropic/claude-opus-5-5" **anthropic/claude-opus-5-5**',
+      )
+      expect(occ).toHaveLength(6)
+      expect(occ.every((o) => !o.malformed)).toBe(true)
+    })
+
+    test('JSON: a model value with leftover characters is one malformed occurrence', () => {
+      for (const value of [
+        'anthropic/claude-opus-5-5-',
+        'anthropic/claude-opus-5-5+123',
+        ' anthropic/claude-opus-5-5',
+        'anthropic/claude-opus-5-5 ',
+        'anthropic/claude-opus-5-5 anthropic/claude-haiku-5-5',
+      ]) {
+        const occ = only('x.json', `{\n  "model": "${value}"\n}`)
+        expect(occ).toHaveLength(1)
+        expect(occ[0]).toMatchObject({
+          raw: value,
+          malformed: true,
+          line: 2,
+        })
+      }
+    })
+
+    test('JSON: a malformed model value does not also take its sibling variant', () => {
+      const occ = only(
+        'x.json',
+        '{ "model": "anthropic/claude-opus-5-5-", "variant": "max" }',
+      )
+      expect(occ).toHaveLength(1)
+      expect(occ[0]?.variant).toBeUndefined()
+    })
+
+    test('JSON: a complete model value is not malformed', () => {
+      const occ = only('x.json', '{ "model": "anthropic/claude-opus-5-5+max" }')
+      expect(occ).toHaveLength(1)
+      expect(occ[0]?.malformed).toBeUndefined()
+      expect(occ[0]?.variant).toBe('max')
+    })
+
+    test('JSON: a model value with no known provider is ignored', () => {
+      expect(only('x.json', '{ "model": "inherit" }')).toEqual([])
+      expect(only('x.json', '{ "model": "provider/model" }')).toEqual([])
+    })
+
+    test('a malformed occurrence is reported as missing', () => {
+      const result = checkOccurrences(
+        only('a.mdx', 'anthropic/claude-opus-5-5-'),
+        catalog,
+        [],
+      )
+      expect(result.findings.map((f) => f.kind)).toEqual(['missing'])
+      expect(result.findings[0]?.detail).toMatch(/complete/)
+      expect(exitCodeFor(result)).toBe(1)
+    })
+  })
+
   test('does not read variant keys in markdown prose', () => {
     const occ = extractOccurrences(
       'a.mdx',
@@ -315,12 +393,12 @@ describe('EXCEPTIONS', () => {
 
 describe('parseCatalog', () => {
   test('rejects unparseable text', () => {
-    expect(() => parseCatalog('{nope')).toThrow(CatalogError)
+    expect(() => parseCatalog('{nope')).toThrow(/could not be parsed/)
   })
 
   test('rejects a non-object root', () => {
-    expect(() => parseCatalog('[]')).toThrow(CatalogError)
-    expect(() => parseCatalog('null')).toThrow(CatalogError)
+    expect(() => parseCatalog('[]')).toThrow(/not a JSON object/)
+    expect(() => parseCatalog('null')).toThrow(/not a JSON object/)
   })
 
   test('rejects a catalog with zero providers', () => {
@@ -335,8 +413,24 @@ describe('parseCatalog', () => {
       /no model entries/,
     )
     expect(() => parseCatalog('{"a":{"models":{}},"b":{"models":{}}}')).toThrow(
-      CatalogError,
+      /no model entries/,
     )
+  })
+
+  test('rejects a model entry that is not an object', () => {
+    for (const value of ['true', 'null', '[]', '"str"', '5']) {
+      expect(() =>
+        parseCatalog(`{"anthropic":{"models":{"claude-opus-5-5":${value}}}}`),
+      ).toThrow(/anthropic\/claude-opus-5-5.*not an object/)
+    }
+  })
+
+  test('rejects a bad entry even when other models are fine', () => {
+    expect(() =>
+      parseCatalog(
+        '{"a":{"models":{"ok":{},"bad":true}},"b":{"models":{"m":{}}}}',
+      ),
+    ).toThrow(/a\/bad/)
   })
 
   test('accepts an empty provider next to one that has models', () => {
@@ -397,6 +491,9 @@ describe('runCli', () => {
   function makeDeps(options: {
     catalogText?: string | Error
     sources?: { path: string; text: string }[]
+    listError?: Error
+    /** Make reading this source path throw. */
+    readFails?: { path: string; error: Error }
     env?: Record<string, string | undefined>
     fetchText?: string | Error
   }): { deps: CliDeps; calls: Calls } {
@@ -421,7 +518,16 @@ describe('runCli', () => {
         }
         return text
       },
-      listSources: async () => options.sources ?? [],
+      listSources: async () => {
+        if (options.listError) throw options.listError
+        return (options.sources ?? []).map((s) => s.path)
+      },
+      readSource: async (p) => {
+        if (options.readFails?.path === p) throw options.readFails.error
+        const source = options.sources?.find((s) => s.path === p)
+        if (!source) throw new Error(`unexpected read of ${p}`)
+        return source.text
+      },
     }
     return { deps, calls }
   }
@@ -578,6 +684,88 @@ describe('runCli', () => {
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toMatch(/no model entries/i)
     expect(result.stdout).toBe('')
+  })
+
+  test('exits 2 when a catalog model entry is not an object', async () => {
+    const { deps } = makeDeps({
+      catalogText: '{"anthropic":{"models":{"claude-opus-5-5":true}}}',
+      sources: [{ path: OMO, text: '"model": "anthropic/claude-opus-5-5"' }],
+    })
+    const result = await runCli([], deps)
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('anthropic/claude-opus-5-5')
+    expect(result.stdout).toBe('')
+  })
+
+  test('exits 2 with context when source discovery throws', async () => {
+    const { deps } = makeDeps({
+      catalogText,
+      listError: new Error('git: command not found'),
+    })
+    const result = await runCli([], deps)
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toMatch(/source discovery failed/i)
+    expect(result.stderr).toContain('git: command not found')
+    expect(result.stdout).toBe('')
+  })
+
+  test('exits 2 naming the file when reading a source throws', async () => {
+    const { deps } = makeDeps({
+      catalogText,
+      sources: [
+        { path: OMO, text: '"model": "anthropic/claude-opus-5-5"' },
+        { path: 'docs/src/content/docs/guides/x.mdx', text: '' },
+      ],
+      readFails: {
+        path: 'docs/src/content/docs/guides/x.mdx',
+        error: new Error('EACCES: permission denied'),
+      },
+    })
+    const result = await runCli([], deps)
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('docs/src/content/docs/guides/x.mdx')
+    expect(result.stderr).toContain('EACCES')
+    expect(result.stdout).toBe('')
+  })
+
+  describe('complete tokens only', () => {
+    // Fro Bot's examples: each used to pass because only the valid base ID
+    // was pulled out of a longer, broken token.
+    const cases = [
+      ['anthropic/claude-opus-5-5-', 'trailing hyphen'],
+      ['anthropic/claude-opus-5-5+123', 'non-letter variant'],
+    ] as const
+
+    for (const [token, label] of cases) {
+      test(`JSON: ${label} exits 1 as missing with the raw value`, async () => {
+        const { deps } = makeDeps({
+          catalogText,
+          sources: [{ path: OMO, text: `{"model":"${token}"}` }],
+        })
+        const result = await runCli([], deps)
+        expect(result.exitCode).toBe(1)
+        expect(result.stdout).toMatch(
+          /missing\s+registry\/files\/profiles\/omo\/oh-my-opencode.jsonc:1\s+/,
+        )
+        expect(result.stdout).toContain(`  ${token}`)
+      })
+
+      test(`MDX: ${label} exits 1 as missing with the raw text`, async () => {
+        const { deps } = makeDeps({
+          catalogText,
+          sources: [
+            {
+              path: 'docs/src/content/docs/guides/x.mdx',
+              text: `Use \`${token}\` here.`,
+            },
+          ],
+        })
+        const result = await runCli([], deps)
+        expect(result.exitCode).toBe(1)
+        expect(result.stdout).toContain(`  ${token}`)
+        expect(result.stdout).toMatch(/missing/)
+      })
+    }
   })
 
   test('exits 2 for an unknown flag', async () => {
