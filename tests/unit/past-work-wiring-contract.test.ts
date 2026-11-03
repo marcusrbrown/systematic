@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   EXTERNAL_TRUNCATION_MARKER,
+  renderExternalFixedReply,
+  renderExternalResult,
   TRUNCATION_MARKER,
 } from '../../src/lib/search-render.js'
 
@@ -96,6 +98,10 @@ describe('learnings-researcher Step 0 under past-work', () => {
   test('stops only when none of the four exists, and never reads a missing path', () => {
     expect(step0).toMatch(/none of the four/i)
     expect(step0).toMatch(/missing/i)
+  })
+
+  test('the categories are whatever subdirectories exist: no category is assumed', () => {
+    expect(step0).toContain('Do not assume any particular category exists.')
   })
 
   test('the solutions stop rule is still there', () => {
@@ -770,7 +776,7 @@ describe('the external call in past-work scope', () => {
     expect(external).toBeLessThan(errorToGrep)
   })
 
-  test('external replies with hits route to External records; empty ones add nothing', () => {
+  test('external replies with hits route to External records; empty ones add no records', () => {
     const hits = rows.find(
       (line) =>
         line.startsWith('| An external reply') &&
@@ -779,7 +785,7 @@ describe('the external call in past-work scope', () => {
     expect(hits).toBeDefined()
     const empty = rows.find(
       (line) =>
-        line.startsWith('| An external reply') && /adds nothing/i.test(line),
+        line.startsWith('| An external reply') && /no records/i.test(line),
     )
     expect(empty).toBeDefined()
     expect(empty).toContain('no external sources are active')
@@ -807,6 +813,181 @@ describe('the external call in past-work scope', () => {
     expect(step8).not.toMatch(/external/i)
     const overlap = paragraph(step1b, 'In overlap mode (the caller asks')
     expect(overlap).not.toMatch(/external/i)
+  })
+})
+
+describe('grep-path behaviors that stay in the prompt', () => {
+  test('the content search falls back to a broader search when it finds fewer than 3 candidates', () => {
+    const step3 = section(RESEARCHER, '### Step 3:')
+    const fallback = paragraph(step3, '**If search returns <3 candidates:**')
+    expect(fallback).toContain('broader content search')
+    expect(fallback).toContain('not just frontmatter fields')
+  })
+
+  test('a zero-hit search adds no synonym pass', () => {
+    const step1b = section(RESEARCHER, '### Step 1b')
+    expect(step1b).toContain('A zero-hit search adds no synonym pass.')
+  })
+
+  test('high-severity and critical patterns are prioritized', () => {
+    expect(RESEARCHER).toContain(
+      '- Prioritize high-severity and critical patterns',
+    )
+  })
+})
+
+describe('external hits survive absent built-in directories', () => {
+  const step0 = section(RESEARCHER, '### Step 0')
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const rows = step1b.split('\n').filter((line) => line.startsWith('|'))
+
+  /** Each of these says the stop needs the external reply to have no hits too. */
+  function expectsNoExternalHits(text: string | undefined): void {
+    expect(text).toBeDefined()
+    expect(text).toMatch(/external[^\n.]*(no hits|zero hits|no hit)/i)
+    expect(text).toContain('External records')
+    expect(text).toContain('Search Context')
+  }
+
+  test('Step 0 stops only when the four are absent and the external call found nothing', () => {
+    const bullet = paragraph(step0, '- Past-work: list')
+    expect(bullet).toMatch(/none of the four/i)
+    expectsNoExternalHits(bullet)
+  })
+
+  test('the corpus: none row stops only when the external reply has no hits either', () => {
+    const none = rows.find((line) => line.includes('`corpus: none`'))
+    expectsNoExternalHits(none)
+  })
+
+  test('the corpus: empty row stops only when the external reply has no hits either', () => {
+    const empty = rows.find((line) => line.includes('`corpus: empty`'))
+    expectsNoExternalHits(empty)
+  })
+
+  test('the not-allowed fixed reply drops hits only when its first line says nothing was read', () => {
+    const row = rows.find((line) => line.startsWith('| External call'))
+    expect(row).toContain('so nothing was read')
+  })
+})
+
+describe('external state reaches Search Context whatever the hit count', () => {
+  const step1b = section(RESEARCHER, '### Step 1b')
+  const rows = step1b.split('\n').filter((line) => line.startsWith('|'))
+  const row = rows.find((line) => line.startsWith('| Any external reply'))
+
+  /** A result with one section per state, rendered by the real renderer. */
+  const rendered = renderExternalResult({
+    query: 'q',
+    queryTerms: ['q'],
+    homeDir: '/home/me',
+    project: { kind: 'not-allowed', proposals: 1, mainRoot: '/home/me/app' },
+    notes: [],
+    warnings: ['w'],
+    sections: (
+      ['loaded', 'missing', 'empty', 'unreadable', 'dropped'] as const
+    ).map((state) => ({
+      name: state,
+      origin: 'user' as const,
+      roots: [`/home/me/${state}`],
+      state,
+      recordCount: 0,
+      hits:
+        state === 'loaded'
+          ? Array.from({ length: 80 }, (_, i) => i + 1).map((rank) => ({
+              rank,
+              record: {
+                source: state,
+                origin: 'user' as const,
+                path: `${state}/${rank}.md`,
+                title: `T${rank}`,
+                body: 'q '.repeat(1000),
+              },
+            }))
+          : [],
+    })),
+  })
+  const renderedLines = rendered.split('\n')
+
+  test('the row exists and is not limited to replies with hits', () => {
+    expect(row).toBeDefined()
+    expect(row).toMatch(/whatever the hit count/i)
+    expect(row).toContain('Search Context')
+  })
+
+  test('it names the note, project and warning lines the renderer prints', () => {
+    expect(renderedLines.some((l) => l.startsWith('Project sources:'))).toBe(
+      true,
+    )
+    expect(renderedLines).toContain('Warnings:')
+    for (const token of ['`Notes:`', '`Project sources:`', '`Warnings:`']) {
+      expect(row).toContain(token)
+    }
+  })
+
+  test('it names every source-state line exactly as the renderer prints it', () => {
+    const stateLines = renderedLines
+      .filter((l) => /^ {3}(missing|empty|unreadable|dropped):/.test(l))
+      .map((l) => l.trim())
+    expect(stateLines).toHaveLength(4)
+    for (const line of stateLines) expect(row).toContain(line)
+  })
+
+  test('a project config that could not be read is reported', () => {
+    const unreadable = renderExternalFixedReply(
+      { kind: 'no-active-source' },
+      {
+        query: 'q',
+        notes: [],
+        warnings: [],
+        project: { kind: 'config-unreadable' },
+      },
+    )
+    const line = unreadable.split('\n').find((l) => l.startsWith('Project'))
+    expect(line).toContain('the project config could not be read')
+    expect(row).toContain('the project config could not be read')
+  })
+
+  test('hits and a not-allowed project line: route the hits and report the project sources not read', () => {
+    expect(
+      renderedLines.some(
+        (l) =>
+          l.startsWith('Project sources:') &&
+          l.includes('not in search.allow_project_sources'),
+      ),
+    ).toBe(true)
+    expect(row).toContain('not in search.allow_project_sources')
+    expect(row).toMatch(/route the hits/i)
+    expect(row).toContain('project sources not read: not allowed')
+  })
+
+  test('a per-source +N more hits line is a cut, reported like the 12 KB marker', () => {
+    expect(
+      renderedLines.some((l) => /^\+\d+ more hits not shown$/.test(l)),
+    ).toBe(true)
+    expect(row).toContain('+N more hits not shown')
+    expect(row).toContain('12 KB')
+    expect(row).toContain('results cut, narrow the query')
+  })
+
+  test('the zero-hit row no longer says an empty reply adds nothing but records', () => {
+    const empty = rows.find(
+      (line) =>
+        line.startsWith('| An external reply with 0 hits') &&
+        line.includes('no external sources are active'),
+    )
+    expect(empty).toBeDefined()
+    expect(empty).not.toMatch(/adds nothing/i)
+    expect(empty).toMatch(/no records/i)
+  })
+
+  test('Search Context is told to report the cut and the absent kinds', () => {
+    const open = RESEARCHER.split('\n').find((line) =>
+      line.startsWith('Open with `## Past-Work Search Results`'),
+    )
+    expect(open).toContain('absent kinds')
+    expect(open).toContain('results cut, narrow the query')
+    expect(open).toMatch(/source state|source-state/i)
   })
 })
 

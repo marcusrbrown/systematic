@@ -113,11 +113,11 @@ const KIND_NAMES = [
  * owns the out-of-range error and a host never pre-empts it.
  */
 export const SEARCH_TOOL_DESCRIPTION =
-  "Search this project's durable outputs by symptom, error text, module or topic: the docs/solutions learnings, and the docs/plans, docs/brainstorms and docs/ideation documents that earlier work wrote. Returns ranked hits with path, title, kind, snippet, tags and status. A superseded document is replaced by its successor in the same kind, a successor in another kind is named on a Successor line, and a stale one carries a caution. Read a hit's path for the full text. Use it before debugging a failure or planning work that a past learning, plan, brainstorm or ideation doc may already cover."
+  "Search this project's durable outputs by symptom, error text, module or topic: the docs/solutions learnings, and the docs/plans, docs/brainstorms and docs/ideation documents that earlier work wrote. Returns ranked hits with path, title, kind, snippet, tags and status. A superseded document is replaced by its successor in the same kind, a successor in another kind is named on a Successor line, and a stale one carries a caution. Read a hit's path for the full text. Use it before debugging a failure or planning work that a past learning, plan, brainstorm or ideation doc may already cover. With kind external, a hit's path is relative to its source's root, which the source section header shows; it is not a repo path."
 export const SEARCH_ARG_DESCRIPTIONS = {
   query: `What to look for: a symptom, error message, module or topic, in plain words. At most ${MAX_QUERY_CHARS} characters.`,
   kind: `Optional. The kind of durable output to search: ${DOCUMENT_KINDS.map((kind) => `"${kind}" (${KIND_TABLE[kind].dir}/)`).join(', ')}, or "${KIND_SELECTOR_ALL}" for every kind in one ranking, or "${KIND_SELECTOR_EXTERNAL}" for the external decision sources the user allowed, each ranked on its own. Defaults to "solution".`,
-  limit: `Optional. How many hits to return, an integer from ${MIN_LIMIT} to ${MAX_LIMIT}. Defaults to ${DEFAULT_LIMIT}.`,
+  limit: `Optional. How many hits to return, an integer from ${MIN_LIMIT} to ${MAX_LIMIT}. Defaults to ${DEFAULT_LIMIT}. With kind "${KIND_SELECTOR_EXTERNAL}" it applies to each source instead, and at most ${MAX_EXTERNAL_HITS_PER_SOURCE} hits per source are returned.`,
 } as const
 
 /** One-line texts an adapter returns when it cannot reach the core. They carry no detail from the failure. */

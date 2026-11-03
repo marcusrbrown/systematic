@@ -12,6 +12,7 @@ import {
   SEARCH_ARGS,
   SEARCH_CONFIG_UNREADABLE_NOTE,
   SEARCH_ERRORS,
+  SEARCH_TOOL_DESCRIPTION,
   SEARCH_TOOL_NAME,
   type SearchOptions,
 } from '../../src/lib/search-core.js'
@@ -131,6 +132,29 @@ describe('kind text', () => {
   it('names external beside all in the shared kind description', () => {
     expect(SEARCH_ARG_DESCRIPTIONS.kind).toContain('"all"')
     expect(SEARCH_ARG_DESCRIPTIONS.kind).toContain('"external"')
+  })
+})
+
+describe('external limit and path text', () => {
+  it('keeps the built-in limit wording and adds the per-source rule for external', () => {
+    expect(SEARCH_ARG_DESCRIPTIONS.limit).toStartWith(
+      'Optional. How many hits to return, an integer from 1 to 20. Defaults to 8.',
+    )
+    expect(SEARCH_ARG_DESCRIPTIONS.limit).toContain('"external"')
+    expect(SEARCH_ARG_DESCRIPTIONS.limit).toContain('each source')
+    expect(SEARCH_ARG_DESCRIPTIONS.limit).toContain('at most 5')
+  })
+
+  it('tells the model an external hit path is relative to its source root, not a repo path', () => {
+    expect(SEARCH_TOOL_DESCRIPTION).toStartWith(
+      "Search this project's durable outputs by symptom",
+    )
+    expect(SEARCH_TOOL_DESCRIPTION).toContain(
+      'Use it before debugging a failure or planning work that a past learning, plan, brainstorm or ideation doc may already cover.',
+    )
+    expect(SEARCH_TOOL_DESCRIPTION).toMatch(
+      /external[^.]*path is relative to its source's root[^.]*section header[^.]*not a repo path/i,
+    )
   })
 })
 

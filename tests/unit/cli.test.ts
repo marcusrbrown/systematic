@@ -2868,6 +2868,19 @@ describe('cli search', () => {
     }
   })
 
+  it('help says --limit applies to each source for --kind external, at most 5 per source', () => {
+    const box = mkSearchBox()
+    try {
+      const result = runCli(['--help'], box.project, box.env)
+      const flat = result.stdout.replace(/\s+/g, ' ')
+      expect(flat).toContain(
+        '--kind external searches the external sources you allowed, ranked per source; --limit then applies to each source, at most 5 per source.',
+      )
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
   it('search --help prints the search usage', () => {
     const box = mkSearchBox()
     try {

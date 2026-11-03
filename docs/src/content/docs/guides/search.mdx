@@ -101,7 +101,7 @@ The tool takes these arguments. The command takes the same three as flags, plus 
 |---|---|---|
 | `query` | yes | What to look for, in plain words. At most 2,000 characters. |
 | `kind` | no | `solution`, `plan`, `brainstorm`, `ideation`, `all`, or `external`. The default is `solution`. |
-| `limit` | no | How many hits to return, an integer from 1 to 20. The default is 8. |
+| `limit` | no | How many hits to return, an integer from 1 to 20. The default is 8. With `kind: external` it applies to each source instead, and at most 5 hits per source are returned. |
 
 Leaving `kind` out searches solutions only, so existing calls return what they always did. `all` is not a fifth kind. It searches the four kinds in one ranking, and each hit names its kind. `external` is not a kind either, and it never combines with another `kind` or with `all`: it searches only the [external sources](#external-sources) you allowed, and every source is ranked on its own. A call with any other `kind` never returns an external record. An unknown `kind` and an out-of-range `limit` are rejected with a fixed error on every surface. On the command line they exit with status 2. A reply is at most 16 KB, and a cut reply ends with a marker line that says so. With `all`, that one cap covers the whole reply. A reply for `external` has its own cap of 12 KB and its own marker.
 
@@ -234,7 +234,7 @@ A `markdown` source indexes every `.md` file under each root, to a depth of 6.
 - The status is the frontmatter `status` string exactly as written, and a hit with none prints no status. Search never infers a status, and it does not follow `superseded_by` links in an external source.
 - Nothing is excluded by name: a `README.md` is searchable, and so is a folder called `_archived`.
 - Symlinks are skipped at every depth. A file with invalid frontmatter is skipped, and the reply counts it in one warning.
-- A hit path is `<source>/<path inside the root>`. If two roots of one source provide the same path, the first root wins.
+- A hit path is `<source>/<path inside the root>`. It is relative to the source's root, which the section header shows. It is not a repo path. If two roots of one source provide the same path, the first root wins.
 
 ### Deciduous sources
 

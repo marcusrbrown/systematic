@@ -121,7 +121,8 @@ Commands:
                                and print ranked hits: docs/solutions learnings (the default kind),
                                docs/plans, docs/brainstorms and docs/ideation. --kind all ranks every
                                kind together; --kind external searches the external sources you
-                               allowed, ranked per source. The project root is the nearest
+                               allowed, ranked per source; --limit then applies to each source,
+                               at most 5 per source. The project root is the nearest
                                ancestor of --dir (default: the current directory) that holds .git.
                                Reads search settings from your user config. A project config can
                                propose external sources but cannot allow them or switch search off.

@@ -45,7 +45,7 @@ Without the content gate, a child that answered from grep would pass. Without th
 The proof has limits, and the header comment of the harness helper says so:
 
 - It shows reach only. A scripted model makes the call, so it says nothing about a live model choosing to call the tool.
-- The child searches `kind: all`, which the researcher prompt forbids (`agents/research/learnings-researcher.md:53`). The per-kind strategy is not exercised on these hosts.
+- The child searches `kind: all`, which the researcher prompt forbids (`agents/research/learnings-researcher.md:49`). The per-kind strategy is not exercised on these hosts.
 
 ## When to Apply
 

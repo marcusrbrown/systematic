@@ -282,6 +282,22 @@ describe('searchCliUsage', () => {
     expect(usage).not.toContain('Only "solution" exists')
   })
 
+  it('says --limit applies to each source for --kind external, at most 5 per source', () => {
+    for (const name of ['systematic-search', 'systematic search']) {
+      const usage = searchCliUsage(name)
+      const start = usage.indexOf('--limit <n>')
+      expect(start).toBeGreaterThan(-1)
+      const option = usage
+        .slice(start)
+        .split(/\n {2}-/)[0]
+        ?.replace(/\s+/g, ' ')
+      expect(option).toContain('1 to 20 (default: 8)')
+      expect(option).toContain('--kind external')
+      expect(option).toContain('each source')
+      expect(option).toContain('at most 5 per source')
+    }
+  })
+
   it('threads usageName into --help and into a usage error', async () => {
     const root = makeProject()
     const help = await run(['--help'], { cwd: root, usageName: 'my-bin' })

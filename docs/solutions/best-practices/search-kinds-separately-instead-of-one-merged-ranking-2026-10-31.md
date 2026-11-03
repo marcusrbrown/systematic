@@ -27,11 +27,11 @@ Past-work search added `plan`, `brainstorm` and `ideation` kinds next to `soluti
 
 ## Guidance
 
-When an agent searches several kinds, make one call per kind, merge the hits by path, and do not call `all`. The researcher prompt says so in `agents/research/learnings-researcher.md:53`:
+When an agent searches several kinds, make one call per kind, merge the hits by path, and do not call `all`. The researcher prompt says so in `agents/research/learnings-researcher.md:49`:
 
 > Make one search per kind, `solution`, `plan`, `brainstorm` and `ideation`, and merge the hits by repo-root path … Never search `all`: long plans crowd the other kinds out of its top results.
 
-A wiring test pins the rule with `expect(text).not.toMatch(/kind: "?all"?/)` (`tests/unit/past-work-wiring-contract.test.ts:122-127`). Keep `all` as a selector for people. Plan decision KTD12 records the same choice (`docs/plans/2026-10-30-001-feat-search-past-work-plan.md:205`).
+A wiring test pins the rule with `expect(text).not.toMatch(/kind: "?all"?/)` (`tests/unit/past-work-wiring-contract.test.ts:128-133`). Keep `all` as a selector for people. Plan decision KTD12 records the same choice (`docs/plans/2026-10-30-001-feat-search-past-work-plan.md:205`).
 
 Treat the design as a hypothesis with a structural reason, not as a measured win.
 

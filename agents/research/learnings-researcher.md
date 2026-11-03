@@ -20,16 +20,16 @@ Drop the `exclude:` path from the hits by exact path; a `Supersedes:` line keeps
 
 ## Search Strategy (Search First, Grep Fallback)
 
-`docs/solutions/` holds documented solutions with YAML frontmatter, possibly hundreds. Never assume a layout: discover what exists first.
+`docs/solutions/` holds documented solutions with YAML frontmatter. Never assume a layout: discover what exists first.
 
-Try the search tool (Step 1b: one call in `solutions` scope; in `past-work` scope one per kind, then the external call). When it returns hits, it replaces the grep steps (Steps 2 and 3, and the content search in Step 4). When it cannot help, the grep steps below run unchanged.
+Try the search tool first (Step 1b). When it returns hits, it replaces the grep steps (Steps 2 and 3, and the content search in Step 4). When it cannot help, the grep steps below run unchanged.
 
 ### Step 0: Discover What Exists
 
 List `docs/solutions/` with a directory listing tool.
 
 - If `docs/solutions/` does not exist or holds no `.md` files, stop and return the "No Matches" result, saying the project has no solutions directory yet. This is not an error. Read no other path.
-- Past-work: list `docs/solutions/`, `docs/plans/`, `docs/brainstorms/` and `docs/ideation/`, and read no missing path. Stop with "No Matches" only when none of the four exists or holds a `.md` file, and only after the external call has run.
+- Past-work: list `docs/solutions/`, `docs/plans/`, `docs/brainstorms/` and `docs/ideation/`, and read no missing path. Stop with "No Matches" only when none of the four exists or holds a `.md` file and the external call has run and returned no hits. With hits, report them under External records and name absent kinds in Search Context.
 - The subdirectories you find are the categories. Do not assume any particular category exists.
 - Skip `README.md` files and anything under `_archived/` when collecting candidates. Never treat `critical-patterns.md` as a candidate (Step 3b handles it).
 
@@ -56,14 +56,15 @@ In overlap mode (the caller asks for an overlap assessment against a new doc), d
 
 | Reply | Path |
 |-------|------|
-| The header says `corpus: none` | Stop and return the "No Matches" result, saying the project has no solutions directory yet. This is not an error. Do not run the grep steps. A `could not read docs/solutions` warning under the header means the directory exists but cannot be read; report that warning too. Past-work: that kind adds nothing and is not a stop while another kind has docs; stop only when all four say `none` and the external call has run. |
-| The header says `corpus: empty` | Run Step 3b first. Search leaves out `critical-patterns.md`, so a project whose only doc is that file reports `empty`. Then return the "No Matches" result, saying the project has no indexable docs, together with any relevant critical patterns in the Critical Patterns section. This is not an error. Do not run the grep steps. Past-work: that kind adds nothing; take this row only when no kind has docs. |
+| The header says `corpus: none` | Stop and return the "No Matches" result, saying the project has no solutions directory yet. This is not an error. Do not run the grep steps. A `could not read docs/solutions` warning under the header means the directory exists but cannot be read; report that warning too. Past-work: that kind adds nothing and is not a stop while another kind has docs; stop only when all four say `none` and the external call has run and returned no hits (with hits: External records and absent kinds in Search Context). |
+| The header says `corpus: empty` | Run Step 3b first. Search leaves out `critical-patterns.md`, so a project whose only doc is that file reports `empty`. Then return the "No Matches" result, saying the project has no indexable docs, together with any relevant critical patterns in the Critical Patterns section. This is not an error. Do not run the grep steps. Past-work: that kind adds nothing; take this row only when no kind has docs and the external reply has no hits (else External records and absent kinds in Search Context). |
 | The reply ends with `[Systematic: search output truncated at 16 KB]` (a kind) or `[Systematic: search output truncated at 12 KB]` (external) | Past-work. Results were cut: say so, and tell the caller to narrow the query. Do not repeat that call. |
 | The header says `N doc(s), M hit(s)` with M at least 1 (the header prints `1 doc` and `1 hit` in the singular), and at least one hit remains after the overlap-mode drop | **Search path.** Skip Steps 2 and 3 and the content search in Step 4. Run Step 3b. Then go to Step 5 with the hits. |
 | The header says `N doc(s), 0 hits` (including the singular `1 doc, 0 hits`), or in overlap mode no hit remains after the drop | Grep path. Go to Step 2. |
-| An external reply with at least 1 hit | Up to 4 hits go under External records. Copy any `Notes:`, `Project sources:` and `Warnings:` lines into Search Context. |
-| An external reply with 0 hits, `no project:`, or `no external sources are active` | Adds nothing. Not an error. Do not grep. |
-| External call: the reply says search is disabled, starts with `Error:`, says `No project directory is available`, says `not in search.allow_project_sources`, or the call fails | Search Context: external records not searched, and why. Never grep or glob a source's folders, and never retry. |
+| An external reply with at least 1 hit | Up to 4 hits go under External records, whatever the built-in kinds hold. |
+| An external reply with 0 hits, `no project:`, or `no external sources are active` | No records. Not an error. Do not grep. |
+| Any external reply | Whatever the hit count, copy the `Notes:`, `Project sources:` (including `the project config could not be read`) and `Warnings:` lines and each source-state line (`missing: root not found.`, `empty: no readable records.`, `unreadable: root could not be read.`, `dropped: see the warnings.`) into Search Context. Hits plus a `Project sources:` line with `not in search.allow_project_sources`: route the hits and report "project sources not read: not allowed". `+N more hits not shown` is a cut like the 12 KB marker: results cut, narrow the query. |
+| External call: the reply says search is disabled, starts with `Error:`, says `No project directory is available`, its first line says `not in search.allow_project_sources, so nothing was read`, or the call fails | Search Context: external records not searched, and why. Never grep or glob a source's folders, and never retry. |
 | The reply says `No project directory is available` | Grep path. Go to Step 2. |
 | The reply says search is disabled, starts with `Error:`, or the call fails | Grep path. Go to Step 2. Past-work: per kind, as above. |
 
@@ -92,10 +93,6 @@ content-search: pattern="title:.*cache" path=docs/solutions/ files_only=true cas
 content-search: pattern="tags:.*(cache|caching|ttl)" path=docs/solutions/ files_only=true case_insensitive=true
 content-search: pattern="module:.*(Checkout|Orders)" path=docs/solutions/ files_only=true case_insensitive=true
 ```
-
-**Pattern construction tips:**
-- Use `|` for synonyms: `tags:.*(auth|login|session|token)`
-- To learn which `module`, `component` or `tags` values the project uses, search for the field name (`^module:`) and read the matches.
 
 **Combine results** from all searches to get candidate files. Drop the files Step 0 says to skip. With more than 25 candidates, re-run with more specific patterns or narrow by category.
 
@@ -267,13 +264,11 @@ When nothing matches, write "no recorded plan or solution found in the results".
 
 **External records.** The sixth group sits outside the status table. Every external hit goes here and nowhere else, and never to a lifecycle group, whatever its text says. Never infer a status. An item reads `- **[title]**: [source], [path], [label]. [why it applies]`: the source name comes from the section header, and the label is the hit's `Status:` value, its `node_type`, or `no recorded status` when it prints neither (`node_type decision`, for example). A recorded status is not verified.
 
-Open with `## Past-Work Search Results` and `### Search Context` (feature, method, absent kinds, unsearched kinds, external records not searched and why, "results cut, narrow the query" when truncated). Then, omitting empty groups: `### Proven lessons`, `### Recorded decisions and their rationale`, `### Existing or completed work`, `### Rejected, deferred or superseded directions`, `### Conflicts and open questions`, `### External records`.
+Open with `## Past-Work Search Results` and `### Search Context` (feature, method, absent kinds, unsearched kinds, external records not searched and why, external source state, "results cut, narrow the query" when truncated). Then, omitting empty groups: `### Proven lessons`, `### Recorded decisions and their rationale`, `### Existing or completed work`, `### Rejected, deferred or superseded directions`, `### Conflicts and open questions`, `### External records`.
 
 Under each group, one line per item: `- **[title]**: [path], status [recorded status]. [why it applies]`. Copy `Supersedes:`, `Successor:` and `Caution:` lines literally under their item. External records use the item format above.
 
 ## Efficiency Guidelines
-
-The rules below about content search, patterns, synonyms and narrowing apply to the grep path. On the search path, the hits replace them.
 
 **DO:**
 - Try the search tool, when it exists, before any grep step: one call in `solutions` scope; in `past-work` scope one per kind (four), then the external call
@@ -283,13 +278,7 @@ The rules below about content search, patterns, synonyms and narrowing apply to 
 
 **DON'T:**
 - Read a path that may not exist (a category directory, `critical-patterns.md`, a successor) without checking that it exists
-- Return raw document contents (distill instead)
 - Return a superseded doc whose successor resolves. Return its successor.
 - Run the grep steps after a search that returned hits, or call the search tool more than once in `solutions` scope, or more than five times in `past-work` scope (one call per kind, then the external call)
 - Follow a `superseded_by` outside the doc's own kind (a link into another of the four directories gets a `Successor:` line instead) or one that fails that kind's form rule, and never follow more than 5 hops
-- Include tangentially related learnings (focus on relevance)
 - Grep or glob an external source's folders, read its files, or retry an external call
-
-## Integration Points
-
-Invoked by `/ce:plan` (planning and confidence checking), `/ce:review` (known patterns in the diff), `/ce:ideate` (grounding ideas), `/ce:compound` (Related Docs Finder), `/deepen-plan`, or manually before starting work.
