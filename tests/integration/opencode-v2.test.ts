@@ -17,12 +17,19 @@ import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
   assertDelegatedSearchProof,
+  type ChatRequest,
   createDelegatedSearchScript,
+  DELEGATED_EXTERNAL_FIXTURE,
+  type DelegatedSearchMode,
   type DelegatedSearchScript,
+  EXTERNAL_DELEGATED_SEARCH_MODE,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
   lastUserTextOf,
+  plantDelegatedExternalFixture,
   plantDelegatedSearchFixture,
+  messageText as proofMessageText,
+  roleOf as proofRoleOf,
   researcherSystemMarker,
 } from '../helpers/delegated-search-proof.js'
 import {
@@ -670,14 +677,19 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
      * never carry; the researcher's opening line, read from its agent file,
      * then confirms the right agent ran.
      */
-    async function runDelegatedSearch(pluginSpec: string): Promise<{
+    async function runDelegatedSearch(
+      pluginSpec: string,
+      mode?: DelegatedSearchMode,
+    ): Promise<{
       script: DelegatedSearchScript
       marker: string
       finalAnswer: string | undefined
     }> {
-      plantDelegatedSearchFixture(fixture.projectDir)
+      if (mode === undefined) plantDelegatedSearchFixture(fixture.projectDir)
+      else plantDelegatedExternalFixture(fixture.projectDir)
       const marker = researcherSystemMarker(REPO_ROOT)
       const script = createDelegatedSearchScript({
+        ...(mode !== undefined && { mode }),
         dispatch: {
           tool: 'subagent',
           arguments: {
@@ -784,6 +796,93 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         }
         // The child was reached, so the failure is the missing tool, not a
         // dispatch that never happened.
+        expect(script.observation().childRequests.length).toBeGreaterThan(0)
+      },
+      TIMEOUT_MS,
+    )
+
+    /** The researcher child's tool message that reached the model, or undefined. */
+    function childToolMessage(
+      script: DelegatedSearchScript,
+    ): string | undefined {
+      const delivered = script
+        .observation()
+        .childRequests.find(
+          (request: ChatRequest) =>
+            proofRoleOf(request.messages?.at(-1)) === 'tool',
+        )
+      return delivered === undefined
+        ? undefined
+        : proofMessageText(delivered.messages?.at(-1))
+    }
+
+    // KTD19: one real-host proof that the external call reaches the parent's
+    // final answer, and a control that fails when the user has not allowed the
+    // project. The scripted model makes the call, so this shows reach and
+    // plumbing, not that a live model chooses `external`.
+    test(
+      'a dispatched learnings-researcher child searches kind external and the planted external record reaches the parent',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        fs.writeFileSync(
+          path.join(fixture.configDir, 'systematic.json'),
+          JSON.stringify({
+            search: { allow_project_sources: [fixture.projectDir] },
+          }),
+        )
+
+        const { script, marker, finalAnswer } = await runDelegatedSearch(
+          pluginSpec,
+          EXTERNAL_DELEGATED_SEARCH_MODE,
+        )
+
+        assertDelegatedSearchProof({
+          ...script.observation(),
+          plantedPath: DELEGATED_EXTERNAL_FIXTURE.hitPath,
+          parentAnswer: finalAnswer,
+        })
+        for (const child of script.observation().childRequests) {
+          expect(hasResearcherSystemMarker(child, marker)).toBe(true)
+        }
+        const toolText = childToolMessage(script) ?? ''
+        expect(toolText).toStartWith('External sources for "')
+        expect(toolText).toContain(DELEGATED_EXTERNAL_FIXTURE.hitPath)
+        expect(finalAnswer).toContain(DELEGATED_EXTERNAL_FIXTURE.hitPath)
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'with the allow entry absent the child receives the not-allowed reply, the parent never sees the external path and the proof names the failure',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        // No user config at all: the project proposes a source, nobody allowed it.
+
+        const { script, finalAnswer } = await runDelegatedSearch(
+          pluginSpec,
+          EXTERNAL_DELEGATED_SEARCH_MODE,
+        )
+
+        const toolText = childToolMessage(script) ?? ''
+        expect(toolText).toStartWith('External sources for "')
+        expect(toolText).toContain('not in search.allow_project_sources')
+        expect(toolText).not.toContain(DELEGATED_EXTERNAL_FIXTURE.hitPath)
+        expect(finalAnswer ?? '').not.toContain(
+          DELEGATED_EXTERNAL_FIXTURE.hitPath,
+        )
+
+        const verdict = evaluateDelegatedSearchProof({
+          ...script.observation(),
+          plantedPath: DELEGATED_EXTERNAL_FIXTURE.hitPath,
+          parentAnswer: finalAnswer,
+        })
+        expect(verdict).toMatchObject({ ok: false, code: 'path-missing' })
+        if (!verdict.ok) {
+          expect(verdict.message).toContain(
+            'not in search.allow_project_sources',
+          )
+        }
+        // The child was reached, so the failure is the missing allow entry.
         expect(script.observation().childRequests.length).toBeGreaterThan(0)
       },
       TIMEOUT_MS,

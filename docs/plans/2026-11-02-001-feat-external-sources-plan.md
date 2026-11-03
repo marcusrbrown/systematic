@@ -760,7 +760,7 @@ flowchart TB
 
 ### Phase E: Researcher and docs
 
-- [ ] U8. Researcher prompt, wiring contract and the v2 delegated proof
+- [x] U8. Researcher prompt, wiring contract and the v2 delegated proof
 
 **Goal:** Add the fifth call and the External records group to past-work scope, keep the prompt inside its ceiling, and prove on a real OpenCode v2 host that the researcher's `external` call reaches the parent's final answer.
 
