@@ -990,7 +990,14 @@ describe('loadUserLevelSearchSettings', () => {
     const { homeDir } = layout()
     expect(
       loadUserLevelSearchSettings({ homeDir, customConfigDir: null }),
-    ).toEqual({ settings: undefined, warnings: [], unreadable: false })
+    ).toEqual({
+      settings: undefined,
+      warnings: [],
+      unreadable: false,
+      dropped: [],
+      sourceLayers: new Map(),
+      readFailures: [],
+    })
   })
 
   test('merges user then custom through the shared merge rules', () => {
@@ -1145,7 +1152,7 @@ describe('loadUserLevelSearchSettings', () => {
     try {
       expect(
         loadUserLevelSearchSettings({ homeDir, customConfigDir: null }),
-      ).toEqual({ settings: undefined, warnings: [], unreadable: false })
+      ).toMatchObject({ settings: undefined, warnings: [], unreadable: false })
     } finally {
       process.chdir(previousCwd)
     }
@@ -1233,6 +1240,7 @@ describe('loadProjectSearchSources', () => {
       sources: [],
       warnings: [],
       unreadable: false,
+      dropped: [],
     })
   })
 
@@ -1246,6 +1254,7 @@ describe('loadProjectSearchSources', () => {
       sources: [],
       warnings: [],
       unreadable: false,
+      dropped: [],
     })
   })
 
@@ -1761,5 +1770,371 @@ describe('validateSearchConfig: exclude', () => {
     const fromReader = viaReader.warnings.map(normalize)
     expect(fromFull).toEqual(fromReader)
     expect(fromReader.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('loadUserLevelSearchSettings: four layers', () => {
+  function layout() {
+    const root = makeTempDir('layers')
+    const homeDir = path.join(root, 'home')
+    const userConfigDir = path.join(homeDir, '.config/opencode')
+    const customConfigDir = path.join(root, 'custom')
+    fs.mkdirSync(userConfigDir, { recursive: true })
+    fs.mkdirSync(customConfigDir, { recursive: true })
+    const write = (dir: string, name: string, search: unknown) =>
+      fs.writeFileSync(path.join(dir, name), JSON.stringify({ search }))
+    return { root, homeDir, userConfigDir, customConfigDir, write }
+  }
+
+  const wiki = (roots: string[], projects: string[]) => ({
+    name: 'wiki',
+    format: 'markdown' as const,
+    roots,
+    projects,
+  })
+
+  test('enabled set at every layer resolves to the custom.local value, and each removal falls to the next', () => {
+    const { homeDir, userConfigDir, customConfigDir, write } = layout()
+    const files: Array<[string, string, boolean]> = [
+      [userConfigDir, 'systematic.json', true],
+      [userConfigDir, 'systematic.local.json', false],
+      [customConfigDir, 'systematic.json', true],
+      [customConfigDir, 'systematic.local.json', false],
+    ]
+    for (const [dir, name, enabled] of files) write(dir, name, { enabled })
+    const read = () =>
+      loadUserLevelSearchSettings({ homeDir, customConfigDir }).settings
+        ?.enabled
+
+    expect(read()).toBe(false)
+    fs.rmSync(path.join(customConfigDir, 'systematic.local.json'))
+    expect(read()).toBe(true)
+    fs.rmSync(path.join(customConfigDir, 'systematic.json'))
+    expect(read()).toBe(false)
+    fs.rmSync(path.join(userConfigDir, 'systematic.local.json'))
+    expect(read()).toBe(true)
+  })
+
+  test('user.local unions the allow list and replaces a same-named source whole, with no field merging', () => {
+    const { homeDir, userConfigDir, write } = layout()
+    write(userConfigDir, 'systematic.json', {
+      allow_project_sources: ['/work/a'],
+      sources: [
+        {
+          ...wiki(['/user-root'], ['/work/a', '/work/b']),
+          exclude: ['log.md'],
+        },
+      ],
+    })
+    write(userConfigDir, 'systematic.local.json', {
+      allow_project_sources: ['/work/b'],
+      sources: [wiki(['/local-root'], ['/work/b'])],
+    })
+
+    const loaded = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    expect(loaded.settings?.allow_project_sources).toEqual([
+      '/work/a',
+      '/work/b',
+    ])
+    expect(loaded.settings?.sources).toEqual([
+      wiki(['/local-root'], ['/work/b']),
+    ])
+    expect(loaded.sourceLayers.get('wiki')).toBe('user.local')
+  })
+
+  test('user.local and custom both define a source: custom wins and the layer says so', () => {
+    const { homeDir, userConfigDir, customConfigDir, write } = layout()
+    write(userConfigDir, 'systematic.local.json', {
+      sources: [wiki(['/local-root'], ['/work/a'])],
+    })
+    write(customConfigDir, 'systematic.json', {
+      sources: [wiki(['/custom-root'], ['/work/a'])],
+    })
+
+    const loaded = loadUserLevelSearchSettings({ homeDir, customConfigDir })
+    expect(loaded.settings?.sources).toEqual([
+      wiki(['/custom-root'], ['/work/a']),
+    ])
+    expect(loaded.sourceLayers.get('wiki')).toBe('custom')
+  })
+
+  test('a local file with no sibling is read alone, in both directories', () => {
+    const { homeDir, userConfigDir, customConfigDir, write } = layout()
+    write(userConfigDir, 'systematic.local.jsonc', {
+      allow_project_sources: ['/work/a'],
+    })
+    write(customConfigDir, 'systematic.local.json', { enabled: false })
+
+    const loaded = loadUserLevelSearchSettings({ homeDir, customConfigDir })
+    expect(loaded.settings).toEqual({
+      enabled: false,
+      allow_project_sources: ['/work/a'],
+    })
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.warnings).toEqual([])
+  })
+
+  test('a syntax error in user.local gives one warning naming it and unreadable, while user and custom still merge', () => {
+    const { homeDir, userConfigDir, customConfigDir, write } = layout()
+    write(userConfigDir, 'systematic.json', { allow_project_sources: ['/a'] })
+    write(customConfigDir, 'systematic.json', { enabled: false })
+    const brokenLocal = path.join(userConfigDir, 'systematic.local.json')
+    fs.writeFileSync(brokenLocal, '{ "search": { "enabled": ')
+
+    const loaded = loadUserLevelSearchSettings({ homeDir, customConfigDir })
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.settings).toEqual({
+      enabled: false,
+      allow_project_sources: ['/a'],
+    })
+    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.warnings[0]).toContain(brokenLocal)
+    expect(loaded.readFailures).toEqual(loaded.warnings)
+  })
+
+  test('a failed custom.local names that file, not its sibling', () => {
+    const { homeDir, customConfigDir, write } = layout()
+    write(customConfigDir, 'systematic.json', { enabled: false })
+    const brokenLocal = path.join(customConfigDir, 'systematic.local.jsonc')
+    fs.writeFileSync(brokenLocal, '[1]')
+
+    const loaded = loadUserLevelSearchSettings({ homeDir, customConfigDir })
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.settings).toEqual({ enabled: false })
+    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.warnings[0]).toContain(brokenLocal)
+  })
+
+  test('a valid enabled:false in a local file is honored beside an invalid sibling', () => {
+    const { homeDir, userConfigDir, write } = layout()
+    fs.writeFileSync(path.join(userConfigDir, 'systematic.json'), '{ nope')
+    write(userConfigDir, 'systematic.local.json', { enabled: false })
+
+    const loaded = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    expect(loaded.settings).toEqual({ enabled: false })
+    expect(loaded.unreadable).toBe(true)
+  })
+
+  test('a dropped entry is listed with its label and reason, and validation warnings are not read failures', () => {
+    const { homeDir, userConfigDir, write } = layout()
+    write(userConfigDir, 'systematic.local.json', {
+      sources: [
+        wiki(['/ok'], ['/work/a']),
+        { name: 'bad', format: 'markdown', roots: ['/x'] },
+      ],
+    })
+
+    const loaded = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    expect(loaded.settings?.sources?.map((s) => s.name)).toEqual(['wiki'])
+    expect(loaded.dropped).toHaveLength(1)
+    expect(loaded.dropped[0]?.label).toBe('"bad"')
+    expect(loaded.dropped[0]?.reason).toEqual(expect.any(String))
+    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.readFailures).toEqual([])
+  })
+
+  describe('a custom directory that is the user directory', () => {
+    /** Run `body` and count the whole-file reads of `file` it caused. */
+    function countReads(file: string, body: () => void): number {
+      const real = fs.readFileSync.bind(fs)
+      let count = 0
+      const spy = spyOn(fs, 'readFileSync').mockImplementation(((
+        ...args: Parameters<typeof fs.readFileSync>
+      ) => {
+        if (String(args[0]) === file) count += 1
+        return real(...args)
+      }) as typeof fs.readFileSync)
+      try {
+        body()
+      } finally {
+        spy.mockRestore()
+      }
+      return count
+    }
+
+    test('each file is read once, a broken local is reported once, and both layer positions still apply', () => {
+      const { homeDir, userConfigDir, write } = layout()
+      write(userConfigDir, 'systematic.json', {
+        sources: [wiki(['/shared-root'], ['/work/a'])],
+      })
+      const brokenLocal = path.join(userConfigDir, 'systematic.local.json')
+      fs.writeFileSync(brokenLocal, '{ "search": ')
+      const userFile = path.join(userConfigDir, 'systematic.json')
+
+      let loaded: ReturnType<typeof loadUserLevelSearchSettings> | undefined
+      const reads = countReads(userFile, () => {
+        loaded = loadUserLevelSearchSettings({
+          homeDir,
+          customConfigDir: userConfigDir,
+        })
+      })
+      expect(reads).toBe(1)
+      if (loaded === undefined) throw new Error('the reader did not run')
+      expect(loaded.warnings).toHaveLength(1)
+      expect(loaded.warnings[0]).toContain(brokenLocal)
+      // The custom position still ranks the shared file's source.
+      expect(loaded.sourceLayers.get('wiki')).toBe('custom')
+      expect(loaded.settings?.sources).toEqual([
+        wiki(['/shared-root'], ['/work/a']),
+      ])
+    })
+
+    test('a symlink to the user directory counts as the same directory', () => {
+      const { root, homeDir, userConfigDir, write } = layout()
+      write(userConfigDir, 'systematic.json', { enabled: false })
+      const link = path.join(root, 'linked')
+      fs.symlinkSync(userConfigDir, link)
+      fs.writeFileSync(
+        path.join(userConfigDir, 'systematic.local.json'),
+        '{ nope',
+      )
+
+      const loaded = loadUserLevelSearchSettings({
+        homeDir,
+        customConfigDir: link,
+      })
+      expect(loaded.warnings).toHaveLength(1)
+      expect(loaded.settings).toEqual({ enabled: false })
+    })
+
+    test('a dropped entry in the shared file is listed once', () => {
+      const { homeDir, userConfigDir, write } = layout()
+      write(userConfigDir, 'systematic.json', {
+        sources: [{ name: 'bad', format: 'markdown', roots: ['/x'] }],
+      })
+      const loaded = loadUserLevelSearchSettings({
+        homeDir,
+        customConfigDir: userConfigDir,
+      })
+      expect(loaded.dropped).toHaveLength(1)
+      expect(loaded.warnings).toHaveLength(1)
+    })
+  })
+})
+
+describe('loadProjectSearchSources: project file selection', () => {
+  const GOOD = {
+    name: 'rfcs',
+    format: 'markdown' as const,
+    roots: ['docs/rfcs'],
+  }
+  const OTHER = { ...GOOD, name: 'other', roots: ['docs/other'] }
+
+  function repo() {
+    const root = makeTempDir('selection')
+    const opencode = path.join(root, '.opencode')
+    fs.mkdirSync(opencode, { recursive: true })
+    return {
+      root,
+      rootJsonc: path.join(root, '.systematic.jsonc'),
+      rootJson: path.join(root, '.systematic.json'),
+      opencodeFile: path.join(opencode, 'systematic.json'),
+    }
+  }
+  const body = (...sources: unknown[]) =>
+    JSON.stringify({ search: { sources } })
+
+  test('the root file wins over .opencode/, the warning names both paths, and the files are never merged', () => {
+    const { root, rootJson, opencodeFile } = repo()
+    fs.writeFileSync(rootJson, body(GOOD))
+    fs.writeFileSync(opencodeFile, body(OTHER))
+
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources.map((s) => s.name)).toEqual(['rfcs'])
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.warnings[0]).toContain(rootJson)
+    expect(loaded.warnings[0]).toContain(opencodeFile)
+  })
+
+  test('.systematic.jsonc beats .systematic.json', () => {
+    const { root, rootJsonc, rootJson } = repo()
+    fs.writeFileSync(rootJson, body({ ...GOOD, name: 'from-json' }))
+    fs.writeFileSync(
+      rootJsonc,
+      `// c\n${body({ ...GOOD, name: 'from-jsonc' })}`,
+    )
+    expect(loadProjectSearchSources(root).sources.map((s) => s.name)).toEqual([
+      'from-jsonc',
+    ])
+  })
+
+  test('a root file alone gives no warning, and .opencode/ alone still works', () => {
+    const { root, rootJson, opencodeFile } = repo()
+    fs.writeFileSync(rootJson, body(GOOD))
+    expect(loadProjectSearchSources(root).warnings).toEqual([])
+    fs.rmSync(rootJson)
+    fs.writeFileSync(opencodeFile, body(OTHER))
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources.map((s) => s.name)).toEqual(['other'])
+    expect(loaded.warnings).toEqual([])
+  })
+
+  test('enabled and allow_project_sources in a root file are not read', () => {
+    const { root, rootJson } = repo()
+    fs.writeFileSync(
+      rootJson,
+      JSON.stringify({
+        search: {
+          enabled: false,
+          allow_project_sources: ['/x'],
+          sources: [GOOD],
+        },
+      }),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([GOOD])
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded).not.toHaveProperty('enabled')
+    expect(loaded).not.toHaveProperty('settings')
+  })
+
+  test('an invalid root file does not fall back to .json or .opencode/, and still reports the shadowed file', () => {
+    const { root, rootJsonc, rootJson, opencodeFile } = repo()
+    fs.writeFileSync(rootJsonc, '{ broken')
+    fs.writeFileSync(rootJson, body(GOOD))
+    fs.writeFileSync(opencodeFile, body(OTHER))
+
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([])
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.warnings.some((w) => w.includes(rootJsonc))).toBe(true)
+    expect(loaded.warnings.some((w) => w.includes(opencodeFile))).toBe(true)
+  })
+
+  test('an oversized root file is unreadable and does not fall back to .opencode/', () => {
+    const { root, rootJson, opencodeFile } = repo()
+    const base = body(GOOD)
+    fs.writeFileSync(
+      rootJson,
+      base + ' '.repeat(MAX_PROJECT_CONFIG_BYTES + 1 - base.length),
+    )
+    fs.writeFileSync(opencodeFile, body(OTHER))
+
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.unreadable).toBe(true)
+    expect(loaded.sources).toEqual([])
+  })
+
+  test('a dropped entry is listed with its label and reason', () => {
+    const { root, rootJson } = repo()
+    fs.writeFileSync(
+      rootJson,
+      body(GOOD, { name: 'escape', format: 'markdown', roots: ['..'] }),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([GOOD])
+    expect(loaded.dropped).toHaveLength(1)
+    expect(loaded.dropped[0]?.label).toBe('"escape"')
+    expect(loaded.dropped[0]?.reason).toEqual(expect.any(String))
   })
 })

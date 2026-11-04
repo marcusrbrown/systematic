@@ -3231,19 +3231,247 @@ describe('loadSearchSettingsForCli', () => {
     }
   })
 
-  it('does not mark search unreadable for an invalid project config', () => {
+  it('names an invalid project config, marks search unreadable, and keeps the user settings', () => {
     const box = mkBox()
     try {
-      fs.mkdirSync(path.join(box.project, '.opencode'), { recursive: true })
+      const projectFile = path.join(box.project, '.opencode/systematic.json')
+      fs.mkdirSync(path.dirname(projectFile), { recursive: true })
+      fs.writeFileSync(projectFile, '{ "search": { "enabled": false ')
       fs.writeFileSync(
-        path.join(box.project, '.opencode/systematic.json'),
-        '{ "search": { "enabled": false ',
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
       )
       const loaded = box.load(box.project)
-      expect(loaded.unreadable).toBe(false)
-      expect(loaded.warnings.join('\n')).not.toContain('config unreadable')
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(
+        loaded.warnings.filter((w) => w.includes(projectFile)),
+      ).toHaveLength(1)
     } finally {
       fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('names a root project file with an invalid non-search field, marks search unreadable, and still lets the per-call reader see its sources', async () => {
+    const box = mkBox()
+    try {
+      const rootFile = path.join(box.project, '.systematic.jsonc')
+      fs.writeFileSync(
+        rootFile,
+        `// the search block is valid, the rest is not\n${JSON.stringify({
+          disabled_skills: 'not-an-array',
+          search: {
+            sources: [
+              {
+                name: 'decisions',
+                format: 'markdown',
+                roots: ['docs/decisions'],
+              },
+            ],
+          },
+        })}`,
+      )
+      fs.mkdirSync(path.join(box.project, 'docs/decisions'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(box.project, 'docs/decisions/zebra.md'),
+        '---\ntitle: Zebra decision\n---\n\nzebra\n',
+      )
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({ search: { allow_project_sources: [box.project] } }),
+      )
+
+      const stdout: string[] = []
+      const stderr: string[] = []
+      const status = await runSearchCli({
+        argv: ['zebra', '--kind', 'external'],
+        cwd: path.join(box.project, 'sub'),
+        usageName: 'systematic search',
+        ...searchCliInputs({
+          homeDir: box.home,
+          userConfigDir: path.join(box.home, '.config/opencode'),
+          customConfigDir: null,
+        }),
+        outputSink: (message) => stdout.push(message),
+        errorSink: (message) => stderr.push(message),
+      })
+      expect(status).toBe(0)
+      expect(stderr.filter((line) => line.includes(rootFile))).toHaveLength(1)
+      expect(stdout[0]).toContain('Notes: config unreadable')
+      expect(stdout[0]).toContain('decisions (project)')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('names a syntax error in user.local once, marks search unreadable, and honors the valid files', () => {
+    const box = mkBox()
+    try {
+      const userDir = path.join(box.home, '.config/opencode')
+      fs.writeFileSync(
+        path.join(userDir, 'systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const brokenLocal = path.join(userDir, 'systematic.local.json')
+      fs.writeFileSync(brokenLocal, '{ "search": { "enabled": ')
+
+      const loaded = box.load(box.project)
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(
+        loaded.warnings.filter((w) => w.includes(brokenLocal)),
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('honors a valid search.enabled:false in a local file beside an invalid sibling', () => {
+    const box = mkBox()
+    try {
+      const userDir = path.join(box.home, '.config/opencode')
+      fs.writeFileSync(path.join(userDir, 'systematic.json'), '{ nope')
+      fs.writeFileSync(
+        path.join(userDir, 'systematic.local.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.unreadable).toBe(true)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it("names an invalid non-search field in custom.local and reads that file's valid search block", () => {
+    const box = mkBox()
+    try {
+      const customDir = path.join(box.root, 'custom')
+      fs.mkdirSync(customDir)
+      const customLocal = path.join(customDir, 'systematic.local.json')
+      fs.writeFileSync(
+        customLocal,
+        JSON.stringify({
+          search: { enabled: false },
+          disabled_skills: 'not-an-array',
+        }),
+      )
+      const loaded = loadSearchSettingsForCli(box.project, {
+        homeDir: box.home,
+        userConfigDir: path.join(box.home, '.config/opencode'),
+        customConfigDir: customDir,
+      })
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.unreadable).toBe(true)
+      expect(
+        loaded.warnings.filter((w) => w.includes(customLocal)),
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('prints the caught message when the loader throws, and keeps the user-level settings', () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({
+          search: { enabled: false },
+          profiles: {
+            broken: { categories: { 'zz-not-a-category': { model: 'a/b' } } },
+          },
+        }),
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.settings).toEqual({ enabled: false })
+      expect(loaded.warnings.join('\n')).toContain('zz-not-a-category')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it("keeps the fallback's warnings, once each, when a sibling key in the same file is invalid", () => {
+    const box = mkBox()
+    try {
+      fs.writeFileSync(
+        path.join(box.home, '.config/opencode/systematic.json'),
+        JSON.stringify({
+          search: { enabled: 'x', sources: 'nope' },
+          disabled_skills: 'not-an-array',
+        }),
+      )
+      const loaded = box.load(box.project)
+      expect(loaded.warnings.length).toBeGreaterThan(0)
+      expect(new Set(loaded.warnings).size).toBe(loaded.warnings.length)
+      expect(
+        loaded.warnings.filter((w) => w.includes('search.enabled')),
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports an unparseable file once, not once by the loader and again by the fallback', () => {
+    const box = mkBox()
+    try {
+      const userFile = path.join(box.home, '.config/opencode/systematic.json')
+      fs.writeFileSync(userFile, '{ "search": { "enabled": ')
+      const loaded = box.load(box.project)
+      expect(loaded.warnings.filter((w) => w.includes(userFile))).toHaveLength(
+        1,
+      )
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('two calls in one process each report their own failures', () => {
+    const box = mkBox()
+    try {
+      const userFile = path.join(box.home, '.config/opencode/systematic.json')
+      fs.writeFileSync(userFile, '{ nope')
+      for (const _call of [1, 2]) {
+        expect(
+          box.load(box.project).warnings.filter((w) => w.includes(userFile)),
+        ).toHaveLength(1)
+      }
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('with no .git anywhere reads <start>/.opencode/systematic.json under the unresolved start path', () => {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-cli-nogit-')),
+    )
+    try {
+      const real = path.join(root, 'real')
+      const link = path.join(root, 'link')
+      fs.mkdirSync(path.join(real, 'proj/.opencode'), { recursive: true })
+      fs.mkdirSync(path.join(root, 'home/.config/opencode'), {
+        recursive: true,
+      })
+      fs.symlinkSync(real, link)
+      fs.writeFileSync(
+        path.join(real, 'proj/.opencode/systematic.json'),
+        JSON.stringify({ search: { enabled: false } }),
+      )
+      const start = path.join(link, 'proj')
+      const loaded = loadSearchSettingsForCli(start, {
+        homeDir: path.join(root, 'home'),
+        userConfigDir: path.join(root, 'home/.config/opencode'),
+        customConfigDir: null,
+      })
+      expect(loaded.warnings).toHaveLength(1)
+      expect(loaded.warnings[0]).toContain(
+        path.join(start, '.opencode/systematic.json'),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 

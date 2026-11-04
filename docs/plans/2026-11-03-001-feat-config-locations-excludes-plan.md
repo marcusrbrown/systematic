@@ -633,7 +633,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ---
 
-- [ ] **U6. Bin-safe readers, CLI diagnostics and cross-surface parity**
+- [x] **U6. Bin-safe readers, CLI diagnostics and cross-surface parity**
 
 **Goal:** The per-call reader, the CLI and the Claude Code bin read the same files in the same order as the full loader, and the CLI names every invalid file.
 

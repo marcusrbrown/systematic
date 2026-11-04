@@ -763,6 +763,7 @@ describe('resolveExternalSources: enabled belongs to the fixed init settings', (
     })
     expect(names(result.sources)).toEqual(['mine', 'proj'])
     expect(Object.keys(result).sort()).toEqual([
+      'dropped',
       'project',
       'sources',
       'userConfigUnreadable',
@@ -836,6 +837,114 @@ describe('C2: nothing is cached between calls', () => {
 
     writeUser(env, { allow_project_sources: [] })
     expect(call().sources).toEqual([])
+  })
+})
+
+describe('resolveExternalSources: locations, local overlays and diagnostics', () => {
+  const resolve = (env: Env, startDir = env.repo) =>
+    resolveExternalSources({ startDir, configOptions: env.configOptions })
+
+  test('a root project file is read from a start directory below the root, and the shadowed .opencode/ file is named once', () => {
+    const env = makeEnv()
+    const rootFile = path.join(env.repo, '.systematic.jsonc')
+    fs.writeFileSync(
+      rootFile,
+      `// proposals\n${JSON.stringify({ search: { sources: [projectSource('from-root')] } })}`,
+    )
+    writeProject(env.repo, { sources: [projectSource('from-opencode')] })
+    writeUser(env, { allow_project_sources: [env.repo] })
+    const deep = path.join(env.repo, 'packages/app')
+    fs.mkdirSync(deep, { recursive: true })
+
+    const result = resolve(env, deep)
+    expect(names(result.sources)).toEqual(['from-root'])
+    const shadow = result.warnings.filter((w) =>
+      w.includes(path.join(env.repo, '.opencode')),
+    )
+    expect(shadow).toHaveLength(1)
+    expect(shadow[0]).toContain('.systematic.jsonc')
+  })
+
+  test('a source defined in user.local is active, and a local allow entry allows the project', () => {
+    const env = makeEnv()
+    writeProject(env.repo, { sources: [projectSource('decisions')] })
+    fs.writeFileSync(
+      path.join(env.userConfigDir, 'systematic.local.json'),
+      JSON.stringify({
+        search: {
+          allow_project_sources: [env.repo],
+          sources: [userSource('wiki', [env.repo])],
+        },
+      }),
+    )
+
+    const result = resolve(env)
+    expect(names(result.sources)).toEqual(['wiki', 'decisions'])
+    expect(result.project).toEqual({ kind: 'allowed', proposals: 1 })
+  })
+
+  test('entries dropped in the user files and in the project file are passed through, apart', () => {
+    const env = makeEnv()
+    writeUser(env, {
+      sources: [{ name: 'no-projects', format: 'markdown', roots: ['/srv/x'] }],
+    })
+    writeProject(env.repo, {
+      sources: [
+        projectSource('good'),
+        { name: 'escape', format: 'markdown', roots: ['..'] },
+      ],
+    })
+
+    const result = resolve(env)
+    expect(result.dropped.user.map((d) => d.label)).toEqual(['"no-projects"'])
+    expect(result.dropped.project.map((d) => d.label)).toEqual(['"escape"'])
+    expect(result.dropped.user[0]?.reason).toEqual(expect.any(String))
+  })
+
+  test('a broken user.local is reported once even when the custom directory is the user directory', () => {
+    const env = makeEnv()
+    const brokenLocal = path.join(env.userConfigDir, 'systematic.local.json')
+    fs.writeFileSync(brokenLocal, '{ "search": ')
+
+    const result = resolveExternalSources({
+      startDir: env.repo,
+      configOptions: {
+        homeDir: env.homeDir,
+        customConfigDir: env.userConfigDir,
+      },
+    })
+    expect(result.userConfigUnreadable).toBe(true)
+    expect(result.warnings.filter((w) => w.includes(brokenLocal))).toHaveLength(
+      1,
+    )
+  })
+
+  test('the same failed file is reported once per call, and a second call reports its own', () => {
+    const env = makeEnv()
+    const broken = path.join(env.userConfigDir, 'systematic.json')
+    fs.writeFileSync(broken, '{ nope')
+
+    for (const _call of [1, 2]) {
+      const result = resolve(env)
+      expect(result.warnings.filter((w) => w.includes(broken))).toHaveLength(1)
+    }
+  })
+
+  test('an oversized root file leaves the project unreadable and does not fall back to .opencode/', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: [env.repo] })
+    writeProject(env.repo, { sources: [projectSource('from-opencode')] })
+    const base = JSON.stringify({
+      search: { sources: [projectSource('from-root')] },
+    })
+    fs.writeFileSync(
+      path.join(env.repo, '.systematic.json'),
+      base + ' '.repeat(MAX_PROJECT_CONFIG_BYTES + 1 - base.length),
+    )
+
+    const result = resolve(env)
+    expect(result.sources).toEqual([])
+    expect(result.project).toEqual({ kind: 'config-unreadable' })
   })
 })
 

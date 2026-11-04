@@ -1756,6 +1756,7 @@ describe('runSearch: kind external', () => {
         project: { kind: 'none' },
         userConfigUnreadable: false,
         warnings: [],
+        dropped: { user: [], project: [] },
         ...overrides,
       }
     }

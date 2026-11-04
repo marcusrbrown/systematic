@@ -41,7 +41,7 @@ import {
   writePluginFiles,
 } from '../../scripts/build-claude-code-plugin.js'
 import { runClaudeCodeSearch } from '../../src/claude-code-search.js'
-import { searchCliInputs } from '../../src/cli.js'
+import { loadSearchSettingsForCli, searchCliInputs } from '../../src/cli.js'
 import { createOpenCodeV1Hooks } from '../../src/lib/opencode-v1.js'
 import { setupOpenCodeV2 } from '../../src/lib/opencode-v2.js'
 import { REAL_PI_DELEGATE_SESSION_RUNTIME } from '../../src/lib/pi-delegate-session.js'
@@ -197,10 +197,14 @@ function toolContext(root: string) {
   }
 }
 
-async function createV1Surface(): Promise<Surface> {
-  const initDir = temp.track(
-    fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-v1-init-'))),
-  )
+async function createV1Surface(startDir?: string): Promise<Surface> {
+  const initDir =
+    startDir ??
+    temp.track(
+      fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'search-v1-init-')),
+      ),
+    )
   const input = {
     client: { app: { log: async () => {} } },
     directory: initDir,
@@ -380,7 +384,7 @@ function cliOutput(status: number, stdout: string[], stderr: string[]): string {
 }
 
 /** `systematic search`: the real runner with the real `cli.ts` settings adapter. */
-function createCliSurface(): Surface {
+function createCliSurface(customConfigDir: string | null = null): Surface {
   return {
     name: 'cli',
     async search(root, args) {
@@ -393,7 +397,7 @@ function createCliSurface(): Surface {
         ...searchCliInputs({
           homeDir: isolatedHome,
           userConfigDir: path.join(isolatedHome, '.config/opencode'),
-          customConfigDir: null,
+          customConfigDir,
         }),
         outputSink: (message) => stdout.push(message),
         errorSink: (message) => stderr.push(message),
@@ -404,7 +408,7 @@ function createCliSurface(): Surface {
 }
 
 /** The `systematic-search` bin entry, in process, reading the user-level files. */
-function createBinSurface(): Surface {
+function createBinSurface(customConfigDir: string | null = null): Surface {
   return {
     name: 'bin',
     async search(root, args) {
@@ -413,7 +417,7 @@ function createBinSurface(): Surface {
       const status = await runClaudeCodeSearch({
         argv: toArgv(args),
         cwd: root,
-        userLevel: { homeDir: isolatedHome, customConfigDir: null },
+        userLevel: { homeDir: isolatedHome, customConfigDir },
         outputSink: (message) => stdout.push(message),
         errorSink: (message) => stderr.push(message),
       })
@@ -452,7 +456,9 @@ function installBuiltBin(): Promise<string> {
  * The built bin run under real Node from the project directory, which holds no
  * `node_modules`, with stdin closed and a timeout.
  */
-async function createBuiltBinSurface(): Promise<Surface> {
+async function createBuiltBinSurface(
+  customConfigDir?: string,
+): Promise<Surface> {
   const bin = await installBuiltBin()
   return {
     name: 'built bin (node)',
@@ -464,6 +470,9 @@ async function createBuiltBinSurface(): Promise<Surface> {
       }
       delete env.OPENCODE_CONFIG_DIR
       delete env.XDG_CONFIG_HOME
+      if (customConfigDir !== undefined) {
+        env.OPENCODE_CONFIG_DIR = customConfigDir
+      }
       const result = spawnSync(NODE_BIN, [bin, ...toArgv(args)], {
         cwd: root,
         env,
@@ -1403,5 +1412,348 @@ describe('search adapters: config-dir option and note merge', () => {
     }
     expect(count(await builtIn(flagged))).toBe(1)
     expect(count(await builtIn(unflagged))).toBe(0)
+  })
+})
+
+// --- config locations, local overlays and excludes ----------------------------
+
+interface LocationsFixture {
+  readonly root: string
+  /** The directory every surface starts from: a subfolder of the repository. */
+  readonly start: string
+  readonly customDir: string
+  readonly userDir: string
+  readonly rootFile: string
+  readonly shadowedFile: string
+}
+
+const markdownDoc = (title: string) =>
+  `---\ntitle: ${title}\n---\n\nzebra ${title}\n`
+
+function writeFile(file: string, content: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, content)
+}
+
+function writeJson(file: string, value: unknown): void {
+  writeFile(file, JSON.stringify(value))
+}
+
+/**
+ * A repository with a `.git` marker, a repo-root `.systematic.jsonc` that
+ * proposes `decisions` with an exclude and also tries to switch search off, a
+ * shadowed `.opencode/` file, and all four user-level files. Each layer
+ * defines something the output must show.
+ */
+function makeLocationsFixture(): LocationsFixture {
+  const root = makeProject()
+  const start = path.join(root, 'packages/app')
+  fs.mkdirSync(start, { recursive: true })
+  const dir = (prefix: string) =>
+    temp.track(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix))))
+
+  writeFile(
+    path.join(root, 'docs/decisions/zebra-rollback.md'),
+    markdownDoc('Zebra rollback decision'),
+  )
+  writeFile(
+    path.join(root, 'docs/decisions/log.md'),
+    markdownDoc('Decisions activity log'),
+  )
+  const rootFile = path.join(root, '.systematic.jsonc')
+  writeFile(
+    rootFile,
+    `// repo-root project config\n${JSON.stringify({
+      search: {
+        enabled: false,
+        allow_project_sources: ['/somewhere/else'],
+        sources: [
+          {
+            name: 'decisions',
+            format: 'markdown',
+            roots: ['docs/decisions'],
+            exclude: ['log.md'],
+          },
+        ],
+      },
+    })}`,
+  )
+  const shadowedFile = path.join(root, '.opencode/systematic.json')
+  writeJson(shadowedFile, {
+    search: {
+      sources: [
+        { name: 'shadowed', format: 'markdown', roots: ['docs/decisions'] },
+      ],
+    },
+  })
+
+  const wiki = dir('search-loc-wiki-')
+  writeFile(path.join(wiki, 'zebra-wiki.md'), markdownDoc('Zebra wiki page'))
+  writeFile(
+    path.join(wiki, 'activity-log.md'),
+    markdownDoc('Wiki activity log'),
+  )
+  const team = dir('search-loc-team-')
+  writeFile(path.join(team, 'zebra-team.md'), markdownDoc('Zebra team note'))
+  const scratch = dir('search-loc-scratch-')
+  writeFile(
+    path.join(scratch, 'zebra-scratch.md'),
+    markdownDoc('Zebra scratch note'),
+  )
+
+  const userDir = path.join(isolatedHome, '.config/opencode')
+  const customDir = dir('search-loc-custom-')
+  const mapped = (name: string, source: string, extra = {}) => ({
+    name,
+    format: 'markdown',
+    roots: [source],
+    projects: [root],
+    ...extra,
+  })
+  writeJson(path.join(userDir, 'systematic.json'), {
+    search: {
+      allow_project_sources: [root],
+      sources: [mapped('wiki', wiki)],
+    },
+  })
+  writeJson(path.join(userDir, 'systematic.local.json'), {
+    search: {
+      sources: [mapped('wiki', wiki, { exclude: ['activity-log.md'] })],
+    },
+  })
+  writeJson(path.join(customDir, 'systematic.json'), {
+    search: { sources: [mapped('team', team)] },
+  })
+  writeJson(path.join(customDir, 'systematic.local.jsonc'), {
+    search: { sources: [mapped('scratch', scratch)] },
+  })
+  return { root, start, customDir, userDir, rootFile, shadowedFile }
+}
+
+/** Run `body` with `OPENCODE_CONFIG_DIR` set, the way a host launches the plugins. */
+async function withCustomDir<T>(
+  customDir: string,
+  body: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  process.env.OPENCODE_CONFIG_DIR = customDir
+  try {
+    return await body()
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+}
+
+/** Run `body` with the process working directory at `dir`, the way Pi reads its startup config. */
+async function inDirectory<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  const previous = process.cwd()
+  process.chdir(dir)
+  try {
+    return await body()
+  } finally {
+    process.chdir(previous)
+  }
+}
+
+/** The messages `console.warn` received while `body` ran. */
+async function captureWarnings<T>(
+  body: () => Promise<T>,
+): Promise<{ value: T; warnings: string[] }> {
+  const spy = spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    const value = await body()
+    return { value, warnings: spy.mock.calls.map((call) => String(call[0])) }
+  } finally {
+    spy.mockRestore()
+  }
+}
+
+describe('search adapters parity: repo-root project file, local overlays and excludes', () => {
+  test('one fixture, started in a subfolder, gives byte-identical external text on v1, v2, Pi, CLI, bin and the built bin, with every layer and the excludes applied', async () => {
+    const fixture = makeLocationsFixture()
+    const { start, customDir } = fixture
+
+    const surfaces = await withCustomDir(customDir, async () => [
+      await createV1Surface(start),
+      await createV2Surface(start),
+      await inDirectory(start, createPiSurface),
+      createCliSurface(customDir),
+      createBinSurface(customDir),
+      await createBuiltBinSurface(customDir),
+    ])
+    const texts: string[] = []
+    // One at a time: the built bin and the hosts share the isolated home.
+    for (const surface of surfaces) {
+      texts.push(
+        await withCustomDir(customDir, () =>
+          surface.search(start, { query: 'zebra', kind: 'external' }),
+        ),
+      )
+    }
+
+    const text = texts[0] as string
+    expect(text).toStartWith('External sources for "zebra":')
+    expect(text).toContain('decisions (project)')
+    expect(text).toContain('decisions/zebra-rollback.md')
+    expect(text).not.toContain('decisions/log.md')
+    expect(text).toContain('wiki (user)')
+    expect(text).toContain('zebra-wiki.md')
+    expect(text).not.toContain('activity-log.md')
+    expect(text).toContain('team (user)')
+    expect(text).toContain('scratch (user)')
+    expect(text).not.toContain('shadowed')
+    expectIdentical(surfaces, texts)
+  }, 120_000)
+
+  test('the four full-loader surfaces warn with the same set: the project strip warnings and the shadowed-file warning', async () => {
+    const fixture = makeLocationsFixture()
+    const { start, customDir, root, rootFile, shadowedFile } = fixture
+
+    const v1 = await withCustomDir(customDir, () =>
+      captureWarnings(() => createV1Surface(start)),
+    )
+    const v2 = await withCustomDir(customDir, () =>
+      captureWarnings(() => createV2Surface(start)),
+    )
+    const pi = await withCustomDir(customDir, () =>
+      captureWarnings(() => inDirectory(start, createPiSurface)),
+    )
+    const cli = loadSearchSettingsForCli(start, {
+      homeDir: isolatedHome,
+      userConfigDir: path.join(isolatedHome, '.config/opencode'),
+      customConfigDir: customDir,
+    })
+
+    const relevant = (messages: readonly string[]) =>
+      [...new Set(messages.filter((message) => message.includes(root)))].sort()
+    const expected = relevant(v1.warnings)
+    expect(expected.length).toBeGreaterThanOrEqual(3)
+    expect(expected.join('\n')).toContain(rootFile)
+    expect(expected.join('\n')).toContain(shadowedFile)
+    expect(expected.join('\n')).toContain('search.enabled')
+    expect(expected.join('\n')).toContain('search.allow_project_sources')
+    expect(relevant(v2.warnings)).toEqual(expected)
+    expect(relevant(pi.warnings)).toEqual(expected)
+    expect(relevant(cli.warnings)).toEqual(expected)
+  }, 60_000)
+
+  test('a project file below the repository root is not read, and the warning names it and the root file', async () => {
+    const fixture = makeLocationsFixture()
+    const { start, customDir, rootFile } = fixture
+    const nested = path.join(start, '.opencode/systematic.json')
+    writeJson(nested, {
+      search: {
+        sources: [{ name: 'nested', format: 'markdown', roots: ['docs'] }],
+      },
+    })
+
+    const v1 = await withCustomDir(customDir, () =>
+      captureWarnings(() => createV1Surface(start)),
+    )
+    expect(
+      v1.warnings.some(
+        (message) => message.includes(nested) && message.includes(rootFile),
+      ),
+    ).toBe(true)
+    const text = await v1.value.search(start, {
+      query: 'zebra',
+      kind: 'external',
+    })
+    expect(text).not.toContain('nested')
+  })
+})
+
+describe('search adapters parity: an invalid local file', () => {
+  function breakUserLocal(fixture: LocationsFixture): string {
+    const file = path.join(fixture.userDir, 'systematic.local.json')
+    fs.writeFileSync(file, '{ "search": { "sources": [ ')
+    return file
+  }
+
+  test('v1 and Pi throw at init naming the local file; v2 setup rejects naming it', async () => {
+    const fixture = makeLocationsFixture()
+    const file = breakUserLocal(fixture)
+
+    await withCustomDir(fixture.customDir, async () => {
+      await expect(createV1Surface(fixture.start)).rejects.toThrow(file)
+      await expect(inDirectory(fixture.start, createPiSurface)).rejects.toThrow(
+        file,
+      )
+      await expect(createV2Surface(fixture.start)).rejects.toThrow(file)
+    })
+  })
+
+  test('a project file over 1 MB makes v1, v2 and Pi throw at init naming it, while the CLI and the bin carry on', async () => {
+    const fixture = makeLocationsFixture()
+    // The oversized file is the root file the fixture already wrote.
+    fs.writeFileSync(
+      fixture.rootFile,
+      `{"disabled_skills":[],"pad":"${'a'.repeat(1024 * 1024)}"}`,
+    )
+
+    await withCustomDir(fixture.customDir, async () => {
+      await expect(createV1Surface(fixture.start)).rejects.toThrow(
+        fixture.rootFile,
+      )
+      await expect(inDirectory(fixture.start, createPiSurface)).rejects.toThrow(
+        fixture.rootFile,
+      )
+      await expect(createV2Surface(fixture.start)).rejects.toThrow(
+        fixture.rootFile,
+      )
+    })
+
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const status = await runClaudeCodeSearch({
+      argv: ['zebra', '--kind', 'external'],
+      cwd: fixture.start,
+      userLevel: { homeDir: isolatedHome, customConfigDir: fixture.customDir },
+      outputSink: (message) => stdout.push(message),
+      errorSink: (message) => stderr.push(message),
+    })
+    expect(status).toBe(0)
+    // The oversized file proposes nothing; the user-level sources still answer.
+    expect(stdout.join('\n')).toContain('team (user)')
+    expect(stdout.join('\n')).not.toContain('decisions (project)')
+  })
+
+  test('the CLI and the bin warn naming the file, add the config unreadable note, and still search with the valid files', async () => {
+    const fixture = makeLocationsFixture()
+    const file = breakUserLocal(fixture)
+    const stderr: string[] = []
+    const stdout: string[] = []
+
+    const cliStatus = await runSearchCli({
+      argv: ['zebra', '--kind', 'external'],
+      cwd: fixture.start,
+      usageName: 'systematic search',
+      ...searchCliInputs({
+        homeDir: isolatedHome,
+        userConfigDir: fixture.userDir,
+        customConfigDir: fixture.customDir,
+      }),
+      outputSink: (message) => stdout.push(message),
+      errorSink: (message) => stderr.push(message),
+    })
+    expect(cliStatus).toBe(0)
+    expect(stderr.filter((line) => line.includes(file))).toHaveLength(1)
+    expect(stdout.join('\n')).toContain('Notes: config unreadable')
+    expect(stdout.join('\n')).toContain('team (user)')
+
+    const binStderr: string[] = []
+    const binStdout: string[] = []
+    const binStatus = await runClaudeCodeSearch({
+      argv: ['zebra', '--kind', 'external'],
+      cwd: fixture.start,
+      userLevel: { homeDir: isolatedHome, customConfigDir: fixture.customDir },
+      outputSink: (message) => binStdout.push(message),
+      errorSink: (message) => binStderr.push(message),
+    })
+    expect(binStatus).toBe(0)
+    expect(binStderr.filter((line) => line.includes(file))).toHaveLength(1)
+    expect(binStdout.join('\n')).toContain('Notes: config unreadable')
+    expect(binStdout.join('\n')).toContain('team (user)')
   })
 })

@@ -58,8 +58,8 @@ import {
   type SearchCliOptions,
   type SearchCliSettingsLoad,
 } from './lib/search-cli.js'
-import { resolveSearchRoot } from './lib/search-corpus.js'
 import {
+  displaySafe,
   loadUserLevelSearchSettings,
   type UserLevelConfigDirOptions,
 } from './lib/search-user-config.js'
@@ -530,56 +530,83 @@ function userLevelDirOptions(
 /**
  * The settings loader `systematic search` injects into `runSearchCli`: the
  * full config loader, so the project-config strip warning for `search.enabled`
- * or `search.allow_project_sources` reaches stderr. Config is read at the
- * project root, resolved the same way the corpus root is. A thrown load, an
- * invalid user or custom source, or an invalid `search` block all give
- * `unreadable: true`, which makes the core add the `config unreadable` note to
- * the results. A project source never counts toward `unreadable`, and a
- * project config cannot change `enabled` or the allow list. It may propose
- * `search.sources`, but the loader validates and discards them: the per-call
- * external reader is their only consumer, and nothing here reads them.
+ * or `search.allow_project_sources` reaches stderr. The loader gets the start
+ * directory as given and finds the repository root itself, so a directory with
+ * no repository keeps its unresolved path. A thrown load, an invalid file of
+ * any kind (user, local, custom or project), or an invalid `search` block all
+ * give `unreadable: true`, which makes the core add the `config unreadable`
+ * note to the results. A project config cannot change `enabled` or the allow
+ * list. It may propose `search.sources`, but the loader validates and
+ * discards them: the per-call external reader is their only consumer, and
+ * reads the project file's `search` block on its own.
  *
  * The full loader drops a whole file that fails validation, so a valid
  * `search.enabled: false` next to a bad sibling key would be lost. When a
  * source is invalid, or the load throws, the settings come from the user-level
  * reader instead, which validates the `search` block on its own (the same
- * reader the `systematic-search` bin uses), so the opt-out still holds. Never throws.
+ * reader the `systematic-search` bin uses), so the opt-out still holds. Its
+ * warnings join the loader's, and a thrown load adds the exception message.
+ * Each message appears once, and a file the loader already named as
+ * unreadable is not named a second time by the fallback. Never throws.
  */
 export function loadSearchSettingsForCli(
   startDir: string,
   configOptions?: LoadConfigOptions,
 ): SearchCliSettingsLoad {
   const warnings: string[] = []
+  // The loader names every file it could not parse before it can throw, so the
+  // fallback adds only the `search` problems inside files that did parse.
+  const fallback = () => {
+    const user = loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
+    const failed = new Set(user.readFailures)
+    return {
+      settings: user.settings,
+      warnings: user.warnings.filter((message) => !failed.has(message)),
+    }
+  }
   try {
-    const loaded = loadConfigWithSources(resolveSearchRoot(startDir), {
+    const loaded = loadConfigWithSources(startDir, {
       ...configOptions,
       invalidSource: 'report',
       warningSink: (message) => warnings.push(message),
     })
     const invalidSource = loaded.metadata.sources.some(
-      (source) => source.presence === 'invalid' && source.kind !== 'project',
+      (source) => source.presence === 'invalid',
     )
-    if (invalidSource) {
-      warnings.push(
-        '[systematic] A Systematic config file could not be read, so search results carry a `config unreadable` note. Run `systematic config show` for details.',
-      )
+    if (!invalidSource) {
+      return {
+        settings: loaded.config.search,
+        warnings: uniqueMessages(warnings),
+        unreadable: loaded.config.searchUnreadable === true,
+      }
     }
+    warnings.push(
+      '[systematic] A Systematic config file could not be read, so search results carry a `config unreadable` note. Run `systematic config show` for details.',
+    )
+    const user = fallback()
+    warnings.push(...user.warnings)
     return {
-      settings: invalidSource
-        ? loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
-            .settings
-        : loaded.config.search,
-      warnings,
-      unreadable: invalidSource || loaded.config.searchUnreadable === true,
+      settings: user.settings,
+      warnings: uniqueMessages(warnings),
+      unreadable: true,
     }
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const user = fallback()
+    warnings.push(
+      `[systematic] The Systematic config could not be loaded (${displaySafe(detail)}), so search results carry a \`config unreadable\` note. Search settings come from the user-level files alone.`,
+      ...user.warnings,
+    )
     return {
-      settings: loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
-        .settings,
-      warnings,
+      settings: user.settings,
+      warnings: uniqueMessages(warnings),
       unreadable: true,
     }
   }
+}
+
+function uniqueMessages(messages: readonly string[]): string[] {
+  return [...new Set(messages)]
 }
 
 /**

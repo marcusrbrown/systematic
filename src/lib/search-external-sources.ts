@@ -33,6 +33,7 @@ import {
   resolveProjectIdentity,
 } from './search-project-identity.js'
 import {
+  type DroppedSearchEntry,
   loadProjectSearchSources,
   loadUserLevelSearchSettings,
   resolveUserLevelConfigDirs,
@@ -95,9 +96,18 @@ export interface ExternalSourcesResolution {
   /**
    * Bounded warnings, the source-cap warning first, then user-file
    * and project-file warnings. They name fields and source names, never a
-   * value. Each file's own list is bounded by its validator.
+   * value. Each file's own list is bounded by its validator, and each file is
+   * read once per call, so it reports a problem once.
    */
   readonly warnings: readonly string[]
+  /**
+   * The source entries the validators dropped whole, apart by where they were
+   * declared: the user-level files, and the project file.
+   */
+  readonly dropped: {
+    readonly user: readonly DroppedSearchEntry[]
+    readonly project: readonly DroppedSearchEntry[]
+  }
 }
 
 export interface ExternalSourcesInput {
@@ -200,15 +210,16 @@ export function resolveExternalSources(
 
   const ordered = [...userSources, ...projectSources]
   const sources = ordered.slice(0, MAX_ACTIVE_SOURCES)
-  const dropped = ordered.slice(MAX_ACTIVE_SOURCES)
+  const capped = ordered.slice(MAX_ACTIVE_SOURCES)
   return {
     sources,
     project: projectState,
     userConfigUnreadable: user.unreadable,
     warnings: [
-      ...(dropped.length > 0 ? [capWarning(dropped)] : []),
+      ...(capped.length > 0 ? [capWarning(capped)] : []),
       ...user.warnings,
       ...project.warnings,
     ],
+    dropped: { user: user.dropped, project: project.dropped },
   }
 }

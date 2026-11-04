@@ -236,8 +236,11 @@ export interface DroppedSearchEntry {
 const MAX_DETAIL_WARNINGS = 5
 const MAX_PATH_CHARS = 200
 
-/** Escape control characters and cap the length of a path before it goes into a warning. */
-function displaySafe(text: string): string {
+/**
+ * Escape control characters and cap the length of a path before it goes into a
+ * warning. The CLI uses it for exception text too.
+ */
+export function displaySafe(text: string): string {
   let out = ''
   for (const char of text) {
     if (out.length >= MAX_PATH_CHARS) return `${out}\u2026`
@@ -896,6 +899,19 @@ export interface UserLevelSearchLoad {
   readonly settings: SearchSchemaOutput | undefined
   readonly warnings: readonly string[]
   readonly unreadable: boolean
+  /**
+   * Every source entry the validator dropped whole, across the files read,
+   * with the label the warning uses and the reason.
+   */
+  readonly dropped: readonly DroppedSearchEntry[]
+  /** The layer each surviving source entry came from, by source name (`mergeSearchSettings`). */
+  readonly sourceLayers: ReadonlyMap<string, UserLevelLayer>
+  /**
+   * The subset of `warnings` that report a file that could not be read or
+   * parsed, as opposed to a problem inside a readable `search` block. A caller
+   * that already named those files can leave them out.
+   */
+  readonly readFailures: readonly string[]
 }
 
 type FileRead =
@@ -983,44 +999,92 @@ function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
   }
 }
 
+/** What one user-level file contributed. */
+interface LayerRead {
+  readonly source: Omit<SearchSettingsSource, 'layer'> | undefined
+  readonly warnings: readonly string[]
+  readonly readFailures: readonly string[]
+  readonly dropped: readonly DroppedSearchEntry[]
+}
+
+const NOTHING_READ: LayerRead = {
+  source: undefined,
+  warnings: [],
+  readFailures: [],
+  dropped: [],
+}
+
+/** Read one selected user-level file's `search` block. */
+function readUserLevelFile(file: UserLevelConfigFile): LayerRead {
+  const read = readSearchBlock(file.path)
+  if (read.kind === 'absent') return NOTHING_READ
+  if (read.kind === 'failed') {
+    const warning = formatSearchFileWarning(file.path, read.reason)
+    return {
+      source: { unreadable: true },
+      warnings: [warning],
+      readFailures: [warning],
+      dropped: [],
+    }
+  }
+  if (!read.has) return NOTHING_READ
+  const validation = validateSearchConfig(read.searchBlock, 'user', file.path)
+  return {
+    source: {
+      settings: validation.settings,
+      unreadable: validation.unreadable,
+    },
+    warnings: validation.warnings,
+    readFailures: [],
+    dropped: validation.dropped,
+  }
+}
+
+/** The user-level layer whose file a custom layer names when the two directories are one. */
+const ALIASED_TWIN: Readonly<Partial<Record<UserLevelLayer, UserLevelLayer>>> =
+  { custom: 'user', 'custom.local': 'user.local' }
+
 /**
- * Read the `search` block from the two user-level files, user then custom, and
- * merge them. It never reads project config and never throws: an unparseable
- * file or an invalid block gives one warning and `unreadable: true`.
+ * Read the `search` block from the user-level files and merge them: user,
+ * user.local, then custom and custom.local when a custom directory is set. A
+ * local file is read with or without its sibling. It never reads project
+ * config and never throws: an unparseable file or an invalid block gives one
+ * warning and `unreadable: true`, and the valid remainder still merges.
+ *
+ * When the custom directory is the user directory, each file is read once and
+ * its diagnostics are reported once; the custom layers still take their
+ * place in the merge order.
  */
 export function loadUserLevelSearchSettings(
   options?: UserLevelConfigDirOptions,
 ): UserLevelSearchLoad {
-  const dirs = resolveUserLevelConfigDirs(options)
-  const files = [
-    selectConfigFile(dirs.userConfigDir, 'systematic'),
-    ...(dirs.customConfigDir
-      ? [selectConfigFile(dirs.customConfigDir, 'systematic')]
-      : []),
-  ]
+  const selection = selectUserLevelConfigFiles(
+    resolveUserLevelConfigDirs(options),
+  )
   const warnings: string[] = []
+  const readFailures: string[] = []
+  const dropped: DroppedSearchEntry[] = []
   const sources: SearchSettingsSource[] = []
-  for (const filePath of files) {
-    const read = readSearchBlock(filePath)
-    if (read.kind === 'absent') continue
-    if (read.kind === 'failed') {
-      warnings.push(formatSearchFileWarning(filePath, read.reason))
-      sources.push({ unreadable: true })
-      continue
-    }
-    if (!read.has) continue
-    const validation = validateSearchConfig(read.searchBlock, 'user', filePath)
-    warnings.push(...validation.warnings)
-    sources.push({
-      settings: validation.settings,
-      unreadable: validation.unreadable,
-    })
+  const reads = new Map<UserLevelLayer, LayerRead>()
+  for (const file of selection.files) {
+    const twin = selection.aliased ? ALIASED_TWIN[file.layer] : undefined
+    const shared = twin === undefined ? undefined : reads.get(twin)
+    const read = shared ?? readUserLevelFile(file)
+    reads.set(file.layer, read)
+    if (read.source) sources.push({ ...read.source, layer: file.layer })
+    if (shared !== undefined) continue
+    warnings.push(...read.warnings)
+    readFailures.push(...read.readFailures)
+    dropped.push(...read.dropped)
   }
   const merged = mergeSearchSettings(sources)
   return {
     settings: merged.settings,
     unreadable: merged.unreadable,
     warnings,
+    dropped,
+    sourceLayers: merged.sourceLayers,
+    readFailures,
   }
 }
 
@@ -1038,43 +1102,62 @@ export interface ProjectSearchLoad {
    * alone does not set it. This is not the user-config `config unreadable` note.
    */
   readonly unreadable: boolean
+  /** Every source entry dropped whole, with the label the warning uses and the reason. */
+  readonly dropped: readonly DroppedSearchEntry[]
 }
 
 function formatProjectFileWarning(sourcePath: string, reason: string): string {
   return `[systematic] project search settings in ${displaySafe(sourcePath)} could not be read (${reason}); the sources it proposes were ignored.`
 }
 
+/** The one warning for an `.opencode/` project file that a repo-root file shadows. */
+function formatShadowedProjectWarning(
+  usedPath: string,
+  ignoredPath: string,
+): string {
+  return `[systematic] project config (${displaySafe(usedPath)}) takes precedence over (${displaySafe(ignoredPath)}), which is ignored; the two files are never merged.`
+}
+
 /**
  * Read the sources a project config proposes, from the checkout root's
- * `.opencode/systematic.jsonc` (falling back to `.json`, as `getConfigPaths`
- * in `config.ts` does). Bin-safe: it needs no `config.ts`. The read is capped
- * at `MAX_PROJECT_CONFIG_BYTES`, the file is validated with the project rules
+ * project file: `.systematic.jsonc`, else `.systematic.json`, else
+ * `.opencode/systematic.jsonc`, else `.opencode/systematic.json`
+ * (`selectProjectConfigFile`). A root file shadowing an `.opencode/` file is
+ * reported in `warnings`; the two are never merged, and a broken winner never
+ * falls back. Bin-safe: it needs no `config.ts`. The read is capped at
+ * `MAX_PROJECT_CONFIG_BYTES`, the file is validated with the project rules
  * (`sources` only; `enabled` and `allow_project_sources` are never read), and
  * it never throws. A missing file or a missing `search` block is normal.
  */
 export function loadProjectSearchSources(
   checkoutRoot: string,
 ): ProjectSearchLoad {
-  const filePath = selectConfigFile(
-    path.join(checkoutRoot, '.opencode'),
-    'systematic',
-  )
+  const selection = selectProjectConfigFile(checkoutRoot)
+  const filePath = selection.path
+  const shadowed =
+    selection.ignoredPath === undefined
+      ? []
+      : [formatShadowedProjectWarning(filePath, selection.ignoredPath)]
   const read = readSearchBlock(filePath, MAX_PROJECT_CONFIG_BYTES)
   if (read.kind === 'absent') {
-    return { sources: [], warnings: [], unreadable: false }
+    return { sources: [], warnings: shadowed, unreadable: false, dropped: [] }
   }
   if (read.kind === 'failed') {
     return {
       sources: [],
-      warnings: [formatProjectFileWarning(filePath, read.reason)],
+      warnings: [...shadowed, formatProjectFileWarning(filePath, read.reason)],
       unreadable: true,
+      dropped: [],
     }
   }
-  if (!read.has) return { sources: [], warnings: [], unreadable: false }
+  if (!read.has) {
+    return { sources: [], warnings: shadowed, unreadable: false, dropped: [] }
+  }
   const validation = validateSearchConfig(read.searchBlock, 'project', filePath)
   return {
     sources: validation.structural ? [] : (validation.settings?.sources ?? []),
-    warnings: validation.warnings,
+    warnings: [...shadowed, ...validation.warnings],
     unreadable: validation.structural,
+    dropped: validation.dropped,
   }
 }
