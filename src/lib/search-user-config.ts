@@ -756,12 +756,30 @@ function absorb(
 // ── File selection ──────────────────────────────────────────────────────────
 
 /**
- * Pick a config file in `dir`: `<basename>.jsonc` when it exists, else the
- * `.json` path (returned even when absent, so callers that stat it still work).
+ * Whether `target` is a directory entry, a symlink included. Selection asks
+ * this instead of `existsSync` because `existsSync` follows a link: a dangling
+ * link would read as absent, and a lower-priority file would win over it. An
+ * entry that cannot be inspected for a reason other than absence counts as
+ * present, so the read that follows reports it.
+ */
+export function configEntryExists(target: string): boolean {
+  try {
+    fs.lstatSync(target)
+    return true
+  } catch (error) {
+    const code = errorCode(error)
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+}
+
+/**
+ * Pick a config file in `dir`: `<basename>.jsonc` when its entry exists, else
+ * the `.json` path (returned even when absent, so callers that stat it still
+ * work). A dangling `.jsonc` link is selected, and its read reports it.
  */
 export function selectConfigFile(dir: string, basename: string): string {
   const jsoncPath = path.join(dir, `${basename}.jsonc`)
-  if (fs.existsSync(jsoncPath)) return jsoncPath
+  if (configEntryExists(jsoncPath)) return jsoncPath
   return path.join(dir, `${basename}.json`)
 }
 
@@ -878,7 +896,8 @@ export interface ProjectConfigSelection {
  * Pick the project config file under the repository root: `.systematic.jsonc`,
  * else `.systematic.json`, else `.opencode/systematic.jsonc`, else
  * `.opencode/systematic.json`. A root file wins even when invalid; selection
- * looks at existence only and never falls back past a broken file.
+ * looks at the directory entry only (a dangling link is a file that exists)
+ * and never falls back past a broken file.
  */
 export function selectProjectConfigFile(
   repoRoot: string,
@@ -888,10 +907,50 @@ export function selectProjectConfigFile(
     'systematic',
   )
   const rootFile = selectConfigFile(repoRoot, '.systematic')
-  if (!fs.existsSync(rootFile)) return { path: opencodeFile }
-  return fs.existsSync(opencodeFile)
+  if (!configEntryExists(rootFile)) return { path: opencodeFile }
+  return configEntryExists(opencodeFile)
     ? { path: rootFile, ignoredPath: opencodeFile }
     : { path: rootFile }
+}
+
+/**
+ * The start directory's own `.opencode/systematic.*` file when the repository
+ * root is a different directory: a file that is never read, because project
+ * config comes from the root. `repoRoot` is the lookup of the start directory
+ * (`lookupSearchRoot`). The file is not reported when it is the selected one
+ * (the same file reached through a link). Both the config loader and the
+ * per-call reader ask this, so they warn under the same condition.
+ */
+export function findStartDirProjectConfig(
+  startDir: string,
+  repoRoot: { readonly root: string; readonly foundGit: boolean },
+  selectedProjectConfig: string,
+): string | undefined {
+  if (!repoRoot.foundGit) return undefined
+  if (realpathOrResolved(startDir) === repoRoot.root) return undefined
+  const candidate = selectConfigFile(
+    path.join(startDir, '.opencode'),
+    'systematic',
+  )
+  if (!configEntryExists(candidate)) return undefined
+  return realpathOrResolved(candidate) ===
+    realpathOrResolved(selectedProjectConfig)
+    ? undefined
+    : candidate
+}
+
+/**
+ * The warning for a start directory's own project file that is not read.
+ * `safe` makes each path fit for a message; the config loader passes its own
+ * sanitizer, and the default is `displaySafe`.
+ */
+export function startDirProjectWarning(
+  startDirConfig: string,
+  projectRoot: string,
+  selectedProjectConfig: string,
+  safe: (text: string) => string = displaySafe,
+): string {
+  return `[systematic] project config (${safe(startDirConfig)}) is below the repository root (${safe(projectRoot)}) and is not read; project config is read from (${safe(selectedProjectConfig)}).`
 }
 
 // ── The user-level reader ───────────────────────────────────────────────────
@@ -924,7 +983,7 @@ type FileRead =
       readonly has: boolean
     }
 
-type TextRead =
+export type TextRead =
   | { readonly kind: 'absent' }
   | { readonly kind: 'failed'; readonly reason: string }
   | { readonly kind: 'text'; readonly content: string }
@@ -941,13 +1000,13 @@ export const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024
  * `maxBytes + 1` bytes, regular files only, and a non-blocking open so a FIFO
  * planted at the path cannot hang the reader.
  */
-function readTextBounded(filePath: string, maxBytes: number): TextRead {
+export function readTextBounded(filePath: string, maxBytes: number): TextRead {
   const read = readBytesBounded(filePath, maxBytes)
   switch (read.kind) {
     case 'bytes':
       return { kind: 'text', content: read.bytes.toString('utf-8') }
     case 'absent':
-      return { kind: 'absent' }
+      return absentOrDangling(filePath)
     case 'not-regular':
       return { kind: 'failed', reason: 'not a regular file' }
     case 'too-large':
@@ -960,11 +1019,22 @@ function readTextBounded(filePath: string, maxBytes: number): TextRead {
   }
 }
 
+/**
+ * A read that found nothing: the file is absent, unless a directory entry
+ * stands at the path. That entry is a link whose target is gone, which the
+ * read reports because selection chose it.
+ */
+function absentOrDangling(filePath: string): TextRead {
+  return configEntryExists(filePath)
+    ? { kind: 'failed', reason: 'unable to read file' }
+    : { kind: 'absent' }
+}
+
 function readTextWhole(filePath: string): TextRead {
   try {
     return { kind: 'text', content: fs.readFileSync(filePath, 'utf-8') }
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return { kind: 'absent' }
+    if (errorCode(error) === 'ENOENT') return absentOrDangling(filePath)
     return { kind: 'failed', reason: 'unable to read file' }
   }
 }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadConfigWithSources } from '../../src/lib/config.js'
+import { loadExternalSources } from '../../src/lib/search-external.js'
 import {
   type ActiveSource,
   type InspectedSource,
@@ -932,6 +933,104 @@ describe('resolveExternalSources: locations, local overlays and diagnostics', ()
     }
   })
 
+  describe('a start directory with its own .opencode file', () => {
+    const BELOW_ROOT = 'is below the repository root'
+
+    function below(env: Env): { deep: string; nested: string } {
+      writeProject(env.repo, { sources: [projectSource('from-root')] })
+      const deep = path.join(env.repo, 'packages/app')
+      writeProject(deep, { sources: [projectSource('nested')] })
+      return { deep, nested: path.join(deep, '.opencode/systematic.json') }
+    }
+
+    test('warns that the file is not read, with the text the config loader uses, once', () => {
+      const env = makeEnv()
+      const { deep, nested } = below(env)
+      writeUser(env, { allow_project_sources: [env.repo] })
+
+      const result = resolve(env, deep)
+      expect(names(result.sources)).toEqual(['from-root'])
+      const loaderWarnings: string[] = []
+      loadConfigWithSources(deep, {
+        ...env.configOptions,
+        warningSink: (message) => loaderWarnings.push(message),
+      })
+      const expected = loaderWarnings.filter((w) => w.includes(BELOW_ROOT))
+      expect(expected).toHaveLength(1)
+      expect(expected[0]).toContain(nested)
+      expect(result.warnings.filter((w) => w.includes(BELOW_ROOT))).toEqual(
+        expected,
+      )
+    })
+
+    test('warns for a project that is not allowed as well', () => {
+      const env = makeEnv()
+      const { deep } = below(env)
+      const result = resolve(env, deep)
+      expect(result.project.kind).toBe('not-allowed')
+      expect(result.warnings.some((w) => w.includes(BELOW_ROOT))).toBe(true)
+    })
+
+    test('does not warn from the root, from a start directory with no file of its own, or when that file is the selected one', () => {
+      const env = makeEnv()
+      const { deep } = below(env)
+      expect(
+        resolve(env, env.repo).warnings.some((w) => w.includes(BELOW_ROOT)),
+      ).toBe(false)
+
+      const bare = path.join(env.repo, 'packages/bare')
+      fs.mkdirSync(bare, { recursive: true })
+      expect(
+        resolve(env, bare).warnings.some((w) => w.includes(BELOW_ROOT)),
+      ).toBe(false)
+
+      fs.rmSync(path.join(deep, '.opencode'), { recursive: true })
+      fs.mkdirSync(path.join(deep, '.opencode'))
+      fs.symlinkSync(
+        path.join(env.repo, '.opencode/systematic.json'),
+        path.join(deep, '.opencode/systematic.json'),
+      )
+      expect(
+        resolve(env, deep).warnings.some((w) => w.includes(BELOW_ROOT)),
+      ).toBe(false)
+    })
+
+    test('does not name the root own .opencode file as below the root when a root file shadows it', () => {
+      const env = makeEnv()
+      writeProject(env.repo, { sources: [projectSource('shadowed')] })
+      fs.writeFileSync(
+        path.join(env.repo, '.systematic.json'),
+        JSON.stringify({ search: { sources: [projectSource('from-root')] } }),
+      )
+      const warnings = resolve(env, env.repo).warnings
+      expect(warnings.some((w) => w.includes('takes precedence over'))).toBe(
+        true,
+      )
+      expect(warnings.some((w) => w.includes(BELOW_ROOT))).toBe(false)
+    })
+
+    test('does not warn outside any repository, even when the start directory is reached through a link', () => {
+      const env = makeEnv()
+      const loose = makeDir('extsrc-loose-')
+      writeProject(loose, { sources: [projectSource('loose')] })
+      fs.writeFileSync(path.join(loose, '.systematic.json'), '{}')
+      const link = path.join(makeDir('extsrc-link-'), 'via')
+      fs.symlinkSync(loose, link)
+      expect(
+        resolve(env, link).warnings.some((w) => w.includes(BELOW_ROOT)),
+      ).toBe(false)
+    })
+
+    test('does not warn outside any repository', () => {
+      const env = makeEnv()
+      const loose = makeDir('extsrc-loose-')
+      writeProject(loose, { sources: [projectSource('loose')] })
+      expect(
+        resolve(env, loose).warnings.some((w) => w.includes(BELOW_ROOT)),
+      ).toBe(false)
+    })
+  })
+
   test('an oversized root file leaves the project unreadable and does not fall back to .opencode/', () => {
     const env = makeEnv()
     writeUser(env, { allow_project_sources: [env.repo] })
@@ -947,6 +1046,78 @@ describe('resolveExternalSources: locations, local overlays and diagnostics', ()
     const result = resolve(env)
     expect(result.sources).toEqual([])
     expect(result.project).toEqual({ kind: 'config-unreadable' })
+  })
+})
+
+describe('resolveExternalSources: warnings of a project that is not allowed', () => {
+  const proposals = (env: Env) => {
+    writeProject(env.repo, {
+      sources: [
+        { ...projectSource('quokka-notes'), exclude: ['[bad]'] },
+        { name: 'quokka-broken', format: 'markdown', roots: ['..'] },
+        42,
+        projectSource('quokka-twin'),
+        projectSource('quokka-twin'),
+      ],
+    })
+  }
+  const resolve = (env: Env) =>
+    resolveExternalSources({
+      startDir: env.repo,
+      configOptions: env.configOptions,
+    })
+
+  test('forwards no warning that names a proposal, and inspection keeps them', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: ['/somewhere/else'] })
+    proposals(env)
+
+    const result = resolve(env)
+    expect(result.project.kind).toBe('not-allowed')
+    expect(result.warnings.join('\n')).not.toContain('quokka')
+    expect(result.warnings.join('\n')).not.toContain('search source')
+
+    const inspected = inspectSearch({
+      checkoutRoot: env.repo,
+      configOptions: env.configOptions,
+    })
+    const byName = (name: string) =>
+      inspected.sources.find((source) => source.name === name)
+    expect(byName('quokka-notes')?.warnings.join('\n')).toContain('exclude[0]')
+    expect(byName('quokka-broken')?.warnings.join('\n')).toContain('dropped')
+    expect(byName('quokka-twin')?.warnings.join('\n')).toContain('dropped')
+  })
+
+  test('forwards the same warnings when the project is allowed', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: [env.repo] })
+    proposals(env)
+
+    const text = resolve(env).warnings.join('\n')
+    expect(text).toContain('exclude[0]')
+    expect(text).toContain('"quokka-broken"')
+    expect(text).toContain('"quokka-twin"')
+  })
+
+  test('keeps a project warning that names no proposal, and drops entry warnings when no valid proposal is left', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: ['/somewhere/else'] })
+    fs.writeFileSync(
+      path.join(env.repo, '.systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [
+            { name: 'quokka-broken', format: 'markdown', roots: ['..'] },
+          ],
+        },
+      }),
+    )
+    writeProject(env.repo, { sources: [projectSource('shadowed')] })
+
+    const result = resolve(env)
+    expect(result.project).toEqual({ kind: 'none' })
+    expect(result.warnings.join('\n')).not.toContain('quokka')
+    expect(result.warnings.join('\n')).toContain('takes precedence over')
   })
 })
 
@@ -1183,6 +1354,109 @@ describe('inspectSearch', () => {
     const matching = result.sources.filter((s) => s.name === 'decisions')
     expect(matching).toHaveLength(1)
     expect(matching[0]?.origin).toBe('user')
+  })
+
+  test('a project proposal off the allow list is still listed when a mapped user source holds the same name', () => {
+    const env = makeEnv()
+    const root = mkRoot(env, 'wiki')
+    writeUser(env, {
+      allow_project_sources: ['/somewhere/else'],
+      sources: [userSource('wiki', [env.repo], root)],
+    })
+    writeProject(env.repo, { sources: [projectSource('wiki')] })
+
+    const rows = inspect(env)
+      .sources.filter((source) => source.name === 'wiki')
+      .map((source) => [source.origin, source.status])
+    expect(rows).toEqual([
+      ['user', 'active'],
+      ['project', 'not allowed'],
+    ])
+  })
+
+  describe('a project root the loader rejects', () => {
+    const SYMLINK_ROOT = 'a project root is a symlink'
+    const SYMLINK_ANCESTOR = 'a project root passes through a symlink'
+
+    function layout(env: Env, roots: string[]): void {
+      fs.mkdirSync(path.join(env.repo, 'real/sub'), { recursive: true })
+      fs.writeFileSync(path.join(env.repo, 'real/sub/a.md'), '# A\n')
+      fs.mkdirSync(path.join(env.repo, 'docs'), { recursive: true })
+      fs.symlinkSync(
+        path.join(env.repo, 'real'),
+        path.join(env.repo, 'docs/linked'),
+      )
+      writeUser(env, { allow_project_sources: [env.repo] })
+      writeProject(env.repo, {
+        sources: roots.map((root, index) => ({
+          name: `s${index}`,
+          format: 'markdown',
+          roots: [root],
+        })),
+      })
+    }
+
+    test('a root that is a symlink and a root below a symlink are not active, and the loader drops the same sources', () => {
+      const env = makeEnv()
+      layout(env, ['docs/linked', 'docs/linked/sub', 'real/sub'])
+
+      const inspected = inspect(env)
+      expect(find(inspected.sources, 's0')).toMatchObject({
+        status: 'root rejected',
+        origin: 'project',
+        reason: SYMLINK_ROOT,
+      })
+      expect(find(inspected.sources, 's1')).toMatchObject({
+        status: 'root rejected',
+        reason: SYMLINK_ANCESTOR,
+      })
+      expect(find(inspected.sources, 's2')?.status).toBe('active')
+
+      const loads = loadExternalSources({
+        sources: resolveExternalSources({
+          startDir: env.repo,
+          configOptions: env.configOptions,
+        }).sources,
+        checkoutRoot: env.repo,
+      })
+      expect(loads.map((load) => [load.name, load.state])).toEqual([
+        ['s0', 'dropped'],
+        ['s1', 'dropped'],
+        ['s2', 'loaded'],
+      ])
+    })
+
+    test('a root whose real path leaves the checkout is rejected, and the loader drops it', () => {
+      const env = makeEnv()
+      const outside = makeDir('extsrc-outside-')
+      fs.writeFileSync(path.join(outside, 'a.md'), '# Outside\n')
+      fs.symlinkSync(outside, path.join(env.repo, 'via'))
+      writeUser(env, { allow_project_sources: [env.repo] })
+      writeProject(env.repo, { sources: [projectSource('escape', 'via')] })
+
+      expect(find(inspect(env).sources, 'escape')).toMatchObject({
+        status: 'root rejected',
+        origin: 'project',
+      })
+      const loads = loadExternalSources({
+        sources: resolveExternalSources({
+          startDir: env.repo,
+          configOptions: env.configOptions,
+        }).sources,
+        checkoutRoot: env.repo,
+      })
+      expect(loads.map((load) => load.state)).toEqual(['dropped'])
+    })
+
+    test('a user source with a symlinked root is not held to the checkout', () => {
+      const env = makeEnv()
+      const target = mkRoot(env, 'target')
+      const link = path.join(env.homeDir, 'vaults/link')
+      fs.symlinkSync(target, link)
+      writeUser(env, { sources: [userSource('wiki', [env.repo], link)] })
+
+      expect(find(inspect(env).sources, 'wiki')?.status).toBe('active')
+    })
   })
 
   test('exclude patterns appear on the source and its warnings never carry pattern text', () => {

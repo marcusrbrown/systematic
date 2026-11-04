@@ -410,10 +410,10 @@ Pi loads config once, from the working directory of the Pi process when it start
 
 - Whether search is enabled, the allow list and whether this project is on it.
 - Each external source with where it was declared (`user`, `user.local`, `custom`, `custom.local` or `project`), its name, format, roots, `exclude` patterns and warnings.
-- A status for each source: `active`; `not allowed` (a project proposal without an allow entry); `over source cap` (more than 8 are active); `dropped invalid` (an entry that failed its checks, with the reason); or `missing root` (a root that does not exist).
+- A status for each source: `active`; `not allowed` (a project proposal without an allow entry); `over source cap` (more than 8 are active); `dropped invalid` (an entry that failed its checks, with the reason); `root rejected` (a project root that is a symlink, passes through one or resolves outside the checkout, so a search drops the source; the reason says which); or `missing root` (a root that does not exist).
 - The four built-in directories, each `present`, `empty`, `missing` or `unreadable`.
 
-A source dropped for being invalid reports the origin `user` whichever user-level file declared it. A user source mapped only to other projects is left out. A project proposal replaced by a same-named user source is not listed either. The section lists the name and roots of a proposal that is not allowed. The tool and the command replies still never do.
+A source dropped for being invalid reports the origin `user` whichever user-level file declared it. A user source mapped only to other projects is left out. An allowed project proposal replaced by a same-named user source is not listed either; a proposal that is not allowed is always listed. The section lists the name and roots of a proposal that is not allowed. The tool and the command replies still never do.
 
 `config show` never prints the text of a local file. A source defined in one appears with its resolved name and roots.
 

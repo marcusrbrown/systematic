@@ -33,6 +33,8 @@ import {
 import { readBytesBounded } from './search-bounded-read.js'
 import { lookupSearchRoot } from './search-corpus.js'
 import {
+  configEntryExists,
+  findStartDirProjectConfig,
   MAX_PROJECT_CONFIG_BYTES,
   mergeSearchSettings,
   resolveUserLevelConfigDirs,
@@ -41,6 +43,7 @@ import {
   selectConfigFile,
   selectProjectConfigFile,
   selectUserLevelConfigFiles,
+  startDirProjectWarning,
   type UserLevelLayer,
   validateSearchConfig,
 } from './search-user-config.js'
@@ -626,7 +629,14 @@ function readConfigText(
     try {
       return fs.readFileSync(filePath, 'utf-8')
     } catch (error) {
-      if (isErrorWithCode(error) && error.code === 'ENOENT') return null
+      // A directory entry at the path is a link whose target is gone: reported.
+      if (
+        isErrorWithCode(error) &&
+        error.code === 'ENOENT' &&
+        !configEntryExists(filePath)
+      ) {
+        return null
+      }
       throw new Error(
         `Invalid Systematic config in ${filePath}: unable to read file`,
         { cause: error },
@@ -638,7 +648,10 @@ function readConfigText(
     case 'bytes':
       return read.bytes.toString('utf-8')
     case 'absent':
-      return null
+      if (!configEntryExists(filePath)) return null
+      throw new Error(
+        `Invalid Systematic config in ${filePath}: unable to read file`,
+      )
     case 'too-large':
       throw new Error(
         `Invalid Systematic config in ${filePath}: unable to read file (${OVERSIZED_FILE_REASON})`,
@@ -1856,7 +1869,12 @@ function emitProjectLocationWarnings(
   }
   if (paths.startDirProjectConfig !== undefined) {
     warningSink(
-      `[systematic] project config (${sanitizeDiagnosticText(paths.startDirProjectConfig)}) is below the repository root (${sanitizeDiagnosticText(paths.projectRoot)}) and is not read; project config is read from (${sanitizeDiagnosticText(paths.projectConfig)}).`,
+      startDirProjectWarning(
+        paths.startDirProjectConfig,
+        paths.projectRoot,
+        paths.projectConfig,
+        sanitizeDiagnosticText,
+      ),
     )
   }
 }
@@ -3013,28 +3031,6 @@ type ConfigPathOptions = Pick<
   LoadConfigOptions,
   'customConfigDir' | 'homeDir' | 'includeProject' | 'userConfigDir'
 >
-
-/**
- * The start directory's own `.opencode/systematic.*` file, when the
- * repository root is a different directory. Such a file is never read.
- */
-function findStartDirProjectConfig(
-  startDir: string,
-  repoRoot: { readonly root: string; readonly foundGit: boolean },
-  selectedProjectConfig: string,
-): string | undefined {
-  if (!repoRoot.foundGit) return undefined
-  if (resolveConfigSourcePath(startDir) === repoRoot.root) return undefined
-  const candidate = selectConfigFile(
-    path.join(startDir, '.opencode'),
-    'systematic',
-  )
-  if (!fs.existsSync(candidate)) return undefined
-  return resolveConfigSourcePath(candidate) ===
-    resolveConfigSourcePath(selectedProjectConfig)
-    ? undefined
-    : candidate
-}
 
 /**
  * Where each config file lives.

@@ -661,6 +661,119 @@ describe('selectConfigFile', () => {
   })
 })
 
+describe('selection looks at the directory entry, not the link target', () => {
+  const dangling = (file: string) =>
+    fs.symlinkSync(path.join(path.dirname(file), 'no-such-target'), file)
+
+  test('selectConfigFile selects a dangling .jsonc link over a valid .json', () => {
+    const dir = makeTempDir('dangling-select')
+    dangling(path.join(dir, 'systematic.jsonc'))
+    fs.writeFileSync(path.join(dir, 'systematic.json'), '{}')
+    expect(selectConfigFile(dir, 'systematic')).toBe(
+      path.join(dir, 'systematic.jsonc'),
+    )
+  })
+
+  test('selectProjectConfigFile selects a dangling root link over a valid .opencode file, and names the .opencode file as ignored', () => {
+    const root = makeTempDir('dangling-project')
+    fs.mkdirSync(path.join(root, '.opencode'))
+    fs.writeFileSync(path.join(root, '.opencode/systematic.json'), '{}')
+    dangling(path.join(root, '.systematic.jsonc'))
+    expect(selectProjectConfigFile(root)).toEqual({
+      path: path.join(root, '.systematic.jsonc'),
+      ignoredPath: path.join(root, '.opencode/systematic.json'),
+    })
+  })
+
+  test('a dangling .opencode link is an ignored file when a root file wins', () => {
+    const root = makeTempDir('dangling-ignored')
+    fs.mkdirSync(path.join(root, '.opencode'))
+    dangling(path.join(root, '.opencode/systematic.json'))
+    fs.writeFileSync(path.join(root, '.systematic.json'), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({
+      path: path.join(root, '.systematic.json'),
+      ignoredPath: path.join(root, '.opencode/systematic.json'),
+    })
+  })
+
+  test('the project reader reports a dangling root link and applies nothing from .opencode', () => {
+    const root = makeTempDir('dangling-reader')
+    fs.mkdirSync(path.join(root, '.opencode'))
+    fs.writeFileSync(
+      path.join(root, '.opencode/systematic.json'),
+      JSON.stringify({
+        search: {
+          sources: [{ name: 'lower', format: 'markdown', roots: ['docs'] }],
+        },
+      }),
+    )
+    const link = path.join(root, '.systematic.jsonc')
+    dangling(link)
+
+    const load = loadProjectSearchSources(root)
+    expect(load.unreadable).toBe(true)
+    expect(load.sources).toEqual([])
+    expect(load.warnings.join('\n')).toContain(link)
+    expect(load.warnings.join('\n')).toContain('could not be read')
+  })
+
+  test('the project reader reports a dangling .opencode link that is the only candidate', () => {
+    const root = makeTempDir('dangling-only')
+    fs.mkdirSync(path.join(root, '.opencode'))
+    const link = path.join(root, '.opencode/systematic.json')
+    dangling(link)
+
+    const load = loadProjectSearchSources(root)
+    expect(load.unreadable).toBe(true)
+    expect(load.warnings.join('\n')).toContain(link)
+  })
+
+  test('the user-level reader reports a dangling .jsonc link and does not fall back to the valid .json', () => {
+    const root = makeTempDir('dangling-user')
+    const homeDir = path.join(root, 'home')
+    const userConfigDir = path.join(homeDir, '.config/opencode')
+    fs.mkdirSync(userConfigDir, { recursive: true })
+    const link = path.join(userConfigDir, 'systematic.jsonc')
+    dangling(link)
+    fs.writeFileSync(
+      path.join(userConfigDir, 'systematic.json'),
+      JSON.stringify({ search: { enabled: false } }),
+    )
+
+    const load = loadUserLevelSearchSettings({ homeDir, customConfigDir: null })
+    expect(load.unreadable).toBe(true)
+    expect(load.settings).toBeUndefined()
+    expect(load.readFailures.join('\n')).toContain(link)
+  })
+
+  test('the full loader goes through the same selection and names the dangling file', () => {
+    const root = makeTempDir('dangling-loader')
+    const homeDir = path.join(root, 'home')
+    const repo = path.join(root, 'repo')
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(repo, '.opencode'))
+    fs.mkdirSync(homeDir)
+    fs.writeFileSync(path.join(repo, '.opencode/systematic.json'), '{}')
+    const link = path.join(repo, '.systematic.jsonc')
+    dangling(link)
+
+    expect(() =>
+      loadConfigWithSources(repo, { homeDir, customConfigDir: null }),
+    ).toThrow(link)
+  })
+
+  test('a plain missing file is still absent: no entry, no report', () => {
+    const root = makeTempDir('missing-still')
+    fs.mkdirSync(path.join(root, '.opencode'))
+    expect(loadProjectSearchSources(root)).toEqual({
+      sources: [],
+      warnings: [],
+      unreadable: false,
+      dropped: [],
+    })
+  })
+})
+
 describe('resolveUserLevelConfigDirs', () => {
   const ORIGINAL = process.env.OPENCODE_CONFIG_DIR
   afterEach(() => {

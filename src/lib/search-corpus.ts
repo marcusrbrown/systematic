@@ -401,6 +401,37 @@ export function symlinkedComponent(
   return undefined
 }
 
+/** Why a project source root is not loaded. */
+export type ProjectRootRejection = SymlinkedComponent | 'outside'
+
+/** The reason each rejection gives, as the loaders and the inspector word it. */
+export const PROJECT_ROOT_REJECTION_REASONS: Readonly<
+  Record<ProjectRootRejection, string>
+> = {
+  root: 'a project root is a symlink',
+  ancestor: 'a project root passes through a symlink',
+  outside: 'a project root resolves outside the project root',
+}
+
+/**
+ * Whether a project source root is rejected before it is walked: it is a
+ * symlink, passes through a symlink below the checkout, or its real path is not
+ * strictly inside the checkout's real path. The loaders and `config show` both
+ * ask this, so what is reported as rejected is what is dropped. A root that is
+ * missing or cannot be inspected is not rejected here; the walk reports it.
+ */
+export function rejectedProjectRoot(
+  checkoutRoot: string,
+  root: string,
+): ProjectRootRejection | undefined {
+  const symlinked = symlinkedComponent(checkoutRoot, root)
+  if (symlinked !== undefined) return symlinked
+  const container = probeRealpath(checkoutRoot)
+  const directory = probeRealpath(root)
+  if (container.kind !== 'ok' || directory.kind !== 'ok') return undefined
+  return isInside(container.value, directory.value) ? undefined : 'outside'
+}
+
 export interface SourceFileCandidate {
   /** Path relative to the walked directory, with `/` separators. */
   readonly relative: string

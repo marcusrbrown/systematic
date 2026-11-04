@@ -24,6 +24,7 @@ Systematic picks a file by whether it exists, never by whether it is valid:
 - When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes precedence and `.json` is ignored. This lets you add comments to your config without renaming the existing file.
 - In a repository, a root file (`.systematic.jsonc`, else `.systematic.json`) takes precedence over a file under `.opencode/`. Systematic never merges the two. It ignores the `.opencode/` file and warns once, naming both paths.
 - A file that is chosen but invalid is never skipped in favor of another file. Systematic reports the chosen file as invalid.
+- A file exists when its directory entry exists. A symlink whose target is gone counts: Systematic chooses it, reports it as unreadable and does not fall back to another file.
 
 The layer names `user.local` and `custom.local` are the ones that appear in prose and in `systematic config show`. The JSON output of `config show` spells them `userLocal` and `customLocal`.
 
@@ -75,7 +76,7 @@ If `OPENCODE_CONFIG_DIR` points at your user config directory (spelled the same 
 
 ### Seeing which files are in play
 
-`systematic config show` lists the paths it resolved: the user, user.local and project files, plus the custom and custom.local files when `OPENCODE_CONFIG_DIR` is set, and the `.opencode/` file that a root project file shadows. A local file's path is listed even when the file does not exist. With `--json`, these are the `locations` keys `user`, `userLocal`, `project`, `custom`, `customLocal` and `ignoredProject`. `custom` and `customLocal` are `null` without a custom directory, and `ignoredProject` is `null` unless a root file shadows an `.opencode/` file. The command prints the project and user files as it always has, and never prints the text of a local file.
+`systematic config show` lists the paths it resolved: the user, user.local and project files, plus the custom and custom.local files when `OPENCODE_CONFIG_DIR` is set, and the `.opencode/` file that a root project file shadows. A local file's path is listed even when the file does not exist. With `--json`, these are the `locations` keys `user`, `userLocal`, `project`, `custom`, `customLocal` and `ignoredProject`. `custom` and `customLocal` are `null` without a custom directory, and `ignoredProject` is `null` unless a root file shadows an `.opencode/` file. The command prints the project and user files as it always has, and never prints the text of a local file. It reads those two files with the same 1 MB cap as the project config. A file that is larger, is not a regular file (a directory or a named pipe) or cannot be read gets a one-line note instead of its text, and the rest of the output still prints.
 
 `config show` also has a Search section for the current project, and `--json` carries it under `search`. It stays available when the configuration fails to load. See [See what search will do](/systematic/guides/search/#see-what-search-will-do).
 

@@ -18,7 +18,9 @@
  * dropped, a user source mapped to this project shadows a same-named project
  * source, user sources come before project sources, and the list caps at
  * `MAX_ACTIVE_SOURCES`. Project-source problems never throw and never touch
- * built-in replies; the caller decides how to word the states.
+ * built-in replies; the caller decides how to word the states. A project that
+ * is not allowed forwards no warning that names one of its entries: its
+ * replies name no proposal, and `inspectSearch` is where those warnings go.
  *
  * Roots come back resolved to absolute paths and nothing more: existence,
  * symlink and containment checks belong to the loader that reads them.
@@ -31,6 +33,10 @@ import {
   discoverSourceFiles,
   isDocumentKind,
   KIND_TABLE,
+  lookupSearchRoot,
+  PROJECT_ROOT_REJECTION_REASONS,
+  type ProjectRootRejection,
+  rejectedProjectRoot,
   resolveSearchRoot,
   safeLstat,
 } from './search-corpus.js'
@@ -41,11 +47,15 @@ import {
 } from './search-project-identity.js'
 import {
   type DroppedSearchEntry,
+  findStartDirProjectConfig,
   loadProjectSearchSources,
   loadUserLevelSearchSettings,
+  type ProjectSearchLoad,
   resolveUserLevelConfigDirs,
   type SearchSourceEntry,
   type SearchSourceFormat,
+  selectProjectConfigFile,
+  startDirProjectWarning,
   type UserLevelConfigDirOptions,
   type UserLevelLayer,
 } from './search-user-config.js'
@@ -189,6 +199,50 @@ function projectSourcesOf(
     }))
 }
 
+/** Whether a warning is the one `search source <label> in <file>` entry warning for `label`. */
+function namesEntry(warning: string, label: string): boolean {
+  return warning.includes(`search source ${label} in `)
+}
+
+/** The labels a project file's entry warnings use: every valid proposal and every dropped entry. */
+function projectEntryLabels(project: ProjectSearchLoad): string[] {
+  return [
+    ...project.sources.map((entry) => `"${entry.name}"`),
+    ...project.dropped.map((entry) => entry.label),
+  ]
+}
+
+/**
+ * The project warnings a reply may carry. A project that is not allowed has
+ * no say in what the reply names, so the warnings about its entries stay out.
+ */
+function forwardedProjectWarnings(
+  project: ProjectSearchLoad,
+  projectAllowed: boolean,
+): readonly string[] {
+  if (projectAllowed) return project.warnings
+  const labels = projectEntryLabels(project)
+  return project.warnings.filter(
+    (warning) => !labels.some((label) => namesEntry(warning, label)),
+  )
+}
+
+/**
+ * The warning for the start directory's own project file when the checkout
+ * root is elsewhere, under the condition the config loader warns under.
+ */
+function startDirWarnings(
+  startDir: string,
+  lookup: ReturnType<typeof lookupSearchRoot>,
+  checkoutRoot: string,
+): string[] {
+  const selected = selectProjectConfigFile(checkoutRoot).path
+  const ignored = findStartDirProjectConfig(startDir, lookup, selected)
+  return ignored === undefined
+    ? []
+    : [startDirProjectWarning(ignored, checkoutRoot, selected)]
+}
+
 /**
  * Read everything for one `external` call and resolve the active sources.
  * Never throws: every file problem is a state or a warning.
@@ -198,12 +252,16 @@ export function resolveExternalSources(
 ): ExternalSourcesResolution {
   const dirs = resolveUserLevelConfigDirs(input.configOptions)
   const homeDir = dirs.homeDir || os.homedir()
-  const checkoutRoot = resolveSearchRoot(input.startDir)
+  const lookup = lookupSearchRoot(input.startDir)
+  const checkoutRoot = lookup.foundGit
+    ? lookup.root
+    : resolveSearchRoot(input.startDir)
   const identity = input.identity ?? resolveProjectIdentity(checkoutRoot)
 
   const user = loadUserLevelSearchSettings(input.configOptions)
   const allow = user.settings?.allow_project_sources ?? []
   const project = loadProjectSearchSources(checkoutRoot)
+  const projectAllowed = isAllowedProject(identity, allow, { homeDir })
 
   const userSources = mappedUserSources(
     user.settings?.sources ?? [],
@@ -218,7 +276,7 @@ export function resolveExternalSources(
     projectState = { kind: 'config-unreadable' }
   } else if (proposals === 0) {
     projectState = { kind: 'none' }
-  } else if (isAllowedProject(identity, allow, { homeDir })) {
+  } else if (projectAllowed) {
     projectState = { kind: 'allowed', proposals }
     projectSources = projectSourcesOf(
       project.sources,
@@ -242,7 +300,8 @@ export function resolveExternalSources(
     warnings: [
       ...(capped.length > 0 ? [capWarning(capped)] : []),
       ...user.warnings,
-      ...project.warnings,
+      ...startDirWarnings(input.startDir, lookup, checkoutRoot),
+      ...forwardedProjectWarnings(project, projectAllowed),
     ],
     dropped: { user: user.dropped, project: project.dropped },
   }
@@ -278,6 +337,21 @@ export type InspectedSource =
       readonly roots: readonly InspectedRoot[]
       readonly exclude: readonly string[]
       /** Warnings that name this source. They never carry a pattern. */
+      readonly warnings: readonly string[]
+    }
+  | {
+      /**
+       * A project root the loader refuses (a symlink, a path through a
+       * symlink, or a real path outside the checkout): the source is dropped
+       * when a search loads it. `reason` says which.
+       */
+      readonly status: 'root rejected'
+      readonly name: string
+      readonly origin: 'project'
+      readonly format: SearchSourceFormat
+      readonly roots: readonly InspectedRoot[]
+      readonly exclude: readonly string[]
+      readonly reason: string
       readonly warnings: readonly string[]
     }
   | {
@@ -352,6 +426,18 @@ function inspectBuiltInKinds(checkoutRoot: string): InspectedBuiltInKind[] {
     })
 }
 
+/** The first rejection among a project source's roots, the one that drops the source. */
+function firstRootRejection(
+  checkoutRoot: string,
+  roots: readonly string[],
+): ProjectRootRejection | undefined {
+  for (const root of roots) {
+    const rejection = rejectedProjectRoot(checkoutRoot, root)
+    if (rejection !== undefined) return rejection
+  }
+  return undefined
+}
+
 /**
  * Describe what search does for one project, without running a search: which
  * sources exist, where each came from, and why each is or is not active.
@@ -379,17 +465,22 @@ export function inspectSearch(input: SearchInspectionInput): SearchInspection {
     identity,
     homeDir,
   )
+  // A user source holds a same-named allowed proposal's place, but a proposal
+  // that is not allowed is listed whatever a user source is called.
   const projectSources = projectSourcesOf(
     project.sources,
     checkoutRoot,
-    new Set(userSources.map((source) => source.name)),
+    projectAllowed
+      ? new Set(userSources.map((source) => source.name))
+      : new Set(),
   )
   const ordered = [...userSources, ...(projectAllowed ? projectSources : [])]
   const rejected = projectAllowed ? [] : projectSources
+  const loaderRoot = path.resolve(checkoutRoot)
 
   const warningsFor = (label: string): string[] =>
     [...user.warnings, ...project.warnings].filter((warning) =>
-      warning.includes(`search source ${label} in `),
+      namesEntry(warning, label),
     )
   const named = new Set<string>()
   const claim = (label: string): string[] => {
@@ -406,6 +497,22 @@ export function inspectSearch(input: SearchInspectionInput): SearchInspection {
       path: root,
       present: status === 'checked' ? safeLstat(root) !== null : null,
     }))
+    const rejection =
+      status === 'checked' && source.origin === 'project'
+        ? firstRootRejection(loaderRoot, source.roots)
+        : undefined
+    if (rejection !== undefined) {
+      return {
+        status: 'root rejected',
+        name: source.name,
+        origin: 'project',
+        format: source.format,
+        roots,
+        exclude: source.exclude,
+        reason: PROJECT_ROOT_REJECTION_REASONS[rejection],
+        warnings: claim(`"${source.name}"`),
+      }
+    }
     return {
       status:
         status === 'checked'

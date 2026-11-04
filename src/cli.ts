@@ -67,6 +67,8 @@ import {
 import {
   displaySafe,
   loadUserLevelSearchSettings,
+  MAX_PROJECT_CONFIG_BYTES,
+  readTextBounded,
   type UserLevelConfigDirOptions,
 } from './lib/search-user-config.js'
 import { type Harness, setupHarness } from './lib/setup.js'
@@ -1024,6 +1026,9 @@ function printSearchSource(source: InspectedSource): void {
   if (source.status === 'dropped invalid') {
     console.log(`      reason:  ${displaySafe(source.reason)}`)
   } else {
+    if (source.status === 'root rejected') {
+      console.log(`      reason:  ${displaySafe(source.reason)}`)
+    }
     console.log(`      format:  ${source.format}`)
     for (const root of source.roots) {
       console.log(`      root:    ${formatSourceRoot(root)}`)
@@ -1079,6 +1084,24 @@ function printSearchSection(search: SearchInspection): void {
   }
 }
 
+/**
+ * Print one config file's text under a heading. The read is the bounded,
+ * non-blocking regular-file read the project config uses, so a file that is
+ * too large, not a regular file (a directory, a FIFO) or unreadable is a
+ * one-line note and the rest of the output still prints. An absent file prints
+ * nothing.
+ */
+function printConfigFile(heading: string, filePath: string): void {
+  const read = readTextBounded(filePath, MAX_PROJECT_CONFIG_BYTES)
+  if (read.kind === 'absent') return
+  console.log(`\n${heading}:`)
+  if (read.kind === 'text') {
+    console.log(read.content)
+    return
+  }
+  console.log(`  ${displaySafe(filePath)} could not be shown: ${read.reason}`)
+}
+
 function configShow(options: { json: boolean }): void {
   if (options.json) {
     const output = buildConfigShowJson()
@@ -1104,15 +1127,8 @@ function configShow(options: { json: boolean }): void {
     console.log(`  Custom local config:    ${locations.customLocal}`)
   }
 
-  if (fs.existsSync(paths.projectConfig)) {
-    console.log('\nProject configuration:')
-    console.log(fs.readFileSync(paths.projectConfig, 'utf-8'))
-  }
-
-  if (fs.existsSync(paths.userConfig)) {
-    console.log('\nUser configuration:')
-    console.log(fs.readFileSync(paths.userConfig, 'utf-8'))
-  }
+  printConfigFile('Project configuration', paths.projectConfig)
+  printConfigFile('User configuration', paths.userConfig)
 
   // A failed load exits 1 in both renderings: the same failure must not
   // report success in prose and failure under `--json`. The search section

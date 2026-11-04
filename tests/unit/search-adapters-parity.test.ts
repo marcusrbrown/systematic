@@ -1662,6 +1662,72 @@ describe('search adapters parity: repo-root project file, local overlays and exc
     })
     expect(text).not.toContain('nested')
   })
+
+  test('every surface warns in its reply about an ignored file below the repository root, and the CLI prints it once on each stream', async () => {
+    const fixture = makeLocationsFixture()
+    const { start, customDir } = fixture
+    const nested = path.join(start, '.opencode/systematic.json')
+    writeJson(nested, {
+      search: {
+        sources: [{ name: 'nested', format: 'markdown', roots: ['docs'] }],
+      },
+    })
+    const marker = `project config (${nested}) is below the repository root`
+    const occurrences = (text: string) => text.split(marker).length - 1
+
+    const surfaces = await withCustomDir(customDir, async () => [
+      await createV1Surface(start),
+      await createV2Surface(start),
+      await inDirectory(start, createPiSurface),
+      createCliSurface(customDir),
+      createBinSurface(customDir),
+      await createBuiltBinSurface(customDir),
+    ])
+    const texts: string[] = []
+    for (const surface of surfaces) {
+      texts.push(
+        await withCustomDir(customDir, () =>
+          surface.search(start, { query: 'zebra', kind: 'external' }),
+        ),
+      )
+    }
+    for (const [index, text] of texts.entries()) {
+      expect([surfaces[index]?.name, occurrences(text)]).toEqual([
+        surfaces[index]?.name,
+        1,
+      ])
+      expect(text).not.toContain('nested')
+    }
+    expectIdentical(surfaces, texts)
+
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const status = await runSearchCli({
+      argv: ['zebra', '--kind', 'external'],
+      cwd: start,
+      usageName: 'systematic search',
+      ...searchCliInputs({
+        homeDir: isolatedHome,
+        userConfigDir: fixture.userDir,
+        customConfigDir: customDir,
+      }),
+      outputSink: (message) => stdout.push(message),
+      errorSink: (message) => stderr.push(message),
+    })
+    expect(status).toBe(0)
+    expect(occurrences(stdout.join('\n'))).toBe(1)
+    expect(occurrences(stderr.join('\n'))).toBe(1)
+
+    const binStderr: string[] = []
+    await runClaudeCodeSearch({
+      argv: ['zebra', '--kind', 'external'],
+      cwd: start,
+      userLevel: { homeDir: isolatedHome, customConfigDir: customDir },
+      outputSink: () => {},
+      errorSink: (message) => binStderr.push(message),
+    })
+    expect(occurrences(binStderr.join('\n'))).toBe(0)
+  }, 120_000)
 })
 
 describe('search adapters parity: an invalid local file', () => {

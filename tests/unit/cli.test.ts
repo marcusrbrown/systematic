@@ -2281,6 +2281,263 @@ describe('cli config show: locations and search', () => {
       fs.rmSync(box.root, { recursive: true, force: true })
     }
   })
+
+  it('keeps the warnings that name a not-allowed proposal out of the fixed and the normal reply, and shows them here', async () => {
+    const box = mkShowBox()
+    const vault = path.join(box.home, 'vault')
+    try {
+      fs.mkdirSync(vault, { recursive: true })
+      fs.writeFileSync(
+        path.join(vault, 'zebra-wiki.md'),
+        '# Zebra wiki page\n\nThe zebra flake is documented here.\n',
+      )
+      writeIn(
+        path.join(box.project, '.opencode'),
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            sources: [
+              {
+                name: 'quokka-notes',
+                format: 'markdown',
+                roots: ['docs/quokka-vault'],
+                exclude: ['[bad]'],
+              },
+              { name: 'quokka-broken', format: 'markdown', roots: ['..'] },
+            ],
+          },
+        }),
+      )
+      const configOptions = { homeDir: box.home, customConfigDir: null }
+
+      const repliesFor = async (): Promise<string[]> => {
+        const tool = await runSearch(
+          { query: 'zebra', kind: 'external' },
+          { startDir: box.project, configOptions },
+        )
+        const binOut: string[] = []
+        const binErr: string[] = []
+        await runClaudeCodeSearch({
+          argv: ['zebra', '--kind', 'external'],
+          cwd: box.project,
+          userLevel: configOptions,
+          outputSink: (message) => binOut.push(message),
+          errorSink: (message) => binErr.push(message),
+        })
+        const cliSearch = runCli(
+          ['search', 'zebra', '--kind', 'external'],
+          box.project,
+          box.env,
+        )
+        // The CLI's stderr also carries the config loader's own notes about
+        // the project file; the reply is its stdout.
+        return [
+          tool.text,
+          binOut.join('\n'),
+          binErr.join('\n'),
+          cliSearch.stdout,
+        ]
+      }
+
+      // Fixed reply: no user source is active.
+      const fixed = await repliesFor()
+      expect(fixed[0]).toContain('not in search.allow_project_sources')
+      for (const reply of fixed) expect(reply).not.toContain('quokka')
+
+      // Normal reply: a mapped user source is active beside the proposals.
+      writeIn(
+        box.userDir,
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            sources: [
+              {
+                name: 'wiki',
+                format: 'markdown',
+                roots: [vault],
+                projects: [box.project],
+              },
+            ],
+          },
+        }),
+      )
+      const normal = await repliesFor()
+      expect(normal[0]).toContain('wiki (user)')
+      for (const reply of normal) expect(reply).not.toContain('quokka')
+
+      const rows = searchOf(showJson(box).parsed).sources
+      const notes = rows.find((row) => row.name === 'quokka-notes')
+      expect(notes?.status).toBe('not allowed')
+      expect(notes?.warnings.join('\n')).toContain('exclude[0]')
+      const broken = rows.find((row) => row.name === 'quokka-broken')
+      expect(broken?.status).toBe('dropped invalid')
+      expect(broken?.warnings.join('\n')).toContain('dropped')
+      const human = runCli(['config', 'show'], box.project, box.env)
+      expect(human.stdout).toContain('quokka-notes')
+      expect(human.stdout).toContain('quokka-broken')
+      expect(human.stdout).toContain('exclude[0]')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a project source whose root is a symlink as root rejected, in JSON and in the human output', () => {
+    const box = mkShowBox()
+    try {
+      fs.mkdirSync(path.join(box.project, 'real'), { recursive: true })
+      fs.symlinkSync(
+        path.join(box.project, 'real'),
+        path.join(box.project, 'docs/linked'),
+      )
+      writeIn(
+        box.userDir,
+        'systematic.json',
+        JSON.stringify({ search: { allow_project_sources: [box.project] } }),
+      )
+      writeIn(
+        path.join(box.project, '.opencode'),
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            sources: [
+              { name: 'linked', format: 'markdown', roots: ['docs/linked'] },
+            ],
+          },
+        }),
+      )
+
+      const { parsed } = showJson(box)
+      const row = searchOf(parsed).sources.find((s) => s.name === 'linked')
+      expect(row?.status).toBe('root rejected')
+      expect(row?.reason).toBe('a project root is a symlink')
+
+      const human = runCli(['config', 'show'], box.project, box.env)
+      expect(human.stdout).toContain('linked [root rejected]')
+      expect(human.stdout).toContain('reason:  a project root is a symlink')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  describe('a config file the dump cannot read', () => {
+    const OVERSIZED = ' '.repeat(1024 * 1024 + 1)
+
+    /** The Search section prints, and a one-line note names the file and the reason. */
+    function expectNote(
+      result: { stdout: string; stderr: string; exitCode: number },
+      heading: string,
+      file: string,
+      reason: string,
+    ): void {
+      expect(result.stdout).toContain(`\n${heading}:\n`)
+      expect(result.stdout).toContain(
+        `  ${file} could not be shown: ${reason}\n`,
+      )
+      expect(result.stdout).toContain('\nSearch:')
+      expect(result.stdout).toContain('Built-in kinds:')
+      expect(result.stdout.length).toBeLessThan(200_000)
+      expect(result.stderr).not.toContain('EISDIR')
+    }
+
+    it('an oversized root config is not dumped', () => {
+      const box = mkShowBox()
+      try {
+        const file = path.join(box.project, '.systematic.json')
+        writeIn(box.project, '.systematic.json', `{}${OVERSIZED}`)
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expectNote(
+          result,
+          'Project configuration',
+          file,
+          'file is larger than 1 MB',
+        )
+        expect(result.exitCode).toBe(1)
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('a directory at the config path is reported', () => {
+      const box = mkShowBox()
+      try {
+        const file = path.join(box.project, '.systematic.json')
+        fs.mkdirSync(file)
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expectNote(result, 'Project configuration', file, 'not a regular file')
+        expect(result.exitCode).toBe(1)
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('a FIFO at the config path does not block the command', () => {
+      const box = mkShowBox()
+      try {
+        const file = path.join(box.project, '.systematic.json')
+        expect(spawnSync('mkfifo', [file]).status).toBe(0)
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expectNote(result, 'Project configuration', file, 'not a regular file')
+        expect(result.exitCode).toBe(1)
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('a dangling link at the config path is reported', () => {
+      const box = mkShowBox()
+      try {
+        const file = path.join(box.project, '.systematic.json')
+        fs.symlinkSync(path.join(box.project, 'no-such-target'), file)
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expectNote(result, 'Project configuration', file, 'unable to read file')
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('an oversized user config is not dumped', () => {
+      const box = mkShowBox()
+      try {
+        const file = path.join(box.userDir, 'systematic.json')
+        fs.writeFileSync(file, `{}${OVERSIZED}`)
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expectNote(
+          result,
+          'User configuration',
+          file,
+          'file is larger than 1 MB',
+        )
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('a directory at the user config path is reported', () => {
+      const box = mkShowBox()
+      try {
+        const file = path.join(box.userDir, 'systematic.json')
+        fs.mkdirSync(file)
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expectNote(result, 'User configuration', file, 'not a regular file')
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('a readable file is still printed as it is', () => {
+      const box = mkShowBox()
+      try {
+        writeIn(box.project, '.systematic.json', '{ "disabled_skills": [] }')
+        const result = runCli(['config', 'show'], box.project, box.env)
+        expect(result.stdout).toContain(
+          'Project configuration:\n{ "disabled_skills": [] }',
+        )
+        expect(result.stdout).not.toContain('could not be shown')
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

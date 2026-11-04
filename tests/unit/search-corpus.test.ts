@@ -19,6 +19,7 @@ import {
   newEntryBudget,
   parseCorpusDocument,
   parseMarkdownFrontmatter,
+  rejectedProjectRoot,
   resolveSearchRoot,
 } from '../../src/lib/search-corpus.js'
 import { compileExcludePatterns } from '../../src/lib/search-exclude.js'
@@ -1402,5 +1403,54 @@ describe('parseMarkdownFrontmatter', () => {
       ok: false,
       reason: 'frontmatter is not a mapping',
     })
+  })
+})
+
+describe('rejectedProjectRoot', () => {
+  function checkout(): { root: string; outside: string } {
+    const base = makeTemp()
+    const root = path.join(base, 'repo')
+    const outside = path.join(base, 'elsewhere')
+    fs.mkdirSync(path.join(root, 'docs/real/sub'), { recursive: true })
+    fs.mkdirSync(path.join(outside, 'docs'), { recursive: true })
+    return { root, outside }
+  }
+
+  it('accepts a plain root, a missing root and a nested root', () => {
+    const { root } = checkout()
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/real'))).toBe(
+      undefined,
+    )
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/real/sub'))).toBe(
+      undefined,
+    )
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/nope'))).toBe(
+      undefined,
+    )
+  })
+
+  it('names a root that is a symlink and a root below a symlink', () => {
+    const { root } = checkout()
+    fs.symlinkSync(path.join(root, 'docs/real'), path.join(root, 'docs/linked'))
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/linked'))).toBe(
+      'root',
+    )
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/linked/sub'))).toBe(
+      'ancestor',
+    )
+  })
+
+  it('names a root whose real path is not inside the checkout, with or without a link', () => {
+    const { root, outside } = checkout()
+    expect(rejectedProjectRoot(root, path.join(outside, 'docs'))).toBe(
+      'outside',
+    )
+    fs.symlinkSync(outside, path.join(root, 'via'))
+    expect(rejectedProjectRoot(root, path.join(root, 'via'))).toBe('root')
+  })
+
+  it('treats the checkout itself as outside: a root must be strictly below it', () => {
+    const { root } = checkout()
+    expect(rejectedProjectRoot(root, root)).toBe('outside')
   })
 })
