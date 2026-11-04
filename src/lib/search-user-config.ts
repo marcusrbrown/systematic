@@ -11,7 +11,8 @@
  * carry the same `trust: 'project-or-higher'` meta inline here.
  *
  * Trust, per field: `enabled` and `allow_project_sources` are user-only (user
- * config and `OPENCODE_CONFIG_DIR` config). A project config may set `sources`
+ * config and `OPENCODE_CONFIG_DIR` config, each with the `systematic.local`
+ * file beside it). A project config may set `sources`
  * only. `config.ts` strips the two user-only fields from a project with
  * per-path warnings, validates the project's `sources` with the validators
  * here, and then discards them; the per-call reader is their only consumer.
@@ -97,7 +98,7 @@ const sourceExcludeSchema = z
   .array(z.string())
   .optional()
   .meta({
-    description: `Patterns for files and folders to skip under each root. A pattern with no \`/\` matches a file or folder name at any depth (\`log.md\`, \`.stryker-tmp\`), and a matched folder is skipped with everything below it. A pattern with a \`/\` is anchored at the root: \`drafts/*.md\` matches \`drafts/a.md\` but not \`notes/drafts/a.md\`. \`*\` matches any run of characters inside one name, \`?\` matches one character, and \`**\` as a whole segment matches any number of folders (\`a/**/b\`). Matching is case-sensitive. Negation (\`!\`), character classes (\`[ ]\`), a leading \`/\` or \`./\`, \`..\`, and backslashes are not supported. A source takes at most ${MAX_EXCLUDE_PATTERNS} patterns of at most ${MAX_EXCLUDE_PATTERN_LENGTH} characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.`,
+    description: `Patterns for files and folders to skip under each root. A pattern with no \`/\` matches a file or folder name at any depth (\`log.md\`, \`.stryker-tmp\`), and a matched folder is skipped with everything below it. A pattern with a \`/\` is anchored at the root: \`drafts/*.md\` matches \`drafts/a.md\` but not \`notes/drafts/a.md\`. \`*\` matches any run of characters inside one name, \`?\` matches one character, and \`**\` as a whole segment matches any number of folders (\`a/**/b\`). A trailing \`/\` is ignored. Matching is case-sensitive. Negation (\`!\`), character classes (\`[ ]\`), a leading \`/\` or \`./\`, \`..\`, and backslashes are not supported. A source takes at most ${MAX_EXCLUDE_PATTERNS} patterns of at most ${MAX_EXCLUDE_PATTERN_LENGTH} characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.`,
     examples: [
       ['log.md', '.stryker-tmp'],
       ['drafts/*.md', 'archive/**/old'],

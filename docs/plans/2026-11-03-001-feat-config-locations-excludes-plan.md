@@ -1,7 +1,7 @@
 ---
 title: "feat: Repo-root project config, local user overlay and search source excludes"
 type: feat
-status: active
+status: completed
 date: 2026-11-03
 origin: docs/brainstorms/2026-11-03-config-locations-and-source-excludes-requirements.md
 ---
@@ -730,7 +730,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ---
 
-- [ ] **U8. Documentation and descriptive strings**
+- [x] **U8. Documentation and descriptive strings**
 
 **Goal:** The reference, the search guide and the architecture docs describe the new locations, precedence, overlay and exclude syntax, and state the accepted compatibility changes.
 
