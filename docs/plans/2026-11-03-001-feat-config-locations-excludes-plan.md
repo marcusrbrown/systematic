@@ -14,9 +14,9 @@ Three config features reach every surface that reads Systematic config: the Open
 
 - **Source excludes.** An external search source gains a gitignore-style `exclude` list, matched by a new dependency-free module.
 - **Repo-root project file.** `.systematic.jsonc` (or `.json`) at the repository root becomes a project config location that beats `.opencode/`. Every reader resolves it from the repository root, not from the start directory.
-- **Local user overlay.** `systematic.local.jsonc` (or `.json`) beside the user file and beside the `OPENCODE_CONFIG_DIR` file adds two layers: user → user.local → profile → project → custom → custom.local.
+- **Local user overlay.** `systematic.local.jsonc` (or `.json`) beside the user file and beside the `OPENCODE_CONFIG_DIR` file adds two layers: user → user.local → project → custom → custom.local, with profile bundles placed by KTD3. Prose and layer values say `user.local` and `custom.local`; JSON keys say `userLocal` and `customLocal`.
 
-Two defects get fixed on the way. `systematic search` drops the fallback's warnings and the caught exception today, so an invalid local file could not be named. And `config show` has no search section at all.
+Three defects get fixed on the way. `systematic search` drops the fallback's warnings and the caught exception today, so an invalid local file could not be named. The CLI is silent about a schema-invalid project file. And `config show` has no search section at all.
 
 The plan extends `search-user-config.ts`, `config.ts`, `search-corpus.ts` and the external walks. It adds one module, `src/lib/search-exclude.ts`.
 
@@ -40,7 +40,7 @@ The loader treats trust as the unit of everything: each file is a source with a 
 The origin defines R1–R18 and AE1–AE11. Planning decisions refine four of them, and the refined wording takes precedence:
 
 - R2/R4 (patterns). `**` is special only as a whole segment. Also invalid: a leading `./`, an embedded `**` (`a**b`), an empty segment (`a//b`), a `.` segment. The 64-pattern limit is by index.
-- R18. No regex and no exponential backtracking. Cost is bounded by pattern length × path length, not linear in path length alone.
+- R18. No regex and no exponential backtracking. For a bounded pattern (at most 256 characters) the cost is linear in path length. The origin states the same bound. U1 asserts correct results on adversarial inputs and that they finish; it does not measure complexity.
 - R15. The CLI fallback must surface the diagnostics it discards today (KTD9).
 - R16. Parity is defined for the same effective start directory (KTD2).
 
@@ -69,9 +69,9 @@ Scope added during planning, beyond the origin:
 
 | ID | Scope | Units |
 |----|-------|-------|
-| S1 | `config show` lists the local and ignored-project paths, never local contents (D7) | U7 |
-| S2 | `config show` gains a Search section for the current project (D8) | U7 |
-| S3 | `loadSearchSettingsForCli` surfaces fallback warnings and the caught exception (D6) | U6 |
+| S1 | `config show` lists the local and ignored-project paths and never prints a local file's raw text (KTD8) | U7 |
+| S2 | `config show` gains a Search section for the current project (KTD11) | U7 |
+| S3 | `loadSearchSettingsForCli` surfaces fallback warnings and the caught exception; an invalid project file is no longer silent in the CLI (KTD9) | U5, U6 |
 
 | AE | Pinned in |
 |----|-----------|
@@ -79,7 +79,7 @@ Scope added during planning, beyond the origin:
 | AE3 | U2 |
 | AE11 | U1 (bounded match), U2 (`!log.md` reported) |
 | AE4 | U4 (selection), U5 (loader), U6 (bin-safe reader) |
-| AE5 | U5, U6 |
+| AE5 | U5 (full-loader surfaces: v1, v2, Pi, CLI). The bin never reads `enabled` or `allow_project_sources` from a project file, so it has nothing to strip or warn about. |
 | AE6, AE9 | U4 (root lookup), U5, U6 |
 | AE7, AE10 | U5 (full loader), U6 (bin-safe reader) |
 | AE8 | U5 (plugin, Pi throw), U6 (CLI, bin report) |
@@ -113,7 +113,7 @@ Scope added during planning, beyond the origin:
 - `src/lib/search-external.ts`: `MARKDOWN_WALK` is a shared constant, so a per-source matcher cannot ride on `WalkSpec`. `gatherCandidates` builds per-source inputs.
 - `src/lib/search-external-deciduous.ts`: `scanFolder` and `classifyJsonEntry` list `nodes/` and `edges/` without recursion.
 - `src/lib/search-external-sources.ts`: `resolveExternalSources`, `ActiveSource`. Both source mappings (user, project) must copy `exclude`.
-- `src/lib/config-protected-fields.ts`: an import-free module shared across the loader/bin boundary. It is the precedent for `search-exclude.ts`.
+- `src/lib/config-protected-fields.ts`: an import-free module shared across the loader/bin boundary (`CONFIG_PROTECTED_FIELD_PATHS`). It is the precedent for `search-exclude.ts`. The protected search field list, `PROJECT_PROTECTED_SEARCH_FIELDS`, lives in `src/lib/config.ts`.
 - `src/cli.ts`: `loadSearchSettingsForCli`, `buildConfigShowJson`, `configShow`.
 - `scripts/lib/generated-surfaces.ts`, `docs/scripts/generate-config-reference.ts` (`SEARCH_SOURCE_ENTRY_FIELDS`).
 
@@ -236,7 +236,7 @@ Scope added during planning, beyond the origin:
     },
     {
       "path_or_symbol": "src/lib/config-protected-fields.ts",
-      "description": "Import-free shared module for a constant used across the config-loader/bin boundary; PROJECT_PROTECTED_SEARCH_FIELDS already covers search.enabled and allow_project_sources, and exclude needs no protection. Precedent for hosting the matcher module.",
+      "description": "Import-free shared module for a constant used across the config-loader/bin boundary (CONFIG_PROTECTED_FIELD_PATHS); the protected search field list PROJECT_PROTECTED_SEARCH_FIELDS lives in config.ts and already covers search.enabled and allow_project_sources, and exclude needs no protection. Precedent for hosting the matcher module.",
       "disposition": "reuse"
     },
     {
@@ -279,16 +279,17 @@ Where a decision changes today's behavior, the Documentation section lists it.
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| KTD1 | **Repo root.** The root is the nearest ancestor holding `.git` (directory or file). With none, the start directory is used unresolved, and the lookup variant reports whether `.git` was found. The lookup runs in `getConfigPaths`/`loadConfigWithSources` only when `includeProject` is true. | One change covers v1, v2, Pi, the CLI's non-search commands and the pi-subagents export. Not realpathing the no-repo fallback keeps no-repo behavior byte-identical; a macOS tmpdir realpath would break existing tests. The v2 home fallback stays `includeProject:false`. |
+| KTD1 | **Repo root.** The root is the nearest ancestor holding `.git` (directory or file). A found root is realpathed, the same way `resolveSearchRoot` does it; with none, the start directory is used unresolved, and the lookup variant reports whether `.git` was found. The lookup runs in `getConfigPaths`/`loadConfigWithSources` only when `includeProject` is true. | One change covers v1, v2, Pi, the CLI's non-search commands and the pi-subagents export. Not realpathing the no-repo fallback keeps no-repo behavior byte-identical; a macOS tmpdir realpath would break existing tests. A symlinked checkout does show its realpath in `config show` and in warnings. The v2 home fallback stays `includeProject:false`. |
 | KTD2 | **Pi keeps its split.** Config loads once at startup from `process.cwd()`; search resolves per call from `ctx.cwd`. R16 parity means the same effective start directory. | A per-call reload is a separate task. The split is documented rather than hidden. |
-| KTD3 | **Layer order** user → user.local → profile → project → custom → custom.local. The advisory position of a project-sourced profile bundle is unchanged. `FileConfigSource` gains a `layer` discriminator, and overlay replace-vs-additive branches on `layer`, not trust. Locals fold into the sibling's observation metadata; a kind is invalid if either of its files is. | A local shares its sibling's kind and trust, so trust cannot tell them apart. Folding keeps the capability snapshot's closed kind allowlist intact. Files are validated separately before folding so messages name the right file. |
+| KTD3 | **Layer order** [advisory project-sourced bundle,] user, [user- or custom-sourced bundle,] user.local, project, custom, custom.local. The bundle slots are today's, from `buildOverlaySources`: the advisory bundle first, any other bundle between the user base and project; a bundle defined in a local file takes that same slot. user.local therefore beats any user- or custom-sourced bundle, and the custom file still beats project and its own bundle. `FileConfigSource` gains a `layer` discriminator, and overlay replace-vs-additive branches on `layer`, not trust. Metadata consumers read a sibling-folded per-kind view built after validation; the overlay merge, the pi-subagents export and the removed-key warnings read the layered list. A kind is invalid if either of its files is. | A local shares its sibling's kind and trust, so trust cannot tell them apart. Keeping today's bundle slots changes no existing precedence. The folded view keeps the capability snapshot's closed kind allowlist intact and keeps a local from replacing its sibling's path or authority. Files are validated separately before folding so messages name the right file. |
 | KTD4 | **Selection by existence, not validity.** `.jsonc` beats `.json`; a root file beats `.opencode/`. An invalid winner never falls back. If the user and custom directories are the same directory or realpath aliases, each file is read from disk once and its diagnostics are emitted once. | Matches how `.jsonc` already wins. Falling back past a broken file would silently apply the wrong config. |
-| KTD5 | **Patterns.** Rules per the Requirements Trace refinements, plus: trailing `/` stripped, case-sensitive, `*` matches dotfiles. Matching is a segment DP across pattern × path segments, with an iterative two-pointer match inside a segment. No regex. The pattern validator runs per element before any strict schema; a non-array `exclude` drops the source; bad elements drop one by one; warnings name `exclude[i]` and the reason, never the pattern text. | A strict schema array would reject the whole value before the per-pattern drop AE3 needs. Regex invites ReDoS, and the bin must run on Node 20.11. |
+| KTD5 | **Patterns.** Rules per the Requirements Trace refinements, plus: trailing `/` stripped, case-sensitive, `*` matches dotfiles. Matching is a segment DP across pattern × path segments, with an iterative two-pointer match inside a segment. No regex. The pattern validator runs per element inside the hand-written `validateEntry`; a non-array `exclude` drops the source; bad elements drop one by one; warnings name `exclude[i]` and the reason, never the pattern text. | Search settings are validated by `validateEntry`, not by Zod, which only feeds the emitted editor schema. A strict schema array would have rejected the whole value before the per-pattern drop AE3 needs, so the list validator owns the limits. Regex invites ReDoS, and the bin must run on Node 20.11. |
 | KTD6 | **Excluded names still cost listing budget.** The check runs after the listing is charged and before `safeLstat`. Excluded entries are never descended into and never count toward file or byte caps. A Deciduous folder removed whole by excludes is intentionally absent and raises no warning. | The walk stays bounded. Excludes cannot be used to hide an oversized directory from the budget. |
-| KTD7 | **Diagnostics.** Search never throws. Each invocation reports each failed file once, deduped by file plus issue. The plugins and Pi fail at startup and name the file. The bin validates only the `search` block and cannot detect other invalid fields; docs say so. | Failure is loud where a loader exists and non-fatal where search must still answer. |
-| KTD8 | **`config show --json` is additive.** Existing keys stay; new keys carry the user-local, custom-local and ignored-project paths. Neither output dumps local file contents. The capability snapshot folds locals into the user/custom kinds. | Consumers pinned to the old key set keep working. |
-| KTD9 | **Fix `loadSearchSettingsForCli`.** The user-level fallback's warnings and the caught exception reach the CLI's warning list. | Without it, AE8 cannot name an invalid local file on the CLI. |
-| KTD10 | **No major version.** The two compatibility changes ship in a minor release with a Compatibility paragraph in the commit body and PR description, not a `BREAKING CHANGE:` footer. | Both changes affect narrow setups, and each has a one-step migration. |
+| KTD7 | **Diagnostics.** Search never throws. Each invocation reports each failed file once, deduped by file plus issue. v1 and Pi fail at init and name the file; v2 fails in `setupOpenCodeV2` at its one config load. The bin validates only the `search` block and cannot detect other invalid fields; the docs say so. | Failure is loud where a loader exists and non-fatal where search must still answer. |
+| KTD8 | **`config show --json` is additive.** Existing keys stay; new keys carry the user.local, custom.local and ignored-project paths. `config show` never prints a local file's raw text; the Search section shows resolved values, including sources defined in a local file and the merged allow list. The capability snapshot folds locals into the user/custom kinds. | Consumers pinned to the old key set keep working. Resolved values are what the user needs; the raw text of an overlay may hold paths the user keeps out of shared output. |
+| KTD9 | **Fix `loadSearchSettingsForCli` and the CLI's silence on invalid files.** The user-level fallback's warnings and the caught exception reach the CLI's warning list. In report mode the loader warns about any invalid file, project included, and the CLI marks an invalid project file unreadable. The loader's project pass gets the bin's 1 MB cap, so both give the same outcome for an oversized file. | Without it, AE8 cannot name an invalid local file on the CLI, and a schema-invalid project file is silent today. |
+| KTD10 | **No major version.** The compatibility changes ship in a minor release with a Compatibility paragraph in the commit body and PR description, not a `BREAKING CHANGE:` footer. | Each affects narrow setups, and each has a one-step migration or a warning. |
+| KTD11 | **`config show` gains a Search section** for the current project, in human and `--json` output. It reports whether search is enabled; the allow list and whether this project is on it; each external source with origin (`user`, `user.local`, `custom`, `custom.local`, `project`), name, format, roots, `exclude`, status and warnings; and each built-in kind (solution, plan, brainstorm, ideation) with its directory and whether it is present, empty, missing or unreadable. Statuses: `active`, `not allowed`, `over source cap`, `dropped invalid`, `missing root` (one `lstat` per root). User sources mapped only to other projects are left out, and a project proposal replaced by a same-named user source is not listed, because the merge keeps only the winner. The section lists the names and roots of not-allowed project proposals. Tool and bin replies keep their current rule: never a name or a root. It runs no search. | Today `config show` shows only model routing, so nobody can see why a source is or is not active. Reusing the resolver and discovery keeps the answer equal to what search does. |
 
 ---
 
@@ -300,23 +301,25 @@ Where a decision changes today's behavior, the Documentation section lists it.
 - `**` matches zero or more segments, so `a/**` also matches `a` itself (dropping the directory) and `**/b` matches a root `b`.
 - More than 64 patterns: elements from index 64 on are dropped, with one aggregate warning naming `exclude[64]` and the count. An invalid element still occupies an index.
 - A non-string element is invalid with reason "not a string".
-- Aliased user/custom directories: both layer positions keep applying, as today, so a user file named by `OPENCODE_CONFIG_DIR` still ranks over project. Each file is read once; diagnostics dedupe; one warning names the alias. Dropping the custom pair was rejected because it silently lowers that file's precedence.
+- Aliased user/custom directories: both layer positions keep applying, as today, so a user file named by `OPENCODE_CONFIG_DIR` still ranks over project. Each file is read once; diagnostics dedupe by file plus issue; one warning names the alias. Dropping the custom pair was rejected because it silently lowers that file's precedence.
+- Profile bundle position: today's slots stay. The order is [advisory project-sourced bundle,] user, [user- or custom-sourced bundle,] user.local, project, custom, custom.local. A bundle defined in a local file takes the same slot as one defined in its sibling. user.local therefore beats any user- or custom-sourced bundle; the custom file still beats project and its own bundle, as today.
+- Layer names: prose and the `layer` values use `user.local` and `custom.local`. JSON keys use `userLocal` and `customLocal`.
 - Selection when no project file exists: the `.opencode/systematic.json` path is reported, as today.
-- The pattern-list validator is a list-level function in `search-exclude.ts` so `validateEntry`, the full loader and the bin share one result.
-- `config show --json` key names: `locations.userLocal`, `locations.customLocal` (null when no custom directory), `locations.ignoredProject` (null unless a root file shadowed an existing `.opencode/` file). Local keys carry the selected path even when absent, like `user` does.
-- `config show` keeps printing the sibling user and project file contents it prints today; only locals are never dumped. `config path` picks up the resolved project path and adds no rows.
+- The pattern-list validator is a list-level function in `search-exclude.ts` so the one `validateEntry` (called by the full loader and the bin-safe readers) gives one result.
+- `config show --json` key names: `locations.userLocal`, `locations.customLocal` (null when no custom directory) and `locations.ignoredProject`: one path, the `.opencode/` file a root file shadowed, or null. Local keys carry the selected path even when absent, like `user` does.
+- `config show` keeps printing the sibling user and project file contents it prints today. It never prints a local file's raw text (KTD8). `config path` picks up the resolved project path and adds no rows.
 - When the full load fails, `config show --json` still returns `{locations, error}` and now also `search`, because the bin-safe readers never throw and the failure is when the section helps most.
-- Search-section statuses: `active`, `not allowed`, `shadowed`, `over source cap`, `dropped invalid`, `missing root`. `missing root` comes from an `lstat` of the root; external sources are not walked. Built-in kinds use the discovery state: `present`, `empty`, `missing`, `unreadable`.
-- `loadSearchSettingsForCli` keeps its `resolveSearchRoot` pre-resolve. It becomes redundant and harmless; removing it is cleanup.
+- Search-section statuses and data: see KTD11. `missing root` comes from one `lstat` per root; external sources are not walked. Built-in kinds use the discovery state: `present`, `empty`, `missing`, `unreadable`.
+- `loadSearchSettingsForCli` drops its `resolveSearchRoot` pre-resolve (U6), because it realpaths the no-repo fallback that KTD1 keeps unresolved.
+- `config.ts` importing `search-corpus.ts` creates no cycle (`search-corpus.ts` imports nothing from the loader) and does not widen the bin's import graph, which never loads `config.ts`.
+- The start-directory warning (U5) lives in the full loader only. The per-call readers start from the root, so they never see the start directory's own file.
 
 ### Deferred to Implementation
 
 - Exact function, option and key names beyond those fixed above.
-- Whether the top-level config Zod schema reaches `search.sources` entries or only `validateEntry` does. KTD5's order (pattern validator first, schema second) holds on both paths either way.
 - The present per-field behavior of `resolveOverlayEntryValue`, `lookupProfileBundle` and `resolveProfileSelector`. Characterize before changing (U5).
-- Whether `resolveExternalSources` can expose per-source dispositions additively or needs a sibling function (U7).
+- Whether the inspector in U7 extends `resolveExternalSources`' result or sits beside it.
 - Whether the CLI fallback needs a sanitizer on exception text before printing.
-- Whether `config.ts` importing `search-corpus.ts` creates a cycle.
 - Wording of the new warnings.
 
 ---
@@ -325,25 +328,25 @@ Where a decision changes today's behavior, the Documentation section lists it.
 
 > *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
 
-User-level layers and what each does to the one before it:
+User-level positions and what each does to what is below it. An advisory project-sourced profile bundle (only under the `allow_project_profiles` opt-in) sits ahead of all of these, as it does today.
 
-| Order | Layer | File (beside) | Trust | Merge over earlier layers |
-|-------|-------|---------------|-------|---------------------------|
-| 1 | user | `~/.config/opencode/systematic.*` | user | base |
-| 2 | user.local | `systematic.local.*` beside it | user | custom rules: scalars by field, allow list union, sources by name replaced whole |
-| 3 | profile | bundle named by the selector | per bundle origin | unchanged |
+| Position | Layer | File (beside) | Trust | Merge over earlier positions |
+|----------|-------|---------------|-------|------------------------------|
+| 1 | user | `~/.config/opencode/systematic.*` | user | base (field-additive over an advisory bundle, as today) |
+| 2 | user- or custom-sourced profile bundle | a bundle defined in the user, user.local, custom or custom.local file | the defining file's | field-additive over user; today's slot between the user base and project |
+| 3 | user.local | `systematic.local.*` beside the user file | user | custom rules: scalars by field, allow list union, a same-key entry or source replaced whole |
 | 4 | project | repo-root `.systematic.*`, else `.opencode/systematic.*` | project | project strip rules, unchanged |
-| 5 | custom | `OPENCODE_CONFIG_DIR/systematic.*` | custom | unchanged |
-| 6 | custom.local | `systematic.local.*` beside it | custom | custom rules |
+| 5 | custom | `OPENCODE_CONFIG_DIR/systematic.*` | custom | replaces a same-key entry whole |
+| 6 | custom.local | `systematic.local.*` beside the custom file | custom | custom rules |
 
-The bin-safe reader sees only the search block, in the order user, user.local, custom, custom.local, then the project sources separately.
+The search settings merge in the order user, user.local, custom, custom.local. The bin-safe reader sees only the search block, in that order, then the project sources separately.
 
 Project file selection (existence only):
 
 | Root `.systematic.jsonc` | Root `.systematic.json` | `.opencode/` file | Used | Warning |
 |---|---|---|---|---|
-| yes | any | any | root `.jsonc` | names ignored `.json`/`.opencode` files |
-| no | yes | any | root `.json` | names ignored `.opencode` file |
+| yes | any | any | root `.jsonc` | names the ignored `.opencode/` file, when one exists |
+| no | yes | any | root `.json` | names the ignored `.opencode/` file, when one exists |
 | no | no | yes | `.opencode` file | none |
 | no | no | no | nothing (`.opencode/systematic.json` reported) | none |
 
@@ -365,7 +368,8 @@ Dependency order:
 flowchart TB
   U1[U1 matcher] --> U2[U2 config]
   U2 --> U3[U3 walks]
-  U4[U4 shared selection] --> U5[U5 full loader]
+  U2 --> U4[U4 shared selection]
+  U4 --> U5[U5 full loader]
   U2 --> U6[U6 bin-safe readers and CLI]
   U4 --> U6
   U5 --> U6
@@ -379,7 +383,7 @@ flowchart TB
 
 ## Implementation Units
 
-The units land as separate commits on one feature branch. U1–U3 (excludes) and U4–U5 (locations) are independent until U6.
+The units land as separate commits on one feature branch. U4 follows U2 only because both edit `src/lib/search-user-config.ts`; otherwise U1–U3 (excludes) and U4–U5 (locations) are independent until U6.
 
 ### Phase A: Source excludes
 
@@ -418,7 +422,7 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 - Edge: a lone `**` is valid and excludes every name.
 - Error path (AE11): each of `''`, `/a`, `!a`, `./a`, `a//b`, `a/./b`, `../a`, `a/../b`, `[a]`, `a\b`, `a**b`, `***` is invalid with a distinct reason; none of the reasons contain the pattern text.
 - Error path: a non-array value drops the source; a number element is dropped as "not a string" while its valid neighbors survive.
-- Integration (R18): `a/**/**/**/b` compiles to the same matcher as `a/**/b`. Adversarial inputs (`*a*a*a*a*b` against a 255-character `a` run; a many-segment path against stacked `**`) return the correct answer. A source scan of the module finds no `RegExp`, no regex literal and no import.
+- Integration (R18): `a/**/**/**/b` compiles to the same matcher as `a/**/b`. Adversarial inputs (`*a*a*a*a*b` against a 255-character `a` run; a 10,000-segment path against stacked `**`) return the correct answer within the default test timeout. The test checks correctness and that these inputs finish; it does not measure complexity.
 
 **Verification:**
 - `tests/unit/search-exclude.test.ts` passes and covers the table above.
@@ -435,37 +439,40 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 **Dependencies:** U1
 
 **Files:**
-- Modify: `src/lib/search-user-config.ts` (`ENTRY_KEYS`, `SearchSourceSchema`, `validateEntry`)
+- Modify: `src/lib/search-user-config.ts` (`ENTRY_KEYS`, `SearchSourceSchema`, `validateEntry`, `validateSources`, `validateSearchConfig`; `SearchConfigValidation` gains a structured `dropped` list of `{label, reason}` for every entry dropped, alongside the existing warnings)
 - Modify: `src/lib/search-external-sources.ts` (`ActiveSource`, user mapping, project mapping)
 - Modify: `src/lib/config-schema.ts` (`.meta` description for `exclude`)
 - Modify: `docs/scripts/generate-config-reference.ts` (`SEARCH_SOURCE_ENTRY_FIELDS`)
 - Modify: `scripts/lib/generated-surfaces.ts` (add `src/lib/search-exclude.ts` to the `schema` and `config-reference` triggers)
 - Regenerate: `docs/public/schemas/v*/systematic-config.schema.json`, `docs/src/content/docs/reference/configuration.mdx`
-- Test: `tests/unit/search-user-config.test.ts`, `tests/unit/config.test.ts`, `tests/unit/config-schema.test.ts`, `tests/unit/search-external-sources.test.ts`, `tests/unit/generate-config-reference.test.ts`, `tests/unit/generated-surfaces.test.ts`
+- Test: `tests/unit/search-user-config.test.ts`, `tests/unit/config.test.ts`, `tests/unit/search-external-sources.test.ts`, `tests/unit/generate-config-reference.test.ts`, `tests/unit/generated-surfaces.test.ts`
 
 **Approach:**
-- `validateEntry` runs the list validator on `exclude` first, replaces the value with the kept patterns, then lets `SearchSourceSchema` check the cleaned entry. The schema keeps `z.array(z.string().max(256)).max(64)` so the emitted JSON schema documents the limits for editors. The runtime path never reaches that constraint with bad data.
+- Runtime validation of `search` is hand-written. The full loader's `splitSearchBlock` runs before `SystematicConfigSchema.safeParse`, and the bin-safe readers call the same `validateSearchConfig`, which runs `validateSources` and `validateEntry`. Zod never sees `search` at runtime. `SearchSourceSchema` feeds only the emitted editor schema and the reference.
+- So `validateEntry` owns `exclude`: add the key to `ENTRY_KEYS` (otherwise the entry is dropped as having an unknown field), run the U1 list validator, and keep the surviving patterns. That validator enforces the 64-pattern and 256-character limits and the per-element drop. `SearchSourceSchema` declares the field with a `.meta` description so editors see it.
 - Each issue goes through `warn()` as `exclude[i]` plus the reason. No trust difference: `exclude` is not a protected field, so project and user entries are treated alike.
+- `validateSources` already holds a label and reason for each rejected entry; it now also returns them as the `dropped` list. U6 passes the list through both bin-safe loaders.
 - Both `ActiveSource` mappings copy the validated list, defaulting to empty.
-- Wiring the trigger is a registration obligation no gate catches by name: the wiring test compares literals with real imports, so add the trigger and let it confirm.
+- The trigger edit is a registration obligation no gate catches by name; the wiring test compares literals with real imports, so add the trigger and let it confirm.
+- Execution order: U2 and U4 both edit `search-user-config.ts`; run them serially.
 
 **Execution note:** Test-first on `validateEntry` behavior; regenerate after the code is green.
 
 **Patterns to follow:**
 - Existing `validateEntry` warnings that name a field and source name but never a value.
-- `PROJECT_PROTECTED_SEARCH_FIELDS` handling for what a project entry may carry.
+- The `PROJECT_PROTECTED_SEARCH_FIELDS` handling in `src/lib/config.ts` for what a project entry may carry.
 
 **Test scenarios:**
 - Happy path: a source with `["log.md", ".stryker-tmp"]` loads with both patterns on `ActiveSource`, for a user entry and a project entry.
 - Error path (AE3): `["drafts/*.md", "[bad]"]` loads, keeps the first, warns once with `exclude[1]` and a reason, and the warning text does not contain `[bad]`.
 - Error path (AE11): `["!log.md", "a/**/**/**/b"]` warns for `exclude[0]` and keeps the second.
-- Error path: `exclude: "log.md"` drops the source with a warning; `exclude: []` is a no-op with no warning.
+- Error path: `exclude: "log.md"` drops the source with a warning and lists it in `dropped` with its label and reason; `exclude: []` is a no-op with no warning.
 - Edge: 70 patterns keep the first 64 with one warning.
-- Integration: the full loader and `loadUserLevelSearchSettings` produce identical sources and warnings for the same fixture (bin-safe parity).
-- Integration: the regenerated schema lists `exclude` with the 64 and 256 limits; the reference table lists the field; the trigger lists include `search-exclude.ts`.
+- Integration: the full loader and `loadUserLevelSearchSettings` produce identical sources, warnings and `dropped` lists for the same fixture (bin-safe parity).
+- Integration: the trigger lists for the `schema` and `config-reference` surfaces include `search-exclude.ts`.
 
 **Verification:**
-- `bun run surfaces:affected --run` regenerates the schema and config-reference surfaces; `bun run surfaces:drift` is clean.
+- `bun run surfaces:affected --run` regenerates the schema and config-reference surfaces; `bun run surfaces:drift` is clean, and the reference lists `exclude`.
 - The unit tests above pass.
 
 ---
@@ -520,18 +527,18 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 
 **Requirements:** R7, R8, R10, R11, R14; AE4, AE6, AE9
 
-**Dependencies:** None
+**Dependencies:** U2 (no data dependency; U2 and U4 both edit `src/lib/search-user-config.ts`, so run them serially)
 
 **Files:**
-- Modify: `src/lib/search-user-config.ts` (user-level selection with layers, project selection with the ignored path)
+- Modify: `src/lib/search-user-config.ts` (user-level selection with layers, project selection with the ignored `.opencode/` path)
 - Modify: `src/lib/search-corpus.ts` (root lookup variant reporting whether `.git` was found; update the comment above `resolveSearchRoot`)
 - Test: `tests/unit/search-user-config.test.ts`, `tests/unit/search-corpus.test.ts`
 - Modify: `tests/helpers/search-external-env.ts` (`writeProjectSearch` root-file variant; a local-file writer)
 
 **Approach:**
 - User-level selection takes the resolved directories and returns ordered layer/path pairs: user, user.local, custom, custom.local. Local selection reuses `selectConfigFile` with the basename `systematic.local`. A blank `OPENCODE_CONFIG_DIR` yields no custom pair, as `resolveUserLevelConfigDirs` already treats it. Aliased user/custom directories are flagged here (same path or same realpath) so callers read once.
-- Project selection takes the root and returns the winning path plus the ignored path, per the selection table in High-Level Technical Design. It uses existence only and never looks at validity.
-- The root lookup variant shares `resolveSearchRoot`'s walk but returns the found root when `.git` exists and signals not-found otherwise, leaving the caller to keep the start directory unresolved. `resolveSearchRoot` itself keeps its realpath behavior. A permission error on an ancestor stops the walk as "not found", never throws.
+- Project selection takes the root and returns the winning path plus the ignored `.opencode/` path when the root file won over an existing `.opencode/` file, per the selection table in High-Level Technical Design. It uses existence only and never looks at validity. A `.json` shadowed by a `.jsonc` in the same directory stays silent, as today.
+- The root lookup variant shares `resolveSearchRoot`'s walk, including its first step of realpathing the start directory, and returns the found root (realpathed) when `.git` exists. When none is found it signals not-found, and the caller keeps its original unresolved start directory. `resolveSearchRoot` itself keeps its behavior. A permission error on an ancestor stops the walk as "not found", never throws.
 - Update the comment on `resolveSearchRoot` so it names the variant and keeps the "do not unify with `findGitWorktreeRoot`" guidance.
 
 **Execution note:** Test-first.
@@ -540,7 +547,7 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 - `selectConfigFile`, `resolveUserLevelConfigDirs`, and the existing fixture style in `tests/helpers/search-external-env.ts`.
 
 **Test scenarios:**
-- Happy path: `.systematic.jsonc` beats `.systematic.json` beats `.opencode/systematic.jsonc`; the ignored path is reported for each combination in the selection table.
+- Happy path: `.systematic.jsonc` beats `.systematic.json` beats `.opencode/systematic.jsonc`; the ignored path is the `.opencode/` file in the first two cases and absent otherwise.
 - Edge: no file anywhere returns the `.opencode/systematic.json` path and no ignored path, as today.
 - Edge: a directory named `.systematic.jsonc` is selected (existence, not validity).
 - Happy path: user-level selection returns four pairs in order; with `OPENCODE_CONFIG_DIR` unset or blank it returns two; a local present without a sibling is still selected (R14); `systematic.local.jsonc` beats `systematic.local.json`.
@@ -548,6 +555,7 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 - Happy path (AE6): start `packages/app` under a directory holding `.git` returns that directory.
 - Happy path (AE9): a nested repository returns its own root from `vendor/lib/src`, and the parent root from the parent's `docs/`.
 - Edge: `.git` as a file counts (linked worktree). No `.git` anywhere returns not-found and the caller's start directory string is unchanged; a symlinked tmpdir start is not realpathed.
+- Edge: a symlinked start directory under a repository returns the repository root's realpath, and the config path resolution and the search reader both select the same root file from it.
 - Error path: an unreadable ancestor returns not-found without throwing.
 - Regression: `resolveSearchRoot` outputs are unchanged.
 
@@ -565,21 +573,28 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 **Dependencies:** U4
 
 **Files:**
-- Modify: `src/lib/config.ts` (`getConfigPaths` and `ConfigPathOptions`, `FileConfigSource`, `loadUserAndCustomSources`, `buildOverlaySources`, the sources list, `mergedDisabled*`, `bootstrap`, `skills_as_commands`, `allow_project_profiles`, the `mergeSearchSettings` call, `resolveProfileSelector`, `lookupProfileBundle`, `trustedDefaultProfileName`, `assertAllProfileBundlesAreValid`, `mergePiSubagentsOverlaySources`, `warnRemovedKeys`, `resolveOverlayEntryValue`, `resolveOverlayEntryOrigin`, `buildConfigObservationMetadata`)
+- Modify: `src/lib/config.ts` (`getConfigPaths` and `ConfigPathOptions`, `LoadConfigOptions`, `FileConfigSource`, `loadJsoncFile` for the project pass, `loadUserAndCustomSources`, `buildOverlaySources`, the sources list, `mergedDisabled*`, `bootstrap`, `skills_as_commands`, `allow_project_profiles`, the `mergeSearchSettings` call, `ProfileSelectionInput`, `resolveProfileSelector`, `lookupProfileBundle`, `trustedDefaultProfileName`, `resolveActiveProfile`, `assertAllProfileBundlesAreValid`, `mergePiSubagentsOverlaySources`, `warnRemovedKeys`, `resolveOverlayEntryValue`, `resolveOverlayEntryOrigin`, `buildConfigObservationMetadata`, `collectVisibleProtectedFields`, `dedupeSourceMetadata`)
+- Modify: `src/lib/search-user-config.ts` (`SearchSettingsSource` takes an origin layer label; `MergedSearchSettings` carries the origin layer of each surviving source)
 - Modify: `src/lib/capability-snapshot.ts` only if the closed kind allowlist needs a test-visible adjustment (expected: none)
-- Test: `tests/unit/config.test.ts`, `tests/unit/capability-snapshot.test.ts`, `tests/unit/pi.test.ts`, `tests/unit/opencode-v2.test.ts`, `tests/unit/opencode-v2-search.test.ts`, `tests/unit/config-handler.test.ts`
+- Test: `tests/unit/config.test.ts`, `tests/unit/capability-snapshot.test.ts`, `tests/unit/pi.test.ts`, `tests/unit/opencode-v2.test.ts`, `tests/unit/opencode-v2-search.test.ts`, `tests/unit/config-handler.test.ts`, `tests/unit/search-user-config.test.ts`
 
 **Approach:**
-- `getConfigPaths` gains `includeProject` (default true) through its options. When true it resolves the root with the U4 variant and derives the project path, the `projectDir` field and the ignored path from it. When the lookup finds no `.git`, it keeps the start directory unresolved. The loader passes its own `includeProject`, so the v2 home fallback does no lookup. CLI display callers get the same resolution.
-- `getConfigPaths` also returns the local paths and the ignored project path.
-- `FileConfigSource` gains `layer`: user, user-local, project, custom, custom-local. Kind and trust stay as they are. Replace-vs-additive merge branches on `layer`: user-local and custom-local follow the custom-layer rule over what is below them.
-- Every enumeration site in the Files list changes to take the layered list. The default chain is user, user-local, profile, project, custom, custom-local; the project-sourced profile bundle keeps its current advisory position at the front.
-- Each file is loaded and validated alone, so errors name the right file. Observation metadata folds local into the sibling after validation: present if either exists, invalid if either is invalid.
+- `getConfigPaths` reads the loader's existing `includeProject` (declared on `LoadConfigOptions`); derive `ConfigPathOptions` from that declaration instead of declaring the option twice. When true it resolves the root with the U4 variant and derives the project path, the `projectDir` field and the ignored path from it. With no `.git` it keeps the start directory unresolved. The v2 home fallback passes `includeProject: false` and does no lookup. CLI display callers get the same resolution.
+- `getConfigPaths` also returns the local paths, the ignored project path, and the start directory's own `.opencode/systematic.*` path when the root is elsewhere.
+- `FileConfigSource` gains `layer`: `user`, `user.local`, `project`, `custom`, `custom.local`. Kind and trust stay as they are. Merge branches on `layer`: the `user` layer keeps today's field-additive merge over an advisory bundle; every other layer follows today's rule for its trust (project strips and keeps security fields; custom and the locals replace a same-key entry whole).
+- Chain order: [advisory project-sourced bundle,] user, [user- or custom-sourced bundle,] user.local, project, custom, custom.local. This keeps today's slots from `buildOverlaySources`: the advisory bundle first, any other bundle between the user base and project. A bundle defined in a local file takes the same slot. So user.local beats any user- or custom-sourced bundle, and the custom file still beats project and its own bundle, as today.
+- Profile selection: the user-layer selector is `user.local ?? user`, the custom-layer selector is `custom.local ?? custom`, and project is unchanged. Bundle lookup order is custom.local, custom, user.local, user, then project under the opt-in. `trustedDefaultProfileName` reads the user-layer selector. `ProfileSelectionInput` carries the effective sources.
+- The same "local over sibling" rule applies to the other user-level scalars: `allow_project_profiles`, `skills_as_commands` and `bootstrap` resolve user.local over user and custom.local over custom, with project where it sits today.
+- Two inputs to metadata. The layered `FileConfigSource` list feeds the overlay merge, `mergePiSubagentsOverlaySources` and `warnRemovedKeys`. A sibling-folded per-kind view, built after validation, feeds `buildConfigObservationMetadata`, `collectVisibleProtectedFields` and `dedupeSourceMetadata`. In that view a kind is present if either file exists, invalid if either is invalid, defined for a field if either file defines it, and keeps the sibling's path. Each file is still validated alone, so errors name the right file.
+- `originForSource` reports a local file's origin as its sibling's kind. That stays, and U8 documents it.
+- The search merge call passes each file's origin layer, and the merge output carries the layer of every surviving source. Existing callers ignore it; U6 parity and U7 use it.
 - The R8 warning goes to `warningSink`. An invalid root file never falls back to `.json` or `.opencode/`.
+- When the start directory has its own `.opencode/systematic.*` and the resolved root is elsewhere, the loader warns once naming that file and the root's project config path. It does not read the start directory's file.
+- The project pass reads through the same 1 MB bounded read the bin uses. An oversized project file is invalid with the same unreadable outcome.
 - Aliased user/custom directories: parse each file once, keep both layer positions, dedupe diagnostics by file plus issue, and emit one alias warning.
-- `invalidSource: 'throw'` (plugins, Pi) throws with the invalid file's own path; `'report'` (CLI) records it in metadata.
+- `invalidSource: 'throw'` (v1, v2, Pi) throws with the invalid file's own path; `'report'` (CLI) records it in metadata.
 
-**Execution note:** Characterization-first. Pin today's behavior of `resolveOverlayEntryValue`, the profile lookups and the three-source metadata before changing them, so only the intended differences show in the diff.
+**Execution note:** Characterization-first. Pin today's behavior of `resolveOverlayEntryValue`, the profile lookups, the selector and the three-source metadata before changing them, so only the intended differences show in the diff.
 
 **Patterns to follow:**
 - The existing project/custom alias handling around `resolveAliasedCustomConfigPath` for buffered warnings.
@@ -590,22 +605,30 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 - Happy path (AE7): user defines `wiki` for two projects; user.local adds an allow entry and redefines `wiki` with another root. The allow list is the union; `wiki` uses the local root with no field merging from the user entry.
 - Happy path (AE10): user.local and custom both define `wiki`; custom wins.
 - Happy path (R13, R14): a local alone sets `search.enabled` and `allow_project_sources`; both apply.
+- Happy path: for each of `allow_project_profiles`, `skills_as_commands` and `bootstrap`, user.local overrides user and custom.local overrides custom. For `skills_as_commands`, a project value sitting between user.local and custom is overridden by custom and overrides user.local.
+- Happy path (profile position): the active profile bundle sets `agents.X.model=B` and user.local sets `agents.X.model=A`; the merged result is A. The same holds when the bundle is custom-sourced.
+- Happy path (advisory bundle): a project-sourced bundle is advisory, first in the chain; user's field-additive merge over it is unchanged, and a key user.local sets replaces the merged entry whole.
+- Happy path (selector): `profile` set in user and in user.local selects the user.local value; set in custom and custom.local selects the custom.local value; project keeps its place between them.
 - Happy path (AE4): root and `.opencode/` files both present; only the root file's settings apply, a field only in `.opencode/` is absent, and a warning names both paths.
 - Happy path (AE5): a root `.systematic.jsonc` setting `search.enabled: false` and `allow_project_sources` is stripped with the same warning text a `.opencode/` file produces today.
 - Happy path (AE6, AE9): a session in `packages/app/` applies the root file; a nested repository applies only its own file.
 - Edge: no `.git` anywhere reads `<start>/.opencode/systematic.json` exactly as today, with the start path unresolved (existing `config.test.ts` tests pass unmodified).
 - Edge: `includeProject: false` performs no lookup and reads no project file.
-- Edge (compat, pinned): `packages/app/.opencode/systematic.json` below a repository root with its own `.git` elsewhere is no longer read.
-- Error path (AE8): a syntax error in user-local makes the loader throw naming the local file, not its sibling; with `report` the `user` metadata entry is invalid and the sibling's valid fields still load. Same for custom-local and for an invalid non-search field.
+- Edge: a symlinked checkout resolves to its realpath, so `getConfigPaths` and the loader's warnings show the realpath, and the root's file is the one read.
+- Edge (compat, pinned): `packages/app/.opencode/systematic.json` below a repository root with its own `.git` elsewhere is not read, and one warning names that file and the root's project config path.
+- Edge: a project file over 1 MB is invalid with the unreadable outcome; the bin reader's outcome for the same file matches.
+- Error path (AE8): a syntax error in user.local makes the loader throw naming the local file, not its sibling; with `report` the `user` metadata entry is invalid and the sibling's valid fields still load. Same for custom.local and for an invalid non-search field.
 - Error path: an invalid root `.systematic.jsonc` does not fall back to the valid `.opencode/` file or to `.systematic.json`; the error names the root file.
-- Edge: metadata for the `user` kind is present when only user-local exists, and the capability snapshot sees no new kind (the unknown-key hard failure is not triggered).
-- Edge: a profile bundle defined in user-local is found; local wins over its sibling; a project-sourced bundle keeps its current position.
-- Edge: with `OPENCODE_CONFIG_DIR` aliasing the user directory, each diagnostic appears once, one alias warning appears, and both layers still apply.
+- Edge: metadata for the `user` kind is present when only user.local exists, and the capability snapshot sees no new kind (the unknown-key hard failure is not triggered).
+- Edge (metadata inputs): with user and user.local both present, `config show` metadata has exactly one `user` source whose path is the user file's canonical path, and field authorities carry kind `user`; a user.local value does not replace the user file's path or authority.
+- Edge: a profile bundle defined in user.local is found and sits in the bundle slot; user.local beats it.
+- Edge (unchanged): a custom-sourced bundle keeps its position relative to project. Project's value for a key beats the bundle, and the custom file's own overlay beats both.
+- Edge: with `OPENCODE_CONFIG_DIR` aliasing the user directory, each diagnostic appears once, one alias warning appears, both layers still apply, and a scalar set in the shared file resolves to that file's value at both positions.
 - Integration: the pi-subagents export includes local layers; `warnRemovedKeys` names the local file for a removed key.
-- Integration (D2): Pi at init with `process.cwd()` in a subfolder applies the root file and throws on an invalid local naming it; v2 with a subfolder `ctx.location.directory` applies it; v2 home fallback applies no project.
+- Integration (KTD2): Pi at init with `process.cwd()` in a subfolder applies the root file and throws on an invalid local naming it; v2 with a subfolder `ctx.location.directory` applies it, and `setupOpenCodeV2` rejects on an invalid local naming it; v2 home fallback applies no project.
 
 **Verification:**
-- Characterization tests pass before and after except where the plan changes behavior.
+- Characterization tests pass before and after except where the plan changes behavior: the project 1 MB cap.
 - All `config.test.ts` start-directory tests pass without edits to their expectations.
 
 ---
@@ -614,21 +637,24 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 
 **Goal:** The per-call reader, the CLI and the Claude Code bin read the same files in the same order as the full loader, and the CLI names every invalid file.
 
-**Requirements:** R7–R16; S3; AE4–AE10
+**Requirements:** R7–R16; S3 (KTD9); AE4–AE10
 
 **Dependencies:** U2, U3, U4, U5
 
 **Files:**
-- Modify: `src/lib/search-user-config.ts` (`loadUserLevelSearchSettings` reads the four layers; `loadProjectSearchSources` uses project selection and returns the R8 warning; `formatProjectFileWarning` wording)
-- Modify: `src/lib/search-external-sources.ts` (per-invocation diagnostic dedupe)
-- Modify: `src/cli.ts` (`loadSearchSettingsForCli` surfaces fallback warnings and the caught exception; dedupe on print)
-- Test: `tests/unit/search-user-config.test.ts`, `tests/unit/search-external-sources.test.ts`, `tests/unit/search-cli.test.ts`, `tests/unit/cli.test.ts`, `tests/unit/search-adapters-parity.test.ts`, `tests/unit/claude-code-search.test.ts`
+- Modify: `src/lib/search-user-config.ts` (`loadUserLevelSearchSettings` reads the four layers; `loadProjectSearchSources` uses project selection and returns the R8 warning; both load results return the structured `dropped` list of `{label, reason}` that `validateSearchConfig` produces (U2); `formatProjectFileWarning` wording)
+- Modify: `src/lib/search-external-sources.ts` (per-invocation diagnostic dedupe; passes `dropped` through)
+- Modify: `src/lib/config.ts` (in `report` mode `loadConfigSource` emits one warning naming the invalid file and its error class, never its content)
+- Modify: `src/cli.ts` (`loadSearchSettingsForCli`: surface fallback warnings and the caught exception, drop the `resolveSearchRoot` pre-resolve, warn on and mark unreadable an invalid project file, dedupe on print)
+- Test: `tests/unit/search-user-config.test.ts`, `tests/unit/search-external-sources.test.ts`, `tests/unit/search-cli.test.ts`, `tests/unit/cli.test.ts`, `tests/unit/config.test.ts`, `tests/unit/search-adapters-parity.test.ts`, `tests/unit/claude-code-search.test.ts`
 
 **Approach:**
 - `loadUserLevelSearchSettings` iterates the U4 pairs. A failed local gives one warning naming that file and marks the result unreadable; the valid remainder still merges.
 - `loadProjectSearchSources` takes the winning path from project selection, keeps the 1 MB bounded read and project-trust validation (sources only; `enabled` and `allow_project_sources` are never read), and returns the R8 warning in `warnings`. An oversized or unreadable winner makes the project unreadable with no fallback.
-- `loadSearchSettingsForCli` merges the fallback's warnings into its list, adds the caught exception's message in the `catch` path, and dedupes the final list by message so the CLI no longer prints the same file twice.
-- The reader and the CLI dedupe by file plus issue per invocation.
+- Today the CLI is silent about a schema-invalid project file: report mode returns metadata only, and the CLI filters `project` out of its invalid-source check. The loader now warns in report mode, and the CLI warns on an invalid project file and marks the result unreadable. The project file's valid `search` block is still read by the per-call reader.
+- `loadSearchSettingsForCli` merges the fallback's warnings into its list, adds the caught exception's message in the `catch` path, and dedupes the final list so the CLI no longer prints the same file twice.
+- The CLI calls the loader with the start directory directly. The `resolveSearchRoot` pre-resolve realpaths the no-repo fallback, which contradicts KTD1, and the loader's own lookup replaces it.
+- The reader and the CLI dedupe by file plus issue per invocation; the message text carries both.
 - The bin keeps its narrow import graph: it gains `search-exclude.ts` (import-free) and nothing else.
 
 **Execution note:** Add the parity fixture first, red, then bring each surface in line.
@@ -637,18 +663,21 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 - The five-surface fixture structure in `tests/unit/search-adapters-parity.test.ts`; the foreign-directory and module-graph tests in `tests/unit/claude-code-search.test.ts`.
 
 **Test scenarios:**
-- Happy path (AE7, AE10): the bin-safe reader returns the same merged settings as the full loader for the AE7 and AE10 fixtures.
-- Happy path (AE4, AE5): the project reader selects the root file, returns the R8 warning naming both paths, never merges, and does not read `enabled` or `allow_project_sources`.
-- Error path: a syntax error in user-local yields one warning naming it and `unreadable`, while user and custom still merge. A local with no sibling is read alone.
-- Error path (AE8, CLI): a syntax error in user-local prints the file name on stderr, results carry the `config unreadable` note, and search runs with the valid files. A valid `search.enabled: false` in a local file is still honored by the fallback.
-- Error path (AE8, CLI): an invalid non-search field in custom-local makes the full loader report it; the fallback reads that file's valid search block, and the warning names the file.
+- Happy path (AE7, AE10): the bin-safe reader returns the same merged settings as the full loader for the AE7 and AE10 fixtures, and its merge output carries the origin layer of each source (U5 type).
+- Happy path (AE4): the project reader selects the root file, returns the R8 warning naming both paths, and never merges.
+- Happy path: the project reader does not read `enabled` or `allow_project_sources` from a root or `.opencode/` file. The bin has no strip warning for them, so AE5 applies to the full-loader surfaces only (v1, v2, Pi, CLI).
+- Error path: a syntax error in user.local yields one warning naming it and `unreadable`, while user and custom still merge. A local with no sibling is read alone.
+- Error path: a dropped entry appears in `dropped` with its label and reason for both loaders.
+- Error path (AE8, CLI): a syntax error in user.local prints the file name on stderr, results carry the `config unreadable` note, and search runs with the valid files. A valid `search.enabled: false` in a local file is still honored by the fallback.
+- Error path (AE8, CLI): an invalid non-search field in custom.local makes the full loader report it, and the report-mode warning names the file; the fallback reads that file's valid search block.
+- Error path (project parity gap): a root `.systematic.jsonc` with an invalid non-search field and a valid search block makes the CLI warn naming that file and mark the result unreadable, and its sources are still proposed to the per-call reader.
 - Error path (S3): the exception path prints the caught message; a regression test fails if fallback warnings are dropped again.
 - Edge: the same file and issue reported by the loader and the fallback appears once; two calls in one process each report their own.
 - Edge: an oversized root `.systematic.jsonc` makes the project unreadable and does not fall back to `.opencode/`.
-- Integration (R16): one fixture — root `.systematic.jsonc` with `exclude`, user + user.local + custom + custom.local, session started in a subfolder — produces identical output on v1, v2, Pi, CLI and bin, including the exclude effect and the warning set. Pi uses the same directory for startup and for `ctx.cwd`.
-- Integration (AE8, other surfaces): v1, v2 and Pi throw at startup naming the local file; the bin warns and continues.
+- Edge: with no `.git` anywhere and a start directory reached through a symlinked tmpdir, the CLI reads `<start>/.opencode/systematic.json` under the unresolved start path and its warnings show that path.
+- Integration (R16): one fixture — a `.git` ancestor, a root `.systematic.jsonc` with `exclude`, user + user.local + custom + custom.local, session started in a subfolder — produces identical search output on v1, v2, Pi, CLI and bin, including the exclude effect. The warning-set assertion covers the four full-loader surfaces (v1, v2, Pi, CLI). Pi uses the same directory for startup and for `ctx.cwd`.
+- Integration (AE8, other surfaces): v1 and Pi throw at init naming the local file; v2 `setupOpenCodeV2` rejects naming it; the bin warns and continues.
 - Integration (bin): the built bin run under Node from a foreign directory with a `.git` ancestor and a root file resolves the project file; the module-graph test shows `search-exclude.ts` reachable and `config.ts` not; no API beyond Node 20.11 is used.
-- Edge (documented limit): an invalid non-search field in a local file is invisible to the bin, and a test pins that.
 
 **Verification:**
 - The parity and bin tests pass; `tests/unit/search-cli.test.ts` no longer shows duplicated warnings.
@@ -661,36 +690,38 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 
 **Goal:** `config show` lists every config file it can read and answers "what will search do for this project, and why" in both human and `--json` forms, without running a search.
 
-**Requirements:** S1, S2
+**Requirements:** S1, S2 (KTD8, KTD11)
 
 **Dependencies:** U5, U6
 
 **Files:**
 - Modify: `src/cli.ts` (`buildConfigShowJson`, `configShow`, the JSON output types)
-- Modify: `src/lib/search-external-sources.ts` (additive per-source dispositions, or a sibling inspector; decided during implementation)
-- Modify: `src/lib/search-user-config.ts` (merge keeps the origin layer label of each source and of the ones it replaced)
+- Modify: `src/lib/search-external-sources.ts` (an inspector that shares the resolver's internals and adds the cap and root checks; whether it extends the resolution or sits beside it is decided during implementation)
 - Test: `tests/unit/cli.test.ts`, `tests/unit/search-external-sources.test.ts`
 
 **Approach:**
-- Locations: keep `user`, `project`, `custom`; add `userLocal`, `customLocal`, `ignoredProject`. The human output lists the same paths. Local contents are never printed.
-- Search section for the current project (start `process.cwd()`, root via `resolveSearchRoot`): `enabled`; the allow list and whether this project is on it; each external source with origin (user, user.local, custom, custom.local, project), name, format, roots, exclude, status and warnings; each built-in kind with its directory and state.
-- It reuses the resolver and discovery. Source status comes from the resolver's decisions plus an `lstat` of each root. External sources are not walked. Built-in state comes from discovery without reading files.
+- Locations: keep `user`, `project`, `custom`; add `userLocal`, `customLocal` and `ignoredProject` (one path or null). The human output lists the same paths. `config show` never prints a local file's raw text (KTD8).
+- One lookup (the U4 variant, from `process.cwd()`) feeds both the locations block and the Search section, so both show the same root string.
+- Search section per KTD11. Source origin comes from the origin-carrying merge output (U5). Dropped entries come from the structured `dropped` lists (U2, U6). `over source cap` and `missing root` come from the inspector: the cap from the resolver's ordered list, and one `lstat` per root. External sources are not walked. Built-in state comes from discovery without reading files.
+- Not-allowed project proposals: the section lists their names and roots, which the inspector reads directly from `loadProjectSearchSources`. The resolver's `ProjectState` contract (counts only, never a name or a root) is unchanged, so tool and bin replies stay as they are.
 - JSON adds `search` beside `routing`, and also on the `{error}` shape because these readers never throw.
 - Existing exit codes are unchanged.
 
 **Execution note:** Test-first on the JSON shape; the human rendering follows it.
 
 **Patterns to follow:**
-- `buildConfigShowJson`'s file-paths-only convention and its comment on why contents are not dumped.
+- `buildConfigShowJson`'s file-paths-only convention and its comment on why file contents are not dumped.
 
 **Test scenarios:**
 - Happy path: the `locations` key set in the existing pin test becomes the new set (`custom`, `customLocal`, `ignoredProject`, `project`, `user`, `userLocal`); existing key values are unchanged.
-- Happy path: a root file shadowing an `.opencode/` file fills `ignoredProject`; otherwise it is null. With no custom directory, `custom` and `customLocal` are null.
-- Edge: a sentinel string in a local file never appears in either output.
-- Happy path: the Search section reports `enabled`, the allow list and `projectAllowed` for a fixture, with the right origin on a user.local source.
-- Happy path: one fixture produces each status: `active`; `not allowed` (project proposal without an allow entry); `shadowed` (a user source replaced by a custom one); `over source cap` (nine sources); `dropped invalid` (bad entry); `missing root`.
+- Happy path: a root file shadowing an `.opencode/` file fills `ignoredProject` with that `.opencode/` path; otherwise it is null. With no custom directory, `custom` and `customLocal` are null.
+- Happy path: the Search section reports `enabled`, the allow list and `projectAllowed` for a fixture, with the right origin (`user.local`) on a source defined there.
+- Happy path: one fixture produces each status: `active`; `not allowed` (project proposal without an allow entry); `over source cap` (nine sources); `dropped invalid` (bad entry, with label and reason); `missing root` (one `lstat` per root).
+- Edge: a user source mapped only to other projects is absent from the section.
 - Happy path: `exclude` patterns appear on the source, and warnings appear without pattern text.
 - Happy path: all four built-in kinds list their directory with `present`, `empty`, `missing` or `unreadable`.
+- Integration (KTD8): a sentinel string placed in a comment of a local file never appears in either output, while a source defined in that file appears with its resolved name and roots, and a local `allow_project_sources` entry appears in the allow list.
+- Integration (names rule): on one fixture with a not-allowed project proposal, `config show` (human and JSON) lists its name and roots, while the search tool reply and the bin reply for the same fixture contain neither.
 - Error path: with an invalid local file, JSON is the error shape plus `search` and the process still exits 1; human output prints the same section.
 - Integration: a spy shows no search runs and no document file is read.
 
@@ -708,18 +739,21 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 **Dependencies:** U1–U7
 
 **Files:**
-- Modify: `docs/src/content/docs/reference/configuration.mdx` (hand-written sections: Config File Locations, project-versus-user notes, the search subsection; a "Migrating" note with the two compatibility changes and a worked example)
+- Modify: `docs/src/content/docs/reference/configuration.mdx` (hand-written sections: Config File Locations, project-versus-user notes, the search subsection; a "Migrating" note with the compatibility changes and a worked example)
 - Modify: `docs/src/content/docs/guides/search.mdx` (sources section: `exclude` syntax and examples, project file location and root rule, local overlay, the Pi split, the bin's validation limit, the `OPENCODE_CONFIG_DIR` warning)
 - Modify: `ARCHITECTURE.md` (config priority, invariants, codemap sentence for the new layers)
-- Modify: `HARNESSES.md` (the Search row, SR-3, SR-6)
+- Modify: `HARNESSES.md` (the Search row, SR-3, SR-6; see the evidence rule below)
 - Modify: `src/lib/AGENTS.md` (rows for the changed modules)
-- Modify: `src/lib/config-schema.ts`, `src/lib/config.ts` (descriptive strings that say project config lives only under `.opencode/`)
+- Modify: `src/lib/config-schema.ts`, `src/lib/config.ts` (descriptive strings that say project config lives only under `.opencode/`, including the `LoadConfigOptions.includeProject` comment)
 - Regenerate: schema and config-reference surfaces
 
 **Approach:**
 - State the layer order table, the selection rule (existence, never validity), the no-merge rule, and which fields a local may set.
-- State the two compatibility changes with the example: move `packages/app/.opencode/systematic.json` to the repository root; and a git-managed home directory becomes the root for any non-repo directory under it.
-- Document the Pi split and the bin's limit (search block only) next to the surfaces they affect.
+- State the compatibility changes from the Documentation section, with the example: move `packages/app/.opencode/systematic.json` to the repository root; mention the one-time warning that names both paths.
+- Document the Pi split and the bin's limit next to the surfaces they affect. The limit: the bin validates the `search` block only, so an invalid non-search field in any config file is invisible to it. No test pins this behavior; the docs carry it.
+- Say that a source in `systematic.local.jsonc` that redefines a source of the same name replaces the whole entry, including its `exclude`.
+- Say that routing provenance in `config show` reports a local file's origin as its sibling's kind (`user` or `custom`).
+- HARNESSES rows change only with evidence from the implementation: the test file paths and counts that now cover the behavior. U8 fills them in after the tests exist and writes nothing speculative.
 - Docs refer to sections and symbols, not line numbers.
 
 **Execution note:** Test expectation: none -- prose and string edits. The gates below check them.
@@ -740,11 +774,11 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 ## System-Wide Impact
 
 - **Interaction graph:** `loadConfigWithSources` serves v1, v2, Pi, the CLI and the pi-subagents export. The per-call reader serves every search call. The bin uses only the bin-safe readers.
-- **Error propagation:** plugins and Pi throw naming the file at startup (v2 per snapshot). The CLI and the bin report and continue. Per-call readers never throw.
+- **Error propagation:** v1 and Pi throw naming the file at init. v2 rejects in `setupOpenCodeV2`, at the single config load its snapshot builder runs per location, before any plan is built. The CLI and the bin report and continue. Per-call readers never throw.
 - **State lifecycle risks:** Pi reads config once, so a root file added mid-session is missed until restart. Search sources resolved per call pick it up.
-- **API surface parity:** `ConfigPathOptions` gains an option; the `config show --json` output gains three keys; `ActiveSource` gains `exclude`. All additive.
+- **API surface parity:** `LoadConfigOptions.includeProject` is passed through to `getConfigPaths`; `config show --json` gains `userLocal`, `customLocal`, `ignoredProject` and `search`; `ActiveSource` gains `exclude`; `SearchConfigValidation` and the two bin-safe load results gain a `dropped` list; the search merge output carries origin layers. All additive.
 - **Integration coverage:** the five-surface parity fixture and the built-bin foreign-directory test cover what unit mocks cannot. No new real-host integration test is added.
-- **Unchanged invariants:** project trust and its strip rules; project files never carry absolute roots; `search.enabled` and `allow_project_sources` stay user-only; built-in kinds and their goldens; v2's home fallback applies no project config.
+- **Unchanged invariants:** project trust and its strip rules; project files never carry absolute roots; `search.enabled` and `allow_project_sources` stay user-only; built-in kinds and their goldens; v2's home fallback applies no project config; tool and bin search replies never name a not-allowed project proposal or its roots.
 
 ---
 
@@ -753,20 +787,25 @@ The units land as separate commits on one feature branch. U1–U3 (excludes) and
 | Risk | Mitigation |
 |------|------------|
 | A missed enumeration site drops a local layer silently (the widest change) | Characterization tests first; one scenario per consumer of the layered list (U5); the parity fixture. |
-| Monorepo subfolder `.opencode/` configs without their own `.git` stop loading | Accepted. Pinned by a test and documented with a migration example. |
+| Observation metadata built from the layered list lets a local replace its sibling's path or authority | Metadata consumers read a sibling-folded per-kind view built after validation; a test pins the sibling's path and authority (U5). |
+| Monorepo subfolder `.opencode/` configs without their own `.git` stop loading | Accepted. Pinned by a test, announced by a one-time warning naming both paths, and documented with a migration example. |
 | A git-managed home directory becomes the root for non-repo directories beneath it | Accepted; it matches search's existing behavior. Documented. |
+| The loader's new 1 MB cap invalidates an oversized project file that loaded before | Accepted; it matches the bin. A test pins the outcome, and the Compatibility notes list it. |
 | The alias interpretation (read once, both positions kept) differs from a reader's expectation | Recorded in Resolved During Planning; the alternative is dropping the custom pair, which lowers precedence. |
 | Folding locals into one metadata entry hides which file broke | Validate files separately and fold after; error messages come from the per-file result. |
-| Pattern semantics drift between the full loader and the bin | One list validator in the import-free module; parity test for the validators (U2). |
-| `config.ts` importing `search-corpus.ts` creates a cycle or widens the plugin's graph | Check at the start of U5; fall back to moving only the lookup if needed. |
+| Pattern semantics drift between the full loader and the bin | One list validator in the import-free module, called from the one `validateEntry`; parity test for the validators (U2). |
 | Generated surfaces drift from the new trigger or field list | Trigger and `SEARCH_SOURCE_ENTRY_FIELDS` change land in U2 with regeneration; U8 regenerates again after string edits. |
-| `config show` source statuses need data the resolver does not expose | The additive disposition output is scoped in U7; if it grows, split it from the rendering. |
+| `config show` source statuses need data the resolver does not expose | Structured dropped-entry output (U2, U6) and the origin-carrying merge output (U5) supply it; the inspector in U7 only adds the cap and root checks. |
 
 ---
 
 ## Documentation / Operational Notes
 
-- Release notes (the commit body and PR description) carry a Compatibility paragraph with both changes and the migration example from U8. No `BREAKING CHANGE:` footer (KTD10).
+- Release notes (the commit body and PR description) carry a Compatibility paragraph with these changes and the migration example from U8. No `BREAKING CHANGE:` footer (KTD10).
+  - A monorepo subfolder `packages/app/.opencode/systematic.json` with no `.git` of its own is no longer read. Move it to the repository root. When the start directory has its own `.opencode/systematic.*` and the resolved root is elsewhere, the loader warns once and names both paths. That warning is the migration aid.
+  - A git-managed home directory becomes the root for non-repo directories beneath it.
+  - A found repository root is realpathed, so a symlinked checkout shows its realpath in `config show` and in warnings.
+  - A project config file over 1 MB is now invalid in the full loader, as it already was for the bin.
 - New modules require the `ARCHITECTURE.md` codemap entry and the `src/lib/AGENTS.md` row, done in U1.
 - Run `bun run surfaces:affected --run`, then `bun run surfaces:drift`, before the PR. A clone without tags needs `git fetch --tags` first.
 - Full gates before the PR: `bun run typecheck:all`, `bun run lint`, `bun test`, `bun run docs:build`.
