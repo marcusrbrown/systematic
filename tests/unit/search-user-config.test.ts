@@ -125,7 +125,7 @@ describe('SearchSettingsSchema: sources and allow list', () => {
     const items = json.properties.sources?.items as {
       properties: Record<string, Record<string, unknown>>
     }
-    for (const key of ['name', 'format', 'roots', 'projects']) {
+    for (const key of ['name', 'format', 'roots', 'projects', 'exclude']) {
       expect(Array.isArray(items.properties[key]?.examples)).toBe(true)
     }
   })
@@ -1179,5 +1179,264 @@ describe('a user source must be mapped to at least one project', () => {
     )?.description
     expect(description).toContain('at least one')
     expect(description).toContain('required')
+  })
+})
+
+describe('validateSearchConfig: exclude', () => {
+  const PROJECT_FILE = '/repo/.opencode/systematic.json'
+
+  const user = (value: unknown) =>
+    validateSearchConfig(value, 'user', USER_FILE)
+
+  const withExclude = (exclude: unknown, trust: 'user' | 'project') =>
+    trust === 'user'
+      ? validateSearchConfig(
+          { sources: [validUser('wiki', { exclude })] },
+          'user',
+          USER_FILE,
+        )
+      : validateSearchConfig(
+          {
+            sources: [
+              { name: 'wiki', format: 'markdown', roots: ['docs'], exclude },
+            ],
+          },
+          'project',
+          PROJECT_FILE,
+        )
+
+  const trusts: Array<'user' | 'project'> = ['user', 'project']
+
+  test.each(trusts)(
+    'a %s entry keeps valid patterns in order and warns about nothing',
+    (trust) => {
+      const result = withExclude(['log.md', '.stryker-tmp'], trust)
+      expect(result.warnings).toEqual([])
+      expect(result.dropped).toEqual([])
+      expect(result.settings?.sources?.[0]?.exclude).toEqual([
+        'log.md',
+        '.stryker-tmp',
+      ])
+    },
+  )
+
+  test.each(trusts)(
+    'a %s entry drops one bad pattern alone, names exclude[i] and never the pattern text',
+    (trust) => {
+      const result = withExclude(['drafts/*.md', '[bad\u001b]'], trust)
+      expect(result.settings?.sources?.[0]?.exclude).toEqual(['drafts/*.md'])
+      expect(result.warnings).toHaveLength(1)
+      const [warning] = result.warnings
+      expect(warning).toContain('exclude[1]')
+      expect(warning).toContain('"wiki"')
+      expect(warning).not.toContain('bad')
+      expect(warning).not.toContain('\u001b')
+      expect(result.dropped).toEqual([])
+      expect(result.unreadable).toBe(false)
+      expect(result.structural).toBe(false)
+    },
+  )
+
+  test('a negated pattern is reported at its index and the later pattern stays as written', () => {
+    const result = withExclude(['!log.md', 'a/**/**/**/b'], 'user')
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('exclude[0]')
+    expect(result.warnings[0]).not.toContain('log.md')
+    expect(result.settings?.sources?.[0]?.exclude).toEqual(['a/**/**/**/b'])
+  })
+
+  test('a non-string element is dropped as not a string and its neighbours survive', () => {
+    const result = withExclude([5, 'ok.md', null], 'user')
+    expect(result.settings?.sources?.[0]?.exclude).toEqual(['ok.md'])
+    expect(result.warnings).toHaveLength(2)
+    expect(result.warnings[0]).toContain('exclude[0]')
+    expect(result.warnings[0]).toContain('not a string')
+    expect(result.warnings[1]).toContain('exclude[2]')
+  })
+
+  test.each(trusts)(
+    'a %s exclude that is not an array drops the source, reports it in dropped and keeps siblings',
+    (trust) => {
+      const result =
+        trust === 'user'
+          ? validateSearchConfig(
+              {
+                sources: [
+                  validUser('wiki', { exclude: 'secret-pattern.md' }),
+                  validUser('keeper'),
+                ],
+              },
+              'user',
+              USER_FILE,
+            )
+          : validateSearchConfig(
+              {
+                sources: [
+                  {
+                    name: 'wiki',
+                    format: 'markdown',
+                    roots: ['docs'],
+                    exclude: 'secret-pattern.md',
+                  },
+                  { name: 'keeper', format: 'markdown', roots: ['docs2'] },
+                ],
+              },
+              'project',
+              PROJECT_FILE,
+            )
+      expect(result.settings?.sources?.map((s) => s.name)).toEqual(['keeper'])
+      expect(result.warnings).toHaveLength(1)
+      expect(result.warnings[0]).toContain('"wiki"')
+      expect(result.warnings[0]).toContain('exclude')
+      expect(result.warnings[0]).not.toContain('secret-pattern')
+      expect(result.dropped).toHaveLength(1)
+      expect(result.dropped[0]?.label).toBe('"wiki"')
+      expect(result.dropped[0]?.reason).toContain('exclude')
+      expect(result.dropped[0]?.reason).not.toContain('secret-pattern')
+    },
+  )
+
+  test('an empty exclude is a no-op: no warning, no field on the entry', () => {
+    const result = withExclude([], 'user')
+    expect(result.warnings).toEqual([])
+    expect(result.dropped).toEqual([])
+    expect(result.settings?.sources?.[0]).toEqual(validUser('wiki'))
+    expect(Object.hasOwn(result.settings?.sources?.[0] ?? {}, 'exclude')).toBe(
+      false,
+    )
+  })
+
+  test('an entry without exclude has no exclude field', () => {
+    const result = user({ sources: [validUser('wiki')] })
+    expect(Object.hasOwn(result.settings?.sources?.[0] ?? {}, 'exclude')).toBe(
+      false,
+    )
+  })
+
+  test('seventy patterns keep the first sixty-four with one aggregate warning', () => {
+    const patterns = Array.from({ length: 70 }, (_v, i) => `p${i}.md`)
+    const result = withExclude(patterns, 'user')
+    expect(result.settings?.sources?.[0]?.exclude).toEqual(
+      patterns.slice(0, 64),
+    )
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('exclude[64]')
+    expect(result.warnings[0]).toContain('6')
+  })
+
+  test('a pattern of 257 characters is dropped and 256 is kept', () => {
+    const result = withExclude(['a'.repeat(256), 'b'.repeat(257)], 'user')
+    expect(result.settings?.sources?.[0]?.exclude).toEqual(['a'.repeat(256)])
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('exclude[1]')
+  })
+
+  test('a duplicate-name entry reports the duplicate only, not its exclude issues', () => {
+    const result = user({
+      sources: [validUser('dup'), validUser('dup', { exclude: ['!x'] })],
+    })
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).not.toContain('exclude[')
+    expect(result.dropped).toHaveLength(1)
+    expect(result.dropped[0]?.label).toBe('"dup"')
+  })
+
+  test('exclude warnings share the detail cap with entry warnings', () => {
+    const result = user({
+      sources: Array.from({ length: 4 }, (_v, i) =>
+        validUser(`s${i}`, { exclude: ['!a', '!b'] }),
+      ),
+    })
+    expect(result.warnings).toHaveLength(6)
+    expect(result.warnings[5]).toContain('3 more')
+  })
+
+  test('every dropped entry is listed with its label and reason', () => {
+    const result = user({
+      sources: [
+        'not-an-object',
+        validUser('bad-format', { format: 'yaml' }),
+        validUser('dup'),
+        validUser('dup'),
+        validUser('ok'),
+      ],
+    })
+    expect(result.dropped.map((d) => d.label)).toEqual([
+      '#0',
+      '"bad-format"',
+      '"dup"',
+    ])
+    for (const entry of result.dropped) {
+      expect(entry.reason.length).toBeGreaterThan(0)
+    }
+    expect(result.settings?.sources?.map((s) => s.name)).toEqual(['dup', 'ok'])
+  })
+
+  test('a valid block and a structural error both give an empty dropped list', () => {
+    expect(user({ sources: [validUser('a')] }).dropped).toEqual([])
+    expect(user({ sources: 'x' }).dropped).toEqual([])
+    expect(user(null).dropped).toEqual([])
+  })
+
+  test('the schema accepts exclude and documents it with a description and an example', () => {
+    expect(
+      SearchSourceSchema.safeParse(validUser('wiki', { exclude: ['log.md'] }))
+        .success,
+    ).toBe(true)
+    const meta = z.globalRegistry.get(SearchSourceSchema.shape.exclude)
+    expect(typeof meta?.description).toBe('string')
+    expect(meta?.description).toContain('64')
+    expect(Array.isArray(meta?.examples)).toBe(true)
+  })
+
+  test('the full loader, the reader and the shared validator agree on exclude', () => {
+    const search = {
+      sources: [
+        validUser('wiki', { exclude: ['drafts/*.md', '[bad]', 7, 'a/**/b'] }),
+        validUser('broken', { exclude: 'log.md' }),
+      ],
+    }
+    const root = makeTempDir('exclude-parity')
+    const homeDir = path.join(root, 'home')
+    const userDir = path.join(homeDir, '.config/opencode')
+    const projectDir = path.join(root, 'project')
+    fs.mkdirSync(userDir, { recursive: true })
+    fs.mkdirSync(projectDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(userDir, 'systematic.json'),
+      JSON.stringify({ search }),
+    )
+    const fullWarnings: string[] = []
+    const viaConfig = loadConfigWithSources(projectDir, {
+      homeDir,
+      customConfigDir: null,
+      warningSink: (message) => fullWarnings.push(message),
+    }).config
+    const viaReader = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    const viaShared = validateSearchConfig(
+      search,
+      'user',
+      path.join(userDir, 'systematic.json'),
+    )
+
+    const expectedExclude = ['drafts/*.md', 'a/**/b']
+    expect(viaShared.settings?.sources?.map((s) => s.name)).toEqual(['wiki'])
+    expect(viaShared.settings?.sources?.[0]?.exclude).toEqual(expectedExclude)
+    expect(viaConfig.search).toEqual(viaShared.settings)
+    expect(viaReader.settings).toEqual(viaShared.settings)
+
+    const normalize = (message: string) =>
+      message
+        .replaceAll(fs.realpathSync(userDir), '<dir>')
+        .replaceAll(userDir, '<dir>')
+    const fromFull = fullWarnings
+      .filter((message) => message.includes('search source'))
+      .map(normalize)
+    const fromReader = viaReader.warnings.map(normalize)
+    expect(fromFull).toEqual(fromReader)
+    expect(fromReader.length).toBeGreaterThanOrEqual(3)
   })
 })

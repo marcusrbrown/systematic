@@ -132,6 +132,7 @@ const SEARCH_SOURCE_ENTRY_FIELDS = [
   'format',
   'roots',
   'projects',
+  'exclude',
 ] as const
 
 /**

@@ -1064,6 +1064,29 @@ User config only, and required there: at least one absolute or `~`-prefixed main
 ```
 
 
+#### sources[].exclude
+
+Patterns for files and folders to skip under each root. A pattern with no `/` matches a file or folder name at any depth (`log.md`, `.stryker-tmp`), and a matched folder is skipped with everything below it. A pattern with a `/` is anchored at the root: `drafts/*.md` matches `drafts/a.md` but not `notes/drafts/a.md`. `*` matches any run of characters inside one name, `?` matches one character, and `**` as a whole segment matches any number of folders (`a/**/b`). Matching is case-sensitive. Negation (`!`), character classes (`[ ]`), a leading `/` or `./`, `..`, and backslashes are not supported. A source takes at most 64 patterns of at most 256 characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "log.md",
+  ".stryker-tmp"
+]
+```
+
+```json
+[
+  "drafts/*.md",
+  "archive/**/old"
+]
+```
+
+
 ## Profile Bundle Overlay Fields
 
 Each named bundle under `profiles` may set `agents.<name>` and `categories.<name>` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): `model`, `variant`, `temperature`, `top_p`, and the harness routing blocks `opencode`/`pi`. Non-routing fields (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are rejected.

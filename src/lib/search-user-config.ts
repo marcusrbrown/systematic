@@ -36,6 +36,12 @@ import {
 } from 'jsonc-parser'
 import { z } from 'zod'
 import { readBytesBounded } from './search-bounded-read.js'
+import {
+  type ExcludeIssue,
+  MAX_EXCLUDE_PATTERN_LENGTH,
+  MAX_EXCLUDE_PATTERNS,
+  validateExcludeList,
+} from './search-exclude.js'
 
 /** The two formats a source may declare. */
 export const SEARCH_SOURCE_FORMATS = ['markdown', 'deciduous'] as const
@@ -83,6 +89,22 @@ const sourceProjectsSchema = z
   })
 
 /**
+ * The schema declares a plain string array. The count and length limits and
+ * the per-pattern rules live in `validateExcludeList`, which drops a bad
+ * pattern alone; a strict array schema would reject the whole value instead.
+ */
+const sourceExcludeSchema = z
+  .array(z.string())
+  .optional()
+  .meta({
+    description: `Patterns for files and folders to skip under each root. A pattern with no \`/\` matches a file or folder name at any depth (\`log.md\`, \`.stryker-tmp\`), and a matched folder is skipped with everything below it. A pattern with a \`/\` is anchored at the root: \`drafts/*.md\` matches \`drafts/a.md\` but not \`notes/drafts/a.md\`. \`*\` matches any run of characters inside one name, \`?\` matches one character, and \`**\` as a whole segment matches any number of folders (\`a/**/b\`). Matching is case-sensitive. Negation (\`!\`), character classes (\`[ ]\`), a leading \`/\` or \`./\`, \`..\`, and backslashes are not supported. A source takes at most ${MAX_EXCLUDE_PATTERNS} patterns of at most ${MAX_EXCLUDE_PATTERN_LENGTH} characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.`,
+    examples: [
+      ['log.md', '.stryker-tmp'],
+      ['drafts/*.md', 'archive/**/old'],
+    ],
+  })
+
+/**
  * One entry of `search.sources`. `projects` is user-config only, and a user
  * entry must carry at least one; the validators enforce both. The schema keeps
  * it optional because the project variant may not set it.
@@ -93,6 +115,7 @@ export const SearchSourceSchema = z
     format: sourceFormatSchema,
     roots: sourceRootsSchema,
     projects: sourceProjectsSchema,
+    exclude: sourceExcludeSchema,
   })
   .strict()
   .meta({
@@ -196,6 +219,18 @@ export interface SearchConfigValidation {
   readonly structural: boolean
   /** Bounded warnings. They name fields and source names, never a value. */
   readonly warnings: readonly string[]
+  /**
+   * Every source entry that was dropped whole, with the label the warning
+   * uses (`"name"`, or `#index` when the name is unusable) and the reason. A
+   * dropped exclude pattern is not listed here: its source stays.
+   */
+  readonly dropped: readonly DroppedSearchEntry[]
+}
+
+/** One source entry the validator dropped, as the warning names it. */
+export interface DroppedSearchEntry {
+  readonly label: string
+  readonly reason: string
 }
 
 const MAX_DETAIL_WARNINGS = 5
@@ -261,6 +296,14 @@ function entryWarning(
   return `[systematic] search source ${label} in ${sourcePath} was dropped: ${reason}. Its valid siblings still load.`
 }
 
+function excludeWarning(
+  sourcePath: string,
+  label: string,
+  issue: ExcludeIssue,
+): string {
+  return `[systematic] \`exclude[${issue.index}]\` of search source ${label} in ${sourcePath} was dropped: ${issue.reason}. The source and its other patterns still load.`
+}
+
 /** `~`, `~/...` or `~\...`. A `~name` form is not a home directory. */
 function isTildePath(value: string): boolean {
   return value === '~' || value.startsWith('~/') || value.startsWith('~\\')
@@ -303,7 +346,11 @@ function isProjectRoot(root: string, format: SearchSourceFormat): boolean {
 }
 
 type EntryResult =
-  | { readonly ok: true; readonly entry: SearchSourceEntry }
+  | {
+      readonly ok: true
+      readonly entry: SearchSourceEntry
+      readonly excludeIssues: readonly ExcludeIssue[]
+    }
   | { readonly ok: false; readonly label: string; readonly reason: string }
 
 const ENTRY_KEYS: ReadonlySet<string> = new Set([
@@ -311,6 +358,7 @@ const ENTRY_KEYS: ReadonlySet<string> = new Set([
   'format',
   'roots',
   'projects',
+  'exclude',
 ])
 
 function isFormat(value: unknown): value is SearchSourceFormat {
@@ -394,6 +442,13 @@ function validateEntry(
   if (typeof roots === 'string') return rejectEntry(label, roots)
   const projects = validateProjects(raw.projects, trust)
   if (typeof projects === 'string') return rejectEntry(label, projects)
+  const exclude = Object.hasOwn(raw, 'exclude')
+    ? validateExcludeList(raw.exclude)
+    : undefined
+  if (exclude?.ok === false) {
+    return rejectEntry(label, `exclude is invalid (${exclude.reason})`)
+  }
+  const patterns = exclude?.patterns ?? []
   return {
     ok: true,
     entry: {
@@ -401,7 +456,9 @@ function validateEntry(
       format,
       roots: [...roots],
       ...(projects !== undefined && { projects: [...projects] }),
+      ...(patterns.length > 0 && { exclude: [...patterns] }),
     },
+    excludeIssues: exclude?.issues ?? [],
   }
 }
 
@@ -409,6 +466,7 @@ interface ValidationState {
   readonly trust: SearchConfigTrust
   readonly sourcePath: string
   readonly warnings: string[]
+  readonly dropped: DroppedSearchEntry[]
   suppressed: number
   unreadable: boolean
   structural: boolean
@@ -434,24 +492,37 @@ function validateSources(
   raw.forEach((item: unknown, index) => {
     const result = validateEntry(item, index, state.trust)
     if (!result.ok) {
-      warn(state, entryWarning(state.sourcePath, result.label, result.reason))
+      dropEntry(state, result.label, result.reason)
       return
     }
     if (seen.has(result.entry.name)) {
-      warn(
+      dropEntry(
         state,
-        entryWarning(
-          state.sourcePath,
-          `"${result.entry.name}"`,
-          'the name is already used earlier in this file, so the first entry is kept',
-        ),
+        `"${result.entry.name}"`,
+        'the name is already used earlier in this file, so the first entry is kept',
       )
       return
     }
     seen.add(result.entry.name)
     kept.push(result.entry)
+    for (const issue of result.excludeIssues) {
+      warn(
+        state,
+        excludeWarning(state.sourcePath, `"${result.entry.name}"`, issue),
+      )
+    }
   })
   return kept
+}
+
+/** Record a dropped entry and warn about it. */
+function dropEntry(
+  state: ValidationState,
+  label: string,
+  reason: string,
+): void {
+  state.dropped.push({ label, reason })
+  warn(state, entryWarning(state.sourcePath, label, reason))
 }
 
 function validateAllowList(
@@ -549,6 +620,7 @@ export function validateSearchConfig(
     trust,
     sourcePath: displaySafe(sourcePath),
     warnings: [],
+    dropped: [],
     suppressed: 0,
     unreadable: false,
     structural: false,
@@ -560,6 +632,7 @@ export function validateSearchConfig(
       unreadable: true,
       structural: true,
       warnings: state.warnings,
+      dropped: state.dropped,
     }
   }
 
@@ -584,6 +657,7 @@ export function validateSearchConfig(
     unreadable: state.unreadable,
     structural: state.structural,
     warnings: state.warnings,
+    dropped: state.dropped,
   }
 }
 

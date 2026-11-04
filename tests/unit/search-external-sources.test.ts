@@ -82,6 +82,78 @@ function names(sources: readonly ActiveSource[]): string[] {
   return sources.map((source) => source.name)
 }
 
+describe('resolveExternalSources: exclude', () => {
+  test('a user source carries its validated patterns', () => {
+    const env = makeEnv()
+    writeUser(env, {
+      sources: [
+        {
+          ...userSource('wiki', [env.repo]),
+          exclude: ['log.md', '[bad]', '.stryker-tmp'],
+        },
+      ],
+    })
+
+    const result = resolveExternalSources({
+      startDir: env.repo,
+      configOptions: env.configOptions,
+    })
+    expect(result.sources).toHaveLength(1)
+    expect(result.sources[0]?.origin).toBe('user')
+    expect(result.sources[0]?.exclude).toEqual(['log.md', '.stryker-tmp'])
+    expect(result.warnings.join('\n')).toContain('exclude[1]')
+    expect(result.warnings.join('\n')).not.toContain('[bad]')
+  })
+
+  test('a project source carries its validated patterns', () => {
+    const env = makeEnv()
+    writeProject(env.repo, {
+      sources: [
+        { ...projectSource('decisions'), exclude: ['drafts/*.md', '!log.md'] },
+      ],
+    })
+    writeUser(env, { allow_project_sources: [env.repo] })
+
+    const result = resolveExternalSources({
+      startDir: env.repo,
+      configOptions: env.configOptions,
+    })
+    expect(result.sources).toHaveLength(1)
+    expect(result.sources[0]?.origin).toBe('project')
+    expect(result.sources[0]?.exclude).toEqual(['drafts/*.md'])
+    expect(result.warnings.join('\n')).toContain('exclude[1]')
+    expect(result.warnings.join('\n')).not.toContain('log.md')
+  })
+
+  test('a source with no exclude gets an empty list', () => {
+    const env = makeEnv()
+    writeUser(env, { sources: [userSource('wiki', [env.repo])] })
+
+    const result = resolveExternalSources({
+      startDir: env.repo,
+      configOptions: env.configOptions,
+    })
+    expect(result.sources[0]?.exclude).toEqual([])
+  })
+
+  test('a user source whose exclude is not an array is dropped with a warning', () => {
+    const env = makeEnv()
+    writeUser(env, {
+      sources: [
+        { ...userSource('wiki', [env.repo]), exclude: 'log.md' },
+        userSource('keeper', [env.repo]),
+      ],
+    })
+
+    const result = resolveExternalSources({
+      startDir: env.repo,
+      configOptions: env.configOptions,
+    })
+    expect(names(result.sources)).toEqual(['keeper'])
+    expect(result.warnings.join('\n')).toContain('"wiki"')
+  })
+})
+
 describe('resolveExternalSources: project proposals', () => {
   test('an allowed project resolves its proposal as a project source', () => {
     const env = makeEnv()
@@ -99,6 +171,7 @@ describe('resolveExternalSources: project proposals', () => {
         format: 'markdown',
         roots: [path.join(fs.realpathSync(env.repo), 'docs/decisions')],
         origin: 'project',
+        exclude: [],
       },
     ])
     expect(result.project).toEqual({ kind: 'allowed', proposals: 1 })
@@ -389,6 +462,7 @@ describe('resolveExternalSources: user sources, shadowing and order', () => {
         format: 'markdown',
         roots: ['/srv/user-wiki'],
         origin: 'user',
+        exclude: [],
       },
     ])
   })

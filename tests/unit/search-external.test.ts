@@ -47,7 +47,14 @@ function source(
   roots: readonly string[],
   overrides: Partial<ActiveSource> = {},
 ): ActiveSource {
-  return { name, format: 'markdown', roots, origin: 'user', ...overrides }
+  return {
+    name,
+    format: 'markdown',
+    roots,
+    origin: 'user',
+    exclude: [],
+    ...overrides,
+  }
 }
 
 function loadOne(

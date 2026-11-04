@@ -55,6 +55,8 @@ export interface ActiveSource {
   readonly format: SearchSourceFormat
   readonly roots: readonly string[]
   readonly origin: SourceOrigin
+  /** Validated exclude patterns for this source's walk. Empty when none. */
+  readonly exclude: readonly string[]
 }
 
 /**
@@ -144,6 +146,7 @@ function mappedUserSources(
       format: entry.format,
       roots: entry.roots.map((root) => expandHome(root, homeDir)),
       origin: 'user' as const,
+      exclude: entry.exclude ?? [],
     }))
 }
 
@@ -186,6 +189,7 @@ export function resolveExternalSources(
         format: entry.format,
         roots: entry.roots.map((root) => path.resolve(checkoutRoot, root)),
         origin: 'project' as const,
+        exclude: entry.exclude ?? [],
       }))
   } else {
     projectState =

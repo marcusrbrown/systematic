@@ -24,25 +24,25 @@
       "$ref": "#/definitions/__schema72"
     },
     "disabled_skills": {
-      "$ref": "#/definitions/__schema84"
-    },
-    "disabled_agents": {
       "$ref": "#/definitions/__schema86"
     },
-    "disabled_commands": {
+    "disabled_agents": {
       "$ref": "#/definitions/__schema88"
     },
-    "bootstrap": {
+    "disabled_commands": {
       "$ref": "#/definitions/__schema90"
     },
-    "workflow_guard": {
-      "$ref": "#/definitions/__schema96"
+    "bootstrap": {
+      "$ref": "#/definitions/__schema92"
     },
-    "pi_subagents": {
+    "workflow_guard": {
       "$ref": "#/definitions/__schema98"
     },
+    "pi_subagents": {
+      "$ref": "#/definitions/__schema100"
+    },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema109"
+      "$ref": "#/definitions/__schema111"
     }
   },
   "additionalProperties": false,
@@ -1994,6 +1994,9 @@
           },
           "projects": {
             "$ref": "#/definitions/__schema82"
+          },
+          "exclude": {
+            "$ref": "#/definitions/__schema84"
           }
         },
         "required": ["name", "format", "roots"],
@@ -2051,9 +2054,11 @@
       }
     },
     "__schema84": {
-      "default": [],
-      "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
-      "examples": [["ce:plan", "ce:review"]],
+      "description": "Patterns for files and folders to skip under each root. A pattern with no `/` matches a file or folder name at any depth (`log.md`, `.stryker-tmp`), and a matched folder is skipped with everything below it. A pattern with a `/` is anchored at the root: `drafts/*.md` matches `drafts/a.md` but not `notes/drafts/a.md`. `*` matches any run of characters inside one name, `?` matches one character, and `**` as a whole segment matches any number of folders (`a/**/b`). Matching is case-sensitive. Negation (`!`), character classes (`[ ]`), a leading `/` or `./`, `..`, and backslashes are not supported. A source takes at most 64 patterns of at most 256 characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.",
+      "examples": [
+        ["log.md", ".stryker-tmp"],
+        ["drafts/*.md", "archive/**/old"]
+      ],
       "allOf": [
         {
           "$ref": "#/definitions/__schema85"
@@ -2061,6 +2066,22 @@
       ]
     },
     "__schema85": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "__schema86": {
+      "default": [],
+      "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
+      "examples": [["ce:plan", "ce:review"]],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema87"
+        }
+      ]
+    },
+    "__schema87": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2119,7 +2140,7 @@
         ]
       }
     },
-    "__schema86": {
+    "__schema88": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -2128,11 +2149,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema87"
+          "$ref": "#/definitions/__schema89"
         }
       ]
     },
-    "__schema87": {
+    "__schema89": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2242,23 +2263,23 @@
         ]
       }
     },
-    "__schema88": {
+    "__schema90": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema89"
+          "$ref": "#/definitions/__schema91"
         }
       ]
     },
-    "__schema89": {
+    "__schema91": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema90": {
+    "__schema92": {
       "default": {
         "enabled": true
       },
@@ -2273,18 +2294,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema91"
+          "$ref": "#/definitions/__schema93"
         }
       ]
     },
-    "__schema91": {
+    "__schema93": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema92"
+          "$ref": "#/definitions/__schema94"
         },
         "file": {
-          "$ref": "#/definitions/__schema94"
+          "$ref": "#/definitions/__schema96"
         }
       },
       "additionalProperties": false,
@@ -2298,22 +2319,10 @@
         }
       ]
     },
-    "__schema92": {
+    "__schema94": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema93"
-        }
-      ]
-    },
-    "__schema93": {
-      "type": "boolean"
-    },
-    "__schema94": {
-      "description": "Path to a custom bootstrap prompt file",
-      "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
           "$ref": "#/definitions/__schema95"
@@ -2321,19 +2330,31 @@
       ]
     },
     "__schema95": {
-      "type": "string"
+      "type": "boolean"
     },
     "__schema96": {
-      "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
-      "deprecated": true,
+      "description": "Path to a custom bootstrap prompt file",
+      "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
           "$ref": "#/definitions/__schema97"
         }
       ]
     },
-    "__schema97": {},
+    "__schema97": {
+      "type": "string"
+    },
     "__schema98": {
+      "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
+      "deprecated": true,
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema99"
+        }
+      ]
+    },
+    "__schema99": {},
+    "__schema100": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2355,11 +2376,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema99"
+          "$ref": "#/definitions/__schema101"
         }
       ]
     },
-    "__schema99": {
+    "__schema101": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2375,7 +2396,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema100"
+              "$ref": "#/definitions/__schema102"
             }
           ]
         },
@@ -2392,14 +2413,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema108"
+              "$ref": "#/definitions/__schema110"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema100": {
+    "__schema102": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2413,12 +2434,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema107"
+            "$ref": "#/definitions/__schema109"
           }
         ]
       }
     },
-    "__schema101": {
+    "__schema103": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2426,7 +2447,7 @@
         }
       ]
     },
-    "__schema102": {
+    "__schema104": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2434,48 +2455,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema103": {
+    "__schema105": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema104": {
+    "__schema106": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema105"
+          "$ref": "#/definitions/__schema107"
         },
         {
-          "$ref": "#/definitions/__schema106"
+          "$ref": "#/definitions/__schema108"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema105": {
+    "__schema107": {
       "type": "boolean",
       "const": true
     },
-    "__schema106": {
+    "__schema108": {
       "type": "string",
       "minLength": 1
     },
-    "__schema107": {
+    "__schema109": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema101"
-        },
-        "max_turns": {
-          "$ref": "#/definitions/__schema102"
-        },
-        "tools": {
           "$ref": "#/definitions/__schema103"
         },
-        "skills": {
+        "max_turns": {
           "$ref": "#/definitions/__schema104"
+        },
+        "tools": {
+          "$ref": "#/definitions/__schema105"
+        },
+        "skills": {
+          "$ref": "#/definitions/__schema106"
         }
       },
       "additionalProperties": false,
@@ -2487,26 +2508,26 @@
         }
       ]
     },
-    "__schema108": {
+    "__schema110": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema107"
+        "$ref": "#/definitions/__schema109"
       }
     },
-    "__schema109": {
+    "__schema111": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema110"
+          "$ref": "#/definitions/__schema112"
         }
       ]
     },
-    "__schema110": {
+    "__schema112": {
       "type": "boolean"
     }
   }

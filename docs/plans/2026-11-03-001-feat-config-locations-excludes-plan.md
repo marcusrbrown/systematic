@@ -387,7 +387,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ### Phase A: Source excludes
 
-- [ ] **U1. Exclude matcher module**
+- [x] **U1. Exclude matcher module**
 
 **Goal:** A pure, import-free module that validates exclude patterns and matches relative paths with a bounded algorithm.
 
@@ -430,7 +430,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ---
 
-- [ ] **U2. `exclude` in config validation and the active-source model**
+- [x] **U2. `exclude` in config validation and the active-source model**
 
 **Goal:** `exclude` is a recognized, validated field on external source entries, carried to every walk input, and visible in the generated schema and reference.
 

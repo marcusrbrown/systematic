@@ -151,6 +151,7 @@ describe('generateConfigReference', () => {
       '#### sources[].format',
       '#### sources[].roots',
       '#### sources[].projects',
+      '#### sources[].exclude',
     ]) {
       expect(section).toContain(heading)
     }
