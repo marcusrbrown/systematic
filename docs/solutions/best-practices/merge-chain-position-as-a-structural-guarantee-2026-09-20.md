@@ -36,13 +36,13 @@ harness blocks, and would be one `!` away from inverting.
 Express the guarantee as **chain position plus merge granularity**, so no predicate
 is required.
 
-`buildOverlaySources` (`src/lib/config.ts:1695`) decides position by provenance:
+`buildOverlaySources` (`src/lib/config.ts:1882`) decides position by provenance:
 
 ```ts
 const ordered =
   profileEntry !== null && bundleSourceTrust === 'project'
-    ? [profileEntry, userSource, projectSource, customSource]
-    : [userSource, profileEntry, projectSource, customSource]
+    ? [profileEntry, user, userLocal, project, custom, customLocal]
+    : [user, profileEntry, userLocal, project, custom, customLocal]
 ```
 
 A user- or custom-authored bundle keeps its historical position *after* user base —
@@ -50,7 +50,7 @@ it is authoritative and overrides, which is the point of a profile. A project-so
 bundle goes *first*, so user base merges over it.
 
 The merge itself is field-additive (`mergeProfileOverlayValue`,
-`src/lib/config.ts:2646`):
+`src/lib/config.ts:2888`):
 
 ```ts
 const result: OverlayConfig = { ...previous, ...next }
@@ -71,7 +71,7 @@ single property makes one function serve both directions purely by argument orde
 | Normal (user/custom bundle) | user base | profile bundle | profile — unchanged behavior |
 | Advisory (project bundle) | project bundle | user overlay | user, project fills gaps |
 
-`resolveOverlayEntryValue` (`src/lib/config.ts:2542`) routes to it with a per-source
+`resolveOverlayEntryValue` (`src/lib/config.ts:2784`) routes to it with a per-source
 branch, not a per-field test.
 
 ## Why This Matters
@@ -80,7 +80,7 @@ branch, not a per-field test.
 replacement, a user who sets only `opencode.variant` on an agent whose project bundle
 sets `opencode.model` erases the model. That leaves a qualifier with no model, which
 `assertRoutingInvariants` rejects — so customising one field fails the entire config
-load, and with it plugin init. Pinned at `tests/unit/config.test.ts:4466`.
+load, and with it plugin init. Pinned at `tests/unit/config.test.ts:4468`.
 
 **There is no policy check to forget, invert, or skip.** A field the user set wins
 because of where the objects sit in the chain.
@@ -101,11 +101,11 @@ check it.
 **Non-local guarantees need tests at each site.** Two tests pin the two halves, each
 verified red-then-green:
 
-- `tests/unit/config.test.ts:4420` fails if a project-sourced bundle stops being
+- `tests/unit/config.test.ts:4422` fails if a project-sourced bundle stops being
   placed ahead of user base. Flipping the condition produces
   `Expected: "a/user-wins" / Received: "a/project-loses"` — it fails for the right
   reason, not incidentally.
-- `tests/unit/config.test.ts:4466` fails if the field-additive branch is removed,
+- `tests/unit/config.test.ts:4468` fails if the field-additive branch is removed,
   throwing on a variant with no model.
 
 A test that passes for several different implementations is not pinning anything.

@@ -539,7 +539,7 @@ resulting diagnostic states the file's fields apply as custom. If the custom sou
 report-mode falls back to the project strip warnings instead. `preserveSecurityFields` carries a
 previously-trusted value's protected fields forward across a project overlay on the same key.
 
-One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserAndCustomSources`
+One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserLevelSources`
 (below) loads user and custom fully, ahead of project, so the opt-in can be resolved before the
 project source is parsed. When the project and custom paths alias to the same canonical file AND that
 file is malformed (JSONC parse failure or schema-invalid), the custom-trust pass now throws first,

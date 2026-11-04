@@ -17,6 +17,7 @@ import {
   DEFAULT_CONFIG,
   getConfigPaths,
   isAgentDisabled,
+  type LoadConfigOptions,
   loadConfig,
   loadConfigWithSources,
   warnDroppedNames,
@@ -30,6 +31,7 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
+import { loadProjectSearchSources } from '../../src/lib/search-user-config.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
@@ -6869,6 +6871,837 @@ describe('search config field', () => {
         path.join(t.paths.userDir, 'systematic.jsonc'),
       )
       expect(paths).not.toHaveProperty('customConfig')
+    })
+  })
+})
+
+describe('layered config files', () => {
+  const tracker = createTempDirTracker()
+  afterEach(() => {
+    tracker.cleanup()
+    delete process.env.SYSTEMATIC_PROFILE
+  })
+
+  const AGENT = 'correctness-reviewer'
+
+  interface Fixture {
+    readonly root: string
+    readonly repo: string
+    readonly start: string
+    readonly homeDir: string
+    readonly userDir: string
+    readonly customDir: string
+    readonly warnings: string[]
+    readonly user: (value: unknown) => string
+    readonly userLocal: (value: unknown) => string
+    readonly project: (value: unknown) => string
+    readonly rootProject: (value: unknown, name?: string) => string
+    readonly custom: (value: unknown) => string
+    readonly customLocal: (value: unknown) => string
+    readonly load: (
+      options?: Partial<LoadConfigOptions> & {
+        readonly withCustom?: boolean
+        readonly from?: string
+      },
+    ) => ReturnType<typeof loadConfigWithSources>
+  }
+
+  /**
+   * A temp tree with a repository root at `repo/` (holding `.git` unless
+   * `git: false`) and a session start directory below it at
+   * `repo/packages/app`.
+   */
+  function setup(options: { readonly git?: boolean } = {}): Fixture {
+    const root = tracker.track(
+      fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-layers-')),
+      ),
+    )
+    const homeDir = path.join(root, 'home')
+    const userDir = path.join(homeDir, '.config/opencode')
+    const customDir = path.join(root, 'custom')
+    const repo = path.join(root, 'repo')
+    const start = path.join(repo, 'packages/app')
+    for (const dir of [userDir, customDir, start]) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    if (options.git !== false) fs.mkdirSync(path.join(repo, '.git'))
+    const warnings: string[] = []
+    const put = (dir: string, name: string, value: unknown): string => {
+      fs.mkdirSync(dir, { recursive: true })
+      const file = path.join(dir, name)
+      fs.writeFileSync(
+        file,
+        typeof value === 'string' ? value : JSON.stringify(value),
+      )
+      return file
+    }
+    return {
+      root,
+      repo,
+      start,
+      homeDir,
+      userDir,
+      customDir,
+      warnings,
+      user: (value) => put(userDir, 'systematic.json', value),
+      userLocal: (value) => put(userDir, 'systematic.local.json', value),
+      project: (value) =>
+        put(path.join(repo, '.opencode'), 'systematic.json', value),
+      rootProject: (value, name = '.systematic.jsonc') =>
+        put(repo, name, value),
+      custom: (value) => put(customDir, 'systematic.json', value),
+      customLocal: (value) => put(customDir, 'systematic.local.json', value),
+      load: (loadOptions = {}) => {
+        const { withCustom, from, ...rest } = loadOptions
+        return loadConfigWithSources(from ?? start, {
+          homeDir,
+          customConfigDir: withCustom ? customDir : null,
+          warningSink: (message) => warnings.push(message),
+          ...rest,
+        })
+      },
+    }
+  }
+
+  describe('characterization of the three-file chain', () => {
+    test('skills_as_commands resolves custom over project over user', () => {
+      const t = setup()
+      t.user({ skills_as_commands: false })
+      t.project({ skills_as_commands: true })
+      expect(t.load({ from: t.repo }).config.skills_as_commands).toBe(true)
+      t.custom({ skills_as_commands: false })
+      expect(
+        t.load({ from: t.repo, withCustom: true }).config.skills_as_commands,
+      ).toBe(false)
+    })
+
+    test('bootstrap fields spread user, then project, then custom', () => {
+      const t = setup()
+      t.user({ bootstrap: { enabled: false, file: 'user.md' } })
+      t.project({ bootstrap: { file: 'project.md' } })
+      t.custom({ bootstrap: { enabled: true } })
+      expect(
+        t.load({ from: t.repo, withCustom: true }).config.bootstrap,
+      ).toEqual({ enabled: true, file: 'project.md' })
+    })
+
+    test('a custom-sourced profile bundle beats a user bundle of the same name', () => {
+      const t = setup()
+      t.user({
+        profile: 'p',
+        profiles: { p: { agents: { [AGENT]: { model: 'a/user' } } } },
+      })
+      t.custom({
+        profiles: { p: { agents: { [AGENT]: { model: 'a/custom' } } } },
+      })
+      const result = t.load({ from: t.repo, withCustom: true })
+      expect(result.config.agents?.[AGENT]?.model).toBe('a/custom')
+      expect(result.activeProfileSourcePath).toBe(
+        path.join(t.customDir, 'systematic.json'),
+      )
+    })
+
+    test('the fallback default profile is the user config profile', () => {
+      const t = setup()
+      t.user({
+        profile: 'home',
+        profiles: { home: { agents: { [AGENT]: { model: 'a/home' } } } },
+      })
+      t.project({ profile: 'missing' })
+      const result = t.load({ from: t.repo })
+      expect(result.metadata.activeProfile).toBe('home')
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'missing',
+        usedDefault: 'home',
+      })
+    })
+
+    test('metadata lists one entry per kind and a custom file wins skills_as_commands authority', () => {
+      const t = setup()
+      t.user({ skills_as_commands: true })
+      t.project({ skills_as_commands: true })
+      t.custom({ skills_as_commands: false })
+      const { metadata } = t.load({ from: t.repo, withCustom: true })
+      expect(metadata.sources.map((source) => source.kind)).toEqual([
+        'custom',
+        'project',
+        'user',
+      ])
+      expect(metadata.authorities).toEqual([
+        { fieldPath: 'skills_as_commands', sourceKind: 'custom' },
+      ])
+    })
+  })
+
+  describe('getConfigPaths', () => {
+    test('resolves the project file from the repository root', () => {
+      const t = setup()
+      t.rootProject({})
+      const paths = getConfigPaths(t.start, { homeDir: t.homeDir })
+      expect(paths.projectConfig).toBe(path.join(t.repo, '.systematic.jsonc'))
+      expect(paths.projectDir).toBe(path.join(t.repo, '.opencode/systematic'))
+      expect(paths.ignoredProjectConfig).toBeUndefined()
+    })
+
+    test('reports the .opencode file a root file shadows', () => {
+      const t = setup()
+      t.rootProject({}, '.systematic.json')
+      const shadowed = t.project({})
+      const paths = getConfigPaths(t.start, { homeDir: t.homeDir })
+      expect(paths.projectConfig).toBe(path.join(t.repo, '.systematic.json'))
+      expect(paths.ignoredProjectConfig).toBe(shadowed)
+    })
+
+    test('with no repository the project path stays under the unresolved start directory', () => {
+      const t = setup({ git: false })
+      const link = path.join(t.root, 'link')
+      fs.symlinkSync(t.start, link)
+      const paths = getConfigPaths(link, { homeDir: t.homeDir })
+      expect(paths.projectConfig).toBe(
+        path.join(link, '.opencode/systematic.json'),
+      )
+    })
+
+    test('a symlinked checkout resolves to the real repository root', () => {
+      const t = setup()
+      const link = path.join(t.root, 'checkout-link')
+      fs.symlinkSync(t.repo, link)
+      t.rootProject({})
+      const paths = getConfigPaths(path.join(link, 'packages/app'), {
+        homeDir: t.homeDir,
+      })
+      expect(paths.projectConfig).toBe(path.join(t.repo, '.systematic.jsonc'))
+    })
+
+    test('includeProject:false looks up no root and keeps the start directory path', () => {
+      const t = setup()
+      t.rootProject({})
+      const paths = getConfigPaths(t.start, {
+        homeDir: t.homeDir,
+        includeProject: false,
+      })
+      expect(paths.projectConfig).toBe(
+        path.join(t.start, '.opencode/systematic.json'),
+      )
+      expect(paths.ignoredProjectConfig).toBeUndefined()
+    })
+
+    test('returns the local file paths beside the user and custom files', () => {
+      const t = setup()
+      fs.writeFileSync(path.join(t.customDir, 'systematic.local.jsonc'), '{}')
+      const paths = getConfigPaths(t.start, {
+        homeDir: t.homeDir,
+        customConfigDir: t.customDir,
+      })
+      expect(paths.userLocalConfig).toBe(
+        path.join(t.userDir, 'systematic.local.json'),
+      )
+      expect(paths.customLocalConfig).toBe(
+        path.join(t.customDir, 'systematic.local.jsonc'),
+      )
+      const withoutCustom = getConfigPaths(t.start, {
+        homeDir: t.homeDir,
+        customConfigDir: null,
+      })
+      expect(withoutCustom.customLocalConfig).toBeUndefined()
+    })
+
+    test('names the start directory own .opencode file when the root is elsewhere', () => {
+      const t = setup()
+      const nested = path.join(t.start, '.opencode')
+      fs.mkdirSync(nested)
+      fs.writeFileSync(path.join(nested, 'systematic.jsonc'), '{}')
+      const paths = getConfigPaths(t.start, { homeDir: t.homeDir })
+      expect(paths.startDirProjectConfig).toBe(
+        path.join(nested, 'systematic.jsonc'),
+      )
+      const atRoot = getConfigPaths(t.repo, { homeDir: t.homeDir })
+      expect(atRoot.startDirProjectConfig).toBeUndefined()
+    })
+  })
+
+  describe('layer precedence', () => {
+    test('a field set at every layer resolves to the highest layer, and falls through as layers are removed', () => {
+      const layers = [
+        'customLocal',
+        'custom',
+        'project',
+        'userLocal',
+        'user',
+      ] as const
+      for (let kept = 0; kept < layers.length; kept += 1) {
+        const t = setup()
+        layers.forEach((layer, index) => {
+          if (index < kept) return
+          t[layer]({ agents: { [AGENT]: { steps: 10 - index } } })
+        })
+        const steps = t.load({ withCustom: true }).config.agents?.[AGENT]?.steps
+        expect(steps).toBe(10 - kept)
+      }
+    })
+
+    test('allow_project_profiles, skills_as_commands and bootstrap resolve local over sibling', () => {
+      const t = setup()
+      t.user({
+        allow_project_profiles: false,
+        skills_as_commands: false,
+        bootstrap: { enabled: false, file: 'user.md' },
+      })
+      t.userLocal({
+        allow_project_profiles: true,
+        skills_as_commands: true,
+        bootstrap: { enabled: true },
+      })
+      const userSide = t.load().config
+      expect(userSide.allow_project_profiles).toBe(true)
+      expect(userSide.skills_as_commands).toBe(true)
+      expect(userSide.bootstrap).toEqual({ enabled: true, file: 'user.md' })
+
+      t.custom({
+        allow_project_profiles: true,
+        skills_as_commands: true,
+        bootstrap: { enabled: true },
+      })
+      t.customLocal({
+        allow_project_profiles: false,
+        skills_as_commands: false,
+        bootstrap: { enabled: false },
+      })
+      const customSide = t.load({ withCustom: true }).config
+      expect(customSide.allow_project_profiles).toBe(false)
+      expect(customSide.skills_as_commands).toBe(false)
+      expect(customSide.bootstrap.enabled).toBe(false)
+    })
+
+    test('a project skills_as_commands sits between user.local and custom', () => {
+      const t = setup()
+      t.userLocal({ skills_as_commands: true })
+      t.project({ skills_as_commands: false })
+      expect(t.load().config.skills_as_commands).toBe(false)
+      t.custom({ skills_as_commands: true })
+      expect(t.load({ withCustom: true }).config.skills_as_commands).toBe(true)
+    })
+
+    test('user.local beats an active profile bundle, user- or custom-sourced', () => {
+      const userBundle = setup()
+      userBundle.user({
+        profile: 'p',
+        profiles: { p: { agents: { [AGENT]: { model: 'a/bundle' } } } },
+      })
+      userBundle.userLocal({ agents: { [AGENT]: { model: 'a/local' } } })
+      expect(userBundle.load().config.agents?.[AGENT]?.model).toBe('a/local')
+
+      const customBundle = setup()
+      customBundle.custom({
+        profile: 'p',
+        profiles: { p: { agents: { [AGENT]: { model: 'a/bundle' } } } },
+      })
+      customBundle.userLocal({ agents: { [AGENT]: { model: 'a/local' } } })
+      expect(
+        customBundle.load({ withCustom: true }).config.agents?.[AGENT]?.model,
+      ).toBe('a/local')
+    })
+
+    test('a custom file still beats project and its own bundle; project beats a custom-sourced bundle', () => {
+      const t = setup()
+      t.custom({
+        profile: 'p',
+        profiles: {
+          p: { agents: { [AGENT]: { model: 'a/bundle', temperature: 0.4 } } },
+        },
+        agents: { [AGENT]: { model: 'a/custom' } },
+      })
+      t.project({ agents: { [AGENT]: { steps: 3 } } })
+      const result = t.load({ withCustom: true })
+      expect(result.config.agents?.[AGENT]).toEqual({ model: 'a/custom' })
+
+      // Project sits after the bundle: it keeps the bundle's model (a
+      // security field the project cannot set) and adds its own steps.
+      const noOverlay = setup()
+      noOverlay.custom({
+        profile: 'p',
+        profiles: { p: { agents: { [AGENT]: { model: 'a/bundle' } } } },
+      })
+      noOverlay.project({ agents: { [AGENT]: { steps: 3 } } })
+      expect(
+        noOverlay.load({ withCustom: true }).config.agents?.[AGENT],
+      ).toEqual({ steps: 3, model: 'a/bundle' })
+    })
+
+    test('a project-sourced advisory bundle stays first; a user.local key replaces the merged entry whole', () => {
+      const t = setup()
+      t.user({
+        allow_project_profiles: true,
+        agents: { [AGENT]: { model: 'a/user' } },
+      })
+      t.project({
+        profile: 'proj',
+        profiles: {
+          proj: {
+            agents: { [AGENT]: { model: 'a/bundle', temperature: 0.5 } },
+          },
+        },
+      })
+      expect(t.load().config.agents?.[AGENT]).toEqual({
+        model: 'a/user',
+        temperature: 0.5,
+      })
+      t.userLocal({ agents: { [AGENT]: { model: 'a/local' } } })
+      expect(t.load().config.agents?.[AGENT]).toEqual({ model: 'a/local' })
+    })
+
+    test('a profile bundle defined in user.local is found and user.local beats it', () => {
+      const t = setup()
+      t.user({ profile: 'p' })
+      t.userLocal({
+        profiles: { p: { agents: { [AGENT]: { model: 'a/bundle' } } } },
+        agents: { [AGENT]: { model: 'a/local' } },
+      })
+      const result = t.load()
+      expect(result.metadata.activeProfile).toBe('p')
+      expect(result.activeProfileSourcePath).toBe(
+        path.join(t.userDir, 'systematic.local.json'),
+      )
+      expect(result.config.agents?.[AGENT]?.model).toBe('a/local')
+    })
+  })
+
+  describe('profile selector', () => {
+    const bundles = {
+      a: { agents: { [AGENT]: { model: 'a/a' } } },
+      b: { agents: { [AGENT]: { model: 'a/b' } } },
+      c: { agents: { [AGENT]: { model: 'a/c' } } },
+      d: { agents: { [AGENT]: { model: 'a/d' } } },
+    }
+
+    test('user.local over user, and custom.local over custom', () => {
+      const t = setup()
+      t.user({ profile: 'a', profiles: bundles })
+      t.userLocal({ profile: 'b' })
+      expect(t.load().metadata.activeProfile).toBe('b')
+      t.custom({ profile: 'c' })
+      t.customLocal({ profile: 'd' })
+      const result = t.load({ withCustom: true })
+      expect(result.metadata.activeProfile).toBe('d')
+      expect(result.metadata.profileSelectorSource).toBe('custom')
+    })
+
+    test('project keeps its place between the user and custom selectors', () => {
+      const t = setup()
+      t.user({ profile: 'a', profiles: bundles })
+      t.userLocal({ profile: 'b' })
+      t.project({ profile: 'c' })
+      const result = t.load()
+      expect(result.metadata.activeProfile).toBe('c')
+      expect(result.metadata.profileSelectorSource).toBe('project')
+    })
+
+    test('an explicit null in a local file selects base configuration', () => {
+      const t = setup()
+      t.user({ profile: 'a', profiles: bundles })
+      t.userLocal({ profile: null })
+      const result = t.load()
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBe('user')
+    })
+
+    test('an explicit null in custom.local selects base configuration over the custom selector', () => {
+      const t = setup()
+      t.user({ profile: 'a', profiles: bundles })
+      t.custom({ profile: 'c' })
+      t.customLocal({ profile: null })
+      const result = t.load({ withCustom: true })
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBe('custom')
+    })
+
+    test('the fallback default is the user.local selector', () => {
+      const t = setup()
+      t.user({ profile: 'a', profiles: bundles })
+      t.userLocal({ profile: 'b' })
+      t.project({ profile: 'missing' })
+      const result = t.load()
+      expect(result.metadata.activeProfile).toBe('b')
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'missing',
+        usedDefault: 'b',
+      })
+    })
+  })
+
+  describe('search settings', () => {
+    const wiki = (root: string, projects: string[]) => ({
+      name: 'wiki',
+      format: 'markdown' as const,
+      roots: [root],
+      projects,
+    })
+
+    test('user.local adds an allow entry and redefines a source whole', () => {
+      const t = setup()
+      t.user({
+        search: {
+          allow_project_sources: ['/work/a'],
+          sources: [wiki('/user/wiki', ['/work/a', '/work/b'])],
+        },
+      })
+      t.userLocal({
+        search: {
+          allow_project_sources: ['/work/c'],
+          sources: [wiki('/local/wiki', ['/work/a'])],
+        },
+      })
+      expect(t.load().config.search).toEqual({
+        allow_project_sources: ['/work/a', '/work/c'],
+        sources: [wiki('/local/wiki', ['/work/a'])],
+      })
+      expect(t.warnings).toEqual([])
+    })
+
+    test('custom beats user.local for a same-named source, and custom.local beats custom', () => {
+      const t = setup()
+      t.userLocal({ search: { sources: [wiki('/local/wiki', ['/work/a'])] } })
+      t.custom({ search: { sources: [wiki('/custom/wiki', ['/work/a'])] } })
+      expect(t.load({ withCustom: true }).config.search?.sources).toEqual([
+        wiki('/custom/wiki', ['/work/a']),
+      ])
+      t.customLocal({
+        search: { sources: [wiki('/custom-local/wiki', ['/work/a'])] },
+      })
+      expect(t.load({ withCustom: true }).config.search?.sources).toEqual([
+        wiki('/custom-local/wiki', ['/work/a']),
+      ])
+    })
+
+    test('a local file alone sets enabled and the allow list', () => {
+      const t = setup()
+      t.userLocal({
+        search: { enabled: false, allow_project_sources: ['/work/a'] },
+      })
+      expect(t.load().config.search).toEqual({
+        enabled: false,
+        allow_project_sources: ['/work/a'],
+      })
+    })
+
+    test('a project root file that sets enabled or the allow list is stripped like an .opencode file', () => {
+      const body = {
+        search: { enabled: false, allow_project_sources: ['/work/a'] },
+      }
+      const rooted = setup()
+      const rootFile = rooted.rootProject(body)
+      rooted.load()
+      const opencode = setup()
+      const opencodeFile = opencode.project(body)
+      opencode.load()
+      expect(rooted.warnings).toHaveLength(2)
+      expect(rooted.warnings.map((m) => m.replace(rootFile, '<file>'))).toEqual(
+        opencode.warnings.map((m) => m.replace(opencodeFile, '<file>')),
+      )
+    })
+  })
+
+  describe('project file from the repository root', () => {
+    test('a root file wins, the .opencode file is ignored with one warning naming both, and nothing merges', () => {
+      const t = setup()
+      const rootFile = t.rootProject({
+        disabled_skills: ['ce:plan'],
+        skills_as_commands: false,
+      })
+      const shadowed = t.project({
+        disabled_skills: ['ce:work'],
+        bootstrap: { file: 'only-opencode.md' },
+      })
+      const { config } = t.load()
+      expect(config.disabled_skills).toEqual(['ce:plan'])
+      expect(config.skills_as_commands).toBe(false)
+      expect(config.bootstrap.file).toBeUndefined()
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(rootFile)
+      expect(t.warnings[0]).toContain(shadowed)
+    })
+
+    test('a session in a subfolder applies the root file', () => {
+      const t = setup()
+      t.rootProject({ disabled_skills: ['ce:plan'] })
+      expect(t.load().config.disabled_skills).toEqual(['ce:plan'])
+    })
+
+    test('a nested repository applies only its own project file', () => {
+      const t = setup()
+      t.rootProject({ disabled_skills: ['ce:plan'] })
+      const nested = path.join(t.repo, 'vendor/lib')
+      fs.mkdirSync(path.join(nested, 'src'), { recursive: true })
+      fs.mkdirSync(path.join(nested, '.git'))
+      fs.writeFileSync(
+        path.join(nested, '.systematic.json'),
+        JSON.stringify({ disabled_skills: ['ce:work'] }),
+      )
+      fs.mkdirSync(path.join(t.repo, 'docs'))
+      expect(
+        t.load({ from: path.join(nested, 'src') }).config.disabled_skills,
+      ).toEqual(['ce:work'])
+      expect(
+        t.load({ from: path.join(t.repo, 'docs') }).config.disabled_skills,
+      ).toEqual(['ce:plan'])
+    })
+
+    test('with no repository the start directory .opencode file is read exactly as before', () => {
+      const t = setup({ git: false })
+      fs.mkdirSync(path.join(t.start, '.opencode'))
+      fs.writeFileSync(
+        path.join(t.start, '.opencode/systematic.json'),
+        JSON.stringify({ disabled_skills: ['ce:plan'] }),
+      )
+      expect(t.load().config.disabled_skills).toEqual(['ce:plan'])
+      expect(t.warnings).toEqual([])
+    })
+
+    test('includeProject:false reads no project file even from an ancestor root', () => {
+      const t = setup()
+      t.rootProject({ disabled_skills: ['ce:plan'] })
+      expect(t.load({ includeProject: false }).config.disabled_skills).toEqual(
+        [],
+      )
+    })
+
+    test('a symlinked checkout reads the real root file and warnings show the real path', () => {
+      const t = setup()
+      const rootFile = t.rootProject({ disabled_skills: ['ce:plan'] })
+      t.project({})
+      const link = path.join(t.root, 'checkout-link')
+      fs.symlinkSync(t.repo, link)
+      const result = t.load({ from: path.join(link, 'packages/app') })
+      expect(result.config.disabled_skills).toEqual(['ce:plan'])
+      expect(t.warnings[0]).toContain(rootFile)
+      expect(t.warnings[0]).not.toContain('checkout-link')
+    })
+
+    test('a start directory .opencode file below the root is not read, and one warning names it and the root project path', () => {
+      const t = setup()
+      t.rootProject({ disabled_skills: ['ce:plan'] })
+      const below = path.join(t.start, '.opencode')
+      fs.mkdirSync(below)
+      const belowFile = path.join(below, 'systematic.json')
+      fs.writeFileSync(
+        belowFile,
+        JSON.stringify({ disabled_skills: ['ce:work'] }),
+      )
+      const { config } = t.load()
+      expect(config.disabled_skills).toEqual(['ce:plan'])
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(belowFile)
+      expect(t.warnings[0]).toContain(path.join(t.repo, '.systematic.jsonc'))
+    })
+
+    test('the start directory warning names the root .opencode path when no root file exists', () => {
+      const t = setup()
+      const belowFile = path.join(t.start, '.opencode/systematic.json')
+      fs.mkdirSync(path.dirname(belowFile))
+      fs.writeFileSync(belowFile, '{}')
+      t.load()
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(belowFile)
+      expect(t.warnings[0]).toContain(
+        path.join(t.repo, '.opencode/systematic.json'),
+      )
+    })
+  })
+
+  describe('invalid files', () => {
+    test('a project file over 1 MB is invalid: the loader throws, report mode warns and marks it, and the bin reader agrees', () => {
+      const t = setup()
+      const big = `{"disabled_skills":[],"pad":"${'a'.repeat(1024 * 1024)}"}`
+      const projectFile = t.project(big)
+      expect(() => t.load()).toThrow(projectFile)
+
+      const reported = t.load({ invalidSource: 'report' })
+      const project = reported.metadata.sources.find(
+        (source) => source.kind === 'project',
+      )
+      expect(project).toEqual({
+        kind: 'project',
+        presence: 'invalid',
+        errorCode: 'read-failed',
+      })
+      expect(t.warnings.some((message) => message.includes(projectFile))).toBe(
+        true,
+      )
+      expect(loadProjectSearchSources(t.repo).unreadable).toBe(true)
+    })
+
+    test('a repo-root project file over 1 MB is invalid too', () => {
+      const t = setup()
+      const rootFile = t.rootProject(
+        `{"disabled_skills":[],"pad":"${'a'.repeat(1024 * 1024)}"}`,
+      )
+      expect(() => t.load()).toThrow(rootFile)
+    })
+
+    test('an invalid root file never falls back to the .json file or the .opencode file', () => {
+      const t = setup()
+      const rootFile = t.rootProject('{ not json')
+      t.rootProject({ disabled_skills: ['ce:plan'] }, '.systematic.json')
+      t.project({ disabled_skills: ['ce:work'] })
+      expect(() => t.load()).toThrow(rootFile)
+      const reported = t.load({ invalidSource: 'report' })
+      expect(reported.config.disabled_skills).toEqual([])
+    })
+
+    test('a syntax error in user.local throws naming the local file, not its sibling', () => {
+      const t = setup()
+      t.user({ disabled_skills: ['ce:plan'] })
+      const local = t.userLocal('{ not json')
+      let message = ''
+      try {
+        t.load()
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain(local)
+      expect(message).not.toContain(path.join(t.userDir, 'systematic.json'))
+    })
+
+    test('report mode marks the user kind invalid and still loads the sibling', () => {
+      const t = setup()
+      t.user({ disabled_skills: ['ce:plan'] })
+      const local = t.userLocal('{ not json')
+      const result = t.load({ invalidSource: 'report' })
+      expect(result.config.disabled_skills).toEqual(['ce:plan'])
+      expect(
+        result.metadata.sources.find((source) => source.kind === 'user'),
+      ).toEqual({
+        kind: 'user',
+        presence: 'invalid',
+        errorCode: 'parse-failed',
+      })
+      expect(t.warnings.some((message) => message.includes(local))).toBe(true)
+    })
+
+    test('an invalid non-search field in custom.local throws naming it, and report mode marks the custom kind', () => {
+      const t = setup()
+      t.custom({ disabled_skills: ['ce:plan'] })
+      const local = t.customLocal({ disabled_skills: 'nope' })
+      expect(() => t.load({ withCustom: true })).toThrow(local)
+      const result = t.load({ withCustom: true, invalidSource: 'report' })
+      expect(result.config.disabled_skills).toEqual(['ce:plan'])
+      expect(
+        result.metadata.sources.find((source) => source.kind === 'custom'),
+      ).toEqual({
+        kind: 'custom',
+        presence: 'invalid',
+        errorCode: 'schema-invalid',
+      })
+    })
+
+    test('a valid search block in a file whose other fields are invalid is not applied by the loader', () => {
+      const t = setup()
+      t.userLocal({ disabled_skills: 'nope', search: { enabled: false } })
+      const result = t.load({ invalidSource: 'report' })
+      expect(result.config.search).toBeUndefined()
+    })
+  })
+
+  describe('metadata folds a local file into its sibling kind', () => {
+    test('the user kind is present when only user.local exists, with no new kind', () => {
+      const t = setup()
+      t.userLocal({ skills_as_commands: false })
+      const { metadata } = t.load()
+      expect(metadata.sources.map((source) => source.kind)).toEqual([
+        'custom',
+        'project',
+        'user',
+      ])
+      expect(
+        metadata.sources.find((source) => source.kind === 'user')?.presence,
+      ).toBe('present')
+      expect(metadata.authorities).toEqual([
+        { fieldPath: 'skills_as_commands', sourceKind: 'user' },
+      ])
+      expect(() =>
+        buildCapabilitySnapshot({
+          argv: ['systematic', 'capabilities'],
+          clock: () => Date.parse(OBSERVED_AT),
+          config: metadata,
+          package: { name: '@fro.bot/systematic', version: '1.2.3' },
+          roots: [],
+        }),
+      ).not.toThrow()
+    })
+
+    test('with user and user.local both present there is one user source and the local never replaces its authority path', () => {
+      const t = setup()
+      t.user({ skills_as_commands: true })
+      t.userLocal({ skills_as_commands: false })
+      const { metadata } = t.load()
+      expect(
+        metadata.sources.filter((source) => source.kind === 'user'),
+      ).toHaveLength(1)
+      expect(metadata.authorities).toEqual([
+        { fieldPath: 'skills_as_commands', sourceKind: 'user' },
+      ])
+    })
+
+    test('a project override still shows when a local defines the same field', () => {
+      const t = setup()
+      t.userLocal({ skills_as_commands: false })
+      t.project({ skills_as_commands: true })
+      expect(t.load().metadata.authorities).toEqual([
+        { fieldPath: 'skills_as_commands', sourceKind: 'project' },
+      ])
+    })
+  })
+
+  describe('aliased user and custom directories', () => {
+    test('each file is read once, diagnostics appear once, no alias warning is emitted, and both layers apply', () => {
+      const t = setup()
+      t.user({
+        skills_as_commands: false,
+        search: { sources: [{ name: 'bad', format: 'yaml' }] },
+      })
+      const result = t.load({ customConfigDir: t.userDir })
+      const invalidEntryWarnings = t.warnings.filter((message) =>
+        message.includes('bad'),
+      )
+      expect(invalidEntryWarnings).toHaveLength(1)
+      expect(
+        t.warnings.filter((message) => message.includes('same directory')),
+      ).toHaveLength(0)
+      expect(result.config.skills_as_commands).toBe(false)
+    })
+
+    test('a scalar set in the shared file wins over a project value at the custom position', () => {
+      const t = setup()
+      t.user({ skills_as_commands: false })
+      t.project({ skills_as_commands: true })
+      const result = t.load({ customConfigDir: t.userDir })
+      expect(result.config.skills_as_commands).toBe(false)
+    })
+  })
+
+  describe('integration', () => {
+    test('pi_subagents overlays merge across the local layers', () => {
+      const t = setup()
+      t.user({ pi_subagents: { agents: { [AGENT]: { max_turns: 5 } } } })
+      t.userLocal({ pi_subagents: { agents: { [AGENT]: { max_turns: 9 } } } })
+      const { piSubagentsOverlays } = t.load()
+      expect(piSubagentsOverlays.agents[AGENT]?.value.max_turns).toBe(9)
+      expect(piSubagentsOverlays.agents[AGENT]?.sourcePath).toBe(
+        path.join(t.userDir, 'systematic.local.json'),
+      )
+    })
+
+    test('a removed key in a local file is warned about naming that file', () => {
+      const t = setup()
+      const local = t.userLocal({ workflow_guard: true })
+      t.load()
+      expect(
+        t.warnings.filter(
+          (message) =>
+            message.includes('workflow_guard') && message.includes(local),
+        ),
+      ).toHaveLength(1)
     })
   })
 })

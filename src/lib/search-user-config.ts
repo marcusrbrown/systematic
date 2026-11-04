@@ -676,28 +676,43 @@ function formatSearchFileWarning(sourcePath: string, reason: string): string {
 export interface SearchSettingsSource {
   readonly settings?: SearchSchemaOutput | undefined
   readonly unreadable: boolean
+  /** The layer this source was read from. Callers that do not track layers leave it out. */
+  readonly layer?: UserLevelLayer | undefined
 }
 
 export interface MergedSearchSettings {
   readonly settings: SearchSchemaOutput | undefined
   readonly unreadable: boolean
+  /**
+   * The layer each surviving source entry came from, by source name: the layer
+   * of the last source that defined that name. Names defined only by sources
+   * with no `layer` are absent.
+   */
+  readonly sourceLayers: ReadonlyMap<string, UserLevelLayer>
 }
 
 /**
  * The one merge rule, used by both `config.ts` and the reader. Sources arrive
- * in priority order, user then custom. `enabled` takes the last source that
- * defines it, `allow_project_sources` is the union, and `sources` merge by
- * name with the later source winning (in the earlier entry's position).
- * `unreadable` is set when any source was.
+ * in priority order: user, user.local, custom, custom.local. `enabled` takes
+ * the last source that defines it, `allow_project_sources` is the union, and
+ * `sources` merge by name with the later source replacing the earlier entry
+ * whole (in the earlier entry's position). `unreadable` is set when any source
+ * was.
  */
 export function mergeSearchSettings(
   sources: readonly SearchSettingsSource[],
 ): MergedSearchSettings {
-  const acc: MergeAccumulator = { allow: [], byName: new Map() }
+  const acc: MergeAccumulator = {
+    allow: [],
+    byName: new Map(),
+    layers: new Map(),
+  }
   let unreadable = false
   for (const source of sources) {
     if (source.unreadable) unreadable = true
-    if (source.settings !== undefined) absorb(acc, source.settings)
+    if (source.settings !== undefined) {
+      absorb(acc, source.settings, source.layer)
+    }
   }
   const merged: SearchSchemaOutput = {
     ...(acc.enabled !== undefined && { enabled: acc.enabled }),
@@ -705,24 +720,33 @@ export function mergeSearchSettings(
     ...(acc.byName.size > 0 && { sources: [...acc.byName.values()] }),
   }
   if (Object.keys(merged).length === 0) {
-    return { settings: undefined, unreadable }
+    return { settings: undefined, unreadable, sourceLayers: acc.layers }
   }
-  return { settings: merged, unreadable }
+  return { settings: merged, unreadable, sourceLayers: acc.layers }
 }
 
 interface MergeAccumulator {
   enabled?: boolean
   readonly allow: string[]
   readonly byName: Map<string, SearchSourceEntry>
+  readonly layers: Map<string, UserLevelLayer>
 }
 
 /** Fold one source's settings into the running merge. */
-function absorb(acc: MergeAccumulator, settings: SearchSchemaOutput): void {
+function absorb(
+  acc: MergeAccumulator,
+  settings: SearchSchemaOutput,
+  layer: UserLevelLayer | undefined,
+): void {
   if (settings.enabled !== undefined) acc.enabled = settings.enabled
   for (const entry of settings.allow_project_sources ?? []) {
     if (!acc.allow.includes(entry)) acc.allow.push(entry)
   }
-  for (const entry of settings.sources ?? []) acc.byName.set(entry.name, entry)
+  for (const entry of settings.sources ?? []) {
+    acc.byName.set(entry.name, entry)
+    if (layer === undefined) acc.layers.delete(entry.name)
+    else acc.layers.set(entry.name, layer)
+  }
 }
 
 // ── File selection ──────────────────────────────────────────────────────────
@@ -993,7 +1017,11 @@ export function loadUserLevelSearchSettings(
     })
   }
   const merged = mergeSearchSettings(sources)
-  return { ...merged, warnings }
+  return {
+    settings: merged.settings,
+    unreadable: merged.unreadable,
+    warnings,
+  }
 }
 
 // ── The project-level reader ────────────────────────────────────────────────

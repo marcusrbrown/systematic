@@ -506,21 +506,21 @@ describe('mergeSearchSettings', () => {
   ): SearchSettingsSource => ({ settings, unreadable })
 
   test('no sources gives nothing and is readable', () => {
-    expect(mergeSearchSettings([])).toEqual({
+    expect(mergeSearchSettings([])).toMatchObject({
       settings: undefined,
       unreadable: false,
     })
   })
 
   test('user only', () => {
-    expect(mergeSearchSettings([src({ enabled: true })])).toEqual({
+    expect(mergeSearchSettings([src({ enabled: true })])).toMatchObject({
       settings: { enabled: true },
       unreadable: false,
     })
   })
 
   test('an empty block contributes no settings', () => {
-    expect(mergeSearchSettings([src({})])).toEqual({
+    expect(mergeSearchSettings([src({})])).toMatchObject({
       settings: undefined,
       unreadable: false,
     })
@@ -540,7 +540,7 @@ describe('mergeSearchSettings', () => {
   })
 
   test('enabled:false only (custom has no search block) stays false', () => {
-    expect(mergeSearchSettings([src({ enabled: false })])).toEqual({
+    expect(mergeSearchSettings([src({ enabled: false })])).toMatchObject({
       settings: { enabled: false },
       unreadable: false,
     })
@@ -594,9 +594,52 @@ describe('mergeSearchSettings', () => {
     ])
     expect(merged.unreadable).toBe(true)
     expect(merged.settings).toEqual({ enabled: false })
-    expect(mergeSearchSettings([src(undefined, true)])).toEqual({
+    expect(mergeSearchSettings([src(undefined, true)])).toMatchObject({
       settings: undefined,
       unreadable: true,
+    })
+  })
+
+  describe('source layers', () => {
+    const layered = (
+      layer: SearchSettingsSource['layer'],
+      settings: SearchSettingsSource['settings'],
+    ): SearchSettingsSource => ({ settings, unreadable: false, layer })
+    const entry = (name: string, root: string) => ({
+      name,
+      format: 'markdown' as const,
+      roots: [root],
+    })
+
+    test('each surviving source reports the layer that defined it last', () => {
+      const merged = mergeSearchSettings([
+        layered('user', { sources: [entry('a', '/u-a'), entry('b', '/u-b')] }),
+        layered('user.local', { sources: [entry('b', '/l-b')] }),
+        layered('custom', { sources: [entry('c', '/c-c')] }),
+        layered('custom.local', { sources: [entry('c', '/cl-c')] }),
+      ])
+      expect([...merged.sourceLayers]).toEqual([
+        ['a', 'user'],
+        ['b', 'user.local'],
+        ['c', 'custom.local'],
+      ])
+      expect(merged.settings?.sources).toEqual([
+        entry('a', '/u-a'),
+        entry('b', '/l-b'),
+        entry('c', '/cl-c'),
+      ])
+    })
+
+    test('a source with no layer clears an earlier layer for that name', () => {
+      const merged = mergeSearchSettings([
+        layered('user', { sources: [entry('a', '/u-a')] }),
+        src({ sources: [entry('a', '/x-a')] }),
+      ])
+      expect(merged.sourceLayers.has('a')).toBe(false)
+    })
+
+    test('no layers at all gives an empty map', () => {
+      expect(mergeSearchSettings([]).sourceLayers.size).toBe(0)
     })
   })
 })

@@ -564,7 +564,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ---
 
-- [ ] **U5. Full-loader layers, root project file and repo-root resolution**
+- [x] **U5. Full-loader layers, root project file and repo-root resolution**
 
 **Goal:** `loadConfigWithSources` loads the two local layers and the root project file in the right order with the right trust, resolves the project from the repository root, and reports invalid files per surface.
 
