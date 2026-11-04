@@ -293,9 +293,41 @@ export function listDirectoryBounded(
 }
 
 /**
+ * The shared walk behind `resolveSearchRoot` and `lookupSearchRoot`: realpath
+ * the start directory, then climb to the nearest ancestor holding `.git` (a
+ * directory, or a file for a worktree). It returns the found root, or `null`
+ * together with the realpathed start when none is found. An unreadable
+ * ancestor stops the walk as "not found"; it never throws.
+ */
+function walkToGitRoot(startDir: string): {
+  readonly gitRoot: string | null
+  readonly start: string
+} {
+  const resolved = path.resolve(startDir)
+  const start = safeRealpath(resolved) ?? resolved
+  let current = start
+  while (true) {
+    try {
+      if (fs.lstatSync(path.join(current, '.git'), { throwIfNoEntry: false })) {
+        return { gitRoot: current, start }
+      }
+    } catch {
+      return { gitRoot: null, start }
+    }
+    const parent = path.dirname(current)
+    if (parent === current) return { gitRoot: null, start }
+    current = parent
+  }
+}
+
+/**
  * The project root: the nearest ancestor of `startDir` holding `.git` (a
  * directory, or a file for a worktree), resolved with `realpath`; otherwise
  * `startDir` itself, also resolved.
+ *
+ * `lookupSearchRoot` is the variant for callers that must keep the start
+ * directory unresolved when there is no repository, and must know whether one
+ * was found. Both share `walkToGitRoot`.
  *
  * This is a copy of the private `findGitWorktreeRoot` in
  * `discovered-skills.ts`, and the two differ on purpose: search falls back to
@@ -304,21 +336,32 @@ export function listDirectoryBounded(
  * the standalone search bin. This is the second use; extract at the third.
  */
 export function resolveSearchRoot(startDir: string): string {
-  const resolved = path.resolve(startDir)
-  const start = safeRealpath(resolved) ?? resolved
-  let current = start
-  while (true) {
-    try {
-      if (fs.lstatSync(path.join(current, '.git'), { throwIfNoEntry: false })) {
-        return current
-      }
-    } catch {
-      return start // unreadable ancestor: stop walking, never throw
-    }
-    const parent = path.dirname(current)
-    if (parent === current) return start
-    current = parent
-  }
+  const { gitRoot, start } = walkToGitRoot(startDir)
+  return gitRoot ?? start
+}
+
+/** What `lookupSearchRoot` found. */
+export interface SearchRootLookup {
+  /**
+   * The repository root (realpathed) when `foundGit`; otherwise the caller's
+   * `startDir`, unchanged and unresolved.
+   */
+  readonly root: string
+  /** Whether an ancestor holding `.git` was found. */
+  readonly foundGit: boolean
+}
+
+/**
+ * Like `resolveSearchRoot`, but reports whether `.git` was found and, when
+ * none was, hands back `startDir` exactly as given instead of its realpath.
+ * Config loading uses it so a directory outside any repository keeps the path
+ * the caller passed (a temp directory under a symlinked prefix stays as is).
+ */
+export function lookupSearchRoot(startDir: string): SearchRootLookup {
+  const { gitRoot } = walkToGitRoot(startDir)
+  return gitRoot === null
+    ? { root: startDir, foundGit: false }
+    : { root: gitRoot, foundGit: true }
 }
 
 export function isInside(root: string, candidate: string): boolean {

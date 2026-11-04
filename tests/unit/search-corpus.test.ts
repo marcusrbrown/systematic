@@ -10,6 +10,7 @@ import {
   KIND_TABLE,
   loadCorpus,
   loadSourceFiles,
+  lookupSearchRoot,
   MAX_DEPTH,
   MAX_DISCOVERED_FILES,
   MAX_FILE_BYTES,
@@ -117,6 +118,79 @@ describe('resolveSearchRoot', () => {
     // os.tmpdir() may be a symlink (macOS /var to /private/var); the result is the real path.
     const viaTmp = path.join(os.tmpdir(), path.basename(start))
     expect(resolveSearchRoot(viaTmp)).toBe(fs.realpathSync(viaTmp))
+  })
+})
+
+describe('lookupSearchRoot', () => {
+  it('finds the ancestor holding a .git directory from a subpackage', () => {
+    const root = makeTemp()
+    fs.mkdirSync(path.join(root, '.git'))
+    const start = path.join(root, 'packages', 'app')
+    fs.mkdirSync(start, { recursive: true })
+    expect(lookupSearchRoot(start)).toEqual({ root, foundGit: true })
+  })
+
+  it('counts a .git file as a repository marker', () => {
+    const root = makeTemp()
+    fs.writeFileSync(path.join(root, '.git'), 'gitdir: /elsewhere\n')
+    const start = path.join(root, 'a', 'b')
+    fs.mkdirSync(start, { recursive: true })
+    expect(lookupSearchRoot(start)).toEqual({ root, foundGit: true })
+  })
+
+  it('returns each nested repository its own root', () => {
+    const outer = makeTemp()
+    fs.mkdirSync(path.join(outer, '.git'))
+    const inner = path.join(outer, 'vendor', 'lib')
+    fs.mkdirSync(path.join(inner, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(inner, 'src'))
+    fs.mkdirSync(path.join(outer, 'docs'))
+    expect(lookupSearchRoot(path.join(inner, 'src')).root).toBe(inner)
+    expect(lookupSearchRoot(path.join(outer, 'docs')).root).toBe(outer)
+  })
+
+  it('reports not found and hands back the start directory string untouched', () => {
+    const start = makeTemp()
+    // The same directory reached through a trailing slash: the string must not be normalized.
+    const withSlash = `${start}${path.sep}`
+    expect(lookupSearchRoot(withSlash)).toEqual({
+      root: withSlash,
+      foundGit: false,
+    })
+  })
+
+  it('does not realpath the start directory when no repository is found', () => {
+    const base = makeTemp()
+    const real = path.join(base, 'real')
+    fs.mkdirSync(real)
+    const link = path.join(base, 'link')
+    fs.symlinkSync(real, link)
+    expect(lookupSearchRoot(link)).toEqual({ root: link, foundGit: false })
+  })
+
+  it('returns the repository root realpath from a symlinked start directory', () => {
+    const base = makeTemp()
+    const repo = path.join(base, 'repo')
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(repo, 'packages', 'app'), { recursive: true })
+    const link = path.join(base, 'link')
+    fs.symlinkSync(path.join(repo, 'packages', 'app'), link)
+    expect(lookupSearchRoot(link)).toEqual({ root: repo, foundGit: true })
+  })
+
+  it('stops at an unreadable ancestor as not found, without throwing', () => {
+    if (process.getuid?.() === 0) return // root ignores directory permissions
+    const base = makeTemp()
+    const locked = path.join(base, 'locked')
+    const start = path.join(locked, 'inner')
+    fs.mkdirSync(start, { recursive: true })
+    fs.mkdirSync(path.join(base, '.git'))
+    fs.chmodSync(locked, 0o000)
+    try {
+      expect(lookupSearchRoot(start)).toEqual({ root: start, foundGit: false })
+    } finally {
+      fs.chmodSync(locked, 0o755)
+    }
   })
 })
 

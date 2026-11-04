@@ -768,6 +768,104 @@ export function resolveUserLevelConfigDirs(
   return { homeDir, userConfigDir, customConfigDir: rawCustom || undefined }
 }
 
+/** The four user-level layers, in the order their search settings merge. */
+export type UserLevelLayer = 'user' | 'user.local' | 'custom' | 'custom.local'
+
+/** One selected user-level file: the layer it feeds and the path to read. */
+export interface UserLevelConfigFile {
+  readonly layer: UserLevelLayer
+  readonly path: string
+}
+
+export interface UserLevelFileSelection {
+  /**
+   * The selected files in layer order: user, user.local, then custom and
+   * custom.local when a custom directory is set. A local file is selected even
+   * when its sibling is absent, and the path of an absent file is still
+   * returned (`selectConfigFile` rule).
+   */
+  readonly files: readonly UserLevelConfigFile[]
+  /**
+   * The custom directory is the user directory, spelled the same way or
+   * reached through a symlink. The custom layers stay in `files` so the custom
+   * file keeps its precedence, but they name the same two files as `user` and
+   * `user.local`: a reader reads each file once and reuses the result.
+   */
+  readonly aliased: boolean
+}
+
+function realpathOrResolved(dir: string): string {
+  const resolved = path.resolve(dir)
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+/**
+ * Pick the user-level config files for the resolved directories. The
+ * basenames are `systematic` and `systematic.local`, each choosing `.jsonc`
+ * before `.json`. Selection looks at existence only, never validity.
+ */
+export function selectUserLevelConfigFiles(
+  dirs: UserLevelConfigDirs,
+): UserLevelFileSelection {
+  const files: UserLevelConfigFile[] = [
+    {
+      layer: 'user',
+      path: selectConfigFile(dirs.userConfigDir, 'systematic'),
+    },
+    {
+      layer: 'user.local',
+      path: selectConfigFile(dirs.userConfigDir, 'systematic.local'),
+    },
+  ]
+  const custom = dirs.customConfigDir
+  if (!custom) return { files, aliased: false }
+  files.push(
+    { layer: 'custom', path: selectConfigFile(custom, 'systematic') },
+    {
+      layer: 'custom.local',
+      path: selectConfigFile(custom, 'systematic.local'),
+    },
+  )
+  const aliased =
+    path.resolve(custom) === path.resolve(dirs.userConfigDir) ||
+    realpathOrResolved(custom) === realpathOrResolved(dirs.userConfigDir)
+  return { files, aliased }
+}
+
+export interface ProjectConfigSelection {
+  /** The project file to read. When none exists, the `.opencode/systematic.json` path. */
+  readonly path: string
+  /**
+   * The `.opencode/` file a repo-root file shadowed. Present only when a root
+   * file won and an `.opencode/` file also exists.
+   */
+  readonly ignoredPath?: string
+}
+
+/**
+ * Pick the project config file under the repository root: `.systematic.jsonc`,
+ * else `.systematic.json`, else `.opencode/systematic.jsonc`, else
+ * `.opencode/systematic.json`. A root file wins even when invalid; selection
+ * looks at existence only and never falls back past a broken file.
+ */
+export function selectProjectConfigFile(
+  repoRoot: string,
+): ProjectConfigSelection {
+  const opencodeFile = selectConfigFile(
+    path.join(repoRoot, '.opencode'),
+    'systematic',
+  )
+  const rootFile = selectConfigFile(repoRoot, '.systematic')
+  if (!fs.existsSync(rootFile)) return { path: opencodeFile }
+  return fs.existsSync(opencodeFile)
+    ? { path: rootFile, ignoredPath: opencodeFile }
+    : { path: rootFile }
+}
+
 // ── The user-level reader ───────────────────────────────────────────────────
 
 export interface UserLevelSearchLoad {

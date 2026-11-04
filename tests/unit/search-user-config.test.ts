@@ -5,6 +5,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { loadConfigWithSources } from '../../src/lib/config.js'
 import type { SearchSettings } from '../../src/lib/search-core.js'
+import { lookupSearchRoot } from '../../src/lib/search-corpus.js'
 import {
   loadProjectSearchSources,
   loadUserLevelSearchSettings,
@@ -15,8 +16,16 @@ import {
   type SearchSettingsSource,
   SearchSourceSchema,
   selectConfigFile,
+  selectProjectConfigFile,
+  selectUserLevelConfigFiles,
   validateSearchConfig,
 } from '../../src/lib/search-user-config.js'
+import {
+  makeExternalEnv,
+  writeProjectSearch,
+  writeUserLocalSearch,
+  writeUserSearch,
+} from '../helpers/search-external-env.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const temp = createTempDirTracker()
@@ -649,6 +658,277 @@ describe('resolveUserLevelConfigDirs', () => {
         customConfigDir: ' /c ',
       }),
     ).toEqual({ homeDir: '/h', userConfigDir: '/u', customConfigDir: '/c' })
+  })
+})
+
+describe('selectUserLevelConfigFiles', () => {
+  function dirs() {
+    const root = makeTempDir('layers')
+    const userConfigDir = path.join(root, 'user')
+    const customConfigDir = path.join(root, 'custom')
+    fs.mkdirSync(userConfigDir)
+    fs.mkdirSync(customConfigDir)
+    return { root, homeDir: root, userConfigDir, customConfigDir }
+  }
+
+  test('returns user, user.local, custom, custom.local in order', () => {
+    const d = dirs()
+    const selection = selectUserLevelConfigFiles(d)
+    expect(selection.files).toEqual([
+      { layer: 'user', path: path.join(d.userConfigDir, 'systematic.json') },
+      {
+        layer: 'user.local',
+        path: path.join(d.userConfigDir, 'systematic.local.json'),
+      },
+      {
+        layer: 'custom',
+        path: path.join(d.customConfigDir, 'systematic.json'),
+      },
+      {
+        layer: 'custom.local',
+        path: path.join(d.customConfigDir, 'systematic.local.json'),
+      },
+    ])
+    expect(selection.aliased).toBe(false)
+  })
+
+  test('returns only the two user pairs without a custom directory', () => {
+    const d = dirs()
+    for (const customConfigDir of [undefined, '']) {
+      const selection = selectUserLevelConfigFiles({ ...d, customConfigDir })
+      expect(selection.files.map((file) => file.layer)).toEqual([
+        'user',
+        'user.local',
+      ])
+      expect(selection.aliased).toBe(false)
+    }
+  })
+
+  test('a blank OPENCODE_CONFIG_DIR through the resolver yields no custom pair', () => {
+    const d = dirs()
+    const selection = selectUserLevelConfigFiles(
+      resolveUserLevelConfigDirs({
+        homeDir: d.homeDir,
+        userConfigDir: d.userConfigDir,
+        customConfigDir: '   ',
+      }),
+    )
+    expect(selection.files.map((file) => file.layer)).toEqual([
+      'user',
+      'user.local',
+    ])
+  })
+
+  test('selects a local file that has no sibling', () => {
+    const d = dirs()
+    fs.writeFileSync(path.join(d.userConfigDir, 'systematic.local.json'), '{}')
+    fs.writeFileSync(
+      path.join(d.customConfigDir, 'systematic.local.jsonc'),
+      '{}',
+    )
+    const selection = selectUserLevelConfigFiles(d)
+    expect(selection.files.map((file) => file.path)).toEqual([
+      path.join(d.userConfigDir, 'systematic.json'),
+      path.join(d.userConfigDir, 'systematic.local.json'),
+      path.join(d.customConfigDir, 'systematic.json'),
+      path.join(d.customConfigDir, 'systematic.local.jsonc'),
+    ])
+  })
+
+  test('systematic.local.jsonc beats systematic.local.json', () => {
+    const d = dirs()
+    fs.writeFileSync(path.join(d.userConfigDir, 'systematic.local.json'), '{}')
+    fs.writeFileSync(path.join(d.userConfigDir, 'systematic.local.jsonc'), '{}')
+    const local = selectUserLevelConfigFiles(d).files.find(
+      (file) => file.layer === 'user.local',
+    )
+    expect(local?.path).toBe(
+      path.join(d.userConfigDir, 'systematic.local.jsonc'),
+    )
+  })
+
+  test('a base file never stands in for its local, and the reverse', () => {
+    const d = dirs()
+    fs.writeFileSync(path.join(d.userConfigDir, 'systematic.jsonc'), '{}')
+    const files = selectUserLevelConfigFiles(d).files
+    expect(files[0]?.path).toBe(path.join(d.userConfigDir, 'systematic.jsonc'))
+    expect(files[1]?.path).toBe(
+      path.join(d.userConfigDir, 'systematic.local.json'),
+    )
+  })
+
+  test('flags the same directory as aliased', () => {
+    const d = dirs()
+    const selection = selectUserLevelConfigFiles({
+      ...d,
+      customConfigDir: d.userConfigDir,
+    })
+    expect(selection.aliased).toBe(true)
+    // Both layer positions stay, so the custom file keeps its precedence.
+    expect(selection.files.map((file) => file.layer)).toEqual([
+      'user',
+      'user.local',
+      'custom',
+      'custom.local',
+    ])
+  })
+
+  test('flags a trailing-slash spelling as aliased', () => {
+    const d = dirs()
+    expect(
+      selectUserLevelConfigFiles({
+        ...d,
+        customConfigDir: `${d.userConfigDir}${path.sep}`,
+      }).aliased,
+    ).toBe(true)
+  })
+
+  test('flags a symlink to the user directory as aliased', () => {
+    const d = dirs()
+    const link = path.join(d.root, 'link')
+    fs.symlinkSync(d.userConfigDir, link)
+    expect(
+      selectUserLevelConfigFiles({ ...d, customConfigDir: link }).aliased,
+    ).toBe(true)
+  })
+
+  test('does not flag two different directories, even when neither exists', () => {
+    const d = dirs()
+    expect(
+      selectUserLevelConfigFiles({
+        homeDir: d.homeDir,
+        userConfigDir: path.join(d.root, 'missing-a'),
+        customConfigDir: path.join(d.root, 'missing-b'),
+      }).aliased,
+    ).toBe(false)
+  })
+
+  test('flags the same missing directory as aliased by path', () => {
+    const d = dirs()
+    const missing = path.join(d.root, 'missing')
+    expect(
+      selectUserLevelConfigFiles({
+        homeDir: d.homeDir,
+        userConfigDir: missing,
+        customConfigDir: missing,
+      }).aliased,
+    ).toBe(true)
+  })
+})
+
+describe('selectProjectConfigFile', () => {
+  function repo() {
+    const root = makeTempDir('project')
+    fs.mkdirSync(path.join(root, '.opencode'))
+    return root
+  }
+  const rootJsonc = (root: string) => path.join(root, '.systematic.jsonc')
+  const rootJson = (root: string) => path.join(root, '.systematic.json')
+  const ocJsonc = (root: string) =>
+    path.join(root, '.opencode', 'systematic.jsonc')
+  const ocJson = (root: string) =>
+    path.join(root, '.opencode', 'systematic.json')
+
+  test('a root .jsonc beats a root .json and the .opencode file', () => {
+    const root = repo()
+    fs.writeFileSync(rootJsonc(root), '{}')
+    fs.writeFileSync(rootJson(root), '{}')
+    fs.writeFileSync(ocJson(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({
+      path: rootJsonc(root),
+      ignoredPath: ocJson(root),
+    })
+  })
+
+  test('a root .json beats the .opencode file and names the ignored path', () => {
+    const root = repo()
+    fs.writeFileSync(rootJson(root), '{}')
+    fs.writeFileSync(ocJsonc(root), '{}')
+    fs.writeFileSync(ocJson(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({
+      path: rootJson(root),
+      ignoredPath: ocJsonc(root),
+    })
+  })
+
+  test('a root file with no .opencode file ignores nothing', () => {
+    const root = repo()
+    fs.writeFileSync(rootJsonc(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({ path: rootJsonc(root) })
+  })
+
+  test('the .opencode file wins when no root file exists, with nothing ignored', () => {
+    const root = repo()
+    fs.writeFileSync(ocJson(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({ path: ocJson(root) })
+    fs.writeFileSync(ocJsonc(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({ path: ocJsonc(root) })
+  })
+
+  test('reports the .opencode/systematic.json path when no file exists anywhere', () => {
+    const root = makeTempDir('project-empty')
+    expect(selectProjectConfigFile(root)).toEqual({ path: ocJson(root) })
+  })
+
+  test('a directory named .systematic.jsonc is selected: existence, not validity', () => {
+    const root = repo()
+    fs.mkdirSync(rootJsonc(root))
+    fs.writeFileSync(rootJson(root), '{}')
+    fs.writeFileSync(ocJson(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({
+      path: rootJsonc(root),
+      ignoredPath: ocJson(root),
+    })
+  })
+
+  test('an invalid root file still wins over a valid .opencode file', () => {
+    const root = repo()
+    fs.writeFileSync(rootJson(root), '{ not json')
+    fs.writeFileSync(ocJson(root), '{}')
+    expect(selectProjectConfigFile(root).path).toBe(rootJson(root))
+  })
+
+  test('a .json shadowed by a .jsonc in the same directory is not reported ignored', () => {
+    const root = repo()
+    fs.writeFileSync(rootJsonc(root), '{}')
+    fs.writeFileSync(rootJson(root), '{}')
+    expect(selectProjectConfigFile(root)).toEqual({ path: rootJsonc(root) })
+  })
+
+  test('a symlinked start directory selects the repository root file', () => {
+    const env = makeExternalEnv(temp)
+    writeProjectSearch(env, { sources: [] }, 'root')
+    writeProjectSearch(env, { sources: [] })
+    const app = path.join(env.repo, 'packages', 'app')
+    fs.mkdirSync(app, { recursive: true })
+    const link = path.join(env.root, 'app-link')
+    fs.symlinkSync(app, link)
+    const lookup = lookupSearchRoot(link)
+    expect(lookup).toEqual({ root: env.repo, foundGit: true })
+    expect(selectProjectConfigFile(lookup.root)).toEqual({
+      path: rootJson(env.repo),
+      ignoredPath: ocJson(env.repo),
+    })
+  })
+
+  test('the fixture helpers write the files this selection reads', () => {
+    const env = makeExternalEnv(temp)
+    writeProjectSearch(env, { sources: [] }, 'root')
+    writeProjectSearch(env, { sources: [] })
+    writeUserSearch(env, {})
+    writeUserLocalSearch(env, {})
+    expect(selectProjectConfigFile(env.repo)).toEqual({
+      path: rootJson(env.repo),
+      ignoredPath: ocJson(env.repo),
+    })
+    expect(
+      selectUserLevelConfigFiles(
+        resolveUserLevelConfigDirs(env.configOptions),
+      ).files.map((file) => file.path),
+    ).toEqual([
+      path.join(env.userConfigDir, 'systematic.json'),
+      path.join(env.userConfigDir, 'systematic.local.json'),
+    ])
   })
 })
 

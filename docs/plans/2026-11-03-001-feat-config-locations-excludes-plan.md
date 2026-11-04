@@ -521,7 +521,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ### Phase B: Config locations
 
-- [ ] **U4. Shared file selection and repo-root lookup**
+- [x] **U4. Shared file selection and repo-root lookup**
 
 **Goal:** One bin-safe place decides which user-level files and which project file a reader looks at, and one lookup says where the repository root is.
 

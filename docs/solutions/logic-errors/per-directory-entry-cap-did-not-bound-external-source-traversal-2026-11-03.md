@@ -28,7 +28,7 @@ An external source points at a folder the user or a checkout controls. Its limit
 - A size check at admission says what the file was, not what a later read returns.
 
 ## Solution
-One entry budget per source is shared by every directory and root, and a spent budget opens nothing more (`newEntryBudget`, `src/lib/search-corpus.ts:223-251`; `src/lib/search-external.ts:283-296`). Each read is limited to `readAllowance`, the smallest of the per-file cap and the remaining per-source and per-call budgets (`src/lib/search-corpus.ts:742-752`). `readBytesBounded` reads at most that allowance plus one sentinel byte and rejects a file over it (`src/lib/search-bounded-read.ts:39-69`).
+One entry budget per source is shared by every directory and root, and a spent budget opens nothing more (`newEntryBudget`, `src/lib/search-corpus.ts:223-251`; `src/lib/search-external.ts:283-296`). Each read is limited to `readAllowance`, the smallest of the per-file cap and the remaining per-source and per-call budgets (`src/lib/search-corpus.ts:785-795`). `readBytesBounded` reads at most that allowance plus one sentinel byte and rejects a file over it (`src/lib/search-bounded-read.ts:39-69`).
 
 ## Why This Works
 Each limit is charged where the resource is spent, at the listing and at the read, instead of at an earlier admission step that can go stale. As the comment on `readAllowance` says, "a file can grow after discovery" (`src/lib/search-corpus.ts:739-740`).

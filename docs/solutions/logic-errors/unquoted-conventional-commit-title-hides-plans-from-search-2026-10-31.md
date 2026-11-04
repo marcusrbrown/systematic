@@ -30,7 +30,7 @@ A plan titled `title: feat: Add x` is not a string to YAML. A colon followed by 
 ## Symptoms
 
 - Several plans under `docs/plans/` failed to parse, and search skipped them.
-- The skip was warned, not silent. `parseCorpusDocument` returns `{ ok: false, reason: 'invalid frontmatter' }` (through `parseMarkdownFrontmatter`, `src/lib/search-corpus.ts:533-547`), and the loader adds `skipped <path>: invalid frontmatter` to its warnings when that happens (`parseCorpusDocument` call site, `src/lib/search-corpus.ts:941-946`; the warning is added at `src/lib/search-corpus.ts:835-837`). No gate and no consumer read that warning.
+- The skip was warned, not silent. `parseCorpusDocument` returns `{ ok: false, reason: 'invalid frontmatter' }` (through `parseMarkdownFrontmatter`, `src/lib/search-corpus.ts:576-590`), and the loader adds `skipped <path>: invalid frontmatter` to its warnings when that happens (`parseCorpusDocument` call site, `src/lib/search-corpus.ts:984-989`; the warning is added at `src/lib/search-corpus.ts:835-837`). No gate and no consumer read that warning.
 
 ## What Didn't Work
 
