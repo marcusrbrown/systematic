@@ -59,6 +59,12 @@ import {
   type SearchCliSettingsLoad,
 } from './lib/search-cli.js'
 import {
+  type InspectedRoot,
+  type InspectedSource,
+  inspectSearch,
+  type SearchInspection,
+} from './lib/search-external-sources.js'
+import {
   displaySafe,
   loadUserLevelSearchSettings,
   type UserLevelConfigDirOptions,
@@ -871,10 +877,43 @@ function toJsonRoutingResolution(
   }
 }
 
+/**
+ * The config files `config show` can read. Local files carry the selected
+ * path even when absent, like `user`; `custom` and `customLocal` are null
+ * without a custom directory; `ignoredProject` is the `.opencode/` file a
+ * repo-root project file shadows, or null.
+ */
 interface ConfigShowJsonLocations {
   readonly user: string
+  readonly userLocal: string
   readonly project: string
   readonly custom: string | null
+  readonly customLocal: string | null
+  readonly ignoredProject: string | null
+}
+
+function toJsonLocations(
+  paths: ReturnType<typeof getConfigPaths>,
+): ConfigShowJsonLocations {
+  return {
+    user: paths.userConfig,
+    userLocal: paths.userLocalConfig,
+    project: paths.projectConfig,
+    custom: paths.customConfig ?? null,
+    customLocal: paths.customLocalConfig ?? null,
+    ignoredProject: paths.ignoredProjectConfig ?? null,
+  }
+}
+
+/**
+ * What search does for this project, from the bin-safe readers: they never
+ * throw, so the section is available even when the full load fails. Rooted at
+ * the same checkout root the locations block shows.
+ */
+function inspectSearchForConfigShow(
+  paths: ReturnType<typeof getConfigPaths>,
+): SearchInspection {
+  return inspectSearch({ checkoutRoot: paths.projectRoot })
 }
 
 interface ConfigShowJsonSuccess {
@@ -889,6 +928,7 @@ interface ConfigShowJsonSuccess {
     readonly opencode: ConfigShowJsonRoutingResolution
     readonly pi: ConfigShowJsonRoutingResolution
   }>
+  readonly search: SearchInspection
 }
 
 /**
@@ -900,24 +940,22 @@ interface ConfigShowJsonSuccess {
 interface ConfigShowJsonError {
   readonly locations: ConfigShowJsonLocations
   readonly error: string
+  readonly search: SearchInspection
 }
 
 type ConfigShowJsonOutput = ConfigShowJsonSuccess | ConfigShowJsonError
 
 /**
  * Builds the `--json` output for `config show`: file paths only (never raw
- * file contents), the resolved profile state, and the per-target routing
+ * file contents), the resolved profile state, the per-target routing
  * table -- the same resolver calls `printRoutingTable` makes, just
  * collected into data instead of printed lines, so the two modes can never
- * diagnostically disagree.
+ * diagnostically disagree -- and the search section.
  */
 function buildConfigShowJson(): ConfigShowJsonOutput {
   const paths = getConfigPaths(process.cwd())
-  const locations = {
-    user: paths.userConfig,
-    project: paths.projectConfig,
-    custom: paths.customConfig ?? null,
-  }
+  const locations = toJsonLocations(paths)
+  const search = inspectSearchForConfigShow(paths)
 
   let loaded: SourceAwareConfigResult
   try {
@@ -926,6 +964,7 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
     return {
       locations,
       error: error instanceof Error ? error.message : String(error),
+      search,
     }
   }
 
@@ -965,6 +1004,78 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
     activeProfileSourcePath: loaded.activeProfileSourcePath,
     profileFallback: loaded.metadata.profileFallback,
     routing,
+    search,
+  }
+}
+
+function yesNo(value: boolean): string {
+  return value ? 'yes' : 'no'
+}
+
+function formatSourceRoot(root: InspectedRoot): string {
+  const state =
+    root.present === null ? '' : root.present ? ' (present)' : ' (missing)'
+  return `${displaySafe(root.path)}${state}`
+}
+
+function printSearchSource(source: InspectedSource): void {
+  console.log(`    ${displaySafe(source.name)} [${source.status}]`)
+  console.log(`      origin:  ${source.origin}`)
+  if (source.status === 'dropped invalid') {
+    console.log(`      reason:  ${displaySafe(source.reason)}`)
+  } else {
+    console.log(`      format:  ${source.format}`)
+    for (const root of source.roots) {
+      console.log(`      root:    ${formatSourceRoot(root)}`)
+    }
+    if (source.exclude.length > 0) {
+      console.log(
+        `      exclude: ${source.exclude.map((pattern) => displaySafe(pattern)).join(', ')}`,
+      )
+    }
+  }
+  for (const warning of source.warnings) {
+    console.log(`      warning: ${warning}`)
+  }
+}
+
+/**
+ * Prints the Search section: the same data `--json` carries under `search`,
+ * as resolved values. A local config file is never echoed.
+ */
+function printSearchSection(search: SearchInspection): void {
+  console.log('\nSearch:')
+  console.log(`  Enabled:        ${yesNo(search.enabled)}`)
+  console.log(`  Project root:   ${displaySafe(search.projectRoot)}`)
+  console.log(
+    `  Allow list:     ${
+      search.allowProjectSources.length === 0
+        ? '(empty)'
+        : search.allowProjectSources
+            .map((entry) => displaySafe(entry))
+            .join(', ')
+    }`,
+  )
+  console.log(`  Project allowed: ${yesNo(search.projectAllowed)}`)
+  if (search.userConfigUnreadable) {
+    console.log('  A user-level config file could not be fully read.')
+  }
+  if (search.projectConfigUnreadable) {
+    console.log('  The project config file could not be read.')
+  }
+
+  console.log('\n  External sources:')
+  if (search.sources.length === 0) console.log('    (none)')
+  for (const source of search.sources) printSearchSource(source)
+  for (const warning of search.warnings) {
+    console.log(`    warning: ${warning}`)
+  }
+
+  console.log('\n  Built-in kinds:')
+  for (const kind of search.builtIn) {
+    console.log(
+      `    ${kind.kind.padEnd(10)} ${kind.state.padEnd(10)} ${displaySafe(kind.directory)}`,
+    )
   }
 }
 
@@ -977,10 +1088,21 @@ function configShow(options: { json: boolean }): void {
   }
 
   const paths = getConfigPaths(process.cwd())
+  const locations = toJsonLocations(paths)
 
   console.log('Configuration locations:\n')
-  console.log(`  User config:    ${paths.userConfig}`)
-  console.log(`  Project config: ${paths.projectConfig}`)
+  console.log(`  User config:            ${locations.user}`)
+  console.log(`  User local config:      ${locations.userLocal}`)
+  console.log(`  Project config:         ${locations.project}`)
+  if (locations.ignoredProject !== null) {
+    console.log(`  Ignored project config: ${locations.ignoredProject}`)
+  }
+  if (locations.custom !== null) {
+    console.log(`  Custom config:          ${locations.custom}`)
+  }
+  if (locations.customLocal !== null) {
+    console.log(`  Custom local config:    ${locations.customLocal}`)
+  }
 
   if (fs.existsSync(paths.projectConfig)) {
     console.log('\nProject configuration:')
@@ -993,8 +1115,12 @@ function configShow(options: { json: boolean }): void {
   }
 
   // A failed load exits 1 in both renderings: the same failure must not
-  // report success in prose and failure under `--json`.
-  if (!printResolvedSection()) process.exit(1)
+  // report success in prose and failure under `--json`. The search section
+  // prints either way, because its readers never throw and a failed load is
+  // when it helps most.
+  const resolved = printResolvedSection()
+  printSearchSection(inspectSearchForConfigShow(paths))
+  if (!resolved) process.exit(1)
 }
 
 function parseConfigShowArgs(rest: string[]): { json: boolean } {

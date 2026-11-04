@@ -686,7 +686,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ### Phase C: Surfacing and documentation
 
-- [ ] **U7. `config show` locations and Search section**
+- [x] **U7. `config show` locations and Search section**
 
 **Goal:** `config show` lists every config file it can read and answers "what will search do for this project, and why" in both human and `--json` forms, without running a search.
 

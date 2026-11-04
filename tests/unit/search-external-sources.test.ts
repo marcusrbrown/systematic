@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadConfigWithSources } from '../../src/lib/config.js'
 import {
   type ActiveSource,
+  type InspectedSource,
+  inspectSearch,
   MAX_ACTIVE_SOURCES,
   resolveExternalSources,
 } from '../../src/lib/search-external-sources.js'
@@ -945,6 +947,376 @@ describe('resolveExternalSources: locations, local overlays and diagnostics', ()
     const result = resolve(env)
     expect(result.sources).toEqual([])
     expect(result.project).toEqual({ kind: 'config-unreadable' })
+  })
+})
+
+describe('inspectSearch', () => {
+  function inspect(env: Env) {
+    return inspectSearch({
+      checkoutRoot: env.repo,
+      configOptions: env.configOptions,
+    })
+  }
+
+  function writeLocal(env: Env, search: unknown): void {
+    fs.writeFileSync(
+      path.join(env.userConfigDir, 'systematic.local.json'),
+      JSON.stringify({ search }),
+    )
+  }
+
+  function mkRoot(env: Env, name: string): string {
+    const dir = path.join(env.homeDir, 'vaults', name)
+    fs.mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  function find(sources: readonly InspectedSource[], name: string) {
+    return sources.find((source) => source.name === name)
+  }
+
+  test('reports enabled, the allow list and whether this project is on it', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: [env.repo] })
+
+    const result = inspect(env)
+    expect(result.enabled).toBe(true)
+    expect(result.allowProjectSources).toEqual([env.repo])
+    expect(result.projectAllowed).toBe(true)
+    expect(result.projectRoot).toBe(env.repo)
+  })
+
+  test('a project that is not on the allow list is reported as not allowed', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: ['/somewhere/else'] })
+
+    const result = inspect(env)
+    expect(result.projectAllowed).toBe(false)
+    expect(result.allowProjectSources).toEqual(['/somewhere/else'])
+  })
+
+  test('search is enabled unless a user-level file switches it off', () => {
+    const env = makeEnv()
+    expect(inspect(env).enabled).toBe(true)
+    writeLocal(env, { enabled: false })
+    expect(inspect(env).enabled).toBe(false)
+  })
+
+  test('a source and an allow entry defined in a local file appear with the local layer', () => {
+    const env = makeEnv()
+    const root = mkRoot(env, 'wiki')
+    writeUser(env, { sources: [userSource('base', [env.repo], root)] })
+    writeLocal(env, {
+      allow_project_sources: [env.repo],
+      sources: [userSource('wiki', [env.repo], root)],
+    })
+
+    const result = inspect(env)
+    expect(result.projectAllowed).toBe(true)
+    expect(result.allowProjectSources).toEqual([env.repo])
+    expect(find(result.sources, 'base')?.origin).toBe('user')
+    const wiki = find(result.sources, 'wiki')
+    expect(wiki?.origin).toBe('user.local')
+    expect(wiki).toMatchObject({
+      status: 'active',
+      format: 'markdown',
+      roots: [{ path: root, present: true }],
+      exclude: [],
+    })
+  })
+
+  test('a custom-directory source carries the custom layer', () => {
+    const env = makeEnv()
+    const custom = path.join(env.homeDir, 'custom')
+    fs.mkdirSync(custom, { recursive: true })
+    const root = mkRoot(env, 'notes')
+    fs.writeFileSync(
+      path.join(custom, 'systematic.local.json'),
+      JSON.stringify({
+        search: { sources: [userSource('notes', [env.repo], root)] },
+      }),
+    )
+
+    const result = inspectSearch({
+      checkoutRoot: env.repo,
+      configOptions: { homeDir: env.homeDir, customConfigDir: custom },
+    })
+    expect(find(result.sources, 'notes')?.origin).toBe('custom.local')
+  })
+
+  test('one fixture produces active, missing root, over source cap and dropped invalid', () => {
+    const env = makeEnv()
+    const present = mkRoot(env, 'present')
+    const sources = [
+      userSource('active-one', [env.repo], present),
+      userSource('gone', [env.repo], path.join(env.homeDir, 'no-such-root')),
+      ...Array.from({ length: 6 }, (_, index) =>
+        userSource(`fill${index}`, [env.repo], present),
+      ),
+      userSource('ninth', [env.repo], present),
+      { name: 'broken', format: 'markdown', roots: ['relative/root'] },
+    ]
+    writeUser(env, { allow_project_sources: [env.repo], sources })
+
+    const result = inspect(env)
+    expect(find(result.sources, 'active-one')?.status).toBe('active')
+    expect(find(result.sources, 'gone')).toMatchObject({
+      status: 'missing root',
+      roots: [{ path: path.join(env.homeDir, 'no-such-root'), present: false }],
+    })
+    expect(find(result.sources, 'ninth')?.status).toBe('over source cap')
+    const broken = find(result.sources, 'broken')
+    expect(broken).toMatchObject({ status: 'dropped invalid', origin: 'user' })
+    expect(broken && 'reason' in broken ? broken.reason : '').toContain('root')
+    expect(
+      result.sources.filter((source) => source.status === 'active'),
+    ).toHaveLength(MAX_ACTIVE_SOURCES - 1)
+  })
+
+  test('an allowed project proposal beyond the cap is over source cap; one within it is active', () => {
+    const env = makeEnv()
+    const present = mkRoot(env, 'present')
+    fs.mkdirSync(path.join(env.repo, 'docs/decisions'), { recursive: true })
+    writeUser(env, {
+      allow_project_sources: [env.repo],
+      sources: Array.from({ length: MAX_ACTIVE_SOURCES }, (_, index) =>
+        userSource(`u${index}`, [env.repo], present),
+      ),
+    })
+    writeProject(env.repo, { sources: [projectSource('decisions')] })
+
+    const result = inspect(env)
+    expect(find(result.sources, 'decisions')).toMatchObject({
+      status: 'over source cap',
+      origin: 'project',
+    })
+  })
+
+  test('a project proposal on the allow list is active when its root exists', () => {
+    const env = makeEnv()
+    fs.mkdirSync(path.join(env.repo, 'docs/decisions'), { recursive: true })
+    writeUser(env, { allow_project_sources: [env.repo] })
+    writeProject(env.repo, {
+      sources: [projectSource('decisions'), projectSource('absent')],
+    })
+
+    const result = inspect(env)
+    expect(find(result.sources, 'decisions')).toMatchObject({
+      status: 'active',
+      origin: 'project',
+      roots: [{ path: path.join(env.repo, 'docs/decisions'), present: true }],
+    })
+    expect(find(result.sources, 'absent')?.status).toBe('missing root')
+  })
+
+  test('a project proposal off the allow list shows its name and roots as not allowed', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: ['/somewhere/else'] })
+    writeProject(env.repo, {
+      sources: [projectSource('quokka-notes', 'docs/quokka-vault')],
+    })
+
+    const result = inspect(env)
+    expect(find(result.sources, 'quokka-notes')).toMatchObject({
+      status: 'not allowed',
+      origin: 'project',
+      roots: [
+        { path: path.join(env.repo, 'docs/quokka-vault'), present: null },
+      ],
+    })
+  })
+
+  test('a dropped project entry is listed with its reason', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: [env.repo] })
+    writeProject(env.repo, {
+      sources: [
+        { name: 'escape', format: 'markdown', roots: ['../outside'] },
+        projectSource('fine'),
+      ],
+    })
+
+    const dropped = find(inspect(env).sources, 'escape')
+    expect(dropped).toMatchObject({
+      status: 'dropped invalid',
+      origin: 'project',
+    })
+  })
+
+  test('an unreadable project file is flagged and proposes nothing', () => {
+    const env = makeEnv()
+    writeUser(env, { allow_project_sources: [env.repo] })
+    fs.mkdirSync(path.join(env.repo, '.opencode'))
+    fs.writeFileSync(path.join(env.repo, '.opencode/systematic.json'), '{ "s')
+
+    const result = inspect(env)
+    expect(result.projectConfigUnreadable).toBe(true)
+    expect(result.sources).toEqual([])
+    expect(result.warnings.join('\n')).toContain('could not be read')
+  })
+
+  test('a user source mapped only to other projects is left out', () => {
+    const env = makeEnv()
+    const root = mkRoot(env, 'elsewhere')
+    writeUser(env, {
+      sources: [
+        userSource('theirs', ['/some/other/project'], root),
+        userSource('mine', [env.repo], root),
+      ],
+    })
+
+    const result = inspect(env)
+    expect(find(result.sources, 'theirs')).toBeUndefined()
+    expect(find(result.sources, 'mine')?.status).toBe('active')
+  })
+
+  test('a project proposal replaced by a same-named mapped user source is not listed', () => {
+    const env = makeEnv()
+    const root = mkRoot(env, 'shadow')
+    writeUser(env, {
+      allow_project_sources: [env.repo],
+      sources: [userSource('decisions', [env.repo], root)],
+    })
+    writeProject(env.repo, { sources: [projectSource('decisions')] })
+
+    const result = inspect(env)
+    const matching = result.sources.filter((s) => s.name === 'decisions')
+    expect(matching).toHaveLength(1)
+    expect(matching[0]?.origin).toBe('user')
+  })
+
+  test('exclude patterns appear on the source and its warnings never carry pattern text', () => {
+    const env = makeEnv()
+    const root = mkRoot(env, 'wiki')
+    writeUser(env, {
+      sources: [
+        {
+          ...userSource('wiki', [env.repo], root),
+          exclude: ['log.md', '[secret-pattern]', '.stryker-tmp'],
+        },
+        userSource('plain', [env.repo], root),
+      ],
+    })
+
+    const result = inspect(env)
+    const wiki = find(result.sources, 'wiki')
+    expect(wiki && 'exclude' in wiki ? wiki.exclude : []).toEqual([
+      'log.md',
+      '.stryker-tmp',
+    ])
+    expect(wiki?.warnings).toHaveLength(1)
+    expect(wiki?.warnings[0]).toContain('exclude[1]')
+    expect(JSON.stringify(result)).not.toContain('secret-pattern')
+    expect(find(result.sources, 'plain')?.warnings).toEqual([])
+    // The warning belongs to the source, so the section list does not repeat it.
+    expect(result.warnings).toEqual([])
+  })
+
+  test('lists the four built-in kinds with their directory and state', () => {
+    const env = makeEnv()
+    const docs = path.join(env.repo, 'docs')
+    fs.mkdirSync(path.join(docs, 'solutions'), { recursive: true })
+    fs.writeFileSync(path.join(docs, 'solutions/fix.md'), '# Fix\n')
+    fs.mkdirSync(path.join(docs, 'plans'), { recursive: true })
+    fs.writeFileSync(path.join(docs, 'plans/README.md'), '# Plans\n')
+
+    const result = inspect(env)
+    expect(result.builtIn.map((kind) => kind.kind)).toEqual([
+      'solution',
+      'plan',
+      'brainstorm',
+      'ideation',
+    ])
+    expect(result.builtIn).toEqual([
+      {
+        kind: 'solution',
+        directory: path.join(docs, 'solutions'),
+        state: 'present',
+      },
+      { kind: 'plan', directory: path.join(docs, 'plans'), state: 'empty' },
+      {
+        kind: 'brainstorm',
+        directory: path.join(docs, 'brainstorms'),
+        state: 'missing',
+      },
+      {
+        kind: 'ideation',
+        directory: path.join(docs, 'ideation'),
+        state: 'missing',
+      },
+    ])
+  })
+
+  test.skipIf(process.getuid?.() === 0)(
+    'a locked built-in directory is reported unreadable',
+    () => {
+      const env = makeEnv()
+      const locked = path.join(env.repo, 'docs/ideation')
+      fs.mkdirSync(locked, { recursive: true })
+      fs.writeFileSync(path.join(locked, 'idea.md'), '# Idea\n')
+      fs.chmodSync(locked, 0o000)
+      try {
+        const ideation = inspect(env).builtIn.find((k) => k.kind === 'ideation')
+        expect(ideation?.state).toBe('unreadable')
+      } finally {
+        fs.chmodSync(locked, 0o755)
+      }
+    },
+  )
+
+  test('the active sources match what resolveExternalSources resolves', () => {
+    const env = makeEnv()
+    const present = mkRoot(env, 'present')
+    fs.mkdirSync(path.join(env.repo, 'docs/decisions'), { recursive: true })
+    writeUser(env, {
+      allow_project_sources: [env.repo],
+      sources: [
+        userSource('one', [env.repo], present),
+        userSource('other-project', ['/not/this/one'], present),
+      ],
+    })
+    writeProject(env.repo, {
+      sources: [projectSource('decisions'), projectSource('one')],
+    })
+
+    const resolved = resolveExternalSources({
+      startDir: env.repo,
+      configOptions: env.configOptions,
+    })
+    const inspected = inspect(env)
+    expect(
+      inspected.sources.filter((s) => s.status === 'active').map((s) => s.name),
+    ).toEqual(names(resolved.sources))
+  })
+
+  test('reads no document and walks no external source', () => {
+    const env = makeEnv()
+    const root = mkRoot(env, 'wiki')
+    fs.writeFileSync(path.join(root, 'entry.md'), '# Secret entry\n')
+    fs.mkdirSync(path.join(env.repo, 'docs/solutions'), { recursive: true })
+    fs.writeFileSync(path.join(env.repo, 'docs/solutions/fix.md'), '# Fix\n')
+    writeUser(env, { sources: [userSource('wiki', [env.repo], root)] })
+
+    const spies = [
+      spyOn(fs, 'readFileSync'),
+      spyOn(fs, 'openSync'),
+      spyOn(fs, 'opendirSync'),
+    ]
+    let touched: string[] = []
+    try {
+      inspect(env)
+      touched = spies.flatMap((spy) =>
+        spy.mock.calls.flatMap((call) =>
+          typeof call[0] === 'string' ? [call[0]] : [],
+        ),
+      )
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+
+    expect(touched.length).toBeGreaterThan(0)
+    expect(touched.filter((target) => target.endsWith('.md'))).toEqual([])
+    expect(touched.some((target) => target.startsWith(root))).toBe(false)
   })
 })
 

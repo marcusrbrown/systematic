@@ -4,6 +4,7 @@ import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { runClaudeCodeSearch } from '../../src/claude-code-search.js'
 import {
   loadSearchSettingsForCli,
   runCapabilitiesCli as runTestableCli,
@@ -12,6 +13,7 @@ import {
 import type { ConfigObservationMetadata } from '../../src/lib/capability-snapshot.js'
 import { MANIFEST_FILENAME } from '../../src/lib/pi-subagents-export.js'
 import { runSearchCli } from '../../src/lib/search-cli.js'
+import { runSearch } from '../../src/lib/search-core.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const CLI_PATH = path.join(ROOT_DIR, 'src/cli.ts')
@@ -897,7 +899,7 @@ describe('cli config show', () => {
         .find((line) => line.startsWith('  User config:'))
       expect(userConfigLine).toBeDefined()
       const printedUserConfigPath = (userConfigLine as string)
-        .replace('  User config:    ', '')
+        .replace(/^ {2}User config:\s+/, '')
         .trim()
       // The symlinked (non-canonical) form, not `fs.realpathSync`'s resolved
       // target -- otherwise `Defined in:` would disagree with the
@@ -1343,7 +1345,14 @@ describe('cli config show', () => {
       expect(result.exitCode).toBe(0)
       expect(result.stdout).not.toContain(envCanary)
       expect(result.stdout).not.toContain(commentCanary)
-      expect(result.stdout).not.toContain(custom)
+      // The custom directory is named only by its location rows.
+      const customLines = result.stdout
+        .split('\n')
+        .filter((line) => line.includes(custom))
+      expect(customLines).toHaveLength(2)
+      expect(
+        customLines.every((line) => /^ {2}Custom (local )?config:/.test(line)),
+      ).toBe(true)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -1563,6 +1572,7 @@ describe('cli config show', () => {
           'profileFallback',
           'profileSelectorSource',
           'routing',
+          'search',
         ])
         expect(parsed.activeProfile).toBe('fast')
         expect(parsed.profileSelectorSource).toBe('user')
@@ -1570,12 +1580,18 @@ describe('cli config show', () => {
         const locations = parsed.locations as Record<string, unknown>
         expect(Object.keys(locations).sort()).toEqual([
           'custom',
+          'customLocal',
+          'ignoredProject',
           'project',
           'user',
+          'userLocal',
         ])
         expect(typeof locations.user).toBe('string')
+        expect(typeof locations.userLocal).toBe('string')
         expect(typeof locations.project).toBe('string')
         expect(locations.custom).toBeNull()
+        expect(locations.customLocal).toBeNull()
+        expect(locations.ignoredProject).toBeNull()
         const routing = parsed.routing as Array<Record<string, unknown>>
         expect(routing.length).toBeGreaterThan(0)
         const entry = routing.find(
@@ -1759,6 +1775,7 @@ describe('cli config show', () => {
         expect(parsed.error as string).toContain('correctness-reviewer')
         expect(parsed.routing).toBeUndefined()
         expect(parsed.activeProfile).toBeUndefined()
+        expect(typeof (parsed.search as Record<string, unknown>)).toBe('object')
         const locations = parsed.locations as Record<string, unknown>
         expect(typeof locations.user).toBe('string')
       } finally {
@@ -1787,6 +1804,482 @@ describe('cli config show', () => {
       const resolved = result.stdout.split('Resolved configuration')[1] ?? ''
       expect(resolved).not.toContain('workflow_guard')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CLI: config show locations and Search section
+// ---------------------------------------------------------------------------
+
+describe('cli config show: locations and search', () => {
+  interface ShowBox {
+    readonly root: string
+    readonly project: string
+    readonly home: string
+    readonly userDir: string
+    readonly env: Record<string, string>
+  }
+
+  function mkShowBox(): ShowBox {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-cli-show-')),
+    )
+    const project = path.join(root, 'project')
+    const home = path.join(root, 'home')
+    const userDir = path.join(home, '.config/opencode')
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(project, 'docs/solutions'), { recursive: true })
+    fs.writeFileSync(
+      path.join(project, 'docs/solutions/zebra-flake.md'),
+      '---\ntitle: Zebra crossing flake\n---\n\nThe zebra flake appears when retries overlap.\n',
+    )
+    fs.mkdirSync(userDir, { recursive: true })
+    return {
+      root,
+      project,
+      home,
+      userDir,
+      env: { HOME: home, OPENCODE_CONFIG_DIR: '' },
+    }
+  }
+
+  function writeIn(dir: string, name: string, content: string): void {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, name), content)
+  }
+
+  function showJson(
+    box: ShowBox,
+    cwd = box.project,
+    extraEnv: Record<string, string> = {},
+  ): {
+    parsed: Record<string, unknown>
+    exitCode: number
+    stdout: string
+    stderr: string
+  } {
+    const result = runCli(['config', 'show', '--json'], cwd, {
+      ...box.env,
+      ...extraEnv,
+    })
+    return {
+      ...result,
+      parsed: JSON.parse(result.stdout) as Record<string, unknown>,
+    }
+  }
+
+  interface SourceRow {
+    readonly name: string
+    readonly status: string
+    readonly origin: string
+    readonly format?: string
+    readonly roots?: ReadonlyArray<{ path: string; present: boolean | null }>
+    readonly exclude?: readonly string[]
+    readonly warnings: readonly string[]
+    readonly reason?: string
+  }
+
+  interface SearchSection {
+    readonly enabled: boolean
+    readonly allowProjectSources: readonly string[]
+    readonly projectAllowed: boolean
+    readonly projectRoot: string
+    readonly sources: readonly SourceRow[]
+    readonly builtIn: ReadonlyArray<{
+      kind: string
+      directory: string
+      state: string
+    }>
+    readonly warnings: readonly string[]
+  }
+
+  function searchOf(parsed: Record<string, unknown>): SearchSection {
+    return parsed.search as SearchSection
+  }
+
+  it('lists the local, custom and ignored-project paths and keeps the existing keys', () => {
+    const box = mkShowBox()
+    const custom = path.join(box.root, 'custom')
+    try {
+      writeIn(box.project, '.systematic.jsonc', '{}')
+      writeIn(path.join(box.project, '.opencode'), 'systematic.json', '{}')
+      writeIn(custom, 'systematic.json', '{}')
+
+      const { parsed, exitCode } = showJson(box, box.project, {
+        OPENCODE_CONFIG_DIR: custom,
+      })
+
+      expect(exitCode).toBe(0)
+      const locations = parsed.locations as Record<string, unknown>
+      expect(Object.keys(locations).sort()).toEqual([
+        'custom',
+        'customLocal',
+        'ignoredProject',
+        'project',
+        'user',
+        'userLocal',
+      ])
+      expect(locations).toEqual({
+        user: path.join(box.userDir, 'systematic.json'),
+        userLocal: path.join(box.userDir, 'systematic.local.json'),
+        project: path.join(box.project, '.systematic.jsonc'),
+        ignoredProject: path.join(box.project, '.opencode/systematic.json'),
+        custom: path.join(custom, 'systematic.json'),
+        customLocal: path.join(custom, 'systematic.local.json'),
+      })
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('has no custom paths without a custom directory and no ignored project file without a shadow', () => {
+    const box = mkShowBox()
+    try {
+      const { parsed } = showJson(box)
+      const locations = parsed.locations as Record<string, unknown>
+      expect(locations.custom).toBeNull()
+      expect(locations.customLocal).toBeNull()
+      expect(locations.ignoredProject).toBeNull()
+      expect(locations.project).toBe(
+        path.join(box.project, '.opencode/systematic.json'),
+      )
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves the project file from the repository root when run in a subfolder', () => {
+    const box = mkShowBox()
+    const inner = path.join(box.project, 'packages/inner')
+    try {
+      fs.mkdirSync(inner, { recursive: true })
+      writeIn(box.project, '.systematic.json', '{}')
+
+      const { parsed } = showJson(box, inner)
+      expect((parsed.locations as Record<string, unknown>).project).toBe(
+        path.join(box.project, '.systematic.json'),
+      )
+      expect(searchOf(parsed).projectRoot).toBe(box.project)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('human output lists the same paths', () => {
+    const box = mkShowBox()
+    const custom = path.join(box.root, 'custom')
+    try {
+      writeIn(box.project, '.systematic.jsonc', '{}')
+      writeIn(path.join(box.project, '.opencode'), 'systematic.json', '{}')
+      writeIn(custom, 'systematic.json', '{}')
+
+      const result = runCli(['config', 'show'], box.project, {
+        ...box.env,
+        OPENCODE_CONFIG_DIR: custom,
+      })
+
+      expect(result.exitCode).toBe(0)
+      const { parsed } = showJson(box, box.project, {
+        OPENCODE_CONFIG_DIR: custom,
+      })
+      const locations = parsed.locations as Record<string, string>
+      for (const location of Object.values(locations)) {
+        expect(result.stdout).toContain(location)
+      }
+      expect(result.stdout).toContain(
+        `  User config:            ${locations.user}`,
+      )
+      expect(result.stdout).toContain(
+        `  Project config:         ${locations.project}`,
+      )
+      expect(result.stdout).toContain(
+        `  Ignored project config: ${locations.ignoredProject}`,
+      )
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports enabled, the allow list and the origin of a source defined in a local file', () => {
+    const box = mkShowBox()
+    const vault = path.join(box.home, 'vault')
+    try {
+      fs.mkdirSync(vault, { recursive: true })
+      writeIn(
+        box.userDir,
+        'systematic.local.json',
+        JSON.stringify({
+          search: {
+            allow_project_sources: [box.project],
+            sources: [
+              {
+                name: 'wiki',
+                format: 'markdown',
+                roots: [vault, path.join(box.home, 'gone')],
+                projects: [box.project],
+                exclude: ['log.md', '[secret-pattern]'],
+              },
+              {
+                name: 'theirs',
+                format: 'markdown',
+                roots: [vault],
+                projects: ['/some/other/project'],
+              },
+            ],
+          },
+        }),
+      )
+
+      const { parsed, exitCode, stdout } = showJson(box)
+
+      expect(exitCode).toBe(0)
+      const search = searchOf(parsed)
+      expect(search.enabled).toBe(true)
+      expect(search.allowProjectSources).toEqual([box.project])
+      expect(search.projectAllowed).toBe(true)
+      expect(search.projectRoot).toBe(box.project)
+      expect(search.sources.map((source) => source.name)).toEqual(['wiki'])
+      const wiki = search.sources[0]
+      expect(wiki).toMatchObject({
+        origin: 'user.local',
+        format: 'markdown',
+        status: 'missing root',
+        exclude: ['log.md'],
+        roots: [
+          { path: vault, present: true },
+          { path: path.join(box.home, 'gone'), present: false },
+        ],
+      })
+      expect(wiki?.warnings).toHaveLength(1)
+      expect(wiki?.warnings[0]).toContain('exclude[1]')
+      expect(stdout).not.toContain('secret-pattern')
+      expect(search.builtIn).toEqual([
+        {
+          kind: 'solution',
+          directory: path.join(box.project, 'docs/solutions'),
+          state: 'present',
+        },
+        {
+          kind: 'plan',
+          directory: path.join(box.project, 'docs/plans'),
+          state: 'missing',
+        },
+        {
+          kind: 'brainstorm',
+          directory: path.join(box.project, 'docs/brainstorms'),
+          state: 'missing',
+        },
+        {
+          kind: 'ideation',
+          directory: path.join(box.project, 'docs/ideation'),
+          state: 'missing',
+        },
+      ])
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('human output prints the Search section with the same facts', () => {
+    const box = mkShowBox()
+    const vault = path.join(box.home, 'vault')
+    try {
+      fs.mkdirSync(vault, { recursive: true })
+      writeIn(
+        box.userDir,
+        'systematic.local.json',
+        JSON.stringify({
+          search: {
+            allow_project_sources: [box.project],
+            sources: [
+              {
+                name: 'wiki',
+                format: 'markdown',
+                roots: [vault, path.join(box.home, 'gone')],
+                projects: [box.project],
+                exclude: ['log.md'],
+              },
+            ],
+          },
+        }),
+      )
+
+      const result = runCli(['config', 'show'], box.project, box.env)
+
+      expect(result.exitCode).toBe(0)
+      const section = result.stdout.split('\nSearch:')[1] ?? ''
+      expect(section).not.toBe('')
+      expect(section).toContain('Enabled:')
+      expect(section).toContain(box.project)
+      expect(section).toContain('wiki [missing root]')
+      expect(section).toContain('user.local')
+      expect(section).toContain(`${vault} (present)`)
+      expect(section).toContain(`${path.join(box.home, 'gone')} (missing)`)
+      expect(section).toContain('log.md')
+      expect(section).toContain('solution')
+      expect(section).toContain('present')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('never prints a local file raw text, but shows what it defines', () => {
+    const box = mkShowBox()
+    const sentinel = 'LOCAL-SENTINEL-DO-NOT-LEAK-71c9'
+    const vault = path.join(box.home, 'vault')
+    const custom = path.join(box.root, 'custom')
+    try {
+      fs.mkdirSync(vault, { recursive: true })
+      const local = `{\n  // ${sentinel}\n  "search": {\n    "allow_project_sources": ["${box.project}"],\n    "sources": [{ "name": "wiki", "format": "markdown", "roots": ["${vault}"], "projects": ["${box.project}"] }]\n  }\n}`
+      writeIn(box.userDir, 'systematic.local.jsonc', local)
+      writeIn(custom, 'systematic.local.jsonc', local)
+
+      const human = runCli(['config', 'show'], box.project, {
+        ...box.env,
+        OPENCODE_CONFIG_DIR: custom,
+      })
+      const json = showJson(box, box.project, { OPENCODE_CONFIG_DIR: custom })
+
+      expect(human.exitCode).toBe(0)
+      expect(human.stdout).not.toContain(sentinel)
+      expect(json.stdout).not.toContain(sentinel)
+      expect(human.stderr).not.toContain(sentinel)
+      for (const text of [human.stdout, json.stdout]) {
+        expect(text).toContain('wiki')
+        expect(text).toContain(vault)
+      }
+      expect(searchOf(json.parsed).allowProjectSources).toEqual([box.project])
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('an invalid local file gives the error shape plus search, and still exits 1', () => {
+    const box = mkShowBox()
+    const vault = path.join(box.home, 'vault')
+    try {
+      fs.mkdirSync(vault, { recursive: true })
+      // `variant` with no model anywhere fails the full load; the `search`
+      // block in the same file is still readable on its own.
+      writeIn(
+        box.userDir,
+        'systematic.local.json',
+        JSON.stringify({
+          agents: { 'correctness-reviewer': { variant: 'high' } },
+          search: {
+            sources: [
+              {
+                name: 'wiki',
+                format: 'markdown',
+                roots: [vault],
+                projects: [box.project],
+              },
+            ],
+          },
+        }),
+      )
+
+      const json = showJson(box)
+      expect(json.exitCode).toBe(1)
+      expect(typeof json.parsed.error).toBe('string')
+      expect(json.parsed.routing).toBeUndefined()
+      expect(searchOf(json.parsed).sources.map((s) => s.name)).toEqual(['wiki'])
+
+      const human = runCli(['config', 'show'], box.project, box.env)
+      expect(human.exitCode).toBe(1)
+      expect(human.stdout).toContain('\nSearch:')
+      expect(human.stdout).toContain('wiki [active]')
+      expect(human.stderr).toContain('correctness-reviewer')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('a local file that does not parse is named in the search warnings', () => {
+    const box = mkShowBox()
+    try {
+      const localPath = path.join(box.userDir, 'systematic.local.json')
+      fs.writeFileSync(localPath, '{ "search": { "sources": [ ')
+
+      const json = showJson(box)
+      expect(json.exitCode).toBe(1)
+      expect(searchOf(json.parsed).warnings.join('\n')).toContain(localPath)
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
+  it('names a project proposal off the allow list here, while the tool, the bin and the CLI search never do', async () => {
+    const box = mkShowBox()
+    try {
+      writeIn(
+        path.join(box.project, '.opencode'),
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            sources: [
+              {
+                name: 'quokka-notes',
+                format: 'markdown',
+                roots: ['docs/quokka-vault'],
+              },
+            ],
+          },
+        }),
+      )
+
+      const json = showJson(box)
+      const proposal = searchOf(json.parsed).sources.find(
+        (source) => source.name === 'quokka-notes',
+      )
+      expect(proposal).toMatchObject({
+        status: 'not allowed',
+        origin: 'project',
+        roots: [
+          {
+            path: path.join(box.project, 'docs/quokka-vault'),
+            present: null,
+          },
+        ],
+      })
+      const human = runCli(['config', 'show'], box.project, box.env)
+      for (const text of [json.stdout, human.stdout]) {
+        expect(text).toContain('quokka-notes')
+        expect(text).toContain('docs/quokka-vault')
+      }
+
+      const configOptions = { homeDir: box.home, customConfigDir: null }
+      const tool = await runSearch(
+        { query: 'zebra', kind: 'external' },
+        { startDir: box.project, configOptions },
+      )
+      const binOut: string[] = []
+      const binErr: string[] = []
+      await runClaudeCodeSearch({
+        argv: ['zebra', '--kind', 'external'],
+        cwd: box.project,
+        userLevel: configOptions,
+        outputSink: (message) => binOut.push(message),
+        errorSink: (message) => binErr.push(message),
+      })
+      const cliSearch = runCli(
+        ['search', 'zebra', '--kind', 'external'],
+        box.project,
+        box.env,
+      )
+      for (const reply of [
+        tool.text,
+        binOut.join('\n'),
+        binErr.join('\n'),
+        cliSearch.stdout,
+        cliSearch.stderr,
+      ]) {
+        expect(reply).not.toContain('quokka')
+      }
+      expect(tool.text).toContain('not in search.allow_project_sources')
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
   })
 })
 
