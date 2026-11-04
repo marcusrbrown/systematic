@@ -477,7 +477,7 @@ The units land as separate commits on one feature branch. U4 follows U2 only bec
 
 ---
 
-- [ ] **U3. Exclude in the Markdown and Deciduous walks**
+- [x] **U3. Exclude in the Markdown and Deciduous walks**
 
 **Goal:** Excluded files and directories are never examined, never entered and never counted toward file or byte caps, while every listed name still costs listing budget.
 

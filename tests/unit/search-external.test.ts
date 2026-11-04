@@ -16,6 +16,7 @@ import {
   type SourceLoad,
 } from '../../src/lib/search-external.js'
 import type { ActiveSource } from '../../src/lib/search-external-sources.js'
+import { watchInspections } from '../helpers/watch-inspections.js'
 import { cleanupTempDirs, makeDir } from './git-worktree-fixtures'
 
 afterEach(cleanupTempDirs)
@@ -1059,6 +1060,187 @@ describe('loadExternalSources: one entry budget per source', () => {
 
     expect(loads.map((l) => l.records.length)).toEqual([1, 1])
     expect(loads.flatMap((l) => l.warnings)).toEqual([])
+  })
+})
+
+describe('loadExternalSources: excludes', () => {
+  const paths = (load: SourceLoad) => load.records.map((r) => r.path)
+
+  test('a bare name drops the file at any depth and the directory with its subtree', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'keep.md', '# Keep\n')
+    write(root, 'log.md', '# Log\n')
+    write(root, 'sub/log.md', '# Log\n')
+    write(root, '.stryker-tmp/x.md', '# X\n')
+    write(root, 'deep/.stryker-tmp/y.md', '# Y\n')
+
+    const load = loadOne(
+      env,
+      source('wiki', [root], { exclude: ['log.md', '.stryker-tmp'] }),
+    )
+
+    expect(load.state).toBe('loaded')
+    expect(paths(load)).toEqual(['wiki/keep.md'])
+    expect(load.warnings).toEqual([])
+  })
+
+  test('a pattern with a slash is anchored at the source root', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'drafts/a.md', '# A\n')
+    write(root, 'notes/drafts/a.md', '# B\n')
+    write(root, 'drafts/x/a.md', '# C\n')
+
+    const load = loadOne(
+      env,
+      source('wiki', [root], { exclude: ['drafts/*.md'] }),
+    )
+
+    expect(paths(load)).toEqual([
+      'wiki/drafts/x/a.md',
+      'wiki/notes/drafts/a.md',
+    ])
+  })
+
+  test('an anchored pattern applies relative to each root of a source', () => {
+    const env = makeEnv()
+    const one = path.join(env.outside, 'one')
+    const two = path.join(env.outside, 'two')
+    write(one, 'drafts/a.md', '# One\n')
+    write(one, 'keep.md', '# Keep\n')
+    write(two, 'drafts/b.md', '# Two\n')
+    write(two, 'notes/drafts/c.md', '# Three\n')
+
+    const load = loadOne(
+      env,
+      source('wiki', [one, two], { exclude: ['drafts/*.md'] }),
+    )
+
+    expect(paths(load)).toEqual(['wiki/keep.md', 'wiki/notes/drafts/c.md'])
+  })
+
+  test('an excluded file is never inspected and an excluded directory is never listed or inspected', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'keep.md', '# Keep\n')
+    write(root, 'secret.md', '# Secret\n')
+    write(root, 'vendor/a.md', '# A\n')
+    write(root, 'sub/vendor/b.md', '# B\n')
+    write(root, 'sub/ok.md', '# Ok\n')
+    const watch = watchInspections()
+    let load: SourceLoad
+    try {
+      load = loadOne(
+        env,
+        source('wiki', [root], { exclude: ['secret.md', 'vendor'] }),
+      )
+    } finally {
+      watch.stop()
+    }
+
+    expect(paths(load)).toEqual(['wiki/keep.md', 'wiki/sub/ok.md'])
+    const touched = [...watch.statted, ...watch.listed]
+    expect(touched.some((target) => target.includes('secret.md'))).toBe(false)
+    expect(touched.some((target) => target.includes('vendor'))).toBe(false)
+    expect(touched.some((target) => target.endsWith('keep.md'))).toBe(true)
+  })
+
+  test('names a pattern excludes still count against the entry budget', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    for (let index = 0; index < 30; index++) {
+      write(root, `skip${index}.md`, '# Skip\n')
+    }
+    write(root, 'keep.md', '# Keep\n')
+    const watch = watchListings()
+    let loads: SourceLoad[]
+    try {
+      loads = loadExternalSources({
+        sources: [source('wiki', [root], { exclude: ['skip*.md'] })],
+        checkoutRoot: env.checkout,
+        entryBudget: 10,
+      })
+    } finally {
+      watch.stop()
+    }
+
+    expect(loads[0]?.warnings).toContain(
+      'wiki: entry limit of 10 reached; some entries were not examined',
+    )
+    expect(watch.entries).toBeLessThanOrEqual(11)
+  })
+
+  test('an excluded file over the per-file cap raises no warning and costs no read budget', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(
+      root,
+      'huge.md',
+      `# Huge\n${'x'.repeat(EXTERNAL_MAX_FILE_BYTES + 10)}`,
+    )
+    write(root, 'keep.md', '# Keep\n')
+
+    const load = loadOne(env, source('wiki', [root], { exclude: ['huge.md'] }))
+
+    expect(paths(load)).toEqual(['wiki/keep.md'])
+    expect(load.warnings).toEqual([])
+  })
+
+  test('excluded files do not make a source need more of the shared read budget', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'big.md', `# Big\n${'x'.repeat(5000)}`)
+    write(root, 'keep.md', '# Keep\n')
+
+    const load = loadOne(
+      env,
+      source('wiki', [root], { exclude: ['big.md'] }),
+      200,
+    )
+
+    expect(load.state).toBe('loaded')
+    expect(paths(load)).toEqual(['wiki/keep.md'])
+    expect(load.warnings).toEqual([])
+  })
+
+  test('excluded files do not count toward the file cap', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    fs.mkdirSync(root, { recursive: true })
+    for (let index = 0; index < MAX_FILES + 5; index++) {
+      fs.writeFileSync(path.join(root, `a-skip${index}.md`), '# S\n')
+    }
+    write(root, 'keep.md', '# Keep\n')
+
+    const load = loadOne(
+      env,
+      source('wiki', [root], { exclude: ['a-skip*.md'] }),
+    )
+
+    expect(paths(load)).toEqual(['wiki/keep.md'])
+    expect(load.warnings).toEqual([])
+  })
+
+  test('an empty exclude list changes nothing', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'log.md', '# Log\n')
+    write(root, 'sub/log.md', '# Log\n')
+
+    const load = loadOne(env, source('wiki', [root], { exclude: [] }))
+
+    expect(paths(load)).toEqual(['wiki/log.md', 'wiki/sub/log.md'])
+  })
+
+  test('a source whose every file is excluded reports empty', () => {
+    const env = makeEnv()
+    const root = path.join(env.outside, 'wiki')
+    write(root, 'a.md', '# A\n')
+
+    const load = loadOne(env, source('wiki', [root], { exclude: ['**'] }))
+
+    expect(load.state).toBe('empty')
   })
 })
 

@@ -11,14 +11,18 @@ import {
   loadCorpus,
   loadSourceFiles,
   MAX_DEPTH,
+  MAX_DISCOVERED_FILES,
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_TOTAL_BYTES,
+  newEntryBudget,
   parseCorpusDocument,
   parseMarkdownFrontmatter,
   resolveSearchRoot,
 } from '../../src/lib/search-corpus.js'
+import { compileExcludePatterns } from '../../src/lib/search-exclude.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
+import { watchInspections } from '../helpers/watch-inspections.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const FIXTURES = path.join(ROOT_DIR, 'tests/fixtures/search-corpus')
@@ -1158,6 +1162,146 @@ describe('loadSourceFiles', () => {
       ['b.md', 2],
     ])
     expect(found.truncated).toBe(false)
+  })
+})
+
+describe('discoverSourceFiles: excludes', () => {
+  const WALK = { excludedFiles: [], excludedDirs: [] }
+  const relatives = (found: ReturnType<typeof discoverSourceFiles>) => {
+    if (found.state !== 'found') throw new Error('not found')
+    return found.candidates.map((candidate) => candidate.relative)
+  }
+
+  it('leaves out files and directories the matcher names, at any depth', () => {
+    const root = makeTemp()
+    writeFile(root, 'keep.md', 'k')
+    writeFile(root, 'log.md', 'l')
+    writeFile(root, 'sub/log.md', 'l')
+    writeFile(root, 'sub/keep.md', 'k')
+    writeFile(root, '.stryker-tmp/x.md', 'x')
+    writeFile(root, 'deep/.stryker-tmp/y.md', 'y')
+
+    const found = discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        isExcluded: compileExcludePatterns(['log.md', '.stryker-tmp']),
+      },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['keep.md', 'sub/keep.md'])
+  })
+
+  it('matches an anchored pattern against the path below the walked directory', () => {
+    const root = makeTemp()
+    writeFile(root, 'drafts/a.md', 'a')
+    writeFile(root, 'drafts/x/a.md', 'a')
+    writeFile(root, 'notes/drafts/a.md', 'a')
+
+    const found = discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        isExcluded: compileExcludePatterns(['drafts/*.md']),
+      },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['drafts/x/a.md', 'notes/drafts/a.md'])
+  })
+
+  it('never inspects an excluded file and never lists or inspects an excluded directory', () => {
+    const root = makeTemp()
+    writeFile(root, 'keep.md', 'k')
+    writeFile(root, 'secret.md', 's')
+    writeFile(root, 'vendor/deep/a.md', 'a')
+    writeFile(root, 'sub/vendor/b.md', 'b')
+    writeFile(root, 'sub/ok.md', 'o')
+    const real = fs.realpathSync(root)
+    const watch = watchInspections()
+    let found: ReturnType<typeof discoverSourceFiles>
+    try {
+      found = discoverSourceFiles(
+        {
+          directory: root,
+          walk: WALK,
+          label: 'x',
+          entryBudget: newEntryBudget(100),
+          isExcluded: compileExcludePatterns(['secret.md', 'vendor']),
+        },
+        [],
+      )
+    } finally {
+      watch.stop()
+    }
+
+    expect(relatives(found)).toEqual(['keep.md', 'sub/ok.md'])
+    const touched = [...watch.statted, ...watch.listed]
+    expect(touched.some((target) => target.includes('secret.md'))).toBe(false)
+    expect(touched.some((target) => target.includes('vendor'))).toBe(false)
+    // The walk still looked at everything else.
+    expect(watch.statted).toContain(path.join(real, 'keep.md'))
+    expect(watch.listed).toContain(path.join(real, 'sub'))
+  })
+
+  it('charges excluded names to the entry budget, so excludes buy no extra listing', () => {
+    const root = makeTemp()
+    for (let index = 0; index < 20; index++) {
+      writeFile(root, `skip${index}.md`, 's')
+    }
+    writeFile(root, 'keep.md', 'k')
+    const budget = newEntryBudget(10)
+
+    discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        entryBudget: budget,
+        isExcluded: compileExcludePatterns(['skip*.md']),
+      },
+      [],
+    )
+
+    expect(budget.exhausted).toBe(true)
+    expect(budget.remaining).toBe(0)
+  })
+
+  it('keeps excluded files out of the discovery ceiling', () => {
+    const root = makeTemp()
+    for (let index = 0; index < MAX_DISCOVERED_FILES + 5; index++) {
+      fs.closeSync(fs.openSync(path.join(root, `skip${index}.md`), 'w'))
+    }
+    writeFile(root, 'zz-keep.md', 'k')
+
+    const found = discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        isExcluded: compileExcludePatterns(['skip*.md']),
+      },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['zz-keep.md'])
+    if (found.state === 'found') expect(found.truncated).toBe(false)
+  })
+
+  it('behaves as before when no matcher is given', () => {
+    const root = makeTemp()
+    writeFile(root, 'log.md', 'l')
+    writeFile(root, 'sub/log.md', 'l')
+
+    const found = discoverSourceFiles(
+      { directory: root, walk: WALK, label: 'x' },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['log.md', 'sub/log.md'])
   })
 })
 

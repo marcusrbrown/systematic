@@ -14,7 +14,8 @@
  * dropped whole, before any of its files is read, and later, smaller sources
  * are still tried.
  *
- * Import rule: node builtins, `search-corpus.ts` and the Deciduous reader
+ * Import rule: node builtins, `search-corpus.ts`, the exclude matcher
+ * (`search-exclude.ts`) and the Deciduous reader
  * (`search-external-deciduous.ts`), plus types. The Deciduous reader imports the
  * corpus helpers and never this module. The loader holds no state, so each
  * call re-reads the stores.
@@ -35,6 +36,7 @@ import {
   type SourceFileCandidate,
   symlinkedComponent,
 } from './search-corpus.js'
+import { compileExcludePatterns } from './search-exclude.js'
 import { loadDeciduousRecords } from './search-external-deciduous.js'
 import type { ActiveSource, SourceOrigin } from './search-external-sources.js'
 
@@ -282,6 +284,7 @@ function gatherCandidates(
   })
   // One budget covers every directory of every root of this source.
   const entryBudget = newEntryBudget(context.entryLimit)
+  const isExcluded = compileExcludePatterns(source.exclude)
   for (const root of source.roots) {
     const problem = projectRootProblem(source, context, root)
     if (problem !== undefined) {
@@ -294,6 +297,7 @@ function gatherCandidates(
         containedIn: origin === 'project' ? context.checkoutRoot : undefined,
         walk: MARKDOWN_WALK,
         entryBudget,
+        isExcluded,
         label: name,
       },
       warnings,
@@ -382,6 +386,7 @@ function loadDeciduousSource(
     remainingBytes: context.remainingBytes,
     maxFileBytes: EXTERNAL_MAX_FILE_BYTES,
     entryLimit: context.entryLimit,
+    isExcluded: compileExcludePatterns(source.exclude),
   })
   return {
     name,

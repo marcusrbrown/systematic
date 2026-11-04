@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from './frontmatter.js'
 import { readBytesBounded } from './search-bounded-read.js'
+import type { ExcludeMatcher } from './search-exclude.js'
 import { isRecord } from './validation.js'
 
 /** Largest single file loaded, in bytes. */
@@ -372,6 +373,8 @@ interface Discovery {
   rootUnreadable: boolean
   /** Set for an external source: the entries every directory of the walk shares. */
   readonly budget?: EntryBudget | undefined
+  /** Set for an external source with excludes: tests a path relative to the walked directory. */
+  readonly isExcluded?: ExcludeMatcher | undefined
 }
 
 type EntryKind = 'file' | 'directory' | 'ignored'
@@ -428,6 +431,15 @@ function listWalkedDirectory(
   return listing.names
 }
 
+/** Keep a file, or mark discovery truncated once the ceiling is reached. The next entry stops the walk. */
+function addCandidate(found: Discovery, candidate: SourceFileCandidate): void {
+  if (found.candidates.length >= MAX_DISCOVERED_FILES) {
+    found.truncated = true
+    return
+  }
+  found.candidates.push(candidate)
+}
+
 function discoverFiles(
   spec: WalkSpec,
   label: string,
@@ -451,6 +463,9 @@ function discoverFiles(
   names.sort(compareCodeUnits)
   for (const name of names) {
     if (found.truncated) return
+    // The listing already charged this name to the budget. An excluded entry is
+    // not inspected, entered or counted toward any file or byte cap.
+    if (found.isExcluded?.(`${prefix}${name}`) === true) continue
     const absolute = path.join(directory, name)
     const stat = safeLstat(absolute)
     const entryKind = classifyEntry(spec, name, stat)
@@ -458,11 +473,7 @@ function discoverFiles(
       const child = `${prefix}${name}/`
       discoverFiles(spec, label, absolute, child, depth + 1, found, warnings)
     } else if (entryKind === 'file' && stat !== null) {
-      if (found.candidates.length >= MAX_DISCOVERED_FILES) {
-        found.truncated = true
-        return
-      }
-      found.candidates.push({
+      addCandidate(found, {
         relative: `${prefix}${name}`,
         absolute,
         size: stat.size,
@@ -598,6 +609,12 @@ export interface DiscoverSourceFilesOptions {
    * source. Left out, every directory is listed whole.
    */
   readonly entryBudget?: EntryBudget | undefined
+  /**
+   * Tests a path relative to the walked directory, `/`-joined. A match leaves
+   * the entry out and, for a directory, its whole subtree. Built-in kinds set
+   * none.
+   */
+  readonly isExcluded?: ExcludeMatcher | undefined
   /** Names the directory in warnings: `spec.dir` for a built-in kind, the source name for an external one. */
   readonly label: string
 }
@@ -628,7 +645,8 @@ export function discoverSourceFiles(
   options: DiscoverSourceFilesOptions,
   warnings: string[],
 ): SourceDiscovery {
-  const { directory, containedIn, walk, label, entryBudget } = options
+  const { directory, containedIn, walk, label, entryBudget, isExcluded } =
+    options
   const directoryProbe = probeRealpath(directory)
   const containerProbe =
     containedIn === undefined ? undefined : probeRealpath(containedIn)
@@ -666,6 +684,7 @@ export function discoverSourceFiles(
     truncated: false,
     rootUnreadable: false,
     budget: entryBudget,
+    isExcluded,
   }
   discoverFiles(walk, label, directoryReal, '', 0, found, warnings)
   // Whether `realpath` of a locked directory fails depends on the platform; a
