@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.0](https://github.com/marcusrbrown/systematic/compare/v3.30.1...v3.31.0) (2026-11-04)
+
+### Features
+
+* read project config from the repo root, add a local user overlay and search source excludes ([#1295](https://github.com/marcusrbrown/systematic/issues/1295)) ([e078196](https://github.com/marcusrbrown/systematic/commit/e07819657f1bd678ab033ad73a1f16c21f5025bb))
+
 ## [3.30.1](https://github.com/marcusrbrown/systematic/compare/v3.30.0...v3.30.1) (2026-11-03)
 
 ### Bug Fixes
