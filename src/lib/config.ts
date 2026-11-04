@@ -2454,10 +2454,14 @@ function collectVisibleProtectedFields(
 }
 
 /**
- * One row per real file: a kind whose files include one a higher-priority kind
- * already reported is the same file reached twice, so it is left out. A
- * user-level kind outranks `project`, so a project file that is a user-level
- * file is reported as that user-level kind. Rows keep their given order.
+ * One row per real file. A kind's row is left out only when it adds nothing:
+ * every file that loaded in the kind was already reported by a higher-priority
+ * kind (the same file reached twice), and the row is not `invalid`. A kind
+ * with a file of its own keeps its row, and an `invalid` row is always kept,
+ * so a file shared with another kind never hides the failure or the presence
+ * of a different file in this one. A user-level kind outranks `project`, so a
+ * project file that is a user-level file is reported as that user-level kind.
+ * Rows keep their given order.
  */
 function dedupeSourceMetadata(
   metadata: readonly ConfigSourceMetadata[],
@@ -2467,11 +2471,14 @@ function dedupeSourceMetadata(
   const seen = new Set<string>()
   const kept = new Set<ConfigSourceKind>()
   for (const kind of priority) {
-    const files = sourcePaths.get(kind)
-    const identities =
-      files !== undefined && files.length > 0 ? files : [`missing:${kind}`]
-    if (identities.some((identity) => seen.has(identity))) continue
-    for (const identity of identities) seen.add(identity)
+    const files = sourcePaths.get(kind) ?? []
+    const presence = metadata.find((source) => source.kind === kind)?.presence
+    const redundant =
+      files.length > 0 &&
+      files.every((file) => seen.has(file)) &&
+      presence !== 'invalid'
+    if (redundant) continue
+    for (const file of files) seen.add(file)
     kept.add(kind)
   }
   return metadata.filter((source) => kept.has(source.kind))

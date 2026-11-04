@@ -7258,6 +7258,133 @@ describe('layered config files', () => {
     })
   })
 
+  describe('a file two layers share hides no other file', () => {
+    const BAD_FIELD = { agents: { [AGENT]: { model: 42 } } }
+    const invalidRows = (t: Fixture, options: Record<string, unknown>) =>
+      t
+        .load({ from: t.repo, invalidSource: 'report', ...options })
+        .metadata.sources.filter((source) => source.presence === 'invalid')
+
+    test('an invalid user base survives when custom.local is user.local reached through a link', () => {
+      const t = setup()
+      t.user({ search: { enabled: false }, ...BAD_FIELD })
+      const shared = t.userLocal({})
+      t.custom({})
+      fs.symlinkSync(shared, path.join(t.customDir, 'systematic.local.json'))
+
+      const rows = invalidRows(t, { withCustom: true })
+      expect(rows).toEqual([
+        { kind: 'user', presence: 'invalid', errorCode: expect.any(String) },
+      ])
+    })
+
+    test('the capability snapshot lists the invalid user file when another user file is shared', () => {
+      const t = setup()
+      t.user({ search: { enabled: false }, ...BAD_FIELD })
+      const shared = t.userLocal({})
+      t.custom({})
+      fs.symlinkSync(shared, path.join(t.customDir, 'systematic.local.json'))
+
+      const { metadata } = t.load({
+        from: t.repo,
+        withCustom: true,
+        invalidSource: 'report',
+      })
+      const snapshot = buildCapabilitySnapshot({
+        argv: ['systematic', 'capabilities'],
+        clock: () => Date.parse(OBSERVED_AT),
+        config: metadata,
+        package: { name: '@fro.bot/systematic', version: '1.2.3' },
+        roots: [],
+      })
+      const text = serializeCapabilitySnapshot(snapshot)
+      expect(text).toMatch(/"presence":\s*"invalid"/)
+      expect(text).not.toContain(t.userDir)
+    })
+
+    test('an invalid user.local survives when the custom base is the user base reached through a link', () => {
+      const t = setup()
+      const shared = t.user({})
+      t.userLocal({ search: { enabled: false }, ...BAD_FIELD })
+      fs.symlinkSync(shared, path.join(t.customDir, 'systematic.json'))
+      t.customLocal({})
+
+      const rows = invalidRows(t, { withCustom: true })
+      expect(rows).toEqual([
+        { kind: 'user', presence: 'invalid', errorCode: expect.any(String) },
+      ])
+    })
+
+    test('an invalid file shared by two kinds is still reported', () => {
+      const t = setup()
+      t.user({})
+      const shared = t.userLocal(BAD_FIELD)
+      t.custom({})
+      fs.symlinkSync(shared, path.join(t.customDir, 'systematic.local.json'))
+
+      const rows = invalidRows(t, { withCustom: true })
+      expect(rows.length).toBeGreaterThanOrEqual(1)
+      expect(rows.map((row) => row.kind)).toContain('user')
+    })
+
+    test('a present file next to a shared one keeps its kind row', () => {
+      const t = setup()
+      const shared = t.user({})
+      t.userLocal({})
+      fs.symlinkSync(shared, path.join(t.customDir, 'systematic.json'))
+
+      const { metadata } = t.load({ from: t.repo, withCustom: true })
+      expect(metadata.sources.map((row) => row.kind)).toEqual([
+        'custom',
+        'project',
+        'user',
+      ])
+      expect(metadata.sources.find((row) => row.kind === 'user')).toEqual({
+        kind: 'user',
+        presence: 'present',
+      })
+    })
+
+    test('a shared file still collapses to one row when nothing else is in its kind', () => {
+      const t = setup()
+      const shared = t.user({ skills_as_commands: false })
+      fs.symlinkSync(shared, path.join(t.customDir, 'systematic.json'))
+
+      const { metadata } = t.load({ from: t.repo, withCustom: true })
+      expect(metadata.sources.map((row) => row.kind)).toEqual([
+        'custom',
+        'project',
+      ])
+    })
+
+    test('blocked fields and the alias notice follow the aliased file, not another sibling failure', () => {
+      const t = setup()
+      t.user({ search: { enabled: false }, ...BAD_FIELD })
+      t.custom({})
+      const target = t.customLocal({
+        agents: { [AGENT]: { model: 'a/aliased' } },
+      })
+      fs.mkdirSync(path.join(t.repo, '.opencode'), { recursive: true })
+      fs.symlinkSync(target, path.join(t.repo, '.opencode/systematic.json'))
+
+      const result = t.load({
+        from: t.repo,
+        withCustom: true,
+        invalidSource: 'report',
+      })
+      expect(result.metadata.protectedFields).toEqual([])
+      expect(
+        t.warnings.filter((w) => w.includes('resolve to the same file')),
+      ).toHaveLength(1)
+      expect(t.warnings.some((w) => w.includes('is only valid in user'))).toBe(
+        false,
+      )
+      expect(
+        result.metadata.sources.filter((row) => row.presence === 'invalid'),
+      ).toHaveLength(1)
+    })
+  })
+
   describe('layer precedence', () => {
     test('a field set at every layer resolves to the highest layer, and falls through as layers are removed', () => {
       const layers = [

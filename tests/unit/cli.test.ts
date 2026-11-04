@@ -4365,6 +4365,94 @@ describe('loadSearchSettingsForCli', () => {
     }
   })
 
+  describe('a file two layers share does not hide the failure of another file', () => {
+    /** An invalid non-search field beside a valid opt-out. */
+    const OPT_OUT_WITH_BAD_FIELD = {
+      search: { enabled: false },
+      agents: { 'correctness-reviewer': { model: 42 } },
+    }
+
+    function loadWithCustom(box: ReturnType<typeof mkBox>, customDir: string) {
+      return loadSearchSettingsForCli(box.project, {
+        homeDir: box.home,
+        userConfigDir: path.join(box.home, '.config/opencode'),
+        customConfigDir: customDir,
+      })
+    }
+
+    it('an invalid user base keeps its opt-out when custom.local is user.local reached through a link', () => {
+      const box = mkBox()
+      try {
+        const userDir = path.join(box.home, '.config/opencode')
+        const customDir = path.join(box.root, 'custom')
+        fs.mkdirSync(customDir)
+        fs.writeFileSync(
+          path.join(userDir, 'systematic.json'),
+          JSON.stringify(OPT_OUT_WITH_BAD_FIELD),
+        )
+        fs.writeFileSync(path.join(userDir, 'systematic.local.json'), '{}')
+        fs.writeFileSync(path.join(customDir, 'systematic.json'), '{}')
+        fs.symlinkSync(
+          path.join(userDir, 'systematic.local.json'),
+          path.join(customDir, 'systematic.local.json'),
+        )
+
+        const loaded = loadWithCustom(box, customDir)
+        expect(loaded.settings).toEqual({ enabled: false })
+        expect(loaded.unreadable).toBe(true)
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('an invalid user.local keeps its opt-out when the custom base is the user base reached through a link', () => {
+      const box = mkBox()
+      try {
+        const userDir = path.join(box.home, '.config/opencode')
+        const customDir = path.join(box.root, 'custom')
+        fs.mkdirSync(customDir)
+        fs.writeFileSync(path.join(userDir, 'systematic.json'), '{}')
+        fs.writeFileSync(
+          path.join(userDir, 'systematic.local.json'),
+          JSON.stringify(OPT_OUT_WITH_BAD_FIELD),
+        )
+        fs.symlinkSync(
+          path.join(userDir, 'systematic.json'),
+          path.join(customDir, 'systematic.json'),
+        )
+        fs.writeFileSync(path.join(customDir, 'systematic.local.json'), '{}')
+
+        const loaded = loadWithCustom(box, customDir)
+        expect(loaded.settings).toEqual({ enabled: false })
+        expect(loaded.unreadable).toBe(true)
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+
+    it('gives the same settings as the arrangement with no link', () => {
+      const box = mkBox()
+      try {
+        const userDir = path.join(box.home, '.config/opencode')
+        const customDir = path.join(box.root, 'custom')
+        fs.mkdirSync(customDir)
+        fs.writeFileSync(
+          path.join(userDir, 'systematic.json'),
+          JSON.stringify(OPT_OUT_WITH_BAD_FIELD),
+        )
+        fs.writeFileSync(path.join(userDir, 'systematic.local.json'), '{}')
+        fs.writeFileSync(path.join(customDir, 'systematic.json'), '{}')
+        fs.writeFileSync(path.join(customDir, 'systematic.local.json'), '{}')
+
+        const loaded = loadWithCustom(box, customDir)
+        expect(loaded.settings).toEqual({ enabled: false })
+        expect(loaded.unreadable).toBe(true)
+      } finally {
+        fs.rmSync(box.root, { recursive: true, force: true })
+      }
+    })
+  })
+
   it('maps a bad search block to unreadable and keeps the rest of the file', () => {
     const box = mkBox()
     try {
