@@ -1085,7 +1085,15 @@ describe('resolveExternalSources: warnings of a project that is not allowed', ()
       inspected.sources.find((source) => source.name === name)
     expect(byName('quokka-notes')?.warnings.join('\n')).toContain('exclude[0]')
     expect(byName('quokka-broken')?.warnings.join('\n')).toContain('dropped')
-    expect(byName('quokka-twin')?.warnings.join('\n')).toContain('dropped')
+    const twins = inspected.sources.filter(
+      (source) => source.name === 'quokka-twin',
+    )
+    expect(twins.map((twin) => twin.status)).toEqual([
+      'not allowed',
+      'dropped invalid',
+    ])
+    expect(twins[0]?.warnings).toEqual([])
+    expect(twins[1]?.warnings.join('\n')).toContain('already used')
   })
 
   test('forwards the same warnings when the project is allowed', () => {
@@ -1456,6 +1464,163 @@ describe('inspectSearch', () => {
       writeUser(env, { sources: [userSource('wiki', [env.repo], link)] })
 
       expect(find(inspect(env).sources, 'wiki')?.status).toBe('active')
+    })
+  })
+
+  describe('a warning belongs to the declaration that produced it', () => {
+    const BAD_EXCLUDE = ['[bad]']
+    const userFile = (env: Env) =>
+      path.join(env.userConfigDir, 'systematic.json')
+    const localFile = (env: Env) =>
+      path.join(env.userConfigDir, 'systematic.local.json')
+    const projectFile = (env: Env) =>
+      path.join(env.repo, '.opencode/systematic.json')
+
+    /** Every inspected row named `name`, with its status, origin and warnings. */
+    function rowsNamed(env: Env, name: string) {
+      return inspectSearch({
+        checkoutRoot: env.repo,
+        configOptions: env.configOptions,
+      })
+        .sources.filter((source) => source.name === name)
+        .map((source) => ({
+          status: source.status,
+          origin: source.origin,
+          warnings: source.warnings,
+        }))
+    }
+    const sectionWarnings = (env: Env) =>
+      inspectSearch({
+        checkoutRoot: env.repo,
+        configOptions: env.configOptions,
+      }).warnings
+
+    test('a valid user source and an invalid project source of one name each keep their own warning', () => {
+      const env = makeEnv()
+      const root = mkRoot(env, 'notes')
+      writeUser(env, {
+        allow_project_sources: [env.repo],
+        sources: [
+          { ...userSource('notes', [env.repo], root), exclude: BAD_EXCLUDE },
+        ],
+      })
+      writeProject(env.repo, {
+        sources: [{ name: 'notes', format: 'markdown', roots: ['..'] }],
+      })
+
+      const rows = rowsNamed(env, 'notes')
+      expect(rows).toHaveLength(2)
+      const valid = rows.find((row) => row.status === 'active')
+      const dropped = rows.find((row) => row.status === 'dropped invalid')
+      expect(valid?.warnings).toHaveLength(1)
+      expect(valid?.warnings[0]).toContain('exclude[0]')
+      expect(valid?.warnings[0]).toContain(userFile(env))
+      expect(dropped?.origin).toBe('project')
+      expect(dropped?.warnings).toHaveLength(1)
+      expect(dropped?.warnings[0]).toContain('was dropped')
+      expect(dropped?.warnings[0]).toContain(projectFile(env))
+      expect(sectionWarnings(env)).toEqual([])
+    })
+
+    test('a valid project source and an invalid user source of one name each keep their own warning', () => {
+      const env = makeEnv()
+      writeUser(env, {
+        allow_project_sources: [env.repo],
+        sources: [{ name: 'notes', format: 'markdown', roots: ['/srv/notes'] }],
+      })
+      writeProject(env.repo, {
+        sources: [{ ...projectSource('notes'), exclude: BAD_EXCLUDE }],
+      })
+
+      const rows = rowsNamed(env, 'notes')
+      const valid = rows.find((row) => row.origin === 'project')
+      const dropped = rows.find((row) => row.status === 'dropped invalid')
+      expect(valid?.warnings).toHaveLength(1)
+      expect(valid?.warnings[0]).toContain('exclude[0]')
+      expect(dropped?.origin).toBe('user')
+      expect(dropped?.warnings).toHaveLength(1)
+      expect(dropped?.warnings[0]).toContain('was dropped')
+      expect(dropped?.warnings[0]).toContain(userFile(env))
+    })
+
+    test('an invalid base entry and a valid local entry of one name: the valid row carries nothing from the base', () => {
+      const env = makeEnv()
+      const root = mkRoot(env, 'notes')
+      writeUser(env, {
+        sources: [{ name: 'notes', format: 'markdown', roots: ['/srv/notes'] }],
+      })
+      writeLocal(env, { sources: [userSource('notes', [env.repo], root)] })
+
+      const rows = rowsNamed(env, 'notes')
+      const valid = rows.find((row) => row.status === 'active')
+      const dropped = rows.find((row) => row.status === 'dropped invalid')
+      expect(valid?.origin).toBe('user.local')
+      expect(valid?.warnings).toEqual([])
+      expect(dropped?.warnings).toHaveLength(1)
+      expect(dropped?.warnings[0]).toContain(userFile(env))
+    })
+
+    test('a valid base entry and an invalid local entry of one name: each row keeps its own warning', () => {
+      const env = makeEnv()
+      const root = mkRoot(env, 'notes')
+      writeUser(env, {
+        sources: [
+          { ...userSource('notes', [env.repo], root), exclude: BAD_EXCLUDE },
+        ],
+      })
+      writeLocal(env, {
+        sources: [{ name: 'notes', format: 'markdown', roots: ['/srv/notes'] }],
+      })
+
+      const rows = rowsNamed(env, 'notes')
+      const valid = rows.find((row) => row.status === 'active')
+      const dropped = rows.find((row) => row.status === 'dropped invalid')
+      expect(valid?.origin).toBe('user')
+      expect(valid?.warnings).toHaveLength(1)
+      expect(valid?.warnings[0]).toContain('exclude[0]')
+      expect(valid?.warnings[0]).toContain(userFile(env))
+      expect(dropped?.warnings).toHaveLength(1)
+      expect(dropped?.warnings[0]).toContain('was dropped')
+      expect(dropped?.warnings[0]).toContain(localFile(env))
+    })
+
+    test('a local entry that replaces a base entry leaves the base warning in the section list, not on the row', () => {
+      const env = makeEnv()
+      const root = mkRoot(env, 'notes')
+      writeUser(env, {
+        sources: [
+          { ...userSource('notes', [env.repo], root), exclude: BAD_EXCLUDE },
+        ],
+      })
+      writeLocal(env, { sources: [userSource('notes', [env.repo], root)] })
+
+      const rows = rowsNamed(env, 'notes')
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.origin).toBe('user.local')
+      expect(rows[0]?.warnings).toEqual([])
+      const section = sectionWarnings(env)
+      expect(section).toHaveLength(1)
+      expect(section[0]).toContain('exclude[0]')
+      expect(section[0]).toContain(userFile(env))
+    })
+
+    test('two entries of one name in one file: the kept one keeps its warning and the repeat keeps its own', () => {
+      const env = makeEnv()
+      const root = mkRoot(env, 'notes')
+      writeUser(env, {
+        sources: [
+          { ...userSource('notes', [env.repo], root), exclude: BAD_EXCLUDE },
+          userSource('notes', [env.repo], root),
+        ],
+      })
+
+      const rows = rowsNamed(env, 'notes')
+      const valid = rows.find((row) => row.status === 'active')
+      const dropped = rows.find((row) => row.status === 'dropped invalid')
+      expect(valid?.warnings).toHaveLength(1)
+      expect(valid?.warnings[0]).toContain('exclude[0]')
+      expect(dropped?.warnings).toHaveLength(1)
+      expect(dropped?.warnings[0]).toContain('already used')
     })
   })
 

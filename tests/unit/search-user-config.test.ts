@@ -770,6 +770,7 @@ describe('selection looks at the directory entry, not the link target', () => {
       warnings: [],
       unreadable: false,
       dropped: [],
+      entries: [],
     })
   })
 })
@@ -1108,6 +1109,7 @@ describe('loadUserLevelSearchSettings', () => {
       warnings: [],
       unreadable: false,
       dropped: [],
+      entries: [],
       sourceLayers: new Map(),
       readFailures: [],
     })
@@ -1354,6 +1356,7 @@ describe('loadProjectSearchSources', () => {
       warnings: [],
       unreadable: false,
       dropped: [],
+      entries: [],
     })
   })
 
@@ -1368,6 +1371,7 @@ describe('loadProjectSearchSources', () => {
       warnings: [],
       unreadable: false,
       dropped: [],
+      entries: [],
     })
   })
 

@@ -158,30 +158,55 @@ function capWarning(dropped: readonly ActiveSource[]): string {
  * custom dir). The validator guarantees every user entry has `projects`; the
  * `undefined` check only narrows the type.
  */
+function mappedUserEntries(
+  declared: readonly SearchSourceEntry[],
+  identity: ProjectIdentity,
+  homeDir: string,
+): SearchSourceEntry[] {
+  return declared.filter(
+    (entry) =>
+      entry.projects !== undefined &&
+      isAllowedProject(identity, entry.projects, { homeDir }),
+  )
+}
+
+function userSourceOf(entry: SearchSourceEntry, homeDir: string): ActiveSource {
+  return {
+    name: entry.name,
+    format: entry.format,
+    roots: entry.roots.map((root) => expandHome(root, homeDir)),
+    origin: 'user',
+    exclude: entry.exclude ?? [],
+  }
+}
+
 function mappedUserSources(
   declared: readonly SearchSourceEntry[],
   identity: ProjectIdentity,
   homeDir: string,
 ): ActiveSource[] {
-  return declared
-    .filter(
-      (entry) =>
-        entry.projects !== undefined &&
-        isAllowedProject(identity, entry.projects, { homeDir }),
-    )
-    .map((entry) => ({
-      name: entry.name,
-      format: entry.format,
-      roots: entry.roots.map((root) => expandHome(root, homeDir)),
-      origin: 'user' as const,
-      exclude: entry.exclude ?? [],
-    }))
+  return mappedUserEntries(declared, identity, homeDir).map((entry) =>
+    userSourceOf(entry, homeDir),
+  )
+}
+
+/** A project proposal as a source, its roots resolved against the checkout root. */
+function projectSourceOf(
+  entry: SearchSourceEntry,
+  checkoutRoot: string,
+): ActiveSource {
+  return {
+    name: entry.name,
+    format: entry.format,
+    roots: entry.roots.map((root) => path.resolve(checkoutRoot, root)),
+    origin: 'project',
+    exclude: entry.exclude ?? [],
+  }
 }
 
 /**
- * Project proposals as sources, roots resolved against the checkout root. A
- * proposal whose name a mapped user source holds is left out: the merge keeps
- * only the user source.
+ * Project proposals as sources. A proposal whose name a mapped user source
+ * holds is left out: the merge keeps only the user source.
  */
 function projectSourcesOf(
   proposals: readonly SearchSourceEntry[],
@@ -190,26 +215,7 @@ function projectSourcesOf(
 ): ActiveSource[] {
   return proposals
     .filter((entry) => !shadowed.has(entry.name))
-    .map((entry) => ({
-      name: entry.name,
-      format: entry.format,
-      roots: entry.roots.map((root) => path.resolve(checkoutRoot, root)),
-      origin: 'project' as const,
-      exclude: entry.exclude ?? [],
-    }))
-}
-
-/** Whether a warning is the one `search source <label> in <file>` entry warning for `label`. */
-function namesEntry(warning: string, label: string): boolean {
-  return warning.includes(`search source ${label} in `)
-}
-
-/** The labels a project file's entry warnings use: every valid proposal and every dropped entry. */
-function projectEntryLabels(project: ProjectSearchLoad): string[] {
-  return [
-    ...project.sources.map((entry) => `"${entry.name}"`),
-    ...project.dropped.map((entry) => entry.label),
-  ]
+    .map((entry) => projectSourceOf(entry, checkoutRoot))
 }
 
 /**
@@ -221,10 +227,10 @@ function forwardedProjectWarnings(
   projectAllowed: boolean,
 ): readonly string[] {
   if (projectAllowed) return project.warnings
-  const labels = projectEntryLabels(project)
-  return project.warnings.filter(
-    (warning) => !labels.some((label) => namesEntry(warning, label)),
+  const aboutEntries = new Set(
+    project.entries.flatMap((entry) => entry.warnings),
   )
+  return project.warnings.filter((warning) => !aboutEntries.has(warning))
 }
 
 /**
@@ -426,6 +432,12 @@ function inspectBuiltInKinds(checkoutRoot: string): InspectedBuiltInKind[] {
     })
 }
 
+/** A source with the validated entry it came from, so its own warnings can be found. */
+interface Declared {
+  readonly source: ActiveSource
+  readonly entry: SearchSourceEntry
+}
+
 /** The first rejection among a project source's roots, the one that drops the source. */
 function firstRootRejection(
   checkoutRoot: string,
@@ -460,43 +472,50 @@ export function inspectSearch(input: SearchInspectionInput): SearchInspection {
   const project = loadProjectSearchSources(checkoutRoot)
   const projectAllowed = isAllowedProject(identity, allow, { homeDir })
 
-  const userSources = mappedUserSources(
+  const userDeclared: Declared[] = mappedUserEntries(
     user.settings?.sources ?? [],
     identity,
     homeDir,
-  )
+  ).map((entry) => ({ entry, source: userSourceOf(entry, homeDir) }))
   // A user source holds a same-named allowed proposal's place, but a proposal
   // that is not allowed is listed whatever a user source is called.
-  const projectSources = projectSourcesOf(
-    project.sources,
-    checkoutRoot,
-    projectAllowed
-      ? new Set(userSources.map((source) => source.name))
-      : new Set(),
-  )
-  const ordered = [...userSources, ...(projectAllowed ? projectSources : [])]
-  const rejected = projectAllowed ? [] : projectSources
+  const shadowed = projectAllowed
+    ? new Set(userDeclared.map(({ source }) => source.name))
+    : new Set<string>()
+  const projectDeclared: Declared[] = project.sources
+    .filter((entry) => !shadowed.has(entry.name))
+    .map((entry) => ({
+      entry,
+      source: projectSourceOf(entry, checkoutRoot),
+    }))
+  const ordered = [...userDeclared, ...(projectAllowed ? projectDeclared : [])]
+  const rejected = projectAllowed ? [] : projectDeclared
   const loaderRoot = path.resolve(checkoutRoot)
 
-  const warningsFor = (label: string): string[] =>
-    [...user.warnings, ...project.warnings].filter((warning) =>
-      namesEntry(warning, label),
-    )
+  // Each warning belongs to the declaration that produced it: the entry the
+  // validator kept (traced by identity through the merge) or the entry it
+  // dropped. A warning of a declaration with no row stays in the section list.
+  const outcomes = [...user.entries, ...project.entries]
+  const warningsOfKept = new Map<SearchSourceEntry, readonly string[]>()
+  for (const outcome of outcomes) {
+    if (outcome.kind === 'kept')
+      warningsOfKept.set(outcome.entry, outcome.warnings)
+  }
   const named = new Set<string>()
-  const claim = (label: string): string[] => {
-    const found = warningsFor(label)
-    for (const warning of found) named.add(warning)
-    return found
+  const claim = (warnings: readonly string[]): readonly string[] => {
+    for (const warning of warnings) named.add(warning)
+    return warnings
   }
 
   const describe = (
-    source: ActiveSource,
+    { source, entry }: Declared,
     status: InspectedSourceStatus | 'checked',
   ): InspectedSource => {
     const roots: InspectedRoot[] = source.roots.map((root) => ({
       path: root,
       present: status === 'checked' ? safeLstat(root) !== null : null,
     }))
+    const warnings = claim(warningsOfKept.get(entry) ?? [])
     const rejection =
       status === 'checked' && source.origin === 'project'
         ? firstRootRejection(loaderRoot, source.roots)
@@ -510,7 +529,7 @@ export function inspectSearch(input: SearchInspectionInput): SearchInspection {
         roots,
         exclude: source.exclude,
         reason: PROJECT_ROOT_REJECTION_REASONS[rejection],
-        warnings: claim(`"${source.name}"`),
+        warnings,
       }
     }
     return {
@@ -528,35 +547,41 @@ export function inspectSearch(input: SearchInspectionInput): SearchInspection {
       format: source.format,
       roots,
       exclude: source.exclude,
-      warnings: claim(`"${source.name}"`),
+      warnings,
     }
   }
 
+  const droppedRows = [
+    ...user.entries.map((outcome) => ({ outcome, origin: 'user' as const })),
+    ...project.entries.map((outcome) => ({
+      outcome,
+      origin: 'project' as const,
+    })),
+  ].flatMap(({ outcome, origin }): InspectedSource[] =>
+    outcome.kind === 'dropped'
+      ? [
+          {
+            status: 'dropped invalid',
+            name: outcome.label.startsWith('"')
+              ? outcome.label.slice(1, -1)
+              : outcome.label,
+            origin,
+            reason: outcome.reason,
+            warnings: claim(outcome.warnings),
+          },
+        ]
+      : [],
+  )
+
   const sources: InspectedSource[] = [
-    ...ordered.map((source, index) =>
+    ...ordered.map((declared, index) =>
       describe(
-        source,
+        declared,
         index < MAX_ACTIVE_SOURCES ? 'checked' : 'over source cap',
       ),
     ),
-    ...rejected.map((source) => describe(source, 'not allowed')),
-    ...[
-      ...user.dropped.map((entry) => ({ entry, origin: 'user' as const })),
-      ...project.dropped.map((entry) => ({
-        entry,
-        origin: 'project' as const,
-      })),
-    ].map(
-      ({ entry, origin }): InspectedSource => ({
-        status: 'dropped invalid',
-        name: entry.label.startsWith('"')
-          ? entry.label.slice(1, -1)
-          : entry.label,
-        origin,
-        reason: entry.reason,
-        warnings: claim(entry.label),
-      }),
-    ),
+    ...rejected.map((declared) => describe(declared, 'not allowed')),
+    ...droppedRows,
   ]
 
   return {

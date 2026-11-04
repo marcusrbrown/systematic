@@ -226,7 +226,35 @@ export interface SearchConfigValidation {
    * dropped exclude pattern is not listed here: its source stays.
    */
   readonly dropped: readonly DroppedSearchEntry[]
+  /**
+   * Every entry of `sources`, in array order, with the warnings that entry
+   * produced. These are the same messages as in `warnings`, kept with the
+   * entry so a caller never has to match them by name.
+   */
+  readonly entries: readonly SearchEntryOutcome[]
 }
+
+/**
+ * What validation made of one entry of a `sources` array. A kept outcome holds
+ * the validated entry itself, so the entry a merge keeps can be traced back to
+ * the warnings of its own declaration. `warnings` holds only the messages that
+ * were listed; a message past the cap is counted, not kept.
+ */
+export type SearchEntryOutcome =
+  | {
+      readonly kind: 'kept'
+      readonly index: number
+      readonly label: string
+      readonly entry: SearchSourceEntry
+      readonly warnings: readonly string[]
+    }
+  | {
+      readonly kind: 'dropped'
+      readonly index: number
+      readonly label: string
+      readonly reason: string
+      readonly warnings: readonly string[]
+    }
 
 /** One source entry the validator dropped, as the warning names it. */
 export interface DroppedSearchEntry {
@@ -471,14 +499,20 @@ interface ValidationState {
   readonly sourcePath: string
   readonly warnings: string[]
   readonly dropped: DroppedSearchEntry[]
+  readonly entries: SearchEntryOutcome[]
   suppressed: number
   unreadable: boolean
   structural: boolean
 }
 
-function warn(state: ValidationState, message: string): void {
-  if (state.warnings.length < MAX_DETAIL_WARNINGS) state.warnings.push(message)
-  else state.suppressed += 1
+/** List a warning unless the cap is reached. Returns whether it was listed. */
+function warn(state: ValidationState, message: string): boolean {
+  if (state.warnings.length < MAX_DETAIL_WARNINGS) {
+    state.warnings.push(message)
+    return true
+  }
+  state.suppressed += 1
+  return false
 }
 
 function validateSources(
@@ -496,12 +530,13 @@ function validateSources(
   raw.forEach((item: unknown, index) => {
     const result = validateEntry(item, index, state.trust)
     if (!result.ok) {
-      dropEntry(state, result.label, result.reason)
+      dropEntry(state, index, result.label, result.reason)
       return
     }
     if (seen.has(result.entry.name)) {
       dropEntry(
         state,
+        index,
         `"${result.entry.name}"`,
         'the name is already used earlier in this file, so the first entry is kept',
       )
@@ -509,12 +544,19 @@ function validateSources(
     }
     seen.add(result.entry.name)
     kept.push(result.entry)
+    const label = `"${result.entry.name}"`
+    const warnings: string[] = []
     for (const issue of result.excludeIssues) {
-      warn(
-        state,
-        excludeWarning(state.sourcePath, `"${result.entry.name}"`, issue),
-      )
+      const message = excludeWarning(state.sourcePath, label, issue)
+      if (warn(state, message)) warnings.push(message)
     }
+    state.entries.push({
+      kind: 'kept',
+      index,
+      label,
+      entry: result.entry,
+      warnings,
+    })
   })
   return kept
 }
@@ -522,11 +564,19 @@ function validateSources(
 /** Record a dropped entry and warn about it. */
 function dropEntry(
   state: ValidationState,
+  index: number,
   label: string,
   reason: string,
 ): void {
   state.dropped.push({ label, reason })
-  warn(state, entryWarning(state.sourcePath, label, reason))
+  const message = entryWarning(state.sourcePath, label, reason)
+  state.entries.push({
+    kind: 'dropped',
+    index,
+    label,
+    reason,
+    warnings: warn(state, message) ? [message] : [],
+  })
 }
 
 function validateAllowList(
@@ -625,6 +675,7 @@ export function validateSearchConfig(
     sourcePath: displaySafe(sourcePath),
     warnings: [],
     dropped: [],
+    entries: [],
     suppressed: 0,
     unreadable: false,
     structural: false,
@@ -637,6 +688,7 @@ export function validateSearchConfig(
       structural: true,
       warnings: state.warnings,
       dropped: state.dropped,
+      entries: state.entries,
     }
   }
 
@@ -662,6 +714,7 @@ export function validateSearchConfig(
     structural: state.structural,
     warnings: state.warnings,
     dropped: state.dropped,
+    entries: state.entries,
   }
 }
 
@@ -964,6 +1017,12 @@ export interface UserLevelSearchLoad {
    * with the label the warning uses and the reason.
    */
   readonly dropped: readonly DroppedSearchEntry[]
+  /**
+   * Every entry of `sources` in every file read, in file order then array
+   * order, with the warnings that entry produced (`SearchEntryOutcome`). A
+   * file two layers share is listed once.
+   */
+  readonly entries: readonly SearchEntryOutcome[]
   /** The layer each surviving source entry came from, by source name (`mergeSearchSettings`). */
   readonly sourceLayers: ReadonlyMap<string, UserLevelLayer>
   /**
@@ -1076,6 +1135,7 @@ interface LayerRead {
   readonly warnings: readonly string[]
   readonly readFailures: readonly string[]
   readonly dropped: readonly DroppedSearchEntry[]
+  readonly entries: readonly SearchEntryOutcome[]
 }
 
 const NOTHING_READ: LayerRead = {
@@ -1083,6 +1143,7 @@ const NOTHING_READ: LayerRead = {
   warnings: [],
   readFailures: [],
   dropped: [],
+  entries: [],
 }
 
 /** Read one selected user-level file's `search` block. */
@@ -1096,6 +1157,7 @@ function readUserLevelFile(file: UserLevelConfigFile): LayerRead {
       warnings: [warning],
       readFailures: [warning],
       dropped: [],
+      entries: [],
     }
   }
   if (!read.has) return NOTHING_READ
@@ -1108,6 +1170,7 @@ function readUserLevelFile(file: UserLevelConfigFile): LayerRead {
     warnings: validation.warnings,
     readFailures: [],
     dropped: validation.dropped,
+    entries: validation.entries,
   }
 }
 
@@ -1135,6 +1198,7 @@ export function loadUserLevelSearchSettings(
   const warnings: string[] = []
   const readFailures: string[] = []
   const dropped: DroppedSearchEntry[] = []
+  const entries: SearchEntryOutcome[] = []
   const sources: SearchSettingsSource[] = []
   const reads = new Map<UserLevelLayer, LayerRead>()
   for (const file of selection.files) {
@@ -1147,6 +1211,7 @@ export function loadUserLevelSearchSettings(
     warnings.push(...read.warnings)
     readFailures.push(...read.readFailures)
     dropped.push(...read.dropped)
+    entries.push(...read.entries)
   }
   const merged = mergeSearchSettings(sources)
   return {
@@ -1154,6 +1219,7 @@ export function loadUserLevelSearchSettings(
     unreadable: merged.unreadable,
     warnings,
     dropped,
+    entries,
     sourceLayers: merged.sourceLayers,
     readFailures,
   }
@@ -1175,6 +1241,8 @@ export interface ProjectSearchLoad {
   readonly unreadable: boolean
   /** Every source entry dropped whole, with the label the warning uses and the reason. */
   readonly dropped: readonly DroppedSearchEntry[]
+  /** Every entry of the file's `sources`, in array order, with the warnings that entry produced. */
+  readonly entries: readonly SearchEntryOutcome[]
 }
 
 function formatProjectFileWarning(sourcePath: string, reason: string): string {
@@ -1210,25 +1278,28 @@ export function loadProjectSearchSources(
       ? []
       : [formatShadowedProjectWarning(filePath, selection.ignoredPath)]
   const read = readSearchBlock(filePath, MAX_PROJECT_CONFIG_BYTES)
-  if (read.kind === 'absent') {
-    return { sources: [], warnings: shadowed, unreadable: false, dropped: [] }
+  const nothing = {
+    sources: [],
+    warnings: shadowed,
+    unreadable: false,
+    dropped: [],
+    entries: [],
   }
+  if (read.kind === 'absent') return nothing
   if (read.kind === 'failed') {
     return {
-      sources: [],
+      ...nothing,
       warnings: [...shadowed, formatProjectFileWarning(filePath, read.reason)],
       unreadable: true,
-      dropped: [],
     }
   }
-  if (!read.has) {
-    return { sources: [], warnings: shadowed, unreadable: false, dropped: [] }
-  }
+  if (!read.has) return nothing
   const validation = validateSearchConfig(read.searchBlock, 'project', filePath)
   return {
     sources: validation.structural ? [] : (validation.settings?.sources ?? []),
     warnings: [...shadowed, ...validation.warnings],
     unreadable: validation.structural,
     dropped: validation.dropped,
+    entries: validation.entries,
   }
 }

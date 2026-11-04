@@ -2419,6 +2419,102 @@ describe('cli config show: locations and search', () => {
     }
   })
 
+  it('gives each warning to the declaration that produced it, in JSON and in the human output', () => {
+    const box = mkShowBox()
+    const vault = path.join(box.home, 'vault')
+    try {
+      fs.mkdirSync(vault, { recursive: true })
+      const baseFile = path.join(box.userDir, 'systematic.json')
+      const localFile = path.join(box.userDir, 'systematic.local.json')
+      const projectFile = path.join(box.project, '.opencode/systematic.json')
+      writeIn(
+        box.userDir,
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            allow_project_sources: [box.project],
+            sources: [
+              {
+                name: 'notes',
+                format: 'markdown',
+                roots: [vault],
+                projects: [box.project],
+                exclude: ['[bad]'],
+              },
+            ],
+          },
+        }),
+      )
+      writeIn(
+        box.userDir,
+        'systematic.local.json',
+        JSON.stringify({
+          search: {
+            sources: [{ name: 'notes', format: 'markdown', roots: [vault] }],
+          },
+        }),
+      )
+      writeIn(
+        path.join(box.project, '.opencode'),
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            sources: [{ name: 'notes', format: 'markdown', roots: ['..'] }],
+          },
+        }),
+      )
+
+      const rows = searchOf(showJson(box).parsed).sources.filter(
+        (row) => row.name === 'notes',
+      )
+      expect(rows).toHaveLength(3)
+      const owned = rows.map((row) => {
+        expect(row.warnings).toHaveLength(1)
+        return [row.status, row.origin, row.warnings[0] ?? ''] as const
+      })
+      const valid = owned.find(([status]) => status !== 'dropped invalid')
+      const droppedLocal = owned.find(
+        ([status, , warning]) =>
+          status === 'dropped invalid' && warning.includes(localFile),
+      )
+      const droppedProject = owned.find(
+        ([status, origin]) =>
+          status === 'dropped invalid' && origin === 'project',
+      )
+      expect(valid?.[2]).toContain('exclude[0]')
+      expect(valid?.[2]).toContain(baseFile)
+      expect(droppedLocal?.[2]).toContain('was dropped')
+      expect(droppedProject?.[2]).toContain('was dropped')
+      expect(droppedProject?.[2]).toContain(projectFile)
+
+      const human = runCli(['config', 'show'], box.project, box.env)
+      const section = human.stdout.split('\nSearch:')[1] ?? ''
+      const blocks = section
+        .split(/\n {4}(?=\S)/)
+        .filter((block) => block.startsWith('notes ['))
+      expect(blocks).toHaveLength(3)
+      for (const block of blocks) {
+        const warningLines = block
+          .split('\n')
+          .filter((line) => line.startsWith('      warning:'))
+        expect(warningLines).toHaveLength(1)
+        const active =
+          block.startsWith('notes [missing root]') ||
+          block.startsWith('notes [active]')
+        if (active) {
+          expect(warningLines[0]).toContain('exclude[0]')
+          expect(warningLines[0]).toContain(baseFile)
+        } else if (block.includes('origin:  project')) {
+          expect(warningLines[0]).toContain(projectFile)
+        } else {
+          expect(warningLines[0]).toContain(localFile)
+        }
+      }
+    } finally {
+      fs.rmSync(box.root, { recursive: true, force: true })
+    }
+  })
+
   describe('a config file the dump cannot read', () => {
     const OVERSIZED = ' '.repeat(1024 * 1024 + 1)
 

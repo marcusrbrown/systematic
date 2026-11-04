@@ -7121,6 +7121,143 @@ describe('layered config files', () => {
     })
   })
 
+  describe('a project config that is the same file as a user-level file', () => {
+    const NOTICE = 'resolve to the same file'
+    const IGNORED = 'is only valid in user config'
+
+    /** Point the project file at `target`, the way a symlinked checkout config does. */
+    function linkProject(t: Fixture, target: string): void {
+      fs.mkdirSync(path.join(t.repo, '.opencode'), { recursive: true })
+      fs.symlinkSync(target, path.join(t.repo, '.opencode/systematic.json'))
+    }
+
+    interface AliasCase {
+      readonly layer: string
+      readonly trust: string
+      readonly base: (t: Fixture) => string
+      readonly target: (t: Fixture) => string
+      readonly options: { readonly withCustom?: boolean }
+    }
+
+    const cases: AliasCase[] = [
+      {
+        layer: 'custom.local',
+        trust: 'custom',
+        base: (t: Fixture) => t.custom({ skills_as_commands: true }),
+        target: (t: Fixture) =>
+          t.customLocal({ agents: { [AGENT]: { model: 'a/aliased' } } }),
+        options: { withCustom: true },
+      },
+      {
+        layer: 'user.local',
+        trust: 'user',
+        base: (t: Fixture) => t.user({ skills_as_commands: true }),
+        target: (t: Fixture) =>
+          t.userLocal({ agents: { [AGENT]: { model: 'a/aliased' } } }),
+        options: {},
+      },
+      {
+        layer: 'user',
+        trust: 'user',
+        base: (t: Fixture) => t.userLocal({ skills_as_commands: true }),
+        target: (t: Fixture) =>
+          t.user({ agents: { [AGENT]: { model: 'a/aliased' } } }),
+        options: {},
+      },
+      {
+        layer: 'custom',
+        trust: 'custom',
+        base: (t: Fixture) => t.customLocal({ skills_as_commands: true }),
+        target: (t: Fixture) =>
+          t.custom({ agents: { [AGENT]: { model: 'a/aliased' } } }),
+        options: { withCustom: true },
+      },
+    ]
+
+    test.each(cases)(
+      'aliasing $layer applies its protected field, and the effective model, the blocked-field metadata and the warnings agree',
+      ({ layer, trust, base, target, options }) => {
+        const t = setup()
+        base(t)
+        linkProject(t, target(t))
+
+        const result = t.load({ from: t.repo, ...options })
+
+        expect(result.config.agents?.[AGENT]?.model).toBe('a/aliased')
+        expect(result.metadata.protectedFields).toEqual([])
+        expect(t.warnings.filter((w) => w.includes(IGNORED))).toEqual([])
+        const notices = t.warnings.filter((w) => w.includes(NOTICE))
+        expect(notices).toHaveLength(1)
+        expect(notices[0]).toContain(`${layer} config`)
+        expect(notices[0]).toContain(`apply through the ${trust}-trust pass`)
+        expect(
+          result.metadata.sources.filter((s) => s.kind === 'project'),
+        ).toEqual([])
+      },
+    )
+
+    test('a project aliasing nothing keeps its blocked field and its ignored warning', () => {
+      const t = setup()
+      t.customLocal({ skills_as_commands: true })
+      t.project({ agents: { [AGENT]: { model: 'a/blocked' } } })
+
+      const result = t.load({ from: t.repo, withCustom: true })
+
+      expect(result.config.agents?.[AGENT]?.model).toBeUndefined()
+      expect(result.metadata.protectedFields).toEqual([
+        {
+          fieldPath: 'agents.*.model',
+          outcome: 'blocked',
+          sourceKind: 'project',
+        },
+      ])
+      expect(t.warnings.filter((w) => w.includes(IGNORED))).toHaveLength(1)
+      expect(t.warnings.some((w) => w.includes(NOTICE))).toBe(false)
+    })
+
+    test('an aliased local file that fails to load leaves the field blocked, flushes the ignored warning and gives no notice', () => {
+      const t = setup()
+      t.custom({ skills_as_commands: true })
+      linkProject(t, t.customLocal({ agents: { [AGENT]: { model: 42 } } }))
+
+      const result = t.load({
+        from: t.repo,
+        withCustom: true,
+        invalidSource: 'report',
+      })
+
+      expect(t.warnings.filter((w) => w.includes(IGNORED))).toHaveLength(1)
+      expect(t.warnings.some((w) => w.includes(NOTICE))).toBe(false)
+      expect(result.metadata.protectedFields).toEqual([
+        {
+          fieldPath: 'agents.*.model',
+          outcome: 'blocked',
+          sourceKind: 'project',
+        },
+      ])
+      expect(result.metadata.sources).toContainEqual(
+        expect.objectContaining({ kind: 'custom', presence: 'invalid' }),
+      )
+    })
+
+    test('a project aliasing the file both a user and a custom layer read is noticed once, under the custom layer', () => {
+      const t = setup()
+      const file = t.user({ agents: { [AGENT]: { model: 'a/aliased' } } })
+      linkProject(t, file)
+
+      const result = t.load({
+        from: t.repo,
+        customConfigDir: t.userDir,
+      })
+
+      expect(result.config.agents?.[AGENT]?.model).toBe('a/aliased')
+      expect(result.metadata.protectedFields).toEqual([])
+      const notices = t.warnings.filter((w) => w.includes(NOTICE))
+      expect(notices).toHaveLength(1)
+      expect(notices[0]).toContain('custom config')
+    })
+  })
+
   describe('layer precedence', () => {
     test('a field set at every layer resolves to the highest layer, and falls through as layers are removed', () => {
       const layers = [

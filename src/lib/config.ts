@@ -1603,16 +1603,51 @@ export function loadConfig(
   return loadConfigWithSources(projectDir, options).config
 }
 
-/** The custom config path, only when it canonically resolves to the same file as the project config path. */
-function resolveAliasedCustomConfigPath(
-  paths: { readonly projectConfig: string; readonly customConfig?: string },
+/** A user-level file that is the project config file, reached at one of the four user-level layers. */
+interface AliasedConfigFile {
+  readonly layer: UserLevelLayer
+  readonly path: string
+}
+
+/** Where `loadUserLevelSources` keeps each layer's result. */
+const USER_LEVEL_SLOT = {
+  user: 'user',
+  'user.local': 'userLocal',
+  custom: 'custom',
+  'custom.local': 'customLocal',
+} as const satisfies Record<UserLevelLayer, keyof LayeredSources>
+
+/**
+ * The user-level files that canonically resolve to the same file as the
+ * project config file, in the order a notice names them: custom, custom.local,
+ * user, user.local. Every sibling counts, so a project file that is the
+ * `custom.local` file is recognised whether or not a separate `custom` base
+ * exists. Empty when nothing aliases or the project file is not loaded.
+ */
+function resolveAliasedConfigFiles(
+  paths: {
+    readonly projectConfig: string
+    readonly userConfig: string
+    readonly userLocalConfig: string
+    readonly customConfig?: string
+    readonly customLocalConfig?: string
+  },
   includeProject: boolean,
-): string | undefined {
-  if (!includeProject || paths.customConfig === undefined) return undefined
-  const sameFile =
-    resolveConfigSourcePath(paths.projectConfig) ===
-    resolveConfigSourcePath(paths.customConfig)
-  return sameFile ? paths.customConfig : undefined
+): readonly AliasedConfigFile[] {
+  if (!includeProject) return []
+  const candidates: readonly (readonly [UserLevelLayer, string | undefined])[] =
+    [
+      ['custom', paths.customConfig],
+      ['custom.local', paths.customLocalConfig],
+      ['user', paths.userConfig],
+      ['user.local', paths.userLocalConfig],
+    ]
+  const project = resolveConfigSourcePath(paths.projectConfig)
+  return candidates.flatMap(([layer, file]) =>
+    file !== undefined && resolveConfigSourcePath(file) === project
+      ? [{ layer, path: file }]
+      : [],
+  )
 }
 
 /**
@@ -1628,12 +1663,12 @@ function resolveAliasedCustomConfigPath(
  */
 function createAliasStripTracker(
   warningSink: (message: string) => void,
-  aliasedCustomConfigPath: string | undefined,
+  aliasedFile: AliasedConfigFile | undefined,
 ): {
   readonly sink: (message: string) => void
   readonly buffered: readonly string[]
 } {
-  if (aliasedCustomConfigPath === undefined) {
+  if (aliasedFile === undefined) {
     return { sink: warningSink, buffered: [] }
   }
   const buffered: string[] = []
@@ -1653,10 +1688,10 @@ function createAliasStripTracker(
  * buffered something.
  */
 function isAliasNoticeEligible(input: {
-  readonly aliasedCustomConfigPath: string | undefined
+  readonly aliasedFile: AliasedConfigFile | undefined
   readonly bufferedCount: number
 }): boolean {
-  return input.aliasedCustomConfigPath !== undefined && input.bufferedCount > 0
+  return input.aliasedFile !== undefined && input.bufferedCount > 0
 }
 
 /**
@@ -1669,21 +1704,21 @@ function isAliasNoticeEligible(input: {
  * `buildAliasSuccessNotice` for that (deferred) case.
  */
 function emitAliasFailureDiagnostics(input: {
-  readonly aliasedCustomConfigPath: string | undefined
+  readonly aliasedFile: AliasedConfigFile | undefined
   readonly buffered: readonly string[]
-  readonly customLoaded: boolean
+  readonly aliasLoaded: boolean
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
 }): void {
   if (
     !isAliasNoticeEligible({
-      aliasedCustomConfigPath: input.aliasedCustomConfigPath,
+      aliasedFile: input.aliasedFile,
       bufferedCount: input.buffered.length,
     })
   ) {
     return
   }
-  if (input.projectLoaded && input.customLoaded) return
+  if (input.projectLoaded && input.aliasLoaded) return
   for (const message of input.buffered) input.warningSink(message)
 }
 
@@ -1698,29 +1733,30 @@ function emitAliasFailureDiagnostics(input: {
  * when the passes did not both succeed (the failure path owns that case).
  */
 function buildAliasSuccessNotice(input: {
-  readonly aliasedCustomConfigPath: string | undefined
+  readonly aliasedFile: AliasedConfigFile | undefined
   readonly bufferedCount: number
-  readonly customLoaded: boolean
+  readonly aliasLoaded: boolean
   readonly projectConfigPath: string
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
 }): (() => void) | undefined {
   if (
     !isAliasNoticeEligible({
-      aliasedCustomConfigPath: input.aliasedCustomConfigPath,
+      aliasedFile: input.aliasedFile,
       bufferedCount: input.bufferedCount,
     }) ||
-    !(input.projectLoaded && input.customLoaded) ||
-    input.aliasedCustomConfigPath === undefined
+    !(input.projectLoaded && input.aliasLoaded) ||
+    input.aliasedFile === undefined
   ) {
     return undefined
   }
-  const aliasedCustomConfigPath = input.aliasedCustomConfigPath
+  const { layer, path: aliasedPath } = input.aliasedFile
+  const trust = LAYER_TRUST[layer]
   const projectConfigPath = input.projectConfigPath
   const warningSink = input.warningSink
   return () => {
     warningSink(
-      `[systematic] project config (${sanitizeDiagnosticText(projectConfigPath)}) and custom config (${sanitizeDiagnosticText(aliasedCustomConfigPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`allow_project_profiles\`) apply through the custom-trust pass instead.`,
+      `[systematic] project config (${sanitizeDiagnosticText(projectConfigPath)}) and ${layer} config (${sanitizeDiagnosticText(aliasedPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`allow_project_profiles\`) apply through the ${trust}-trust pass instead.`,
     )
   }
 }
@@ -1991,14 +2027,9 @@ export function loadConfigWithSources(
   // that SAME file also loads, those fields apply through it via ordinary
   // merge precedence, so the buffered warnings are dropped in favor of one
   // alias summary below; otherwise they are flushed as normal.
-  const aliasedCustomConfigPath = resolveAliasedCustomConfigPath(
-    paths,
-    includeProject,
-  )
-  const projectStrip = createAliasStripTracker(
-    warningSink,
-    aliasedCustomConfigPath,
-  )
+  const aliasedFiles = resolveAliasedConfigFiles(paths, includeProject)
+  const aliasedFile = aliasedFiles[0]
+  const projectStrip = createAliasStripTracker(warningSink, aliasedFile)
   // Shared 20-detail cap (see `createBoundedStripWarningSink`) for every
   // project-trust protected-field warning of this load -- overlay-field
   // strips (below, via `stripProjectSecurityOverlayFields`) AND the
@@ -2016,7 +2047,12 @@ export function loadConfigWithSources(
     reportInvalid,
     warningSink,
   })
-  const { allowProjectProfiles, custom } = userLevel
+  const { allowProjectProfiles } = userLevel
+  // The protected fields apply when any user-level layer reading the project
+  // file loaded it.
+  const aliasLoaded = aliasedFiles.some(
+    ({ layer }) => userLevel[USER_LEVEL_SLOT[layer]].source !== null,
+  )
 
   const project: LoadedConfigSource = includeProject
     ? loadConfigSource({
@@ -2063,16 +2099,16 @@ export function loadConfigWithSources(
   }
 
   emitAliasFailureDiagnostics({
-    aliasedCustomConfigPath,
+    aliasedFile,
     buffered: projectStrip.buffered,
-    customLoaded: custom.source !== null,
+    aliasLoaded,
     projectLoaded: project.source !== null,
     warningSink,
   })
   const emitAliasSuccessNotice = buildAliasSuccessNotice({
-    aliasedCustomConfigPath,
+    aliasedFile,
     bufferedCount: projectStrip.buffered.length,
-    customLoaded: custom.source !== null,
+    aliasLoaded,
     projectConfigPath: paths.projectConfig,
     projectLoaded: project.source !== null,
     warningSink,
@@ -2082,7 +2118,7 @@ export function loadConfigWithSources(
     user: userLevel.user.source,
     userLocal: userLevel.userLocal.source,
     project: projectSource,
-    custom: custom.source,
+    custom: userLevel.custom.source,
     customLocal: userLevel.customLocal.source,
   }
   const sources = chainOf(layers)
@@ -2278,13 +2314,14 @@ function isUserLevelLayer(layer: ConfigSourceLayer): layer is UserLevelLayer {
  * A kind's source files seen as one: the observation metadata describes a
  * kind (`user`, `project`, `custom`), not a file, so a local file is folded
  * into its sibling after both are validated. The folded entry keeps the
- * sibling's canonical path (the local's only when no sibling loaded), so a
- * local never replaces its sibling's path, and lists every config in the kind
- * so a field counts as defined when either file defines it.
+ * canonical path of every file that loaded, so a project file that is the
+ * local file (or the base file) is recognised as the same file as the kind,
+ * and lists every config in the kind so a field counts as defined when either
+ * file defines it.
  */
 interface FoldedConfigSource {
   readonly trust: ConfigSourceKind
-  readonly canonicalPath: string
+  readonly canonicalPaths: readonly string[]
   readonly configs: readonly RawSystematicConfig[]
   readonly protectedFields: readonly ConfigProtectedFieldMetadata[]
 }
@@ -2298,7 +2335,7 @@ function foldSiblingSources(
   }
   return Array.from(byTrust.values(), (files) => ({
     trust: files[0]?.trust ?? 'user',
-    canonicalPath: files[0]?.canonicalPath ?? '',
+    canonicalPaths: files.map((file) => file.canonicalPath),
     configs: files.map((file) => file.config),
     protectedFields: files.flatMap((file) => file.protectedFields),
   }))
@@ -2332,10 +2369,10 @@ function buildConfigObservationMetadata(
     ConfigSourceKind,
     readonly RawSystematicConfig[]
   >()
-  const sourcePaths = new Map<ConfigSourceKind, string>()
+  const sourcePaths = new Map<ConfigSourceKind, readonly string[]>()
   for (const source of summary.sources) {
     sourceConfigs.set(source.trust, source.configs)
-    sourcePaths.set(source.trust, source.canonicalPath)
+    sourcePaths.set(source.trust, source.canonicalPaths)
   }
 
   const firstDefinedSource = (
@@ -2389,38 +2426,55 @@ function buildConfigObservationMetadata(
  * canonical file and the custom-trust pass of that file loaded successfully,
  * the stripped fields DID take effect -- through the custom pass, at full
  * trust -- so reporting them as "blocked" in `ConfigObservationMetadata` is
- * misleading duplication. Drop the project source's protected-field records
- * in that case; keep them (they are genuinely blocked) whenever the custom
- * pass isn't aliased to the same file, or failed to load (`report` mode).
+ * misleading duplication. The same holds for any user-level file that loaded
+ * (`user`, `user.local`, `custom` or `custom.local`): a user-level layer
+ * applies what a project strips. Drop the project source's protected-field
+ * records in that case; keep them (they are genuinely blocked) whenever no
+ * loaded user-level file is the project file, or the one that is failed to
+ * load (`report` mode).
  */
 function collectVisibleProtectedFields(
   sources: readonly FoldedConfigSource[],
 ): readonly ConfigProtectedFieldMetadata[] {
   const projectSource = sources.find((source) => source.trust === 'project')
-  const customSource = sources.find((source) => source.trust === 'custom')
-  const projectAppliedViaCustom =
-    projectSource !== undefined &&
-    customSource !== undefined &&
-    projectSource.canonicalPath === customSource.canonicalPath
+  const userLevelPaths = new Set(
+    sources
+      .filter((source) => source.trust !== 'project')
+      .flatMap((source) => source.canonicalPaths),
+  )
+  const projectAppliedViaUserLevel =
+    projectSource?.canonicalPaths.some((file) => userLevelPaths.has(file)) ??
+    false
 
   return sources.flatMap((source) =>
-    projectAppliedViaCustom && source.trust === 'project'
+    projectAppliedViaUserLevel && source.trust === 'project'
       ? []
       : source.protectedFields,
   )
 }
 
+/**
+ * One row per real file: a kind whose files include one a higher-priority kind
+ * already reported is the same file reached twice, so it is left out. A
+ * user-level kind outranks `project`, so a project file that is a user-level
+ * file is reported as that user-level kind. Rows keep their given order.
+ */
 function dedupeSourceMetadata(
   metadata: readonly ConfigSourceMetadata[],
-  sourcePaths: ReadonlyMap<ConfigSourceKind, string>,
+  sourcePaths: ReadonlyMap<ConfigSourceKind, readonly string[]>,
 ): readonly ConfigSourceMetadata[] {
+  const priority: readonly ConfigSourceKind[] = ['custom', 'user', 'project']
   const seen = new Set<string>()
-  return metadata.filter((source) => {
-    const identity = sourcePaths.get(source.kind) ?? `missing:${source.kind}`
-    if (seen.has(identity)) return false
-    seen.add(identity)
-    return true
-  })
+  const kept = new Set<ConfigSourceKind>()
+  for (const kind of priority) {
+    const files = sourcePaths.get(kind)
+    const identities =
+      files !== undefined && files.length > 0 ? files : [`missing:${kind}`]
+    if (identities.some((identity) => seen.has(identity))) continue
+    for (const identity of identities) seen.add(identity)
+    kept.add(kind)
+  }
+  return metadata.filter((source) => kept.has(source.kind))
 }
 
 function hasConfigField(
