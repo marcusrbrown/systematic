@@ -14,7 +14,8 @@
  * dropped whole, before any of its files is read, and later, smaller sources
  * are still tried.
  *
- * Import rule: node builtins, `search-corpus.ts` and the Deciduous reader
+ * Import rule: node builtins, `search-corpus.ts`, the exclude matcher
+ * (`search-exclude.ts`) and the Deciduous reader
  * (`search-external-deciduous.ts`), plus types. The Deciduous reader imports the
  * corpus helpers and never this module. The loader holds no state, so each
  * call re-reads the stores.
@@ -29,12 +30,14 @@ import {
   narrowNonEmptyString,
   newEntryBudget,
   type ParsedSourceFile,
+  PROJECT_ROOT_REJECTION_REASONS,
   parseMarkdownFrontmatter,
   readSourceFiles,
+  rejectedProjectRoot,
   type SourceDiscovery,
   type SourceFileCandidate,
-  symlinkedComponent,
 } from './search-corpus.js'
+import { compileExcludePatterns } from './search-exclude.js'
 import { loadDeciduousRecords } from './search-external-deciduous.js'
 import type { ActiveSource, SourceOrigin } from './search-external-sources.js'
 
@@ -239,21 +242,18 @@ function finishGather(
   return { kind: 'gathered', candidates, truncated: merge.truncated }
 }
 
-/** Why a project root drops its source before it is walked, or `undefined`. */
-function projectRootProblem(
+/** The warning for a project root that drops its source before it is walked, or `undefined`. */
+function projectRootWarning(
   source: ActiveSource,
   context: LoadContext,
   root: string,
 ): string | undefined {
   if (source.origin !== 'project') return undefined
-  switch (symlinkedComponent(context.checkoutRoot, root)) {
-    case 'root':
-      return 'a project root is a symlink'
-    case 'ancestor':
-      return 'a project root passes through a symlink'
-    default:
-      return undefined
-  }
+  const rejection = rejectedProjectRoot(context.checkoutRoot, root)
+  if (rejection === undefined) return undefined
+  return rejection === 'outside'
+    ? `${source.name} resolves outside the project root; not loaded`
+    : `${source.name}: ${PROJECT_ROOT_REJECTION_REASONS[rejection]}; source dropped`
 }
 
 /**
@@ -282,10 +282,11 @@ function gatherCandidates(
   })
   // One budget covers every directory of every root of this source.
   const entryBudget = newEntryBudget(context.entryLimit)
+  const isExcluded = compileExcludePatterns(source.exclude)
   for (const root of source.roots) {
-    const problem = projectRootProblem(source, context, root)
-    if (problem !== undefined) {
-      warnings.push(`${name}: ${problem}; source dropped`)
+    const rootWarning = projectRootWarning(source, context, root)
+    if (rootWarning !== undefined) {
+      warnings.push(rootWarning)
       return drop()
     }
     const discovery = discoverSourceFiles(
@@ -294,6 +295,7 @@ function gatherCandidates(
         containedIn: origin === 'project' ? context.checkoutRoot : undefined,
         walk: MARKDOWN_WALK,
         entryBudget,
+        isExcluded,
         label: name,
       },
       warnings,
@@ -382,6 +384,7 @@ function loadDeciduousSource(
     remainingBytes: context.remainingBytes,
     maxFileBytes: EXTERNAL_MAX_FILE_BYTES,
     entryLimit: context.entryLimit,
+    isExcluded: compileExcludePatterns(source.exclude),
   })
   return {
     name,

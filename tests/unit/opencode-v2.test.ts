@@ -321,6 +321,80 @@ describe('setupOpenCodeV2', () => {
     expect(errorMessages()).toHaveLength(1)
   })
 
+  test('a project directory below the repository root applies the repo-root project file', async () => {
+    fs.mkdirSync(path.join(projectDir, '.git'))
+    fs.writeFileSync(
+      path.join(projectDir, '.systematic.jsonc'),
+      JSON.stringify({ bootstrap: { enabled: false } }),
+    )
+    const subfolder = path.join(projectDir, 'packages/app')
+    fs.mkdirSync(subfolder, { recursive: true })
+    let captured: V2Snapshot | undefined
+    const { ctx } = createFakeContext(subfolder)
+
+    await setupOpenCodeV2(
+      ctx,
+      deps({
+        installers: {
+          agents: ({ snapshot }) => {
+            captured = snapshot
+          },
+        },
+      }),
+    )
+
+    expect(captured?.config.bootstrap.enabled).toBe(false)
+  })
+
+  test('the home directory fallback applies no project file even from a repository root there', async () => {
+    fs.mkdirSync(path.join(homeDir, '.git'))
+    fs.writeFileSync(
+      path.join(homeDir, '.systematic.jsonc'),
+      JSON.stringify({ bootstrap: { enabled: false } }),
+    )
+    let captured: V2Snapshot | undefined
+    const { ctx } = createFakeContext(undefined)
+
+    await setupOpenCodeV2(
+      ctx,
+      deps({
+        installers: {
+          agents: ({ snapshot }) => {
+            captured = snapshot
+          },
+        },
+      }),
+    )
+
+    expect(captured?.config.bootstrap.enabled).toBe(true)
+  })
+
+  test('an invalid user.local file rejects setup naming the local file and installs nothing', async () => {
+    const localPath = path.join(
+      homeDir,
+      '.config/opencode/systematic.local.json',
+    )
+    fs.writeFileSync(localPath, '{ "bootstrap": ')
+    const installed: string[] = []
+    const { ctx } = createFakeContext(projectDir)
+
+    const outcome = setupOpenCodeV2(
+      ctx,
+      deps({
+        installers: {
+          agents: () => {
+            installed.push('agents')
+          },
+        },
+      }),
+    )
+
+    await expect(outcome).rejects.toThrow(
+      `Invalid Systematic config in ${localPath}`,
+    )
+    expect(installed).toEqual([])
+  })
+
   test('invalid config rejects setup with the named message and installs nothing', async () => {
     const configPath = writeProjectConfig('{ "bootstrap": ')
     const installed: string[] = []

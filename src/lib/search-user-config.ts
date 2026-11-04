@@ -11,7 +11,8 @@
  * carry the same `trust: 'project-or-higher'` meta inline here.
  *
  * Trust, per field: `enabled` and `allow_project_sources` are user-only (user
- * config and `OPENCODE_CONFIG_DIR` config). A project config may set `sources`
+ * config and `OPENCODE_CONFIG_DIR` config, each with the `systematic.local`
+ * file beside it). A project config may set `sources`
  * only. `config.ts` strips the two user-only fields from a project with
  * per-path warnings, validates the project's `sources` with the validators
  * here, and then discards them; the per-call reader is their only consumer.
@@ -36,6 +37,12 @@ import {
 } from 'jsonc-parser'
 import { z } from 'zod'
 import { readBytesBounded } from './search-bounded-read.js'
+import {
+  type ExcludeIssue,
+  MAX_EXCLUDE_PATTERN_LENGTH,
+  MAX_EXCLUDE_PATTERNS,
+  validateExcludeList,
+} from './search-exclude.js'
 
 /** The two formats a source may declare. */
 export const SEARCH_SOURCE_FORMATS = ['markdown', 'deciduous'] as const
@@ -83,6 +90,22 @@ const sourceProjectsSchema = z
   })
 
 /**
+ * The schema declares a plain string array. The count and length limits and
+ * the per-pattern rules live in `validateExcludeList`, which drops a bad
+ * pattern alone; a strict array schema would reject the whole value instead.
+ */
+const sourceExcludeSchema = z
+  .array(z.string())
+  .optional()
+  .meta({
+    description: `Patterns for files and folders to skip under each root. A pattern with no \`/\` matches a file or folder name at any depth (\`log.md\`, \`.stryker-tmp\`), and a matched folder is skipped with everything below it. A pattern with a \`/\` is anchored at the root: \`drafts/*.md\` matches \`drafts/a.md\` but not \`notes/drafts/a.md\`. \`*\` matches any run of characters inside one name, \`?\` matches one character, and \`**\` as a whole segment matches any number of folders (\`a/**/b\`). A trailing \`/\` is ignored. Matching is case-sensitive. Negation (\`!\`), character classes (\`[ ]\`), a leading \`/\` or \`./\`, \`..\`, and backslashes are not supported. A source takes at most ${MAX_EXCLUDE_PATTERNS} patterns of at most ${MAX_EXCLUDE_PATTERN_LENGTH} characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.`,
+    examples: [
+      ['log.md', '.stryker-tmp'],
+      ['drafts/*.md', 'archive/**/old'],
+    ],
+  })
+
+/**
  * One entry of `search.sources`. `projects` is user-config only, and a user
  * entry must carry at least one; the validators enforce both. The schema keeps
  * it optional because the project variant may not set it.
@@ -93,6 +116,7 @@ export const SearchSourceSchema = z
     format: sourceFormatSchema,
     roots: sourceRootsSchema,
     projects: sourceProjectsSchema,
+    exclude: sourceExcludeSchema,
   })
   .strict()
   .meta({
@@ -196,13 +220,56 @@ export interface SearchConfigValidation {
   readonly structural: boolean
   /** Bounded warnings. They name fields and source names, never a value. */
   readonly warnings: readonly string[]
+  /**
+   * Every source entry that was dropped whole, with the label the warning
+   * uses (`"name"`, or `#index` when the name is unusable) and the reason. A
+   * dropped exclude pattern is not listed here: its source stays.
+   */
+  readonly dropped: readonly DroppedSearchEntry[]
+  /**
+   * Every entry of `sources`, in array order, with the warnings that entry
+   * produced. These are the same messages as in `warnings`, kept with the
+   * entry so a caller never has to match them by name.
+   */
+  readonly entries: readonly SearchEntryOutcome[]
+}
+
+/**
+ * What validation made of one entry of a `sources` array. A kept outcome holds
+ * the validated entry itself, so the entry a merge keeps can be traced back to
+ * the warnings of its own declaration. `warnings` holds only the messages that
+ * were listed; a message past the cap is counted, not kept.
+ */
+export type SearchEntryOutcome =
+  | {
+      readonly kind: 'kept'
+      readonly index: number
+      readonly label: string
+      readonly entry: SearchSourceEntry
+      readonly warnings: readonly string[]
+    }
+  | {
+      readonly kind: 'dropped'
+      readonly index: number
+      readonly label: string
+      readonly reason: string
+      readonly warnings: readonly string[]
+    }
+
+/** One source entry the validator dropped, as the warning names it. */
+export interface DroppedSearchEntry {
+  readonly label: string
+  readonly reason: string
 }
 
 const MAX_DETAIL_WARNINGS = 5
 const MAX_PATH_CHARS = 200
 
-/** Escape control characters and cap the length of a path before it goes into a warning. */
-function displaySafe(text: string): string {
+/**
+ * Escape control characters and cap the length of a path before it goes into a
+ * warning. The CLI uses it for exception text too.
+ */
+export function displaySafe(text: string): string {
   let out = ''
   for (const char of text) {
     if (out.length >= MAX_PATH_CHARS) return `${out}\u2026`
@@ -261,6 +328,14 @@ function entryWarning(
   return `[systematic] search source ${label} in ${sourcePath} was dropped: ${reason}. Its valid siblings still load.`
 }
 
+function excludeWarning(
+  sourcePath: string,
+  label: string,
+  issue: ExcludeIssue,
+): string {
+  return `[systematic] \`exclude[${issue.index}]\` of search source ${label} in ${sourcePath} was dropped: ${issue.reason}. The source and its other patterns still load.`
+}
+
 /** `~`, `~/...` or `~\...`. A `~name` form is not a home directory. */
 function isTildePath(value: string): boolean {
   return value === '~' || value.startsWith('~/') || value.startsWith('~\\')
@@ -303,7 +378,11 @@ function isProjectRoot(root: string, format: SearchSourceFormat): boolean {
 }
 
 type EntryResult =
-  | { readonly ok: true; readonly entry: SearchSourceEntry }
+  | {
+      readonly ok: true
+      readonly entry: SearchSourceEntry
+      readonly excludeIssues: readonly ExcludeIssue[]
+    }
   | { readonly ok: false; readonly label: string; readonly reason: string }
 
 const ENTRY_KEYS: ReadonlySet<string> = new Set([
@@ -311,6 +390,7 @@ const ENTRY_KEYS: ReadonlySet<string> = new Set([
   'format',
   'roots',
   'projects',
+  'exclude',
 ])
 
 function isFormat(value: unknown): value is SearchSourceFormat {
@@ -394,6 +474,13 @@ function validateEntry(
   if (typeof roots === 'string') return rejectEntry(label, roots)
   const projects = validateProjects(raw.projects, trust)
   if (typeof projects === 'string') return rejectEntry(label, projects)
+  const exclude = Object.hasOwn(raw, 'exclude')
+    ? validateExcludeList(raw.exclude)
+    : undefined
+  if (exclude?.ok === false) {
+    return rejectEntry(label, `exclude is invalid (${exclude.reason})`)
+  }
+  const patterns = exclude?.patterns ?? []
   return {
     ok: true,
     entry: {
@@ -401,7 +488,9 @@ function validateEntry(
       format,
       roots: [...roots],
       ...(projects !== undefined && { projects: [...projects] }),
+      ...(patterns.length > 0 && { exclude: [...patterns] }),
     },
+    excludeIssues: exclude?.issues ?? [],
   }
 }
 
@@ -409,14 +498,21 @@ interface ValidationState {
   readonly trust: SearchConfigTrust
   readonly sourcePath: string
   readonly warnings: string[]
+  readonly dropped: DroppedSearchEntry[]
+  readonly entries: SearchEntryOutcome[]
   suppressed: number
   unreadable: boolean
   structural: boolean
 }
 
-function warn(state: ValidationState, message: string): void {
-  if (state.warnings.length < MAX_DETAIL_WARNINGS) state.warnings.push(message)
-  else state.suppressed += 1
+/** List a warning unless the cap is reached. Returns whether it was listed. */
+function warn(state: ValidationState, message: string): boolean {
+  if (state.warnings.length < MAX_DETAIL_WARNINGS) {
+    state.warnings.push(message)
+    return true
+  }
+  state.suppressed += 1
+  return false
 }
 
 function validateSources(
@@ -434,24 +530,53 @@ function validateSources(
   raw.forEach((item: unknown, index) => {
     const result = validateEntry(item, index, state.trust)
     if (!result.ok) {
-      warn(state, entryWarning(state.sourcePath, result.label, result.reason))
+      dropEntry(state, index, result.label, result.reason)
       return
     }
     if (seen.has(result.entry.name)) {
-      warn(
+      dropEntry(
         state,
-        entryWarning(
-          state.sourcePath,
-          `"${result.entry.name}"`,
-          'the name is already used earlier in this file, so the first entry is kept',
-        ),
+        index,
+        `"${result.entry.name}"`,
+        'the name is already used earlier in this file, so the first entry is kept',
       )
       return
     }
     seen.add(result.entry.name)
     kept.push(result.entry)
+    const label = `"${result.entry.name}"`
+    const warnings: string[] = []
+    for (const issue of result.excludeIssues) {
+      const message = excludeWarning(state.sourcePath, label, issue)
+      if (warn(state, message)) warnings.push(message)
+    }
+    state.entries.push({
+      kind: 'kept',
+      index,
+      label,
+      entry: result.entry,
+      warnings,
+    })
   })
   return kept
+}
+
+/** Record a dropped entry and warn about it. */
+function dropEntry(
+  state: ValidationState,
+  index: number,
+  label: string,
+  reason: string,
+): void {
+  state.dropped.push({ label, reason })
+  const message = entryWarning(state.sourcePath, label, reason)
+  state.entries.push({
+    kind: 'dropped',
+    index,
+    label,
+    reason,
+    warnings: warn(state, message) ? [message] : [],
+  })
 }
 
 function validateAllowList(
@@ -549,6 +674,8 @@ export function validateSearchConfig(
     trust,
     sourcePath: displaySafe(sourcePath),
     warnings: [],
+    dropped: [],
+    entries: [],
     suppressed: 0,
     unreadable: false,
     structural: false,
@@ -560,6 +687,8 @@ export function validateSearchConfig(
       unreadable: true,
       structural: true,
       warnings: state.warnings,
+      dropped: state.dropped,
+      entries: state.entries,
     }
   }
 
@@ -584,6 +713,8 @@ export function validateSearchConfig(
     unreadable: state.unreadable,
     structural: state.structural,
     warnings: state.warnings,
+    dropped: state.dropped,
+    entries: state.entries,
   }
 }
 
@@ -602,28 +733,43 @@ function formatSearchFileWarning(sourcePath: string, reason: string): string {
 export interface SearchSettingsSource {
   readonly settings?: SearchSchemaOutput | undefined
   readonly unreadable: boolean
+  /** The layer this source was read from. Callers that do not track layers leave it out. */
+  readonly layer?: UserLevelLayer | undefined
 }
 
 export interface MergedSearchSettings {
   readonly settings: SearchSchemaOutput | undefined
   readonly unreadable: boolean
+  /**
+   * The layer each surviving source entry came from, by source name: the layer
+   * of the last source that defined that name. Names defined only by sources
+   * with no `layer` are absent.
+   */
+  readonly sourceLayers: ReadonlyMap<string, UserLevelLayer>
 }
 
 /**
  * The one merge rule, used by both `config.ts` and the reader. Sources arrive
- * in priority order, user then custom. `enabled` takes the last source that
- * defines it, `allow_project_sources` is the union, and `sources` merge by
- * name with the later source winning (in the earlier entry's position).
- * `unreadable` is set when any source was.
+ * in priority order: user, user.local, custom, custom.local. `enabled` takes
+ * the last source that defines it, `allow_project_sources` is the union, and
+ * `sources` merge by name with the later source replacing the earlier entry
+ * whole (in the earlier entry's position). `unreadable` is set when any source
+ * was.
  */
 export function mergeSearchSettings(
   sources: readonly SearchSettingsSource[],
 ): MergedSearchSettings {
-  const acc: MergeAccumulator = { allow: [], byName: new Map() }
+  const acc: MergeAccumulator = {
+    allow: [],
+    byName: new Map(),
+    layers: new Map(),
+  }
   let unreadable = false
   for (const source of sources) {
     if (source.unreadable) unreadable = true
-    if (source.settings !== undefined) absorb(acc, source.settings)
+    if (source.settings !== undefined) {
+      absorb(acc, source.settings, source.layer)
+    }
   }
   const merged: SearchSchemaOutput = {
     ...(acc.enabled !== undefined && { enabled: acc.enabled }),
@@ -631,35 +777,62 @@ export function mergeSearchSettings(
     ...(acc.byName.size > 0 && { sources: [...acc.byName.values()] }),
   }
   if (Object.keys(merged).length === 0) {
-    return { settings: undefined, unreadable }
+    return { settings: undefined, unreadable, sourceLayers: acc.layers }
   }
-  return { settings: merged, unreadable }
+  return { settings: merged, unreadable, sourceLayers: acc.layers }
 }
 
 interface MergeAccumulator {
   enabled?: boolean
   readonly allow: string[]
   readonly byName: Map<string, SearchSourceEntry>
+  readonly layers: Map<string, UserLevelLayer>
 }
 
 /** Fold one source's settings into the running merge. */
-function absorb(acc: MergeAccumulator, settings: SearchSchemaOutput): void {
+function absorb(
+  acc: MergeAccumulator,
+  settings: SearchSchemaOutput,
+  layer: UserLevelLayer | undefined,
+): void {
   if (settings.enabled !== undefined) acc.enabled = settings.enabled
   for (const entry of settings.allow_project_sources ?? []) {
     if (!acc.allow.includes(entry)) acc.allow.push(entry)
   }
-  for (const entry of settings.sources ?? []) acc.byName.set(entry.name, entry)
+  for (const entry of settings.sources ?? []) {
+    acc.byName.set(entry.name, entry)
+    if (layer === undefined) acc.layers.delete(entry.name)
+    else acc.layers.set(entry.name, layer)
+  }
 }
 
 // ── File selection ──────────────────────────────────────────────────────────
 
 /**
- * Pick a config file in `dir`: `<basename>.jsonc` when it exists, else the
- * `.json` path (returned even when absent, so callers that stat it still work).
+ * Whether `target` is a directory entry, a symlink included. Selection asks
+ * this instead of `existsSync` because `existsSync` follows a link: a dangling
+ * link would read as absent, and a lower-priority file would win over it. An
+ * entry that cannot be inspected for a reason other than absence counts as
+ * present, so the read that follows reports it.
+ */
+export function configEntryExists(target: string): boolean {
+  try {
+    fs.lstatSync(target)
+    return true
+  } catch (error) {
+    const code = errorCode(error)
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+}
+
+/**
+ * Pick a config file in `dir`: `<basename>.jsonc` when its entry exists, else
+ * the `.json` path (returned even when absent, so callers that stat it still
+ * work). A dangling `.jsonc` link is selected, and its read reports it.
  */
 export function selectConfigFile(dir: string, basename: string): string {
   const jsoncPath = path.join(dir, `${basename}.jsonc`)
-  if (fs.existsSync(jsoncPath)) return jsoncPath
+  if (configEntryExists(jsoncPath)) return jsoncPath
   return path.join(dir, `${basename}.json`)
 }
 
@@ -694,12 +867,170 @@ export function resolveUserLevelConfigDirs(
   return { homeDir, userConfigDir, customConfigDir: rawCustom || undefined }
 }
 
+/** The four user-level layers, in the order their search settings merge. */
+export type UserLevelLayer = 'user' | 'user.local' | 'custom' | 'custom.local'
+
+/** One selected user-level file: the layer it feeds and the path to read. */
+export interface UserLevelConfigFile {
+  readonly layer: UserLevelLayer
+  readonly path: string
+}
+
+export interface UserLevelFileSelection {
+  /**
+   * The selected files in layer order: user, user.local, then custom and
+   * custom.local when a custom directory is set. A local file is selected even
+   * when its sibling is absent, and the path of an absent file is still
+   * returned (`selectConfigFile` rule).
+   */
+  readonly files: readonly UserLevelConfigFile[]
+  /**
+   * The custom directory is the user directory, spelled the same way or
+   * reached through a symlink. The custom layers stay in `files` so the custom
+   * file keeps its precedence, but they name the same two files as `user` and
+   * `user.local`: a reader reads each file once and reuses the result.
+   */
+  readonly aliased: boolean
+}
+
+function realpathOrResolved(dir: string): string {
+  const resolved = path.resolve(dir)
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+/**
+ * Pick the user-level config files for the resolved directories. The
+ * basenames are `systematic` and `systematic.local`, each choosing `.jsonc`
+ * before `.json`. Selection looks at existence only, never validity.
+ */
+export function selectUserLevelConfigFiles(
+  dirs: UserLevelConfigDirs,
+): UserLevelFileSelection {
+  const files: UserLevelConfigFile[] = [
+    {
+      layer: 'user',
+      path: selectConfigFile(dirs.userConfigDir, 'systematic'),
+    },
+    {
+      layer: 'user.local',
+      path: selectConfigFile(dirs.userConfigDir, 'systematic.local'),
+    },
+  ]
+  const custom = dirs.customConfigDir
+  if (!custom) return { files, aliased: false }
+  files.push(
+    { layer: 'custom', path: selectConfigFile(custom, 'systematic') },
+    {
+      layer: 'custom.local',
+      path: selectConfigFile(custom, 'systematic.local'),
+    },
+  )
+  const aliased =
+    path.resolve(custom) === path.resolve(dirs.userConfigDir) ||
+    realpathOrResolved(custom) === realpathOrResolved(dirs.userConfigDir)
+  return { files, aliased }
+}
+
+export interface ProjectConfigSelection {
+  /** The project file to read. When none exists, the `.opencode/systematic.json` path. */
+  readonly path: string
+  /**
+   * The `.opencode/` file a repo-root file shadowed. Present only when a root
+   * file won and an `.opencode/` file also exists.
+   */
+  readonly ignoredPath?: string
+}
+
+/**
+ * Pick the project config file under the repository root: `.systematic.jsonc`,
+ * else `.systematic.json`, else `.opencode/systematic.jsonc`, else
+ * `.opencode/systematic.json`. A root file wins even when invalid; selection
+ * looks at the directory entry only (a dangling link is a file that exists)
+ * and never falls back past a broken file.
+ */
+export function selectProjectConfigFile(
+  repoRoot: string,
+): ProjectConfigSelection {
+  const opencodeFile = selectConfigFile(
+    path.join(repoRoot, '.opencode'),
+    'systematic',
+  )
+  const rootFile = selectConfigFile(repoRoot, '.systematic')
+  if (!configEntryExists(rootFile)) return { path: opencodeFile }
+  return configEntryExists(opencodeFile)
+    ? { path: rootFile, ignoredPath: opencodeFile }
+    : { path: rootFile }
+}
+
+/**
+ * The start directory's own `.opencode/systematic.*` file when the repository
+ * root is a different directory: a file that is never read, because project
+ * config comes from the root. `repoRoot` is the lookup of the start directory
+ * (`lookupSearchRoot`). The file is not reported when it is the selected one
+ * (the same file reached through a link). Both the config loader and the
+ * per-call reader ask this, so they warn under the same condition.
+ */
+export function findStartDirProjectConfig(
+  startDir: string,
+  repoRoot: { readonly root: string; readonly foundGit: boolean },
+  selectedProjectConfig: string,
+): string | undefined {
+  if (!repoRoot.foundGit) return undefined
+  if (realpathOrResolved(startDir) === repoRoot.root) return undefined
+  const candidate = selectConfigFile(
+    path.join(startDir, '.opencode'),
+    'systematic',
+  )
+  if (!configEntryExists(candidate)) return undefined
+  return realpathOrResolved(candidate) ===
+    realpathOrResolved(selectedProjectConfig)
+    ? undefined
+    : candidate
+}
+
+/**
+ * The warning for a start directory's own project file that is not read.
+ * `safe` makes each path fit for a message; the config loader passes its own
+ * sanitizer, and the default is `displaySafe`.
+ */
+export function startDirProjectWarning(
+  startDirConfig: string,
+  projectRoot: string,
+  selectedProjectConfig: string,
+  safe: (text: string) => string = displaySafe,
+): string {
+  return `[systematic] project config (${safe(startDirConfig)}) is below the repository root (${safe(projectRoot)}) and is not read; project config is read from (${safe(selectedProjectConfig)}).`
+}
+
 // ── The user-level reader ───────────────────────────────────────────────────
 
 export interface UserLevelSearchLoad {
   readonly settings: SearchSchemaOutput | undefined
   readonly warnings: readonly string[]
   readonly unreadable: boolean
+  /**
+   * Every source entry the validator dropped whole, across the files read,
+   * with the label the warning uses and the reason.
+   */
+  readonly dropped: readonly DroppedSearchEntry[]
+  /**
+   * Every entry of `sources` in every file read, in file order then array
+   * order, with the warnings that entry produced (`SearchEntryOutcome`). A
+   * file two layers share is listed once.
+   */
+  readonly entries: readonly SearchEntryOutcome[]
+  /** The layer each surviving source entry came from, by source name (`mergeSearchSettings`). */
+  readonly sourceLayers: ReadonlyMap<string, UserLevelLayer>
+  /**
+   * The subset of `warnings` that report a file that could not be read or
+   * parsed, as opposed to a problem inside a readable `search` block. A caller
+   * that already named those files can leave them out.
+   */
+  readonly readFailures: readonly string[]
 }
 
 type FileRead =
@@ -711,7 +1042,7 @@ type FileRead =
       readonly has: boolean
     }
 
-type TextRead =
+export type TextRead =
   | { readonly kind: 'absent' }
   | { readonly kind: 'failed'; readonly reason: string }
   | { readonly kind: 'text'; readonly content: string }
@@ -728,13 +1059,13 @@ export const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024
  * `maxBytes + 1` bytes, regular files only, and a non-blocking open so a FIFO
  * planted at the path cannot hang the reader.
  */
-function readTextBounded(filePath: string, maxBytes: number): TextRead {
+export function readTextBounded(filePath: string, maxBytes: number): TextRead {
   const read = readBytesBounded(filePath, maxBytes)
   switch (read.kind) {
     case 'bytes':
       return { kind: 'text', content: read.bytes.toString('utf-8') }
     case 'absent':
-      return { kind: 'absent' }
+      return absentOrDangling(filePath)
     case 'not-regular':
       return { kind: 'failed', reason: 'not a regular file' }
     case 'too-large':
@@ -747,11 +1078,22 @@ function readTextBounded(filePath: string, maxBytes: number): TextRead {
   }
 }
 
+/**
+ * A read that found nothing: the file is absent, unless a directory entry
+ * stands at the path. That entry is a link whose target is gone, which the
+ * read reports because selection chose it.
+ */
+function absentOrDangling(filePath: string): TextRead {
+  return configEntryExists(filePath)
+    ? { kind: 'failed', reason: 'unable to read file' }
+    : { kind: 'absent' }
+}
+
 function readTextWhole(filePath: string): TextRead {
   try {
     return { kind: 'text', content: fs.readFileSync(filePath, 'utf-8') }
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return { kind: 'absent' }
+    if (errorCode(error) === 'ENOENT') return absentOrDangling(filePath)
     return { kind: 'failed', reason: 'unable to read file' }
   }
 }
@@ -787,41 +1129,100 @@ function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
   }
 }
 
+/** What one user-level file contributed. */
+interface LayerRead {
+  readonly source: Omit<SearchSettingsSource, 'layer'> | undefined
+  readonly warnings: readonly string[]
+  readonly readFailures: readonly string[]
+  readonly dropped: readonly DroppedSearchEntry[]
+  readonly entries: readonly SearchEntryOutcome[]
+}
+
+const NOTHING_READ: LayerRead = {
+  source: undefined,
+  warnings: [],
+  readFailures: [],
+  dropped: [],
+  entries: [],
+}
+
+/** Read one selected user-level file's `search` block. */
+function readUserLevelFile(file: UserLevelConfigFile): LayerRead {
+  const read = readSearchBlock(file.path)
+  if (read.kind === 'absent') return NOTHING_READ
+  if (read.kind === 'failed') {
+    const warning = formatSearchFileWarning(file.path, read.reason)
+    return {
+      source: { unreadable: true },
+      warnings: [warning],
+      readFailures: [warning],
+      dropped: [],
+      entries: [],
+    }
+  }
+  if (!read.has) return NOTHING_READ
+  const validation = validateSearchConfig(read.searchBlock, 'user', file.path)
+  return {
+    source: {
+      settings: validation.settings,
+      unreadable: validation.unreadable,
+    },
+    warnings: validation.warnings,
+    readFailures: [],
+    dropped: validation.dropped,
+    entries: validation.entries,
+  }
+}
+
+/** The user-level layer whose file a custom layer names when the two directories are one. */
+const ALIASED_TWIN: Readonly<Partial<Record<UserLevelLayer, UserLevelLayer>>> =
+  { custom: 'user', 'custom.local': 'user.local' }
+
 /**
- * Read the `search` block from the two user-level files, user then custom, and
- * merge them. It never reads project config and never throws: an unparseable
- * file or an invalid block gives one warning and `unreadable: true`.
+ * Read the `search` block from the user-level files and merge them: user,
+ * user.local, then custom and custom.local when a custom directory is set. A
+ * local file is read with or without its sibling. It never reads project
+ * config and never throws: an unparseable file or an invalid block gives one
+ * warning and `unreadable: true`, and the valid remainder still merges.
+ *
+ * When the custom directory is the user directory, each file is read once and
+ * its diagnostics are reported once; the custom layers still take their
+ * place in the merge order.
  */
 export function loadUserLevelSearchSettings(
   options?: UserLevelConfigDirOptions,
 ): UserLevelSearchLoad {
-  const dirs = resolveUserLevelConfigDirs(options)
-  const files = [
-    selectConfigFile(dirs.userConfigDir, 'systematic'),
-    ...(dirs.customConfigDir
-      ? [selectConfigFile(dirs.customConfigDir, 'systematic')]
-      : []),
-  ]
+  const selection = selectUserLevelConfigFiles(
+    resolveUserLevelConfigDirs(options),
+  )
   const warnings: string[] = []
+  const readFailures: string[] = []
+  const dropped: DroppedSearchEntry[] = []
+  const entries: SearchEntryOutcome[] = []
   const sources: SearchSettingsSource[] = []
-  for (const filePath of files) {
-    const read = readSearchBlock(filePath)
-    if (read.kind === 'absent') continue
-    if (read.kind === 'failed') {
-      warnings.push(formatSearchFileWarning(filePath, read.reason))
-      sources.push({ unreadable: true })
-      continue
-    }
-    if (!read.has) continue
-    const validation = validateSearchConfig(read.searchBlock, 'user', filePath)
-    warnings.push(...validation.warnings)
-    sources.push({
-      settings: validation.settings,
-      unreadable: validation.unreadable,
-    })
+  const reads = new Map<UserLevelLayer, LayerRead>()
+  for (const file of selection.files) {
+    const twin = selection.aliased ? ALIASED_TWIN[file.layer] : undefined
+    const shared = twin === undefined ? undefined : reads.get(twin)
+    const read = shared ?? readUserLevelFile(file)
+    reads.set(file.layer, read)
+    if (read.source) sources.push({ ...read.source, layer: file.layer })
+    if (shared !== undefined) continue
+    warnings.push(...read.warnings)
+    readFailures.push(...read.readFailures)
+    dropped.push(...read.dropped)
+    entries.push(...read.entries)
   }
   const merged = mergeSearchSettings(sources)
-  return { ...merged, warnings }
+  return {
+    settings: merged.settings,
+    unreadable: merged.unreadable,
+    warnings,
+    dropped,
+    entries,
+    sourceLayers: merged.sourceLayers,
+    readFailures,
+  }
 }
 
 // ── The project-level reader ────────────────────────────────────────────────
@@ -838,43 +1239,67 @@ export interface ProjectSearchLoad {
    * alone does not set it. This is not the user-config `config unreadable` note.
    */
   readonly unreadable: boolean
+  /** Every source entry dropped whole, with the label the warning uses and the reason. */
+  readonly dropped: readonly DroppedSearchEntry[]
+  /** Every entry of the file's `sources`, in array order, with the warnings that entry produced. */
+  readonly entries: readonly SearchEntryOutcome[]
 }
 
 function formatProjectFileWarning(sourcePath: string, reason: string): string {
   return `[systematic] project search settings in ${displaySafe(sourcePath)} could not be read (${reason}); the sources it proposes were ignored.`
 }
 
+/** The one warning for an `.opencode/` project file that a repo-root file shadows. */
+function formatShadowedProjectWarning(
+  usedPath: string,
+  ignoredPath: string,
+): string {
+  return `[systematic] project config (${displaySafe(usedPath)}) takes precedence over (${displaySafe(ignoredPath)}), which is ignored; the two files are never merged.`
+}
+
 /**
  * Read the sources a project config proposes, from the checkout root's
- * `.opencode/systematic.jsonc` (falling back to `.json`, as `getConfigPaths`
- * in `config.ts` does). Bin-safe: it needs no `config.ts`. The read is capped
- * at `MAX_PROJECT_CONFIG_BYTES`, the file is validated with the project rules
+ * project file: `.systematic.jsonc`, else `.systematic.json`, else
+ * `.opencode/systematic.jsonc`, else `.opencode/systematic.json`
+ * (`selectProjectConfigFile`). A root file shadowing an `.opencode/` file is
+ * reported in `warnings`; the two are never merged, and a broken winner never
+ * falls back. Bin-safe: it needs no `config.ts`. The read is capped at
+ * `MAX_PROJECT_CONFIG_BYTES`, the file is validated with the project rules
  * (`sources` only; `enabled` and `allow_project_sources` are never read), and
  * it never throws. A missing file or a missing `search` block is normal.
  */
 export function loadProjectSearchSources(
   checkoutRoot: string,
 ): ProjectSearchLoad {
-  const filePath = selectConfigFile(
-    path.join(checkoutRoot, '.opencode'),
-    'systematic',
-  )
+  const selection = selectProjectConfigFile(checkoutRoot)
+  const filePath = selection.path
+  const shadowed =
+    selection.ignoredPath === undefined
+      ? []
+      : [formatShadowedProjectWarning(filePath, selection.ignoredPath)]
   const read = readSearchBlock(filePath, MAX_PROJECT_CONFIG_BYTES)
-  if (read.kind === 'absent') {
-    return { sources: [], warnings: [], unreadable: false }
+  const nothing = {
+    sources: [],
+    warnings: shadowed,
+    unreadable: false,
+    dropped: [],
+    entries: [],
   }
+  if (read.kind === 'absent') return nothing
   if (read.kind === 'failed') {
     return {
-      sources: [],
-      warnings: [formatProjectFileWarning(filePath, read.reason)],
+      ...nothing,
+      warnings: [...shadowed, formatProjectFileWarning(filePath, read.reason)],
       unreadable: true,
     }
   }
-  if (!read.has) return { sources: [], warnings: [], unreadable: false }
+  if (!read.has) return nothing
   const validation = validateSearchConfig(read.searchBlock, 'project', filePath)
   return {
     sources: validation.structural ? [] : (validation.settings?.sources ?? []),
-    warnings: validation.warnings,
+    warnings: [...shadowed, ...validation.warnings],
     unreadable: validation.structural,
+    dropped: validation.dropped,
+    entries: validation.entries,
   }
 }

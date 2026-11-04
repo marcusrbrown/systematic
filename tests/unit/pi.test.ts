@@ -1481,3 +1481,86 @@ describe('src/pi.ts worktree placement rule', () => {
     expect(countOf(second, '<SYSTEMATIC_WORKFLOWS>')).toBe(1)
   })
 })
+
+describe('src/pi.ts config resolved from the repository root', () => {
+  const DISABLED_SKILL = 'ce:brainstorm'
+
+  interface SubfolderFiles {
+    /** Written to `<repo>/.systematic.jsonc`. */
+    readonly root?: Record<string, unknown>
+    /** Written beside the user config file as `systematic.local.json`. */
+    readonly userLocal?: string
+  }
+
+  /** Runs the extension with `process.cwd()` in `<repo>/packages/app`, below the `.git` directory. */
+  async function initFromSubfolder(
+    files: SubfolderFiles,
+  ): Promise<ToolDefinition[]> {
+    const tempDir = tempDirs.track(
+      fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-pi-root-')),
+      ),
+    )
+    const originalHomedir = os.homedir
+    const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+    const originalCwd = process.cwd()
+    const repo = path.join(tempDir, 'repo')
+    const subfolder = path.join(repo, 'packages/app')
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true })
+    fs.mkdirSync(subfolder, { recursive: true })
+    delete process.env.OPENCODE_CONFIG_DIR
+    os.homedir = () => tempDir
+    if (files.root !== undefined) {
+      fs.writeFileSync(
+        path.join(repo, '.systematic.jsonc'),
+        JSON.stringify(files.root),
+      )
+    }
+    if (files.userLocal !== undefined) {
+      const userDir = path.join(tempDir, '.config/opencode')
+      fs.mkdirSync(userDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(userDir, 'systematic.local.json'),
+        files.userLocal,
+      )
+    }
+    process.chdir(subfolder)
+    try {
+      const api = createFakeExtensionApi()
+      await piExtension(api)
+      return api.registeredTools
+    } finally {
+      process.chdir(originalCwd)
+      os.homedir = originalHomedir
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+      }
+    }
+  }
+
+  test('a session started in a subfolder applies the repo-root project file', async () => {
+    const tools = await initFromSubfolder({
+      root: { disabled_skills: [DISABLED_SKILL] },
+    })
+
+    expect(findToolByName(tools, 'systematic_skill').description).not.toContain(
+      `- ${DISABLED_SKILL}:`,
+    )
+  })
+
+  test('with no project file anywhere the skill stays listed', async () => {
+    const tools = await initFromSubfolder({})
+
+    expect(findToolByName(tools, 'systematic_skill').description).toContain(
+      `- ${DISABLED_SKILL}:`,
+    )
+  })
+
+  test('an invalid user.local file fails init and the error names it', async () => {
+    await expect(
+      initFromSubfolder({ userLocal: '{ not json' }),
+    ).rejects.toThrow('systematic.local.json')
+  })
+})

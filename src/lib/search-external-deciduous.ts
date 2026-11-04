@@ -18,8 +18,8 @@
  * nothing else. Symlinks are skipped at every depth. Reads files only.
  *
  * Import rule: node builtins, `search-bounded-read.ts` and `search-corpus.ts`
- * only. It never imports the dispatcher (`search-external.ts`), which adapts
- * its result.
+ * only, plus the `ExcludeMatcher` type. It never imports the dispatcher
+ * (`search-external.ts`), which adapts its result and compiles the matcher.
  */
 
 import fs from 'node:fs'
@@ -42,6 +42,7 @@ import {
   safeLstat,
   symlinkedComponent,
 } from './search-corpus.js'
+import type { ExcludeMatcher } from './search-exclude.js'
 
 /** Only these node types become records; `action` and `observation` never do. */
 const RECORD_NODE_TYPES: ReadonlySet<string> = new Set([
@@ -96,6 +97,12 @@ export interface DeciduousLoadInput {
   readonly maxFileBytes: number
   /** Directory entries the source may examine in total. Defaults to `MAX_LISTED_ENTRIES`. */
   readonly entryLimit?: number | undefined
+  /**
+   * Tests `nodes`, `edges`, `nodes/<file>` or `edges/<file>`, relative to each
+   * root. A match leaves the folder or file out unexamined. Without it nothing
+   * is excluded.
+   */
+  readonly isExcluded?: ExcludeMatcher | undefined
 }
 
 interface FileCandidate {
@@ -159,12 +166,13 @@ function probeRoot(root: string, containedIn: string | undefined): RootProbe {
   return { kind: 'ok', real }
 }
 
-type FolderStatus = 'listed' | 'absent' | 'unreadable'
+type FolderStatus = 'listed' | 'absent' | 'unreadable' | 'excluded'
 
 interface FolderScan {
   /**
    * `absent`: the folder is missing, not a directory or a symlink.
    * `unreadable`: it exists but could not be inspected or listed.
+   * `excluded`: a pattern names the folder; it is not examined.
    */
   readonly status: FolderStatus
   readonly candidates: FileCandidate[]
@@ -182,8 +190,11 @@ function classifyJsonEntry(
   folder: 'nodes' | 'edges',
   name: string,
   skips: Skips,
+  isExcluded: ExcludeMatcher,
 ): FileCandidate | undefined {
   if (!name.endsWith(JSON_SUFFIX)) return undefined
+  // An excluded entry is not inspected, so it is never counted as a skip.
+  if (isExcluded(`${folder}/${name}`)) return undefined
   const absolute = path.join(directory, name)
   const entry = safeLstat(absolute)
   if (entry === null) return undefined
@@ -225,7 +236,9 @@ function statFolder(directory: string): FolderStat {
  * ignored; a symlink is counted. A stem outside the id charset is counted and
  * never opened. The listing takes its entries from the source's budget and the
  * scan stops after `limit` candidates. A folder that exists but cannot be
- * inspected or listed is `unreadable`, not absent.
+ * inspected or listed is `unreadable`, not absent. A folder a pattern names is
+ * `excluded` and is not touched; a file a pattern names is neither inspected
+ * nor counted.
  */
 function scanFolder(
   rootReal: string,
@@ -233,7 +246,9 @@ function scanFolder(
   limit: number,
   skips: Skips,
   budget: EntryBudget,
+  isExcluded: ExcludeMatcher,
 ): FolderScan {
+  if (isExcluded(folder)) return folderScan('excluded')
   const directory = path.join(rootReal, folder)
   const probed = statFolder(directory)
   if (probed.kind === 'absent') return folderScan('absent')
@@ -250,7 +265,13 @@ function scanFolder(
 
   const candidates: FileCandidate[] = []
   for (const name of names) {
-    const candidate = classifyJsonEntry(directory, folder, name, skips)
+    const candidate = classifyJsonEntry(
+      directory,
+      folder,
+      name,
+      skips,
+      isExcluded,
+    )
     if (candidate === undefined) continue
     if (candidates.length >= limit) {
       return { status: 'listed', candidates, truncated: true }
@@ -267,6 +288,10 @@ interface Gathered {
   readonly rootsFound: number
   readonly anyNodesFolder: boolean
   readonly anyEdgesFolder: boolean
+  /** A pattern names the `nodes/` folder, so its absence is intended. */
+  readonly nodesExcluded: boolean
+  /** A pattern names the `edges/` folder, so its absence is intended. */
+  readonly edgesExcluded: boolean
   /** A `nodes/` folder exists in some root and could not be listed. */
   readonly nodesUnreadable: boolean
   /** An `edges/` folder exists in some root and could not be listed. */
@@ -337,6 +362,8 @@ interface FolderTally {
   readonly files: Map<string, FileCandidate>
   /** The folder was listed in some root. */
   listed: boolean
+  /** A pattern names the folder. */
+  excluded: boolean
   /** The folder exists in some root and could not be listed. */
   unreadable: boolean
   /** A scan stopped at the shared file ceiling. */
@@ -347,6 +374,7 @@ function newTally(): FolderTally {
   return {
     files: new Map(),
     listed: false,
+    excluded: false,
     unreadable: false,
     truncated: false,
   }
@@ -359,6 +387,7 @@ function scanRoots(
   otherCount: number,
   skips: Skips,
   budget: EntryBudget,
+  isExcluded: ExcludeMatcher,
 ): void {
   for (const real of reals) {
     const scan = scanFolder(
@@ -367,8 +396,10 @@ function scanRoots(
       Math.max(MAX_DISCOVERED_FILES - otherCount - tally.files.size, 0),
       skips,
       budget,
+      isExcluded,
     )
     tally.listed = tally.listed || scan.status === 'listed'
+    tally.excluded = tally.excluded || scan.status === 'excluded'
     tally.unreadable = tally.unreadable || scan.status === 'unreadable'
     tally.truncated = tally.truncated || scan.truncated
     for (const candidate of scan.candidates) {
@@ -410,8 +441,9 @@ function gather(
   const budget = newEntryBudget(limit)
   const nodes = newTally()
   const edges = newTally()
-  scanRoots(reals, 'nodes', nodes, 0, skips, budget)
-  scanRoots(reals, 'edges', edges, nodes.files.size, skips, budget)
+  const isExcluded = input.isExcluded ?? (() => false)
+  scanRoots(reals, 'nodes', nodes, 0, skips, budget, isExcluded)
+  scanRoots(reals, 'edges', edges, nodes.files.size, skips, budget, isExcluded)
   warnings.push(
     ...folderWarnings(input.name, 'nodes', nodes),
     ...folderWarnings(input.name, 'edges', edges),
@@ -429,6 +461,8 @@ function gather(
       rootsFound: reals.length,
       anyNodesFolder: nodes.listed,
       anyEdgesFolder: edges.listed,
+      nodesExcluded: nodes.excluded,
+      edgesExcluded: edges.excluded,
       nodesUnreadable: nodes.unreadable,
       edgesUnreadable: edges.unreadable,
       truncated: nodes.truncated || edges.truncated,
@@ -810,7 +844,7 @@ export function loadDeciduousRecords(input: DeciduousLoadInput): DeciduousLoad {
     return nothing('unreadable', warnings.map(cleanForWarning))
   }
   if (nodeless === 'empty') {
-    if (!gathered.anyNodesFolder) {
+    if (!gathered.anyNodesFolder && !gathered.nodesExcluded) {
       warnings.push(`${name}: no nodes/ folder; nothing to index`)
     }
     warnings.push(...skipWarnings(name, skips, input.maxFileBytes))
@@ -835,7 +869,11 @@ export function loadDeciduousRecords(input: DeciduousLoadInput): DeciduousLoad {
   const scan = readNodes(gathered.nodes, input, reader, skips)
   readEdges(gathered.edges, scan, input, reader, skips)
 
-  if (!gathered.anyEdgesFolder && !gathered.edgesUnreadable) {
+  if (
+    !gathered.anyEdgesFolder &&
+    !gathered.edgesUnreadable &&
+    !gathered.edgesExcluded
+  ) {
     warnings.push(`${name}: no edges/ folder; records carry no rationale`)
   }
   warnings.push(

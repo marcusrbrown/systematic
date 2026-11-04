@@ -28,10 +28,10 @@ An external search source whose root exists but cannot be listed was reported as
 - Reproducing as root. `tests/unit/search-core.test.ts:1424` returns early for uid 0, so the repro needs a non-root user and a Node binary.
 
 ## Solution
-The walk sets `found.rootUnreadable` when the walked directory itself cannot be listed, and discovery returns `unreadable` for it (`src/lib/search-corpus.ts:671-676`). A test that stubs `readdirSync` to throw EACCES runs that branch on every platform (`tests/unit/search-corpus.test.ts:379-409`). The parity test counts `Notes:` lines, not the raw phrase (`tests/unit/search-adapters-parity.test.ts:120-122`).
+The walk sets `found.rootUnreadable` when the walked directory itself cannot be listed, and discovery returns `unreadable` for it (`src/lib/search-corpus.ts:764-769`). A test that stubs `readdirSync` to throw EACCES runs that branch on every platform (`tests/unit/search-corpus.test.ts:457-487`). The parity test counts `Notes:` lines, not the raw phrase (`tests/unit/search-adapters-parity.test.ts:120-122`).
 
 ## Why This Works
-Under Bun on macOS, `realpathSync` on a mode-0 directory fails with EACCES; under Node, and under Bun on Linux, it succeeds. The tests run under Bun. On macOS the early `realpath` failure gave `unreadable`. Before the fix, the Linux walk reached the failing root listing and emitted `could not read directory <label>`, but discovery still returned `found`, so the source looked empty. Now the state comes from the listing (`src/lib/search-corpus.ts:447-449`, `found.rootUnreadable`), which fails the same way everywhere.
+Under Bun on macOS, `realpathSync` on a mode-0 directory fails with EACCES; under Node, and under Bun on Linux, it succeeds. The tests run under Bun. On macOS the early `realpath` failure gave `unreadable`. Before the fix, the Linux walk reached the failing root listing and emitted `could not read directory <label>`, but discovery still returned `found`, so the source looked empty. Now the state comes from the listing (`src/lib/search-corpus.ts:533-535`, `found.rootUnreadable`), which fails the same way everywhere.
 
 A warning can also contain `config unreadable`, and warnings are capped at 200 characters. It embeds a temp path whose length differs by platform, so a raw substring count can change between platforms. The `Notes:` line is fixed text; see the test comment (`tests/unit/search-adapters-parity.test.ts:1208-1209`).
 

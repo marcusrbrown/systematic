@@ -47,13 +47,32 @@ export function writeUserSearch(env: ExternalEnv, search: unknown): void {
   )
 }
 
-export function writeProjectSearch(env: ExternalEnv, search: unknown): void {
+/** Write the user-level local overlay beside the user config file. */
+export function writeUserLocalSearch(env: ExternalEnv, search: unknown): void {
+  fs.writeFileSync(
+    path.join(env.userConfigDir, 'systematic.local.json'),
+    typeof search === 'string' ? search : JSON.stringify({ search }),
+  )
+}
+
+/**
+ * Write the project config file with the given `search` block. The default
+ * location is `.opencode/systematic.json`; `'root'` writes the repo-root
+ * `.systematic.json` instead.
+ */
+export function writeProjectSearch(
+  env: ExternalEnv,
+  search: unknown,
+  location: 'opencode' | 'root' = 'opencode',
+): void {
+  const body = JSON.stringify({ search })
+  if (location === 'root') {
+    fs.writeFileSync(path.join(env.repo, '.systematic.json'), body)
+    return
+  }
   const dir = path.join(env.repo, '.opencode')
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(
-    path.join(dir, 'systematic.json'),
-    JSON.stringify({ search }),
-  )
+  fs.writeFileSync(path.join(dir, 'systematic.json'), body)
 }
 
 /** Write a Markdown file under `dir` (creating it) with a `title` and an optional `status`. */

@@ -21,6 +21,7 @@ import {
   writeUserSearch,
 } from '../helpers/search-external-env.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
+import { watchInspections } from '../helpers/watch-inspections.js'
 
 const temp = createTempDirTracker()
 afterEach(() => temp.cleanup())
@@ -43,6 +44,7 @@ function source(
     format: 'deciduous',
     roots,
     origin: 'user',
+    exclude: [],
     ...overrides,
   }
 }
@@ -999,6 +1001,181 @@ describe('Deciduous loader: one entry budget per source', () => {
     expect(entries).toBeGreaterThan(90)
     // The folders after the budget ran out are never opened.
     expect(opened.some((target) => target.endsWith('/edges'))).toBe(false)
+  })
+})
+
+describe('Deciduous loader: excludes', () => {
+  const paths = (result: SourceLoad) => result.records.map((r) => r.path)
+
+  test('a pattern on nodes/ skips the matching node files and reads the rest', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'legacy-1')
+    node(root, 'legacy-2')
+    node(root, 'fresh')
+    edge(root, 'legacy-e', 'fresh', 'fresh', 'kept edge')
+
+    const result = load(
+      env,
+      source([root], { exclude: ['nodes/legacy-*.json'] }),
+    )
+
+    expect(paths(result)).toEqual(['graph/nodes/fresh.json'])
+    expect(result.warnings).toEqual([])
+  })
+
+  test('a name-only pattern matches in both folders', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'a')
+    node(root, 'b')
+    edge(root, 'skipme', 'a', 'b', 'excluded rationale')
+    edge(root, 'other', 'a', 'b', 'kept rationale')
+
+    const result = load(env, source([root], { exclude: ['skipme.json'] }))
+    const body = byPath(result, 'nodes/a.json').body
+
+    expect(body).toContain('kept rationale')
+    expect(body).not.toContain('excluded rationale')
+  })
+
+  test('excluding the edges folder removes it with no warning and no rationale', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'a')
+    node(root, 'b')
+    edge(root, 'e1', 'a', 'b', 'hidden rationale')
+    write(root, 'edges/bad id.json', '{}')
+    const watch = watchInspections()
+    let result: SourceLoad
+    try {
+      result = load(env, source([root], { exclude: ['edges'] }))
+    } finally {
+      watch.stop()
+    }
+
+    expect(result.state).toBe('loaded')
+    expect(result.records).toHaveLength(2)
+    expect(result.records.every((r) => !r.body.includes('hidden'))).toBe(true)
+    expect(result.warnings).toEqual([])
+    const touched = [...watch.statted, ...watch.listed]
+    expect(touched.some((target) => target.endsWith('/edges'))).toBe(false)
+    expect(touched.some((target) => target.includes('/edges/'))).toBe(false)
+  })
+
+  test('excluding the nodes folder leaves nothing to index and warns about nothing', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'a')
+    fs.mkdirSync(path.join(root, 'edges'), { recursive: true })
+    const watch = watchInspections()
+    let result: SourceLoad
+    try {
+      result = load(env, source([root], { exclude: ['nodes'] }))
+    } finally {
+      watch.stop()
+    }
+
+    expect(result.state).toBe('empty')
+    expect(result.warnings).toEqual([])
+    const touched = [...watch.statted, ...watch.listed]
+    expect(touched.some((target) => target.includes('/nodes'))).toBe(false)
+  })
+
+  test('a pattern that matches every .json name excludes both folders entirely', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'a')
+    edge(root, 'e1', 'a', 'a', 'rationale')
+
+    const result = load(env, source([root], { exclude: ['*.json'] }))
+
+    expect(result.state).toBe('empty')
+    expect(result.records).toEqual([])
+    expect(result.warnings).toEqual([])
+  })
+
+  test('an excluded entry is never inspected, so its symlink and id problems report nothing', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'good')
+    write(root, 'nodes/has space.json', '{}')
+    write(root, 'nodes/secret.json', '{}')
+    const outside = path.join(env.root, 'outside.json')
+    fs.writeFileSync(outside, '{}')
+    fs.symlinkSync(outside, path.join(root, 'nodes/linked.json'))
+    fs.mkdirSync(path.join(root, 'edges'), { recursive: true })
+    const watch = watchInspections()
+    let result: SourceLoad
+    try {
+      result = load(
+        env,
+        source([root], {
+          exclude: ['has space.json', 'linked.json', 'secret.json'],
+        }),
+      )
+    } finally {
+      watch.stop()
+    }
+
+    expect(paths(result)).toEqual(['graph/nodes/good.json'])
+    expect(result.warnings).toEqual([])
+    for (const target of watch.statted) {
+      expect(target).not.toContain('has space')
+      expect(target).not.toContain('linked.json')
+      expect(target).not.toContain('secret.json')
+    }
+    expect(watch.statted.some((target) => target.endsWith('good.json'))).toBe(
+      true,
+    )
+  })
+
+  test('names a pattern excludes still count against the entry budget', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    fillWithEntries(path.join(root, 'nodes'), 30, 'json')
+    node(root, 'keep')
+    fs.mkdirSync(path.join(root, 'edges'), { recursive: true })
+
+    const [result] = loadExternalSources({
+      sources: [source([root], { exclude: ['x*.json'] })],
+      checkoutRoot: env.repo,
+      entryBudget: 10,
+    })
+
+    expect(result?.warnings).toContain(
+      'graph: entry limit of 10 reached; some entries were not examined',
+    )
+  })
+
+  test('an anchored pattern applies relative to each root', () => {
+    const env = makeEnv()
+    const one = path.join(env.root, 'one')
+    const two = path.join(env.root, 'two')
+    node(one, 'a')
+    node(one, 'drop')
+    node(two, 'b')
+    node(two, 'drop2')
+
+    const result = load(
+      env,
+      source([one, two], { exclude: ['nodes/drop*.json'] }),
+    )
+
+    expect(paths(result)).toEqual(['graph/nodes/a.json', 'graph/nodes/b.json'])
+  })
+
+  test('excluded files do not count toward the read allowance', () => {
+    const env = makeEnv()
+    const root = path.join(env.root, 'graph')
+    node(root, 'huge', { padding: 'x'.repeat(20_000) })
+    node(root, 'keep')
+
+    const result = load(env, source([root], { exclude: ['huge.json'] }), 2000)
+
+    expect(result.state).toBe('loaded')
+    expect(paths(result)).toEqual(['graph/nodes/keep.json'])
+    expect(result.warnings.join('\n')).not.toContain('dropped')
   })
 })
 

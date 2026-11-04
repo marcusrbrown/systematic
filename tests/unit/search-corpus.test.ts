@@ -10,15 +10,21 @@ import {
   KIND_TABLE,
   loadCorpus,
   loadSourceFiles,
+  lookupSearchRoot,
   MAX_DEPTH,
+  MAX_DISCOVERED_FILES,
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_TOTAL_BYTES,
+  newEntryBudget,
   parseCorpusDocument,
   parseMarkdownFrontmatter,
+  rejectedProjectRoot,
   resolveSearchRoot,
 } from '../../src/lib/search-corpus.js'
+import { compileExcludePatterns } from '../../src/lib/search-exclude.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
+import { watchInspections } from '../helpers/watch-inspections.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const FIXTURES = path.join(ROOT_DIR, 'tests/fixtures/search-corpus')
@@ -113,6 +119,79 @@ describe('resolveSearchRoot', () => {
     // os.tmpdir() may be a symlink (macOS /var to /private/var); the result is the real path.
     const viaTmp = path.join(os.tmpdir(), path.basename(start))
     expect(resolveSearchRoot(viaTmp)).toBe(fs.realpathSync(viaTmp))
+  })
+})
+
+describe('lookupSearchRoot', () => {
+  it('finds the ancestor holding a .git directory from a subpackage', () => {
+    const root = makeTemp()
+    fs.mkdirSync(path.join(root, '.git'))
+    const start = path.join(root, 'packages', 'app')
+    fs.mkdirSync(start, { recursive: true })
+    expect(lookupSearchRoot(start)).toEqual({ root, foundGit: true })
+  })
+
+  it('counts a .git file as a repository marker', () => {
+    const root = makeTemp()
+    fs.writeFileSync(path.join(root, '.git'), 'gitdir: /elsewhere\n')
+    const start = path.join(root, 'a', 'b')
+    fs.mkdirSync(start, { recursive: true })
+    expect(lookupSearchRoot(start)).toEqual({ root, foundGit: true })
+  })
+
+  it('returns each nested repository its own root', () => {
+    const outer = makeTemp()
+    fs.mkdirSync(path.join(outer, '.git'))
+    const inner = path.join(outer, 'vendor', 'lib')
+    fs.mkdirSync(path.join(inner, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(inner, 'src'))
+    fs.mkdirSync(path.join(outer, 'docs'))
+    expect(lookupSearchRoot(path.join(inner, 'src')).root).toBe(inner)
+    expect(lookupSearchRoot(path.join(outer, 'docs')).root).toBe(outer)
+  })
+
+  it('reports not found and hands back the start directory string untouched', () => {
+    const start = makeTemp()
+    // The same directory reached through a trailing slash: the string must not be normalized.
+    const withSlash = `${start}${path.sep}`
+    expect(lookupSearchRoot(withSlash)).toEqual({
+      root: withSlash,
+      foundGit: false,
+    })
+  })
+
+  it('does not realpath the start directory when no repository is found', () => {
+    const base = makeTemp()
+    const real = path.join(base, 'real')
+    fs.mkdirSync(real)
+    const link = path.join(base, 'link')
+    fs.symlinkSync(real, link)
+    expect(lookupSearchRoot(link)).toEqual({ root: link, foundGit: false })
+  })
+
+  it('returns the repository root realpath from a symlinked start directory', () => {
+    const base = makeTemp()
+    const repo = path.join(base, 'repo')
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true })
+    fs.mkdirSync(path.join(repo, 'packages', 'app'), { recursive: true })
+    const link = path.join(base, 'link')
+    fs.symlinkSync(path.join(repo, 'packages', 'app'), link)
+    expect(lookupSearchRoot(link)).toEqual({ root: repo, foundGit: true })
+  })
+
+  it('stops at an unreadable ancestor as not found, without throwing', () => {
+    if (process.getuid?.() === 0) return // root ignores directory permissions
+    const base = makeTemp()
+    const locked = path.join(base, 'locked')
+    const start = path.join(locked, 'inner')
+    fs.mkdirSync(start, { recursive: true })
+    fs.mkdirSync(path.join(base, '.git'))
+    fs.chmodSync(locked, 0o000)
+    try {
+      expect(lookupSearchRoot(start)).toEqual({ root: start, foundGit: false })
+    } finally {
+      fs.chmodSync(locked, 0o755)
+    }
   })
 })
 
@@ -1161,6 +1240,146 @@ describe('loadSourceFiles', () => {
   })
 })
 
+describe('discoverSourceFiles: excludes', () => {
+  const WALK = { excludedFiles: [], excludedDirs: [] }
+  const relatives = (found: ReturnType<typeof discoverSourceFiles>) => {
+    if (found.state !== 'found') throw new Error('not found')
+    return found.candidates.map((candidate) => candidate.relative)
+  }
+
+  it('leaves out files and directories the matcher names, at any depth', () => {
+    const root = makeTemp()
+    writeFile(root, 'keep.md', 'k')
+    writeFile(root, 'log.md', 'l')
+    writeFile(root, 'sub/log.md', 'l')
+    writeFile(root, 'sub/keep.md', 'k')
+    writeFile(root, '.stryker-tmp/x.md', 'x')
+    writeFile(root, 'deep/.stryker-tmp/y.md', 'y')
+
+    const found = discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        isExcluded: compileExcludePatterns(['log.md', '.stryker-tmp']),
+      },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['keep.md', 'sub/keep.md'])
+  })
+
+  it('matches an anchored pattern against the path below the walked directory', () => {
+    const root = makeTemp()
+    writeFile(root, 'drafts/a.md', 'a')
+    writeFile(root, 'drafts/x/a.md', 'a')
+    writeFile(root, 'notes/drafts/a.md', 'a')
+
+    const found = discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        isExcluded: compileExcludePatterns(['drafts/*.md']),
+      },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['drafts/x/a.md', 'notes/drafts/a.md'])
+  })
+
+  it('never inspects an excluded file and never lists or inspects an excluded directory', () => {
+    const root = makeTemp()
+    writeFile(root, 'keep.md', 'k')
+    writeFile(root, 'secret.md', 's')
+    writeFile(root, 'vendor/deep/a.md', 'a')
+    writeFile(root, 'sub/vendor/b.md', 'b')
+    writeFile(root, 'sub/ok.md', 'o')
+    const real = fs.realpathSync(root)
+    const watch = watchInspections()
+    let found: ReturnType<typeof discoverSourceFiles>
+    try {
+      found = discoverSourceFiles(
+        {
+          directory: root,
+          walk: WALK,
+          label: 'x',
+          entryBudget: newEntryBudget(100),
+          isExcluded: compileExcludePatterns(['secret.md', 'vendor']),
+        },
+        [],
+      )
+    } finally {
+      watch.stop()
+    }
+
+    expect(relatives(found)).toEqual(['keep.md', 'sub/ok.md'])
+    const touched = [...watch.statted, ...watch.listed]
+    expect(touched.some((target) => target.includes('secret.md'))).toBe(false)
+    expect(touched.some((target) => target.includes('vendor'))).toBe(false)
+    // The walk still looked at everything else.
+    expect(watch.statted).toContain(path.join(real, 'keep.md'))
+    expect(watch.listed).toContain(path.join(real, 'sub'))
+  })
+
+  it('charges excluded names to the entry budget, so excludes buy no extra listing', () => {
+    const root = makeTemp()
+    for (let index = 0; index < 20; index++) {
+      writeFile(root, `skip${index}.md`, 's')
+    }
+    writeFile(root, 'keep.md', 'k')
+    const budget = newEntryBudget(10)
+
+    discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        entryBudget: budget,
+        isExcluded: compileExcludePatterns(['skip*.md']),
+      },
+      [],
+    )
+
+    expect(budget.exhausted).toBe(true)
+    expect(budget.remaining).toBe(0)
+  })
+
+  it('keeps excluded files out of the discovery ceiling', () => {
+    const root = makeTemp()
+    for (let index = 0; index < MAX_DISCOVERED_FILES + 5; index++) {
+      fs.closeSync(fs.openSync(path.join(root, `skip${index}.md`), 'w'))
+    }
+    writeFile(root, 'zz-keep.md', 'k')
+
+    const found = discoverSourceFiles(
+      {
+        directory: root,
+        walk: WALK,
+        label: 'x',
+        isExcluded: compileExcludePatterns(['skip*.md']),
+      },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['zz-keep.md'])
+    if (found.state === 'found') expect(found.truncated).toBe(false)
+  })
+
+  it('behaves as before when no matcher is given', () => {
+    const root = makeTemp()
+    writeFile(root, 'log.md', 'l')
+    writeFile(root, 'sub/log.md', 'l')
+
+    const found = discoverSourceFiles(
+      { directory: root, walk: WALK, label: 'x' },
+      [],
+    )
+
+    expect(relatives(found)).toEqual(['log.md', 'sub/log.md'])
+  })
+})
+
 describe('parseMarkdownFrontmatter', () => {
   it('strips a BOM, accepts a missing trailing newline and returns the body', () => {
     const parsed = parseMarkdownFrontmatter('\uFEFF---\ntitle: T\n---')
@@ -1184,5 +1403,54 @@ describe('parseMarkdownFrontmatter', () => {
       ok: false,
       reason: 'frontmatter is not a mapping',
     })
+  })
+})
+
+describe('rejectedProjectRoot', () => {
+  function checkout(): { root: string; outside: string } {
+    const base = makeTemp()
+    const root = path.join(base, 'repo')
+    const outside = path.join(base, 'elsewhere')
+    fs.mkdirSync(path.join(root, 'docs/real/sub'), { recursive: true })
+    fs.mkdirSync(path.join(outside, 'docs'), { recursive: true })
+    return { root, outside }
+  }
+
+  it('accepts a plain root, a missing root and a nested root', () => {
+    const { root } = checkout()
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/real'))).toBe(
+      undefined,
+    )
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/real/sub'))).toBe(
+      undefined,
+    )
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/nope'))).toBe(
+      undefined,
+    )
+  })
+
+  it('names a root that is a symlink and a root below a symlink', () => {
+    const { root } = checkout()
+    fs.symlinkSync(path.join(root, 'docs/real'), path.join(root, 'docs/linked'))
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/linked'))).toBe(
+      'root',
+    )
+    expect(rejectedProjectRoot(root, path.join(root, 'docs/linked/sub'))).toBe(
+      'ancestor',
+    )
+  })
+
+  it('names a root whose real path is not inside the checkout, with or without a link', () => {
+    const { root, outside } = checkout()
+    expect(rejectedProjectRoot(root, path.join(outside, 'docs'))).toBe(
+      'outside',
+    )
+    fs.symlinkSync(outside, path.join(root, 'via'))
+    expect(rejectedProjectRoot(root, path.join(root, 'via'))).toBe('root')
+  })
+
+  it('treats the checkout itself as outside: a root must be strictly below it', () => {
+    const { root } = checkout()
+    expect(rejectedProjectRoot(root, root)).toBe('outside')
   })
 })

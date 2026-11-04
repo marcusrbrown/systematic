@@ -7,13 +7,95 @@ Systematic works out of the box with sensible defaults. This page covers every w
 
 ## Config File Locations
 
-Systematic looks for configuration in three places, checked in this order (highest priority first):
+Systematic reads up to five config files. A later file in this table overrides an earlier one:
 
-1. **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.{json,jsonc}`
-2. **Project-specific:** `.opencode/systematic.{json,jsonc}`
-3. **Global:** `~/.config/opencode/systematic.{json,jsonc}`
+| Order | Layer | File |
+|---|---|---|
+| 1 | user | `~/.config/opencode/systematic.{jsonc,json}` |
+| 2 | user.local | `~/.config/opencode/systematic.local.{jsonc,json}` |
+| 3 | project | `<repository root>/.systematic.{jsonc,json}`, else `<repository root>/.opencode/systematic.{jsonc,json}` |
+| 4 | custom | `$OPENCODE_CONFIG_DIR/systematic.{jsonc,json}` |
+| 5 | custom.local | `$OPENCODE_CONFIG_DIR/systematic.local.{jsonc,json}` |
 
-When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes precedence and `.json` is silently ignored. This lets you add comments to your config without renaming the existing file.
+The custom layers exist only when `OPENCODE_CONFIG_DIR` is set and not blank. Every file is optional.
+
+Systematic picks a file by whether it exists, never by whether it is valid:
+
+- When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes precedence and `.json` is ignored. This lets you add comments to your config without renaming the existing file.
+- In a repository, a root file (`.systematic.jsonc`, else `.systematic.json`) takes precedence over a file under `.opencode/`. Systematic never merges the two. It ignores the `.opencode/` file and warns once, naming both paths.
+- A file that is chosen but invalid is never skipped in favor of another file. Systematic reports the chosen file as invalid.
+- A file exists when its directory entry exists. A symlink whose target is gone counts: Systematic chooses it, reports it as unreadable and does not fall back to another file.
+
+The layer names `user.local` and `custom.local` are the ones that appear in prose and in `systematic config show`. The JSON output of `config show` spells them `userLocal` and `customLocal`.
+
+### The repository root
+
+Systematic reads the project file from the repository root. The root is the nearest ancestor of the start directory that holds a `.git` entry (a `.git` file counts, so a linked worktree works). Systematic resolves a root it finds with `realpath`, so a symlinked checkout shows its real path in warnings and in `config show`. If no ancestor holds a `.git` entry, the start directory itself is the root and stays as given.
+
+The start directory depends on the surface:
+
+| Surface | Start directory |
+|---|---|
+| OpenCode v1 | The directory OpenCode gives the plugin |
+| OpenCode v2 | The location directory of the session. With no project directory, only the user-level files load. |
+| Pi | The working directory of the Pi process at startup. Pi loads config once, so a project file you add later is read after a restart. |
+| `systematic` command | The current directory (`systematic search` takes `--dir`) |
+
+So a session in `packages/app/` of a monorepo reads the project file at the repository root, not one inside `packages/app/`. A nested repository with its own `.git` is its own root and reads only its own project file.
+
+The lookup is by `.git` alone. A home directory that is itself a git repository becomes the root for every directory below it that has no repository of its own.
+
+When a session starts in a subfolder that has its own `.opencode/systematic.*` file and the root is a different directory, Systematic does not read that file. It warns once, naming the file and the project config path it reads instead.
+
+### Local overlay files
+
+`systematic.local.jsonc` (or `systematic.local.json`) sits beside a user-level file: beside `~/.config/opencode/systematic.jsonc`, and beside the file in `OPENCODE_CONFIG_DIR`. It is a second file for settings that belong to one machine, such as absolute source roots, `projects` and the allow list, so the main file can live in your dotfiles. Systematic never creates or gitignores the local file for you.
+
+- A local file has the trust of the file it sits beside. It may set every field that file may set, and `search.enabled` and `search.allow_project_sources` included.
+- It needs no sibling. A local file with no `systematic.jsonc` beside it is valid.
+- It overrides the file beside it and every earlier layer in the table. The project file and the custom layers still override it. An `agents` or `categories` entry in a local file replaces the entry with the same key from earlier layers whole, the way a custom entry does. It does not merge field by field.
+- A source in `search.sources` that has the same `name` as a source in an earlier user-level file replaces that source whole, including its `projects` and its `exclude` list.
+- An invalid local file is named in the error. OpenCode v1, OpenCode v2 and Pi fail at startup and name the local file. The `systematic` command and the `systematic-search` command report it and carry on with the files that are valid.
+- `systematic config show` reports the origin of a routing value from a local file as the kind of the file beside it (`user` or `custom`).
+
+If `OPENCODE_CONFIG_DIR` points at your user config directory (spelled the same way or through a symlink), Systematic reads each file once. It applies each file at both positions, so the shared file still outranks the project file. No warning is shown.
+
+### Which layer wins
+
+| Setting | Rule |
+|---|---|
+| `agents`, `categories` | Layers merge in table order, with the active profile bundle placed as described in [Profiles and Per-Harness Routing](#profiles-and-per-harness-routing). An entry in user.local, custom or custom.local replaces the entry with the same key from earlier layers whole. A project entry replaces it too, except that the routing and permission fields a project cannot set (`model`, `variant`, `permission`, `skills`, `opencode`, `pi`) carry over from below. |
+| `disabled_skills`, `disabled_agents`, `disabled_commands` | The union of every file |
+| `bootstrap` | Field by field, a later file's fields over an earlier file's |
+| `skills_as_commands` | The last file that sets it |
+| `allow_project_profiles` | The last user-level file that sets it: user, user.local, custom, custom.local. A project file never sets it. |
+| `profile` | `SYSTEMATIC_PROFILE`, else custom.local over custom, else project, else user.local over user |
+| `search.enabled` | The last user-level file that sets it |
+| `search.allow_project_sources` | The union of the four user-level files |
+| `search.sources` | By `name`, a later user-level file replacing an earlier entry whole; a project's `sources` are proposals (see [External sources](/systematic/guides/search/#external-sources)) |
+
+### Seeing which files are in play
+
+`systematic config show` lists the paths it resolved: the user, user.local and project files, plus the custom and custom.local files when `OPENCODE_CONFIG_DIR` is set, and the `.opencode/` file that a root project file shadows. A local file's path is listed even when the file does not exist. With `--json`, these are the `locations` keys `user`, `userLocal`, `project`, `custom`, `customLocal` and `ignoredProject`. `custom` and `customLocal` are `null` without a custom directory, and `ignoredProject` is `null` unless a root file shadows an `.opencode/` file. The command prints the project and user files as it always has, and never prints the text of a local file. It reads those two files with the same 1 MB cap as the project config. A file that is larger, is not a regular file (a directory or a named pipe) or cannot be read gets a one-line note instead of its text, and the rest of the output still prints.
+
+`config show` also has a Search section for the current project, and `--json` carries it under `search`. It stays available when the configuration fails to load. See [See what search will do](/systematic/guides/search/#see-what-search-will-do).
+
+`systematic config path` prints the resolved user and project paths.
+
+### Migrating
+
+The repository root rule changes four things for existing setups:
+
+- **A subfolder `.opencode/systematic.*` file is no longer read.** Earlier releases read `.opencode/systematic.json` from the directory the session started in, so a monorepo package could carry its own. Now only the root's project file is read, unless the subfolder has a `.git` of its own. Move the file to the repository root:
+
+  ```bash
+  mv packages/app/.opencode/systematic.json .systematic.json
+  ```
+
+  A file at `<repository root>/.opencode/systematic.json` keeps working. Until you move the subfolder file, each load warns once and names both paths.
+- **A git-managed home directory becomes the root** for the directories below it that have no repository of their own. A project directory below it that held its own `.opencode/systematic.json` is no longer its own root. Run `git init` in that project to make it one, or move the file to the home directory's root if you want it to apply to all of them.
+- **A found root is resolved with `realpath`.** A symlinked checkout shows its real path in warnings and in `config show`.
+- **A project config file over 1 MB is not loaded.** The search readers always had this cap. Now the full loader applies it too. OpenCode v1, OpenCode v2 and Pi fail at startup and name the file. The `systematic` command and the `systematic-search` command report it and carry on. The cap applies to the project file only. Trim the file, or move bulk content out of it.
 
 ## Common Examples
 
@@ -59,7 +141,7 @@ When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes prece
 
 ## Trust Boundaries
 
-Fields that control provider routing or capability policy — `model`, `variant`, `permission`, and `skills` — are accepted only from user config (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`. Project config may tune non-sensitive fields such as `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing or loosen permission/capability policy.
+Fields that control provider routing or capability policy — `model`, `variant`, `permission`, and `skills` — are accepted only from user config (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`, or from the `systematic.local.json` file beside either, which has the same trust. Project config, whether it is `.systematic.json` at the repository root or `.opencode/systematic.json`, may tune non-sensitive fields such as `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing or loosen permission/capability policy.
 
 A typo in `agents.<key>`, `disabled_agents`, or `disabled_skills` fails loudly with a clear error that names the offending key — no silent misconfiguration.
 
@@ -140,11 +222,11 @@ For a task-oriented walkthrough, see the [model profiles guide](/systematic/guid
 Any config source may set the top-level `profile` selector to choose among the user's profiles — including a repository's project config:
 
 ```jsonc
-// .opencode/systematic.json (project config)
+// .systematic.json at the repository root, or .opencode/systematic.json (project config)
 { "profile": "work" }
 ```
 
-Only `profile` (the selector) is project-settable by default. `profiles` (the map of bundle definitions) is trust-protected exactly like `model`, `variant`, `permission`, and `skills` — a project may choose among the profiles you've defined, but it cannot define new ones or see into ones you haven't shared, unless you opt in (see below). A `profiles` map set in project config is ignored with a warning unless the opt-in is on. Both your user config and `$OPENCODE_CONFIG_DIR` config ("custom" config) may define a `profiles` map; a name is looked up in custom's map first, then user's, so a bundle defined only in custom config is still selectable by any source.
+Only `profile` (the selector) is project-settable by default. `profiles` (the map of bundle definitions) is trust-protected exactly like `model`, `variant`, `permission`, and `skills` — a project may choose among the profiles you've defined, but it cannot define new ones or see into ones you haven't shared, unless you opt in (see below). A `profiles` map set in project config is ignored with a warning unless the opt-in is on. Both your user config and `$OPENCODE_CONFIG_DIR` config ("custom" config), and the `systematic.local` file beside each, may define a `profiles` map; a name is looked up in custom.local's map first, then custom's, then user.local's, then user's, so a bundle defined only in custom config is still selectable by any source. A bundle defined in a local file sits in the same slot of the merge chain as one defined in the file beside it, so the local file's own overlay beats it.
 
 ### Opting a repository into defining its own profiles
 
@@ -167,17 +249,17 @@ Setting `allow_project_profiles: true` in your **user** (or `$OPENCODE_CONFIG_DI
 }
 ```
 
-`allow_project_profiles` is **user-owned only** — exactly like `profiles` itself, a project config can never set this field; doing so is stripped before the project config is even parsed and produces the same "ignored" warning as any other project-trust field. A project cannot grant itself a permission it does not already have. The opt-in is resolved from your user and `$OPENCODE_CONFIG_DIR` config only, before the project config is loaded, so setting it in the SAME file as a `profiles` map does not work either — both are stripped together, as if neither had been written.
+`allow_project_profiles` is **user-owned only** — exactly like `profiles` itself, a project config can never set this field; doing so is stripped before the project config is even parsed and produces the same "ignored" warning as any other project-trust field. A project cannot grant itself a permission it does not already have. The opt-in is resolved from your user and `$OPENCODE_CONFIG_DIR` config only (including the `systematic.local` file beside each), before the project config is loaded, so setting it in the SAME file as a `profiles` map does not work either — both are stripped together, as if neither had been written.
 
 A project-defined bundle is **advisory**, not authoritative: it supplies routing only where your own config is silent for that field, and can never override a value you set — not even partially. If you set `agents.correctness-reviewer.model` yourself, a project bundle that also sets it has no effect on that agent's model at all; the project's value never applies and never appears anywhere in the resolved config. This is enforced structurally by where the project bundle sits in the merge chain (before your base config, not after) combined with field-by-field merging — not by a policy check that a future change could accidentally bypass. A repository whose entire suggested profile is already covered by your own config is a normal, silent no-op: `systematic config show` shows you exactly which fields, if any, actually came from the project (see the [model profiles guide](/systematic/guides/model-profiles/#checking-active-routing)).
 
-A project-defined profile name can never shadow one you or `$OPENCODE_CONFIG_DIR` config already **defined**: bundle lookup checks custom, then user, then project **last**. If your `personal` profile and a repository's `personal` profile both exist, yours always wins the name. This protects a name you have defined content for — it does not protect a name you have only **referenced**. If your own `profile` default names a bundle you never defined (or typoed), that name is still looked up through the same custom-then-user-then-project order, so an opted-in repository's own `profiles` entry of that same name is consulted and can supply content for it; the usual "not defined in `profiles`" warning does not fire, because the name IS defined — by the repository, not by you.
+A project-defined profile name can never shadow one you or `$OPENCODE_CONFIG_DIR` config already **defined**: bundle lookup checks custom.local, custom, user.local, user, then project **last**. If your `personal` profile and a repository's `personal` profile both exist, yours always wins the name. This protects a name you have defined content for — it does not protect a name you have only **referenced**. If your own `profile` default names a bundle you never defined (or typoed), that name is still looked up through the same custom-then-user-then-project order, so an opted-in repository's own `profiles` entry of that same name is consulted and can supply content for it; the usual "not defined in `profiles`" warning does not fire, because the name IS defined — by the repository, not by you.
 
 Because `assertAllProfileBundlesAreValid` validates every bundle in every source that may define one — including, once opted in, every bundle in a project's `profiles` map — a malformed bundle anywhere in that map can fail the entire config load (and therefore plugin init) even if nobody ever selects it. This applies to a bundle you clone from a repository just as much as one you write yourself: opting in makes your config load depend on content you did not author.
 
 The repository still decides which of its own (or your) profiles is active for itself, via its project config's `profile` selector — same as today, opt-in or not. That is the point of a project selecting a profile, not a gap: a repository choosing to route itself through the `work` profile you already defined is exactly what `profile` selection is for. If you disagree with a repository's selection for your own session, `SYSTEMATIC_PROFILE=<name>` in your shell environment outranks every config source's `profile` value, including the project's — set it to override, or to a nonexistent name to fall back to your own default.
 
-`profile` is **tri-state**: leaving it unset means "no opinion, let a lower-priority source decide"; setting it to a name selects that bundle; setting it to `null` explicitly means "base configuration, no profile" and wins outright over a weaker source's name — this is how a repository can opt out of your default profile rather than merely failing to set one. The strongest source that sets `profile` at all wins: custom config, then project config, then user config.
+`profile` is **tri-state**: leaving it unset means "no opinion, let a lower-priority source decide"; setting it to a name selects that bundle; setting it to `null` explicitly means "base configuration, no profile" and wins outright over a weaker source's name — this is how a repository can opt out of your default profile rather than merely failing to set one. The strongest source that sets `profile` at all wins: custom config (custom.local over custom), then project config, then user config (user.local over user).
 
 If the selected name doesn't match a defined profile (in either custom's or user's `profiles` map), Systematic warns once and falls back to your own `profile` default (if you have one and it resolves — checked the same way, custom first, then user); if that's also undefined, it falls back to base configuration with no profile active. Run `systematic config show` to see the active profile, which source selected it, and any fallback that occurred.
 
@@ -199,7 +281,7 @@ Switching which profile is active never changes an agent's visibility, permissio
 }
 ```
 
-Resolution precedence, evaluated independently for `model` and for the harness's qualifier (`variant` on OpenCode, `thinking` on Pi): **agent block > agent flat > category block > category flat**. Merge order across sources is **user base → selected profile → project → custom**, with each later source overriding the same field at the same level — **when the active profile came from your user or `$OPENCODE_CONFIG_DIR` config.** When the active profile is a project-defined bundle (the opt-in above), it merges *before* user base instead, so your base config overrides it field by field rather than the other way around; see the opt-in section above for what that means in practice.
+Resolution precedence, evaluated independently for `model` and for the harness's qualifier (`variant` on OpenCode, `thinking` on Pi): **agent block > agent flat > category block > category flat**. Merge order across sources is **user base → selected profile → user.local → project → custom → custom.local**, with each later source overriding the same field at the same level — **when the active profile came from your user or `$OPENCODE_CONFIG_DIR` config.** When the active profile is a project-defined bundle (the opt-in above), it merges *before* user base instead, so your base config overrides it field by field rather than the other way around; see the opt-in section above for what that means in practice.
 
 `model: null` is a value, not an absence — it means "inherit from the parent session" and beats a lower layer's explicit model at the same precedence level. But it obeys the *same* precedence as any other value: a block's `null` beats a flat explicit model at the same level, not the other way around. Concretely, a profile that sets `agents.x.model: null` does **not** undo a base config's `agents.x.opencode.model` — the block is more specific than the flat field it's trying to override, so OpenCode keeps the block's model. To restore inheritance on OpenCode specifically, set `agents.x.opencode.model: null`. When `model: null` wins at layer L on OpenCode, any `variant` is dropped too — inheriting the parent's model means inheriting its variant as well; there is no "inherited model, explicit variant" combination.
 
@@ -1060,6 +1142,29 @@ User config only, and required there: at least one absolute or `~`-prefixed main
 ```json
 [
   "~/src/github.com/me/app"
+]
+```
+
+
+#### sources[].exclude
+
+Patterns for files and folders to skip under each root. A pattern with no `/` matches a file or folder name at any depth (`log.md`, `.stryker-tmp`), and a matched folder is skipped with everything below it. A pattern with a `/` is anchored at the root: `drafts/*.md` matches `drafts/a.md` but not `notes/drafts/a.md`. `*` matches any run of characters inside one name, `?` matches one character, and `**` as a whole segment matches any number of folders (`a/**/b`). A trailing `/` is ignored. Matching is case-sensitive. Negation (`!`), character classes (`[ ]`), a leading `/` or `./`, `..`, and backslashes are not supported. A source takes at most 64 patterns of at most 256 characters. An invalid pattern is dropped with a warning that names its position, and the other patterns still apply. Allowed in user and project config.
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "log.md",
+  ".stryker-tmp"
+]
+```
+
+```json
+[
+  "drafts/*.md",
+  "archive/**/old"
 ]
 ```
 

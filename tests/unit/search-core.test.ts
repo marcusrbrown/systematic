@@ -1756,6 +1756,7 @@ describe('runSearch: kind external', () => {
         project: { kind: 'none' },
         userConfigUnreadable: false,
         warnings: [],
+        dropped: { user: [], project: [] },
         ...overrides,
       }
     }
@@ -1836,6 +1837,7 @@ describe('runSearch: kind external', () => {
         format: 'markdown',
         roots: [dir],
         origin: 'user',
+        exclude: [],
       }
       const response = await externalSearch(
         env,
@@ -1917,6 +1919,7 @@ describe('rankExternalSources', () => {
       format: 'markdown',
       roots: ['/r'],
       origin: 'user',
+      exclude: [],
     }
     const load: SourceLoad = {
       name,

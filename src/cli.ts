@@ -58,9 +58,17 @@ import {
   type SearchCliOptions,
   type SearchCliSettingsLoad,
 } from './lib/search-cli.js'
-import { resolveSearchRoot } from './lib/search-corpus.js'
 import {
+  type InspectedRoot,
+  type InspectedSource,
+  inspectSearch,
+  type SearchInspection,
+} from './lib/search-external-sources.js'
+import {
+  displaySafe,
   loadUserLevelSearchSettings,
+  MAX_PROJECT_CONFIG_BYTES,
+  readTextBounded,
   type UserLevelConfigDirOptions,
 } from './lib/search-user-config.js'
 import { type Harness, setupHarness } from './lib/setup.js'
@@ -530,56 +538,83 @@ function userLevelDirOptions(
 /**
  * The settings loader `systematic search` injects into `runSearchCli`: the
  * full config loader, so the project-config strip warning for `search.enabled`
- * or `search.allow_project_sources` reaches stderr. Config is read at the
- * project root, resolved the same way the corpus root is. A thrown load, an
- * invalid user or custom source, or an invalid `search` block all give
- * `unreadable: true`, which makes the core add the `config unreadable` note to
- * the results. A project source never counts toward `unreadable`, and a
- * project config cannot change `enabled` or the allow list. It may propose
- * `search.sources`, but the loader validates and discards them: the per-call
- * external reader is their only consumer, and nothing here reads them.
+ * or `search.allow_project_sources` reaches stderr. The loader gets the start
+ * directory as given and finds the repository root itself, so a directory with
+ * no repository keeps its unresolved path. A thrown load, an invalid file of
+ * any kind (user, local, custom or project), or an invalid `search` block all
+ * give `unreadable: true`, which makes the core add the `config unreadable`
+ * note to the results. A project config cannot change `enabled` or the allow
+ * list. It may propose `search.sources`, but the loader validates and
+ * discards them: the per-call external reader is their only consumer, and
+ * reads the project file's `search` block on its own.
  *
  * The full loader drops a whole file that fails validation, so a valid
  * `search.enabled: false` next to a bad sibling key would be lost. When a
  * source is invalid, or the load throws, the settings come from the user-level
  * reader instead, which validates the `search` block on its own (the same
- * reader the `systematic-search` bin uses), so the opt-out still holds. Never throws.
+ * reader the `systematic-search` bin uses), so the opt-out still holds. Its
+ * warnings join the loader's, and a thrown load adds the exception message.
+ * Each message appears once, and a file the loader already named as
+ * unreadable is not named a second time by the fallback. Never throws.
  */
 export function loadSearchSettingsForCli(
   startDir: string,
   configOptions?: LoadConfigOptions,
 ): SearchCliSettingsLoad {
   const warnings: string[] = []
+  // The loader names every file it could not parse before it can throw, so the
+  // fallback adds only the `search` problems inside files that did parse.
+  const fallback = () => {
+    const user = loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
+    const failed = new Set(user.readFailures)
+    return {
+      settings: user.settings,
+      warnings: user.warnings.filter((message) => !failed.has(message)),
+    }
+  }
   try {
-    const loaded = loadConfigWithSources(resolveSearchRoot(startDir), {
+    const loaded = loadConfigWithSources(startDir, {
       ...configOptions,
       invalidSource: 'report',
       warningSink: (message) => warnings.push(message),
     })
     const invalidSource = loaded.metadata.sources.some(
-      (source) => source.presence === 'invalid' && source.kind !== 'project',
+      (source) => source.presence === 'invalid',
     )
-    if (invalidSource) {
-      warnings.push(
-        '[systematic] A Systematic config file could not be read, so search results carry a `config unreadable` note. Run `systematic config show` for details.',
-      )
+    if (!invalidSource) {
+      return {
+        settings: loaded.config.search,
+        warnings: uniqueMessages(warnings),
+        unreadable: loaded.config.searchUnreadable === true,
+      }
     }
+    warnings.push(
+      '[systematic] A Systematic config file could not be read, so search results carry a `config unreadable` note. Run `systematic config show` for details.',
+    )
+    const user = fallback()
+    warnings.push(...user.warnings)
     return {
-      settings: invalidSource
-        ? loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
-            .settings
-        : loaded.config.search,
-      warnings,
-      unreadable: invalidSource || loaded.config.searchUnreadable === true,
+      settings: user.settings,
+      warnings: uniqueMessages(warnings),
+      unreadable: true,
     }
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const user = fallback()
+    warnings.push(
+      `[systematic] The Systematic config could not be loaded (${displaySafe(detail)}), so search results carry a \`config unreadable\` note. Search settings come from the user-level files alone.`,
+      ...user.warnings,
+    )
     return {
-      settings: loadUserLevelSearchSettings(userLevelDirOptions(configOptions))
-        .settings,
-      warnings,
+      settings: user.settings,
+      warnings: uniqueMessages(warnings),
       unreadable: true,
     }
   }
+}
+
+function uniqueMessages(messages: readonly string[]): string[] {
+  return [...new Set(messages)]
 }
 
 /**
@@ -844,10 +879,43 @@ function toJsonRoutingResolution(
   }
 }
 
+/**
+ * The config files `config show` can read. Local files carry the selected
+ * path even when absent, like `user`; `custom` and `customLocal` are null
+ * without a custom directory; `ignoredProject` is the `.opencode/` file a
+ * repo-root project file shadows, or null.
+ */
 interface ConfigShowJsonLocations {
   readonly user: string
+  readonly userLocal: string
   readonly project: string
   readonly custom: string | null
+  readonly customLocal: string | null
+  readonly ignoredProject: string | null
+}
+
+function toJsonLocations(
+  paths: ReturnType<typeof getConfigPaths>,
+): ConfigShowJsonLocations {
+  return {
+    user: paths.userConfig,
+    userLocal: paths.userLocalConfig,
+    project: paths.projectConfig,
+    custom: paths.customConfig ?? null,
+    customLocal: paths.customLocalConfig ?? null,
+    ignoredProject: paths.ignoredProjectConfig ?? null,
+  }
+}
+
+/**
+ * What search does for this project, from the bin-safe readers: they never
+ * throw, so the section is available even when the full load fails. Rooted at
+ * the same checkout root the locations block shows.
+ */
+function inspectSearchForConfigShow(
+  paths: ReturnType<typeof getConfigPaths>,
+): SearchInspection {
+  return inspectSearch({ checkoutRoot: paths.projectRoot })
 }
 
 interface ConfigShowJsonSuccess {
@@ -862,6 +930,7 @@ interface ConfigShowJsonSuccess {
     readonly opencode: ConfigShowJsonRoutingResolution
     readonly pi: ConfigShowJsonRoutingResolution
   }>
+  readonly search: SearchInspection
 }
 
 /**
@@ -873,24 +942,22 @@ interface ConfigShowJsonSuccess {
 interface ConfigShowJsonError {
   readonly locations: ConfigShowJsonLocations
   readonly error: string
+  readonly search: SearchInspection
 }
 
 type ConfigShowJsonOutput = ConfigShowJsonSuccess | ConfigShowJsonError
 
 /**
  * Builds the `--json` output for `config show`: file paths only (never raw
- * file contents), the resolved profile state, and the per-target routing
+ * file contents), the resolved profile state, the per-target routing
  * table -- the same resolver calls `printRoutingTable` makes, just
  * collected into data instead of printed lines, so the two modes can never
- * diagnostically disagree.
+ * diagnostically disagree -- and the search section.
  */
 function buildConfigShowJson(): ConfigShowJsonOutput {
   const paths = getConfigPaths(process.cwd())
-  const locations = {
-    user: paths.userConfig,
-    project: paths.projectConfig,
-    custom: paths.customConfig ?? null,
-  }
+  const locations = toJsonLocations(paths)
+  const search = inspectSearchForConfigShow(paths)
 
   let loaded: SourceAwareConfigResult
   try {
@@ -899,6 +966,7 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
     return {
       locations,
       error: error instanceof Error ? error.message : String(error),
+      search,
     }
   }
 
@@ -938,7 +1006,100 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
     activeProfileSourcePath: loaded.activeProfileSourcePath,
     profileFallback: loaded.metadata.profileFallback,
     routing,
+    search,
   }
+}
+
+function yesNo(value: boolean): string {
+  return value ? 'yes' : 'no'
+}
+
+function formatSourceRoot(root: InspectedRoot): string {
+  const state =
+    root.present === null ? '' : root.present ? ' (present)' : ' (missing)'
+  return `${displaySafe(root.path)}${state}`
+}
+
+function printSearchSource(source: InspectedSource): void {
+  console.log(`    ${displaySafe(source.name)} [${source.status}]`)
+  console.log(`      origin:  ${source.origin}`)
+  if (source.status === 'dropped invalid') {
+    console.log(`      reason:  ${displaySafe(source.reason)}`)
+  } else {
+    if (source.status === 'root rejected') {
+      console.log(`      reason:  ${displaySafe(source.reason)}`)
+    }
+    console.log(`      format:  ${source.format}`)
+    for (const root of source.roots) {
+      console.log(`      root:    ${formatSourceRoot(root)}`)
+    }
+    if (source.exclude.length > 0) {
+      console.log(
+        `      exclude: ${source.exclude.map((pattern) => displaySafe(pattern)).join(', ')}`,
+      )
+    }
+  }
+  for (const warning of source.warnings) {
+    console.log(`      warning: ${warning}`)
+  }
+}
+
+/**
+ * Prints the Search section: the same data `--json` carries under `search`,
+ * as resolved values. A local config file is never echoed.
+ */
+function printSearchSection(search: SearchInspection): void {
+  console.log('\nSearch:')
+  console.log(`  Enabled:        ${yesNo(search.enabled)}`)
+  console.log(`  Project root:   ${displaySafe(search.projectRoot)}`)
+  console.log(
+    `  Allow list:     ${
+      search.allowProjectSources.length === 0
+        ? '(empty)'
+        : search.allowProjectSources
+            .map((entry) => displaySafe(entry))
+            .join(', ')
+    }`,
+  )
+  console.log(`  Project allowed: ${yesNo(search.projectAllowed)}`)
+  if (search.userConfigUnreadable) {
+    console.log('  A user-level config file could not be fully read.')
+  }
+  if (search.projectConfigUnreadable) {
+    console.log('  The project config file could not be read.')
+  }
+
+  console.log('\n  External sources:')
+  if (search.sources.length === 0) console.log('    (none)')
+  for (const source of search.sources) printSearchSource(source)
+  for (const warning of search.warnings) {
+    console.log(`    warning: ${warning}`)
+  }
+
+  console.log('\n  Built-in kinds:')
+  for (const kind of search.builtIn) {
+    console.log(
+      `    ${kind.kind.padEnd(10)} ${kind.state.padEnd(10)} ${displaySafe(kind.directory)}`,
+    )
+  }
+}
+
+/**
+ * Print one config file's text under a heading. The read is the bounded,
+ * non-blocking regular-file read the project config uses, so a file that is
+ * too large, not a regular file (a directory, a FIFO) or unreadable is a
+ * one-line note and the rest of the output still prints. An absent file prints
+ * nothing.
+ */
+function printConfigFile(heading: string, filePath: string): void {
+  const read = readTextBounded(filePath, MAX_PROJECT_CONFIG_BYTES)
+  if (read.kind === 'absent') return
+  console.log(`\n${heading}:`)
+  if (read.kind === 'text') {
+    console.log(read.content)
+    return
+  }
+  console.log(`  ${displaySafe(filePath)} could not be shown: ${read.reason}`)
 }
 
 function configShow(options: { json: boolean }): void {
@@ -950,24 +1111,32 @@ function configShow(options: { json: boolean }): void {
   }
 
   const paths = getConfigPaths(process.cwd())
+  const locations = toJsonLocations(paths)
 
   console.log('Configuration locations:\n')
-  console.log(`  User config:    ${paths.userConfig}`)
-  console.log(`  Project config: ${paths.projectConfig}`)
-
-  if (fs.existsSync(paths.projectConfig)) {
-    console.log('\nProject configuration:')
-    console.log(fs.readFileSync(paths.projectConfig, 'utf-8'))
+  console.log(`  User config:            ${locations.user}`)
+  console.log(`  User local config:      ${locations.userLocal}`)
+  console.log(`  Project config:         ${locations.project}`)
+  if (locations.ignoredProject !== null) {
+    console.log(`  Ignored project config: ${locations.ignoredProject}`)
+  }
+  if (locations.custom !== null) {
+    console.log(`  Custom config:          ${locations.custom}`)
+  }
+  if (locations.customLocal !== null) {
+    console.log(`  Custom local config:    ${locations.customLocal}`)
   }
 
-  if (fs.existsSync(paths.userConfig)) {
-    console.log('\nUser configuration:')
-    console.log(fs.readFileSync(paths.userConfig, 'utf-8'))
-  }
+  printConfigFile('Project configuration', paths.projectConfig)
+  printConfigFile('User configuration', paths.userConfig)
 
   // A failed load exits 1 in both renderings: the same failure must not
-  // report success in prose and failure under `--json`.
-  if (!printResolvedSection()) process.exit(1)
+  // report success in prose and failure under `--json`. The search section
+  // prints either way, because its readers never throw and a failed load is
+  // when it helps most.
+  const resolved = printResolvedSection()
+  printSearchSection(inspectSearchForConfigShow(paths))
+  if (!resolved) process.exit(1)
 }
 
 function parseConfigShowArgs(rest: string[]): { json: boolean } {

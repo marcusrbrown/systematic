@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from './frontmatter.js'
 import { readBytesBounded } from './search-bounded-read.js'
+import type { ExcludeMatcher } from './search-exclude.js'
 import { isRecord } from './validation.js'
 
 /** Largest single file loaded, in bytes. */
@@ -292,9 +293,41 @@ export function listDirectoryBounded(
 }
 
 /**
+ * The shared walk behind `resolveSearchRoot` and `lookupSearchRoot`: realpath
+ * the start directory, then climb to the nearest ancestor holding `.git` (a
+ * directory, or a file for a worktree). It returns the found root, or `null`
+ * together with the realpathed start when none is found. An unreadable
+ * ancestor stops the walk as "not found"; it never throws.
+ */
+function walkToGitRoot(startDir: string): {
+  readonly gitRoot: string | null
+  readonly start: string
+} {
+  const resolved = path.resolve(startDir)
+  const start = safeRealpath(resolved) ?? resolved
+  let current = start
+  while (true) {
+    try {
+      if (fs.lstatSync(path.join(current, '.git'), { throwIfNoEntry: false })) {
+        return { gitRoot: current, start }
+      }
+    } catch {
+      return { gitRoot: null, start }
+    }
+    const parent = path.dirname(current)
+    if (parent === current) return { gitRoot: null, start }
+    current = parent
+  }
+}
+
+/**
  * The project root: the nearest ancestor of `startDir` holding `.git` (a
  * directory, or a file for a worktree), resolved with `realpath`; otherwise
  * `startDir` itself, also resolved.
+ *
+ * `lookupSearchRoot` is the variant for callers that must keep the start
+ * directory unresolved when there is no repository, and must know whether one
+ * was found. Both share `walkToGitRoot`.
  *
  * This is a copy of the private `findGitWorktreeRoot` in
  * `discovered-skills.ts`, and the two differ on purpose: search falls back to
@@ -303,21 +336,32 @@ export function listDirectoryBounded(
  * the standalone search bin. This is the second use; extract at the third.
  */
 export function resolveSearchRoot(startDir: string): string {
-  const resolved = path.resolve(startDir)
-  const start = safeRealpath(resolved) ?? resolved
-  let current = start
-  while (true) {
-    try {
-      if (fs.lstatSync(path.join(current, '.git'), { throwIfNoEntry: false })) {
-        return current
-      }
-    } catch {
-      return start // unreadable ancestor: stop walking, never throw
-    }
-    const parent = path.dirname(current)
-    if (parent === current) return start
-    current = parent
-  }
+  const { gitRoot, start } = walkToGitRoot(startDir)
+  return gitRoot ?? start
+}
+
+/** What `lookupSearchRoot` found. */
+export interface SearchRootLookup {
+  /**
+   * The repository root (realpathed) when `foundGit`; otherwise the caller's
+   * `startDir`, unchanged and unresolved.
+   */
+  readonly root: string
+  /** Whether an ancestor holding `.git` was found. */
+  readonly foundGit: boolean
+}
+
+/**
+ * Like `resolveSearchRoot`, but reports whether `.git` was found and, when
+ * none was, hands back `startDir` exactly as given instead of its realpath.
+ * Config loading uses it so a directory outside any repository keeps the path
+ * the caller passed (a temp directory under a symlinked prefix stays as is).
+ */
+export function lookupSearchRoot(startDir: string): SearchRootLookup {
+  const { gitRoot } = walkToGitRoot(startDir)
+  return gitRoot === null
+    ? { root: startDir, foundGit: false }
+    : { root: gitRoot, foundGit: true }
 }
 
 export function isInside(root: string, candidate: string): boolean {
@@ -357,6 +401,37 @@ export function symlinkedComponent(
   return undefined
 }
 
+/** Why a project source root is not loaded. */
+export type ProjectRootRejection = SymlinkedComponent | 'outside'
+
+/** The reason each rejection gives, as the loaders and the inspector word it. */
+export const PROJECT_ROOT_REJECTION_REASONS: Readonly<
+  Record<ProjectRootRejection, string>
+> = {
+  root: 'a project root is a symlink',
+  ancestor: 'a project root passes through a symlink',
+  outside: 'a project root resolves outside the project root',
+}
+
+/**
+ * Whether a project source root is rejected before it is walked: it is a
+ * symlink, passes through a symlink below the checkout, or its real path is not
+ * strictly inside the checkout's real path. The loaders and `config show` both
+ * ask this, so what is reported as rejected is what is dropped. A root that is
+ * missing or cannot be inspected is not rejected here; the walk reports it.
+ */
+export function rejectedProjectRoot(
+  checkoutRoot: string,
+  root: string,
+): ProjectRootRejection | undefined {
+  const symlinked = symlinkedComponent(checkoutRoot, root)
+  if (symlinked !== undefined) return symlinked
+  const container = probeRealpath(checkoutRoot)
+  const directory = probeRealpath(root)
+  if (container.kind !== 'ok' || directory.kind !== 'ok') return undefined
+  return isInside(container.value, directory.value) ? undefined : 'outside'
+}
+
 export interface SourceFileCandidate {
   /** Path relative to the walked directory, with `/` separators. */
   readonly relative: string
@@ -372,6 +447,8 @@ interface Discovery {
   rootUnreadable: boolean
   /** Set for an external source: the entries every directory of the walk shares. */
   readonly budget?: EntryBudget | undefined
+  /** Set for an external source with excludes: tests a path relative to the walked directory. */
+  readonly isExcluded?: ExcludeMatcher | undefined
 }
 
 type EntryKind = 'file' | 'directory' | 'ignored'
@@ -428,6 +505,15 @@ function listWalkedDirectory(
   return listing.names
 }
 
+/** Keep a file, or mark discovery truncated once the ceiling is reached. The next entry stops the walk. */
+function addCandidate(found: Discovery, candidate: SourceFileCandidate): void {
+  if (found.candidates.length >= MAX_DISCOVERED_FILES) {
+    found.truncated = true
+    return
+  }
+  found.candidates.push(candidate)
+}
+
 function discoverFiles(
   spec: WalkSpec,
   label: string,
@@ -451,6 +537,9 @@ function discoverFiles(
   names.sort(compareCodeUnits)
   for (const name of names) {
     if (found.truncated) return
+    // The listing already charged this name to the budget. An excluded entry is
+    // not inspected, entered or counted toward any file or byte cap.
+    if (found.isExcluded?.(`${prefix}${name}`) === true) continue
     const absolute = path.join(directory, name)
     const stat = safeLstat(absolute)
     const entryKind = classifyEntry(spec, name, stat)
@@ -458,11 +547,7 @@ function discoverFiles(
       const child = `${prefix}${name}/`
       discoverFiles(spec, label, absolute, child, depth + 1, found, warnings)
     } else if (entryKind === 'file' && stat !== null) {
-      if (found.candidates.length >= MAX_DISCOVERED_FILES) {
-        found.truncated = true
-        return
-      }
-      found.candidates.push({
+      addCandidate(found, {
         relative: `${prefix}${name}`,
         absolute,
         size: stat.size,
@@ -598,6 +683,12 @@ export interface DiscoverSourceFilesOptions {
    * source. Left out, every directory is listed whole.
    */
   readonly entryBudget?: EntryBudget | undefined
+  /**
+   * Tests a path relative to the walked directory, `/`-joined. A match leaves
+   * the entry out and, for a directory, its whole subtree. Built-in kinds set
+   * none.
+   */
+  readonly isExcluded?: ExcludeMatcher | undefined
   /** Names the directory in warnings: `spec.dir` for a built-in kind, the source name for an external one. */
   readonly label: string
 }
@@ -628,7 +719,8 @@ export function discoverSourceFiles(
   options: DiscoverSourceFilesOptions,
   warnings: string[],
 ): SourceDiscovery {
-  const { directory, containedIn, walk, label, entryBudget } = options
+  const { directory, containedIn, walk, label, entryBudget, isExcluded } =
+    options
   const directoryProbe = probeRealpath(directory)
   const containerProbe =
     containedIn === undefined ? undefined : probeRealpath(containedIn)
@@ -666,6 +758,7 @@ export function discoverSourceFiles(
     truncated: false,
     rootUnreadable: false,
     budget: entryBudget,
+    isExcluded,
   }
   discoverFiles(walk, label, directoryReal, '', 0, found, warnings)
   // Whether `realpath` of a locked directory fails depends on the platform; a

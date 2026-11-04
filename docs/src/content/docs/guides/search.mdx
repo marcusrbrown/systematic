@@ -84,7 +84,7 @@ The start directory depends on the surface:
 | Pi | The working directory of each call. In a delegate, that is the delegate session's own directory. |
 | `systematic search` and `systematic-search` | `--dir <path>`, else the current directory |
 
-In a monorepo the root is the repository root, not the package you are in.
+In a monorepo the root is the repository root, not the package you are in. The project config file is read from the same root, so a session in `packages/app/` reads the project file at the repository root and not one inside `packages/app/`. See [Config File Locations](/systematic/reference/configuration/#config-file-locations) for the file names and the order of the config layers.
 
 ## Where to call it
 
@@ -148,7 +148,7 @@ Three rules decide what gets read:
 
 ### Declare sources in your user config
 
-Put this in `~/.config/opencode/systematic.jsonc` (or in the file inside `OPENCODE_CONFIG_DIR`). A user source needs a `projects` list with at least one project root. A user source without one is dropped with a warning, so a source can never apply to every project by accident.
+Put this in `~/.config/opencode/systematic.jsonc` (or in the file inside `OPENCODE_CONFIG_DIR`). Absolute roots and `projects` paths belong to one machine, so you can put them in `systematic.local.jsonc` beside either file and keep the main file in your dotfiles (see [Configure search](#configure-search)). A user source needs a `projects` list with at least one project root. A user source without one is dropped with a warning, so a source can never apply to every project by accident.
 
 ```jsonc
 {
@@ -178,7 +178,7 @@ Put this in `~/.config/opencode/systematic.jsonc` (or in the file inside `OPENCO
 
 ### Let a project propose sources
 
-A repository can ship its own list in `.opencode/systematic.jsonc` (or `.json`) inside the checkout. A project may set `sources` and nothing else under `search`.
+A repository can ship its own list in `.systematic.jsonc` (or `.json`) at the repository root, or in `.opencode/systematic.jsonc` (or `.json`). When both exist, the root file is used and the `.opencode/` file is ignored, with a warning that names both paths. The two are never merged. A project may set `sources` and nothing else under `search`.
 
 ```jsonc
 {
@@ -212,7 +212,7 @@ A project's proposals are read only when its main repository root is in `search.
 }
 ```
 
-Entries are absolute or `~` paths. Matching is exact, after both sides are resolved to real paths. Systematic combines the lists in the two user-level files. Neither a project config nor anything inside a repository can add to this list.
+Entries are absolute or `~` paths. Matching is exact, after both sides are resolved to real paths. Systematic combines the lists in all the user-level files, local files included. Neither a project config nor anything inside a repository can add to this list.
 
 If you skip this step, `kind: external` says so and reads nothing:
 
@@ -248,6 +248,46 @@ A `deciduous` source reads the sync folder of a Deciduous graph. The root is the
 - A `nodes/` folder that exists but cannot be listed makes the source `unreadable`, the same state a Markdown root gets when it cannot be read. An `edges/` folder that exists but cannot be listed adds the warning `could not read an edges/ folder; records load without its rationale`, and the records still load. With several roots, the source is `unreadable` only when no root had a `nodes/` folder that could be listed.
 - The scan visits the `nodes/` folder of every root, in root order, and then the `edges/` folder of every root, sharing one limit of 8,000 files. A large `edges/` folder in the first root cannot use up the limit before a later root's nodes are scanned.
 
+### Exclude files and folders
+
+A store often holds files that only add noise: an activity log in a wiki, or sandbox copies of your docs that a test tool leaves behind. Add an `exclude` list to a source to skip them. Both user and project sources accept it:
+
+```jsonc
+{
+  "name": "wiki",
+  "format": "markdown",
+  "roots": ["~/wiki"],
+  "projects": ["~/src/github.com/me/app"],
+  "exclude": ["log.md", ".stryker-tmp", "drafts/*.md", "archive/**/old"]
+}
+```
+
+A pattern is tested against the path of a file or folder relative to the root, written with `/` between segments. The rules are a small subset of `.gitignore`:
+
+- **No `/` in the pattern.** It matches a file or folder with that name at any depth, so `log.md` skips `log.md` and `notes/log.md`.
+- **A `/` inside the pattern.** It is anchored at the root and tested against the whole relative path. `drafts/*.md` skips `drafts/a.md`, but not `drafts/sub/a.md` and not `notes/drafts/a.md`.
+- **A trailing `/` is ignored.** `drafts/` means `drafts`, which matches a file or folder of that name at any depth. To pin a folder to the root, write `drafts/**`.
+- **`*`** matches any run of characters inside one name, a leading dot included. **`?`** matches one character. Neither crosses a `/`.
+- **`**` as a whole segment** matches zero or more folders. `archive/**/old` matches `archive/old` and `archive/2024/old`. `archive/**` matches `archive` and everything below it. `**` inside a segment, as in `a**b`, is invalid.
+- **Matching is case-sensitive.**
+
+A matched folder is never entered, so everything below it is skipped too. A skipped file is never opened and counts toward no file or byte limit. The names in a folder still count against the 32,000 directory entries a source may examine, so an `exclude` cannot hide a huge folder from that limit.
+
+The pattern is tested against the same path on every surface. For a `deciduous` source that path is `nodes/<id>.json` or `edges/<id>.json`, so `nodes/dec-*` skips matching nodes, `edges` skips every edge, and `nodes` skips every node and leaves the source `empty`. A Deciduous folder that your patterns remove whole raises no warning.
+
+A source takes at most 64 patterns of at most 256 characters. These are not supported, and a pattern that uses one is dropped:
+
+- An empty pattern.
+- Negation with `!`.
+- Character classes with `[` and `]`.
+- A leading `/` or `./`.
+- An empty segment (`a//b`) or a `.` or `..` segment.
+- A backslash.
+
+An invalid pattern drops alone. The source and its other patterns still load. The warning names the position (`exclude[2]`) and the broken rule, and never repeats the pattern. Patterns past the 64th are dropped with one warning that names `exclude[64]` and counts them. An `exclude` that is not an array drops the whole source.
+
+In user config, a source in `systematic.local.jsonc` with the same `name` as a source in `systematic.jsonc` replaces that source whole, including its `exclude` list. The lists do not combine.
+
 ### Limits
 
 | Limit | Value |
@@ -261,7 +301,8 @@ A `deciduous` source reads the sync folder of a Deciduous graph. The root is the
 | Text per source | 16 MB |
 | Hits per source | At most 5, even when `limit` asks for more. `limit` applies to each source, not to the whole reply. |
 | Reply size | 12 KB, shared evenly by the sources that have hits |
-| Project config file | 1 MB |
+| Project config file | 1 MB. A larger file is not loaded as project config. The plugins fail at startup and name the file. `systematic search` and `systematic-search` report it and carry on. |
+| Patterns in one source's `exclude` | 64, each at most 256 characters |
 
 A source that goes past its share of the 12 KB drops whole hits from the end and prints `+N more hits not shown`. If the reply is cut anyway, it ends with `[Systematic: search output truncated at 12 KB]`.
 
@@ -315,21 +356,21 @@ A gitignored folder does not exist in a fresh worktree, so a source that points 
 External search reads fresh on every call:
 
 - The start directory and the project it belongs to, including its identity.
-- Both user-level config files, so edits to `allow_project_sources` and to your user sources take effect on the next call.
-- The project config file.
+- All the user-level config files, `systematic.local` included, so edits to `allow_project_sources` and to your user sources take effect on the next call.
+- The project config file, from the repository root of the start directory.
 - The record files themselves. Nothing is cached.
 
 A few things are fixed when the harness starts: `search.enabled`, whether the `systematic_search` tool exists and how it is described, and the `config unreadable` note recorded at startup, which built-in searches keep printing. In a host plugin, an external call decides that note from its own read of the user config and ignores the startup note, so a repair clears the note on the next external call without a restart. The `systematic search` and `systematic-search` commands read everything on every run.
 
 ### When setup fails and when it does not
 
-A project config that parses but holds an invalid `search.sources` never fails plugin setup. This holds on OpenCode v2, where it is tested. Systematic drops the bad entries, warns, and loads everything else. A project config that cannot be parsed at all fails setup exactly as it always has. External search cannot rescue a plugin that never started: if setup failed, there is no tool to call.
+A project config that parses but holds an invalid `search.sources` never fails plugin setup. This holds on OpenCode v2, where it is tested. Systematic drops the bad entries, warns, and loads everything else. A project config that cannot be parsed at all, or is larger than 1 MB, fails setup and the error names the file. The same holds for a user-level file that cannot be parsed, a local file included. External search cannot rescue a plugin that never started: if setup failed, there is no tool to call.
 
 ### Known limits
 
 These are accepted trade-offs. Read them before you allow a project.
 
-- **Every worktree of an allowed project contributes.** A worktree reads its own copy of `.opencode/systematic.jsonc` and its own Markdown. That includes a worktree you made to review someone else's pull request. Allowing a project covers whatever any of its branches proposes. Roots still pass the rules above, so a branch cannot reach outside its checkout, but it can point at any folder inside it.
+- **Every worktree of an allowed project contributes.** A worktree reads its own copy of the project file (`.systematic.jsonc` or `.opencode/systematic.jsonc`) and its own Markdown. That includes a worktree you made to review someone else's pull request. Allowing a project covers whatever any of its branches proposes. Roots still pass the rules above, so a branch cannot reach outside its checkout, but it can point at any folder inside it.
 - **A stale allow entry trusts whatever repository is cloned to that path later.** The entry is an exact path. Remove entries for paths you no longer use.
 - **Plugin hosts read the standard config directories.** On OpenCode v1, OpenCode v2 and Pi, external search reads `~/.config/opencode` and `OPENCODE_CONFIG_DIR`. The OpenCode v2 plugin has no config-directory override for this read.
 - **No redaction.** An external source is text you chose to expose. Text in a hit can contain instructions, and Systematic does not strip anything from it. Point it only at stores you trust.
@@ -343,13 +384,38 @@ External sources read local files and send nothing anywhere. Search opens no net
 Search reads its settings from your **user-level** config. Systematic reads them from these files, in this order, and merges them:
 
 1. `~/.config/opencode/systematic.jsonc`, or `systematic.json` if there is no `.jsonc`.
-2. The same file name inside the directory named by `OPENCODE_CONFIG_DIR`, if that variable is set and not blank.
+2. `systematic.local.jsonc` (or `.json`) in the same directory. This is the local overlay: a file for the settings that belong to this machine, so the main file can live in your dotfiles. It needs no main file beside it.
+3. The same file name as 1 inside the directory named by `OPENCODE_CONFIG_DIR`, if that variable is set and not blank.
+4. `systematic.local.jsonc` (or `.json`) in that directory.
 
-The second file overrides the first. `enabled` takes the last file that sets it, `allow_project_sources` combines the lists in both files, and `sources` merge by name with the second file winning.
+A later file overrides an earlier one. `enabled` takes the last file that sets it, `allow_project_sources` combines the lists in all the files, and `sources` merge by name with the later file replacing the earlier entry whole. A local file may set every field the file beside it may set.
 
-A project config may set `search.sources` and nothing else. `search.enabled` and `search.allow_project_sources` belong to you. If `.opencode/systematic.jsonc` or `.opencode/systematic.json` sets either one, Systematic ignores that field and prints a warning that names it. This is on purpose. Otherwise a repository you clone could switch search off, or allow its own sources.
+If `OPENCODE_CONFIG_DIR` is the same directory as `~/.config/opencode` (spelled the same way or through a symlink), each file is read once and applies at both positions. No warning is shown.
 
-The `systematic-search` command in Claude Code reads the two user-level files. From project config it reads one thing, and only for `--kind external`: the `sources` the project proposes. It does not read project config for anything else, so it cannot print the warning about ignored user-only fields that `systematic search` prints. If it cannot read the project file, it prints one warning on stderr and treats the project as proposing no sources.
+Each file gets its own warning that names it, so a broken `systematic.local.jsonc` is named and its sibling is not. The valid files still apply, and search results carry the `config unreadable` note.
+
+A project config may set `search.sources` and nothing else. `search.enabled` and `search.allow_project_sources` belong to you. If the project file (`.systematic.jsonc` or `.json` at the repository root, or `.opencode/systematic.jsonc` or `.json`) sets either one, Systematic ignores that field and prints a warning that names it. This is on purpose. Otherwise a repository you clone could switch search off, or allow its own sources. There is no project-level `.local` file.
+
+The `systematic-search` command in Claude Code reads the user-level files. From project config it reads one thing, and only for `--kind external`: the `sources` the project proposes. It does not read project config for anything else, so it cannot print the warning about ignored user-only fields that `systematic search` prints. If it cannot read the project file, including a project file over 1 MB, it prints one warning on stderr and treats the project as proposing no sources.
+
+The command also validates only the `search` block of each file. An invalid field elsewhere in a config file is invisible to it, and it keeps using that file's valid `search` block. `systematic search` and the plugins check the whole file. A file that fails there is named in an error (the plugins fail at startup) or in a warning on stderr (`systematic search`), and `systematic search` still uses the valid `search` blocks.
+
+### On Pi
+
+Pi loads config once, from the working directory of the Pi process when it starts. That load fixes `search.enabled`, the registration of the tool and the `config unreadable` note, so restart Pi after you change them. Each `systematic_search` call then starts from the directory of that call instead, which in a delegate is the delegate session's own directory. It reads the allow list, your sources and the project file again from that directory's repository root. The two agree when Pi starts and searches in the same directory.
+
+### See what search will do
+
+`systematic config show` prints a Search section for the current project, and `systematic config show --json` carries the same data under `search`. It runs no search and reads no document. It shows:
+
+- Whether search is enabled, the allow list and whether this project is on it.
+- Each external source with where it was declared (`user`, `user.local`, `custom`, `custom.local` or `project`), its name, format, roots, `exclude` patterns and warnings.
+- A status for each source: `active`; `not allowed` (a project proposal without an allow entry); `over source cap` (more than 8 are active); `dropped invalid` (an entry that failed its checks, with the reason); `root rejected` (a project root that is a symlink, passes through one or resolves outside the checkout, so a search drops the source; the reason says which); or `missing root` (a root that does not exist).
+- The four built-in directories, each `present`, `empty`, `missing` or `unreadable`.
+
+A source dropped for being invalid reports the origin `user` whichever user-level file declared it. A user source mapped only to other projects is left out. An allowed project proposal replaced by a same-named user source is not listed either; a proposal that is not allowed is always listed. The section lists the name and roots of a proposal that is not allowed. The tool and the command replies still never do.
+
+`config show` never prints the text of a local file. A source defined in one appears with its resolved name and roots.
 
 ### Fields
 
@@ -364,6 +430,7 @@ An unknown field makes the `search` block invalid.
 | `search.sources[].format` | `markdown` or `deciduous` | none | Required. |
 | `search.sources[].roots` | array of paths | none | Required, 1 to 8 folders. Relative in a project, absolute or `~` in user config. |
 | `search.sources[].projects` | array of paths | none | Required in user config, where it needs at least one entry. Not allowed in a project. |
+| `search.sources[].exclude` | array of patterns | none | Files and folders to skip under each root. See [Exclude files and folders](#exclude-files-and-folders). A project may set this field. |
 
 A field or an entry that fails its check is dropped alone. `enabled: false` survives a typo in `sources`, and one bad source leaves its valid siblings in place. Systematic prints one warning that names the field or the source and never its value, and loads the rest of the file. If a dropped setting changes what search does (a bad `enabled`, a bad allow entry, a `sources` that is not an array, an unknown field), results carry the note `config unreadable`. A bad allow entry allows nothing. A source entry that is dropped on its own sets no note. The `systematic-search` command does the same. It also treats a user-level file it cannot parse as unreadable. Search never stops the plugin from loading.
 
@@ -379,7 +446,7 @@ This removes `systematic_search` from OpenCode v1, OpenCode v2 and Pi, and from 
 
 ### Restart after you change config
 
-OpenCode and Pi read config once when they start. Restart the harness after you change `search.enabled`. Changes to `allow_project_sources`, to your user `sources` and to a project's `sources` need no restart for `kind: external`, because that call reads them again every time (see [What is read when](#what-is-read-when)). The `systematic search` command and the `systematic-search` command read config on every run, so they need no restart.
+OpenCode and Pi read config once when they start. Restart the harness after you change `search.enabled`, in any of the user-level files. Changes to `allow_project_sources`, to your user `sources` and to a project's `sources` need no restart for `kind: external`, because that call reads them again every time (see [What is read when](#what-is-read-when)). The `systematic search` command and the `systematic-search` command read config on every run, so they need no restart.
 
 ## Notes
 

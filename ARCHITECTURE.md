@@ -105,7 +105,7 @@ Coarse module pipeline, roughly in dependency order:
 
 ```
 Config loading
-  src/lib/config.ts          — loadConfig: JSONC loading, 3-source merge (env > project > user)
+  src/lib/config.ts          — loadConfig: JSONC loading, layered merge (user < user.local < project < custom < custom.local); the project file is read from the repository root
   src/lib/config-schema.ts   — SystematicConfigSchema (Zod), validateConfig, SECURITY_OVERLAY_FIELDS
   src/lib/config-protected-fields.ts — CONFIG_PROTECTED_FIELD_PATHS: dependency-free (imports nothing), shared verbatim by config.ts and capability-snapshot.ts so the two never drift
 
@@ -168,12 +168,13 @@ Pi adapter
 Durable-output search
   src/lib/search-lexical.ts        — pure tokenizer, hand-written `ln` and BM25F scorer that give bit-identical scores on Bun and Node
   src/lib/search-bounded-read.ts   — the one bounded file read (`readBytesBounded`): a non-blocking open, a regular-file check on the fd, and at most `maxBytes + 1` bytes read, so a file that is too large or grows while being read is rejected and a FIFO cannot hang the reader; used by the project config reader, the project identity reads and the corpus and external file reads (node builtins only, bundled into the bin)
-  src/lib/search-corpus.ts         — project root walk-up, the `kind` table (`solution`, `plan`, `brainstorm`, `ideation`: directory and exclusions per kind) and a bounded, symlink-safe walk-and-read core (`discoverSourceFiles`, `readSourceFiles`, `loadSourceFiles`; every file is read through `search-bounded-read.ts`, and an external source shares one entry budget across all its directories and roots, and every read is limited to what the byte budgets leave) that `loadCorpus` calls for one kind per call and the external loader calls per source, with a narrowing frontmatter wrapper (title is `title`, else `topic`, else the file name) built on a shared BOM, newline and YAML step
+  src/lib/search-exclude.ts        — gitignore-style exclude patterns for external sources: per-pattern and per-list validators (reasons never echo the pattern) and a compiled matcher over root-relative paths; no regex, a two-pointer segment match plus a segment DP, so the cost grows linearly with path length (imports nothing, shared by the plugin and the bin)
+  src/lib/search-corpus.ts         — project root walk-up (`resolveSearchRoot`, and `lookupSearchRoot`, which keeps an unresolved start directory when no `.git` is found and reports whether one was), the `kind` table (`solution`, `plan`, `brainstorm`, `ideation`: directory and exclusions per kind) and a bounded, symlink-safe walk-and-read core (`discoverSourceFiles`, `readSourceFiles`, `loadSourceFiles`; every file is read through `search-bounded-read.ts`, and an external source shares one entry budget across all its directories and roots, and every read is limited to what the byte budgets leave) that `loadCorpus` calls for one kind per call and the external loader calls per source, with a narrowing frontmatter wrapper (title is `title`, else `topic`, else the file name) built on a shared BOM, newline and YAML step
   src/lib/search-render.ts         — sanitise, snippet, cap and 16 KB-truncate a search result into the one text every surface returns; the header names the corpus directory, or one count per kind for `all`; `external` replies render separately, with their own prefix, per-source sections and a 12 KB allowance
   src/lib/search-core.ts           — host-neutral search composition: validate `kind` (one kind, the `all` selector or the exclusive `external` selector), load each requested kind through the loader, rank the merged documents as one corpus, per-kind lifecycle resolver, render; `external` resolves and loads its sources per call and ranks each source on its own index
-  src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure user-then-custom merge, shared user-level file selection, and a user-level reader that never touches project config, and a bin-safe project reader capped at 1 MB (imports only zod, jsonc-parser, node builtins and `search-bounded-read.ts`)
+  src/lib/search-user-config.ts    — the `search` config field's zod piece, the pure merge over the user-level layers (user, user.local, custom, custom.local), shared file selection for those layers and for the project file (a repo-root `.systematic.*` over `.opencode/systematic.*`), a user-level reader that never touches project config, and a bin-safe project reader capped at 1 MB (imports only zod, jsonc-parser, node builtins and `search-bounded-read.ts`)
   src/lib/search-project-identity.ts — project identity for external sources: a checkout's main repository root from filesystem reads alone (linked worktree verified from the common-directory side, `core.worktree` refused, submodule and nested repo are their own roots) and the exact realpath allow-list match (node builtins and `search-bounded-read.ts` only, bundled into the bin; identity files are read through the bounded fd read, so a FIFO is `unresolved`)
-  src/lib/search-external-sources.ts — the per-call reader for `kind: "external"`: re-reads the user files, the project file (via the bounded, bin-safe `loadProjectSearchSources`) and the project identity on every call, then applies a fixed order (drop proposals of a non-allowed project, user-mapped sources shadow, user before project, cap at 8) and returns the active sources plus project states and warnings (never imports `config.ts` or `config-schema.ts`; bundled into the bin)
+  src/lib/search-external-sources.ts — the per-call reader for `kind: "external"`: re-reads the user files, the project file (via the bounded, bin-safe `loadProjectSearchSources`) and the project identity on every call, then applies a fixed order (drop proposals of a non-allowed project, user-mapped sources shadow, user before project, cap at 8) and returns the active sources plus project states and warnings; `inspectSearch` shares those readers and adds the declaring layer, the source cap, one `lstat` per root and the not-allowed proposals, for `config show` (never imports `config.ts` or `config-schema.ts`; bundled into the bin)
   src/lib/search-external.ts       — the external source loader behind `kind: "external"`: Markdown files under each resolved source root become bounded records (title from `title`, else the first H1, else the file name; recorded status only), with a 1 MB per-file cap, per-source caps and one 32 MB read budget shared by the call (a source that does not fit is dropped whole before any file is read); a `deciduous` source goes to `search-external-deciduous.ts`. Reads files only; imports node builtins, `search-corpus.ts` and the Deciduous reader (types aside) and is bundled into the bin
   src/lib/search-external-deciduous.ts — the Deciduous reader behind `format: "deciduous"`: its own scan of `nodes/` then `edges/` (explicit order, not a path sort; `MAX_DISCOVERED_FILES` bounds files scanned, `MAX_FILES` bounds kept records), keeps live `decision`, `option`, `outcome` and `goal` nodes only (never `action` or `observation`; `deleted_at` tombstones skipped), and folds edge rationale into both endpoints' body (300 characters per edge, 20 edges and 2 KB per node, other endpoint must be a live node); ids must match `[A-Za-z0-9_-]{1,64}`, display paths come from validated file stems only and no file is opened by an id read from content. Reads files only; imports node builtins, `search-bounded-read.ts` and `search-corpus.ts`, never the dispatcher; bundled into the bin
   src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
@@ -209,7 +210,7 @@ Key symbols:
 | `createConfigHandler` | `src/lib/config-handler.ts` | Config hook implementation |
 | `createSkillTool` | `src/lib/skill-tool.ts` | `systematic_skill` tool factory |
 | `getBootstrapContent` | `src/lib/bootstrap.ts` | System prompt injection |
-| `loadConfig` | `src/lib/config.ts` | JSONC config loading + 3-source merge |
+| `loadConfig` | `src/lib/config.ts` | JSONC config loading + five-layer merge (user, user.local, project, custom, custom.local) |
 | `SystematicConfigSchema` | `src/lib/config-schema.ts` | Canonical Zod schema for user config |
 | `validateConfig` | `src/lib/config-schema.ts` | Safe parse wrapper returning `ValidationResult` |
 | `SECURITY_OVERLAY_FIELDS` | `src/lib/config-schema.ts` | Trust-protected field names |
@@ -239,9 +240,10 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    category routing through their registry profile, while plain npm consumers lose category-aware
    routing unless they opt in.
 
-3. **Trust boundary on project config.** Project-level `systematic.json` cannot set `model`,
-   `variant`, `permission`, or `skills`. These fields are listed in `SECURITY_OVERLAY_FIELDS` and
-   are stripped during config merging.
+3. **Trust boundary on project config.** Project-level config (`.systematic.json` at the repository
+   root, else `.opencode/systematic.json`) cannot set `model`, `variant`, `permission`, or `skills`.
+   These fields are listed in `SECURITY_OVERLAY_FIELDS` and are stripped during config merging. A
+   `systematic.local.json` file has the trust of the file beside it, never project trust.
 
 4. **No phantom skill references.** Any `systematic:*` name referenced in skill or agent content
    must correspond to a real bundled skill. The content-integrity gate catches dangling references.
@@ -271,8 +273,11 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    `external` is a second selector, exclusive and never a `KIND_TABLE` key, so the kind table, `all`
    and the built-in render path are untouched and built-in output cannot change. It reads
    user-allowed folders of Markdown and Deciduous sync JSON, ranks each source on its own index,
-   caps hits at 5 per source and renders at most 12 KB. Its per-call reader re-reads the user files,
-   the project file, the project's identity and the record files on every call; only
+   caps hits at 5 per source and renders at most 12 KB. A source may carry `exclude`
+   patterns (`search-exclude.ts`, no regex, shared with the bin): a matched folder is not entered
+   and a matched file is not examined, but the listing still charges the entry budget. Its per-call
+   reader re-reads the user-level files (user, user.local, custom and custom.local), the project
+   file from the repository root, the project's identity and the record files on every call; only
    `search.enabled`, tool registration and the registration-time `config unreadable` note are fixed
    at init. Sources read files only, with no command, network or write. The
    `search.enabled` and `search.allow_project_sources` are stripped from project config, so a
@@ -508,19 +513,30 @@ warning sink and without reading the value. The warning is the only report: noth
 load result or the source metadata, and `systematic capabilities` keeps its silent sink.
 `workflow_guard` is the only entry.
 
-**Config priority** — `$OPENCODE_CONFIG_DIR/systematic.json` > project `.opencode/systematic.json`
-> user `~/.config/opencode/systematic.json` > defaults. Disabled lists union-merge across all
-sources; bootstrap config shallow-merges.
+**Config priority** — from lowest to highest: user `~/.config/opencode/systematic.json`, user.local
+(`systematic.local.json` beside it), project, custom (`$OPENCODE_CONFIG_DIR/systematic.json`) and
+custom.local (`systematic.local.json` beside that), over the defaults. The project file is the
+repository root's `.systematic.json`, else `.opencode/systematic.json`; the two are never merged and
+the root file wins even when it is invalid. The repository root is the nearest ancestor holding `.git`
+(`lookupSearchRoot`), realpathed, or the start directory as given when none is found; a
+`.opencode/systematic.*` file in a start directory below the root is not read, and the loader warns
+once. A local file has its sibling's trust, needs no sibling, and its `agents`/`categories` entry
+replaces a same-key entry from an earlier layer whole. A local `search.sources` entry with the name
+of an earlier user-level entry replaces it whole, `exclude` included. Disabled lists union-merge
+across all files; bootstrap config shallow-merges. The project pass reads through the same 1 MB
+bounded read as the bin, so a larger project file is invalid. `FileConfigSource.layer` carries the
+position; metadata consumers read a view that folds each local file into its sibling's kind, so
+routing provenance reports a local file's origin as `user` or `custom`.
 
 **Named model profiles** (`src/lib/config.ts` `resolveActiveProfile`/`resolveProfileSelector`,
 `ProfileOverlaySchema` in `src/lib/config-schema.ts`) — a top-level `profile` key selects a named
 entry from a `profiles` map (routing-only `agents`/`categories` overlays) defined in
 `$OPENCODE_CONFIG_DIR` or user config. `resolveProfileSelector` picks the winning selector strongest
-first: a non-blank `SYSTEMATIC_PROFILE` env var, then custom, then project, then user `profile`. The
+first: a non-blank `SYSTEMATIC_PROFILE` env var, then custom (custom.local over custom), then project, then user (user.local over user) `profile`. The
 env var selects only — it never supplies bundle content — and a blank or whitespace-only value counts
 as unset. An explicit `profile: null` in a source counts as set and wins (base configuration) rather
 than falling through to a weaker source. The selected bundle enters the overlay merge as a fourth
-chain entry; every other merge in `loadConfigWithSources` keeps the three-source chain above. Only a
+chain entry; every other merge in `loadConfigWithSources` uses the file chain above. Only a
 **custom** overlay can override a profile-supplied routing choice. A **project** overlay cannot:
 protected overlay fields (`SECURITY_OVERLAY_FIELDS` — model, variant, skills, permission, opencode,
 pi; includes routing) are stripped from a project-trust source before schema validation, not merely
@@ -538,7 +554,7 @@ resulting diagnostic states the file's fields apply as custom. If the custom sou
 report-mode falls back to the project strip warnings instead. `preserveSecurityFields` carries a
 previously-trusted value's protected fields forward across a project overlay on the same key.
 
-One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserAndCustomSources`
+One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserLevelSources`
 (below) loads user and custom fully, ahead of project, so the opt-in can be resolved before the
 project source is parsed. When the project and custom paths alias to the same canonical file AND that
 file is malformed (JSONC parse failure or schema-invalid), the custom-trust pass now throws first,
@@ -562,15 +578,15 @@ bundle content, subject to two structural constraints:
 - **The opt-in cannot grant itself.** `allow_project_profiles` is unconditionally stripped from a
   project source before that source is parsed (it lives in `PROJECT_ALWAYS_PROTECTED_FIELDS`, never
   in the conditional `profiles` gate) and its effective value is resolved from custom and user
-  config only (`custom ?? user ?? false`). Because `loadConfigWithSources` loads user and custom
+  config only (the last of user, user.local, custom and custom.local to set it, else `false`). Because `loadConfigWithSources` loads user and custom
   fully — and resolves this value — before the project source is ever loaded, the resolved opt-in is
   already known at the moment `stripProjectProtectedFields` decides whether to strip that project
   source's own `profiles` map. A project source setting `allow_project_profiles: true` alongside a
   `profiles` map in the same file has both fields stripped exactly as if the opt-in were never
   mentioned — self-authorization is unreachable, not merely rejected by a runtime check.
 - **A project-defined bundle name can never shadow a name a user or custom source *defined*.**
-  `lookupProfileBundle` consults custom, then user, then — only when the opt-in resolved `true` —
-  project, in that fixed order; a name collision always resolves to the custom or user definition.
+  `lookupProfileBundle` consults custom.local, custom, user.local, user, then — only when the opt-in
+  resolved `true` — project, in that fixed order; a name collision always resolves to the custom or user definition.
   This does NOT extend to a name a user or custom source only *referenced* via `profile` (its
   top-level selector) without ever defining a matching `profiles` entry: `trustedDefaultProfileName`
   returns the user's own `profile` string as the fallback candidate, and that name is looked up
@@ -587,11 +603,11 @@ bundle content, subject to two structural constraints:
 
 A project-sourced active bundle's chain position depends on that provenance and differs from a
 user/custom-sourced one: `buildOverlaySources` inserts a user- or custom-sourced bundle after user
-base (`[userSource, profileEntry, project, custom]`, unchanged from the paragraph above — the bundle
-is authoritative and overrides user base) but inserts a **project-sourced** bundle *before* user base
-(`[profileEntry, userSource, project, custom]`). This positioning is what makes a project-sourced
+base (`[userSource, profileEntry, userLocal, project, custom, customLocal]` — the bundle is
+authoritative and overrides user base, and user.local overrides it) but inserts a **project-sourced**
+bundle *before* user base (`[profileEntry, userSource, userLocal, project, custom, customLocal]`). This positioning is what makes a project-sourced
 bundle **advisory** rather than authoritative: user base's own merge step
-(`resolveOverlayEntryValue`'s `source.trust === 'user'` branch, reachable only in this ordering) then
+(`resolveOverlayEntryValue`'s `source.layer === 'user'` branch, reachable only in this ordering) then
 sees the bundle's contribution as `previous` and field-merges its own overlay over it via
 `mergeProfileOverlayValue` — the same field-additive traversal (including one level into the
 `opencode`/`pi` blocks) a normal profile already uses to merge over user base, just with the

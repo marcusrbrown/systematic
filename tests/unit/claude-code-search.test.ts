@@ -613,6 +613,59 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     expect(here.stdout).toBe(`${expected}\n`)
   }, 60_000)
 
+  it('started in a subfolder of a repository, reads the repo-root project file, its excludes and a user.local allow entry', async () => {
+    const bin = await installBin()
+    const root = makeProject()
+    proposeDecisions(root)
+    fs.writeFileSync(
+      path.join(root, 'docs/decisions/log.md'),
+      '---\ntitle: Decisions activity log\n---\n\nzebra activity\n',
+    )
+    fs.writeFileSync(
+      path.join(root, '.systematic.jsonc'),
+      `// repo-root project config\n${JSON.stringify({
+        search: {
+          sources: [
+            {
+              name: 'decisions',
+              format: 'markdown',
+              roots: ['docs/decisions'],
+              exclude: ['log.md'],
+            },
+          ],
+        },
+      })}`,
+    )
+    const sub = path.join(root, 'packages/app')
+    fs.mkdirSync(sub, { recursive: true })
+    const dirs = makeUserDirs()
+    // The allow entry lives only in the local overlay.
+    allowProject(dirs.userConfigDir, root, 'systematic.local.json')
+    expect(fs.existsSync(path.join(path.dirname(root), 'node_modules'))).toBe(
+      false,
+    )
+    const expected = await externalCoreText(sub, 'zebra', {
+      homeDir: dirs.home,
+      customConfigDir: null,
+    })
+
+    const result = runBin(bin, ['zebra', '--kind', 'external'], {
+      cwd: sub,
+      home: dirs.home,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('decisions (project)')
+    expect(result.stdout).toContain('decisions/zebra-rollback.md')
+    expect(result.stdout).not.toContain('log.md')
+    // The reply warns that the root file shadows the .opencode/ file (the
+    // renderer cuts a long line, so only its start is stable); nothing else warns.
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain(
+      `project config (${path.join(root, '.systematic.jsonc')}) takes precedence over`,
+    )
+    expect(result.stdout).toBe(`${expected}\n`)
+  }, 60_000)
+
   it('prints one stderr warning for a structurally broken project file, for external only', async () => {
     const bin = await installBin()
     const root = makeProject()
@@ -653,15 +706,18 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
  */
 describe('built systematic-search bin: module graph', () => {
   it('bundles the external readers and contains neither config.ts nor config-schema.ts', async () => {
-    const { metafile } = await buildSearchBundle(ROOT_DIR)
+    const { bundle, metafile } = await buildSearchBundle(ROOT_DIR)
     const modules = Object.keys(metafile.inputs).map((input) =>
       path.basename(input),
     )
 
+    // Matching is the bundled matcher, never `path.matchesGlob` (Node 22+).
+    expect(bundle.toString('utf8')).not.toContain('matchesGlob')
     for (const required of [
       'claude-code-search.ts',
       'search-cli.ts',
       'search-core.ts',
+      'search-exclude.ts',
       'search-external.ts',
       'search-external-sources.ts',
       'search-project-identity.ts',

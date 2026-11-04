@@ -30,12 +30,21 @@ import {
   type RoutingTarget,
   resolveRouting,
 } from './routing-resolver.js'
+import { readBytesBounded } from './search-bounded-read.js'
+import { lookupSearchRoot } from './search-corpus.js'
 import {
+  configEntryExists,
+  findStartDirProjectConfig,
+  MAX_PROJECT_CONFIG_BYTES,
   mergeSearchSettings,
   resolveUserLevelConfigDirs,
   type SearchSchemaOutput,
   type SearchSettingsSource,
   selectConfigFile,
+  selectProjectConfigFile,
+  selectUserLevelConfigFiles,
+  startDirProjectWarning,
+  type UserLevelLayer,
   validateSearchConfig,
 } from './search-user-config.js'
 
@@ -306,9 +315,26 @@ interface ConfigSourceBase {
   readonly protectedFields: readonly ConfigProtectedFieldMetadata[]
 }
 
-/** A config source loaded from an actual file: user, project, or custom. */
+/**
+ * The position a file holds in the chain. `user.local` and `custom.local` are
+ * the overlay files beside the user and custom files: they share their
+ * sibling's trust but are a layer of their own, which is what the overlay
+ * merge branches on.
+ */
+type ConfigSourceLayer = UserLevelLayer | 'project'
+
+const LAYER_TRUST = {
+  user: 'user',
+  'user.local': 'user',
+  project: 'project',
+  custom: 'custom',
+  'custom.local': 'custom',
+} as const satisfies Record<ConfigSourceLayer, ConfigSourceKind>
+
+/** A config source loaded from an actual file: a user, project, or custom file, or a local overlay beside one. */
 interface FileConfigSource extends ConfigSourceBase {
   readonly kind: 'file'
+  readonly layer: ConfigSourceLayer
   /** Keys from `REMOVED_CONFIG_KEYS` this file carries, whatever their value. */
   readonly removedKeys: readonly string[]
   /**
@@ -592,17 +618,62 @@ function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
   return error instanceof Error && 'code' in error
 }
 
-function loadJsoncFile(filePath: string): RawSystematicConfig | null {
-  let content: string
-  try {
-    content = fs.readFileSync(filePath, 'utf-8')
-  } catch (error) {
-    if (isErrorWithCode(error) && error.code === 'ENOENT') return null
-    throw new Error(
-      `Invalid Systematic config in ${filePath}: unable to read file`,
-      { cause: error },
-    )
+/** Part of the error text for a project file over the size cap. */
+const OVERSIZED_FILE_REASON = `file is larger than ${MAX_PROJECT_CONFIG_BYTES / (1024 * 1024)} MB`
+
+function readConfigText(
+  filePath: string,
+  maxBytes: number | undefined,
+): string | null {
+  if (maxBytes === undefined) {
+    try {
+      return fs.readFileSync(filePath, 'utf-8')
+    } catch (error) {
+      // A directory entry at the path is a link whose target is gone: reported.
+      if (
+        isErrorWithCode(error) &&
+        error.code === 'ENOENT' &&
+        !configEntryExists(filePath)
+      ) {
+        return null
+      }
+      throw new Error(
+        `Invalid Systematic config in ${filePath}: unable to read file`,
+        { cause: error },
+      )
+    }
   }
+  const read = readBytesBounded(filePath, maxBytes)
+  switch (read.kind) {
+    case 'bytes':
+      return read.bytes.toString('utf-8')
+    case 'absent':
+      if (!configEntryExists(filePath)) return null
+      throw new Error(
+        `Invalid Systematic config in ${filePath}: unable to read file`,
+      )
+    case 'too-large':
+      throw new Error(
+        `Invalid Systematic config in ${filePath}: unable to read file (${OVERSIZED_FILE_REASON})`,
+      )
+    default:
+      throw new Error(
+        `Invalid Systematic config in ${filePath}: unable to read file`,
+      )
+  }
+}
+
+/**
+ * @param maxBytes Bounds the read. The project pass sets it so a cloned
+ * repository cannot hand the loader an arbitrarily large file; user-level
+ * files are read whole.
+ */
+function loadJsoncFile(
+  filePath: string,
+  maxBytes?: number,
+): RawSystematicConfig | null {
+  const content = readConfigText(filePath, maxBytes)
+  if (content === null) return null
 
   const errors: ParseError[] = []
   const parsed = parseJsonc(content, errors) as unknown
@@ -833,21 +904,39 @@ function throwTopLevelConfigSchemaError(
   })
 }
 
-/**
- * @param allowProjectProfiles The effective (custom ?? user) opt-in,
- * resolved by the caller before this source is loaded -- only consulted
- * when `trust === 'project'`; pass `false` for user/custom loads where it
- * is ignored.
- */
-function loadConfigSource(
-  filePath: string,
-  trust: ConfigSourceKind,
-  invalidSource: 'throw' | 'report',
-  warningSink: (message: string) => void,
-  allowProjectProfiles: boolean,
-): { metadata: ConfigSourceMetadata; source: FileConfigSource | null } {
+interface LoadedConfigSource {
+  readonly metadata: ConfigSourceMetadata
+  readonly source: FileConfigSource | null
+}
+
+interface ConfigSourceLoadInput {
+  readonly filePath: string
+  readonly layer: ConfigSourceLayer
+  readonly invalidSource: 'throw' | 'report'
+  /** Where strip and validation warnings go. For the project layer this is the bounded, alias-buffered sink. */
+  readonly warningSink: (message: string) => void
+  /** Called in `report` mode for a file that failed to load. Not buffered or capped. */
+  readonly reportInvalid: (
+    filePath: string,
+    code: ConfigSourceErrorCode,
+  ) => void
+  /**
+   * The effective opt-in, resolved by the caller before this source is
+   * loaded. Only consulted for the project layer; user-level loads pass
+   * `false`.
+   */
+  readonly allowProjectProfiles: boolean
+}
+
+function loadConfigSource(input: ConfigSourceLoadInput): LoadedConfigSource {
+  const { filePath, layer, invalidSource, warningSink, allowProjectProfiles } =
+    input
+  const trust = LAYER_TRUST[layer]
   try {
-    const rawConfig = loadJsoncFile(filePath)
+    const rawConfig = loadJsoncFile(
+      filePath,
+      layer === 'project' ? MAX_PROJECT_CONFIG_BYTES : undefined,
+    )
     if (!rawConfig) {
       return {
         metadata: { kind: trust, presence: 'absent' },
@@ -903,6 +992,7 @@ function loadConfigSource(
       metadata: { kind: trust, presence: 'present' },
       source: {
         kind: 'file',
+        layer,
         canonicalPath: resolveConfigSourcePath(filePath),
         config: configWithoutSearch,
         path: filePath,
@@ -916,12 +1006,10 @@ function loadConfigSource(
     }
   } catch (error) {
     if (invalidSource === 'throw') throw error
+    const errorCode = classifyConfigSourceError(error)
+    input.reportInvalid(filePath, errorCode)
     return {
-      metadata: {
-        errorCode: classifyConfigSourceError(error),
-        kind: trust,
-        presence: 'invalid',
-      },
+      metadata: { errorCode, kind: trust, presence: 'invalid' },
       source: null,
     }
   }
@@ -1215,13 +1303,45 @@ function mergeArraysUnique<T>(
 const PROFILE_DOCS_URL =
   'https://fro.bot/systematic/reference/configuration#profiles'
 
+/** The loaded file for each layer, `null` where a layer has no valid file. */
+interface LayeredSources {
+  readonly user: FileConfigSource | null
+  readonly userLocal: FileConfigSource | null
+  readonly project: FileConfigSource | null
+  readonly custom: FileConfigSource | null
+  readonly customLocal: FileConfigSource | null
+}
+
+/** The sources present, lowest layer first: user, user.local, project, custom, custom.local. */
+function chainOf(layers: LayeredSources): FileConfigSource[] {
+  return [
+    layers.user,
+    layers.userLocal,
+    layers.project,
+    layers.custom,
+    layers.customLocal,
+  ].filter((source): source is FileConfigSource => source !== null)
+}
+
+/**
+ * The last value any source in `sources` defines for a top-level field.
+ * "Defined" means not `undefined`, so an explicit `null` counts.
+ */
+function lastDefined<K extends keyof RawSystematicConfig>(
+  sources: readonly (FileConfigSource | null)[],
+  key: K,
+): RawSystematicConfig[K] | undefined {
+  let found: RawSystematicConfig[K] | undefined
+  for (const source of sources) {
+    const value = source?.config[key]
+    if (value !== undefined) found = value
+  }
+  return found
+}
+
 interface ProfileSelectionInput {
-  readonly userConfig: RawSystematicConfig | undefined
-  readonly userSource: FileConfigSource | null
-  readonly projectConfig: RawSystematicConfig | undefined
-  readonly projectSource: FileConfigSource | null
-  readonly customConfig: RawSystematicConfig | undefined
-  readonly customSource: FileConfigSource | null
+  /** The loaded files by layer. A local file's `profile` and `profiles` rank above its sibling's. */
+  readonly layers: LayeredSources
   /**
    * The resolved (custom ?? user) `allow_project_profiles` opt-in. Gates
    * whether `lookupProfileBundle` consults `projectSource.config.profiles`
@@ -1265,7 +1385,8 @@ const NO_PROFILE_SELECTION: ProfileSelectionResult = {
 /**
  * Resolve the winning `profile` selector value across sources, strongest
  * first: `SYSTEMATIC_PROFILE` env var, then custom, then project, then
- * user. The env var outranks every config source, including custom --
+ * user. The custom and user entries each read their local file first
+ * (`custom.local ?? custom`, `user.local ?? user`). The env var outranks every config source, including custom --
  * selection only, it can never supply bundle content. A source's `profile`
  * is considered "set" as soon as it is not `undefined` -- an explicit
  * `null` counts as set and wins outright (it means "base configuration",
@@ -1284,10 +1405,11 @@ function resolveProfileSelector(input: ProfileSelectionInput): {
   const envProfile = process.env.SYSTEMATIC_PROFILE?.trim()
   if (envProfile) return { value: envProfile, source: 'environment' }
 
+  const { layers } = input
   const candidates: readonly [ConfigSourceKind, string | null | undefined][] = [
-    ['custom', input.customConfig?.profile],
-    ['project', input.projectConfig?.profile],
-    ['user', input.userConfig?.profile],
+    ['custom', lastDefined([layers.custom, layers.customLocal], 'profile')],
+    ['project', layers.project?.config.profile],
+    ['user', lastDefined([layers.user, layers.userLocal], 'profile')],
   ]
   for (const [source, value] of candidates) {
     if (value !== undefined) return { value, source }
@@ -1296,9 +1418,10 @@ function resolveProfileSelector(input: ProfileSelectionInput): {
 }
 
 /**
- * Look up a named profile bundle across custom (OPENCODE_CONFIG_DIR), then
- * user, then -- only when the `allow_project_profiles` opt-in is on --
- * project, in that order. Custom wins on a name collision with user -- it
+ * Look up a named profile bundle across custom.local, custom
+ * (OPENCODE_CONFIG_DIR), user.local, then user, then -- only when the
+ * `allow_project_profiles` opt-in is on -- project, in that order. A local
+ * file's bundle wins over its sibling's. Custom wins on a name collision with user -- it
  * is the strongest trust level, and there is no security reason to exclude
  * it. Project is checked LAST and only conditionally: this ordering is the
  * entire anti-shadowing mechanism for the opt-in feature -- a user (or
@@ -1314,22 +1437,18 @@ function lookupProfileBundle(
   input: ProfileSelectionInput,
   name: string,
 ): { bundle: RawProfileBundle; definingSource: FileConfigSource } | undefined {
-  if (input.customSource) {
-    const bundle = input.customSource.config.profiles?.[name]
-    if (bundle !== undefined) {
-      return { bundle, definingSource: input.customSource }
-    }
-  }
-  if (input.userSource) {
-    const bundle = input.userSource.config.profiles?.[name]
-    if (bundle !== undefined) {
-      return { bundle, definingSource: input.userSource }
-    }
-  }
-  if (input.allowProjectProfiles && input.projectSource) {
-    const bundle = input.projectSource.config.profiles?.[name]
-    if (bundle !== undefined) {
-      return { bundle, definingSource: input.projectSource }
+  const { layers } = input
+  const lookupOrder = [
+    layers.customLocal,
+    layers.custom,
+    layers.userLocal,
+    layers.user,
+    input.allowProjectProfiles ? layers.project : null,
+  ]
+  for (const source of lookupOrder) {
+    const bundle = source?.config.profiles?.[name]
+    if (source && bundle !== undefined) {
+      return { bundle, definingSource: source }
     }
   }
   return undefined
@@ -1337,7 +1456,7 @@ function lookupProfileBundle(
 
 /**
  * The single fallback candidate name to retry when a selected profile name
- * is missing: the USER source's own `profile` default. This is the
+ * is missing: the user layer's own `profile` default (`user.local ?? user`). This is the
  * bottom-rung default regardless of which source's SELECTOR failed --
  * `custom` has no independent "default" identity distinct from `user`'s
  * (a `custom`-sourced selector that itself fails has nothing more trusted
@@ -1353,7 +1472,10 @@ function lookupProfileBundle(
 function trustedDefaultProfileName(
   input: ProfileSelectionInput,
 ): string | undefined {
-  const userDefault = input.userConfig?.profile
+  const userDefault = lastDefined(
+    [input.layers.user, input.layers.userLocal],
+    'profile',
+  )
   return typeof userDefault === 'string' ? userDefault : undefined
 }
 
@@ -1459,10 +1581,12 @@ function resolveActiveProfile(
 
 export interface LoadConfigOptions {
   /**
-   * When false, the project-level config source (`<cwd>/.opencode/systematic.json`)
-   * is not loaded at all — not merged, not trust-stripped, entirely absent from
-   * the source chain. Used by global-scoped pi-subagents export so it never
-   * absorbs cwd project overlays (plan R7/R19). Defaults to true.
+   * When false, the project-level config source is not loaded at all — not
+   * merged, not trust-stripped, entirely absent from the source chain — and
+   * no repository root is looked up. Used by global-scoped pi-subagents
+   * export so it never absorbs cwd project overlays (plan R7/R19). Defaults
+   * to true, which reads the project file from the repository root above the
+   * start directory (see `getConfigPaths`).
    */
   includeProject?: boolean
   invalidSource?: 'throw' | 'report'
@@ -1479,16 +1603,51 @@ export function loadConfig(
   return loadConfigWithSources(projectDir, options).config
 }
 
-/** The custom config path, only when it canonically resolves to the same file as the project config path. */
-function resolveAliasedCustomConfigPath(
-  paths: { readonly projectConfig: string; readonly customConfig?: string },
+/** A user-level file that is the project config file, reached at one of the four user-level layers. */
+interface AliasedConfigFile {
+  readonly layer: UserLevelLayer
+  readonly path: string
+}
+
+/** Where `loadUserLevelSources` keeps each layer's result. */
+const USER_LEVEL_SLOT = {
+  user: 'user',
+  'user.local': 'userLocal',
+  custom: 'custom',
+  'custom.local': 'customLocal',
+} as const satisfies Record<UserLevelLayer, keyof LayeredSources>
+
+/**
+ * The user-level files that canonically resolve to the same file as the
+ * project config file, in the order a notice names them: custom, custom.local,
+ * user, user.local. Every sibling counts, so a project file that is the
+ * `custom.local` file is recognised whether or not a separate `custom` base
+ * exists. Empty when nothing aliases or the project file is not loaded.
+ */
+function resolveAliasedConfigFiles(
+  paths: {
+    readonly projectConfig: string
+    readonly userConfig: string
+    readonly userLocalConfig: string
+    readonly customConfig?: string
+    readonly customLocalConfig?: string
+  },
   includeProject: boolean,
-): string | undefined {
-  if (!includeProject || paths.customConfig === undefined) return undefined
-  const sameFile =
-    resolveConfigSourcePath(paths.projectConfig) ===
-    resolveConfigSourcePath(paths.customConfig)
-  return sameFile ? paths.customConfig : undefined
+): readonly AliasedConfigFile[] {
+  if (!includeProject) return []
+  const candidates: readonly (readonly [UserLevelLayer, string | undefined])[] =
+    [
+      ['custom', paths.customConfig],
+      ['custom.local', paths.customLocalConfig],
+      ['user', paths.userConfig],
+      ['user.local', paths.userLocalConfig],
+    ]
+  const project = resolveConfigSourcePath(paths.projectConfig)
+  return candidates.flatMap(([layer, file]) =>
+    file !== undefined && resolveConfigSourcePath(file) === project
+      ? [{ layer, path: file }]
+      : [],
+  )
 }
 
 /**
@@ -1504,12 +1663,12 @@ function resolveAliasedCustomConfigPath(
  */
 function createAliasStripTracker(
   warningSink: (message: string) => void,
-  aliasedCustomConfigPath: string | undefined,
+  aliasedFile: AliasedConfigFile | undefined,
 ): {
   readonly sink: (message: string) => void
   readonly buffered: readonly string[]
 } {
-  if (aliasedCustomConfigPath === undefined) {
+  if (aliasedFile === undefined) {
     return { sink: warningSink, buffered: [] }
   }
   const buffered: string[] = []
@@ -1529,10 +1688,10 @@ function createAliasStripTracker(
  * buffered something.
  */
 function isAliasNoticeEligible(input: {
-  readonly aliasedCustomConfigPath: string | undefined
+  readonly aliasedFile: AliasedConfigFile | undefined
   readonly bufferedCount: number
 }): boolean {
-  return input.aliasedCustomConfigPath !== undefined && input.bufferedCount > 0
+  return input.aliasedFile !== undefined && input.bufferedCount > 0
 }
 
 /**
@@ -1545,21 +1704,21 @@ function isAliasNoticeEligible(input: {
  * `buildAliasSuccessNotice` for that (deferred) case.
  */
 function emitAliasFailureDiagnostics(input: {
-  readonly aliasedCustomConfigPath: string | undefined
+  readonly aliasedFile: AliasedConfigFile | undefined
   readonly buffered: readonly string[]
-  readonly customLoaded: boolean
+  readonly aliasLoaded: boolean
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
 }): void {
   if (
     !isAliasNoticeEligible({
-      aliasedCustomConfigPath: input.aliasedCustomConfigPath,
+      aliasedFile: input.aliasedFile,
       bufferedCount: input.buffered.length,
     })
   ) {
     return
   }
-  if (input.projectLoaded && input.customLoaded) return
+  if (input.projectLoaded && input.aliasLoaded) return
   for (const message of input.buffered) input.warningSink(message)
 }
 
@@ -1574,29 +1733,30 @@ function emitAliasFailureDiagnostics(input: {
  * when the passes did not both succeed (the failure path owns that case).
  */
 function buildAliasSuccessNotice(input: {
-  readonly aliasedCustomConfigPath: string | undefined
+  readonly aliasedFile: AliasedConfigFile | undefined
   readonly bufferedCount: number
-  readonly customLoaded: boolean
+  readonly aliasLoaded: boolean
   readonly projectConfigPath: string
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
 }): (() => void) | undefined {
   if (
     !isAliasNoticeEligible({
-      aliasedCustomConfigPath: input.aliasedCustomConfigPath,
+      aliasedFile: input.aliasedFile,
       bufferedCount: input.bufferedCount,
     }) ||
-    !(input.projectLoaded && input.customLoaded) ||
-    input.aliasedCustomConfigPath === undefined
+    !(input.projectLoaded && input.aliasLoaded) ||
+    input.aliasedFile === undefined
   ) {
     return undefined
   }
-  const aliasedCustomConfigPath = input.aliasedCustomConfigPath
+  const { layer, path: aliasedPath } = input.aliasedFile
+  const trust = LAYER_TRUST[layer]
   const projectConfigPath = input.projectConfigPath
   const warningSink = input.warningSink
   return () => {
     warningSink(
-      `[systematic] project config (${sanitizeDiagnosticText(projectConfigPath)}) and custom config (${sanitizeDiagnosticText(aliasedCustomConfigPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`allow_project_profiles\`) apply through the custom-trust pass instead.`,
+      `[systematic] project config (${sanitizeDiagnosticText(projectConfigPath)}) and ${layer} config (${sanitizeDiagnosticText(aliasedPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`allow_project_profiles\`) apply through the ${trust}-trust pass instead.`,
     )
   }
 }
@@ -1629,81 +1789,224 @@ function warnRemovedKeys(
 }
 
 /**
- * Load the `user` and `custom` (`OPENCODE_CONFIG_DIR`) sources and resolve
- * the effective `allow_project_profiles` opt-in (custom ?? user ??
- * default) from them -- extracted from `loadConfigWithSources` to keep its
- * cognitive complexity down. Neither trust level ever writes to
- * `warningSink` today (project trust is the only one that strips/warns
- * inside `loadConfigSource`), so loading them ahead of the project source
- * -- which the opt-in resolution requires -- does not reorder any
- * observable WARNING and leaves the project-pass-only alias-buffering
- * machinery in `loadConfigWithSources` untouched. It does change ONE other
- * thing: under `invalidSource: 'throw'`, when the project and custom paths
- * alias to the same canonical file and that file is malformed, the
- * custom-trust pass now loads (and throws) before the project-trust pass
- * would have, so the thrown diagnostic names custom as the failing source
- * instead of project. Nothing pinned relies on the old ordering, but this
- * is a real behavior change, not a no-op reorder -- see ARCHITECTURE.md's
- * "Named model profiles" section for the full explanation.
+ * A warning function for files that failed to load in `report` mode. It names
+ * the file and the error class, never its content, and warns once per real
+ * file and error class: a project file aliased to the custom file fails twice
+ * and says so once.
  */
-function loadUserAndCustomSources(
-  paths: ReturnType<typeof getConfigPaths>,
-  invalidSource: 'throw' | 'report',
+function createInvalidFileReporter(
   warningSink: (message: string) => void,
-): {
-  user: { metadata: ConfigSourceMetadata; source: FileConfigSource | null }
-  custom: { metadata: ConfigSourceMetadata; source: FileConfigSource | null }
-  allowProjectProfiles: boolean
-} {
-  const user = loadConfigSource(
-    paths.userConfig,
-    'user',
-    invalidSource,
-    warningSink,
-    false,
-  )
-  const custom = paths.customConfig
-    ? loadConfigSource(
-        paths.customConfig,
-        'custom',
-        invalidSource,
-        warningSink,
-        false,
-      )
-    : {
-        metadata: { kind: 'custom' as const, presence: 'absent' as const },
-        source: null,
-      }
-  const allowProjectProfiles =
-    custom.source?.config.allow_project_profiles ??
-    user.source?.config.allow_project_profiles ??
-    DEFAULT_CONFIG.allow_project_profiles
-  return { user, custom, allowProjectProfiles }
+): (filePath: string, code: ConfigSourceErrorCode) => void {
+  const reported = new Set<string>()
+  return (filePath, code) => {
+    const identity = `${resolveConfigSourcePath(filePath)}\0${code}`
+    if (reported.has(identity)) return
+    reported.add(identity)
+    warningSink(
+      `[systematic] config file (${sanitizeDiagnosticText(filePath)}) is invalid (${code}) and was not loaded.`,
+    )
+  }
+}
+
+/** The same loaded file, held at another user-level layer. Only the layer and trust differ. */
+function reassignLayer(
+  loaded: LoadedConfigSource,
+  layer: UserLevelLayer,
+): LoadedConfigSource {
+  const trust = LAYER_TRUST[layer]
+  return {
+    metadata: { ...loaded.metadata, kind: trust },
+    source: loaded.source && { ...loaded.source, layer, trust },
+  }
+}
+
+interface UserLevelLoad {
+  readonly user: LoadedConfigSource
+  readonly userLocal: LoadedConfigSource
+  readonly custom: LoadedConfigSource
+  readonly customLocal: LoadedConfigSource
+  readonly allowProjectProfiles: boolean
 }
 
 /**
- * Build the four-entry overlay-merge chain, ordering the active profile
- * bundle by provenance -- extracted from `loadConfigWithSources` to keep
- * its cognitive complexity down. This ordering IS the advisory-merge
- * guarantee's structural half (see the doc comment at the call site for
- * the full explanation): a user/custom-sourced bundle sits at its
- * historical position (authoritative over user base); a project-sourced
+ * Load the four user-level files (`user`, `user.local`, `custom`,
+ * `custom.local`) and resolve the effective `allow_project_profiles` opt-in
+ * from them (last layer to define it wins; default off). They load ahead of
+ * the project file because the project pass needs that opt-in to decide
+ * whether to strip `profiles`.
+ *
+ * Each real file is read once: when the custom directory is the user
+ * directory (or a symlink to it), the custom layers reuse the user layers'
+ * result, so a diagnostic is not emitted twice. Both layer positions still
+ * apply, and one warning names the alias. Neither trust level writes strip
+ * warnings, so hoisting these loads above the project pass reorders no other
+ * warning. Under `invalidSource: 'throw'`, a file that is also the project
+ * file now throws from the custom pass first, so the error names custom as
+ * the failing source instead of project; see ARCHITECTURE.md's "Named model
+ * profiles" section.
+ */
+function loadUserLevelSources(
+  paths: ReturnType<typeof getConfigPaths>,
+  context: Pick<
+    ConfigSourceLoadInput,
+    'invalidSource' | 'reportInvalid' | 'warningSink'
+  >,
+): UserLevelLoad {
+  const loadedByRealFile = new Map<string, LoadedConfigSource>()
+  const load = (
+    layer: UserLevelLayer,
+    filePath: string | undefined,
+  ): LoadedConfigSource => {
+    if (filePath === undefined) {
+      return {
+        metadata: { kind: LAYER_TRUST[layer], presence: 'absent' },
+        source: null,
+      }
+    }
+    const realFile = resolveConfigSourcePath(filePath)
+    const shared = loadedByRealFile.get(realFile)
+    if (shared) return reassignLayer(shared, layer)
+    const loaded = loadConfigSource({
+      ...context,
+      filePath,
+      layer,
+      allowProjectProfiles: false,
+    })
+    loadedByRealFile.set(realFile, loaded)
+    return loaded
+  }
+
+  const user = load('user', paths.userConfig)
+  const userLocal = load('user.local', paths.userLocalConfig)
+  const custom = load('custom', paths.customConfig)
+  const customLocal = load('custom.local', paths.customLocalConfig)
+  const allowProjectProfiles =
+    lastDefined(
+      [user.source, userLocal.source, custom.source, customLocal.source],
+      'allow_project_profiles',
+    ) ?? DEFAULT_CONFIG.allow_project_profiles
+  return { user, userLocal, custom, customLocal, allowProjectProfiles }
+}
+
+/**
+ * Warn about project files the resolved project config location leaves
+ * unread: an `.opencode/` file a repository-root file shadows, and an
+ * `.opencode/` file in the start directory when the repository root is
+ * elsewhere. Neither file is read.
+ */
+function emitProjectLocationWarnings(
+  paths: ReturnType<typeof getConfigPaths>,
+  warningSink: (message: string) => void,
+): void {
+  if (paths.ignoredProjectConfig !== undefined) {
+    warningSink(
+      `[systematic] project config (${sanitizeDiagnosticText(paths.projectConfig)}) takes precedence over (${sanitizeDiagnosticText(paths.ignoredProjectConfig)}), which is ignored; the two files are never merged.`,
+    )
+  }
+  if (paths.startDirProjectConfig !== undefined) {
+    warningSink(
+      startDirProjectWarning(
+        paths.startDirProjectConfig,
+        paths.projectRoot,
+        paths.projectConfig,
+        sanitizeDiagnosticText,
+      ),
+    )
+  }
+}
+
+/**
+ * Build the overlay-merge chain, ordering the active profile bundle by
+ * provenance -- extracted from `loadConfigWithSources` to keep its
+ * cognitive complexity down. The chain is [advisory project-sourced
+ * bundle,] user, [user- or custom-sourced bundle,] user.local, project,
+ * custom, custom.local. This ordering IS the advisory-merge guarantee's
+ * structural half (see the doc comment at the call site for the full
+ * explanation): a user/custom-sourced bundle sits at its historical position
+ * (authoritative over user base, and under user.local); a project-sourced
  * bundle sits first (merely advisory -- user base's own merge step then
- * field-merges over it instead of replacing it, see the
- * `source.trust === 'user'` branch of `resolveOverlayEntryValue`).
+ * field-merges over it instead of replacing it, see the `layer === 'user'`
+ * branch of `resolveOverlayEntryValue`).
  */
 function buildOverlaySources(
   profileEntry: ProfileBundleConfigSource | null,
   bundleSourceTrust: ConfigSourceKind | undefined,
-  userSource: FileConfigSource | null,
-  projectSource: FileConfigSource | null,
-  customSource: FileConfigSource | null,
+  layers: LayeredSources,
 ): ConfigSource[] {
   const ordered =
     profileEntry !== null && bundleSourceTrust === 'project'
-      ? [profileEntry, userSource, projectSource, customSource]
-      : [userSource, profileEntry, projectSource, customSource]
+      ? [
+          profileEntry,
+          layers.user,
+          layers.userLocal,
+          layers.project,
+          layers.custom,
+          layers.customLocal,
+        ]
+      : [
+          layers.user,
+          profileEntry,
+          layers.userLocal,
+          layers.project,
+          layers.custom,
+          layers.customLocal,
+        ]
   return ordered.filter((source): source is ConfigSource => source !== null)
+}
+
+/**
+ * The active profile bundle as a chain entry (plan KTD: "Profile selection is
+ * a load-time step between stripping and merging"). It may be defined in any
+ * user-level file or -- under the `allow_project_profiles` opt-in -- the
+ * project file, so its path mirrors `profileSelection.bundleSource`, the file
+ * `lookupProfileBundle` actually found it in. The same merge rules that apply
+ * to any other overlay value apply to its content (it may freely set
+ * model/variant/opencode/pi; `ProfileOverlaySchema` already restricts it to
+ * routing-only fields at parse time) -- see `ProfileBundleConfigSource`'s doc
+ * comment for why it is a distinct union member rather than a `trust: 'user'`
+ * file source. Gated on `bundleSource` existing (not just `bundle`) so a
+ * bundle can never be silently dropped for lack of a defining file to
+ * attribute it to; and on `activeProfile` narrowing to `string` so
+ * `profileName` never needs a fallback value -- both are guaranteed together
+ * whenever `bundle` is set (see `resolveActiveProfile`).
+ */
+function buildProfileEntry(
+  profileSelection: ProfileSelectionResult,
+): ProfileBundleConfigSource | null {
+  const { bundle, bundleSource, activeProfile } = profileSelection
+  if (!bundle || !bundleSource || typeof activeProfile !== 'string') return null
+  return {
+    kind: 'profile-bundle',
+    canonicalPath: bundleSource.canonicalPath,
+    path: bundleSource.path,
+    config: { agents: bundle.agents, categories: bundle.categories },
+    protectedFields: [],
+    profileName: activeProfile,
+    bundleTrust: bundleSource.trust,
+  }
+}
+
+type DisabledListKey =
+  | 'disabled_agents'
+  | 'disabled_commands'
+  | 'disabled_skills'
+
+/** The union of a `disabled_*` list across the chain, as a fresh array. */
+function unionDisabledList(
+  sources: readonly FileConfigSource[],
+  key: DisabledListKey,
+): string[] {
+  return sources.reduce(
+    (merged, source) => mergeArraysUnique(merged, source.config[key]),
+    mergeArraysUnique(DEFAULT_CONFIG[key], undefined),
+  )
+}
+
+/** `bootstrap` fields spread in chain order, each file's fields over the ones before it. */
+function mergeBootstrap(sources: readonly FileConfigSource[]): BootstrapConfig {
+  const merged: BootstrapConfig = { ...DEFAULT_CONFIG.bootstrap }
+  for (const source of sources) Object.assign(merged, source.config.bootstrap)
+  return merged
 }
 
 export function loadConfigWithSources(
@@ -1714,6 +2017,9 @@ export function loadConfigWithSources(
   const invalidSource = options?.invalidSource ?? 'throw'
   const paths = getConfigPaths(projectDir, options)
   const warningSink = options?.warningSink ?? console.warn
+  const reportInvalid = createInvalidFileReporter(warningSink)
+
+  if (includeProject) emitProjectLocationWarnings(paths, warningSink)
 
   // If project and custom resolve to the same real file, the project pass
   // still strips and validates as usual, but its per-field strip warnings
@@ -1721,14 +2027,9 @@ export function loadConfigWithSources(
   // that SAME file also loads, those fields apply through it via ordinary
   // merge precedence, so the buffered warnings are dropped in favor of one
   // alias summary below; otherwise they are flushed as normal.
-  const aliasedCustomConfigPath = resolveAliasedCustomConfigPath(
-    paths,
-    includeProject,
-  )
-  const projectStrip = createAliasStripTracker(
-    warningSink,
-    aliasedCustomConfigPath,
-  )
+  const aliasedFiles = resolveAliasedConfigFiles(paths, includeProject)
+  const aliasedFile = aliasedFiles[0]
+  const projectStrip = createAliasStripTracker(warningSink, aliasedFile)
   // Shared 20-detail cap (see `createBoundedStripWarningSink`) for every
   // project-trust protected-field warning of this load -- overlay-field
   // strips (below, via `stripProjectSecurityOverlayFields`) AND the
@@ -1736,31 +2037,34 @@ export function loadConfigWithSources(
   // past the budget.
   const boundedProjectStrip = createBoundedStripWarningSink(projectStrip.sink)
 
-  // `user` and `custom` are loaded BEFORE `project` (custom outranks user,
-  // both outrank project) specifically so the effective `allow_project_profiles`
-  // opt-in is known ahead of the project parse -- the project pass needs it
-  // to decide whether to strip `profiles`. Extracted into
-  // `loadUserAndCustomSources` to keep this function's cognitive complexity
-  // under Biome's cap; see that function's doc comment for why hoisting the
-  // loads is safe for the alias-buffering machinery below.
-  const { user, custom, allowProjectProfiles } = loadUserAndCustomSources(
-    paths,
+  // The user-level files are loaded BEFORE `project` specifically so the
+  // effective `allow_project_profiles` opt-in is known ahead of the project
+  // parse -- the project pass needs it to decide whether to strip
+  // `profiles`. See `loadUserLevelSources` for why hoisting the loads is
+  // safe for the alias-buffering machinery below.
+  const userLevel = loadUserLevelSources(paths, {
     invalidSource,
+    reportInvalid,
     warningSink,
+  })
+  const { allowProjectProfiles } = userLevel
+  // The protected fields apply when any user-level layer reading the project
+  // file loaded it.
+  const aliasLoaded = aliasedFiles.some(
+    ({ layer }) => userLevel[USER_LEVEL_SLOT[layer]].source !== null,
   )
-  const userSource = user.source
-  const customSource = custom.source
 
-  const project = includeProject
-    ? loadConfigSource(
-        paths.projectConfig,
-        'project',
+  const project: LoadedConfigSource = includeProject
+    ? loadConfigSource({
+        filePath: paths.projectConfig,
+        layer: 'project',
         invalidSource,
-        boundedProjectStrip.sink,
+        warningSink: boundedProjectStrip.sink,
+        reportInvalid,
         allowProjectProfiles,
-      )
+      })
     : {
-        metadata: { kind: 'project' as const, presence: 'absent' as const },
+        metadata: { kind: 'project', presence: 'absent' },
         source: null,
       }
   const projectSource = project.source
@@ -1795,100 +2099,72 @@ export function loadConfigWithSources(
   }
 
   emitAliasFailureDiagnostics({
-    aliasedCustomConfigPath,
+    aliasedFile,
     buffered: projectStrip.buffered,
-    customLoaded: custom.source !== null,
+    aliasLoaded,
     projectLoaded: project.source !== null,
     warningSink,
   })
   const emitAliasSuccessNotice = buildAliasSuccessNotice({
-    aliasedCustomConfigPath,
+    aliasedFile,
     bufferedCount: projectStrip.buffered.length,
-    customLoaded: custom.source !== null,
+    aliasLoaded,
     projectConfigPath: paths.projectConfig,
     projectLoaded: project.source !== null,
     warningSink,
   })
 
-  const sources = [userSource, projectSource, customSource].filter(
-    (source): source is FileConfigSource => source !== null,
-  )
+  const layers: LayeredSources = {
+    user: userLevel.user.source,
+    userLocal: userLevel.userLocal.source,
+    project: projectSource,
+    custom: userLevel.custom.source,
+    customLocal: userLevel.customLocal.source,
+  }
+  const sources = chainOf(layers)
   warnRemovedKeys(sources, warningSink)
-  const userConfig = userSource?.config
-  const projectConfig = projectSource?.config
-  const customConfig = customSource?.config
 
   const warned = new Set<string>()
 
-  // Only user and custom sources carry a resolved `search`, merged by the one
-  // shared rule (see `mergeSearchSettings`). A project's `search.sources` were
-  // validated and discarded at load; nothing here reads them.
+  // Only the user-level files carry a resolved `search`, merged by the one
+  // shared rule (see `mergeSearchSettings`) in layer order. A project's
+  // `search.sources` were validated and discarded at load; nothing here reads
+  // them.
   const mergedSearch = mergeSearchSettings(
-    [userSource?.search, customSource?.search].filter(
-      (source): source is SearchSettingsSource => source !== undefined,
+    (['user', 'userLocal', 'custom', 'customLocal'] as const).flatMap(
+      (slot) => {
+        const source = layers[slot]
+        return source?.search && isUserLevelLayer(source.layer)
+          ? [{ ...source.search, layer: source.layer }]
+          : []
+      },
     ),
   )
 
-  assertAllProfileBundlesAreValid(userConfig, customConfig, projectConfig)
+  assertAllProfileBundlesAreValid(
+    [
+      layers.user,
+      layers.userLocal,
+      layers.custom,
+      layers.customLocal,
+      layers.project,
+    ].map((source) => source?.config),
+  )
 
   const profileSelection = resolveActiveProfile({
-    userConfig,
-    userSource,
-    projectConfig,
-    projectSource,
-    customConfig,
-    customSource,
+    layers,
     allowProjectProfiles,
     warningSink,
   })
 
-  // The active profile bundle is inserted as a fourth chain entry (plan
-  // KTD: "Profile selection is a load-time step between stripping and
-  // merging"). It may be defined in the user config file, the custom
-  // (OPENCODE_CONFIG_DIR) config file, or -- under the
-  // `allow_project_profiles` opt-in -- the project config file, so its
-  // sourcePath/canonicalPath mirror `profileSelection.bundleSource` -- the
-  // file `lookupProfileBundle` actually found it in -- not unconditionally
-  // the user file (a profile defined only in custom config, with no user
-  // config file at all, must still resolve and apply). The same merge
-  // rules that apply to any other overlay value apply to its content (it
-  // may freely set model/variant/opencode/pi; `ProfileOverlaySchema`
-  // already restricts it to routing-only fields at parse time) -- see
-  // `ProfileBundleConfigSource`'s doc comment for why it is a distinct
-  // union member rather than a `trust: 'user'` file source. Gated on
-  // `bundleSource` existing (not just `bundle`) so a bundle can never be
-  // silently dropped for lack of a defining file to attribute it to; and
-  // on `activeProfile` narrowing to `string` so `profileName` never needs
-  // a fallback value -- both are guaranteed together whenever `bundle` is
-  // set (see `resolveActiveProfile`). Its CHAIN POSITION depends on
-  // provenance -- see `overlaySources` below -- a user/custom-sourced
-  // bundle is authoritative over user base (today's behavior, unchanged);
-  // a project-sourced bundle is merely advisory.
-  const profileEntry: ProfileBundleConfigSource | null =
-    profileSelection.bundle &&
-    profileSelection.bundleSource &&
-    typeof profileSelection.activeProfile === 'string'
-      ? {
-          kind: 'profile-bundle',
-          canonicalPath: profileSelection.bundleSource.canonicalPath,
-          path: profileSelection.bundleSource.path,
-          config: {
-            agents: profileSelection.bundle.agents,
-            categories: profileSelection.bundle.categories,
-          },
-          protectedFields: [],
-          profileName: profileSelection.activeProfile,
-          bundleTrust: profileSelection.bundleSource.trust,
-        }
-      : null
+  const profileEntry = buildProfileEntry(profileSelection)
 
-  // Overlay merging uses the four-entry chain; every other merge in this
-  // function (pi_subagents, disabled_*, bootstrap,
-  // skills_as_commands, and the observation metadata below) uses the
-  // original three-entry `sources`, since a profile bundle carries no
-  // fields outside agents/categories and must not be double-counted as a
-  // second 'user' entry in per-trust-kind metadata (authorities, source
-  // dedup).
+  // Overlay merging uses the chain with the profile bundle in it; every
+  // other merge in this function (pi_subagents, disabled_*, bootstrap,
+  // skills_as_commands) uses `sources`, the files alone, since a profile
+  // bundle carries no fields outside agents/categories. The observation
+  // metadata uses a further view that folds each local file into its
+  // sibling's kind (see `foldSiblingSources`).
   //
   // Chain position is provenance-dependent -- see `buildOverlaySources`'s
   // doc comment for the full explanation; this IS the advisory-merge
@@ -1896,9 +2172,7 @@ export function loadConfigWithSources(
   const overlaySources = buildOverlaySources(
     profileEntry,
     profileSelection.bundleSource?.trust,
-    userSource,
-    projectSource,
-    customSource,
+    layers,
   )
 
   const mergedOverlays = mergeOverlaySources(overlaySources)
@@ -1930,16 +2204,7 @@ export function loadConfigWithSources(
   // below, so `assertRoutingInvariants` can exclude disabled agents from its
   // walk -- a disabled agent must never block config load on a missing
   // model (see the disabled-agent exclusion comment on `collectRoutingTargets`).
-  const mergedDisabledAgents = mergeArraysUnique(
-    mergeArraysUnique(
-      mergeArraysUnique(
-        DEFAULT_CONFIG.disabled_agents,
-        userConfig?.disabled_agents,
-      ),
-      projectConfig?.disabled_agents,
-    ),
-    customConfig?.disabled_agents,
-  )
+  const mergedDisabledAgents = unionDisabledList(sources, 'disabled_agents')
 
   assertRoutingInvariants(
     overlays,
@@ -1949,33 +2214,10 @@ export function loadConfigWithSources(
   )
 
   const result: SystematicConfig = {
-    disabled_skills: mergeArraysUnique(
-      mergeArraysUnique(
-        mergeArraysUnique(
-          DEFAULT_CONFIG.disabled_skills,
-          userConfig?.disabled_skills,
-        ),
-        projectConfig?.disabled_skills,
-      ),
-      customConfig?.disabled_skills,
-    ),
+    disabled_skills: unionDisabledList(sources, 'disabled_skills'),
     disabled_agents: mergedDisabledAgents,
-    disabled_commands: mergeArraysUnique(
-      mergeArraysUnique(
-        mergeArraysUnique(
-          DEFAULT_CONFIG.disabled_commands,
-          userConfig?.disabled_commands,
-        ),
-        projectConfig?.disabled_commands,
-      ),
-      customConfig?.disabled_commands,
-    ),
-    bootstrap: {
-      ...DEFAULT_CONFIG.bootstrap,
-      ...userConfig?.bootstrap,
-      ...projectConfig?.bootstrap,
-      ...customConfig?.bootstrap,
-    },
+    disabled_commands: unionDisabledList(sources, 'disabled_commands'),
+    bootstrap: mergeBootstrap(sources),
     agents: overlayValues(overlays.agents),
     categories: overlayValues(overlays.categories),
     pi_subagents: {
@@ -1983,16 +2225,11 @@ export function loadConfigWithSources(
       agents: overlayValues(mergedPiSubagentsOverlays.agents),
     },
     skills_as_commands:
-      customConfig?.skills_as_commands ??
-      projectConfig?.skills_as_commands ??
-      userConfig?.skills_as_commands ??
+      lastDefined(sources, 'skills_as_commands') ??
       DEFAULT_CONFIG.skills_as_commands,
-    // `allow_project_profiles` is protected (stripped from `projectConfig`
-    // before this point) so only user/custom are consulted here.
-    allow_project_profiles:
-      customConfig?.allow_project_profiles ??
-      userConfig?.allow_project_profiles ??
-      DEFAULT_CONFIG.allow_project_profiles,
+    // `allow_project_profiles` is protected (stripped from the project file
+    // before this point) so only the user-level files decide it.
+    allow_project_profiles: allowProjectProfiles,
     ...(mergedSearch.settings && { search: mergedSearch.settings }),
     ...(mergedSearch.unreadable && { searchUnreadable: true }),
   }
@@ -2051,11 +2288,17 @@ export function loadConfigWithSources(
   return {
     config: effectiveConfig,
     metadata: buildConfigObservationMetadata({
-      custom: custom.metadata,
+      custom: foldKindMetadata('custom', [
+        userLevel.custom.metadata,
+        userLevel.customLocal.metadata,
+      ]),
       profileSelection,
       project: project.metadata,
-      sources,
-      user: user.metadata,
+      sources: foldSiblingSources(sources),
+      user: foldKindMetadata('user', [
+        userLevel.user.metadata,
+        userLevel.userLocal.metadata,
+      ]),
     }),
     overlays,
     piSubagentsOverlays: mergedPiSubagentsOverlays,
@@ -2063,11 +2306,58 @@ export function loadConfigWithSources(
   }
 }
 
+function isUserLevelLayer(layer: ConfigSourceLayer): layer is UserLevelLayer {
+  return layer !== 'project'
+}
+
+/**
+ * A kind's source files seen as one: the observation metadata describes a
+ * kind (`user`, `project`, `custom`), not a file, so a local file is folded
+ * into its sibling after both are validated. The folded entry keeps the
+ * canonical path of every file that loaded, so a project file that is the
+ * local file (or the base file) is recognised as the same file as the kind,
+ * and lists every config in the kind so a field counts as defined when either
+ * file defines it.
+ */
+interface FoldedConfigSource {
+  readonly trust: ConfigSourceKind
+  readonly canonicalPaths: readonly string[]
+  readonly configs: readonly RawSystematicConfig[]
+  readonly protectedFields: readonly ConfigProtectedFieldMetadata[]
+}
+
+function foldSiblingSources(
+  sources: readonly FileConfigSource[],
+): FoldedConfigSource[] {
+  const byTrust = new Map<ConfigSourceKind, FileConfigSource[]>()
+  for (const source of sources) {
+    byTrust.set(source.trust, [...(byTrust.get(source.trust) ?? []), source])
+  }
+  return Array.from(byTrust.values(), (files) => ({
+    trust: files[0]?.trust ?? 'user',
+    canonicalPaths: files.map((file) => file.canonicalPath),
+    configs: files.map((file) => file.config),
+    protectedFields: files.flatMap((file) => file.protectedFields),
+  }))
+}
+
+/** A kind is invalid if either of its files is, present if either exists, else absent. */
+function foldKindMetadata(
+  kind: ConfigSourceKind,
+  files: readonly ConfigSourceMetadata[],
+): ConfigSourceMetadata {
+  const invalid = files.find((file) => file.presence === 'invalid')
+  if (invalid) return invalid
+  return files.some((file) => file.presence === 'present')
+    ? { kind, presence: 'present' }
+    : { kind, presence: 'absent' }
+}
+
 interface ConfigSourceLoadSummary {
   readonly custom: ConfigSourceMetadata
   readonly profileSelection: ProfileSelectionResult
   readonly project: ConfigSourceMetadata
-  readonly sources: readonly FileConfigSource[]
+  readonly sources: readonly FoldedConfigSource[]
   readonly user: ConfigSourceMetadata
 }
 
@@ -2075,11 +2365,14 @@ function buildConfigObservationMetadata(
   summary: ConfigSourceLoadSummary,
 ): ConfigObservationMetadata {
   const authorities: ConfigAuthorityMetadata[] = []
-  const sourceConfigs = new Map<ConfigSourceKind, RawSystematicConfig>()
-  const sourcePaths = new Map<ConfigSourceKind, string>()
+  const sourceConfigs = new Map<
+    ConfigSourceKind,
+    readonly RawSystematicConfig[]
+  >()
+  const sourcePaths = new Map<ConfigSourceKind, readonly string[]>()
   for (const source of summary.sources) {
-    sourceConfigs.set(source.trust, source.config)
-    sourcePaths.set(source.trust, source.canonicalPath)
+    sourceConfigs.set(source.trust, source.configs)
+    sourcePaths.set(source.trust, source.canonicalPaths)
   }
 
   const firstDefinedSource = (
@@ -2087,8 +2380,8 @@ function buildConfigObservationMetadata(
     candidates: readonly ConfigSourceKind[],
   ): ConfigAuthorityMetadata | undefined => {
     for (const sourceKind of candidates) {
-      const config = sourceConfigs.get(sourceKind)
-      if (config && hasConfigField(config, fieldPath)) {
+      const configs = sourceConfigs.get(sourceKind)
+      if (configs?.some((config) => hasConfigField(config, fieldPath))) {
         return { fieldPath, sourceKind }
       }
     }
@@ -2133,38 +2426,62 @@ function buildConfigObservationMetadata(
  * canonical file and the custom-trust pass of that file loaded successfully,
  * the stripped fields DID take effect -- through the custom pass, at full
  * trust -- so reporting them as "blocked" in `ConfigObservationMetadata` is
- * misleading duplication. Drop the project source's protected-field records
- * in that case; keep them (they are genuinely blocked) whenever the custom
- * pass isn't aliased to the same file, or failed to load (`report` mode).
+ * misleading duplication. The same holds for any user-level file that loaded
+ * (`user`, `user.local`, `custom` or `custom.local`): a user-level layer
+ * applies what a project strips. Drop the project source's protected-field
+ * records in that case; keep them (they are genuinely blocked) whenever no
+ * loaded user-level file is the project file, or the one that is failed to
+ * load (`report` mode).
  */
 function collectVisibleProtectedFields(
-  sources: readonly FileConfigSource[],
+  sources: readonly FoldedConfigSource[],
 ): readonly ConfigProtectedFieldMetadata[] {
   const projectSource = sources.find((source) => source.trust === 'project')
-  const customSource = sources.find((source) => source.trust === 'custom')
-  const projectAppliedViaCustom =
-    projectSource !== undefined &&
-    customSource !== undefined &&
-    projectSource.canonicalPath === customSource.canonicalPath
+  const userLevelPaths = new Set(
+    sources
+      .filter((source) => source.trust !== 'project')
+      .flatMap((source) => source.canonicalPaths),
+  )
+  const projectAppliedViaUserLevel =
+    projectSource?.canonicalPaths.some((file) => userLevelPaths.has(file)) ??
+    false
 
   return sources.flatMap((source) =>
-    projectAppliedViaCustom && source.trust === 'project'
+    projectAppliedViaUserLevel && source.trust === 'project'
       ? []
       : source.protectedFields,
   )
 }
 
+/**
+ * One row per real file. A kind's row is left out only when it adds nothing:
+ * every file that loaded in the kind was already reported by a higher-priority
+ * kind (the same file reached twice), and the row is not `invalid`. A kind
+ * with a file of its own keeps its row, and an `invalid` row is always kept,
+ * so a file shared with another kind never hides the failure or the presence
+ * of a different file in this one. A user-level kind outranks `project`, so a
+ * project file that is a user-level file is reported as that user-level kind.
+ * Rows keep their given order.
+ */
 function dedupeSourceMetadata(
   metadata: readonly ConfigSourceMetadata[],
-  sourcePaths: ReadonlyMap<ConfigSourceKind, string>,
+  sourcePaths: ReadonlyMap<ConfigSourceKind, readonly string[]>,
 ): readonly ConfigSourceMetadata[] {
+  const priority: readonly ConfigSourceKind[] = ['custom', 'user', 'project']
   const seen = new Set<string>()
-  return metadata.filter((source) => {
-    const identity = sourcePaths.get(source.kind) ?? `missing:${source.kind}`
-    if (seen.has(identity)) return false
-    seen.add(identity)
-    return true
-  })
+  const kept = new Set<ConfigSourceKind>()
+  for (const kind of priority) {
+    const files = sourcePaths.get(kind) ?? []
+    const presence = metadata.find((source) => source.kind === kind)?.presence
+    const redundant =
+      files.length > 0 &&
+      files.every((file) => seen.has(file)) &&
+      presence !== 'invalid'
+    if (redundant) continue
+    for (const file of files) seen.add(file)
+    kept.add(kind)
+  }
+  return metadata.filter((source) => kept.has(source.kind))
 }
 
 function hasConfigField(
@@ -2318,7 +2635,7 @@ function assertProfileBundleCategoryKeysAreBundledCategories(
 
 /**
  * Validate every profile bundle defined in every source that may define
- * `profiles` (custom, user, and project), regardless of whether that
+ * `profiles` (the user-level files and project), regardless of whether that
  * bundle is currently selected. A typo in an unselected profile's category
  * key must fail config load exactly like a typo in the top-level
  * `categories` overlay does, rather than staying silent until some later
@@ -2329,15 +2646,14 @@ function assertProfileBundleCategoryKeysAreBundledCategories(
  * `createProfileBundleSchema`'s doc comment.) `projectConfig` naturally
  * only contributes bundles when `allow_project_profiles` is on -- `profiles`
  * is stripped from it otherwise (see `stripProjectProtectedFields`), so
- * `projectConfig?.profiles` is `undefined` in the opt-in-off case and this
- * loop needs no separate opt-in check of its own.
+ * the project config's `profiles` is `undefined` in the opt-in-off case and this
+ * loop needs no separate opt-in check of its own. Callers pass the configs in
+ * check order: user, user.local, custom, custom.local, project.
  */
 function assertAllProfileBundlesAreValid(
-  userConfig: RawSystematicConfig | undefined,
-  customConfig: RawSystematicConfig | undefined,
-  projectConfig: RawSystematicConfig | undefined,
+  configs: readonly (RawSystematicConfig | undefined)[],
 ): void {
-  for (const config of [userConfig, customConfig, projectConfig]) {
+  for (const config of configs) {
     for (const [profileName, bundle] of Object.entries(
       config?.profiles ?? {},
     )) {
@@ -2526,8 +2842,8 @@ function resolveOverlayEntryOrigin(
   if (!previous) return own
   const preserves =
     source.kind === 'profile-bundle' ||
-    source.trust === 'project' ||
-    source.trust === 'user'
+    source.layer === 'project' ||
+    source.layer === 'user'
   return preserves ? { ...previous, ...own } : own
 }
 
@@ -2548,9 +2864,9 @@ function resolveOverlayEntryValue(
   if (source.kind === 'profile-bundle') {
     return mergeProfileOverlayValue(previous, next)
   }
-  if (source.trust === 'project') return preserveSecurityFields(previous, next)
+  if (source.layer === 'project') return preserveSecurityFields(previous, next)
   // `previous` is only ever non-empty here when `source` is the user
-  // source AND an advisory (project-sourced) profile bundle was placed
+  // layer AND an advisory (project-sourced) profile bundle was placed
   // ahead of it in `overlaySources` -- `userSource` is unconditionally the
   // FIRST chain entry in every other case (normal/no active profile,
   // user/custom-sourced active profile), so this branch is unreachable
@@ -2559,11 +2875,11 @@ function resolveOverlayEntryValue(
   // picking up whatever the project bundle filled in, so it reuses the
   // exact same field-additive `mergeProfileOverlayValue` a normal profile
   // uses over user base -- not a second, parallel traversal.
-  if (source.trust === 'user') return mergeProfileOverlayValue(previous, next)
-  // An ordinary custom same-key overlay fully replaces the previous value.
-  // Only the project trust level, the user-over-advisory-bundle case
-  // (above), and the profile-bundle pseudo-source (mergeProfileOverlayValue)
-  // merge field-by-field instead of replacing.
+  if (source.layer === 'user') return mergeProfileOverlayValue(previous, next)
+  // Every other layer -- user.local, custom, custom.local -- fully replaces
+  // the previous value for the same key. Only the project layer, the
+  // user-over-advisory-bundle case (above), and the profile-bundle
+  // pseudo-source (mergeProfileOverlayValue) merge field-by-field instead.
   return next
 }
 
@@ -2772,32 +3088,79 @@ function throwInvalidOverlay(sourcePath: string, keyPath: string): never {
   )
 }
 
-interface ConfigPathOptions {
-  readonly homeDir?: string
-  readonly userConfigDir?: string
-  readonly customConfigDir?: string | null
-}
+type ConfigPathOptions = Pick<
+  LoadConfigOptions,
+  'customConfigDir' | 'homeDir' | 'includeProject' | 'userConfigDir'
+>
 
+/**
+ * Where each config file lives.
+ *
+ * The project file is read from the repository root: the nearest ancestor of
+ * `projectDir` holding `.git`, or `projectDir` itself when there is none (kept
+ * as given, not resolved). Under that root `.systematic.jsonc` (else
+ * `.systematic.json`) wins over `.opencode/systematic.jsonc` (else `.json`);
+ * `ignoredProjectConfig` names the `.opencode/` file a root file shadows. With
+ * `includeProject: false` no root is looked up and `projectConfig` stays under
+ * `projectDir`. `startDirProjectConfig` names an `.opencode/` file in
+ * `projectDir` that is not read because the root is elsewhere.
+ *
+ * The local files sit beside the user and custom files and are selected even
+ * when absent. `customAliasesUser` is true when the custom directory is the
+ * user directory.
+ */
 export function getConfigPaths(
   projectDir: string,
   options?: ConfigPathOptions,
 ) {
-  const { homeDir, userConfigDir, customConfigDir } =
-    resolveUserLevelConfigDirs(options)
-
-  const result = {
-    userConfig: selectConfigFile(userConfigDir, 'systematic'),
-    projectConfig: selectConfigFile(
-      path.join(projectDir, '.opencode'),
-      'systematic',
-    ),
-    userDir: path.join(homeDir, '.config/opencode/systematic'),
-    projectDir: path.join(projectDir, '.opencode/systematic'),
-    ...(customConfigDir && {
-      customConfig: selectConfigFile(customConfigDir, 'systematic'),
-      customDir: path.join(customConfigDir, 'systematic'),
-    }),
+  const dirs = resolveUserLevelConfigDirs(options)
+  const { homeDir, customConfigDir } = dirs
+  const selection = selectUserLevelConfigFiles(dirs)
+  const fileFor = (layer: UserLevelLayer): string | undefined =>
+    selection.files.find((file) => file.layer === layer)?.path
+  const userFile = (layer: 'user' | 'user.local'): string => {
+    const file = fileFor(layer)
+    if (file === undefined) {
+      throw new Error(`No ${layer} config file was selected`)
+    }
+    return file
   }
 
-  return result
+  const repoRoot =
+    (options?.includeProject ?? true) ? lookupSearchRoot(projectDir) : undefined
+  const projectRoot = repoRoot?.root ?? projectDir
+  const project = repoRoot
+    ? selectProjectConfigFile(projectRoot)
+    : {
+        path: selectConfigFile(
+          path.join(projectDir, '.opencode'),
+          'systematic',
+        ),
+      }
+  const startDirProjectConfig = repoRoot
+    ? findStartDirProjectConfig(projectDir, repoRoot, project.path)
+    : undefined
+  const ignoredProjectConfig =
+    'ignoredPath' in project ? project.ignoredPath : undefined
+  const customConfig = fileFor('custom')
+  const customLocalConfig = fileFor('custom.local')
+
+  return {
+    userConfig: userFile('user'),
+    userLocalConfig: userFile('user.local'),
+    projectConfig: project.path,
+    projectRoot,
+    userDir: path.join(homeDir, '.config/opencode/systematic'),
+    projectDir: path.join(projectRoot, '.opencode/systematic'),
+    customAliasesUser: selection.aliased,
+    ...(ignoredProjectConfig !== undefined && { ignoredProjectConfig }),
+    ...(startDirProjectConfig !== undefined && { startDirProjectConfig }),
+    ...(customConfigDir &&
+      customConfig !== undefined &&
+      customLocalConfig !== undefined && {
+        customConfig,
+        customLocalConfig,
+        customDir: path.join(customConfigDir, 'systematic'),
+      }),
+  }
 }

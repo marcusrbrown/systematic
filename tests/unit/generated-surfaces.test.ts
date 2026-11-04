@@ -899,6 +899,19 @@ describe('affected selection in a temp repo', () => {
     }
   })
 
+  test('the exclude matcher module triggers the schema and config-reference surfaces', () => {
+    for (const surface of ['schema', 'config-reference']) {
+      const found = GENERATED_SURFACES.find((s) => s.name === surface)
+      if (found === undefined) {
+        throw new Error(`${surface} surface missing`)
+      }
+      expect(found.triggers).toContain('src/lib/search-exclude.ts')
+      expect(
+        found.triggers.some((t) => matchesGlob(t, 'src/lib/search-exclude.ts')),
+      ).toBe(true)
+    }
+  })
+
   test('a hand edit to a generated output selects the surface that writes it', () => {
     const repo = seededRepo()
     write(
