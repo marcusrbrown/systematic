@@ -11,7 +11,7 @@ tags:
   - code-blocks
   - tool-names
   - orchestrating-swarms
-last_refreshed: 2026-05-16
+last_refreshed: 2026-11-05
 environment: "Bun 1.x / TypeScript 5.7+ / OpenCode"
 symptoms:
   - "Code examples show Task({ instead of task({ after CC→OC conversion"
@@ -24,6 +24,8 @@ related: []
 ---
 
 # Converter Skips Code Blocks: 47 Broken Tool Name Examples in orchestrating-swarms
+
+**Note (2026-11-05):** The converter (`src/lib/converter.ts`) and the `convert` CLI command were removed in v3.0.0 (commit `a8dd8763`), and the `convert-cc-defs` skill was deleted earlier. The converter sections below are history. The lesson still applies to any import: a mechanical transform that skips fenced code blocks needs a separate code-block audit. Imports now follow `.agents/skills/importing-upstream-content/SKILL.md`, and `bun scripts/content-integrity.ts` is the backstop.
 
 ## Problem
 
@@ -50,7 +52,7 @@ The converter's behavior is tested and correct. The problem is downstream.
 
 ### Step 2: Understand the code-block audit requirement
 
-The converter's intentional code-block skip is documented in `src/lib/converter.ts` source comments (see `CODE_BLOCK_PATTERN` and `transformBody()`). The `convert-cc-defs` workflow that previously documented the manual audit step has been deleted. Any batch conversion run via the CLI (`bun src/cli.ts convert <file>`) must include a separate code-block audit step — the converter will not fix capitalized tool names inside fenced code blocks.
+The converter's intentional code-block skip is documented in `src/lib/converter.ts` source comments (see `CODE_BLOCK_PATTERN` and `transformBody()`). The `convert-cc-defs` workflow that previously documented the manual audit step has been deleted. A batch conversion needed a separate code-block audit step, because the converter did not fix capitalized tool names inside fenced code blocks. Today that audit is part of the import procedure (see the note above).
 
 ### Step 3: Verify scope
 
@@ -97,11 +99,11 @@ Added a high-risk pattern note to the convert-cc-defs skill's Code Block Audit s
 
 ### 1. Post-conversion validation command
 
-`scripts/content-integrity.ts` already runs banned-pattern detection (including `Task(` in code blocks) on every CI run. For ad-hoc CLI conversions, run it locally with `bun scripts/content-integrity.ts` before committing.
+`scripts/content-integrity.ts` already runs banned-pattern detection (including `Task(` in code blocks) on every CI run. For any import or hand adaptation, run it locally with `bun scripts/content-integrity.ts` before committing.
 
 ### 2. Workflow guardrails
 
-Make Phase 3d a hard gate in `convert-cc-defs`:
+Make Phase 3d a hard gate in `convert-cc-defs` (since deleted; apply the same gate to the import procedure):
 - Run the validation command; if exit code != 0, do not proceed to Phase 4
 - Record audit counts in manifest notes: `CODE_BLOCK_AUDIT: PASS (Task(:0, TodoWrite:0)`
 
@@ -128,7 +130,7 @@ bun run build && bun run typecheck && bun run lint && bun test
 ## Cross-References
 
 - **PR:** [#63](https://github.com/marcusrbrown/systematic/pull/63) — feat: sync all CEP skills from upstream
-- **Converter source:** `src/lib/converter.ts` — `CODE_BLOCK_PATTERN` and `transformBody()`
+- **Converter source (removed in v3.0.0, `a8dd8763`):** `src/lib/converter.ts` — `CODE_BLOCK_PATTERN` and `transformBody()`
 - **Content-integrity gate:** `scripts/content-integrity.ts` — CI enforcement for CC heritage patterns
 
 ## Key Takeaway

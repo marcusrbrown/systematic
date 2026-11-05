@@ -12,7 +12,7 @@ tags:
   - slack-researcher
   - content-integrity
   - content-integrity-gate
-last_refreshed: 2026-05-16
+last_refreshed: 2026-11-05
 environment: 'Systematic plugin / CEP upstream sync / reconciliation-only policy'
 symptoms:
   - 'Three bundled skills (`ce-brainstorm`, `ce-ideate`, `ce-plan`) dispatch `systematic:research:slack-researcher` but no such agent exists in `agents/research/`'
@@ -54,7 +54,7 @@ Three of the 63 updated skills (`ce-brainstorm`, `ce-ideate`, `ce-plan`) had bee
 
 ## Solution
 
-**Short-term fix applied:** imported the missing agent from CEP upstream (`agents/research/slack-researcher.md`), applied CEP→Systematic conversions (`Claude Code` → `OpenCode`, `model: sonnet` → `model: inherit` to match Systematic's research-agent convention), and verified the three dispatch refs now resolve.
+**Short-term fix applied:** imported the missing agent from CEP upstream (`agents/research/slack-researcher.md`), applied CEP→Systematic conversions (`Claude Code` → `OpenCode`, `model: sonnet` dropped so the agent has no `model` field, per the convention that bundled agents omit `model`), and verified the three dispatch refs now resolve.
 
 ```bash
 # Fetch upstream agent
@@ -70,7 +70,7 @@ done
 
 ## Why This Works
 
-The agent file's presence satisfies the orchestrator's lookup path when one of the three skills triggers the dispatch branch. The conversion from `model: sonnet` to `model: inherit` aligns with Systematic's convention for research agents (all six existing research agents use `inherit`).
+The agent file's presence satisfies the orchestrator's lookup path when one of the three skills triggers the dispatch branch. Dropping `model: sonnet` aligns with Systematic's convention: bundled agents omit `model` and inherit the invoking model. (The original fix wrote `model: inherit`. That value is not supported; see AGENTS.md Conventions.)
 
 ## Prevention
 
@@ -97,7 +97,7 @@ done < <(grep -rhoE 'systematic:(research|review|workflow|design|docs|document-r
 
 This logic is now implemented in `scripts/content-integrity.ts` (the `checkReferenceIntegrity` check) and runs on every CI build.
 
-**If doing future reconciliation-only syncs**, always include this step — either in the sync tooling itself, or as a post-sync verification in the calling workflow. The sync tooling that previously existed (`convert-cc-defs` skill, `check-cep-upstream.ts` script) never had a reference-integrity step. The CLI `convert` command, which remains available for ad-hoc conversions, also does not check reference integrity — callers must do this themselves.
+**If doing future reconciliation-only syncs**, always include this step — either in the sync tooling itself, or as a post-sync verification in the calling workflow. The sync tooling that previously existed (`convert-cc-defs` skill, `check-cep-upstream.ts` script) never had a reference-integrity step, and neither did the CLI `convert` command (removed in v3.0.0, commit `a8dd8763`). Imports now follow `.agents/skills/importing-upstream-content/SKILL.md`, which ends with `bun scripts/content-integrity.ts`.
 
 **CI drift gate should include reference integrity** (not just string patterns). This is now implemented in `scripts/content-integrity.ts`, which runs on every CI build and asserts:
 

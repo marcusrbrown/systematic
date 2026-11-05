@@ -13,14 +13,14 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: high
 tags: [converter, frontmatter, map-and-preserve, non-destructive, cep-to-opencode]
-last_refreshed: 2026-05-16
+last_refreshed: 2026-11-05
 ---
 
 # Map-and-Preserve Strategy for CEP-to-OpenCode Conversion
 
 ## Problem
 
-The Systematic plugin's converter (`src/lib/converter.ts`) used a destructive "strip-all" approach when converting CEP (Compound Engineering Plugin) frontmatter to OpenCode format. Note: as of April 2026, Systematic no longer auto-syncs from CEP; the converter is now reserved for ad-hoc CLI conversions (`bun src/cli.ts convert <file>`). Fields that had direct OpenCode equivalents were silently removed instead of being mapped, causing data loss during conversion. Unknown fields that should have passed through were also stripped.
+The Systematic plugin's converter (`src/lib/converter.ts`) used a destructive "strip-all" approach when converting CEP (Compound Engineering Plugin) frontmatter to OpenCode format. Note: Systematic stopped auto-syncing from CEP in April 2026, and v3.0.0 removed the converter and the `convert` CLI command (commit `a8dd8763`). The converter details below are preserved as history; imports now follow `.agents/skills/importing-upstream-content/SKILL.md`. Fields that had direct OpenCode equivalents were silently removed instead of being mapped, causing data loss during conversion. Unknown fields that should have passed through were also stripped.
 
 ## Environment
 
