@@ -92,7 +92,7 @@ bun run surfaces:drift   # Check every surface and name each failure (CI runs th
 
 ## Cloned Dependency Source
 
-Read-only dependency source repositories are available under `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
+Read-only dependency source repositories can be recreated under `.slim/clonedeps/repos/` from the repo URL and ref in `.slim/clonedeps.json`. That directory is gitignored and absent in a fresh checkout. Do not edit these clones.
 
 - `.slim/clonedeps/repos/anomalyco__opencode/` — `anomalyco/opencode` at `v1.17.6`; OpenCode monorepo containing `packages/sdk/js` (the `OpencodeClient` runtime that `client.provider.list()` and `client.model.list()` are dispatched through) and `packages/plugin` (the `PluginInput` type definitions and the plugin loader/hook iteration semantics — useful for verifying the FIFO assumption and `output` reference-sharing contract from PR #352).
 - `.slim/clonedeps/repos/obra__superpowers/` — `obra/superpowers` at `v5.1.0`; MIT-licensed agentic skills framework. Source of the `test-driven-development` and `writing-skills` skills being imported into Systematic's bundle. Useful for verifying exact upstream content during the adaptation pass and tracking future upstream drift.

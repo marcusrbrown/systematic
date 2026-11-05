@@ -1,6 +1,7 @@
 ---
 name: agent-native-audit
 description: Run comprehensive agent-native architecture review with scored principles
+license: MIT
 argument-hint: '[optional: specific principle to audit]'
 disable-model-invocation: true
 ---

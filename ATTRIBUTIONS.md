@@ -4,7 +4,7 @@ Systematic ships bundled skills and agents adapted from third-party sources. Thi
 
 ## License Conventions
 
-Bundled skills and agents may declare a `license:` field in their YAML frontmatter to communicate their licensing origin. When this field is **present**, it reflects the upstream source's license — these files are derivative works adapted from clearly identified projects. When this field is **absent**, the file is unspecified Systematic-originated content, not "proprietary" or "unlicensed." Treat absence as "no upstream attribution required," not as a missing legal notice.
+This file is the authoritative attribution surface for every derived file, including agents and sub-files, which carry no `license:` field. The entry-point `SKILL.md` of a derived skill may declare a `license:` field in its YAML frontmatter. The field names the primary upstream license of that skill and holds one value, even when the skill derives from more than one source. For example, `frontend-design` carries `Apache-2.0` from `pbakaus/impeccable`, and its compound-engineering lineage (MIT) is recorded only in that source's section below. A skill vendored from a single upstream, such as `agent-browser`, carries no field and is attributed only here. A missing `license:` field never means that attribution is not required: check the sections below. A file not listed in any section below is not recorded as derived from a third-party source.
 
 The full repository license is in `LICENSE` at the repository root.
 
@@ -14,7 +14,7 @@ The full repository license is in `LICENSE` at the repository root.
 **Pinned commit:** `f2cbfbefebbfef77321e4c9abc9e949826bea9d7` (tag `v5.1.0`)
 **License:** MIT
 **Copyright:** Copyright (c) 2025 Jesse Vincent
-**Cloned at:** `.slim/clonedeps/repos/obra__superpowers/` (development inspection only; not shipped)
+**Cloned at:** `.slim/clonedeps/repos/obra__superpowers/`, recreated on demand from `.slim/clonedeps.json` (gitignored; development inspection only; not shipped)
 
 ### Files derived
 
@@ -486,6 +486,121 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+```
+
+## EveryInc/compound-engineering-plugin — MIT
+
+**Source repository:** [`EveryInc/compound-engineering-plugin`](https://github.com/EveryInc/compound-engineering-plugin)
+**Pinned commit:** `59dbaef37607354d103113f05c13b731eecbb690` (upstream `main`, committed 2026-04-17T09:00:37Z)
+**Later ports:** `8cc07acb5299db5331c359395738d5fe32df50c5` (2026-04-28T05:17:02Z) for ten reference files added in #319; `debc915c5886a22c049e871304b7f991363e1155` (2026-06-05T05:31:36Z) for six reference files and the phases merged into `ce-brainstorm` and `ce-plan` in #486
+**License:** MIT
+**Copyright:** Copyright (c) 2025 Kieran Klaassen (`plugins/compound-engineering/LICENSE`); Copyright (c) 2025 Every (`LICENSE` at the repository root)
+
+### Provenance
+
+- Systematic imported compound-engineering content from its first commit (2026-01-23). Bulk syncs ran from February to April 2026 through a converter and a `sync-manifest.json` that recorded an upstream commit for each definition (for example #62, #63 and #261).
+- #290 (2026-04-17) ran one last reconciliation sync of 63 definitions, then deleted the sync tooling and the manifest. No upstream SHA was recorded for that sync, so the pinned commit above is reconstructed. It is upstream `main` when #290 began: the PR's first commit is 2026-04-17T16:11:45Z, and the next upstream commit (`12aaad31ebd17686db1a75d1d3575da79d1dad2b`, 2026-04-17T18:40:54Z) is not reflected in the shipped files. Across upstream's commits from 2026-04-01 to 2026-04-19, line-level comparison of the files that changed in that window peaks at this commit. The previous upstream commit, `e7cf0ae9571e260a00db458dd8e2281c37f1ec8b`, differs from it only in files Systematic did not import.
+- Five files were deleted upstream before the pinned commit. For these, the SHA below is the one the manifest recorded, and the shipped text matches that upstream version:
+
+| Shipped file | Upstream commit |
+|---|---|
+| `agents/workflow/bug-reproduction-validator.md` | `f744b797efca368c986e4c8595e09a4f75e57a11` |
+| `skills/compound-docs/SKILL.md` | `56b174a0563107b3084d780a1e6ae5a909ebeef3` |
+| `skills/deepen-plan/SKILL.md` | `54bea268f2b5b9056607a75dd7ffccab8903ae77` |
+| `skills/reproduce-bug/SKILL.md` | `0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b` |
+| `skills/slfg/SKILL.md` | `fed9fd68db283c64ec11293f88a8ad7a6373e2fe` |
+
+- The `assets/` and `references/` files of `skills/compound-docs/` were replaced in 2026-10 (#1228) with adapted copies of the `ce-compound` files at the pinned commit.
+
+### Files derived
+
+The list is grouped by directory because it covers 119 files. Every file under a listed skill directory is derived unless a bullet says otherwise.
+
+Agents (36 files):
+
+- `agents/design/`: `design-iterator`
+- `agents/document-review/`: `adversarial-document-reviewer`, `coherence-reviewer`, `design-lens-reviewer`, `feasibility-reviewer`, `product-lens-reviewer`, `scope-guardian-reviewer`, `security-lens-reviewer`
+- `agents/research/`: `best-practices-researcher`, `framework-docs-researcher`, `git-history-analyzer`, `issue-intelligence-analyst`, `learnings-researcher`, `repo-research-analyst`, `slack-researcher`
+- `agents/review/`: `adversarial-reviewer`, `agent-native-reviewer`, `api-contract-reviewer`, `architecture-strategist`, `cli-readiness-reviewer`, `code-simplicity-reviewer`, `correctness-reviewer`, `data-migrations-reviewer`, `deployment-verification-agent`, `kieran-typescript-reviewer`, `maintainability-reviewer`, `pattern-recognition-specialist`, `performance-reviewer`, `previous-comments-reviewer`, `project-standards-reviewer`, `reliability-reviewer`, `security-reviewer`, `testing-reviewer`
+- `agents/workflow/`: `bug-reproduction-validator`, `pr-comment-resolver`, `spec-flow-analyzer`
+
+Skills (83 files in 26 directories):
+
+- `skills/agent-native-architecture/` (15 files), `skills/agent-native-audit/`, `skills/ce-brainstorm/` (8), `skills/ce-compound/` (4), `skills/ce-compound-refresh/` (4), `skills/ce-ideate/` (2), `skills/ce-work/` (2), `skills/compound-docs/` (4), `skills/deepen-plan/`, `skills/deploy-docs/`, `skills/document-review/` (5), `skills/frontend-design/`, `skills/git-clean-gone-branches/` (2), `skills/git-commit/`, `skills/git-commit-push-pr/`, `skills/git-worktree/` (2), `skills/lfg/`, `skills/onboarding/` (2), `skills/report-bug-ce/`, `skills/reproduce-bug/`, `skills/resolve-pr-feedback/` (5), `skills/slfg/`, `skills/test-browser/`, `skills/todos/` (2; it merges upstream's `todo-create`, `todo-triage` and `todo-resolve`)
+- `skills/ce-plan/`: all files except `references/prior-art-survey-schema.json`, which was written in Systematic
+- `skills/ce-review/`: `SKILL.md` and `references/` `diff-scope.md`, `findings-schema.json`, `persona-catalog.md`, `resolve-base.sh`, `review-output-template.md` and `subagent-template.md`. The other files in the directory were written in Systematic.
+
+Five of these files were imported from upstream and have since been largely rewritten here: `agents/research/learnings-researcher.md`, `skills/git-worktree/SKILL.md`, `skills/git-worktree/scripts/worktree-manager.sh`, `skills/ce-review/references/findings-schema.json` and `skills/ce-brainstorm/references/visual-communication.md` (modelled on the `ce-plan` file of the same name). They are listed because their lineage is upstream, not because much upstream text remains.
+
+`skills/frontend-design/SKILL.md` also carries Apache 2.0 material from `pbakaus/impeccable` (see above).
+
+### Adaptation notes
+
+- The sync converter and a batch pass rewrote upstream's harness-specific text: `compound-engineering:<category>:<name>` agent references became `systematic:<category>:<name>`, `.compound-engineering/` and `.context/compound-engineering/` paths became Systematic paths, `plugins/compound-engineering/` path examples and `ai:compound-engineering` identity strings were rewritten, `Claude Code` became `OpenCode` (later harness-neutral wording), `CLAUDE.md` became `AGENTS.md`, `.claude/` became `.opencode/`, `${CLAUDE_PLUGIN_ROOT}` paths became relative paths, and tool names such as `AskUserQuestion` and `TaskCreate` were mapped to harness equivalents.
+- Model fields were removed from every bundled agent (#336), so the agents are model-free. Frontmatter was otherwise mapped to the fields Systematic's loader reads.
+- Systematic did not follow upstream's 2026-04-18 rename to a `ce-` prefix (#503). Some names differ from upstream's current ones, for example `document-review` (`ce-doc-review`), `git-commit` (`ce-commit`), `git-commit-push-pr` (`ce-commit-push-pr`), `git-clean-gone-branches` (`ce-clean-gone-branches`), `git-worktree` (`ce-worktree`) and `report-bug-ce` (`ce-report-bug`).
+- The `.mjs` scripts under `skills/` are formatted by Biome (single quotes, no semicolons), so they differ from upstream line by line while keeping the same logic. A CodeQL fix in #261 also changed some regexes in `skills/onboarding/scripts/inventory.mjs`.
+- The files have been edited in Systematic, not re-synced, since #290. Measured by line overlap with the version shipped at #290, 72 of the 95 derived files that existed then still match at least 90% of their lines, and 19 more match 50% to 90%. Four fall below 50%: `skills/ce-review/references/persona-catalog.md`, `skills/document-review/references/review-output-template.md`, and two `skills/compound-docs/` files that were replaced with the `ce-compound` versions. The five largely rewritten files above are counted separately. The other 19 derived files were added after #290 (in #319, #486 and later).
+- Per-file copyright comments are not used. The 24 entry-point `SKILL.md` files of derived skills carry `license: MIT` in their frontmatter: every skill listed above except `skills/frontend-design/` (`Apache-2.0`, from `pbakaus/impeccable`) and `skills/git-worktree/` (lineage only). Agents and sub-files carry no field, so this section is their attribution surface.
+
+### Future refresh discipline
+
+Future refreshes from compound-engineering are explicit human-reviewed events, not automatic syncs. No sync tooling remains (it was removed in #290). To refresh, diff the pinned commit above against the new upstream commit and apply that diff onto Systematic's copy. Do not copy upstream files over Systematic's. Record the new pinned commit here.
+
+### Upstream MIT license text
+
+The following are the full MIT license texts from `EveryInc/compound-engineering-plugin@59dbaef37607354d103113f05c13b731eecbb690`, reproduced here in compliance with the license's notice requirements. The two files are identical except for the copyright holder on the third line. Neither file changed in upstream between 2026-01-23 and the pinned commit.
+
+`plugins/compound-engineering/LICENSE`, the directory the derived files were copied from:
+
+```
+MIT License
+
+Copyright (c) 2025 Kieran Klaassen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+`LICENSE`, at the upstream repository root:
+
+```
+MIT License
+
+Copyright (c) 2025 Every
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ## Anthropic — CC-BY-4.0

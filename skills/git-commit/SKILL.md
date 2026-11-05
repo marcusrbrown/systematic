@@ -1,6 +1,7 @@
 ---
 name: git-commit
 description: Create a git commit with a clear, value-communicating message. Use when the user says "commit", "commit this", "save my changes", "create a commit", or wants to commit staged or unstaged work. Produces well-structured commit messages that follow repo conventions when they exist, and defaults to conventional commit format otherwise.
+license: MIT
 ---
 
 # Git Commit

@@ -1,6 +1,7 @@
 ---
 name: compound-docs
 description: Capture solved problems as categorized documentation with YAML frontmatter for fast lookup
+license: MIT
 disable-model-invocation: true
 allowed-tools:
   - Read

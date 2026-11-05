@@ -1,6 +1,7 @@
 ---
 name: reproduce-bug
 description: Systematically reproduce and investigate a bug from a GitHub issue. Use when the user provides a GitHub issue number or URL for a bug they want reproduced or investigated.
+license: MIT
 argument-hint: '[GitHub issue number or URL]'
 ---
 
