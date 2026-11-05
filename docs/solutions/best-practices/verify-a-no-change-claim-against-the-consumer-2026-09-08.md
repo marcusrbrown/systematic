@@ -47,7 +47,7 @@ The PR asserted "no runtime behavior changed." A review across eleven personas r
 
 > **Updated 2026-09-20.** Two mechanism details above have since changed; the lesson is unaffected, but the specifics are worth correcting because this document's own subject is verifying claims against their consumer.
 >
-> - The guard no longer throws. `rejectProjectSecurityOverlay` was replaced by `stripProjectSecurityOverlayFields` (`src/lib/config.ts:1229`), which strips the offending field and warns rather than failing the load (issue #992, shipped in v3.18.9). A malformed field in a committed project config no longer breaks every teammate's plugin init.
+> - The guard no longer throws. `rejectProjectSecurityOverlay` was replaced by `stripProjectSecurityOverlayFields` (`src/lib/config.ts:1247`), which strips the offending field and warns rather than failing the load (issue #992, shipped in v3.18.9). A malformed field in a committed project config no longer breaks every teammate's plugin init.
 > - "A project file may not set routing at all" is now too strong. It remains true for project `agents`/`categories` overlays, but a user may opt in with `allow_project_profiles`, after which a project config may define `profiles` bundles that contribute routing — advisory only, filling gaps the user left and never overriding a user-set value (v3.20.0). The opt-in is itself protected and resolved from user and custom config only, so a repository still cannot grant itself the permission.
 >
 > See [`merge-chain-position-as-a-structural-guarantee-2026-09-20.md`](./merge-chain-position-as-a-structural-guarantee-2026-09-20.md).

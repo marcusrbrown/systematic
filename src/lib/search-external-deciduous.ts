@@ -37,10 +37,11 @@ import {
   MAX_TOTAL_BYTES,
   narrowNonEmptyString,
   newEntryBudget,
+  projectRootRejectionWarning,
   type ReadBound,
   readAllowance,
+  rejectedProjectRoot,
   safeLstat,
-  symlinkedComponent,
 } from './search-corpus.js'
 import type { ExcludeMatcher } from './search-exclude.js'
 
@@ -327,23 +328,20 @@ function probeRoots(
   const reals: string[] = []
   let unreadable = false
   for (const root of input.roots) {
-    const symlinked =
+    // The shared pre-walk check, so both formats refuse the same project roots
+    // with the same warning. `probeRoot` repeats the containment test on the
+    // real path it is about to read.
+    const rejection =
       containedIn === undefined
         ? undefined
-        : symlinkedComponent(containedIn, root)
-    if (symlinked === 'root') {
-      warnings.push(`${name}: a project root is a symlink; source dropped`)
-      return { kind: 'dropped' }
-    }
-    if (symlinked === 'ancestor') {
-      warnings.push(
-        `${name}: a project root passes through a symlink; source dropped`,
-      )
+        : rejectedProjectRoot(containedIn, root)
+    if (rejection !== undefined) {
+      warnings.push(projectRootRejectionWarning(name, rejection))
       return { kind: 'dropped' }
     }
     const probe = probeRoot(root, containedIn)
     if (probe.kind === 'outside') {
-      warnings.push(`${name} resolves outside the project root; not loaded`)
+      warnings.push(projectRootRejectionWarning(name, 'outside'))
       return { kind: 'dropped' }
     }
     if (probe.kind === 'unreadable') {

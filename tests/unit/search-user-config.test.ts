@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1177,6 +1178,36 @@ describe('loadUserLevelSearchSettings', () => {
     expect(loaded.warnings).toHaveLength(1)
   })
 
+  test('a FIFO or a directory at a user-level path is unreadable, not a hang', () => {
+    const { homeDir, userConfigDir } = layout()
+    const fifo = path.join(userConfigDir, 'systematic.json')
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+    // A one-shot writer lets a blocking read return, so a reader that still
+    // blocks fails the assertions below instead of wedging the run.
+    const writer = spawn('sh', ['-c', 'echo "{}" > "$0"', fifo], {
+      stdio: 'ignore',
+    })
+    try {
+      const loaded = loadUserLevelSearchSettings({
+        homeDir,
+        customConfigDir: null,
+      })
+      expect(loaded.unreadable).toBe(true)
+      expect(loaded.readFailures).toHaveLength(1)
+      expect(loaded.warnings.join('\n')).toContain(fifo)
+    } finally {
+      writer.kill()
+    }
+
+    const local = path.join(userConfigDir, 'systematic.local.json')
+    fs.mkdirSync(local)
+    const withDirectory = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
+    expect(withDirectory.readFailures.join('\n')).toContain(local)
+  })
+
   test('user enabled:false survives a custom file with no search block', () => {
     const { homeDir, userConfigDir, customConfigDir } = layout()
     fs.writeFileSync(
@@ -2060,16 +2091,16 @@ describe('loadUserLevelSearchSettings: four layers', () => {
   })
 
   describe('a custom directory that is the user directory', () => {
-    /** Run `body` and count the whole-file reads of `file` it caused. */
+    /** Run `body` and count the times it opened `file` to read it. */
     function countReads(file: string, body: () => void): number {
-      const real = fs.readFileSync.bind(fs)
+      const real = fs.openSync.bind(fs)
       let count = 0
-      const spy = spyOn(fs, 'readFileSync').mockImplementation(((
-        ...args: Parameters<typeof fs.readFileSync>
+      const spy = spyOn(fs, 'openSync').mockImplementation(((
+        ...args: Parameters<typeof fs.openSync>
       ) => {
         if (String(args[0]) === file) count += 1
         return real(...args)
-      }) as typeof fs.readFileSync)
+      }) as typeof fs.openSync)
       try {
         body()
       } finally {

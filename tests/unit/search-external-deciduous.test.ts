@@ -1282,6 +1282,122 @@ describe('Deciduous loader: symlinked ancestors of a project root', () => {
   })
 })
 
+describe('Deciduous loader: project roots are rejected as the Markdown loader rejects them', () => {
+  const NAME = 'graph'
+
+  /** A project source of either format over `roots`, sharing one name. */
+  function projectSource(
+    format: ActiveSource['format'],
+    roots: readonly string[],
+  ): ActiveSource {
+    return source(roots, { format, origin: 'project' })
+  }
+
+  /** Each way a project root is refused before it is walked. */
+  const REJECTIONS: {
+    readonly label: string
+    readonly warning: string
+    readonly layout: (env: ExternalEnv) => string
+  }[] = [
+    {
+      label: 'a root that is a symlink',
+      warning: `${NAME}: a project root is a symlink; source dropped`,
+      layout: (env) => {
+        const real = path.join(env.repo, 'real')
+        node(real, 'a')
+        const link = path.join(env.repo, 'linked')
+        fs.symlinkSync(real, link)
+        return link
+      },
+    },
+    {
+      label: 'a root below a symlinked directory',
+      warning: `${NAME}: a project root passes through a symlink; source dropped`,
+      layout: (env) => {
+        node(path.join(env.repo, '.hidden/private'), 'a')
+        fs.symlinkSync(
+          path.join(env.repo, '.hidden'),
+          path.join(env.repo, 'docs'),
+        )
+        return path.join(env.repo, 'docs/private')
+      },
+    },
+    {
+      label: 'a directory outside the checkout',
+      warning: `${NAME} resolves outside the project root; not loaded`,
+      layout: (env) => {
+        const outside = path.join(env.root, 'outside-graph')
+        node(outside, 'secret')
+        return outside
+      },
+    },
+    {
+      label: 'a file outside the checkout',
+      warning: `${NAME} resolves outside the project root; not loaded`,
+      layout: (env) => {
+        const outside = path.join(env.root, 'outside-file.json')
+        fs.writeFileSync(outside, '{}')
+        return outside
+      },
+    },
+  ]
+
+  test.each(REJECTIONS)(
+    '$label drops the source with the shared warning',
+    ({ warning, layout }) => {
+      const env = makeEnv()
+      const root = layout(env)
+
+      const result = load(env, projectSource('deciduous', [root]))
+
+      expect(result.state).toBe('dropped')
+      expect(result.records).toEqual([])
+      expect(result.warnings).toEqual([warning])
+    },
+  )
+
+  test.each(REJECTIONS)(
+    '$label gets the same state and warnings in both formats',
+    ({ layout }) => {
+      const env = makeEnv()
+      const root = layout(env)
+
+      const markdown = load(env, projectSource('markdown', [root]))
+      const deciduous = load(env, projectSource('deciduous', [root]))
+
+      expect(deciduous.state).toBe(markdown.state)
+      expect(deciduous.warnings).toEqual(markdown.warnings)
+    },
+  )
+
+  test('a later bad root drops the whole source, records of an earlier good root included', () => {
+    const env = makeEnv()
+    const good = path.join(env.repo, 'good')
+    node(good, 'fine')
+    const [bad] = REJECTIONS
+    if (bad === undefined) throw new Error('no rejection layouts')
+
+    const result = load(
+      env,
+      projectSource('deciduous', [good, bad.layout(env)]),
+    )
+
+    expect(result.state).toBe('dropped')
+    expect(result.records).toEqual([])
+  })
+
+  test('a user source is held to none of these rules', () => {
+    const env = makeEnv()
+    const outside = path.join(env.root, 'user-graph')
+    node(outside, 'fine')
+    const link = path.join(env.root, 'user-link')
+    fs.symlinkSync(outside, link)
+
+    expect(load(env, source([outside])).state).toBe('loaded')
+    expect(load(env, source([link])).state).toBe('loaded')
+  })
+})
+
 describe('Deciduous loader: module rules', () => {
   test('search-external-deciduous.ts never imports the dispatcher or config', () => {
     const text = fs.readFileSync(

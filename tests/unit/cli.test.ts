@@ -2329,13 +2329,14 @@ describe('cli config show: locations and search', () => {
           box.project,
           box.env,
         )
-        // The CLI's stderr also carries the config loader's own notes about
-        // the project file; the reply is its stdout.
+        // The CLI's stderr carries the config loader's notes about the project
+        // file, which name no proposal of a project that is not allowed.
         return [
           tool.text,
           binOut.join('\n'),
           binErr.join('\n'),
           cliSearch.stdout,
+          cliSearch.stderr,
         ]
       }
 
@@ -2364,6 +2365,35 @@ describe('cli config show: locations and search', () => {
       const normal = await repliesFor()
       expect(normal[0]).toContain('wiki (user)')
       for (const reply of normal) expect(reply).not.toContain('quokka')
+
+      // Once the project is allowed, the CLI's stderr carries the loader's
+      // warnings about its entries.
+      writeIn(
+        box.userDir,
+        'systematic.json',
+        JSON.stringify({
+          search: { allow_project_sources: [box.project] },
+        }),
+      )
+      const allowedStderr = (await repliesFor())[4] ?? ''
+      expect(allowedStderr).toContain('quokka-broken')
+      expect(allowedStderr).toContain('exclude[0]')
+      writeIn(
+        box.userDir,
+        'systematic.json',
+        JSON.stringify({
+          search: {
+            sources: [
+              {
+                name: 'wiki',
+                format: 'markdown',
+                roots: [vault],
+                projects: [box.project],
+              },
+            ],
+          },
+        }),
+      )
 
       const rows = searchOf(showJson(box).parsed).sources
       const notes = rows.find((row) => row.name === 'quokka-notes')

@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import {
   type ParseError,
@@ -33,6 +34,10 @@ import {
 import { readBytesBounded } from './search-bounded-read.js'
 import { lookupSearchRoot } from './search-corpus.js'
 import {
+  isAllowedProject,
+  resolveProjectIdentity,
+} from './search-project-identity.js'
+import {
   configEntryExists,
   findStartDirProjectConfig,
   MAX_PROJECT_CONFIG_BYTES,
@@ -46,6 +51,7 @@ import {
   startDirProjectWarning,
   type UserLevelLayer,
   validateSearchConfig,
+  withoutEntryWarnings,
 } from './search-user-config.js'
 
 export interface BootstrapConfig {
@@ -614,35 +620,18 @@ export function warnDroppedNames(
   }
 }
 
-function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
-  return error instanceof Error && 'code' in error
-}
-
 /** Part of the error text for a project file over the size cap. */
 const OVERSIZED_FILE_REASON = `file is larger than ${MAX_PROJECT_CONFIG_BYTES / (1024 * 1024)} MB`
 
-function readConfigText(
-  filePath: string,
-  maxBytes: number | undefined,
-): string | null {
-  if (maxBytes === undefined) {
-    try {
-      return fs.readFileSync(filePath, 'utf-8')
-    } catch (error) {
-      // A directory entry at the path is a link whose target is gone: reported.
-      if (
-        isErrorWithCode(error) &&
-        error.code === 'ENOENT' &&
-        !configEntryExists(filePath)
-      ) {
-        return null
-      }
-      throw new Error(
-        `Invalid Systematic config in ${filePath}: unable to read file`,
-        { cause: error },
-      )
-    }
-  }
+/**
+ * The read bound for user-level files. They are the user's own, so no size
+ * cap applies: a cap would only add a way for a large but valid file to fail.
+ * What the bounded read still enforces is a non-blocking open of a regular
+ * file, so a FIFO or a device at the path cannot hang the loader.
+ */
+const USER_LEVEL_CONFIG_MAX_BYTES = Number.POSITIVE_INFINITY
+
+function readConfigText(filePath: string, maxBytes: number): string | null {
   const read = readBytesBounded(filePath, maxBytes)
   switch (read.kind) {
     case 'bytes':
@@ -664,13 +653,14 @@ function readConfigText(
 }
 
 /**
- * @param maxBytes Bounds the read. The project pass sets it so a cloned
+ * @param maxBytes Bounds the read. The project pass sets a cap so a cloned
  * repository cannot hand the loader an arbitrarily large file; user-level
- * files are read whole.
+ * files use `USER_LEVEL_CONFIG_MAX_BYTES`. Every layer reads through the same
+ * non-blocking regular-file read.
  */
 function loadJsoncFile(
   filePath: string,
-  maxBytes?: number,
+  maxBytes: number,
 ): RawSystematicConfig | null {
   const content = readConfigText(filePath, maxBytes)
   if (content === null) return null
@@ -926,16 +916,31 @@ interface ConfigSourceLoadInput {
    * `false`.
    */
   readonly allowProjectProfiles: boolean
+  /**
+   * Whether the project is on the user's `search.allow_project_sources` list.
+   * Only consulted for the project layer, and only when its `search.sources`
+   * drew a warning about an entry: a project that is not allowed has no say in
+   * what the warnings name. User-level loads pass `() => false`.
+   */
+  readonly projectAllowed: () => boolean
 }
 
 function loadConfigSource(input: ConfigSourceLoadInput): LoadedConfigSource {
-  const { filePath, layer, invalidSource, warningSink, allowProjectProfiles } =
-    input
+  const {
+    filePath,
+    layer,
+    invalidSource,
+    warningSink,
+    allowProjectProfiles,
+    projectAllowed,
+  } = input
   const trust = LAYER_TRUST[layer]
   try {
     const rawConfig = loadJsoncFile(
       filePath,
-      layer === 'project' ? MAX_PROJECT_CONFIG_BYTES : undefined,
+      layer === 'project'
+        ? MAX_PROJECT_CONFIG_BYTES
+        : USER_LEVEL_CONFIG_MAX_BYTES,
     )
     if (!rawConfig) {
       return {
@@ -971,6 +976,7 @@ function loadConfigSource(input: ConfigSourceLoadInput): LoadedConfigSource {
       filePath,
       trust,
       warningSink,
+      projectAllowed,
     )
 
     const result = SystematicConfigSchema.safeParse(configWithoutSearch)
@@ -1024,12 +1030,17 @@ function loadConfigSource(input: ConfigSourceLoadInput): LoadedConfigSource {
  * warnings already report), validated for its warnings, and then discarded,
  * because the per-call reader is the only consumer of project `sources`. Only `settings` and `unreadable` of the result are consumed here;
  * a project's `structural` state belongs to that reader.
+ *
+ * A project that is not allowed gets no warning that names one of its
+ * entries, the rule the per-call reader applies to its replies; `config show`
+ * is where those warnings go.
  */
 function splitSearchBlock(
   config: RawSystematicConfig,
   filePath: string,
   trust: ConfigSourceKind,
   warningSink: (message: string) => void,
+  projectAllowed: () => boolean,
 ): { config: RawSystematicConfig; search: SearchSettingsSource | undefined } {
   if (!Object.hasOwn(config, 'search')) return { config, search: undefined }
   const { search: rawSearch, ...rest } = config as Record<string, unknown>
@@ -1038,7 +1049,14 @@ function splitSearchBlock(
     trust === 'project' ? 'project' : 'user',
     filePath,
   )
-  for (const message of validation.warnings) warningSink(message)
+  const hideEntryWarnings =
+    trust === 'project' &&
+    validation.entries.some((entry) => entry.warnings.length > 0) &&
+    !projectAllowed()
+  const warnings = hideEntryWarnings
+    ? withoutEntryWarnings(validation)
+    : validation.warnings
+  for (const message of warnings) warningSink(message)
   return {
     config: rest as RawSystematicConfig,
     search:
@@ -1871,6 +1889,7 @@ function loadUserLevelSources(
       filePath,
       layer,
       allowProjectProfiles: false,
+      projectAllowed: () => false,
     })
     loadedByRealFile.set(realFile, loaded)
     return loaded
@@ -2048,6 +2067,19 @@ export function loadConfigWithSources(
     warningSink,
   })
   const { allowProjectProfiles } = userLevel
+  // The user-level `search` blocks merge by the one shared rule (see
+  // `mergeSearchSettings`) in layer order. Their allow list is known before the
+  // project pass, which needs it to decide whether the project's proposals may
+  // be named in a warning. A project's own `search.sources` are validated and
+  // discarded at load; nothing here reads them.
+  const mergedSearch = mergeUserLevelSearch(userLevel)
+  const homeDir = resolveUserLevelConfigDirs(options).homeDir || os.homedir()
+  const projectAllowed = () =>
+    isAllowedProject(
+      resolveProjectIdentity(paths.projectRoot),
+      mergedSearch.settings?.allow_project_sources ?? [],
+      { homeDir },
+    )
   // The protected fields apply when any user-level layer reading the project
   // file loaded it.
   const aliasLoaded = aliasedFiles.some(
@@ -2062,6 +2094,7 @@ export function loadConfigWithSources(
         warningSink: boundedProjectStrip.sink,
         reportInvalid,
         allowProjectProfiles,
+        projectAllowed,
       })
     : {
         metadata: { kind: 'project', presence: 'absent' },
@@ -2125,21 +2158,6 @@ export function loadConfigWithSources(
   warnRemovedKeys(sources, warningSink)
 
   const warned = new Set<string>()
-
-  // Only the user-level files carry a resolved `search`, merged by the one
-  // shared rule (see `mergeSearchSettings`) in layer order. A project's
-  // `search.sources` were validated and discarded at load; nothing here reads
-  // them.
-  const mergedSearch = mergeSearchSettings(
-    (['user', 'userLocal', 'custom', 'customLocal'] as const).flatMap(
-      (slot) => {
-        const source = layers[slot]
-        return source?.search && isUserLevelLayer(source.layer)
-          ? [{ ...source.search, layer: source.layer }]
-          : []
-      },
-    ),
-  )
 
   assertAllProfileBundlesAreValid(
     [
@@ -2304,6 +2322,25 @@ export function loadConfigWithSources(
     piSubagentsOverlays: mergedPiSubagentsOverlays,
     activeProfileSourcePath: profileSelection.bundleSource?.path ?? null,
   }
+}
+
+/**
+ * The merged `search` settings of the four user-level files. Only these carry
+ * a resolved `search`.
+ */
+function mergeUserLevelSearch(
+  userLevel: UserLevelLoad,
+): ReturnType<typeof mergeSearchSettings> {
+  return mergeSearchSettings(
+    (['user', 'userLocal', 'custom', 'customLocal'] as const).flatMap(
+      (slot) => {
+        const source = userLevel[slot].source
+        return source?.search && isUserLevelLayer(source.layer)
+          ? [{ ...source.search, layer: source.layer }]
+          : []
+      },
+    ),
+  )
 }
 
 function isUserLevelLayer(layer: ConfigSourceLayer): layer is UserLevelLayer {

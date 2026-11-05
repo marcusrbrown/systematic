@@ -58,6 +58,7 @@ import {
   startDirProjectWarning,
   type UserLevelConfigDirOptions,
   type UserLevelLayer,
+  withoutEntryWarnings,
 } from './search-user-config.js'
 
 /** At most this many sources are active in one call. */
@@ -226,11 +227,7 @@ function forwardedProjectWarnings(
   project: ProjectSearchLoad,
   projectAllowed: boolean,
 ): readonly string[] {
-  if (projectAllowed) return project.warnings
-  const aboutEntries = new Set(
-    project.entries.flatMap((entry) => entry.warnings),
-  )
-  return project.warnings.filter((warning) => !aboutEntries.has(warning))
+  return projectAllowed ? project.warnings : withoutEntryWarnings(project)
 }
 
 /**

@@ -116,6 +116,8 @@ Config source chain depends on export scope:
 - **`--scope project`** (default) loads `user → project → custom`, in increasing priority.
 - **`--scope global`** loads `user → custom` only — it never absorbs the current working directory's project config, even when one exists.
 
+The project config is `.opencode/systematic.json`, or `.systematic.jsonc` (or `.systematic.json`) at the repository root. When the root file exists it wins and the `.opencode/` file is ignored; the two are never merged.
+
 ### Trust boundaries
 
 Project-level config (`.opencode/systematic.json`) is the least-trusted source. In the existing `categories`/`agents` overlay, a project-sourced `model` is **rejected outright** — config validation throws, it is not silently dropped. In the `pi_subagents.categories`/`pi_subagents.agents` overlay, project-sourced `thinking`, `tools`, and `skills` are **silently stripped** before merge — project config simply cannot grant them. `max_turns` is trust-any and passes through from any source, including project config. User config (`~/.config/opencode/systematic.json`) and custom config (`$OPENCODE_CONFIG_DIR/systematic.json`) may set all supported fields.

@@ -524,7 +524,11 @@ once. A local file has its sibling's trust, needs no sibling, and its `agents`/`
 replaces a same-key entry from an earlier layer whole. A local `search.sources` entry with the name
 of an earlier user-level entry replaces it whole, `exclude` included. Disabled lists union-merge
 across all files; bootstrap config shallow-merges. The project pass reads through the same 1 MB
-bounded read as the bin, so a larger project file is invalid. `FileConfigSource.layer` carries the
+bounded read as the bin, so a larger project file is invalid. User-level files take the same
+non-blocking regular-file read with no size cap, so a FIFO or a directory at one of those paths is an
+unreadable file and never a hang. A project whose main root is not on the merged user-level
+`search.allow_project_sources` list gets no loader warning that names one of its `search.sources`
+entries or `exclude` patterns, the rule the per-call reader applies; `config show` still lists them. `FileConfigSource.layer` carries the
 position; metadata consumers read a view that folds each local file into its sibling's kind, so
 routing provenance reports a local file's origin as `user` or `custom`.
 

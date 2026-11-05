@@ -718,6 +718,21 @@ export function validateSearchConfig(
   }
 }
 
+/**
+ * The warnings of a validation, less the ones about a single source entry (a
+ * dropped entry, a dropped `exclude` pattern). Those name a proposal; what is
+ * left names fields only. A caller that must not name the proposals of a
+ * project that is not allowed uses this on that project's file.
+ */
+export function withoutEntryWarnings(
+  validation: Pick<SearchConfigValidation, 'entries' | 'warnings'>,
+): readonly string[] {
+  const aboutEntries = new Set(
+    validation.entries.flatMap((entry) => entry.warnings),
+  )
+  return validation.warnings.filter((warning) => !aboutEntries.has(warning))
+}
+
 /** The one warning for a user-level file the reader could not parse. */
 function formatSearchFileWarning(sourcePath: string, reason: string): string {
   return `[systematic] search settings in ${displaySafe(sourcePath)} could not be read (${reason}); the settings were ignored, search still runs and its results carry a \`config unreadable\` note.`
@@ -1089,25 +1104,21 @@ function absentOrDangling(filePath: string): TextRead {
     : { kind: 'absent' }
 }
 
-function readTextWhole(filePath: string): TextRead {
-  try {
-    return { kind: 'text', content: fs.readFileSync(filePath, 'utf-8') }
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return absentOrDangling(filePath)
-    return { kind: 'failed', reason: 'unable to read file' }
-  }
-}
+/**
+ * The read bound for user-level files: none. They are the user's own, so a
+ * size cap would only add a way for a valid file to fail; the bounded read is
+ * used for its non-blocking open of a regular file, so a FIFO planted at the
+ * path cannot hang the reader.
+ */
+const USER_LEVEL_FILE_MAX_BYTES = Number.POSITIVE_INFINITY
 
 /**
- * Read and parse one config file's `search` block. `maxBytes` bounds the read
+ * Read and parse one config file's `search` block. `maxBytes` caps the read
  * (used for project config, which a cloned repository controls); user-level
- * files are read whole, as before.
+ * files take no size cap. Both reads are non-blocking and regular-file only.
  */
 function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
-  const text =
-    maxBytes === undefined
-      ? readTextWhole(filePath)
-      : readTextBounded(filePath, maxBytes)
+  const text = readTextBounded(filePath, maxBytes ?? USER_LEVEL_FILE_MAX_BYTES)
   if (text.kind !== 'text') return text
   const content = text.content
   const errors: ParseError[] = []

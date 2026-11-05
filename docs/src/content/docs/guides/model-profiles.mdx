@@ -60,6 +60,10 @@ To make a repository ignore your default profile and run on base configuration, 
 { "profile": null }
 ```
 
+:::note
+The project config can also be `.systematic.jsonc` (or `.systematic.json`) at the repository root. When that file exists it wins and `.opencode/systematic.jsonc` or `.json` is ignored; the two are never merged. The examples on this page use `.opencode/systematic.json`, and the same keys work in either file.
+:::
+
 The strongest source that sets `profile` wins: `$OPENCODE_CONFIG_DIR` config, then project config, then user config. The full resolution and merge rules are in the [configuration reference](/systematic/reference/configuration/#profiles-and-per-harness-routing).
 
 A repository choosing which of your profiles it runs under is the feature working as intended, not a gap — that's what per-project selection is for. If you disagree with a repository's choice for your own session, set `SYSTEMATIC_PROFILE` in your shell:

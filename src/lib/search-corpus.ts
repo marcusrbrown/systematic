@@ -414,6 +414,19 @@ export const PROJECT_ROOT_REJECTION_REASONS: Readonly<
 }
 
 /**
+ * The warning a loader prints when a project source root is rejected, for the
+ * Markdown and Deciduous loaders alike. It names the source, never a path.
+ */
+export function projectRootRejectionWarning(
+  sourceName: string,
+  rejection: ProjectRootRejection,
+): string {
+  return rejection === 'outside'
+    ? `${sourceName} resolves outside the project root; not loaded`
+    : `${sourceName}: ${PROJECT_ROOT_REJECTION_REASONS[rejection]}; source dropped`
+}
+
+/**
  * Whether a project source root is rejected before it is walked: it is a
  * symlink, passes through a symlink below the checkout, or its real path is not
  * strictly inside the checkout's real path. The loaders and `config show` both
