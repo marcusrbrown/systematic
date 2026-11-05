@@ -8074,7 +8074,7 @@ describe('layered config files', () => {
             message = error instanceof Error ? error.message : String(error)
           }
           expect(message).toContain(target)
-          expect(message).toContain('unable to read file')
+          expect(message).toContain('unable to read file (not a regular file)')
 
           const reported = t.load({ withCustom: true, invalidSource: 'report' })
           expect(
@@ -8101,7 +8101,7 @@ describe('layered config files', () => {
           message = error instanceof Error ? error.message : String(error)
         }
         expect(message).toContain(target)
-        expect(message).toContain('unable to read file')
+        expect(message).toContain('unable to read file (not a regular file)')
 
         const reported = t.load({ withCustom: true, invalidSource: 'report' })
         expect(

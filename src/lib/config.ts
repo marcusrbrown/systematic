@@ -645,6 +645,10 @@ function readConfigText(filePath: string, maxBytes: number): string | null {
       throw new Error(
         `Invalid Systematic config in ${filePath}: unable to read file (${OVERSIZED_FILE_REASON})`,
       )
+    case 'not-regular':
+      throw new Error(
+        `Invalid Systematic config in ${filePath}: unable to read file (not a regular file)`,
+      )
     default:
       throw new Error(
         `Invalid Systematic config in ${filePath}: unable to read file`,
