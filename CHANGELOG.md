@@ -4,6 +4,16 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.3](https://github.com/marcusrbrown/systematic/compare/v3.31.2...v3.31.3) (2026-11-05)
+
+### Bug Fixes
+
+* credit compound-engineering in the bundled attributions ([#1306](https://github.com/marcusrbrown/systematic/issues/1306)) ([800c99b](https://github.com/marcusrbrown/systematic/commit/800c99b7f7512c2d2f3f8a3f3170d9c74231aa6d))
+
+### Documentation
+
+* **contributing:** add a project skill for importing upstream content ([#1305](https://github.com/marcusrbrown/systematic/issues/1305)) ([5016e51](https://github.com/marcusrbrown/systematic/commit/5016e51d7738da61dec4f02a4717857f86c26ed5))
+
 ## [3.31.2](https://github.com/marcusrbrown/systematic/compare/v3.31.1...v3.31.2) (2026-11-05)
 
 ### Bug Fixes
