@@ -384,11 +384,13 @@ export function runGit(args, cwd, options = {}) {
   })
 }
 
-// Controlled-locale message for git's unambiguous "no repository" diagnostic.
-// Deliberately distinct from the corrupt-metadata message ("not a git
+// Controlled-locale messages for git's unambiguous "no repository"
+// diagnostics: discovery reached the filesystem root ("or any of the parent
+// directories"), or stopped at a mount point ("or any parent up to mount
+// point"). Both are distinct from the corrupt-metadata message ("not a git
 // repository: <path>"), which lacks the parenthetical and must not match.
 const NOT_A_REPO_PATTERN =
-  /^fatal: not a git repository \(or any of the parent directories\): /m
+  /^fatal: not a git repository \(or any (?:of the parent directories\): |parent up to mount point )/m
 
 export function classifyGitWorkTree(root, options = {}) {
   const result = runGit(['rev-parse', '--is-inside-work-tree'], root, options)
