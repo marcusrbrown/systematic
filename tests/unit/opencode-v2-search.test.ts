@@ -349,6 +349,54 @@ describe('setupOpenCodeV2 with a project search.sources problem', () => {
     },
   )
 
+  describe('the init warnings about the entries of a project', () => {
+    const PROPOSALS = JSON.stringify({
+      search: {
+        sources: [
+          {
+            name: 'quokka-notes',
+            format: 'markdown',
+            roots: ['docs/quokka'],
+            exclude: ['[bad]'],
+          },
+          { name: 'quokka-broken', format: 'markdown', roots: ['.'] },
+        ],
+      },
+    })
+
+    async function initWarnings(allowed: boolean): Promise<string> {
+      const { home, project } = makeEnv(PROPOSALS)
+      if (allowed) {
+        const userDir = path.join(home, '.config/opencode')
+        fs.mkdirSync(userDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(userDir, 'systematic.json'),
+          JSON.stringify({ search: { allow_project_sources: [project] } }),
+        )
+      }
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await setupOpenCodeV2(makeHost(project).ctx, {
+          packageRoot: PACKAGE_ROOT,
+          homeDir: home,
+        })
+        return warnSpy.mock.calls.map((call) => call.join(' ')).join('\n')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    }
+
+    test('name no proposal when the project is not on the allow list', async () => {
+      expect(await initWarnings(false)).not.toContain('quokka')
+    })
+
+    test('name the dropped entry and the dropped pattern when the project is allowed', async () => {
+      const text = await initWarnings(true)
+      expect(text).toContain('"quokka-broken"')
+      expect(text).toContain('`exclude[0]` of search source "quokka-notes"')
+    })
+  })
+
   test('a project file that cannot be parsed rejects setup exactly as it did before sources existed', async () => {
     const { home, project } = makeEnv('{ broken')
     const host = makeHost(project)

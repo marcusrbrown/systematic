@@ -1386,9 +1386,17 @@ describe('inspectSearch', () => {
     const SYMLINK_ROOT = 'a project root is a symlink'
     const SYMLINK_ANCESTOR = 'a project root passes through a symlink'
 
-    function layout(env: Env, roots: string[]): void {
-      fs.mkdirSync(path.join(env.repo, 'real/sub'), { recursive: true })
+    function layout(
+      env: Env,
+      roots: string[],
+      format: 'deciduous' | 'markdown' = 'markdown',
+    ): void {
+      fs.mkdirSync(path.join(env.repo, 'real/sub/nodes'), { recursive: true })
       fs.writeFileSync(path.join(env.repo, 'real/sub/a.md'), '# A\n')
+      fs.writeFileSync(
+        path.join(env.repo, 'real/sub/nodes/n1.json'),
+        JSON.stringify({ change_id: 'n1', node_type: 'decision', title: 'T' }),
+      )
       fs.mkdirSync(path.join(env.repo, 'docs'), { recursive: true })
       fs.symlinkSync(
         path.join(env.repo, 'real'),
@@ -1398,11 +1406,56 @@ describe('inspectSearch', () => {
       writeProject(env.repo, {
         sources: roots.map((root, index) => ({
           name: `s${index}`,
-          format: 'markdown',
+          format,
           roots: [root],
         })),
       })
     }
+
+    test('a Deciduous source is rejected for the same roots, with the same reasons and warnings, as a Markdown source', () => {
+      const roots = ['docs/linked', 'docs/linked/sub', 'real/sub']
+      const outcomes = (['markdown', 'deciduous'] as const).map((format) => {
+        const env = makeEnv()
+        layout(env, roots, format)
+        const inspected = inspect(env)
+        const loads = loadExternalSources({
+          sources: resolveExternalSources({
+            startDir: env.repo,
+            configOptions: env.configOptions,
+          }).sources,
+          checkoutRoot: env.repo,
+        })
+        return {
+          reasons: ['s0', 's1', 's2'].map((name) => {
+            const row = find(inspected.sources, name)
+            return row?.status === 'root rejected' ? row.reason : row?.status
+          }),
+          // Only a dropped source's warnings are about its root; a loaded
+          // Deciduous source may add notes about the layout it found.
+          loads: loads.map((load) => [
+            load.name,
+            load.state,
+            load.state === 'dropped' ? load.warnings : [],
+          ]),
+        }
+      })
+
+      expect(outcomes[1]).toEqual(outcomes[0])
+      expect(outcomes[1]?.reasons).toEqual([
+        SYMLINK_ROOT,
+        SYMLINK_ANCESTOR,
+        'active',
+      ])
+      expect(outcomes[1]?.loads).toEqual([
+        ['s0', 'dropped', ['s0: a project root is a symlink; source dropped']],
+        [
+          's1',
+          'dropped',
+          ['s1: a project root passes through a symlink; source dropped'],
+        ],
+        ['s2', 'loaded', []],
+      ])
+    })
 
     test('a root that is a symlink and a root below a symlink are not active, and the loader drops the same sources', () => {
       const env = makeEnv()

@@ -30,8 +30,8 @@ import {
   narrowNonEmptyString,
   newEntryBudget,
   type ParsedSourceFile,
-  PROJECT_ROOT_REJECTION_REASONS,
   parseMarkdownFrontmatter,
+  projectRootRejectionWarning,
   readSourceFiles,
   rejectedProjectRoot,
   type SourceDiscovery,
@@ -250,10 +250,9 @@ function projectRootWarning(
 ): string | undefined {
   if (source.origin !== 'project') return undefined
   const rejection = rejectedProjectRoot(context.checkoutRoot, root)
-  if (rejection === undefined) return undefined
-  return rejection === 'outside'
-    ? `${source.name} resolves outside the project root; not loaded`
-    : `${source.name}: ${PROJECT_ROOT_REJECTION_REASONS[rejection]}; source dropped`
+  return rejection === undefined
+    ? undefined
+    : projectRootRejectionWarning(source.name, rejection)
 }
 
 /**

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6636,9 +6637,8 @@ describe('search config field', () => {
       expect(config.disabled_skills).toEqual(['ce:plan'])
       expect(config).not.toHaveProperty('search')
       expect(config).not.toHaveProperty('searchUnreadable')
-      expect(t.warnings).toHaveLength(1)
-      expect(t.warnings[0]).toContain('"dot"')
-      expect(t.warnings[0]).not.toContain('"good"')
+      // This project is not on the allow list, so its proposals are not named.
+      expect(t.warnings).toEqual([])
     })
 
     test('a project sources value that is not an array loads, warns, and loses nothing else', () => {
@@ -7666,6 +7666,159 @@ describe('layered config files', () => {
     })
   })
 
+  describe('warnings about the proposals of a project', () => {
+    /** Four problems, each of which the validator warns about by name or index. */
+    const PROPOSALS = {
+      search: {
+        sources: [
+          {
+            name: 'quokka-notes',
+            format: 'markdown',
+            roots: ['docs/quokka'],
+            exclude: ['[bad]'],
+          },
+          { name: 'quokka-broken', format: 'markdown', roots: ['..'] },
+          42,
+          { name: 'quokka-twin', format: 'markdown', roots: ['docs/a'] },
+          { name: 'quokka-twin', format: 'markdown', roots: ['docs/b'] },
+        ],
+      },
+    }
+
+    const allowing = (...projects: string[]) => ({
+      search: { allow_project_sources: projects },
+    })
+
+    test('a project that is not on the allow list gets no loader warning that names a proposal, in throw and report mode', () => {
+      const t = setup()
+      t.project(PROPOSALS)
+
+      t.load()
+      t.load({ invalidSource: 'report' })
+
+      expect(t.warnings).toEqual([])
+    })
+
+    test('an allow list that names another project does not help', () => {
+      const t = setup()
+      t.user(allowing(path.join(t.root, 'elsewhere')))
+      t.project(PROPOSALS)
+
+      t.load()
+
+      expect(t.warnings).toEqual([])
+    })
+
+    test('the allow entry must be the repository root, not the start directory below it', () => {
+      const t = setup()
+      t.user(allowing(t.start))
+      t.project(PROPOSALS)
+
+      t.load()
+
+      expect(t.warnings).toEqual([])
+    })
+
+    test('a repo-root project file is held to the same rule', () => {
+      const t = setup()
+      t.rootProject(PROPOSALS)
+
+      t.load()
+
+      expect(t.warnings).toEqual([])
+    })
+
+    test('a directory that is not a checkout is never allowed, even when listed', () => {
+      const t = setup({ git: false })
+      t.user(allowing(t.start))
+      fs.mkdirSync(path.join(t.start, '.opencode'))
+      fs.writeFileSync(
+        path.join(t.start, '.opencode/systematic.json'),
+        JSON.stringify(PROPOSALS),
+      )
+
+      t.load()
+
+      expect(t.warnings).toEqual([])
+    })
+
+    test('an allowed project gets the warnings the per-call reader reports for its file', () => {
+      const t = setup()
+      t.user(allowing(t.repo))
+      t.project(PROPOSALS)
+
+      t.load()
+
+      expect(t.warnings).toEqual([...loadProjectSearchSources(t.repo).warnings])
+      const text = t.warnings.join('\n')
+      expect(text).toContain('`exclude[0]` of search source "quokka-notes"')
+      expect(text).toContain('search source "quokka-broken"')
+      expect(text).toContain('search source "quokka-twin"')
+    })
+
+    test.each([
+      { layer: 'user.local', withCustom: false },
+      { layer: 'custom', withCustom: true },
+      { layer: 'custom.local', withCustom: true },
+    ])(
+      'an allow entry in the $layer file allows the project',
+      ({ layer, withCustom }) => {
+        const t = setup()
+        const writers: Record<string, Fixture['user']> = {
+          'user.local': t.userLocal,
+          custom: t.custom,
+          'custom.local': t.customLocal,
+        }
+        writers[layer]?.(allowing(t.repo))
+        t.project(PROPOSALS)
+
+        t.load({ withCustom })
+
+        expect(t.warnings.join('\n')).toContain('"quokka-broken"')
+      },
+    )
+
+    test('an allow entry in the project file allows nothing, and its own warning names no proposal', () => {
+      const t = setup()
+      t.project({
+        search: { ...PROPOSALS.search, allow_project_sources: [t.repo] },
+      })
+
+      t.load()
+
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('`search.allow_project_sources`')
+      expect(t.warnings.join('\n')).not.toContain('quokka')
+    })
+
+    test('a warning that names no proposal stays beside the hidden entry warnings', () => {
+      const t = setup()
+      t.project({ search: { ...PROPOSALS.search, bogus: true } })
+
+      t.load()
+
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('unknown field')
+      expect(t.warnings.join('\n')).not.toContain('quokka')
+    })
+
+    test.each([
+      ['a sources value that is not an array', { sources: 'docs' }],
+      ['an unknown field', { bogus: true }],
+      ['a search block that is not an object', 'on'],
+    ])(
+      '%s is still warned about when the project is not allowed',
+      (_label, search) => {
+        const t = setup()
+        t.project({ search })
+
+        t.load()
+
+        expect(t.warnings).toHaveLength(1)
+      },
+    )
+  })
+
   describe('project file from the repository root', () => {
     test('a root file wins, the .opencode file is ignored with one warning naming both, and nothing merges', () => {
       const t = setup()
@@ -7864,6 +8017,106 @@ describe('layered config files', () => {
       t.userLocal({ disabled_skills: 'nope', search: { enabled: false } })
       const result = t.load({ invalidSource: 'report' })
       expect(result.config.search).toBeUndefined()
+    })
+  })
+
+  describe('a user-level config path that is not a regular file', () => {
+    const LAYERS: {
+      readonly layer: string
+      readonly kind: 'custom' | 'user'
+      readonly file: (t: Fixture) => string
+    }[] = [
+      {
+        layer: 'user',
+        kind: 'user',
+        file: (t) => path.join(t.userDir, 'systematic.json'),
+      },
+      {
+        layer: 'user.local',
+        kind: 'user',
+        file: (t) => path.join(t.userDir, 'systematic.local.json'),
+      },
+      {
+        layer: 'custom',
+        kind: 'custom',
+        file: (t) => path.join(t.customDir, 'systematic.json'),
+      },
+      {
+        layer: 'custom.local',
+        kind: 'custom',
+        file: (t) => path.join(t.customDir, 'systematic.local.json'),
+      },
+    ]
+
+    /**
+     * A FIFO at `file`, with a one-shot writer already running. A blocking read
+     * of the FIFO therefore returns `{}` instead of hanging the test process,
+     * so a loader that still reads it blocking fails an assertion rather than
+     * wedging the run. The caller kills the writer.
+     */
+    function plantFifo(file: string): ChildProcess {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      expect(spawnSync('mkfifo', [file]).status).toBe(0)
+      return spawn('sh', ['-c', 'echo "{}" > "$0"', file], { stdio: 'ignore' })
+    }
+
+    test.each(LAYERS)(
+      'a FIFO at the $layer path fails fast: throw mode names the file and report mode marks the kind invalid',
+      ({ kind, file }) => {
+        const t = setup()
+        const target = file(t)
+        const writer = plantFifo(target)
+        try {
+          let message = ''
+          try {
+            t.load({ withCustom: true })
+          } catch (error) {
+            message = error instanceof Error ? error.message : String(error)
+          }
+          expect(message).toContain(target)
+          expect(message).toContain('unable to read file (not a regular file)')
+
+          const reported = t.load({ withCustom: true, invalidSource: 'report' })
+          expect(
+            reported.metadata.sources.find((source) => source.kind === kind),
+          ).toEqual({ kind, presence: 'invalid', errorCode: 'read-failed' })
+          expect(t.warnings.some((entry) => entry.includes(target))).toBe(true)
+        } finally {
+          writer.kill()
+        }
+      },
+    )
+
+    test.each(LAYERS)(
+      'a directory at the $layer path behaves the same way',
+      ({ kind, file }) => {
+        const t = setup()
+        const target = file(t)
+        fs.mkdirSync(target, { recursive: true })
+
+        let message = ''
+        try {
+          t.load({ withCustom: true })
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error)
+        }
+        expect(message).toContain(target)
+        expect(message).toContain('unable to read file (not a regular file)')
+
+        const reported = t.load({ withCustom: true, invalidSource: 'report' })
+        expect(
+          reported.metadata.sources.find((source) => source.kind === kind),
+        ).toEqual({ kind, presence: 'invalid', errorCode: 'read-failed' })
+        expect(t.warnings.some((entry) => entry.includes(target))).toBe(true)
+      },
+    )
+
+    test('a user file larger than the project cap still loads', () => {
+      const t = setup()
+      t.user(
+        `{"disabled_skills":["ce:plan"]}\n// ${'a'.repeat(1024 * 1024 + 1)}\n`,
+      )
+      expect(t.load().config.disabled_skills).toEqual(['ce:plan'])
     })
   })
 
