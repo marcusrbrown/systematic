@@ -1,6 +1,7 @@
 ---
 name: deploy-docs
 description: Validate and prepare documentation for GitHub Pages deployment
+license: MIT
 disable-model-invocation: true
 ---
 

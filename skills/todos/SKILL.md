@@ -1,6 +1,7 @@
 ---
 name: todos
 description: Use when creating durable work items, managing todo lifecycle, or tracking findings across sessions in the file-based todo system; when reviewing pending todos for approval, prioritizing code review findings, or interactively categorizing work items; or when batch-resolving approved todos, especially after code review or triage sessions
+license: MIT
 argument-hint: '[create|triage|resolve] [optional: findings list, source type, or specific todo ID/pattern]'
 disable-model-invocation: true
 ---

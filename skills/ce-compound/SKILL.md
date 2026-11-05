@@ -1,6 +1,7 @@
 ---
 name: ce-compound
 description: Document a recently solved problem to compound your team's knowledge
+license: MIT
 ---
 
 # /compound

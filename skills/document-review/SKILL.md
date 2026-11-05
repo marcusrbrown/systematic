@@ -1,6 +1,7 @@
 ---
 name: document-review
 description: Review requirements or plan documents using parallel persona agents that surface role-specific issues. Use when a requirements document or plan document exists and the user wants to improve it.
+license: MIT
 argument-hint: '[mode:headless] [path/to/document.md]'
 ---
 

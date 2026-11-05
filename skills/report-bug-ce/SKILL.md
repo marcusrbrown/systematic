@@ -1,6 +1,7 @@
 ---
 name: report-bug-ce
 description: Use this skill when a user needs to report a bug in the Systematic plugin with complete reproduction details and environment data, then open a GitHub issue directly from the CLI.
+license: MIT
 argument-hint: '[optional: brief description of the bug]'
 disable-model-invocation: true
 ---

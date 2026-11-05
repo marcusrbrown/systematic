@@ -1,6 +1,7 @@
 ---
 name: lfg
 description: Full autonomous engineering workflow
+license: MIT
 argument-hint: '[feature description]'
 disable-model-invocation: true
 ---

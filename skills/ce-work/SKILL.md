@@ -1,6 +1,7 @@
 ---
 name: ce-work
 description: Execute work efficiently while maintaining quality and finishing features
+license: MIT
 argument-hint: '[Plan doc path or description of work. Blank to auto use latest plan doc]'
 ---
 
