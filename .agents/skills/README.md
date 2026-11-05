@@ -25,6 +25,7 @@ Each skill is a directory containing a `SKILL.md` file with YAML frontmatter. Op
 | Skill | Description |
 |-------|-------------|
 | `generating-project-docs` | Create, refresh, or update project-level docs (`README.md`, `ARCHITECTURE.md`, `STRUCTURE.md`) — derives all facts from the live repo |
+| `importing-upstream-content` | Bring skills, agents or references from an upstream project into the bundle: a new import, a refresh to a newer upstream release, or a merge into a diverged skill. Covers attribution, adaptation, the checks the gates miss, and a releasing title |
 | `release-notes-narrative` | Rewrite terse bucket bullets or spurious `closes [URL-fragment]` autolinks in a semantic-release GitHub release into proper narrative drawn from commit bodies and PR descriptions |
 | `running-with-without-evals` | Produce or refresh a with/without-Systematic demo or A/B plugin evaluation — recorded `opencode run` sessions comparing behavior with and without a plugin loaded, with pre-registration, controls, and honest framing |
 
