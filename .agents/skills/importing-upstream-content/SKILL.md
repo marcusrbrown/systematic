@@ -16,7 +16,7 @@ Imported content ships to every Systematic user. It must pass the same gates as 
 | A skill or agent new to Systematic | Import with light adaptation | Keep the upstream voice. Adapt only what the gates and harnesses require. |
 | A newer upstream release of content already imported | Refresh | Diff the old pinned commit against the new one, and apply that diff onto Systematic's copy. Re-apply Systematic's additions. Never copy the upstream files over the top. |
 | One upstream improvement to a skill Systematic has changed | Merge | Port the capability and keep Systematic's structure. Keep one authority per section. |
-| A file that ships inside an npm package and needs only a mechanical transform | Generated surface | Pin the package exactly as a devDependency, write a generator, and register it in `scripts/lib/generated-surfaces.ts`. |
+| A file that ships inside an npm package and needs only a mechanical transform | Generated surface | Pin the package exactly as a devDependency, write a generator, and register it in `scripts/lib/generated-surfaces.ts`. The pin is the npm version, not a commit SHA. Renovate brings refreshes, and `surfaces:regen` applies them. The generator writes the version into `ATTRIBUTIONS.md`. Don't edit any of these by hand; the SHA and human-review steps below don't apply. |
 
 ## Get the upstream source
 
