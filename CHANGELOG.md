@@ -4,6 +4,24 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.2](https://github.com/marcusrbrown/systematic/compare/v3.31.1...v3.31.2) (2026-11-05)
+
+### Bug Fixes
+
+* let ce:review save its artifacts in a non-git directory on its own filesystem ([#1303](https://github.com/marcusrbrown/systematic/issues/1303)) ([d6e84ab](https://github.com/marcusrbrown/systematic/commit/d6e84ab321ca9cb6ad82f69609e4d74bac674e2c))
+
+### Build System
+
+* **deps:** update Pi to v1.5.0 ([#1301](https://github.com/marcusrbrown/systematic/issues/1301)) ([32144ed](https://github.com/marcusrbrown/systematic/commit/32144ed9601a93787cfebb370f8fb43f088cab59))
+
+### Documentation
+
+* **solutions:** record the shared-file dedupe and warning attribution lessons from config locations ([#1302](https://github.com/marcusrbrown/systematic/issues/1302)) ([db04a6c](https://github.com/marcusrbrown/systematic/commit/db04a6c2801b221d92f4fd4c9692b248653c80cd))
+
+### Miscellaneous Chores
+
+* **deps:** update github/codeql-action action to v4.39.3 ([#1297](https://github.com/marcusrbrown/systematic/issues/1297)) ([8d28f89](https://github.com/marcusrbrown/systematic/commit/8d28f8952fd773b0ddf7c5338d5f33b4731dc7a0))
+
 ## [3.31.1](https://github.com/marcusrbrown/systematic/compare/v3.31.0...v3.31.1) (2026-11-05)
 
 ### Bug Fixes
