@@ -4,6 +4,16 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.1](https://github.com/marcusrbrown/systematic/compare/v3.31.0...v3.31.1) (2026-11-05)
+
+### Bug Fixes
+
+* keep config warnings private to allowed projects and bound every config read ([#1299](https://github.com/marcusrbrown/systematic/issues/1299)) ([ef517dd](https://github.com/marcusrbrown/systematic/commit/ef517dd5ead52490b0dcdd318f50f6691ae02140))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.135.0 ([#1298](https://github.com/marcusrbrown/systematic/issues/1298)) ([798c61b](https://github.com/marcusrbrown/systematic/commit/798c61ba7fe56164a398818b6aa28eee807bd82e))
+
 ## [3.31.0](https://github.com/marcusrbrown/systematic/compare/v3.30.1...v3.31.0) (2026-11-04)
 
 ### Features
