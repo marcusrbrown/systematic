@@ -43,6 +43,20 @@ afterEach(() => {
   }
 })
 
+/**
+ * Creates a bin directory whose `git` prints `stderrText` to stderr and exits
+ * with `exitCode`. Returns the directory so a test can put it on PATH.
+ */
+function makeGitStub(stderrText: string, exitCode: number): string {
+  const binDir = makeDir('ensure-ignore-git-stub-')
+  const script = `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(stderrText)} >&2\nexit ${exitCode}\n`
+  fs.writeFileSync(path.join(binDir, 'git'), script, { mode: 0o755 })
+  return binDir
+}
+
+const MOUNT_POINT_STDERR =
+  'fatal: not a git repository (or any parent up to mount point /tmp)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'
+
 function initRepo(dir: string): void {
   const result = spawnSync('git', ['init', '-q'], { cwd: dir })
   if (result.status !== 0) {
@@ -159,7 +173,7 @@ describe('ensure-ignore CLI: preparation and protection', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     const parsed = parseJsonRecord(stdout)
     expect(parsed.status).toBe('protected')
     expect(readIgnoreFile(root)).toBe(`${REQUIRED_ENTRY}\n`)
@@ -172,7 +186,7 @@ describe('ensure-ignore CLI: preparation and protection', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('protected')
     expect(readIgnoreFile(root)).toBe(`${REQUIRED_ENTRY}\n`)
     // Unrelated root-level ignore data is preserved untouched.
@@ -186,7 +200,7 @@ describe('ensure-ignore CLI: preparation and protection', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('not-applicable')
     expect(readIgnoreFile(root)).toBe(`${REQUIRED_ENTRY}\n`)
   })
@@ -204,7 +218,7 @@ describe('ensure-ignore CLI: preparation and protection', () => {
   it('rejects a missing/invalid root', () => {
     const { exitCode, stdout } = runHelper('/nonexistent/definitely/not/here')
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'invalid-root',
       status: 'blocked',
@@ -221,9 +235,9 @@ describe('ensure-ignore CLI: byte preservation and idempotency', () => {
     fs.mkdirSync(path.join(root, '.context'))
     fs.writeFileSync(path.join(root, '.context', '.gitignore'), 'existing-line')
 
-    const { exitCode } = runHelper(root)
+    const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(readIgnoreFile(root)).toBe(`existing-line\n${REQUIRED_ENTRY}\n`)
   })
 
@@ -236,9 +250,9 @@ describe('ensure-ignore CLI: byte preservation and idempotency', () => {
       'existing-line\n',
     )
 
-    const { exitCode } = runHelper(root)
+    const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(readIgnoreFile(root)).toBe(`existing-line\n${REQUIRED_ENTRY}\n`)
   })
 
@@ -249,9 +263,9 @@ describe('ensure-ignore CLI: byte preservation and idempotency', () => {
     const ignorePath = path.join(root, '.context', '.gitignore')
     fs.writeFileSync(ignorePath, 'existing-line\n', { mode: 0o640 })
 
-    const { exitCode } = runHelper(root)
+    const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(fs.statSync(ignorePath).mode & 0o777).toBe(0o640)
   })
 
@@ -277,7 +291,7 @@ describe('ensure-ignore CLI: byte preservation and idempotency', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('not-applicable')
     expect(readIgnoreFile(root)).toBe(afterFirst)
   })
@@ -297,7 +311,7 @@ describe('ensure-ignore CLI: negation handling', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('protected')
     expect(readIgnoreFile(root)).toBe(
       `${REQUIRED_ENTRY}\n!${REQUIRED_ENTRY}\n${REQUIRED_ENTRY}\n`,
@@ -321,7 +335,7 @@ describe('ensure-ignore CLI: negation handling', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('protected')
     expect(readIgnoreFile(root)).toBe(`${REQUIRED_ENTRY}\n`)
     // The deeper file is not this helper's concern and must be untouched.
@@ -338,7 +352,7 @@ describe('ensure-ignore CLI: Git classification', () => {
 
     const { exitCode, stdout } = runHelper(root, [], { PATH: emptyBin })
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'missing-git',
       status: 'blocked',
@@ -352,7 +366,7 @@ describe('ensure-ignore CLI: Git classification', () => {
 
     const { exitCode, stdout } = runHelper(bareRoot)
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'git-ambiguous',
       status: 'blocked',
@@ -368,11 +382,24 @@ describe('ensure-ignore CLI: Git classification', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'git-error',
       status: 'blocked',
     })
+  })
+
+  it('treats a non-Git directory below a filesystem boundary as non-Git', () => {
+    const root = makeDir('ensure-ignore-mount-boundary-')
+    const stubBin = makeGitStub(MOUNT_POINT_STDERR, 128)
+
+    const { exitCode, stdout } = runHelper(root, [], {
+      PATH: `${stubBin}${path.delimiter}${process.env.PATH ?? ''}`,
+    })
+
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
+    expect(parseJsonRecord(stdout).status).toBe('not-applicable')
+    expect(readIgnoreFile(root)).toBe(`${REQUIRED_ENTRY}\n`)
   })
 
   it('protects a directory nested inside an existing work tree', () => {
@@ -383,7 +410,7 @@ describe('ensure-ignore CLI: Git classification', () => {
 
     const { exitCode, stdout } = runHelper(nested)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('protected')
     expect(readIgnoreFile(nested)).toBe(`${REQUIRED_ENTRY}\n`)
   })
@@ -429,7 +456,7 @@ describe('ensure-ignore CLI: Git classification', () => {
 
     const { exitCode, stdout } = runHelper(worktreeDir)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('protected')
     expect(readIgnoreFile(worktreeDir)).toBe(`${REQUIRED_ENTRY}\n`)
   })
@@ -446,7 +473,7 @@ describe('ensure-ignore CLI: symlink rejection', () => {
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'symlink-rejected',
       status: 'blocked',
@@ -472,6 +499,54 @@ describe('ensure-ignore CLI: symlink rejection', () => {
 })
 
 // ── CLI argument validation ──────────────────────────────────────────────────
+
+describe('ensure-ignore internals: classifyGitWorkTree stderr classification', () => {
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly stderr: string
+    readonly kind: string
+  }> = [
+    {
+      name: 'parent-directories message',
+      stderr:
+        'fatal: not a git repository (or any of the parent directories): .git',
+      kind: 'non-git',
+    },
+    {
+      name: 'mount-point message',
+      stderr: MOUNT_POINT_STDERR,
+      kind: 'non-git',
+    },
+    {
+      name: 'corrupt-metadata message',
+      stderr: 'fatal: not a git repository: /some/path/.git',
+      kind: 'error',
+    },
+  ]
+
+  for (const { name, stderr, kind } of cases) {
+    it(`classifies the ${name} as ${kind}`, () => {
+      const stubBin = makeGitStub(stderr, 128)
+      const root = makeDir('ensure-ignore-classify-root-')
+
+      const script = `
+        import assert from 'node:assert/strict'
+        import { classifyGitWorkTree } from '${HELPER_URL}'
+
+        const result = classifyGitWorkTree(${JSON.stringify(root)})
+        assert.deepEqual(result, { kind: ${JSON.stringify(kind)} })
+        process.exit(0)
+      `
+
+      const { exitCode, stderr: harnessStderr } = runNodeHarness(script, {
+        PATH: `${stubBin}${path.delimiter}${process.env.PATH ?? ''}`,
+      })
+
+      expect(harnessStderr).toBe('')
+      expect(exitCode).toBe(0)
+    })
+  }
+})
 
 describe('ensure-ignore CLI: argument validation', () => {
   it('rejects a duplicate --root flag rather than silently using the last value', () => {
@@ -499,7 +574,7 @@ describe('ensure-ignore CLI: argument validation', () => {
 
     const { exitCode, stdout } = runHelper(root, ['--bogus', 'value'])
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'invalid-arguments',
       status: 'blocked',
@@ -561,9 +636,9 @@ describe('ensure-ignore CLI: non-UTF-8 byte preservation', () => {
     ])
     fs.writeFileSync(ignorePath, original)
 
-    const { exitCode } = runHelper(root)
+    const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     const resultBytes = fs.readFileSync(ignorePath)
     const expected = Buffer.concat([
       original,
@@ -799,7 +874,7 @@ describe('ensure-ignore CLI: filesystem error propagation (non-ENOENT)', () => {
 
       // Contract: exit 2 with a fixed blocked reason -- never exit 1 from an
       // uncaught exception, and never a bare crash.
-      expect(exitCode).toBe(2)
+      expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
       const parsed = parseJsonRecord(stdout)
       expect(parsed.status).toBe('blocked')
       expect(typeof parsed.reason).toBe('string')
@@ -833,7 +908,7 @@ describe('ensure-ignore CLI: filesystem error propagation (non-ENOENT)', () => {
     try {
       const { exitCode, stdout, stderr } = runHelper(root)
 
-      expect(exitCode).toBe(2)
+      expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
       const parsed = parseJsonRecord(stdout)
       expect(parsed.status).toBe('blocked')
       expect(parsed.reason).not.toBe('symlink-rejected')
@@ -900,7 +975,7 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'ignore-file-too-large',
       status: 'blocked',
@@ -932,7 +1007,7 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'ignore-file-too-large',
       status: 'blocked',
@@ -951,7 +1026,7 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(2)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 2 })
     expect(parseJsonRecord(stdout)).toEqual({
       reason: 'ignore-file-too-large',
       status: 'blocked',
@@ -984,7 +1059,7 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
 
     const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     expect(parseJsonRecord(stdout).status).toBe('protected')
     // Idempotent: bytes are untouched since the entry was already effective,
     // observed from a single open descriptor (see readFileSnapshotFd).
@@ -1008,9 +1083,9 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
     ])
     fs.writeFileSync(ignorePath, existing)
 
-    const { exitCode } = runHelper(root)
+    const { exitCode, stdout } = runHelper(root)
 
-    expect(exitCode).toBe(0)
+    expect({ exitCode, stdout }).toMatchObject({ exitCode: 0 })
     const resultBytes = fs.readFileSync(ignorePath)
     const expected = Buffer.concat([
       existing,
