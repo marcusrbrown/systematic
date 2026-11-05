@@ -1,7 +1,7 @@
 ---
 title: Multi-file batch imports drop tree-structured content without an integrity check
 date: 2026-02-19
-last_refreshed: 2026-05-16
+last_refreshed: 2026-11-05
 category: integration-issues
 module: content-integrity
 problem_type: integration_issue
@@ -207,8 +207,10 @@ The shipped tree is the ground truth; the workflow that produced it is incidenta
   both ride on `scripts/content-integrity.ts`
 - `scripts/content-integrity.ts` (`checkSubfileReferences`) — the surviving
   enforcement that catches this class of bug
-- `src/lib/converter.ts` — still available for ad-hoc CC-format conversion via
-  CLI, with the same per-file integrity caveat
+- `src/lib/converter.ts` — the CLI converter, removed in v3.0.0 (commit
+  `a8dd8763`). Imports now follow
+  `.agents/skills/importing-upstream-content/SKILL.md`, which ends with
+  `bun scripts/content-integrity.ts`
 - PR #243 — deleted the `/sync-cep` workflow this original bug was reported against
 - PR #301 (v2.5.0) — introduced the content-integrity gate that catches the
   modern equivalent

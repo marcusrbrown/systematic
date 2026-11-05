@@ -35,7 +35,7 @@ Imported content ships to every Systematic user. It must pass the same gates as 
   - a note that refresh is human-reviewed.
 - **Put `license: <SPDX>` on each entry-point `SKILL.md` only.** Don't add per-file header comments.
 - **Record the SHA you synced to** in the attribution entry and in the commit body (`Source: owner/repo@<sha>`), so the next refresh can diff from it.
-- **If the source has no section yet, raise it with the maintainer before shipping.** Attribution is a legal surface. compound-engineering (`EveryInc/compound-engineering-plugin`, MIT) is the known case: most `ce-*` content derives from it and it has no section.
+- **If the source has no section yet, raise it with the maintainer before shipping.** Attribution is a legal surface.
 - **CC-BY derivatives** need the originality checks in the light-adaptation doc. **Apache-2.0** sources keep their NOTICE text.
 
 ## Adapt
@@ -104,7 +104,7 @@ Write the title as public prose.
 - `docs/solutions/best-practices/third-party-skill-design-law-import-2026-05-21.md`
 - `docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md`
 - `docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md`
-- `docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md` (its `model: inherit` advice is outdated)
+- `docs/solutions/integration-issues/reconciliation-sync-reference-integrity-20260417.md`
 - `docs/solutions/integration-issues/sync-cep-missing-sub-files-SyncCEP-20260219.md`
 - `docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md`
 - `docs/solutions/best-practices/anchor-bundled-script-paths-in-skill-prose-2026-08-24.md`

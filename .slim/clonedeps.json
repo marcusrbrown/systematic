@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-07-13T00:00:00.000Z",
+  "updatedAt": "2026-11-05T00:00:00.000Z",
   "dependencies": [
     {
       "name": "@opencode-ai/sdk",
@@ -28,6 +28,15 @@
       "path": ".slim/clonedeps/repos/obra__superpowers",
       "packagePath": "skills",
       "reason": "Source for the test-driven-development and writing-skills skills being imported into Systematic's bundle. MIT-licensed. Used to verify exact upstream content during the adaptation pass and to track future upstream drift."
+    },
+    {
+      "name": "EveryInc/compound-engineering-plugin",
+      "resolvedVersion": "59dbaef",
+      "repoUrl": "https://github.com/EveryInc/compound-engineering-plugin.git",
+      "ref": "59dbaef37607354d103113f05c13b731eecbb690",
+      "path": ".slim/clonedeps/repos/EveryInc__compound-engineering-plugin",
+      "packagePath": "plugins/compound-engineering",
+      "reason": "Source for the ce-* skills and agents imported into Systematic's bundle. MIT-licensed. Used to verify exact upstream content at the pinned commit in ATTRIBUTIONS.md and to diff against it during human-reviewed refreshes."
     }
   ]
 }
