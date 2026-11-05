@@ -95,7 +95,7 @@ The escalation artifact prevents the "what do I do with this?" friction that tur
 
 ### ATTRIBUTIONS.md anatomy
 
-A single canonical attribution surface beats per-file comment headers for three reasons: (1) attribution is reviewable in one place; (2) license-absence semantics are explicit (see below); (3) per-file comments are noise on content files that get edited frequently.
+A single canonical attribution surface beats per-file comment headers for three reasons: (1) attribution is reviewable in one place; (2) `license:` field semantics are explicit (see below); (3) per-file comments are noise on content files that get edited frequently.
 
 Required structure per third-party source:
 
@@ -103,7 +103,7 @@ Required structure per third-party source:
 - **License text**: full upstream license text reproduced verbatim (MIT requires this; CC-BY-4.0 doesn't but inclusion is defensive)
 - **File inventory**: list of derived files in your project's tree
 - **Adaptation notes**: brief summary of the adaptation deltas applied (what was rewritten, what was renamed, what was preserved)
-- **License absence clarification**: explicit statement that absence of `license:` frontmatter on other bundled content means "unspecified host-project-originated," NOT "proprietary" or "unlicensed"
+- **License field semantics**: `ATTRIBUTIONS.md` is the authoritative surface for every derived file. An entry-point `license:` field names one primary upstream licence, and a missing field never means attribution isn't required
 - **Future refresh discipline**: explicit statement that future refreshes from upstream are human-reviewed events, not automatic syncs
 
 For CC-BY-4.0 derivative documentation, add a **Distillation Outline** section: the source-material → host-use-case-category mapping. This makes future re-distillation passes (after the upstream source updates) have a stable scaffold instead of starting from scratch.

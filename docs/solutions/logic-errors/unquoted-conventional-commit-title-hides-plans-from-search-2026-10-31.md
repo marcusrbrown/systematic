@@ -45,7 +45,7 @@ Quote the failing titles:
 +title: "feat: Add Agent Configuration Overlays"
 ```
 
-Fix the source of new ones. The ce:plan template showed `title: [Plan Title]` at v3.28.1, and it now shows a quoted placeholder. Phase 3.1 tells the planner why (`skills/ce-plan/SKILL.md:360`, `skills/ce-plan/SKILL.md:517`):
+Fix the source of new ones. The ce:plan template showed `title: [Plan Title]` at v3.28.1, and it now shows a quoted placeholder. Phase 3.1 tells the planner why (`skills/ce-plan/SKILL.md:361`, `skills/ce-plan/SKILL.md:518`):
 
 ```md
   - Quote the title in the frontmatter (`title: "feat: Add user authentication"`): a conventional-commit title contains a colon, which YAML reads as a mapping, and the plan then fails to parse

@@ -1,6 +1,7 @@
 ---
 name: git-clean-gone-branches
 description: Clean up local branches whose remote tracking branch is gone. Use when the user says "clean up branches", "delete gone branches", "prune local branches", "clean gone", or wants to remove stale local branches that no longer exist on the remote. Also handles removing associated worktrees for branches that have them.
+license: MIT
 ---
 
 # Clean Gone Branches

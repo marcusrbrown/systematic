@@ -52,7 +52,7 @@ Only (1) is a defect. (2) is correct, validated, and conventional.
   name (`correctness-reviewer`) does not match that regex, so converting silently
   **removes validation coverage** — a later typo would no longer be caught.
 - **Persona-roster tables are references, not dispatch.** ce-review's roster
-  (`skills/ce-review/SKILL.md:108-118`) maps persona → description. A table row is
+  (`skills/ce-review/SKILL.md:109-119`) maps persona → description. A table row is
   not a dispatch instruction; its qualified ID is a validated cross-reference.
   Leave it qualified.
 - **Do not add a gate banning qualified IDs in skill bodies.** It would directly
@@ -72,9 +72,9 @@ The qualified form is load-bearing on two axes:
   silent runtime dispatch failure — the precise failure class that
   `reconciliation-sync-reference-integrity` documents.
 - **Corpus convention.** Qualified IDs are the persona-reference style across the
-  bundle: `skills/document-review/SKILL.md:105-114`,
-  `skills/resolve-pr-feedback/SKILL.md:144-157`,
-  `skills/ce-compound/SKILL.md:464-477`, `skills/ce-review/SKILL.md:108-118`. Neutralizing only
+  bundle: `skills/document-review/SKILL.md:106-115`,
+  `skills/resolve-pr-feedback/SKILL.md:145-158`,
+  `skills/ce-compound/SKILL.md:465-478`, `skills/ce-review/SKILL.md:109-119`. Neutralizing only
   four skills would make them inconsistent with every other skill.
 
 The cost signal is the lesson: a full brainstorm → 5-persona document-review →
@@ -154,7 +154,7 @@ This is the explicit "not this" list:
 ## Examples
 
 Correct fix — fake-call syntax neutralized, qualified ID preserved
-(`skills/ce-plan/SKILL.md:227-231, 296-300, 323-328`):
+(`skills/ce-plan/SKILL.md:228-232, 297-301, 324-329`):
 
 ```diff
 - - task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {planning context summary})

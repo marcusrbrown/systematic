@@ -1,6 +1,7 @@
 ---
 name: slfg
 description: Full autonomous engineering workflow using swarm mode for parallel execution
+license: MIT
 argument-hint: '[feature description]'
 disable-model-invocation: true
 ---

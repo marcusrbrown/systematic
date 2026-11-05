@@ -1,6 +1,7 @@
 ---
 name: test-browser
 description: Run browser tests on pages affected by current PR or branch
+license: MIT
 argument-hint: "[PR number, branch name, 'current', or --port PORT]"
 ---
 
