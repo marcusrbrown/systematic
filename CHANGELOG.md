@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.5](https://github.com/marcusrbrown/systematic/compare/v3.31.4...v3.31.5) (2026-11-06)
+
+### Bug Fixes
+
+* keep config show from printing a project file outside the repository ([#1321](https://github.com/marcusrbrown/systematic/issues/1321)) ([1d7aac7](https://github.com/marcusrbrown/systematic/commit/1d7aac70a3af111b530a0ca8fd6a223b6c54134e)), closes [#1314](https://github.com/marcusrbrown/systematic/issues/1314)
+
 ## [3.31.4](https://github.com/marcusrbrown/systematic/compare/v3.31.3...v3.31.4) (2026-11-06)
 
 ### Bug Fixes
