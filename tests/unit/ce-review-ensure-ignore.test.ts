@@ -944,15 +944,16 @@ describe('ensure-ignore internals: Git timeout classification', () => {
     expect(exitCode).toBe(0)
   })
 
-  it('classifies a real, fast repository as work-tree under the same injected timeout', () => {
+  it('classifies a real, fast repository as work-tree under a generous injected timeout', () => {
     const root = makeDir('ensure-ignore-timeout-fast-')
     initRepo(root)
 
+    // 2000ms, not 200ms: git spawn overhead under Node on macOS can exceed 200ms.
     const script = `
       import assert from 'node:assert/strict'
       import { classifyGitWorkTree } from '${HELPER_URL}'
 
-      const result = classifyGitWorkTree(${JSON.stringify(root)}, { timeoutMs: 200 })
+      const result = classifyGitWorkTree(${JSON.stringify(root)}, { timeoutMs: 2000 })
       assert.deepEqual(result, { kind: 'work-tree' })
       process.exit(0)
     `

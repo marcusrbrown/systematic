@@ -21,7 +21,7 @@ applies_when:
 ---
 
 > **Note (2026-05-23):** The manual `gh release edit` workflow described here is now automated for this repo. As of v2.23.4, `scripts/dispatch-release-notes.sh` (run from `.github/workflows/release-notes.yaml` on `release: published`, or a manual `workflow_dispatch` with a `tag`) dispatches the `release-notes-narrative` skill for each published release. See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](../best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the v2 CI automation architecture and [`docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md`](../best-practices/release-notes-narrative-procedure-2026-05-23.md) for the v1 manual procedure both modes inherit. Manual `gh release edit` is still the right answer when the automation fails-soft or for backfilling historical releases.
-
+>
 > **Correction (2026-08-17):** The 2026-05-23 note above originally ended "The myth itself — that release-notes-generator ignores commit bodies — remains true." That is true of the *plugin* and false of the *pipeline*, and the difference is not academic — see [Stage 2 reversed the ingestion rule](#stage-2-reversed-the-ingestion-rule-2026-08-17) below. Reading only the original claim leads to "commit bodies are internal," which published internal planning vocabulary to a real release.
 
 # The release pipeline has two stages with opposite commit-body ingestion

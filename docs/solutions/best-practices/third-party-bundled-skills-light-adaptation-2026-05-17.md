@@ -55,7 +55,7 @@ Layer 1 is **mechanical** (orchestrator runs literal checks):
 
 1. Size in target range (e.g., 3500-6000 bytes for a ~4.5KB target)
 2. Attribution + license URL in first 3 lines (literal `CC-BY-4.0` + license URL + canonical source URL)
-3. Heading 1:1 match count = 0 (extract `^## ` lines from distilled file AND upstream; intersection must be empty)
+3. Heading 1:1 match count = 0 (extract lines matching `^##` followed by a space from distilled file AND upstream; intersection must be empty)
 4. Heading order divergence (distilled sequence does NOT map 1:1 to upstream sequence)
 5. Per-paragraph longest-line `grep -F` against upstream returns zero hits for any line >120 chars
 

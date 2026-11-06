@@ -26,7 +26,7 @@ Two verification layers were ported from upstream CEP into Systematic: a `ce:rev
 independent finding-validation pass, and a content-integrity check for silent YAML
 frontmatter truncation in `docs/solutions/` (where the knowledge store lives). The
 frontmatter check was meant to detect the silent-data-loss class where an unquoted value
-containing ` #` is truncated by the YAML parser with no error (`problem: cache miss # under load`
+containing a space followed by `#` is truncated by the YAML parser with no error (`problem: cache miss # under load`
 parses to `"cache miss"`, dropping the rest, with `parseError: false`).
 
 The first implementation tried to detect *actual content loss* by comparing the parsed value
@@ -42,7 +42,7 @@ the ambiguous pattern outright**, with a remediation that removes the ambiguity.
 
 For the YAML case: `problem: cache miss # under load` (truncation — bad) and
 `date: 2026-01-01 # created` (intentional comment — fine) are **byte-identical to the parser** —
-both parse to the text before ` #`. No parse-diff, heuristic, or "did we lose content?" check can
+both parse to the text before the space-then-`#`. No parse-diff, heuristic, or "did we lose content?" check can
 separate them, because YAML strips comments by design and the result is the same either way.
 
 The honest resolution is a flat lexical rule: **flag any unquoted inline comment** (whitespace
