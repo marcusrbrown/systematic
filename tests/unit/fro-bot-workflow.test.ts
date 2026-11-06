@@ -987,7 +987,7 @@ describe('Fro Bot rotating daily report issue', () => {
       // Rotation must never close today's canonical issue.
       'close every other open issue',
       'a failed write never closes the previous report',
-      'title starts with `Daily Fro Bot Report —`',
+      'whose title passes the report title rule',
       'exactly `Daily Autohealing Report`',
       'closed as completed',
       'Superseded by #N.',
@@ -1001,7 +1001,7 @@ describe('Fro Bot rotating daily report issue', () => {
 
   test('reads the previous report and carries it forward', () => {
     expectPromptFragments(autohealPromptText(), [
-      'newest issue, open or closed, whose title starts with `Daily Fro Bot Report —`',
+      'newest issue, open or closed, whose title passes the report title rule',
       'legacy issue #153',
       'Previous report: #N',
     ])
@@ -1235,5 +1235,95 @@ describe('Fro Bot Sunday upstream watch', () => {
     const env = asRecord(runFroBot.env, 'Run Fro Bot env')
 
     expect(env).not.toHaveProperty('IS_SUNDAY_UTC')
+  })
+})
+
+describe('Fro Bot report title rule', () => {
+  /** The anchored regex the prompt hands the agent, compiled as written. */
+  function reportTitlePattern(): RegExp {
+    const matches = [
+      ...autohealPromptText().matchAll(/`(\^Daily Fro Bot Report — [^`\n]*)`/g),
+    ]
+    expect(matches).toHaveLength(1)
+    return new RegExp(matches[0]?.[1] ?? '')
+  }
+
+  function section(from: string, to: string): string {
+    const prompt = autohealPromptText()
+    const start = prompt.indexOf(from)
+    const end = prompt.indexOf(to, start + from.length)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    return prompt.slice(start, end).replace(/\s+/g, ' ')
+  }
+
+  test('the regex is anchored at both ends', () => {
+    const source = reportTitlePattern().source
+
+    expect(source.startsWith('^Daily Fro Bot Report — ')).toBe(true)
+    expect(source.endsWith('$')).toBe(true)
+  })
+
+  test('accepts a real daily report title', () => {
+    const pattern = reportTitlePattern()
+
+    expect(pattern.test('Daily Fro Bot Report — 2026-11-06 (UTC)')).toBe(true)
+    expect(pattern.test('Daily Fro Bot Report — 2026-02-28 (UTC)')).toBe(true)
+  })
+
+  test.each([
+    ['an arbitrary suffix', 'Daily Fro Bot Report — rotation bug'],
+    ['a missing (UTC)', 'Daily Fro Bot Report — 2026-11-06'],
+    ['an unpadded date', 'Daily Fro Bot Report — 2026-1-6 (UTC)'],
+    [
+      'a trailing letter on the date',
+      'Daily Fro Bot Report — 2026-11-06x (UTC)',
+    ],
+    ['an impossible month', 'Daily Fro Bot Report — 2026-13-06 (UTC)'],
+    ['an impossible day', 'Daily Fro Bot Report — 2026-11-40 (UTC)'],
+    [
+      'a hyphen instead of the em dash',
+      'Daily Fro Bot Report - 2026-11-06 (UTC)',
+    ],
+    ['a leading extra', 'Re: Daily Fro Bot Report — 2026-11-06 (UTC)'],
+    ['a trailing extra', 'Daily Fro Bot Report — 2026-11-06 (UTC) copy'],
+    ['text after the date', 'Daily Fro Bot Report — 2026-11-06 (UTC)\nextra'],
+    ['the legacy title', 'Daily Autohealing Report'],
+    ['an empty title', ''],
+  ])('rejects %s', (_label, title) => {
+    expect(reportTitlePattern().test(title)).toBe(false)
+  })
+
+  test('selection uses the one rule in continuity, canonical, and rotation', () => {
+    const continuity = section(
+      'CONTINUITY (read before acting)',
+      '\nDEDUPLICATION',
+    )
+    const canonical = section('\nDAILY REPORT ISSUE\n', '\nROTATION\n')
+    const rotation = section('\nROTATION\n', '\nONE REPORT, ONE BODY')
+
+    for (const text of [continuity, canonical, rotation]) {
+      expect(text.toLowerCase()).toContain('report title rule')
+    }
+  })
+
+  test('states the rule once as a whole-title match, with the legacy title exact', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'report title rule',
+      'a whole-title match for `Daily Fro Bot Report — YYYY-MM-DD (UTC)`',
+      'the em dash is literal',
+      'the date is a real calendar date',
+      'prefix, substring, and fuzzy matching never qualify',
+      'the only other title rotation may close is exactly `Daily Autohealing Report`',
+    ])
+  })
+
+  test('no starts-with or prefix wording remains for report selection', () => {
+    const prompt = autohealPromptText()
+
+    expect(prompt).not.toMatch(/title starts? with/i)
+    expect(prompt).not.toMatch(/starts? with `Daily Fro Bot Report/i)
+    expect(prompt).not.toMatch(/title prefix/i)
+    expect(prompt).not.toMatch(/begins? with `Daily Fro Bot Report/i)
   })
 })

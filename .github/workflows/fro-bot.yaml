@@ -165,15 +165,26 @@ env:
     Do not keep multiple branches checked out at once. Complete one mutation,
     return to a clean working tree, then continue.
 
+    REPORT TITLE RULE
+    A daily report title is a whole-title match for
+    `Daily Fro Bot Report — YYYY-MM-DD (UTC)`: the em dash is literal and the
+    date is a real calendar date. Test every candidate title locally against
+    this anchored regex, which must match the entire title:
+    `^Daily Fro Bot Report — [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]) \(UTC\)$`
+    Prefix, substring, and fuzzy matching never qualify; for example
+    `Daily Fro Bot Report — rotation bug` is not a report. The only other title
+    rotation may close is exactly `Daily Autohealing Report` (legacy #153), as a
+    whole-title match. Every selection below uses this rule.
+
     CONTINUITY (read before acting)
-    1. The prior report is the newest issue, open or closed, whose title starts
-       with `Daily Fro Bot Report —`, authored by exactly `fro-bot` or
+    1. The prior report is the newest issue, open or closed, whose title passes
+       the REPORT TITLE RULE, authored by exactly `fro-bot` or
        `mrbro-bot[bot]`, other than the issue for today. Find it with
        `gh issue list --state all --search "Daily Fro Bot Report in:title"
-       --json number,title,author,createdAt`, then verify the title prefix and
-       author locally; search is fuzzy. If none exists, read the body of legacy
-       issue #153 ("Daily Autohealing Report") instead, and treat the top dated
-       section of #153 as one prior report.
+       --json number,title,author,createdAt`, then apply the title regex and
+       the author check locally; search is fuzzy. If none exists, read the body
+       of legacy issue #153 ("Daily Autohealing Report") instead, and treat the
+       top dated section of #153 as one prior report.
     2. Read the prior report for continuity: do-not-retry items, recurring
        findings, and unresolved Needs Human Attention items. Start today's body
        with `Previous report: #N`.
@@ -448,12 +459,13 @@ env:
     `Daily Fro Bot Report — YYYY-MM-DD (UTC)`: an em dash, and the date is the
     TODAY_UTC value from the RUN CONTEXT line.
 
-    The canonical issue is the lowest-numbered open issue with today's exact
-    title, authored by exactly `fro-bot` or `mrbro-bot[bot]` (no other bot or
+    The canonical issue is the lowest-numbered open issue whose title passes the
+    REPORT TITLE RULE and equals today's exact title (the TODAY_UTC date),
+    authored by exactly `fro-bot` or `mrbro-bot[bot]` (no other bot or
     app identity qualifies, and never a human-authored issue). Find it with
     `gh issue list --state open --search "Daily Fro Bot Report in:title"
-    --json number,title,author`, then compare title and author locally; search
-    is fuzzy.
+    --json number,title,author`, then apply the title regex, the date, and the
+    author check locally; search is fuzzy.
     - If none exists, create it.
     - If one exists (a second run on the same day, for example a dispatch), edit
       it in place with a full current report for the day: rewrite the whole
@@ -470,11 +482,11 @@ env:
     ROTATION
     After the daily issue for today is written successfully, close every other
     open issue authored by exactly `fro-bot` or `mrbro-bot[bot]` whose title
-    starts with `Daily Fro Bot Report —` or is exactly `Daily Autohealing Report`
+    passes the REPORT TITLE RULE or is exactly `Daily Autohealing Report`
     (legacy #153). Rotated issues are closed as completed, each with a one-line
     comment: `Superseded by #N.` (N is the canonical issue). A failed write never
-    closes the previous report. Never close any other issue; no fuzzy or
-    contains matching.
+    closes the previous report. Never close any other issue, including one with
+    a similar title that fails the rule.
 
     ONE REPORT, ONE BODY
     The full report lives in the issue body. Never post the report, or a copy of
