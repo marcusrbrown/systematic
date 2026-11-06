@@ -42,7 +42,7 @@ All of these were found by the PR review, which reproduced them with alias fixtu
 
 ## Solution
 
-`dedupeSourceMetadata` now decides redundancy per kind, and only when nothing in the kind is left unreported (`src/lib/config.ts:2507-2526`):
+`dedupeSourceMetadata` now decides redundancy per kind, and only when nothing in the kind is left unreported (`src/lib/config.ts:2803-2822`):
 
 ```ts
 const redundant =
@@ -60,9 +60,9 @@ Each part of the condition covers a different case:
 
 ## Why This Works
 
-- A file that fails validation never becomes a source. `LayeredSources` holds `null` for a layer with no valid file (`src/lib/config.ts:1328-1335`), so such a file adds nothing to the kind's path list. The failure survives only as the kind's `presence: 'invalid'`, which `foldKindMetadata` carries (`src/lib/config.ts:2386-2395`).
+- A file that fails validation never becomes a source. `LayeredSources` holds `null` for a layer with no valid file (`src/lib/config.ts:1450-1457`), so such a file adds nothing to the kind's path list. The failure survives only as the kind's `presence: 'invalid'`, which `foldKindMetadata` carries (`src/lib/config.ts:2682-2691`).
 - `loadSearchSettingsForCli` falls back to the user-level reader when the full load throws or reports an invalid source (`src/cli.ts:560-614`). That fallback keeps `search.enabled: false` when the full loader drops a whole invalid file, as its doc comment explains. Here the load did not throw, so the invalid row was the only signal, and losing it switched the fail-safe off.
-- `foldSiblingSources` keeps every loaded file's canonical path (`src/lib/config.ts:2370-2383`), so aliasing is still recognised for any sibling and the first-round defect stays fixed.
+- `foldSiblingSources` keeps every loaded file's canonical path (`src/lib/config.ts:2666-2679`), so aliasing is still recognised for any sibling and the first-round defect stays fixed.
 
 ## Prevention
 

@@ -1393,7 +1393,7 @@ describe('cli config show', () => {
   // A malformed config fails earlier than the trust boundary, at the JSONC
   // parse. It names the file but has no key to name, so any prose or docs
   // promising "the file and key" over-promises for this shape.
-  it('a malformed config reports the parse failure, naming no key', () => {
+  it('a malformed project config is skipped: the parse failure is reported in prose and in --json, and the command exits 0', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
     const project = path.join(root, 'project')
@@ -1405,11 +1405,26 @@ describe('cli config show', () => {
         '{,]',
       )
 
+      const file = fs.realpathSync(
+        path.join(project, '.opencode', 'systematic.json'),
+      )
       const result = runCli(['config', 'show'], project, { HOME: home })
 
-      expect(result.exitCode).toBe(1)
-      expect(result.stderr).toContain('Resolved configuration: unavailable')
-      expect(result.stderr).toContain('JSONC parse error')
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).not.toContain('unavailable')
+      expect(result.stdout).toContain('Resolved configuration:')
+      expect(result.stdout).toContain(`Project config skipped: ${file}`)
+      expect(result.stdout).toContain('JSONC parse error')
+
+      const json = runCli(['config', 'show', '--json'], project, { HOME: home })
+      expect(json.exitCode).toBe(0)
+      const parsed = JSON.parse(json.stdout) as {
+        error?: string
+        projectSkipped?: { path: string; reason: string }
+      }
+      expect(parsed.error).toBeUndefined()
+      expect(parsed.projectSkipped?.path).toBe(file)
+      expect(parsed.projectSkipped?.reason).toContain('JSONC parse error')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -1418,11 +1433,10 @@ describe('cli config show', () => {
   // The prose reason and exit code must both agree with `--json`; they read
   // the same Error. This is the regression that would reintroduce the split.
   //
-  // A project security-overlay field (e.g. `agents.x.model`) no longer
-  // triggers a genuine load failure (issue #992: it is stripped and warned
-  // instead, see the test above), so this exercises a still-throwing
-  // failure -- a malformed overlay VALUE, not a trust violation -- that
-  // still names both the file and the key.
+  // A project config can no longer fail the load (it is skipped), and a
+  // project security-overlay field is stripped and warned about (issue #992).
+  // So this exercises a still-throwing failure: a malformed overlay VALUE in
+  // the user's own config, which names both the file and the key.
   it('the load-failure reason and exit code match --json', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
@@ -1430,7 +1444,7 @@ describe('cli config show', () => {
     try {
       fs.mkdirSync(project, { recursive: true })
       fs.mkdirSync(home, { recursive: true })
-      writeProjectConfig(project, {
+      writeUserConfig(home, {
         agents: { 'correctness-reviewer': 'not-an-object' },
       })
 
@@ -2577,7 +2591,8 @@ describe('cli config show: locations and search', () => {
           file,
           'file is larger than 1 MB',
         )
-        expect(result.exitCode).toBe(1)
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(`Project config skipped: ${file}`)
       } finally {
         fs.rmSync(box.root, { recursive: true, force: true })
       }
@@ -2590,7 +2605,8 @@ describe('cli config show: locations and search', () => {
         fs.mkdirSync(file)
         const result = runCli(['config', 'show'], box.project, box.env)
         expectNote(result, 'Project configuration', file, 'not a regular file')
-        expect(result.exitCode).toBe(1)
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(`Project config skipped: ${file}`)
       } finally {
         fs.rmSync(box.root, { recursive: true, force: true })
       }
@@ -2603,7 +2619,8 @@ describe('cli config show: locations and search', () => {
         expect(spawnSync('mkfifo', [file]).status).toBe(0)
         const result = runCli(['config', 'show'], box.project, box.env)
         expectNote(result, 'Project configuration', file, 'not a regular file')
-        expect(result.exitCode).toBe(1)
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(`Project config skipped: ${file}`)
       } finally {
         fs.rmSync(box.root, { recursive: true, force: true })
       }

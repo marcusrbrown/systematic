@@ -120,6 +120,8 @@ The project config is `.opencode/systematic.json`, or `.systematic.jsonc` (or `.
 
 ### Trust boundaries
 
+A project config that fails to load is skipped by the plugin, but the project-scope export does not skip it. It writes into the repository, so it stops on the failure and writes nothing.
+
 Project-level config (`.opencode/systematic.json`) is the least-trusted source. In the existing `categories`/`agents` overlay, a project-sourced `model` is **rejected outright** — config validation throws, it is not silently dropped. In the `pi_subagents.categories`/`pi_subagents.agents` overlay, project-sourced `thinking`, `tools`, and `skills` are **silently stripped** before merge — project config simply cannot grant them. `max_turns` is trust-any and passes through from any source, including project config. User config (`~/.config/opencode/systematic.json`) and custom config (`$OPENCODE_CONFIG_DIR/systematic.json`) may set all supported fields.
 
 ### Canonical example

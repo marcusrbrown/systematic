@@ -31,8 +31,9 @@ import { installSearch } from './search-tool.js'
  *
  * Two failure rules shape the module:
  *
- * - Invalid config rejects `setup`, as it throws on v1. The host then logs that
- *   the plugin failed to load and carries on without it.
+ * - An invalid user-level config rejects `setup`, as it throws on v1. The host
+ *   then logs that the plugin failed to load and carries on without it. An
+ *   invalid project file never does: the loader skips it with one warning.
  * - Nothing else may throw into the host. A throwing transform disables the
  *   whole plugin, and a throwing hook breaks the turn it runs in. Every
  *   installer and every callback an installer registers therefore runs through
@@ -341,8 +342,9 @@ function composeBootstrapOrNull(
 
 /**
  * The snapshot every installer reads, or `undefined` when the asset plan
- * cannot be built. Invalid config still throws: that is the one failure that
- * stops the plugin, as it does on v1. Anything else is reported, and the host
+ * cannot be built. An invalid user-level config still throws: that is the one
+ * failure that stops the plugin, as it does on v1. A project file that fails
+ * is skipped by the loader. Anything else is reported, and the host
  * keeps the plugin loaded.
  */
 function buildSnapshot(
@@ -369,7 +371,8 @@ function buildSnapshot(
   // shared v2 service, belongs to a different project).
   const directory = projectDirectory ?? homeDir
 
-  // Invalid config throws here, before any plan is built. Not fail-open.
+  // An invalid user-level config throws here, before any plan is built. Not
+  // fail-open. An invalid project file never does: the loader skips it.
   const { config, overlays } = loadConfigWithSources(directory, {
     homeDir,
     userConfigDir: opencodeConfigDir,

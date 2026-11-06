@@ -1204,9 +1204,12 @@ describe('worktree placement rule', () => {
     })
 
     test('a qualified systematic:git-worktree entry fails config load instead of silently disabling the rule', () => {
+      // The strict project read: the default read skips a failing project
+      // file (the rule then stays on), and the schema error is the same.
       expect(() =>
         loadConfig(
           projectWithConfig({ disabled_skills: ['systematic:git-worktree'] }),
+          { projectFailure: 'throw' },
         ),
       ).toThrow(/Unrecognized skill name 'systematic:git-worktree'/)
     })

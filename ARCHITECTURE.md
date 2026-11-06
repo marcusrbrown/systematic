@@ -58,9 +58,10 @@ installer lives in its own module and registers through a native v2 domain, not 
 - **bootstrap** (`opencode-v2-bootstrap.ts`) — one instruction entry (`systematic.bootstrap`) per session,
   put from the `prompt` hook.
 
-Two rules hold across the v2 adapter. Invalid `systematic.json` rejects `setup` with the same
-`Invalid Systematic config in <path>` message v1 throws, and the host then logs that the plugin failed
-to load and carries on without it. Everything else is guarded: a throwing transform disables the whole
+Two rules hold across the v2 adapter. An invalid user-level `systematic.json` (user, user.local,
+custom, custom.local) rejects `setup` with the same `Invalid Systematic config in <path>` message v1
+throws, and the host then logs that the plugin failed to load and carries on without it. An invalid
+project file never does: the loader skips it with one warning. Everything else is guarded: a throwing transform disables the whole
 plugin and a throwing hook breaks the turn it runs in, so every installer and every registered
 callback runs through `createSafeGuard`, which reports to `console.error` with a `systematic:` prefix and
 never throws.
@@ -248,8 +249,9 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 4. **No phantom skill references.** Any `systematic:*` name referenced in skill or agent content
    must correspond to a real bundled skill. The content-integrity gate catches dangling references.
 
-5. **Nothing throws into the v2 host, except invalid config.** `setup` rejects on invalid
-   `systematic.json` (mirroring v1's throw at load); every other v2 callback is wrapped by
+5. **Nothing throws into the v2 host, except an invalid user-level config.** `setup` rejects on an
+   invalid user-level `systematic.json` (mirroring v1's throw at load); a failing project file is
+   skipped, not thrown. Every other v2 callback is wrapped by
    `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
 
 6. **Search reads the disk on every call, protects its config per field, and avoids `Math.log`.**
@@ -524,7 +526,8 @@ once. A local file has its sibling's trust, needs no sibling, and its `agents`/`
 replaces a same-key entry from an earlier layer whole. A local `search.sources` entry with the name
 of an earlier user-level entry replaces it whole, `exclude` included. Disabled lists union-merge
 across all files; bootstrap config shallow-merges. The project pass reads through the same 1 MB
-bounded read as the bin, so a larger project file is invalid. User-level files take the same
+bounded read as the bin, so a larger project file is invalid. Every file parses as JSONC with
+`allowTrailingComma`, at both parse sites (`config.ts` and `search-user-config.ts`). User-level files take the same
 non-blocking regular-file read with no size cap, so a FIFO or a directory at one of those paths is an
 unreadable file and never a hang. A project whose main root is not on the merged user-level
 `search.allow_project_sources` list gets no loader warning that names one of its `search.sources`
@@ -557,6 +560,21 @@ custom source loads successfully, both trust passes still run in normal preceden
 resulting diagnostic states the file's fields apply as custom. If the custom source fails to load,
 report-mode falls back to the project strip warnings instead. `preserveSecurityFields` carries a
 previously-trusted value's protected fields forward across a project overlay on the same key.
+
+**A project file cannot break the load.** `loadConfigWithSources` loads the project layer in report
+mode whatever `invalidSource` says; `invalidSource` still governs the four user-level layers. A project
+file that cannot be read, is over 1 MB, is not valid JSONC, has a non-object root or fails the schema
+becomes no source: one warning per file and reason for the process (`noticeSkippedProjectConfig`, reset
+with `resetSkippedProjectConfigNotices`) names the file and a reason that holds no value, and the file's
+own strip and field warnings are held back and dropped. A project file that loads alone but breaks the
+load after the merge (profile-bundle assertion, routing invariants) is handled by the wrapper in
+`loadConfigWithSources`: it holds the pass's warnings, and if the pass throws with a project source it
+reruns without the project layer. A successful rerun marks the project skipped; a failed one rethrows
+the first error. An empty or whitespace-only project file is absent. The result's `skippedProject` carries
+the path and reason for `config show`. `projectFailure: 'throw'` turns all of this off, and the
+project-scope pi-subagents export passes it so a broken project file stops the export before it writes.
+A project file aliased to a custom file is read first by the strict custom pass, so it stays fatal.
+The per-call search reader and the bin still read a skipped file's `search.sources` on their own.
 
 One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserLevelSources`
 (below) loads user and custom fully, ahead of project, so the opt-in can be resolved before the
@@ -603,7 +621,8 @@ bundle content, subject to two structural constraints:
   currently selected, matching the existing user/custom validate-always behavior: a malformed bundle
   in a shared repository is a repository bug that surfaces for everyone, not only whoever happens to
   select it — including, under the opt-in, a repository whose project bundle nobody in the loading
-  session ever selects.
+  session ever selects. For a project bundle that failure skips the whole project file, through the
+  rerun above; a user or custom bundle still fails the load.
 
 A project-sourced active bundle's chain position depends on that provenance and differs from a
 user/custom-sourced one: `buildOverlaySources` inserts a user- or custom-sourced bundle after user

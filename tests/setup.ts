@@ -1,3 +1,6 @@
+import { beforeEach } from 'bun:test'
+import { resetSkippedProjectConfigNotices } from '../src/lib/config.js'
+
 // Bun test preload (see bunfig.toml `[test].preload`). Runs once before any
 // test file. `SYSTEMATIC_PROFILE` selects the active model profile
 // (src/lib/config.ts), so an ambient value in the developer's or CI's shell
@@ -7,3 +10,11 @@
 // (e.g. `withEnvProfile` in tests/unit/config.test.ts) and restore it
 // afterward.
 delete process.env.SYSTEMATIC_PROFILE
+
+// A skipped project config warns once per file for the process, so a warning
+// asserted in one test would otherwise be swallowed by an earlier test that
+// skipped the same file. Forgetting the notices before every test keeps each
+// test independent of the order the suite runs in.
+beforeEach(() => {
+  resetSkippedProjectConfigNotices()
+})

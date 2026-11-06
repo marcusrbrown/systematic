@@ -1121,8 +1121,12 @@ function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
   const text = readTextBounded(filePath, maxBytes ?? USER_LEVEL_FILE_MAX_BYTES)
   if (text.kind !== 'text') return text
   const content = text.content
+  // A project file with nothing in it is absent, as it is to the loader.
+  if (maxBytes !== undefined && content.trim() === '') return { kind: 'absent' }
   const errors: ParseError[] = []
-  const parsed: unknown = parseJsonc(content, errors)
+  const parsed: unknown = parseJsonc(content, errors, {
+    allowTrailingComma: true,
+  })
   const firstError = errors[0]
   if (firstError) {
     return {

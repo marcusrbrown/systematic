@@ -395,38 +395,42 @@ describe('setupOpenCodeV2', () => {
     expect(installed).toEqual([])
   })
 
-  test('invalid config rejects setup with the named message and installs nothing', async () => {
+  test('a project config with a syntax error is skipped: setup resolves, every installer runs, and one warning names the file', async () => {
     const configPath = writeProjectConfig('{ "bootstrap": ')
     const installed: string[] = []
     const { ctx } = createFakeContext(projectDir)
 
-    const outcome = setupOpenCodeV2(
-      ctx,
-      deps({
-        installers: {
-          agents: () => {
-            installed.push('agents')
+    await expect(
+      setupOpenCodeV2(
+        ctx,
+        deps({
+          installers: {
+            agents: () => {
+              installed.push('agents')
+            },
+            bootstrap: () => {
+              installed.push('bootstrap')
+            },
           },
-          bootstrap: () => {
-            installed.push('bootstrap')
-          },
-        },
-      }),
-    )
+        }),
+      ),
+    ).resolves.toBeUndefined()
 
-    await expect(outcome).rejects.toThrow(
-      `Invalid Systematic config in ${configPath}`,
-    )
-    expect(installed).toEqual([])
+    expect([...installed].sort()).toEqual(['agents', 'bootstrap'])
+    const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(configPath)
+    expect(errorSpy).not.toHaveBeenCalled()
   })
 
-  test('a config that parses but fails the schema rejects setup', async () => {
+  test('a project config that parses but fails the schema is skipped and setup resolves', async () => {
     const configPath = writeProjectConfig({ disabled_skills: 'not-a-list' })
     const { ctx } = createFakeContext(projectDir)
 
-    await expect(setupOpenCodeV2(ctx, deps())).rejects.toThrow(
-      `Invalid Systematic config in ${configPath}`,
-    )
+    await expect(setupOpenCodeV2(ctx, deps())).resolves.toBeUndefined()
+    const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(configPath)
   })
 
   test('a bootstrap file that cannot be read leaves every other installer running, with one diagnostic', async () => {
@@ -507,8 +511,9 @@ describe('setupOpenCodeV2', () => {
     expect(notes[0]).toContain('ENOTDIR')
   })
 
-  test('invalid config still rejects setup when the bundle is also broken', async () => {
-    const configPath = writeProjectConfig('{ "bootstrap": ')
+  test('invalid user config still rejects setup when the bundle is also broken', async () => {
+    const configPath = path.join(homeDir, '.config/opencode/systematic.json')
+    fs.writeFileSync(configPath, '{ "bootstrap": ')
     const brokenRoot = path.join(tempRoot, 'broken-package')
     fs.mkdirSync(path.join(brokenRoot, 'skills'), { recursive: true })
     fs.writeFileSync(path.join(brokenRoot, 'agents'), 'not a directory')
@@ -722,14 +727,14 @@ describe('default export wiring', () => {
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
-  test('setup rejects on invalid project config for a v2 context', async () => {
+  test('setup resolves on an invalid project config for a v2 context, and skips it with a warning', async () => {
     process.env.HOME = homeDir
     const configPath = writeProjectConfig('not json at all')
     const { ctx } = createFakeContext(projectDir)
 
-    await expect(SystematicPlugin.setup(ctx)).rejects.toThrow(
-      `Invalid Systematic config in ${configPath}`,
-    )
+    await expect(SystematicPlugin.setup(ctx)).resolves.toBeUndefined()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain(configPath)
   })
 
   test('setup resolves for a valid v2 context', async () => {

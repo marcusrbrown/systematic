@@ -320,7 +320,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
   const reportedRouting = new Set<string>()
 
   return async (config: Config): Promise<void> => {
-    // Invalid config throws here, before any plan is built. v1 is not fail-open.
+    // An invalid user-level config throws here, before any plan is built (not fail-open).
     const { config: systematicConfig, overlays } =
       loadConfigWithSources(directory)
     const existingAgents = { ...(config.agent ?? {}) }
