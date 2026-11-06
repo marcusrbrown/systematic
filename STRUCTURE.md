@@ -57,7 +57,7 @@ subdirectory of core modules.
 - `src/claude-code-validator.ts` — review-artifact validation for the Claude Code bundle; `src/claude-code-validator-bin.ts` is the bin's entry
 - `src/claude-code-search.ts` — entry of the `systematic-search` Claude Code bin (user-level config; from project config only the proposed external `sources`)
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
-- `src/lib/config.ts` — JSONC config loading, 3-source merge
+- `src/lib/config.ts` — JSONC config loading, five-layer merge (user, user.local, project, custom, custom.local)
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
 - `src/lib/config-protected-fields.ts` — `CONFIG_PROTECTED_FIELD_PATHS`, dependency-free list shared
   by `config.ts` and `capability-snapshot.ts`
@@ -270,7 +270,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | File | Role |
 |------|------|
 | `src/lib/config-schema.ts` | Canonical Zod schema for all user config |
-| `src/lib/config.ts` | JSONC loading + 3-source merge |
+| `src/lib/config.ts` | JSONC loading + five-layer merge |
 | `src/lib/config-handler.ts` | Plugin config hook — merges bundled assets |
 | `biome.json` | Linter + formatter config |
 | `tsconfig.json` | TypeScript compiler config |

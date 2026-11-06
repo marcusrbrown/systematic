@@ -301,7 +301,7 @@ OpenCode loads plugin
        ├─ config hook fires
         │    └─ createConfigHandler
         │         ├─ buildAssetPlan      — host-neutral agents, commands, skills, permission triples
-        │         ├─ loadConfig          — reads systematic.json from 3 sources
+        │         ├─ loadConfig          — merges systematic.json over five file layers
        │         ├─ findSkillsInDir     — discovers skills/
        │         ├─ findAgentsInDir     — discovers agents/
        │         ├─ findCommandsInDir   — discovers .opencode/commands/
