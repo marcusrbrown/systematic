@@ -1125,10 +1125,64 @@ function isConfigSchemaError(error: unknown): error is Error & {
   return isRecord(error) && error._tag === 'ConfigSchemaError'
 }
 
+/** The definition of a Zod schema node, read without a Zod-version-specific type. */
+function schemaDefinition(node: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(node)) return undefined
+  const internals = node._zod
+  const definition = isRecord(internals) ? internals.def : node.def
+  return isRecord(definition) ? definition : undefined
+}
+
+/** Step through the wrappers (optional, default, nullable, pipe) to the node that holds the shape. */
+function unwrapSchemaNode(node: unknown): unknown {
+  let current = node
+  for (let depth = 0; depth < 16; depth += 1) {
+    const definition = schemaDefinition(current)
+    if (definition === undefined) return current
+    const inner = definition.innerType ?? definition.in
+    if (inner === undefined) return current
+    current = inner
+  }
+  return current
+}
+
+/**
+ * The path of an issue with every segment the file chose replaced. A segment
+ * is shown only when the schema itself defines it: a key of an object's shape.
+ * The key of a record (`categories`, `profiles`, `pi_subagents.*`, a
+ * permission map) and an array index become a placeholder, and so does any
+ * segment the walk cannot resolve (a union). The walk reads the schema, so a
+ * record field added later is redacted without a change here.
+ */
+function redactedSchemaPath(
+  path: readonly PropertyKey[],
+  root: unknown,
+): string[] {
+  const segments: string[] = []
+  let node: unknown = root
+  for (const segment of path) {
+    const definition = schemaDefinition(unwrapSchemaNode(node))
+    const shape = definition?.type === 'object' ? definition.shape : undefined
+    if (isRecord(shape) && Object.hasOwn(shape, String(segment))) {
+      segments.push(String(segment))
+      node = shape[String(segment)]
+    } else if (definition?.type === 'array') {
+      segments.push('<index>')
+      node = definition.element
+    } else {
+      segments.push('<key>')
+      node = definition?.type === 'record' ? definition.valueType : undefined
+    }
+  }
+  return segments
+}
+
 /**
  * Why a config file failed to load, in words that are safe to show: the JSONC
- * error code and offset, the reason a read failed, or the path of the first
- * schema issue. Never a value and never any of the file's content.
+ * error code and offset, the reason a read failed, or the schema position of
+ * the first issue. Never a value, never any of the file's content, and never a
+ * key the file chose: an unrecognized key is reported by the object it sits
+ * under, and a record key by a placeholder (see `redactedSchemaPath`).
  */
 function describeConfigSourceFailure(
   error: unknown,
@@ -1137,13 +1191,16 @@ function describeConfigSourceFailure(
   if (isConfigSchemaError(error)) {
     const [issue] = error.issues
     if (issue === undefined) return 'schema validation failed'
-    const segments = issue.path.map(String)
-    if (issue.code === 'unrecognized_keys' && issue.keys[0] !== undefined) {
-      segments.push(issue.keys[0])
+    const segments = redactedSchemaPath(issue.path, SystematicConfigSchema)
+    const where = sanitizeDiagnosticText(segments.join('.'))
+    if (issue.code === 'unrecognized_keys') {
+      return segments.length === 0
+        ? 'schema validation failed: unrecognized key at the top level'
+        : `schema validation failed: unrecognized key under \`${where}\``
     }
     return segments.length === 0
       ? 'schema validation failed'
-      : `schema validation failed at \`${sanitizeDiagnosticText(segments.join('.'))}\``
+      : `schema validation failed at \`${where}\``
   }
   if (hasFailureDetail(error)) return error.detail
   return code

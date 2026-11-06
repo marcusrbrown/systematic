@@ -8187,6 +8187,67 @@ describe('layered config files', () => {
       })
     })
 
+    describe('the skip reason never carries a key the file chose', () => {
+      const SECRET = 'sk-live-123'
+
+      test.each([
+        [
+          'an unrecognized top-level key',
+          { [SECRET]: true },
+          'unrecognized key at the top level',
+        ],
+        [
+          'an unrecognized key under agents',
+          { agents: { [SECRET]: { temperature: 0.1 } } },
+          'unrecognized key under `agents`',
+        ],
+        [
+          'an invalid value under an arbitrary categories key',
+          { categories: { [SECRET]: { temperature: 'high' } } },
+          '`categories.<key>.temperature`',
+        ],
+        [
+          'an invalid value under an arbitrary pi_subagents.categories key',
+          { pi_subagents: { categories: { [SECRET]: { max_turns: -1 } } } },
+          '`pi_subagents.categories.<key>.max_turns`',
+        ],
+        [
+          'an invalid value under an arbitrary key of a profile bundle',
+          {
+            profiles: {
+              [SECRET]: {
+                categories: { [`${SECRET}-b`]: { temperature: 'x' } },
+              },
+            },
+          },
+          '`profiles.<key>.categories.<key>.temperature`',
+        ],
+      ])(
+        '%s is named by its schema position alone',
+        (_label, content, expected) => {
+          const t = setup()
+          t.user({ allow_project_profiles: true })
+          const file = t.project(content)
+          const result = t.load()
+
+          expect(t.warnings).toHaveLength(1)
+          expect(t.warnings[0]).toContain(file)
+          expect(t.warnings[0]).toContain(expected)
+          expect(t.warnings[0]).not.toContain(SECRET)
+          expect(result.skippedProject?.reason).toContain(expected)
+          expect(result.skippedProject?.reason).not.toContain(SECRET)
+        },
+      )
+
+      test('a field the schema defines is still named', () => {
+        const t = setup()
+        t.project({ disabled_skills: SECRET })
+        const result = t.load()
+        expect(result.skippedProject?.reason).toContain('`disabled_skills`')
+        expect(result.skippedProject?.reason).not.toContain(SECRET)
+      })
+    })
+
     test('a root that is not an object skips the file', () => {
       const t = setup()
       const file = t.project('[]')
@@ -8224,12 +8285,34 @@ describe('layered config files', () => {
 
     test('when the retry without the project file also fails, the original error stands and no skip warning is shown', () => {
       const t = setup()
+      // The two passes fail differently. With the project file, the profile
+      // bundle check fails first on the project's bundle. Without it, that
+      // check passes and the routing check fails on the user's own variant,
+      // which has no model. The first error is the one that must be thrown.
       t.user({
-        profiles: { p: { categories: { 'not-a-category': { model: 'a/x' } } } },
+        allow_project_profiles: true,
+        agents: { [AGENT]: { variant: 'high' } },
       })
-      t.project({ disabled_skills: ['ce:work'] })
-      expect(() => t.load()).toThrow(/not-a-category/)
+      t.project({
+        profiles: {
+          p: { categories: { 'not-a-category-in-project': { model: 'a/x' } } },
+        },
+      })
+
+      let message = ''
+      try {
+        t.load()
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain('not-a-category-in-project')
+      expect(message).not.toContain('variant')
       expect(t.warnings).toEqual([])
+
+      // The retry alone fails with the routing error, so the two errors differ.
+      const retryOnly = setup()
+      retryOnly.user({ agents: { [AGENT]: { variant: 'high' } } })
+      expect(() => retryOnly.load()).toThrow(/variant/)
     })
 
     test('no retry is made when there is no project file', () => {
