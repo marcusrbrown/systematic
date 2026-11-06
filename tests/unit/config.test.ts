@@ -2920,6 +2920,22 @@ describe('config', () => {
   })
 
   describe('JSONC precedence', () => {
+    test.each(['.systematic.jsonc', '.opencode/systematic.jsonc'])(
+      'accepts nested trailing commas in project config %s',
+      (relativePath) => {
+        const filePath = path.join(testDir, relativePath)
+        fs.mkdirSync(path.dirname(filePath), { recursive: true })
+        fs.writeFileSync(
+          filePath,
+          '{"disabled_skills": ["ce:plan",], "bootstrap": {"enabled": false,},}',
+        )
+
+        const result = loadConfig(testDir)
+        expect(result.disabled_skills).toEqual(['ce:plan'])
+        expect(result.bootstrap.enabled).toBe(false)
+      },
+    )
+
     test('only systematic.json exists -- loads it (backward compat)', () => {
       writeUserConfig({ disabled_skills: ['ce:plan'] })
 

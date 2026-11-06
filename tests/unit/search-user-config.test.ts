@@ -1245,7 +1245,7 @@ describe('loadUserLevelSearchSettings', () => {
     expect(loaded.warnings).toEqual([])
   })
 
-  test('a trailing comma is a parse error, exactly as in the loader: unreadable, one warning, no values', () => {
+  test('accepts trailing commas without losing the user search opt-out, matching the loader', () => {
     const { root, homeDir, userConfigDir } = layout()
     fs.writeFileSync(
       path.join(userConfigDir, 'systematic.jsonc'),
@@ -1257,21 +1257,20 @@ describe('loadUserLevelSearchSettings', () => {
       homeDir,
       customConfigDir: null,
     })
-    expect(loaded.unreadable).toBe(true)
-    expect(loaded.settings).toBeUndefined()
-    expect(loaded.warnings).toHaveLength(1)
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.settings).toEqual({ enabled: false })
+    expect(loaded.warnings).toEqual([])
 
-    // The loader rejects the same file (unchanged); the reader mirrors that
-    // as unreadable instead of throwing.
+    // The full loader and the bin-safe reader must preserve the same opt-out.
     const projectDir = path.join(root, 'project')
     fs.mkdirSync(projectDir, { recursive: true })
-    expect(() =>
+    expect(
       loadConfigWithSources(projectDir, {
         homeDir,
         customConfigDir: null,
         warningSink: () => {},
-      }),
-    ).toThrow(/JSONC parse error/)
+      }).config.search?.enabled,
+    ).toBe(false)
   })
 
   test('falls back to .json when there is no .jsonc', () => {
@@ -1357,6 +1356,19 @@ describe('loadUserLevelSearchSettings', () => {
 })
 
 describe('loadProjectSearchSources', () => {
+  test('accepts nested trailing commas in a root project config', () => {
+    const { root } = checkout()
+    fs.writeFileSync(
+      path.join(root, '.systematic.jsonc'),
+      '{"search": {"sources": [{"name": "rfcs", "format": "markdown", "roots": ["docs/rfcs",],},],},}',
+    )
+
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.warnings).toEqual([])
+    expect(loaded.sources).toEqual([GOOD])
+  })
+
   function checkout(): { root: string; dir: string } {
     const root = makeTempDir('project-reader')
     const dir = path.join(root, '.opencode')

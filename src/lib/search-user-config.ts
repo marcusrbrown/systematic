@@ -1122,7 +1122,7 @@ function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
   if (text.kind !== 'text') return text
   const content = text.content
   const errors: ParseError[] = []
-  const parsed: unknown = parseJsonc(content, errors)
+  const raw: unknown = parseJsonc(content, errors, { allowTrailingComma: true })
   const firstError = errors[0]
   if (firstError) {
     return {
@@ -1130,13 +1130,13 @@ function readSearchBlock(filePath: string, maxBytes?: number): FileRead {
       reason: `JSONC parse error: ${printParseErrorCode(firstError.error)}`,
     }
   }
-  if (!isRecord(parsed)) {
+  if (!isRecord(raw)) {
     return { kind: 'failed', reason: 'root must be an object' }
   }
   return {
     kind: 'read',
-    has: Object.hasOwn(parsed, 'search'),
-    searchBlock: parsed.search,
+    has: Object.hasOwn(raw, 'search'),
+    searchBlock: raw.search,
   }
 }
 

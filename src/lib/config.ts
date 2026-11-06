@@ -670,7 +670,7 @@ function loadJsoncFile(
   if (content === null) return null
 
   const errors: ParseError[] = []
-  const parsed = parseJsonc(content, errors) as unknown
+  const raw: unknown = parseJsonc(content, errors, { allowTrailingComma: true })
   if (errors.length > 0) {
     const error = errors[0]
     const message = error
@@ -681,13 +681,13 @@ function loadJsoncFile(
     )
   }
 
-  if (!isRecord(parsed)) {
+  if (!isRecord(raw)) {
     throw new Error(
       `Invalid Systematic config in ${filePath}: root must be an object`,
     )
   }
 
-  return parsed as RawSystematicConfig
+  return raw as RawSystematicConfig
 }
 
 /**

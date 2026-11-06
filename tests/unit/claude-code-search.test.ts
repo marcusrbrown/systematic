@@ -401,7 +401,7 @@ describe('runClaudeCodeSearch (in process)', () => {
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.jsonc'),
-      '{ "search": { "enabled": false, },\n}\n',
+      '{ "search": { "enabled": },\n}\n',
     )
     const root = makeProject()
     const result = await runInProcess(root, dirs, ['zebra'])
@@ -529,12 +529,12 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     expect(result.stdout).toBe(`${await coreText(root, 'zebra flake')}\n`)
   }, 60_000)
 
-  it('reads a JSONC user config with comments and prints disabled', async () => {
+  it('reads a JSONC user config with comments and trailing commas and prints disabled', async () => {
     const bin = await installBin()
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.jsonc'),
-      '// off\n{ /* c */ "search": { "enabled": false } }\n',
+      '// off\n{ /* c */ "search": { "enabled": false, }, }\n',
     )
     const result = runBin(bin, ['zebra'], {
       cwd: makeProject(),
@@ -571,7 +571,7 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.jsonc'),
-      '{ "search": { "enabled": false, },\n}\n',
+      '{ "search": { "enabled": },\n}\n',
     )
     const root = makeProject()
     const result = runBin(bin, ['zebra'], { cwd: root, home: dirs.home })
