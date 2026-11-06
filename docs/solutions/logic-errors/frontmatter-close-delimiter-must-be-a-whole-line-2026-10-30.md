@@ -44,7 +44,7 @@ The old closing pattern (commit 42c3618d^) was:
 /^---\r?\n([\s\S]*?)\r?\n?---\r?\n([\s\S]*)$/
 ```
 
-The fixed pattern is the `frontmatterRegex` in `src/lib/frontmatter.ts:41`:
+The fixed pattern is the `frontmatterRegex` in `src/lib/frontmatter.ts:48`:
 
 ```ts
 /^---\r?\n((?:[\s\S]*?\r?\n)?)---\r?\n([\s\S]*)$/
@@ -74,7 +74,7 @@ The parser is shared. Find its callers with a search for `parseFrontmatter` unde
 
 ## Related Issues
 
-Open item: `extractFrontmatterBlock` (`src/lib/frontmatter.ts:21`) is still loose by contract, and its callers in `scripts/content-integrity.ts` have not been checked for exposure.
+`extractFrontmatterBlock` (`src/lib/frontmatter.ts:23`) anchors the closing `---` as a whole line, the same way `parseFrontmatter` does, so its callers in `scripts/content-integrity.ts` read the same block.
 
 - `docs/solutions/best-practices/lifecycle-validator-runs-only-in-ci-so-agent-prose-must-enforce-it-2026-10-26.md`: why a superseded doc must resolve to its successor, and what the lifecycle checks guarantee.
 - `docs/solutions/runtime-errors/circular-yaml-alias-aborts-content-integrity-report-2026-10-26.md`: another frontmatter edge case that the shared checks must survive without throwing.

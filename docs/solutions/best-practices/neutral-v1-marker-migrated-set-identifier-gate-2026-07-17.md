@@ -38,7 +38,7 @@ metadata:
 
 - **Marker-only predicate.** A skill is migrated iff `metadata` is a record
   and `metadata['harness-portability'] === 'neutral-v1'` — nothing else
-  (`scripts/content-integrity.ts:1215-1220`). This deliberately does NOT
+  (`scripts/content-integrity.ts:1221-1226`). This deliberately does NOT
   mirror the runtime `parseMetadata` drop rules (which drop the whole map if
   any value is non-string): the marker's only consumer is this gate, so there
   is no runtime protection to mirror, and requiring all-string siblings would
@@ -48,7 +48,7 @@ metadata:
 - **Bounded lexical vocabulary.** Exactly nine identifier patterns:
   `task(`, `subagent_type`, `todowrite`, `TodoWrite`, `request_user_input`,
   `ask_user`, `AskUserQuestion`, `update_plan`, and backtick-wrapped
-  `` `question` `` (`MIGRATED_SKILL_IDENTIFIER_PATTERNS`, `scripts/content-integrity.ts:3698-3732`). Word-boundary
+  `` `question` `` (`MIGRATED_SKILL_IDENTIFIER_PATTERNS`, `scripts/content-integrity.ts:3779-3813`). Word-boundary
   regexes prevent prose false positives ("task" as an English word passes;
   `task(` fails). The scope is intentionally lexical — paraphrases are not
   detected, and the gate says so in its doc comment (honest-ban rule).
@@ -66,7 +66,7 @@ metadata:
   - The sanctioned interaction idiom line (contains both `in OpenCode` and
     `in Pi`) exempts only the blocking-question identifiers; every other
     banned identifier is still scanned on that line
-    (`scripts/content-integrity.ts:1215-1279`). An earlier whole-line skip
+    (`scripts/content-integrity.ts:1221-1285`). An earlier whole-line skip
     was a bypass (3 reviewers converged on it).
   - Frontmatter `description` and `argument-hint` are scanned too — they
     render into the bootstrap catalog in every harness.
@@ -95,7 +95,7 @@ closes both while keeping the gate honestly lexical.
 ## Examples
 
 ```ts
-// scripts/content-integrity.ts:1215-1220 — marker-only predicate
+// scripts/content-integrity.ts:1221-1226 — marker-only predicate
 function isMigratedSkill(data: Record<string, unknown>): boolean {
   const metadata = data.metadata
   if (!isRecord(metadata)) return false

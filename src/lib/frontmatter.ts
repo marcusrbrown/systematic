@@ -15,12 +15,19 @@ export interface FrontmatterResult<T = Record<string, unknown>> {
  * returned verbatim as part of the block — callers that scan individual lines
  * (e.g. parse-safety checks) must skip indented lines themselves.
  *
- * Handles LF and CRLF line endings. The closing `---` does not need a trailing
- * newline (handles files that end immediately after the delimiter).
+ * The closing `---` must be a whole line, matching {@link parseFrontmatter}: a
+ * value that merely contains or ends in `---` (`title: a---b`) cannot close the
+ * block. Handles LF and CRLF line endings. The closing `---` does not need a
+ * trailing newline (handles files that end immediately after the delimiter).
  */
 export function extractFrontmatterBlock(content: string): string | null {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n?---/)
-  return match ? (match[1] ?? '') : null
+  // Group 1 is empty or ends in the line break before the closing `---`, so the
+  // delimiter can only start at the beginning of a line. The `$` alternative
+  // lets a file end right after it.
+  const match = content.match(/^---\r?\n((?:[\s\S]*?\r?\n)?)---(?:\r?\n|$)/)
+  if (!match) return null
+  // Drop the line break that preceded the closing delimiter.
+  return (match[1] ?? '').replace(/\r?\n$/, '')
 }
 
 /**

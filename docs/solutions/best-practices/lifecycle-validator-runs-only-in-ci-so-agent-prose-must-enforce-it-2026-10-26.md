@@ -30,7 +30,7 @@ tags:
 
 ## Context
 
-A solution doc can be marked `status: superseded` and name its successor in `superseded_by`. In this repo, `checkSolutionLifecycle` (`scripts/content-integrity.ts:2011-2046`) checks on every CI run that the successor is named by repo-root path, exists, parses, and is not itself superseded.
+A solution doc can be marked `status: superseded` and name its successor in `superseded_by`. In this repo, `checkSolutionLifecycle` (`scripts/content-integrity.ts:2017-2052`) checks on every CI run that the successor is named by repo-root path, exists, parses, and is not itself superseded.
 
 That validator never runs in a user's repo. There, the same rules are enforced twice, and only one of the two is code. The `systematic_search` tool resolves the lifecycle in code (`resolveLifecycle` in `src/lib/search-core.ts`, with the same 5-hop cap, visited set and form rule). The learnings-researcher calls the tool first, and its grep steps (Step 4's successor walk) are the fallback when search has no hits, is disabled, errors or is absent. ce-compound-refresh's Lifecycle Consistency rules stay prose only. The refresh skill says so (`skills/ce-compound-refresh/SKILL.md:543`). Prose that states only the outcome, "a superseded doc points at a live successor", leaves out the checks that make it true.
 
@@ -42,7 +42,7 @@ Search now also covers plans, brainstorms and ideation docs, and it resolves suc
 
 Write each check as a step at the point where the agent acts on a pointer.
 
-1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1949`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:130`, quoted with an elision):
+1. **Check form and existence at every hop.** `classifySupersededBy` (`scripts/content-integrity.ts:1955`) rejects a target outside the solution-file set as `dangling-superseded-by`. The researcher runs the same check before any target becomes the successor, and says why a search miss proves nothing (`agents/research/learnings-researcher.md:130`, quoted with an elision):
 
    ```md
    2. At every hop, before taking the target as the successor, check that it passes the form rule above for the current doc's kind. [...] Otherwise check that the file exists. [...] A target that did not match the search is not evidence that it exists, because most active docs have no `status` line.
@@ -50,7 +50,7 @@ Write each check as a step at the point where the agent acts on a pointer.
 
 2. **Read lifecycle fields from parsed frontmatter, and use search only to find files.** Values lifted from matched lines misread `status: superseded # retired`, folded scalars and `status:` lines inside a body example. The researcher's Step 4 uses search only to choose files, then reads each doc's frontmatter (`agents/research/learnings-researcher.md:115-117`).
 
-3. **Write out the exclusions.** The validator's solution set leaves out every `README.md` (`scripts/content-integrity.ts:2019-2024`). The researcher's form rule names that exclusion and also skips `_archived/` as a defensive check, even though no such directory exists here (`agents/research/learnings-researcher.md:127`).
+3. **Write out the exclusions.** The validator's solution set leaves out every `README.md` (`scripts/content-integrity.ts:2025-2030`). The researcher's form rule names that exclusion and also skips `_archived/` as a defensive check, even though no such directory exists here (`agents/research/learnings-researcher.md:127`).
 
 4. **Delete only after every prerequisite write succeeded.** Refresh retargets `superseded_by` before Replace or Consolidate removes a doc, and it removes the doc only once the survivor exists and every write succeeded. That rule overrides autofix's record-and-continue rule (`skills/ce-compound-refresh/SKILL.md:547`).
 
@@ -82,7 +82,7 @@ Prose cannot enforce "no dangling pointer" after the fact. It can only order its
 
 ## Examples
 
-One rule, two behaviours on purpose. The validator forbids a chain (`scripts/content-integrity.ts:1987-1992`):
+One rule, two behaviours on purpose. The validator forbids a chain (`scripts/content-integrity.ts:1993-1998`):
 
 ```ts
 if (successor.status === 'superseded') {
