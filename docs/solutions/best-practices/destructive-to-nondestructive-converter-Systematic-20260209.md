@@ -133,5 +133,3 @@ const PERMISSION_MODE_MAP: Record<string, PermissionConfig> = {
 - **Cache versioning:** Any converter that caches results must include a version number in the cache key. Bump the version when mapping logic changes.
 - **Test coverage:** The 41 new unit tests + 7 idempotency tests ensure each mapping is verified independently. Future field additions should include corresponding test cases.
 - **Lookup table sync:** `TOOL_NAME_MAP` must stay synchronized with the `TOOL_MAPPINGS` constant used in bootstrap.ts. A code comment marks this coupling.
-
-
