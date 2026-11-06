@@ -1750,7 +1750,7 @@ describe('search adapters parity: an invalid local file', () => {
     })
   })
 
-  test('a project file over 1 MB makes v1, v2 and Pi throw at init naming it, while the CLI and the bin carry on', async () => {
+  test('a project file over 1 MB is skipped on v1, v2 and Pi with one warning for the process, and the CLI and the bin carry on', async () => {
     const fixture = makeLocationsFixture()
     // The oversized file is the root file the fixture already wrote.
     fs.writeFileSync(
@@ -1758,17 +1758,19 @@ describe('search adapters parity: an invalid local file', () => {
       `{"disabled_skills":[],"pad":"${'a'.repeat(1024 * 1024)}"}`,
     )
 
-    await withCustomDir(fixture.customDir, async () => {
-      await expect(createV1Surface(fixture.start)).rejects.toThrow(
-        fixture.rootFile,
-      )
-      await expect(inDirectory(fixture.start, createPiSurface)).rejects.toThrow(
-        fixture.rootFile,
-      )
-      await expect(createV2Surface(fixture.start)).rejects.toThrow(
-        fixture.rootFile,
-      )
-    })
+    const { warnings } = await captureWarnings(() =>
+      withCustomDir(fixture.customDir, async () => {
+        await createV1Surface(fixture.start)
+        await inDirectory(fixture.start, createPiSurface)
+        await createV2Surface(fixture.start)
+      }),
+    )
+    expect(
+      warnings.filter(
+        (message) =>
+          message.includes(fixture.rootFile) && message.includes('was skipped'),
+      ),
+    ).toHaveLength(1)
 
     const stdout: string[] = []
     const stderr: string[] = []

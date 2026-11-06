@@ -401,18 +401,47 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
-      'invalid systematic.json fails the plugin load, is logged, and the session still answers',
+      'a project systematic.json with trailing commas loads the plugin like any other file',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        // The removed bundled name makes the loader warn once per load, which
+        // proves the file was read: the trailing commas did not reject it.
+        writeProjectSystematicConfig(
+          '{ "disabled_skills": ["orchestrating-swarms",], }',
+        )
+
+        const result = await runPrompt(pluginSpec)
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain(REPLY_TEXT)
+        expect(result.stderr).not.toContain('failed to load plugin')
+        expect(result.stderr).not.toContain('Invalid Systematic config')
+        expect(
+          result.stderr
+            .split('\n')
+            .filter((line) => line.includes('orchestrating-swarms')),
+        ).toHaveLength(1)
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a project systematic.json with a syntax error is skipped: the plugin loads, one warning names the file, and the session answers',
       async () => {
         const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
         writeProjectSystematicConfig('{ "bootstrap": ')
 
         const result = await runPrompt(pluginSpec)
 
-        // The host logs the failed load and stays usable without the plugin.
-        expect(result.stderr).toContain('failed to load plugin')
-        expect(result.stderr).toContain('Invalid Systematic config in')
         expect(result.exitCode).toBe(0)
         expect(result.stdout).toContain(REPLY_TEXT)
+        expect(result.stderr).not.toContain('failed to load plugin')
+        const skipped = result.stderr
+          .split('\n')
+          .filter((line) => line.includes('was skipped'))
+        expect(skipped).toHaveLength(1)
+        expect(skipped[0]).toContain('.opencode/systematic.json')
+        expect(skipped[0]).toContain('JSONC parse error')
       },
       TIMEOUT_MS,
     )
@@ -593,6 +622,39 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       await host.client.session.wait({ sessionID: session.id })
       return toolModel.toolResults.slice(before).join('\n')
     }
+
+    test(
+      'a skipped project systematic.json leaves the bundled agents listed and the tools offered',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        writeProjectSystematicConfig('{ "bootstrap": ')
+        const toolModel = startToolModelServer()
+        const host = await startAgentHost(pluginSpec, toolModel)
+        try {
+          const listed = await listAgents(host.client)
+          const ids = new Set(listed.map((agent) => String(agent.id)))
+          for (const { name } of findAgentsInDir(
+            path.join(REPO_ROOT, 'agents'),
+          )) {
+            expect(ids.has(name), `agent ${name} is listed`).toBe(true)
+          }
+
+          const loaded = await callTool(host, toolModel, {
+            tool: 'systematic_skill',
+            args: { name: 'git-clean-gone-branches' },
+          })
+          expect([...toolModel.toolNames]).toContain('systematic_skill')
+          expect([...toolModel.toolNames]).toContain('systematic_search')
+          expect(loaded).toContain(
+            '<skill_content name="systematic:git-clean-gone-branches">',
+          )
+        } finally {
+          toolModel.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
 
     test(
       'systematic_skill is offered to the model and loads an enabled skill by bare and prefixed name',

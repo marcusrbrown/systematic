@@ -28,6 +28,8 @@ Systematic picks a file by whether it exists, never by whether it is valid:
 
 The layer names `user.local` and `custom.local` are the ones that appear in prose and in `systematic config show`. The JSON output of `config show` spells them `userLocal` and `customLocal`.
 
+Every config file is JSONC. Comments and trailing commas are accepted in objects and arrays, in all five files, so a file that Prettier or your editor formats loads as it is.
+
 ### The repository root
 
 Systematic reads the project file from the repository root. The root is the nearest ancestor of the start directory that holds a `.git` entry (a `.git` file counts, so a linked worktree works). Systematic resolves a root it finds with `realpath`, so a symlinked checkout shows its real path in warnings and in `config show`. If no ancestor holds a `.git` entry, the start directory itself is the root and stays as given.
@@ -55,10 +57,24 @@ When a session starts in a subfolder that has its own `.opencode/systematic.*` f
 - It needs no sibling. A local file with no `systematic.jsonc` beside it is valid.
 - It overrides the file beside it and every earlier layer in the table. The project file and the custom layers still override it. An `agents` or `categories` entry in a local file replaces the entry with the same key from earlier layers whole, the way a custom entry does. It does not merge field by field.
 - A source in `search.sources` that has the same `name` as a source in an earlier user-level file replaces that source whole, including its `projects` and its `exclude` list.
-- An invalid local file is named in the error. OpenCode v1, OpenCode v2 and Pi fail at startup and name the local file. The `systematic` command and the `systematic-search` command report it and carry on with the files that are valid.
+- An invalid local file is named in the error. OpenCode v1, OpenCode v2 and Pi fail at startup and name the local file. The `systematic` command and the `systematic-search` command report it and carry on with the files that are valid. See [When a config file is invalid](#when-a-config-file-is-invalid).
 - `systematic config show` reports the origin of a routing value from a local file as the kind of the file beside it (`user` or `custom`).
 
 If `OPENCODE_CONFIG_DIR` points at your user config directory (spelled the same way or through a symlink), Systematic reads each file once. It applies each file at both positions, so the shared file still outranks the project file. No warning is shown.
+
+### When a config file is invalid
+
+The five files are not equally trusted, so a failure costs different amounts:
+
+- **A broken user, user.local, custom or custom.local file is fatal.** OpenCode v1, OpenCode v2 and Pi fail at startup and name the file. These are your own files, so Systematic does not hide the mistake.
+- **A broken project file is skipped.** The project file comes from a repository, so a pull, a branch or a contributor's formatter must not be able to take your plugin down. Systematic leaves out the whole file, loads with the other layers, and warns once per process. The warning names the file and the reason: the JSONC error code and offset, the reason a read failed, or the path of the first field that failed validation. It never shows a value or any of the file's text. The other warnings the same file would have produced are dropped, so the skip warning is the only one for that file.
+- **A project file fails when** it cannot be read, is larger than 1 MB, is not valid JSONC, has a root that is not an object, or has a top-level field that fails validation. It also fails when it loads alone but breaks the load once merged with the other layers, for example a project profile bundle you opted into that names an unknown category. Systematic retries the load without the project file. If the retry succeeds, the project file is skipped. If it fails too, the original error stands.
+- **An empty or whitespace-only project file is the same as no file.** There is no warning.
+- **A bad `search` field or source in a project file** is dropped on its own, with its own warning. It never causes the whole file to be skipped.
+- **A project file that is also your custom file stays fatal.** Systematic reads such a file once, through the custom layer, which is strict.
+- **Exporting pi-subagents at project scope stops on a broken project file.** The export writes into the repository, so it refuses to run on a partial view of the config. It writes nothing.
+
+`systematic config show` marks a skipped project file with the reason, in the Resolved configuration section, and exits `0`. With `--json`, a skipped file adds a `projectSkipped` object with `path` and `reason`; the key is absent otherwise.
 
 ### Which layer wins
 
@@ -95,7 +111,7 @@ The repository root rule changes four things for existing setups:
   A file at `<repository root>/.opencode/systematic.json` keeps working. Until you move the subfolder file, each load warns once and names both paths.
 - **A git-managed home directory becomes the root** for the directories below it that have no repository of their own. A project directory below it that held its own `.opencode/systematic.json` is no longer its own root. Run `git init` in that project to make it one, or move the file to the home directory's root if you want it to apply to all of them.
 - **A found root is resolved with `realpath`.** A symlinked checkout shows its real path in warnings and in `config show`.
-- **A project config file over 1 MB is not loaded.** The search readers always had this cap. Now the full loader applies it too. OpenCode v1, OpenCode v2 and Pi fail at startup and name the file. The `systematic` command and the `systematic-search` command report it and carry on. The cap applies to the project file only. Trim the file, or move bulk content out of it.
+- **A project config file over 1 MB is not loaded.** The search readers always had this cap. Now the full loader applies it too. OpenCode v1, OpenCode v2 and Pi skip the file with one warning that names it, and load with the other layers. The `systematic` command and the `systematic-search` command report it and carry on. The cap applies to the project file only. Trim the file, or move bulk content out of it.
 
 ## Common Examples
 
@@ -255,7 +271,7 @@ A project-defined bundle is **advisory**, not authoritative: it supplies routing
 
 A project-defined profile name can never shadow one you or `$OPENCODE_CONFIG_DIR` config already **defined**: bundle lookup checks custom.local, custom, user.local, user, then project **last**. If your `personal` profile and a repository's `personal` profile both exist, yours always wins the name. This protects a name you have defined content for — it does not protect a name you have only **referenced**. If your own `profile` default names a bundle you never defined (or typoed), that name is still looked up through the same custom-then-user-then-project order, so an opted-in repository's own `profiles` entry of that same name is consulted and can supply content for it; the usual "not defined in `profiles`" warning does not fire, because the name IS defined — by the repository, not by you.
 
-Because `assertAllProfileBundlesAreValid` validates every bundle in every source that may define one — including, once opted in, every bundle in a project's `profiles` map — a malformed bundle anywhere in that map can fail the entire config load (and therefore plugin init) even if nobody ever selects it. This applies to a bundle you clone from a repository just as much as one you write yourself: opting in makes your config load depend on content you did not author.
+Because `assertAllProfileBundlesAreValid` validates every bundle in every source that may define one — including, once opted in, every bundle in a project's `profiles` map — a malformed bundle anywhere in that map fails the merge even if nobody ever selects it. Systematic then skips the whole project file, with one warning, and loads with your own config (see [When a config file is invalid](#when-a-config-file-is-invalid)). A malformed bundle in your own user or custom config still fails the load. Opting in makes your config depend on content you did not author, so a bad bundle in a repository costs you its suggestions.
 
 The repository still decides which of its own (or your) profiles is active for itself, via its project config's `profile` selector — same as today, opt-in or not. That is the point of a project selecting a profile, not a gap: a repository choosing to route itself through the `work` profile you already defined is exactly what `profile` selection is for. If you disagree with a repository's selection for your own session, `SYSTEMATIC_PROFILE=<name>` in your shell environment outranks every config source's `profile` value, including the project's — set it to override, or to a nonexistent name to fall back to your own default.
 
@@ -331,7 +347,7 @@ VS Code is the reference target — it picks up `$schema` automatically and prov
 
 Since v2.15.0, Systematic validates `agents.<key>`, `disabled_agents`, and `disabled_skills` against the actual set of bundled names at load time. A typo fails loudly with a clear error that names the offending key. The valid bundled names are listed in the error when validation fails, so the error message is the fix.
 
-If your config contains a typo in any of these fields, Systematic will fail to load on upgrade and surface the error. The fix is to correct the key to a valid bundled name.
+If your user or custom config contains a typo in any of these fields, Systematic will fail to load on upgrade and surface the error. The fix is to correct the key to a valid bundled name. A typo in a project file does not stop the plugin: Systematic skips that file and warns, naming the field. See [When a config file is invalid](#when-a-config-file-is-invalid).
 
 ---
 

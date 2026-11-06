@@ -240,6 +240,13 @@ export interface SourceAwareConfigResult {
    * for a symlinked config directory.
    */
   activeProfileSourcePath: string | null
+  /**
+   * Set when the project config file was not loaded because it failed, on its
+   * own or in combination with the other layers. `reason` holds no value and no
+   * file content. Deliberately not on `ConfigObservationMetadata`, for the same
+   * reason as `activeProfileSourcePath`.
+   */
+  skippedProject?: { readonly path: string; readonly reason: string }
 }
 
 export interface PiSubagentsOverlayMap {
@@ -631,6 +638,30 @@ const OVERSIZED_FILE_REASON = `file is larger than ${MAX_PROJECT_CONFIG_BYTES / 
  */
 const USER_LEVEL_CONFIG_MAX_BYTES = Number.POSITIVE_INFINITY
 
+/**
+ * An error for a config file that could not be loaded. `detail` is the part
+ * after the file name, text that never holds a value or any file content, so a
+ * skip warning can show it.
+ */
+function configFileError(
+  filePath: string,
+  detail: string,
+): Error & { readonly detail: string } {
+  return Object.assign(
+    new Error(`Invalid Systematic config in ${filePath}: ${detail}`),
+    { detail },
+  )
+}
+
+function hasFailureDetail(
+  error: unknown,
+): error is Error & { readonly detail: string } {
+  return (
+    error instanceof Error &&
+    typeof (error as { detail?: unknown }).detail === 'string'
+  )
+}
+
 function readConfigText(filePath: string, maxBytes: number): string | null {
   const read = readBytesBounded(filePath, maxBytes)
   switch (read.kind) {
@@ -638,21 +669,19 @@ function readConfigText(filePath: string, maxBytes: number): string | null {
       return read.bytes.toString('utf-8')
     case 'absent':
       if (!configEntryExists(filePath)) return null
-      throw new Error(
-        `Invalid Systematic config in ${filePath}: unable to read file`,
-      )
+      throw configFileError(filePath, 'unable to read file')
     case 'too-large':
-      throw new Error(
-        `Invalid Systematic config in ${filePath}: unable to read file (${OVERSIZED_FILE_REASON})`,
+      throw configFileError(
+        filePath,
+        `unable to read file (${OVERSIZED_FILE_REASON})`,
       )
     case 'not-regular':
-      throw new Error(
-        `Invalid Systematic config in ${filePath}: unable to read file (not a regular file)`,
+      throw configFileError(
+        filePath,
+        'unable to read file (not a regular file)',
       )
     default:
-      throw new Error(
-        `Invalid Systematic config in ${filePath}: unable to read file`,
-      )
+      throw configFileError(filePath, 'unable to read file')
   }
 }
 
@@ -661,30 +690,35 @@ function readConfigText(filePath: string, maxBytes: number): string | null {
  * repository cannot hand the loader an arbitrarily large file; user-level
  * files use `USER_LEVEL_CONFIG_MAX_BYTES`. Every layer reads through the same
  * non-blocking regular-file read.
+ * @param emptyIsAbsent A file with nothing but whitespace counts as absent.
+ * Only the project pass sets it: an empty file a repository ships is not worth
+ * a warning, while an empty user-level file is the user's own mistake.
  */
 function loadJsoncFile(
   filePath: string,
   maxBytes: number,
+  emptyIsAbsent: boolean,
 ): RawSystematicConfig | null {
   const content = readConfigText(filePath, maxBytes)
   if (content === null) return null
+  if (emptyIsAbsent && content.trim() === '') return null
 
   const errors: ParseError[] = []
-  const parsed = parseJsonc(content, errors) as unknown
+  // Trailing commas are accepted in every config file: editors and formatters
+  // write them into JSONC.
+  const parsed = parseJsonc(content, errors, {
+    allowTrailingComma: true,
+  }) as unknown
   if (errors.length > 0) {
     const error = errors[0]
     const message = error
       ? `${printParseErrorCode(error.error)} at offset ${error.offset}`
       : 'unknown parse error'
-    throw new Error(
-      `Invalid Systematic config in ${filePath}: JSONC parse error: ${message}`,
-    )
+    throw configFileError(filePath, `JSONC parse error: ${message}`)
   }
 
   if (!isRecord(parsed)) {
-    throw new Error(
-      `Invalid Systematic config in ${filePath}: root must be an object`,
-    )
+    throw configFileError(filePath, 'root must be an object')
   }
 
   return parsed as RawSystematicConfig
@@ -901,6 +935,8 @@ function throwTopLevelConfigSchemaError(
 interface LoadedConfigSource {
   readonly metadata: ConfigSourceMetadata
   readonly source: FileConfigSource | null
+  /** Why a file that failed in `report` mode was not loaded. */
+  readonly failure?: string
 }
 
 interface ConfigSourceLoadInput {
@@ -913,6 +949,7 @@ interface ConfigSourceLoadInput {
   readonly reportInvalid: (
     filePath: string,
     code: ConfigSourceErrorCode,
+    reason: string,
   ) => void
   /**
    * The effective opt-in, resolved by the caller before this source is
@@ -945,6 +982,7 @@ function loadConfigSource(input: ConfigSourceLoadInput): LoadedConfigSource {
       layer === 'project'
         ? MAX_PROJECT_CONFIG_BYTES
         : USER_LEVEL_CONFIG_MAX_BYTES,
+      layer === 'project',
     )
     if (!rawConfig) {
       return {
@@ -1017,10 +1055,12 @@ function loadConfigSource(input: ConfigSourceLoadInput): LoadedConfigSource {
   } catch (error) {
     if (invalidSource === 'throw') throw error
     const errorCode = classifyConfigSourceError(error)
-    input.reportInvalid(filePath, errorCode)
+    const reason = describeConfigSourceFailure(error, errorCode)
+    input.reportInvalid(filePath, errorCode, reason)
     return {
       metadata: { errorCode, kind: trust, presence: 'invalid' },
       source: null,
+      failure: reason,
     }
   }
 }
@@ -1078,10 +1118,35 @@ function classifyConfigSourceError(error: unknown): ConfigSourceErrorCode {
   return 'source-invalid'
 }
 
-function isConfigSchemaError(
-  error: unknown,
-): error is Error & { readonly _tag: 'ConfigSchemaError' } {
+function isConfigSchemaError(error: unknown): error is Error & {
+  readonly _tag: 'ConfigSchemaError'
+  readonly issues: readonly z.core.$ZodIssue[]
+} {
   return isRecord(error) && error._tag === 'ConfigSchemaError'
+}
+
+/**
+ * Why a config file failed to load, in words that are safe to show: the JSONC
+ * error code and offset, the reason a read failed, or the path of the first
+ * schema issue. Never a value and never any of the file's content.
+ */
+function describeConfigSourceFailure(
+  error: unknown,
+  code: ConfigSourceErrorCode,
+): string {
+  if (isConfigSchemaError(error)) {
+    const [issue] = error.issues
+    if (issue === undefined) return 'schema validation failed'
+    const segments = issue.path.map(String)
+    if (issue.code === 'unrecognized_keys' && issue.keys[0] !== undefined) {
+      segments.push(issue.keys[0])
+    }
+    return segments.length === 0
+      ? 'schema validation failed'
+      : `schema validation failed at \`${sanitizeDiagnosticText(segments.join('.'))}\``
+  }
+  if (hasFailureDetail(error)) return error.detail
+  return code
 }
 
 function resolveConfigSourcePath(filePath: string): string {
@@ -1611,7 +1676,14 @@ export interface LoadConfigOptions {
    * start directory (see `getConfigPaths`).
    */
   includeProject?: boolean
+  /** What a failing user, user.local, custom or custom.local file does. Defaults to `throw`. The project file follows `projectFailure`. */
   invalidSource?: 'throw' | 'report'
+  /**
+   * What a failing project file does. `skip` (the default) leaves the file out
+   * with one warning, so a repository's config cannot take the plugin down.
+   * `throw` makes it fatal, for a caller that writes into the repository.
+   */
+  projectFailure?: 'skip' | 'throw'
   homeDir?: string
   userConfigDir?: string
   customConfigDir?: string | null
@@ -1818,7 +1890,7 @@ function warnRemovedKeys(
  */
 function createInvalidFileReporter(
   warningSink: (message: string) => void,
-): (filePath: string, code: ConfigSourceErrorCode) => void {
+): (filePath: string, code: ConfigSourceErrorCode, reason: string) => void {
   const reported = new Set<string>()
   return (filePath, code) => {
     const identity = `${resolveConfigSourcePath(filePath)}\0${code}`
@@ -1829,6 +1901,40 @@ function createInvalidFileReporter(
     )
   }
 }
+
+/**
+ * The project files already reported as skipped in this process, by real file
+ * and reason. OpenCode v1 loads the config at init and again on every config
+ * hook, so without this a skipped file would warn on each of those loads.
+ */
+const skippedProjectNotices = new Set<string>()
+
+/** Forget which skipped project files were reported. For tests. */
+export function resetSkippedProjectConfigNotices(): void {
+  skippedProjectNotices.clear()
+}
+
+/**
+ * Warn that a project config file was skipped, once per file and reason for
+ * the process. It names the file and the reason; `reason` never holds a value
+ * or file content (see `describeConfigSourceFailure`).
+ */
+function noticeSkippedProjectConfig(
+  filePath: string,
+  reason: string,
+  warningSink: (message: string) => void,
+): void {
+  const identity = `${resolveConfigSourcePath(filePath)}\0${reason}`
+  if (skippedProjectNotices.has(identity)) return
+  skippedProjectNotices.add(identity)
+  warningSink(
+    `[systematic] project config (${sanitizeDiagnosticText(filePath)}) was skipped: ${reason}. None of its settings were loaded. Fix the file to apply them.`,
+  )
+}
+
+/** The reason for a project file that loads alone but breaks the load once merged with the other layers. */
+const PROJECT_CONFIG_MERGE_FAILURE_REASON =
+  'it could not be combined with the other config layers'
 
 /** The same loaded file, held at another user-level layer. Only the layer and trust differ. */
 function reassignLayer(
@@ -2032,14 +2138,100 @@ function mergeBootstrap(sources: readonly FileConfigSource[]): BootstrapConfig {
   return merged
 }
 
+/** One pass over the config layers; see `loadConfigWithSources` for the retry around it. */
+interface LoadAttempt {
+  readonly warningSink: (message: string) => void
+  /** Leave the project file out. The reason names why, for `skippedProject`. */
+  readonly omitProjectBecause?: string
+  /** Set once a project file has become a source of this pass. */
+  projectContributed: boolean
+}
+
+/**
+ * Load every config layer into one config.
+ *
+ * User, user.local, custom and custom.local files are strict: a broken one
+ * throws. The project file comes from a repository, so by default it never
+ * takes the plugin down. A file that fails on its own (it cannot be read,
+ * is over the size cap, is not valid JSONC, or fails the schema) is skipped
+ * with one warning. A project file that loads alone but breaks the load once
+ * merged with the other layers is skipped the same way: the load is retried
+ * without it, and the original error stands if the retry fails too.
+ * `projectFailure: 'throw'` makes any project failure fatal instead, for a
+ * caller that writes into the repository and must not act on a partial view.
+ */
 export function loadConfigWithSources(
   projectDir: string,
   options?: LoadConfigOptions,
 ): SourceAwareConfigResult {
+  const warningSink = options?.warningSink ?? console.warn
+  if (
+    !(options?.includeProject ?? true) ||
+    options?.projectFailure === 'throw'
+  ) {
+    return loadConfigLayers(projectDir, options, {
+      warningSink,
+      projectContributed: false,
+    })
+  }
+
+  // Warnings are held until the outcome is known: a retry drops the ones the
+  // failed pass produced, which describe a project file that no longer applies.
+  const held: string[] = []
+  const flush = (messages: readonly string[]) => {
+    for (const message of messages) warningSink(message)
+  }
+  const attempt: LoadAttempt = {
+    warningSink: (message) => {
+      held.push(message)
+    },
+    projectContributed: false,
+  }
+  try {
+    const result = loadConfigLayers(projectDir, options, attempt)
+    flush(held)
+    return result
+  } catch (error) {
+    if (!attempt.projectContributed) {
+      flush(held)
+      throw error
+    }
+    const retryHeld: string[] = []
+    let retried: SourceAwareConfigResult
+    try {
+      retried = loadConfigLayers(projectDir, options, {
+        warningSink: (message) => {
+          retryHeld.push(message)
+        },
+        omitProjectBecause: PROJECT_CONFIG_MERGE_FAILURE_REASON,
+        projectContributed: false,
+      })
+    } catch {
+      flush(held)
+      throw error
+    }
+    flush(retryHeld)
+    if (retried.skippedProject) {
+      noticeSkippedProjectConfig(
+        retried.skippedProject.path,
+        retried.skippedProject.reason,
+        warningSink,
+      )
+    }
+    return retried
+  }
+}
+
+function loadConfigLayers(
+  projectDir: string,
+  options: LoadConfigOptions | undefined,
+  attempt: LoadAttempt,
+): SourceAwareConfigResult {
   const includeProject = options?.includeProject ?? true
   const invalidSource = options?.invalidSource ?? 'throw'
+  const projectFailure = options?.projectFailure ?? 'skip'
   const paths = getConfigPaths(projectDir, options)
-  const warningSink = options?.warningSink ?? console.warn
+  const warningSink = attempt.warningSink
   const reportInvalid = createInvalidFileReporter(warningSink)
 
   if (includeProject) emitProjectLocationWarnings(paths, warningSink)
@@ -2090,21 +2282,17 @@ export function loadConfigWithSources(
     ({ layer }) => userLevel[USER_LEVEL_SLOT[layer]].source !== null,
   )
 
-  const project: LoadedConfigSource = includeProject
-    ? loadConfigSource({
-        filePath: paths.projectConfig,
-        layer: 'project',
-        invalidSource,
-        warningSink: boundedProjectStrip.sink,
-        reportInvalid,
-        allowProjectProfiles,
-        projectAllowed,
-      })
-    : {
-        metadata: { kind: 'project', presence: 'absent' },
-        source: null,
-      }
+  const project = loadProjectSource({
+    attempt,
+    includeProject,
+    paths,
+    projectFailure,
+    stripSink: boundedProjectStrip.sink,
+    allowProjectProfiles,
+    projectAllowed,
+  })
   const projectSource = project.source
+  attempt.projectContributed = projectSource !== null
 
   // `profiles` and `allow_project_profiles` are protected top-level fields,
   // already stripped from `projectSource.config` -- warn once each so a
@@ -2325,7 +2513,58 @@ export function loadConfigWithSources(
     overlays,
     piSubagentsOverlays: mergedPiSubagentsOverlays,
     activeProfileSourcePath: profileSelection.bundleSource?.path ?? null,
+    ...(project.failure !== undefined && {
+      skippedProject: { path: paths.projectConfig, reason: project.failure },
+    }),
   }
+}
+
+/**
+ * Load the project layer. A failure is skipped unless `projectFailure` is
+ * `'throw'`. The file's own field and strip warnings are held until the file
+ * is known to load: a skipped file contributes the skip warning alone.
+ */
+function loadProjectSource(input: {
+  readonly attempt: LoadAttempt
+  readonly includeProject: boolean
+  readonly paths: ReturnType<typeof getConfigPaths>
+  readonly projectFailure: 'skip' | 'throw'
+  readonly stripSink: (message: string) => void
+  readonly allowProjectProfiles: boolean
+  readonly projectAllowed: () => boolean
+}): LoadedConfigSource {
+  const { attempt, paths } = input
+  if (!input.includeProject) {
+    return { metadata: { kind: 'project', presence: 'absent' }, source: null }
+  }
+  if (attempt.omitProjectBecause !== undefined) {
+    return {
+      metadata: {
+        errorCode: 'source-invalid',
+        kind: 'project',
+        presence: 'invalid',
+      },
+      source: null,
+      failure: attempt.omitProjectBecause,
+    }
+  }
+  const held: string[] = []
+  const loaded = loadConfigSource({
+    filePath: paths.projectConfig,
+    layer: 'project',
+    invalidSource: input.projectFailure === 'throw' ? 'throw' : 'report',
+    warningSink: (message) => {
+      held.push(message)
+    },
+    reportInvalid: (filePath, _code, reason) =>
+      noticeSkippedProjectConfig(filePath, reason, attempt.warningSink),
+    allowProjectProfiles: input.allowProjectProfiles,
+    projectAllowed: input.projectAllowed,
+  })
+  if (loaded.source !== null) {
+    for (const message of held) input.stripSink(message)
+  }
+  return loaded
 }
 
 /**

@@ -258,9 +258,8 @@ describe('setupOpenCodeV2 search slot', () => {
 })
 
 /**
- * A project file that parses but holds a bad `search.sources` never
- * fails v2 setup. One that cannot be parsed fails as it always has, because the
- * whole project config loads before `search` is split out.
+ * A project file that holds a bad `search.sources` never fails v2 setup, and
+ * neither does one that cannot be parsed: the loader skips that file.
  */
 describe('setupOpenCodeV2 with a project search.sources problem', () => {
   const TOOL_CONTEXT = { sessionID: 's', agent: 'a', messageID: 'm', id: 'c' }
@@ -397,12 +396,18 @@ describe('setupOpenCodeV2 with a project search.sources problem', () => {
     })
   })
 
-  test('a project file that cannot be parsed rejects setup exactly as it did before sources existed', async () => {
+  test('a project file that cannot be parsed is skipped: setup resolves and the host keeps the plugin', async () => {
     const { home, project } = makeEnv('{ broken')
     const host = makeHost(project)
-    await expect(
-      setupOpenCodeV2(host.ctx, { packageRoot: PACKAGE_ROOT, homeDir: home }),
-    ).rejects.toThrow('Invalid Systematic config in')
-    expect(host.added).toEqual([])
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(
+        setupOpenCodeV2(host.ctx, { packageRoot: PACKAGE_ROOT, homeDir: home }),
+      ).resolves.toBeUndefined()
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      warnSpy.mockRestore()
+    }
+    expect(host.added.length).toBeGreaterThan(0)
   })
 })

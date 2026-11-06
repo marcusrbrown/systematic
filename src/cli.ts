@@ -844,6 +844,13 @@ function printResolvedSection(): boolean {
     Object.keys(overlays.categories).length > 0
 
   console.log('\nResolved configuration:')
+  // A project file that failed is left out of everything below. Say so first,
+  // so the values that follow are not read as including it.
+  if (loaded.skippedProject !== undefined) {
+    console.log(
+      `  Project config skipped: ${displaySafe(loaded.skippedProject.path)} (${displaySafe(loaded.skippedProject.reason)}). Its settings are not applied.`,
+    )
+  }
 
   if (!hasProfileSelection && !hasOverlays) {
     console.log(
@@ -920,6 +927,8 @@ function inspectSearchForConfigShow(
 
 interface ConfigShowJsonSuccess {
   readonly locations: ConfigShowJsonLocations
+  /** Present only when the project config file failed and was left out. `reason` holds no value and no file content. */
+  readonly projectSkipped?: { readonly path: string; readonly reason: string }
   readonly activeProfile: string | null
   readonly profileSelectorSource: LoaderConfigObservationMetadata['profileSelectorSource']
   /** The (non-canonical) path of the file that defined the active profile's bundle, or `null` when no profile is active. See `SourceAwareConfigResult.activeProfileSourcePath`'s doc comment for why this is file-paths-only, same as the rest of `locations`. */
@@ -1001,6 +1010,9 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
 
   return {
     locations,
+    ...(loaded.skippedProject !== undefined && {
+      projectSkipped: loaded.skippedProject,
+    }),
     activeProfile: loaded.metadata.activeProfile,
     profileSelectorSource: loaded.metadata.profileSelectorSource,
     activeProfileSourcePath: loaded.activeProfileSourcePath,

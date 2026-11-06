@@ -856,6 +856,9 @@ function generateEntries(
   if (!configOptions) return { entries, disabledFilenames: new Set() }
   const { config, overlays } = loadConfigWithSources(configOptions.cwd, {
     includeProject: configOptions.scope === 'project',
+    // The export writes into the repository, so a project file that fails stops
+    // it. The plugin skips such a file instead; see `LoadConfigOptions`.
+    projectFailure: 'throw',
   })
   // Filtered here and not in `generateAll`, which stays config-neutral so the
   // committed fixtures keep seeing every curated persona.

@@ -2119,9 +2119,9 @@ model: gpt-4
       expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.33)
     })
 
-    // A malformed project config must fail closed: the handler throws
-    // rather than silently falling back to a default configuration.
-    test('malformed systematic.json surfaces schema validation error from config loader', async () => {
+    // A project config that fails validation is skipped, not fatal: the
+    // handler resolves and warns once, naming the file and the failing field.
+    test('malformed systematic.json is skipped with one warning that names the file and the field', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
@@ -2140,13 +2140,24 @@ model: gpt-4
         projectDir,
         '.opencode/systematic.json',
       )
-      await expect(handler(config)).rejects.toThrow(expectedConfigPath)
-      await expect(handler(config)).rejects.toThrow('disabled_skills')
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await handler(config)
+        await handler({})
+        const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).toContain(expectedConfigPath)
+        expect(warnings[0]).toContain('disabled_skills')
+      } finally {
+        warnSpy.mockRestore()
+      }
+      expect(config.agent?.['correctness-reviewer']).toBeDefined()
     })
 
     // An invalid project field must not discard a trusted custom-config
-    // permission/model overlay restricting a bundled agent.
-    test('invalid project disabled_skills does not discard a trusted permission/model overlay (fails closed, does not emit an unrestricted agent)', async () => {
+    // permission/model overlay restricting a bundled agent: skipping the
+    // project file leaves every trusted restriction in force.
+    test('invalid project disabled_skills does not discard a trusted permission/model overlay (the restriction stays in force)', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
@@ -2169,18 +2180,23 @@ model: gpt-4
       })
 
       const config: Config = {}
-      const before = structuredClone(config)
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await handler(config)
+      } finally {
+        warnSpy.mockRestore()
+      }
 
-      await expect(handler(config)).rejects.toThrow('disabled_skills')
-
-      // Fail closed: no unrestricted (default permission, no model pin)
-      // agent entry was emitted.
-      expect(config).toEqual(before)
+      // The agent is emitted with the trusted pin and deny rule, never as an
+      // unrestricted (default permission, no model pin) entry.
+      const agent = config.agent?.['correctness-reviewer']
+      expect(agent?.model).toBe('private/local')
+      expect(agent?.permission?.bash).toEqual({ '*': 'deny' })
     })
 
     // Malformed (unparsable) project JSON must not discard a trusted
     // user-config disabled_agents entry.
-    test('malformed project JSON does not discard a trusted disabled_agents entry (fails closed, does not re-enable the agent)', async () => {
+    test('malformed project JSON does not discard a trusted disabled_agents entry (the agent stays disabled)', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
@@ -2205,13 +2221,15 @@ model: gpt-4
       })
 
       const config: Config = {}
-      const before = structuredClone(config)
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await handler(config)
+      } finally {
+        warnSpy.mockRestore()
+      }
 
-      await expect(handler(config)).rejects.toThrow()
-
-      // Fail closed: the agent the user disabled was not re-registered.
-      expect(config).toEqual(before)
-      expect(config.agent).toBeUndefined()
+      // The agent the user disabled was not re-registered.
+      expect(config.agent?.['correctness-reviewer']).toBeUndefined()
     })
 
     test('removed docs category does not prevent all bundled agents from being emitted', async () => {

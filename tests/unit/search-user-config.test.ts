@@ -747,7 +747,7 @@ describe('selection looks at the directory entry, not the link target', () => {
     expect(load.readFailures.join('\n')).toContain(link)
   })
 
-  test('the full loader goes through the same selection and names the dangling file', () => {
+  test('the full loader goes through the same selection and names the dangling file it skips', () => {
     const root = makeTempDir('dangling-loader')
     const homeDir = path.join(root, 'home')
     const repo = path.join(root, 'repo')
@@ -758,9 +758,18 @@ describe('selection looks at the directory entry, not the link target', () => {
     const link = path.join(repo, '.systematic.jsonc')
     dangling(link)
 
-    expect(() =>
-      loadConfigWithSources(repo, { homeDir, customConfigDir: null }),
-    ).toThrow(link)
+    const warnings: string[] = []
+    const result = loadConfigWithSources(repo, {
+      homeDir,
+      customConfigDir: null,
+      warningSink: (message) => warnings.push(message),
+    })
+    // The dangling link wins the selection, so the loader skips that file and
+    // never falls back to the `.opencode` file beside it.
+    expect(result.skippedProject?.path).toContain(link)
+    expect(
+      warnings.filter((message) => message.includes('was skipped')),
+    ).toEqual([expect.stringContaining(link)])
   })
 
   test('a plain missing file is still absent: no entry, no report', () => {
@@ -1245,7 +1254,7 @@ describe('loadUserLevelSearchSettings', () => {
     expect(loaded.warnings).toEqual([])
   })
 
-  test('a trailing comma is a parse error, exactly as in the loader: unreadable, one warning, no values', () => {
+  test('a trailing comma is accepted, exactly as in the loader: readable, no warning', () => {
     const { root, homeDir, userConfigDir } = layout()
     fs.writeFileSync(
       path.join(userConfigDir, 'systematic.jsonc'),
@@ -1257,21 +1266,36 @@ describe('loadUserLevelSearchSettings', () => {
       homeDir,
       customConfigDir: null,
     })
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.settings).toEqual({ enabled: false })
+    expect(loaded.warnings).toEqual([])
+
+    // The loader reads the same file the same way.
+    const projectDir = path.join(root, 'project')
+    fs.mkdirSync(projectDir, { recursive: true })
+    const warnings: string[] = []
+    const result = loadConfigWithSources(projectDir, {
+      homeDir,
+      customConfigDir: null,
+      warningSink: (message) => warnings.push(message),
+    })
+    expect(result.config.search).toEqual({ enabled: false })
+    expect(warnings).toEqual([])
+  })
+
+  test('a syntax error that is not a trailing comma is still unreadable, with one warning and no values', () => {
+    const { homeDir, userConfigDir } = layout()
+    fs.writeFileSync(
+      path.join(userConfigDir, 'systematic.jsonc'),
+      '{ "search": { "enabled": false ',
+    )
+    const loaded = loadUserLevelSearchSettings({
+      homeDir,
+      customConfigDir: null,
+    })
     expect(loaded.unreadable).toBe(true)
     expect(loaded.settings).toBeUndefined()
     expect(loaded.warnings).toHaveLength(1)
-
-    // The loader rejects the same file (unchanged); the reader mirrors that
-    // as unreadable instead of throwing.
-    const projectDir = path.join(root, 'project')
-    fs.mkdirSync(projectDir, { recursive: true })
-    expect(() =>
-      loadConfigWithSources(projectDir, {
-        homeDir,
-        customConfigDir: null,
-        warningSink: () => {},
-      }),
-    ).toThrow(/JSONC parse error/)
   })
 
   test('falls back to .json when there is no .jsonc', () => {
@@ -1411,6 +1435,18 @@ describe('loadProjectSearchSources', () => {
     fs.writeFileSync(
       path.join(dir, 'systematic.json'),
       JSON.stringify({ search: { sources: [GOOD] } }),
+    )
+    const loaded = loadProjectSearchSources(root)
+    expect(loaded.sources).toEqual([GOOD])
+    expect(loaded.unreadable).toBe(false)
+    expect(loaded.warnings).toEqual([])
+  })
+
+  test('proposes a source from a project file with trailing commas exactly as without them', () => {
+    const { root, dir } = checkout()
+    fs.writeFileSync(
+      path.join(dir, 'systematic.jsonc'),
+      '{"search": {"sources": [{"name": "rfcs", "format": "markdown", "roots": ["docs/rfcs",],},],},}',
     )
     const loaded = loadProjectSearchSources(root)
     expect(loaded.sources).toEqual([GOOD])

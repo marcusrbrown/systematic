@@ -397,11 +397,23 @@ describe('runClaudeCodeSearch (in process)', () => {
     expect(result.stdout).toEqual([await coreText(root, 'zebra')])
   })
 
-  it('gives results with a config unreadable note for an unparseable file', async () => {
+  it('reads a config file with trailing commas like any other', async () => {
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.jsonc'),
       '{ "search": { "enabled": false, },\n}\n',
+    )
+    const result = await runInProcess(makeProject(), dirs, ['zebra'])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toEqual([SEARCH_CLI_DISABLED_NOTICE])
+    expect(result.stderr).toEqual([])
+  })
+
+  it('gives results with a config unreadable note for an unparseable file', async () => {
+    const dirs = makeUserDirs()
+    fs.writeFileSync(
+      path.join(dirs.userConfigDir, 'systematic.jsonc'),
+      '{ "search": { "enabled": false \n',
     )
     const root = makeProject()
     const result = await runInProcess(root, dirs, ['zebra'])
@@ -566,12 +578,26 @@ describe('built systematic-search bin (foreign directory, real node)', () => {
     expect(result.stdout).toBe(`${await coreText(root, 'zebra')}\n`)
   }, 60_000)
 
-  it('still returns results and exit 0 for an unparseable user config', async () => {
+  it('reads a user config with trailing commas', async () => {
     const bin = await installBin()
     const dirs = makeUserDirs()
     fs.writeFileSync(
       path.join(dirs.userConfigDir, 'systematic.jsonc'),
       '{ "search": { "enabled": false, },\n}\n',
+    )
+    const root = makeProject()
+    const result = runBin(bin, ['zebra'], { cwd: root, home: dirs.home })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe(`${SEARCH_CLI_DISABLED_NOTICE}\n`)
+    expect(result.stderr).toBe('')
+  }, 60_000)
+
+  it('still returns results and exit 0 for an unparseable user config', async () => {
+    const bin = await installBin()
+    const dirs = makeUserDirs()
+    fs.writeFileSync(
+      path.join(dirs.userConfigDir, 'systematic.jsonc'),
+      '{ "search": { "enabled": false \n',
     )
     const root = makeProject()
     const result = runBin(bin, ['zebra'], { cwd: root, home: dirs.home })

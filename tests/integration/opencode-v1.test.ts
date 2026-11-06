@@ -368,7 +368,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
     )
 
     test(
-      'packaged plugin rejects an unrecognized disabled_skills name, model-free',
+      'packaged plugin skips a project config with an unrecognized disabled_skills name, model-free',
       async () => {
         const { pluginUrl } = extractPackagedPlugin(fixture)
         fs.mkdirSync(path.join(fixture.projectDir, '.opencode'), {
@@ -382,14 +382,20 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
 
         const result = await runOpencodeDebugConfig(fixture, configContent)
 
-        // OpenCode 1.17.18 host contract: plugin-factory rejections are
-        // caught and logged, hooks omitted, host exits 0
-        // (.slim/clonedeps/repos/anomalyco__opencode/packages/opencode/src/plugin/index.ts:219-235).
-        // Asserting exitCode === 0 (not just log content) prevents a hang
-        // or crash from silently passing.
+        // The project file comes from a repository, so a failing one is
+        // skipped and the plugin still loads: the host does not log a failed
+        // load, and the one warning names the file and the failing field.
+        // Asserting exitCode === 0 (not just log content) prevents a hang or
+        // crash from silently passing.
         expect(result.exitCode).toBe(0)
-        expect(result.stderr).toContain('failed to load plugin')
-        expect(result.stderr).toContain('Invalid Systematic config in')
+        expect(result.stderr).not.toContain('failed to load plugin')
+        const skipped = result.stderr
+          .split('\n')
+          .filter((line) => line.includes('was skipped'))
+        expect(skipped).toHaveLength(1)
+        expect(skipped[0]).toContain('.opencode/systematic.json')
+        expect(skipped[0]).toContain('disabled_skills')
+        expect(result.stderr).not.toContain('never-existed-skill')
       },
       TIMEOUT_MS,
     )

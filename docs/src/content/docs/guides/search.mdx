@@ -364,7 +364,9 @@ A few things are fixed when the harness starts: `search.enabled`, whether the `s
 
 ### When setup fails and when it does not
 
-A project config that parses but holds an invalid `search.sources` never fails plugin setup. This holds on OpenCode v2, where it is tested. Systematic drops the bad entries, warns, and loads everything else. A project config that cannot be parsed at all, or is larger than 1 MB, fails setup and the error names the file. The same holds for a user-level file that cannot be parsed, a local file included. External search cannot rescue a plugin that never started: if setup failed, there is no tool to call.
+A project config never fails plugin setup. This holds on OpenCode v2, where it is tested. If it holds an invalid `search.sources`, Systematic drops the bad entries, warns, and loads everything else. If the file cannot be parsed, is larger than 1 MB, or fails validation anywhere else, Systematic skips the whole file, warns once with the file name and the reason, and loads with the other layers. A user-level file that cannot be parsed, a local file included, still fails setup, and the error names the file. External search cannot rescue a plugin that never started: if setup failed, there is no tool to call.
+
+The per-call reader and `systematic-search` still honor the valid, allowed `search.sources` of a project file whose other fields made the plugin skip it. They validate the `search` block on its own, so an agent search and a plugin load can see different parts of the same file.
 
 ### Known limits
 
@@ -398,7 +400,7 @@ A project config may set `search.sources` and nothing else. `search.enabled` and
 
 The `systematic-search` command in Claude Code reads the user-level files. From project config it reads one thing, and only for `--kind external`: the `sources` the project proposes. It does not read project config for anything else, so it cannot print the warning about ignored user-only fields that `systematic search` prints. If it cannot read the project file, including a project file over 1 MB, it prints one warning on stderr and treats the project as proposing no sources.
 
-The command also validates only the `search` block of each file. An invalid field elsewhere in a config file is invisible to it, and it keeps using that file's valid `search` block. `systematic search` and the plugins check the whole file. A file that fails there is named in an error (the plugins fail at startup) or in a warning on stderr (`systematic search`), and `systematic search` still uses the valid `search` blocks.
+The command also validates only the `search` block of each file. An invalid field elsewhere in a config file is invisible to it, and it keeps using that file's valid `search` block. `systematic search` and the plugins check the whole file. A file that fails there is named in an error (the plugins fail at startup, for a user-level file) or in a warning (a skipped project file; `systematic search` prints it on stderr), and `systematic search` still uses the valid `search` blocks.
 
 ### On Pi
 

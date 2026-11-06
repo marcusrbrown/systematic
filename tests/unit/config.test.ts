@@ -21,6 +21,7 @@ import {
   type LoadConfigOptions,
   loadConfig,
   loadConfigWithSources,
+  resetSkippedProjectConfigNotices,
   warnDroppedNames,
 } from '../../src/lib/config.js'
 import {
@@ -36,6 +37,13 @@ import { loadProjectSearchSources } from '../../src/lib/search-user-config.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
+
+/**
+ * A project file that fails is skipped by default. The tests that read a
+ * schema or overlay error through a project file ask for the strict read (the
+ * one the project-scope pi-subagents export uses), which throws that error.
+ */
+const STRICT_PROJECT = { projectFailure: 'throw' } as const
 
 // SYSTEMATIC_PROFILE is cleared from the ambient environment by the
 // tests/setup.ts preload (see bunfig.toml) before any test file runs, so
@@ -286,23 +294,29 @@ describe('config', () => {
         }
       })
 
-      test('reports malformed source metadata only in opt-in mode', () => {
+      test('marks a malformed project source invalid in the metadata and skips it in both modes', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
         fs.writeFileSync(projectConfigPath, '{invalid json')
+        const warningSink = () => undefined
 
-        const result = loadConfigWithSources(testDir, {
-          invalidSource: 'report',
-        })
+        for (const invalidSource of ['report', 'throw'] as const) {
+          const result = loadConfigWithSources(testDir, {
+            invalidSource,
+            warningSink,
+          })
 
-        expect(result.metadata.sources).toContainEqual({
-          errorCode: 'parse-failed',
-          kind: 'project',
-          presence: 'invalid',
-        })
-        expect(JSON.stringify(result.metadata)).not.toContain(projectConfigPath)
-        expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
+          expect(result.metadata.sources).toContainEqual({
+            errorCode: 'parse-failed',
+            kind: 'project',
+            presence: 'invalid',
+          })
+          expect(JSON.stringify(result.metadata)).not.toContain(
+            projectConfigPath,
+          )
+        }
+        expect(() => loadConfig(testDir, { warningSink })).not.toThrow()
       })
 
       test('deduplicates symlink-equivalent config sources without leaking paths', () => {
@@ -1030,8 +1044,12 @@ describe('config', () => {
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
         fs.writeFileSync(projectConfigPath, '{invalid json')
 
-        expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
-        expect(() => loadConfig(testDir)).toThrow(/parse error/i)
+        expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+          projectConfigPath,
+        )
+        expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+          /parse error/i,
+        )
       })
 
       test('ignores project config if it does not exist', () => {
@@ -1427,8 +1445,12 @@ describe('config', () => {
             }),
           )
 
-          expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
-          expect(() => loadConfig(testDir)).toThrow('temperature')
+          expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+            'temperature',
+          )
         })
 
         test('an invalid-shape protected field in USER or CUSTOM config still fails validation -- pre-schema stripping is project-trust only', () => {
@@ -1713,8 +1735,12 @@ describe('config', () => {
               },
             }),
           )
-          expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
-          expect(() => loadConfig(testDir)).toThrow('totally-not-a-real-agent')
+          expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+            'totally-not-a-real-agent',
+          )
 
           fs.writeFileSync(
             projectConfigPath,
@@ -1722,8 +1748,12 @@ describe('config', () => {
               agents: { 'totally-not-a-real-agent': {} },
             }),
           )
-          expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
-          expect(() => loadConfig(testDir)).toThrow('totally-not-a-real-agent')
+          expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+            'totally-not-a-real-agent',
+          )
         })
       })
 
@@ -2076,8 +2106,12 @@ describe('config', () => {
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
         fs.writeFileSync(projectConfigPath, JSON.stringify(config))
 
-        expect(() => loadConfigWithSources(testDir)).toThrow(projectConfigPath)
-        expect(() => loadConfigWithSources(testDir)).toThrow(keyPath)
+        expect(() => loadConfigWithSources(testDir, STRICT_PROJECT)).toThrow(
+          projectConfigPath,
+        )
+        expect(() => loadConfigWithSources(testDir, STRICT_PROJECT)).toThrow(
+          keyPath,
+        )
       })
 
       test('preserves multiple bundled agent overlays across source priorities', () => {
@@ -2334,7 +2368,7 @@ describe('config', () => {
         disabled_agents: ['security-reviewer'],
         bootstrap: { enabled: false },
       })
-      const result = loadConfig(testDir)
+      const result = loadConfig(testDir, STRICT_PROJECT)
       expect(result.disabled_skills).toContain('ce:plan')
       expect(result.disabled_agents).toContain('security-reviewer')
       expect(result.bootstrap.enabled).toBe(false)
@@ -2342,14 +2376,16 @@ describe('config', () => {
 
     test('disabled_skills as string is rejected with field name and source path in error', () => {
       const configPath = writeProjectConfig({ disabled_skills: 'not-an-array' })
-      expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(configPath)
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        'disabled_skills',
+      )
     })
 
     test('unknown top-level field is rejected by strict-mode schema with field name in error', () => {
       const configPath = writeProjectConfig({ agnts: {} })
-      expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow('agnts')
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(configPath)
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow('agnts')
     })
 
     // `model` is a SECURITY_OVERLAY_FIELDS member: a project-trust source has
@@ -2363,21 +2399,23 @@ describe('config', () => {
       const configPath = writeProjectConfig({
         agents: { 'correctness-reviewer': { hidden: 'not-a-boolean' } },
       })
-      expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow(
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(configPath)
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
         'agents.correctness-reviewer.hidden',
       )
     })
 
     test('bootstrap.enabled as string is rejected with field path in error', () => {
       const configPath = writeProjectConfig({ bootstrap: { enabled: 'yes' } })
-      expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow('bootstrap.enabled')
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(configPath)
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        'bootstrap.enabled',
+      )
     })
 
     test('empty config loads with all Zod defaults applied', () => {
       writeProjectConfig({})
-      const result = loadConfig(testDir)
+      const result = loadConfig(testDir, STRICT_PROJECT)
       expect(result.disabled_skills).toEqual([])
       expect(result.disabled_agents).toEqual([])
       expect(result.disabled_commands).toEqual([])
@@ -2394,14 +2432,18 @@ describe('config', () => {
         disabled_skills: [],
         unknownField: true,
       })
-      expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow('unknownField')
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(configPath)
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow('unknownField')
     })
 
     test('user config schema validation failure names the user config file in error', () => {
       const userConfigFilePath = writeUserConfig({ disabled_skills: 'wrong' })
-      expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
-      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        userConfigFilePath,
+      )
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        'disabled_skills',
+      )
     })
 
     test('typo on agents key produces a message pointing at the documentation URL', () => {
@@ -2410,7 +2452,7 @@ describe('config', () => {
       })
       let errorMessage = ''
       try {
-        loadConfig(testDir)
+        loadConfig(testDir, STRICT_PROJECT)
       } catch (err) {
         errorMessage = (err as Error).message
       }
@@ -2427,7 +2469,7 @@ describe('config', () => {
       })
       let errorMessage = ''
       try {
-        loadConfig(testDir)
+        loadConfig(testDir, STRICT_PROJECT)
       } catch (err) {
         errorMessage = (err as Error).message
       }
@@ -2447,7 +2489,7 @@ describe('config', () => {
         writeProjectConfig({ disabled_agents: ['security-reviwer'] })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2464,7 +2506,7 @@ describe('config', () => {
         writeProjectConfig({ disabled_skills: ['typed-config-validatoin'] })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2479,8 +2521,8 @@ describe('config', () => {
 
       test('valid disabled_agents entry passes through enrichment unchanged', () => {
         writeProjectConfig({ disabled_agents: ['correctness-reviewer'] })
-        expect(() => loadConfig(testDir)).not.toThrow()
-        const result = loadConfig(testDir)
+        expect(() => loadConfig(testDir, STRICT_PROJECT)).not.toThrow()
+        const result = loadConfig(testDir, STRICT_PROJECT)
         expect(result.disabled_agents).toContain('correctness-reviewer')
       })
 
@@ -2490,7 +2532,7 @@ describe('config', () => {
         writeProjectConfig({ agents: { 'typo-a': {}, 'typo-b': {} } })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2503,7 +2545,7 @@ describe('config', () => {
         writeProjectConfig({ agents: { 'typo-a': {} } })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2518,7 +2560,7 @@ describe('config', () => {
         })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2537,7 +2579,7 @@ describe('config', () => {
         })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2557,7 +2599,7 @@ describe('config', () => {
         writeProjectConfig({ disabled_agents: [null] })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (err) {
           errorMessage = (err as Error).message
         }
@@ -2578,7 +2620,7 @@ describe('config', () => {
         })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (e) {
           errorMessage = (e as Error).message
         }
@@ -2595,7 +2637,7 @@ describe('config', () => {
         })
         let errorMessage = ''
         try {
-          loadConfig(testDir)
+          loadConfig(testDir, STRICT_PROJECT)
         } catch (e) {
           errorMessage = (e as Error).message
         }
@@ -2749,8 +2791,12 @@ describe('config', () => {
     test('disabled_skills with a genuinely-unknown name still throws the actionable schema error', () => {
       writeProjectConfig({ disabled_skills: ['never-existed-skill'] })
 
-      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
-      expect(() => loadConfig(testDir)).toThrow('never-existed-skill')
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        'disabled_skills',
+      )
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        'never-existed-skill',
+      )
     })
 
     test('mixed removed and valid disabled_skills: removed name dropped-with-warning, valid name retained', () => {
@@ -3217,7 +3263,9 @@ describe('config', () => {
         JSON.stringify({ disabled_skills: ['never-existed-skill'] }),
       )
 
-      expect(() => loadConfig(testDir)).toThrow(/never-existed-skill/)
+      expect(() => loadConfig(testDir, STRICT_PROJECT)).toThrow(
+        /never-existed-skill/,
+      )
     })
 
     test('merge precedence is unchanged when a valid name is present alongside other config', () => {
@@ -3980,12 +4028,12 @@ describe('config', () => {
           },
         })
 
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          projectConfigPath,
-        )
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          'not-a-real-agent-name',
-        )
+        expect(() =>
+          loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+        ).toThrow(projectConfigPath)
+        expect(() =>
+          loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+        ).toThrow('not-a-real-agent-name')
       })
 
       test('opt-in ON via custom config only, user config absent: project-defined `profiles` still survives (ordering regression)', () => {
@@ -4010,12 +4058,12 @@ describe('config', () => {
         })
 
         try {
-          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-            projectConfigPath,
-          )
-          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-            'not-a-real-agent-name',
-          )
+          expect(() =>
+            loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+          ).toThrow(projectConfigPath)
+          expect(() =>
+            loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+          ).toThrow('not-a-real-agent-name')
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
           fs.rmSync(customDir, { recursive: true, force: true })
@@ -4039,12 +4087,12 @@ describe('config', () => {
         })
 
         try {
-          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-            projectConfigPath,
-          )
-          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-            'not-a-real-agent-name',
-          )
+          expect(() =>
+            loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+          ).toThrow(projectConfigPath)
+          expect(() =>
+            loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+          ).toThrow('not-a-real-agent-name')
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
           fs.rmSync(customDir, { recursive: true, force: true })
@@ -4120,28 +4168,38 @@ describe('config', () => {
           },
         })
 
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          projectConfigPath,
-        )
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          'not-a-real-agent-name',
-        )
+        expect(() =>
+          loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+        ).toThrow(projectConfigPath)
+        expect(() =>
+          loadConfigWithSources(testDir, { ...STRICT_PROJECT, warningSink }),
+        ).toThrow('not-a-real-agent-name')
       })
 
-      test('opt-in ON, a project bundle names an unknown category: rejected by assertAllProfileBundlesAreValid', () => {
+      test('opt-in ON, a project bundle names an unknown category: assertAllProfileBundlesAreValid fails the merge, so the project file is skipped with one warning', () => {
         writeUserConfig({ allow_project_profiles: true })
-        writeProjectConfig({
+        const projectConfigPath = writeProjectConfig({
           profiles: {
             sneaky: { categories: { 'not-a-real-category': { model: 'a/x' } } },
           },
         })
 
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          'not-a-real-category',
-        )
+        expect(() =>
+          loadConfigWithSources(testDir, {
+            projectFailure: 'throw',
+            warningSink,
+          }),
+        ).toThrow('not-a-real-category')
+        warnings.length = 0
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.skippedProject?.path).toBe(projectConfigPath)
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).toContain(projectConfigPath)
+        expect(warnings[0]).not.toContain('not-a-real-category')
       })
 
-      test('opt-in ON, an invalid project bundle that is NOT selected still fails the load (repository-wide bug, same as user/custom)', () => {
+      test('opt-in ON, an invalid project bundle that is NOT selected still fails the merge, so the project file is skipped as a whole', () => {
         writeUserConfig({ allow_project_profiles: true, profile: 'fine' })
         writeProjectConfig({
           // `fine` is selected; `broken` is never selected by anyone, but its
@@ -4152,9 +4210,16 @@ describe('config', () => {
           },
         })
 
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          'not-a-real-category',
-        )
+        expect(() =>
+          loadConfigWithSources(testDir, {
+            projectFailure: 'throw',
+            warningSink,
+          }),
+        ).toThrow('not-a-real-category')
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
+        expect(result.skippedProject).toBeDefined()
       })
 
       // PINNING A KNOWN, DOCUMENTED DESIGN PROPERTY -- not endorsing it as
@@ -4698,7 +4763,7 @@ describe('config', () => {
         expect(reverseResolution.model).toBe('a/project-agent-level')
       })
 
-      test('project bundle sets a qualifier with no model resolvable anywhere: assertRoutingInvariants still throws', () => {
+      test('project bundle sets a qualifier with no model resolvable anywhere: assertRoutingInvariants throws under the strict read, and the default read skips the project file', () => {
         writeUserConfig({ allow_project_profiles: true })
         writeProjectConfig({
           profile: 'proj',
@@ -4711,12 +4776,22 @@ describe('config', () => {
           },
         })
 
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          /correctness-reviewer/,
-        )
-        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-          /opencode/,
-        )
+        expect(() =>
+          loadConfigWithSources(testDir, {
+            projectFailure: 'throw',
+            warningSink,
+          }),
+        ).toThrow(/correctness-reviewer/)
+        expect(() =>
+          loadConfigWithSources(testDir, {
+            projectFailure: 'throw',
+            warningSink,
+          }),
+        ).toThrow(/opencode/)
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.skippedProject).toBeDefined()
+        expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
       })
 
       test('routing resolved through resolveRouting reflects the advisory outcome, not just the raw overlay map', () => {
@@ -5889,7 +5964,9 @@ describe('pi_subagents merge and trust', () => {
       pi_subagents: { agents: { x: { thinking: 'turbo' } } },
     })
 
-    expect(() => loadConfigWithSources(testDir)).toThrow(projectConfigPath)
+    expect(() => loadConfigWithSources(testDir, STRICT_PROJECT)).toThrow(
+      projectConfigPath,
+    )
   })
 
   test('unknown pi_subagents field fails validation under strict schema', () => {
@@ -5897,7 +5974,9 @@ describe('pi_subagents merge and trust', () => {
       pi_subagents: { agents: { x: { bogus: true } } },
     })
 
-    expect(() => loadConfigWithSources(testDir)).toThrow(projectConfigPath)
+    expect(() => loadConfigWithSources(testDir, STRICT_PROJECT)).toThrow(
+      projectConfigPath,
+    )
   })
 
   describe('scope-aware config chain (includeProject option)', () => {
@@ -6650,19 +6729,16 @@ describe('search config field', () => {
       expect(t.warnings).toHaveLength(1)
     })
 
-    test('a project file that cannot be parsed still fails exactly as before', () => {
+    test('a project file that cannot be parsed is skipped with one warning that names the file and the parse error', () => {
       const t = setup()
-      fs.writeFileSync(
-        path.join(t.paths.projectDir, '.opencode/systematic.json'),
-        '{ "search": { "sources": ',
-      )
-      expect(() =>
-        loadConfigWithSources(t.paths.projectDir, {
-          homeDir: t.paths.homeDir,
-          customConfigDir: null,
-          warningSink: () => {},
-        }),
-      ).toThrow(/JSONC parse error/)
+      const file = path.join(t.paths.projectDir, '.opencode/systematic.json')
+      fs.writeFileSync(file, '{ "search": { "sources": ')
+      t.user({ disabled_skills: ['ce:plan'] })
+      const { config } = t.load()
+      expect(config.disabled_skills).toEqual(['ce:plan'])
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(file)
+      expect(t.warnings[0]).toMatch(/[A-Za-z]+ at offset \d+/)
     })
 
     test.each([
@@ -7927,12 +8003,18 @@ describe('layered config files', () => {
   })
 
   describe('invalid files', () => {
-    test('a project file over 1 MB is invalid: the loader throws, report mode warns and marks it, and the bin reader agrees', () => {
+    test('a project file over 1 MB is invalid: the loader skips it with one warning in either mode, and the bin reader agrees', () => {
       const t = setup()
       const big = `{"disabled_skills":[],"pad":"${'a'.repeat(1024 * 1024)}"}`
       const projectFile = t.project(big)
-      expect(() => t.load()).toThrow(projectFile)
+      const skipped = t.load()
+      expect(skipped.config.disabled_skills).toEqual([])
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(projectFile)
+      expect(t.warnings[0]).toContain('1 MB')
 
+      resetSkippedProjectConfigNotices()
+      t.warnings.length = 0
       const reported = t.load({ invalidSource: 'report' })
       const project = reported.metadata.sources.find(
         (source) => source.kind === 'project',
@@ -7948,12 +8030,14 @@ describe('layered config files', () => {
       expect(loadProjectSearchSources(t.repo).unreadable).toBe(true)
     })
 
-    test('a repo-root project file over 1 MB is invalid too', () => {
+    test('a repo-root project file over 1 MB is skipped too', () => {
       const t = setup()
       const rootFile = t.rootProject(
         `{"disabled_skills":[],"pad":"${'a'.repeat(1024 * 1024)}"}`,
       )
-      expect(() => t.load()).toThrow(rootFile)
+      expect(t.load().config.disabled_skills).toEqual([])
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(rootFile)
     })
 
     test('an invalid root file never falls back to the .json file or the .opencode file', () => {
@@ -7961,7 +8045,15 @@ describe('layered config files', () => {
       const rootFile = t.rootProject('{ not json')
       t.rootProject({ disabled_skills: ['ce:plan'] }, '.systematic.json')
       t.project({ disabled_skills: ['ce:work'] })
-      expect(() => t.load()).toThrow(rootFile)
+      const skipped = t.load()
+      expect(skipped.config.disabled_skills).toEqual([])
+      expect(
+        t.warnings.filter(
+          (message) =>
+            message.includes(rootFile) && message.includes('was skipped'),
+        ),
+      ).toHaveLength(1)
+      resetSkippedProjectConfigNotices()
       const reported = t.load({ invalidSource: 'report' })
       expect(reported.config.disabled_skills).toEqual([])
     })
@@ -8017,6 +8109,179 @@ describe('layered config files', () => {
       t.userLocal({ disabled_skills: 'nope', search: { enabled: false } })
       const result = t.load({ invalidSource: 'report' })
       expect(result.config.search).toBeUndefined()
+    })
+  })
+
+  describe('a project file that fails cannot break the load', () => {
+    const CANARY = 'SECRET-CANARY-value'
+
+    test('every layer accepts trailing commas in objects and arrays', () => {
+      const t = setup()
+      t.user('{ "disabled_skills": ["ce:plan",], }')
+      t.userLocal('{ "disabled_commands": ["user-local",], }')
+      t.project('{ "disabled_skills": ["ce:work",], }')
+      t.custom('{ "skills_as_commands": false, }')
+      t.customLocal('{ "bootstrap": { "enabled": false, }, }')
+      const { config, metadata } = t.load({ withCustom: true })
+      expect(t.warnings).toEqual([])
+      expect(config.disabled_skills).toEqual(['ce:plan', 'ce:work'])
+      expect(config.disabled_commands).toEqual(['user-local'])
+      expect(config.skills_as_commands).toBe(false)
+      expect(config.bootstrap.enabled).toBe(false)
+      expect(
+        metadata.sources.every((source) => source.presence === 'present'),
+      ).toBe(true)
+    })
+
+    test('a syntax error skips the project file: the user overlay applies, nothing from the project does, and one warning names the file, the error code and the offset', () => {
+      const t = setup()
+      t.user({ agents: { [AGENT]: { model: 'a/user' } } })
+      const file = t.project(`{ "note": "${CANARY}", ]`)
+      const result = t.load()
+      expect(result.config.agents?.[AGENT]).toMatchObject({ model: 'a/user' })
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(file)
+      expect(t.warnings[0]).toMatch(/[A-Za-z]+ at offset \d+/)
+      expect(t.warnings[0]).not.toContain(CANARY)
+      expect(
+        result.metadata.sources.find((source) => source.kind === 'project'),
+      ).toEqual({
+        kind: 'project',
+        presence: 'invalid',
+        errorCode: 'parse-failed',
+      })
+    })
+
+    test('the skip warning appears once per file for the process, and again after a reset', () => {
+      const t = setup()
+      t.project('{ not json')
+      t.load()
+      t.load()
+      t.load({ invalidSource: 'report' })
+      expect(t.warnings).toHaveLength(1)
+      resetSkippedProjectConfigNotices()
+      t.load()
+      expect(t.warnings).toHaveLength(2)
+    })
+
+    test('a field that fails the schema skips the whole file; the warning names the first failing path and drops the strip warnings of the same file', () => {
+      const t = setup()
+      t.user({ disabled_skills: ['ce:plan'] })
+      const file = t.project({
+        disabled_skills: CANARY,
+        agents: { [AGENT]: { model: 'a/project' } },
+      })
+      const result = t.load()
+      expect(result.config.disabled_skills).toEqual(['ce:plan'])
+      expect(result.config.agents?.[AGENT]).toBeUndefined()
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(file)
+      expect(t.warnings[0]).toContain('disabled_skills')
+      expect(t.warnings[0]).not.toContain(CANARY)
+      expect(
+        result.metadata.sources.find((source) => source.kind === 'project'),
+      ).toEqual({
+        kind: 'project',
+        presence: 'invalid',
+        errorCode: 'schema-invalid',
+      })
+    })
+
+    test('a root that is not an object skips the file', () => {
+      const t = setup()
+      const file = t.project('[]')
+      expect(t.load().config.disabled_skills).toEqual([])
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(file)
+    })
+
+    test.each([
+      ['an empty file', ''],
+      ['a whitespace-only file', '  \n\t \n'],
+    ])('%s is absent: no warning and no metadata error', (_label, content) => {
+      const t = setup()
+      t.project(content)
+      const result = t.load()
+      expect(t.warnings).toEqual([])
+      expect(
+        result.metadata.sources.find((source) => source.kind === 'project'),
+      ).toEqual({ kind: 'project', presence: 'absent' })
+    })
+
+    test('a project profile bundle that breaks only after the merge is retried without the project file, and skipped with one warning', () => {
+      const t = setup()
+      t.user({ allow_project_profiles: true, disabled_skills: ['ce:plan'] })
+      const file = t.project({
+        disabled_skills: ['ce:work'],
+        profiles: { p: { categories: { 'not-a-category': { model: 'a/x' } } } },
+      })
+      const result = t.load()
+      expect(result.config.disabled_skills).toEqual(['ce:plan'])
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain(file)
+      expect(t.warnings[0]).not.toContain('not-a-category')
+    })
+
+    test('when the retry without the project file also fails, the original error stands and no skip warning is shown', () => {
+      const t = setup()
+      t.user({
+        profiles: { p: { categories: { 'not-a-category': { model: 'a/x' } } } },
+      })
+      t.project({ disabled_skills: ['ce:work'] })
+      expect(() => t.load()).toThrow(/not-a-category/)
+      expect(t.warnings).toEqual([])
+    })
+
+    test('no retry is made when there is no project file', () => {
+      const t = setup()
+      t.user({
+        profiles: { p: { categories: { 'not-a-category': { model: 'a/x' } } } },
+      })
+      expect(() => t.load()).toThrow(/not-a-category/)
+    })
+
+    test('a project file that is the same file as a custom file stays fatal through the strict custom pass', () => {
+      const t = setup()
+      const target = t.customLocal('{ not json')
+      fs.mkdirSync(path.join(t.repo, '.opencode'), { recursive: true })
+      fs.symlinkSync(target, path.join(t.repo, '.opencode/systematic.json'))
+      expect(() => t.load({ withCustom: true })).toThrow(target)
+    })
+
+    test('a broken user, user.local or custom file stays fatal and names the file', () => {
+      const t = setup()
+      t.project({ disabled_skills: ['ce:work'] })
+      const user = t.user('{ not json')
+      expect(() => t.load()).toThrow(user)
+      const custom = t.custom('{ "disabled_skills": 1 }')
+      t.user({})
+      expect(() => t.load({ withCustom: true })).toThrow(custom)
+    })
+
+    test.each([
+      ['a syntax error', '{ not json', /JSONC parse error/],
+      ['a schema failure', { disabled_skills: 'x' }, /disabled_skills/],
+    ])(
+      'projectFailure: "throw" makes %s fatal',
+      (_label, content, expected) => {
+        const t = setup()
+        t.project(content)
+        expect(() => t.load({ projectFailure: 'throw' })).toThrow(expected)
+        expect(t.warnings).toEqual([])
+      },
+    )
+
+    test('a valid project file still loads with its trust stripping', () => {
+      const t = setup()
+      t.project({
+        disabled_skills: ['ce:work'],
+        agents: { [AGENT]: { model: 'a/project' } },
+      })
+      const result = t.load()
+      expect(result.config.disabled_skills).toEqual(['ce:work'])
+      expect(result.config.agents?.[AGENT]).toBeUndefined()
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('has been ignored')
     })
   })
 
