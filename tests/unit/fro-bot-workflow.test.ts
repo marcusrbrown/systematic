@@ -67,6 +67,21 @@ function promptRouting(source: string): string {
   return source.slice(start, end)
 }
 
+/**
+ * Autoheal prompt branches append the workflow-computed run context (today's
+ * UTC date and the Sunday flag). The agent's shell does not inherit step env
+ * (run 41269659786: `printenv IS_SUNDAY_UTC` was empty while the step env said
+ * `true`), so the values travel inside the prompt text itself.
+ */
+const AUTOHEAL_WITH_CONTEXT =
+  "format('{0}{1}', env.AUTOHEAL_PROMPT, env.RUN_CONTEXT)"
+const RUN_CONTEXT_STEP = 'Compute UTC run context'
+
+function autohealPromptText(): string {
+  const env = asRecord(readWorkflow().workflow.env, 'workflow env')
+  return asString(env.AUTOHEAL_PROMPT, 'AUTOHEAL_PROMPT')
+}
+
 function expectPromptFragments(
   prompt: string,
   fragments: readonly string[],
@@ -169,13 +184,13 @@ describe('Fro Bot workflow contracts', () => {
     )
     expect(routing).not.toContain('MAINTENANCE_PROMPT')
     expect(routing).toContain(
-      "(github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal' && env.AUTOHEAL_PROMPT)",
+      `(github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal' && ${AUTOHEAL_WITH_CONTEXT})`,
     )
     expect(routing).toContain(
-      "(github.event_name == 'workflow_dispatch' && env.AUTOHEAL_PROMPT)",
+      `(github.event_name == 'workflow_dispatch' && ${AUTOHEAL_WITH_CONTEXT})`,
     )
     expect(routing).toContain(
-      "(github.event_name == 'schedule' && github.event.schedule == '30 3 * * *' && env.AUTOHEAL_PROMPT)",
+      `(github.event_name == 'schedule' && github.event.schedule == '30 3 * * *' && ${AUTOHEAL_WITH_CONTEXT})`,
     )
     expect(routing).toContain(
       "(github.event_name == 'issues' && env.ISSUE_TRIAGE_PROMPT)",
@@ -320,11 +335,8 @@ describe('Fro Bot workflow contracts', () => {
       'do-not-retry',
       'bot-authored',
       'exact title',
-      'if multiple exist, keep the most recently updated one as canonical',
       'yyyy-mm-dd',
       'close',
-      'weekly maintenance report',
-      'migration',
       'never test write permissions by modifying a live issue',
       'never write canary, placeholder, or intermediate content',
       'prepare and validate the complete intended mutation locally',
@@ -376,8 +388,6 @@ describe('Fro Bot workflow contracts', () => {
       'never route',
       'event content into reactive healing',
       'only cold-start LLM notes are allowed',
-      'date placeholders match exactly YYYY-MM-DD',
-      'no other report titles or date formats are permitted',
     ])
   })
 
@@ -951,5 +961,369 @@ describe('Fro Bot brokered push anchor (trusted same-repo PR head)', () => {
 
     expect(result.exitCode).toBe(1)
     expect(result.sha).toBeUndefined()
+  })
+})
+
+describe('Fro Bot rotating daily report issue', () => {
+  test('titles each report with the exact em-dash UTC-date format', () => {
+    const prompt = autohealPromptText()
+
+    expect(prompt).toContain('Daily Fro Bot Report — YYYY-MM-DD (UTC)')
+    expectPromptFragments(prompt, [
+      'the date is the today_utc value from the run context line',
+      'lowest-numbered open issue',
+      'authored by exactly `fro-bot` or `mrbro-bot[bot]`',
+      'edit it in place',
+      'never create a second same-day issue',
+      'closed as not planned',
+    ])
+  })
+
+  test('rotates only after the daily issue is written, and only report titles', () => {
+    const prompt = autohealPromptText()
+
+    expectPromptFragments(prompt, [
+      'after the daily issue for today is written successfully',
+      // Rotation must never close today's canonical issue.
+      'close every other open issue',
+      'a failed write never closes the previous report',
+      'whose title passes the report title rule',
+      'exactly `Daily Autohealing Report`',
+      'closed as completed',
+      'Superseded by #N.',
+      'never close any other issue',
+    ])
+    // Write first, close second.
+    expect(
+      prompt.indexOf('After the daily issue for today is written'),
+    ).toBeLessThan(prompt.indexOf('Superseded by #N.'))
+  })
+
+  test('reads the previous report and carries it forward', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'newest issue, open or closed, whose title passes the report title rule',
+      'legacy issue #153',
+      'Previous report: #N',
+    ])
+  })
+
+  test('keeps the full report in the issue body and bans comment copies', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'the full report lives in the issue body',
+      'never post the report, or a copy of any previous body, as a comment',
+      'the only comments on issues are the one-line closing comments',
+      'at most 30,000 characters',
+      'trim lower-priority sections first and name what was trimmed',
+    ])
+  })
+
+  test('drops the perpetual-issue model', () => {
+    const prompt = autohealPromptText()
+
+    expect(prompt).not.toMatch(/perpetual/i)
+    expect(prompt).not.toMatch(/prepend/i)
+    expect(prompt).not.toContain('50,000')
+    expect(prompt).not.toContain('Archived')
+    expect(prompt).not.toContain('DO NOT create new daily issues')
+    expect(prompt).not.toContain('Weekly Maintenance Report')
+    expect(prompt).not.toContain('Update — YYYY-MM-DD')
+    expect(prompt).toContain('## Daily Fro Bot Report — YYYY-MM-DD (UTC)')
+  })
+
+  test('allows closing exactly two kinds of thing', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'closing is allowed for exactly two kinds of action',
+      'daily report issues as described under daily report issue',
+      'your own superseded pull requests under self-cleanup',
+    ])
+  })
+})
+
+describe('Fro Bot autoheal strategies', () => {
+  test('never pushes to or opens PRs against Renovate and Dependabot branches', () => {
+    const prompt = autohealPromptText()
+
+    expectPromptFragments(prompt, [
+      'never push to, or open a PR against, a branch owned by renovate[bot] or dependabot[bot]',
+      'diagnose the cause first',
+      'fix it on main through the single repair pr of this run',
+      'otherwise report the root cause in the daily issue',
+      'Do not comment on the bot PR',
+    ])
+    // The old repair path for bot PRs is gone.
+    expect(prompt).not.toContain(
+      'Trusted PR authors for branch repair are Marcus and these automation bots',
+    )
+    expect(prompt).not.toContain('fix and push to that PR branch')
+  })
+
+  test('marks new and resolved findings and escalates after three reports', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'mark findings new since then `★` and resolved findings `✅`',
+      '3 consecutive reports',
+      'treat the top dated section of #153 as one prior report',
+      'moves to needs human attention',
+    ])
+  })
+
+  test('remembers declined fixes', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'closed without merge in the last 90 days',
+      'never re-propose a fix that matches a declined one',
+      'report it as declined',
+    ])
+  })
+
+  test('self-cleans only its own superseded PRs', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'only when a newer fro bot pr fixes the same root cause',
+      'comment linking the successor',
+      'never close a pr you did not author',
+    ])
+  })
+
+  test('confirms a finding still reproduces on main before acting', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'confirm it still reproduces on current main',
+      'report it as resolved',
+    ])
+  })
+
+  test('adds report-only rent-test and doc-drift checks', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'rent test',
+      'serves no current caller',
+      'doc drift',
+      'agents.md, architecture.md, structure.md and src/lib/agents.md',
+      'report only what it misses',
+      'report-only; never open a pr for them',
+    ])
+  })
+
+  test('covers the sibling and governance repos in cross-project intelligence', () => {
+    const prompt = autohealPromptText()
+
+    for (const repo of [
+      'marcusrbrown/marcusrbrown',
+      'marcusrbrown/opencode-copilot-delegate',
+      'cortexkit/opencode-magic-context',
+      'anomalyco/opencode',
+      'fro-bot/agent',
+      'fro-bot/space-bus',
+      'marcusrbrown/renovate-config',
+      'bfra-me/.github',
+    ]) {
+      expect(prompt).toContain(`\`${repo}\``)
+    }
+    expectPromptFragments(prompt, [
+      'monitor-only',
+      'never clone',
+      'adopt, monitor, or reject',
+    ])
+  })
+
+  test('caps the job at 30 minutes', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+
+    expect(froBot['timeout-minutes']).toBe(30)
+  })
+
+  test('forbids ce:* skills in the PR review prompt', () => {
+    const env = asRecord(readWorkflow().workflow.env, 'workflow env')
+    const review = asString(env.PR_REVIEW_PROMPT, 'PR_REVIEW_PROMPT')
+
+    expectPromptFragments(review, [
+      'Do NOT invoke `ce:review` or any other `ce:*` skill',
+    ])
+  })
+})
+
+describe('Fro Bot Sunday upstream watch', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /** Runs the real step script with `date` stubbed to a fixed UTC instant. */
+  function computeContext(utcDateAndWeekday: string): Map<string, string> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fro-bot-context-'))
+    dirs.push(dir)
+    const bin = path.join(dir, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(
+      path.join(bin, 'date'),
+      `#!/usr/bin/env bash\necho '${utcDateAndWeekday}'\n`,
+      { mode: 0o755 },
+    )
+    const githubEnv = path.join(dir, 'github-env')
+    const step = findStep(froBotSteps(), RUN_CONTEXT_STEP)
+    const result = Bun.spawnSync(
+      ['bash', '-e', '-c', asString(step.run, `${RUN_CONTEXT_STEP} run`)],
+      {
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          GITHUB_ENV: githubEnv,
+        },
+      },
+    )
+    expect(result.exitCode).toBe(0)
+    const values = new Map<string, string>()
+    for (const line of fs.readFileSync(githubEnv, 'utf8').split('\n')) {
+      const eq = line.indexOf('=')
+      if (eq > 0) values.set(line.slice(0, eq), line.slice(eq + 1))
+    }
+    return values
+  }
+
+  test('the context step runs on schedule and dispatch, before the agent', () => {
+    const steps = froBotSteps()
+    const step = findStep(steps, RUN_CONTEXT_STEP)
+
+    expect(step.if).toBe(
+      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+    )
+    expect(stepIndex(steps, RUN_CONTEXT_STEP)).toBeLessThan(
+      stepIndex(steps, 'Run Fro Bot'),
+    )
+  })
+
+  test('computes the UTC date and Sunday flag into one RUN_CONTEXT line', () => {
+    const sunday = computeContext('2026-11-01 7')
+
+    expect(sunday.get('RUN_CONTEXT')).toBe(
+      'RUN CONTEXT (computed by the workflow, authoritative): TODAY_UTC=2026-11-01 IS_SUNDAY_UTC=true',
+    )
+  })
+
+  test('reports a weekday as not Sunday', () => {
+    const monday = computeContext('2026-11-02 1')
+
+    expect(monday.get('RUN_CONTEXT')).toBe(
+      'RUN CONTEXT (computed by the workflow, authoritative): TODAY_UTC=2026-11-02 IS_SUNDAY_UTC=false',
+    )
+  })
+
+  test('every autoheal branch appends RUN_CONTEXT to the prompt', () => {
+    const routing = promptRouting(readWorkflow().source)
+
+    expect(routing.split(AUTOHEAL_WITH_CONTEXT)).toHaveLength(4)
+    expect(routing).not.toMatch(/&& env\.AUTOHEAL_PROMPT\)/)
+  })
+
+  test('the prompt ends in a newline so the context lands on its own line', () => {
+    expect(autohealPromptText().endsWith('\n')).toBe(true)
+  })
+
+  test('category 10 reads the in-prompt flag, never the shell environment', () => {
+    const prompt = autohealPromptText()
+
+    expectPromptFragments(prompt, [
+      'the run context line at the end of this prompt',
+      'do not read them from the shell environment',
+      'runs only when the run context line says is_sunday_utc=true',
+    ])
+    expect(prompt).not.toMatch(/read this environment variable/i)
+    expect(prompt).not.toContain('printenv')
+  })
+
+  test('the agent step no longer depends on a forwarded IS_SUNDAY_UTC env var', () => {
+    const runFroBot = findStep(froBotSteps(), 'Run Fro Bot')
+    const env = asRecord(runFroBot.env, 'Run Fro Bot env')
+
+    expect(env).not.toHaveProperty('IS_SUNDAY_UTC')
+  })
+})
+
+describe('Fro Bot report title rule', () => {
+  /** The anchored regex the prompt hands the agent, compiled as written. */
+  function reportTitlePattern(): RegExp {
+    const matches = [
+      ...autohealPromptText().matchAll(/`(\^Daily Fro Bot Report — [^`\n]*)`/g),
+    ]
+    expect(matches).toHaveLength(1)
+    return new RegExp(matches[0]?.[1] ?? '')
+  }
+
+  function section(from: string, to: string): string {
+    const prompt = autohealPromptText()
+    const start = prompt.indexOf(from)
+    const end = prompt.indexOf(to, start + from.length)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    return prompt.slice(start, end).replace(/\s+/g, ' ')
+  }
+
+  test('the regex is anchored at both ends', () => {
+    const source = reportTitlePattern().source
+
+    expect(source.startsWith('^Daily Fro Bot Report — ')).toBe(true)
+    expect(source.endsWith('$')).toBe(true)
+  })
+
+  test('accepts a real daily report title', () => {
+    const pattern = reportTitlePattern()
+
+    expect(pattern.test('Daily Fro Bot Report — 2026-11-06 (UTC)')).toBe(true)
+    expect(pattern.test('Daily Fro Bot Report — 2026-02-28 (UTC)')).toBe(true)
+  })
+
+  test.each([
+    ['an arbitrary suffix', 'Daily Fro Bot Report — rotation bug'],
+    ['a missing (UTC)', 'Daily Fro Bot Report — 2026-11-06'],
+    ['an unpadded date', 'Daily Fro Bot Report — 2026-1-6 (UTC)'],
+    [
+      'a trailing letter on the date',
+      'Daily Fro Bot Report — 2026-11-06x (UTC)',
+    ],
+    ['an impossible month', 'Daily Fro Bot Report — 2026-13-06 (UTC)'],
+    ['an impossible day', 'Daily Fro Bot Report — 2026-11-40 (UTC)'],
+    [
+      'a hyphen instead of the em dash',
+      'Daily Fro Bot Report - 2026-11-06 (UTC)',
+    ],
+    ['a leading extra', 'Re: Daily Fro Bot Report — 2026-11-06 (UTC)'],
+    ['a trailing extra', 'Daily Fro Bot Report — 2026-11-06 (UTC) copy'],
+    ['text after the date', 'Daily Fro Bot Report — 2026-11-06 (UTC)\nextra'],
+    ['the legacy title', 'Daily Autohealing Report'],
+    ['an empty title', ''],
+  ])('rejects %s', (_label, title) => {
+    expect(reportTitlePattern().test(title)).toBe(false)
+  })
+
+  test('selection uses the one rule in continuity, canonical, and rotation', () => {
+    const continuity = section(
+      'CONTINUITY (read before acting)',
+      '\nDEDUPLICATION',
+    )
+    const canonical = section('\nDAILY REPORT ISSUE\n', '\nROTATION\n')
+    const rotation = section('\nROTATION\n', '\nONE REPORT, ONE BODY')
+
+    for (const text of [continuity, canonical, rotation]) {
+      expect(text.toLowerCase()).toContain('report title rule')
+    }
+  })
+
+  test('states the rule once as a whole-title match, with the legacy title exact', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'report title rule',
+      'a whole-title match for `Daily Fro Bot Report — YYYY-MM-DD (UTC)`',
+      'the em dash is literal',
+      'the date is a real calendar date',
+      'prefix, substring, and fuzzy matching never qualify',
+      'the only other title rotation may close is exactly `Daily Autohealing Report`',
+    ])
+  })
+
+  test('no starts-with or prefix wording remains for report selection', () => {
+    const prompt = autohealPromptText()
+
+    expect(prompt).not.toMatch(/title starts? with/i)
+    expect(prompt).not.toMatch(/starts? with `Daily Fro Bot Report/i)
+    expect(prompt).not.toMatch(/title prefix/i)
+    expect(prompt).not.toMatch(/begins? with `Daily Fro Bot Report/i)
   })
 })
