@@ -65,6 +65,7 @@ import {
   type SearchInspection,
 } from './lib/search-external-sources.js'
 import {
+  configEntryExists,
   displaySafe,
   loadUserLevelSearchSettings,
   MAX_PROJECT_CONFIG_BYTES,
@@ -1097,18 +1098,95 @@ function printSearchSection(search: SearchInspection): void {
 }
 
 /**
+ * Remove terminal escape sequences and control characters from text a
+ * repository controls, keeping `\n` and `\t`. Unlike `displaySafe`, which
+ * escapes control characters in a one-line path, this keeps the lines of a
+ * multi-line file intact. Whole CSI (`ESC [` or C1 CSI), OSC (`ESC ]`) and
+ * two-character ESC sequences go first, so no sequence leaves a tail such as
+ * `[31m` behind; then every remaining C0, DEL and C1 character goes.
+ */
+function stripTerminalControls(text: string): string {
+  /* biome-ignore-start lint/suspicious/noControlCharactersInRegex: matching control characters is the purpose of this function */
+  return text
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, '')
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?/g, '')
+    .replace(/\u001b[@-Z\\-_]/g, '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+  /* biome-ignore-end lint/suspicious/noControlCharactersInRegex: see above */
+}
+
+/** True when `target` is `root` or sits under it. */
+function isWithinRoot(root: string, target: string): boolean {
+  const relative = path.relative(root, target)
+  return (
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
+/**
+ * Resolve a project config file for printing: its real path when that is
+ * inside the checkout root, else the reason it must not be shown. The reason
+ * never carries the resolved path, which is outside the repository.
+ */
+function resolveProjectFileInRepository(
+  filePath: string,
+  projectRoot: string,
+):
+  | { readonly kind: 'inside'; readonly realPath: string }
+  | { readonly kind: 'withheld'; readonly reason: string } {
+  try {
+    const realRoot = fs.realpathSync(projectRoot)
+    const realPath = fs.realpathSync(filePath)
+    return isWithinRoot(realRoot, realPath)
+      ? { kind: 'inside', realPath }
+      : { kind: 'withheld', reason: 'it resolves outside the repository' }
+  } catch {
+    return { kind: 'withheld', reason: 'it could not be resolved' }
+  }
+}
+
+/**
  * Print one config file's text under a heading. The read is the bounded,
  * non-blocking regular-file read the project config uses, so a file that is
  * too large, not a regular file (a directory, a FIFO) or unreadable is a
  * one-line note and the rest of the output still prints. An absent file prints
  * nothing.
+ *
+ * With `projectRoot` the file is repository-controlled (the project file): its
+ * text prints only when its real path is inside that root, and control
+ * characters are stripped from it. The user's own files pass no root, so a
+ * dotfile symlink to anywhere prints as before.
  */
-function printConfigFile(heading: string, filePath: string): void {
-  const read = readTextBounded(filePath, MAX_PROJECT_CONFIG_BYTES)
+function printConfigFile(
+  heading: string,
+  filePath: string,
+  projectRoot?: string,
+): void {
+  let readPath = filePath
+  if (projectRoot !== undefined) {
+    if (!configEntryExists(filePath)) return
+    const contained = resolveProjectFileInRepository(filePath, projectRoot)
+    if (contained.kind === 'withheld') {
+      console.log(`\n${heading}:`)
+      console.log(
+        `  ${displaySafe(filePath)} is not shown: ${contained.reason}`,
+      )
+      return
+    }
+    // Read the resolved path, so a link swapped in after the check is not followed.
+    readPath = contained.realPath
+  }
+  const read = readTextBounded(readPath, MAX_PROJECT_CONFIG_BYTES)
   if (read.kind === 'absent') return
   console.log(`\n${heading}:`)
   if (read.kind === 'text') {
-    console.log(read.content)
+    console.log(
+      projectRoot === undefined
+        ? read.content
+        : stripTerminalControls(read.content),
+    )
     return
   }
   console.log(`  ${displaySafe(filePath)} could not be shown: ${read.reason}`)
@@ -1139,7 +1217,11 @@ function configShow(options: { json: boolean }): void {
     console.log(`  Custom local config:    ${locations.customLocal}`)
   }
 
-  printConfigFile('Project configuration', paths.projectConfig)
+  printConfigFile(
+    'Project configuration',
+    paths.projectConfig,
+    paths.projectRoot,
+  )
   printConfigFile('User configuration', paths.userConfig)
 
   // A failed load exits 1 in both renderings: the same failure must not

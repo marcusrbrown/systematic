@@ -1358,6 +1358,202 @@ describe('cli config show', () => {
     }
   })
 
+  // Issue #1314: the project file's text is printed only when it resolves
+  // inside the checkout, with terminal control characters stripped. The user
+  // file is the user's own and prints as it always has.
+  describe('project file containment', () => {
+    const MARKER = 'OUTSIDE-MARKER-DO-NOT-PRINT-7d3f'
+
+    function makeCheckout(root: string): { home: string; project: string } {
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      fs.mkdirSync(path.join(project, '.git'), { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      return { home, project }
+    }
+
+    function controlCodes(text: string): number[] {
+      const found: number[] = []
+      for (const char of text) {
+        const code = char.codePointAt(0) ?? 0
+        const isControl =
+          (code <= 0x1f && code !== 0x0a && code !== 0x09) ||
+          (code >= 0x7f && code <= 0x9f)
+        if (isControl) found.push(code)
+      }
+      return found
+    }
+
+    it('does not print a project file symlinked into a sibling directory that shares the checkout name as a prefix', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        const siblingDir = `${project}-evil`
+        const target = path.join(siblingDir, 'secret.jsonc')
+        fs.mkdirSync(siblingDir, { recursive: true })
+        fs.writeFileSync(target, `${MARKER}\n`)
+        fs.symlinkSync(target, path.join(project, '.systematic.jsonc'))
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.stdout).not.toContain(MARKER)
+        expect(result.stdout).toContain(
+          'is not shown: it resolves outside the repository',
+        )
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('does not print a project file symlinked to a file outside the checkout', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        const outsideDir = path.join(root, 'outside-secrets')
+        const target = path.join(outsideDir, 'target-secret.txt')
+        fs.mkdirSync(outsideDir, { recursive: true })
+        fs.writeFileSync(target, `${MARKER}\n`)
+        fs.symlinkSync(target, path.join(project, '.systematic.jsonc'))
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.stdout).not.toContain(MARKER)
+        expect(result.stderr).not.toContain(MARKER)
+        expect(result.stdout).not.toContain('target-secret')
+        expect(result.stdout).not.toContain(outsideDir)
+        expect(result.stderr).not.toContain('target-secret')
+        expect(result.stdout).toContain('Project configuration:')
+        expect(result.stdout).toContain(
+          'is not shown: it resolves outside the repository',
+        )
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('does not print a project file symlinked to a dangling target, or name it', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        const target = path.join(root, 'missing-target-secret.txt')
+        fs.symlinkSync(target, path.join(project, '.systematic.jsonc'))
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.stdout).not.toContain('missing-target-secret')
+        expect(result.stdout).toContain('Project configuration:')
+        expect(result.stdout).toContain(
+          'is not shown: it could not be resolved',
+        )
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('prints a project file symlinked to a file inside the checkout', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        fs.mkdirSync(path.join(project, 'config'), { recursive: true })
+        fs.writeFileSync(
+          path.join(project, 'config/shared.jsonc'),
+          `{\n  "profile": "${MARKER}"\n}\n`,
+        )
+        fs.symlinkSync(
+          path.join(project, 'config/shared.jsonc'),
+          path.join(project, '.systematic.jsonc'),
+        )
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.stdout).toContain('Project configuration:')
+        expect(result.stdout).toContain(`"profile": "${MARKER}"`)
+        expect(result.stdout).not.toContain('is not shown')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('prints a regular project file', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        fs.writeFileSync(
+          path.join(project, '.systematic.jsonc'),
+          `{\n  "profile": "${MARKER}"\n}\n`,
+        )
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.stdout).toContain('Project configuration:')
+        expect(result.stdout).toContain(`"profile": "${MARKER}"`)
+        expect(result.stdout).not.toContain('is not shown')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('strips control characters and escape sequences from a project file, keeping newlines', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        fs.writeFileSync(
+          path.join(project, '.systematic.jsonc'),
+          [
+            '{',
+            '  // \u001b[31mRED-COMMENT\u001b[0m',
+            '  "profile": "a\u0007b\u0085c\u007fd",',
+            '  // \u009b32mGREEN-C1',
+            '  // \u001b]0;TITLE-HIJACK\u0007after-osc',
+            '\t"agents": {} // tab kept\r',
+            '}',
+            '',
+          ].join('\n'),
+        )
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(controlCodes(result.stdout)).toEqual([])
+        expect(result.stdout).not.toContain('[31m')
+        expect(result.stdout).not.toContain('[0m')
+        expect(result.stdout).not.toContain('32m')
+        expect(result.stdout).toContain('GREEN-C1')
+        expect(result.stdout).not.toContain('TITLE-HIJACK')
+        expect(result.stdout).toContain('RED-COMMENT')
+        expect(result.stdout).toContain('after-osc')
+        expect(result.stdout).toContain('"profile": "abcd",')
+        expect(result.stdout).toContain('\n\t"agents": {} // tab kept\n}\n')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('still prints a user config that is a symlink from elsewhere', () => {
+      const root = mkTempCwd()
+      try {
+        const { home, project } = makeCheckout(root)
+        const dotfiles = path.join(root, 'dotfiles')
+        fs.mkdirSync(dotfiles, { recursive: true })
+        fs.writeFileSync(
+          path.join(dotfiles, 'systematic.json'),
+          `{ "profile": "${MARKER}" }`,
+        )
+        fs.mkdirSync(path.join(home, '.config/opencode'), { recursive: true })
+        fs.symlinkSync(
+          path.join(dotfiles, 'systematic.json'),
+          path.join(home, '.config/opencode/systematic.json'),
+        )
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.stdout).toContain('User configuration:')
+        expect(result.stdout).toContain(`{ "profile": "${MARKER}" }`)
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  })
+
   // A project config carrying a trust-protected overlay field must NOT make
   // `loadConfigWithSources` throw (issue #992): that used to drop the
   // plugin's entire config contribution (all bundled agents) from a single
@@ -2632,7 +2828,14 @@ describe('cli config show: locations and search', () => {
         const file = path.join(box.project, '.systematic.json')
         fs.symlinkSync(path.join(box.project, 'no-such-target'), file)
         const result = runCli(['config', 'show'], box.project, box.env)
-        expectNote(result, 'Project configuration', file, 'unable to read file')
+        // The project file is repository-controlled, so the dump withholds a
+        // link it cannot resolve (#1314) instead of attempting the read.
+        expect(result.stdout).toContain('\nProject configuration:\n')
+        expect(result.stdout).toContain(
+          `  ${file} is not shown: it could not be resolved\n`,
+        )
+        expect(result.stdout).toContain('\nSearch:')
+        expect(result.stdout).not.toContain('no-such-target')
       } finally {
         fs.rmSync(box.root, { recursive: true, force: true })
       }
