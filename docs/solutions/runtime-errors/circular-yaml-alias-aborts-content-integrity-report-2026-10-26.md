@@ -37,7 +37,7 @@ YAML anchors and aliases can make a value that contains itself. `superseded_by: 
 
 ## Solution
 
-Two helpers describe a parsed value without recursing into it. Every message that echoes a parsed value whose type is not yet known goes through them (`scripts/content-integrity.ts:1587-1604`):
+Two helpers describe a parsed value without recursing into it. Every message that echoes a parsed value whose type is not yet known goes through them (`scripts/content-integrity.ts:1593-1610`):
 
 ```ts
 function describeYamlValueType(value: unknown): string {
@@ -56,7 +56,7 @@ function describeYamlValue(value: unknown): string {
 }
 ```
 
-Strings are still quoted, with JSON escaping, so an author sees the value they wrote. Every other value is named by its type. The required-field, enum and date messages use `describeYamlValue`. The lifecycle check's not-a-string message for `superseded_by` uses `describeYamlValueType`, because it is only reached for a non-string value (`scripts/content-integrity.ts:1955-1960`).
+Strings are still quoted, with JSON escaping, so an author sees the value they wrote. Every other value is named by its type. The required-field, enum and date messages use `describeYamlValue`. The lifecycle check's not-a-string message for `superseded_by` uses `describeYamlValueType`, because it is only reached for a non-string value (`scripts/content-integrity.ts:1968-1972`).
 
 ## Why This Works
 

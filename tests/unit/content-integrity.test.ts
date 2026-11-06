@@ -21,6 +21,7 @@ import {
   checkFrontmatter,
   checkFrontmatterParseSafety,
   checkHookParity,
+  checkIdeationFrontmatterParse,
   checkLibModuleTableCompleteness,
   checkMigratedSkillIdentifiers,
   checkPlanFrontmatterParse,
@@ -1290,6 +1291,124 @@ describe('checkContentIntegrity — plan frontmatter parse wiring', () => {
       expect(result.planFrontmatterViolations).toMatchObject([
         { kind: 'unparseable-frontmatter' },
       ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkIdeationFrontmatterParse', () => {
+  const IDEATION = 'docs/ideation/2026-01-01-open-ideation.md'
+
+  test('passes a good ideation doc', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        IDEATION,
+        '---\ntitle: "Ideation: x"\nstatus: active\n---\n\n## Ideas\n',
+      )
+
+      expect(checkIdeationFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a broken ideation doc and names the file', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        IDEATION,
+        '---\ntitle: ideation: x\nstatus: active\n---\n\n## Ideas\n',
+      )
+
+      const violations = checkIdeationFrontmatterParse(root)
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'unparseable-frontmatter',
+        file: IDEATION,
+      })
+      expect(violations[0]?.message).toContain(IDEATION)
+      expect(violations[0]?.message).toContain('title')
+      expect(violations[0]?.message).toContain('quote')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('skips README.md and anything under _archived, as search does', () => {
+    const root = makeFixtureRepo()
+    try {
+      const broken = '---\ntitle: feat: x\ntags: [unclosed\n---\n'
+      writeFile(root, 'docs/ideation/README.md', broken)
+      writeFile(root, 'docs/ideation/_archived/old.md', broken)
+      writeFile(root, 'docs/ideation/nested/_archived/older.md', broken)
+
+      expect(checkIdeationFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not read docs/plans', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-feat-example-plan.md',
+        '---\ntitle: feat: x\n---\n',
+      )
+
+      expect(checkIdeationFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports nothing when docs/ideation does not exist', () => {
+    const root = makeFixtureRepo()
+    try {
+      expect(checkIdeationFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkPlanFrontmatterParse — search exclusions', () => {
+  test('skips README.md and anything under _archived, as search does', () => {
+    const root = makeFixtureRepo()
+    try {
+      const broken = '---\ntitle: feat: x\ntags: [unclosed\n---\n'
+      writeFile(root, 'docs/plans/README.md', broken)
+      writeFile(root, 'docs/plans/_archived/old-plan.md', broken)
+
+      expect(checkPlanFrontmatterParse(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — ideation frontmatter parse wiring', () => {
+  test('surfaces an unparseable ideation doc in the aggregate result', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/ideation/2026-01-01-open-ideation.md',
+        '---\ntitle: ideation: x\n---\n',
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.ideationFrontmatterViolations).toMatchObject([
+        { kind: 'unparseable-frontmatter' },
+      ])
+      expect(result.planFrontmatterViolations).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

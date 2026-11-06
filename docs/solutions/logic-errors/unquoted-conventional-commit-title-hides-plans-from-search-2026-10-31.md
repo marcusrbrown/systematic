@@ -59,9 +59,9 @@ The template made the failure likely, not certain, because an unquoted placehold
 
 ## Prevention
 
-- `checkPlanFrontmatterParse` fails any plan under `docs/plans/` whose frontmatter does not parse, and `hasUnquotedColonTitle` makes the message name the `title` field when that is the cause (`scripts/content-integrity.ts:3490-3539`). The content-integrity run calls it at `scripts/content-integrity.ts:4113`, and its unit tests start at `tests/unit/content-integrity.test.ts:1088`.
+- `checkPlanFrontmatterParse` fails any plan under `docs/plans/` whose frontmatter does not parse, and `hasUnquotedColonTitle` makes the message name the `title` field when that is the cause (`scripts/content-integrity.ts:3496-3579`). The content-integrity run calls it at `scripts/content-integrity.ts:4161`, and its unit tests start at `tests/unit/content-integrity.test.ts:1089`.
 - `tests/unit/ce-plan-template-contract.test.ts:30-50` asserts that the template title starts with a double quote, and that a `feat: Add x` title substituted into the template parses back unchanged.
-- Skill frontmatter (`scripts/content-integrity.ts:1106`) and solution frontmatter (`scripts/content-integrity.ts:1739`) already had a parse gate. Plans were the gap.
+- Skill frontmatter (`scripts/content-integrity.ts:1112`) and solution frontmatter (`scripts/content-integrity.ts:1745`) already had a parse gate. Plans were the gap.
 - Open item: brainstorm and ideation docs have no parse gate, and search skips them the same way. This was not checked for broken files.
 
 ## Related Issues

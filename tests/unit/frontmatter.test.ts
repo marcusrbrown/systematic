@@ -338,4 +338,51 @@ describe('extractFrontmatterBlock', () => {
     const block = extractFrontmatterBlock(content)
     expect(block).toBe('meta:\n  note: cache miss # under load')
   })
+
+  // The closing `---` must be a whole line. Pinning it as the tail of a value
+  // is what tells a whole-line match from a substring match.
+  describe('closing delimiter is a whole line', () => {
+    test('does not close the block on --- in the middle of a value', () => {
+      const content = '---\ntitle: a---b\nstatus: active\n---\nBody'
+      expect(extractFrontmatterBlock(content)).toBe(
+        'title: a---b\nstatus: active',
+      )
+    })
+
+    test('does not close the block on --- at the end of a value', () => {
+      const content = '---\ntitle: uses ---\nstatus: active\n---\nBody'
+      expect(extractFrontmatterBlock(content)).toBe(
+        'title: uses ---\nstatus: active',
+      )
+    })
+
+    test('does not close the block on --- at the end of a value with CRLF', () => {
+      const content = '---\r\ntitle: uses ---\r\nstatus: active\r\n---\r\nBody'
+      expect(extractFrontmatterBlock(content)).toBe(
+        'title: uses ---\r\nstatus: active',
+      )
+    })
+
+    test('returns an empty string for empty frontmatter with CRLF', () => {
+      expect(extractFrontmatterBlock('---\r\n---\r\nBody')).toBe('')
+    })
+
+    test('returns an empty string for empty frontmatter with no trailing newline', () => {
+      expect(extractFrontmatterBlock('---\n---')).toBe('')
+    })
+
+    test('returns the block when the file ends right after the closing delimiter and a value holds ---', () => {
+      expect(extractFrontmatterBlock('---\ntitle: a---b\n---')).toBe(
+        'title: a---b',
+      )
+    })
+
+    test('returns null when --- only appears inside a value and never on its own line', () => {
+      expect(extractFrontmatterBlock('---\ntitle: a---b\nBody')).toBeNull()
+    })
+
+    test('returns null for content with no frontmatter even if it contains ---', () => {
+      expect(extractFrontmatterBlock('# Heading\n\n---\n\ntext')).toBeNull()
+    })
+  })
 })

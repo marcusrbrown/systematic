@@ -143,7 +143,7 @@ moments later:
 
 ```text
 ReferenceError: isResolvableDispatchIdentifier is not defined
-    at findNearMissAgentStem (scripts/content-integrity.ts:1226:7)
+    at findNearMissAgentStem (scripts/content-integrity.ts:1232:7)
 ```
 
 An undefined function is the most basic thing a typechecker catches. Getting

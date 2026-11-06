@@ -112,6 +112,7 @@ import {
   REMOVED_BUNDLED_AGENT_NAMES,
   REMOVED_BUNDLED_SKILL_NAMES,
 } from '../src/lib/removed-names.js'
+import { KIND_TABLE } from '../src/lib/search-corpus.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
 import { isDiscoverableMarkdown, walkDir } from '../src/lib/walk-dir.js'
 
@@ -346,11 +347,14 @@ export interface StalePlanStatusViolation {
   message: string
 }
 
-export interface PlanFrontmatterViolation {
+export interface DocFrontmatterViolation {
   kind: 'unparseable-frontmatter'
   file: string
   message: string
 }
+
+export type PlanFrontmatterViolation = DocFrontmatterViolation
+export type IdeationFrontmatterViolation = DocFrontmatterViolation
 
 export interface CheckResult {
   rootDir: string
@@ -380,6 +384,7 @@ export interface CheckResult {
   libModuleTableCompletenessViolations: LibModuleTableCompletenessViolation[]
   stalePlanStatusViolations: StalePlanStatusViolation[]
   planFrontmatterViolations: PlanFrontmatterViolation[]
+  ideationFrontmatterViolations: IdeationFrontmatterViolation[]
   dispatchArgumentViolations: DispatchArgumentViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -641,6 +646,7 @@ export const CODEMAP_EXCLUSION_HEADING = '## Codemap exclusions'
 export const LIB_MODULE_TABLE_DOCUMENT = 'src/lib/AGENTS.md'
 export const LIB_MODULE_TABLE_EXCLUSION_HEADING = '## Module table exclusions'
 export const PLANS_DIR = 'docs/plans'
+export const IDEATION_DIR = 'docs/ideation'
 
 const HOOK_ASSERTION_REGEX =
   /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+))?\s+(?:OpenCode\s+)?hooks?\b/i
@@ -3500,22 +3506,48 @@ function hasUnquotedColonTitle(content: string): boolean {
 }
 
 /**
- * Every file under `docs/plans/` must have frontmatter that parses, because
- * search skips a document it cannot parse. The parser reports failure only as
- * a boolean, so the remediation always says to quote values, and it names the
- * `title` field only when the file has an unquoted title holding a colon and
- * a space. A file with no frontmatter is not a violation.
+ * True when search would never index `relPath`: a README, or anything under an
+ * excluded directory such as `_archived/`. Reads the same `KIND_TABLE` entry
+ * the search loader walks with, so the two cannot drift.
+ */
+function isExcludedFromSearch(
+  kind: 'plan' | 'ideation',
+  docsDir: string,
+  relPath: string,
+): boolean {
+  const spec: {
+    excludedFiles: readonly string[]
+    excludedDirs: readonly string[]
+  } = KIND_TABLE[kind]
+  const segments = path.relative(docsDir, relPath).split(path.sep)
+  const fileName = (segments.pop() ?? '').toLowerCase()
+  return (
+    spec.excludedFiles.includes(fileName) ||
+    segments.some((segment) => spec.excludedDirs.includes(segment))
+  )
+}
+
+/**
+ * Every file search indexes under a doc kind's directory must have frontmatter
+ * that parses, because search skips a document it cannot parse. The parser
+ * reports failure only as a boolean, so the remediation always says to quote
+ * values, and it names the `title` field only when the file has an unquoted
+ * title holding a colon and a space. A file with no frontmatter is not a
+ * violation. Files search excludes (READMEs, `_archived/`) are not checked.
  *
  * Normalization matches the search loader: strip a leading BOM and make sure
  * the content ends in a newline, so a closing `---` on the last line counts.
  */
-export function checkPlanFrontmatterParse(
+function checkDocFrontmatterParse(
   rootDir: string,
-  plansDir = PLANS_DIR,
-): PlanFrontmatterViolation[] {
-  const violations: PlanFrontmatterViolation[] = []
+  kind: 'plan' | 'ideation',
+  docsDir: string,
+): DocFrontmatterViolation[] {
+  const violations: DocFrontmatterViolation[] = []
 
-  for (const relPath of collectPlanFiles(rootDir, plansDir)) {
+  for (const relPath of collectPlanFiles(rootDir, docsDir)) {
+    if (isExcludedFromSearch(kind, docsDir, relPath)) continue
+
     const raw = readFileSafe(path.join(rootDir, relPath))
     if (raw === null) continue
 
@@ -3536,6 +3568,22 @@ export function checkPlanFrontmatterParse(
   }
 
   return violations
+}
+
+/** Every indexed file under `docs/plans/` must have frontmatter that parses. */
+export function checkPlanFrontmatterParse(
+  rootDir: string,
+  plansDir = PLANS_DIR,
+): PlanFrontmatterViolation[] {
+  return checkDocFrontmatterParse(rootDir, 'plan', plansDir)
+}
+
+/** Every indexed file under `docs/ideation/` must have frontmatter that parses. */
+export function checkIdeationFrontmatterParse(
+  rootDir: string,
+  ideationDir = IDEATION_DIR,
+): IdeationFrontmatterViolation[] {
+  return checkDocFrontmatterParse(rootDir, 'ideation', ideationDir)
 }
 
 /**
@@ -4111,6 +4159,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     checkLibModuleTableCompleteness(rootDir)
   const stalePlanStatusViolations = checkStalePlanStatus(rootDir)
   const planFrontmatterViolations = checkPlanFrontmatterParse(rootDir)
+  const ideationFrontmatterViolations = checkIdeationFrontmatterParse(rootDir)
   const dispatchArgumentViolations = checkDispatchArguments(
     rootDir,
     targets.markdown,
@@ -4149,6 +4198,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     libModuleTableCompletenessViolations,
     stalePlanStatusViolations,
     planFrontmatterViolations,
+    ideationFrontmatterViolations,
     dispatchArgumentViolations,
     exemptHits,
     scanStats: {
@@ -4219,7 +4269,14 @@ function printResult(result: CheckResult, verbose: boolean): void {
     result.libModuleTableCompletenessViolations,
   )
   printStalePlanStatusViolations(result.stalePlanStatusViolations)
-  printPlanFrontmatterViolations(result.planFrontmatterViolations)
+  printDocFrontmatterViolations(
+    result.planFrontmatterViolations,
+    'Plan frontmatter parse violations',
+  )
+  printDocFrontmatterViolations(
+    result.ideationFrontmatterViolations,
+    'Ideation frontmatter parse violations',
+  )
   printDispatchArgumentViolations(result.dispatchArgumentViolations)
 
   if (totalViolations(result) === 0) {
@@ -4521,13 +4578,12 @@ function printStalePlanStatusViolations(
   }
 }
 
-function printPlanFrontmatterViolations(
-  violations: readonly PlanFrontmatterViolation[],
+function printDocFrontmatterViolations(
+  violations: readonly DocFrontmatterViolation[],
+  heading: string,
 ): void {
   if (violations.length === 0) return
-  process.stderr.write(
-    `\nPlan frontmatter parse violations (${violations.length}):\n`,
-  )
+  process.stderr.write(`\n${heading} (${violations.length}):\n`)
   for (const violation of violations) {
     process.stderr.write(`  [${violation.kind}] ${violation.message}\n`)
   }
@@ -4559,6 +4615,7 @@ function totalViolations(result: CheckResult): number {
     result.libModuleTableCompletenessViolations.length +
     result.stalePlanStatusViolations.length +
     result.planFrontmatterViolations.length +
+    result.ideationFrontmatterViolations.length +
     result.dispatchArgumentViolations.length
   )
 }
