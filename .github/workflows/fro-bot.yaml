@@ -284,6 +284,9 @@ env:
        If security advisory/alert data is unavailable to FRO_BOT_PAT or `gh`,
        skip this category and note "security alerts unavailable" under
        "Needs Human Attention". Do not guess.
+       Secret scanning alerts are not visible to FRO_BOT_PAT by design (the
+       API answers 404). Do not query them and do not report the 404; secret
+       scanning and push protection are enabled and owned by the maintainer.
 
     3. REACTIVE ISSUE HEALING (DAILY SCHEDULE OR AUTOHEAL DISPATCH ONLY)
        On the daily schedule or a workflow_dispatch with mode=autoheal, scan
@@ -362,7 +365,9 @@ env:
        f. `bun run surfaces:drift` — 0 drift on every surface. Run this
           before `docs:verify`, which regenerates the config reference and
           the schema and would hide their drift.
-       g. `bun run docs:verify` — completes without error.
+       g. `bun run docs:verify` — completes without error. Without GH_TOKEN
+          the release-notes generator writes a stub page; that is expected
+          here and is not a finding (the docs deploy workflow passes a token).
        h. Node ESM smoke test:
           `node --input-type=module -e "import('./dist/index.js').then(m => console.log(Object.keys(m).sort()))"`
           — exports only `['default']` (regression contract from v2.5.2/v2.12.2;

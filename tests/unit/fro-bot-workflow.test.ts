@@ -1017,6 +1017,15 @@ describe('Fro Bot rotating daily report issue', () => {
     ])
   })
 
+  test('treats known environment gaps as expected, not findings', () => {
+    expectPromptFragments(autohealPromptText(), [
+      'secret scanning alerts are not visible to fro_bot_pat by design',
+      'do not query them and do not report the 404',
+      'the release-notes generator writes a stub page; that is expected',
+      'is not a finding',
+    ])
+  })
+
   test('drops the perpetual-issue model', () => {
     const prompt = autohealPromptText()
 
