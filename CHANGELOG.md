@@ -4,6 +4,28 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.4](https://github.com/marcusrbrown/systematic/compare/v3.31.3...v3.31.4) (2026-11-06)
+
+### Bug Fixes
+
+* keep a broken project config from stopping the plugin ([#1319](https://github.com/marcusrbrown/systematic/issues/1319)) ([446f7cf](https://github.com/marcusrbrown/systematic/commit/446f7cf3a2373b9a28414ee7b1d47b09250ccdcd))
+
+### Documentation
+
+* describe the five config layers and the filled v2 installers ([#1311](https://github.com/marcusrbrown/systematic/issues/1311)) ([2aaa973](https://github.com/marcusrbrown/systematic/commit/2aaa973c9e37cc908286589267b848f37dd310a9))
+* **solutions:** mark the removed converter as history in import learnings ([#1308](https://github.com/marcusrbrown/systematic/issues/1308)) ([34b6a2a](https://github.com/marcusrbrown/systematic/commit/34b6a2a4ba4654508d42783fc11bbe6771e19f3d))
+
+### Continuous Integration
+
+* **fro-bot:** rotate a daily report issue and harden the scheduled run ([#1309](https://github.com/marcusrbrown/systematic/issues/1309)) ([a52278f](https://github.com/marcusrbrown/systematic/commit/a52278fcaf5d3a046d40dd27480d0a46410df2c7))
+* **fro-bot:** stop reporting expected secret-scanning and docs-stub gaps ([#1312](https://github.com/marcusrbrown/systematic/issues/1312)) ([f47e2dd](https://github.com/marcusrbrown/systematic/commit/f47e2dd6fb1398a9052ca8c4a52b0133484e15a8))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.135.1 ([#1315](https://github.com/marcusrbrown/systematic/issues/1315)) ([7a8b234](https://github.com/marcusrbrown/systematic/commit/7a8b23488b927247aad1592acd64b6e85ba91611))
+* fix the ensure-ignore test timeout and solutions markdownlint errors ([#1316](https://github.com/marcusrbrown/systematic/issues/1316)) ([0e9a98f](https://github.com/marcusrbrown/systematic/commit/0e9a98f7ba78cb2b403af2c7f2c2e8b63f86d250))
+* **scripts:** anchor the frontmatter extractor and gate ideation doc parsing ([#1317](https://github.com/marcusrbrown/systematic/issues/1317)) ([53a3d3f](https://github.com/marcusrbrown/systematic/commit/53a3d3f0d3e52fe50249efe149d563799ad7ad5f))
+
 ## [3.31.3](https://github.com/marcusrbrown/systematic/compare/v3.31.2...v3.31.3) (2026-11-05)
 
 ### Bug Fixes
