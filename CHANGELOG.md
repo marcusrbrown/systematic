@@ -4,6 +4,17 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.6](https://github.com/marcusrbrown/systematic/compare/v3.31.5...v3.31.6) (2026-11-07)
+
+### Bug Fixes
+
+* **security:** reject ambiguous IPv4 literals in tooling ([#1326](https://github.com/marcusrbrown/systematic/issues/1326)) ([86d204b](https://github.com/marcusrbrown/systematic/commit/86d204b008777d560141d0e2446fa6a61527fd29))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.136.0 ([#1323](https://github.com/marcusrbrown/systematic/issues/1323)) ([57ebe34](https://github.com/marcusrbrown/systematic/commit/57ebe348e9a0e3872505eb90e67c1f4f516604f6))
+* stop loading the plugin from source in this repository ([#1324](https://github.com/marcusrbrown/systematic/issues/1324)) ([020ed87](https://github.com/marcusrbrown/systematic/commit/020ed87b005385c78123acd85d089ede8c016157))
+
 ## [3.31.5](https://github.com/marcusrbrown/systematic/compare/v3.31.4...v3.31.5) (2026-11-06)
 
 ### Bug Fixes
