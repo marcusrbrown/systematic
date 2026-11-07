@@ -64,7 +64,7 @@ function createHost(
     },
     agent: { async transform() {} },
     skill: { async transform() {} },
-    tool: { async transform() {} },
+    tool: { async transform() {}, async hook() {} },
     permission: { async assert() {} },
     session: {
       async hook(name: string, callback: PromptHook) {

@@ -10,6 +10,7 @@ export interface PermissionConfig {
   edit?: PermissionSetting
   bash?: PermissionSetting | Record<string, PermissionSetting>
   webfetch?: PermissionSetting
+  websearch?: PermissionSetting
   doom_loop?: PermissionSetting
   external_directory?: PermissionSetting
   task?: PermissionSetting
@@ -65,6 +66,7 @@ function buildPermissionObject(
   edit: PermissionSetting | null | undefined,
   bash: PermissionConfig['bash'] | null | undefined,
   webfetch: PermissionSetting | null | undefined,
+  websearch: PermissionSetting | null | undefined,
   doom_loop: PermissionSetting | null | undefined,
   external_directory: PermissionSetting | null | undefined,
   task: PermissionSetting | null | undefined,
@@ -74,6 +76,7 @@ function buildPermissionObject(
   if (edit) permission.edit = edit
   if (bash) permission.bash = bash
   if (webfetch) permission.webfetch = webfetch
+  if (websearch) permission.websearch = websearch
   if (doom_loop) permission.doom_loop = doom_loop
   if (external_directory) permission.external_directory = external_directory
   if (task) permission.task = task
@@ -95,6 +98,9 @@ export function normalizePermission(
   const webfetch = extractSimplePermission(value, 'webfetch')
   if (webfetch === null) return undefined
 
+  const websearch = extractSimplePermission(value, 'websearch')
+  if (websearch === null) return undefined
+
   const doom_loop = extractSimplePermission(value, 'doom_loop')
   if (doom_loop === null) return undefined
 
@@ -114,6 +120,7 @@ export function normalizePermission(
     edit,
     bash,
     webfetch,
+    websearch,
     doom_loop,
     external_directory,
     task,

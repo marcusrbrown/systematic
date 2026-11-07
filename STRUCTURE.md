@@ -70,8 +70,8 @@ subdirectory of core modules.
 - `src/lib/opencode-v2.ts` — `setupOpenCodeV2`: the v2 adapter (one config load, one frozen
   snapshot, the agents installer, and the never-throw `createSafeGuard`)
 - `src/lib/opencode-v2-permissions.ts`, `opencode-v2-skills.ts`, `opencode-v2-commands.ts`,
-  `opencode-v2-bootstrap.ts` — the v2 permission translation and the skills, commands and
-  bootstrap installers
+  `opencode-v2-bootstrap.ts`, `opencode-v2-tool-guard.ts` — the v2 permission translation and the
+  skills, commands, bootstrap and read-only tool guard installers
 - `src/lib/skill-tool.ts` — `createSkillTool`: `systematic_skill` tool factory (and
   `createSkillToolDescriptor`, its zod-free form for v2)
 - `src/lib/skill-loader.ts` — `loadSkill`: content loading + XML wrapping

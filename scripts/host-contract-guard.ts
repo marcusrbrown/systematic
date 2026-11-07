@@ -111,13 +111,19 @@ const V1_SMOKE_FILES: readonly string[] = [
 ]
 
 /**
- * `eval-runner.test.ts` drives the eval runner, which launches the current v1
- * CLI through its own pin whatever host a job targets. It belongs to the
- * current-pin profile only: the floor job would run it against the wrong host,
- * and the v2 job would need a v1 install it does not otherwise have.
+ * Files that belong to the current-pin profile only.
+ *
+ * - `eval-runner.test.ts` drives the eval runner, which launches the current
+ *   v1 CLI through its own pin whatever host a job targets. The floor job would
+ *   run it against the wrong host, and the v2 job would need a v1 install it
+ *   does not otherwise have.
+ * - `opencode-v1-isolation.test.ts` observes the read-only researcher's tool
+ *   denies on the current v1 pin. The behavior is claimed for that pin only, so
+ *   the floor job must not run it.
  */
 const V1_CURRENT_ONLY_FILES: readonly string[] = [
   'tests/integration/eval-runner.test.ts',
+  'tests/integration/opencode-v1-isolation.test.ts',
 ]
 
 /**

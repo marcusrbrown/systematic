@@ -16,6 +16,29 @@ import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
+  CONNECT_PROBE_AGENT,
+  CONNECT_PROBE_MARKER,
+  type ConnectIsolationScript,
+  connectIsolationLayout,
+  connectObservation,
+  createConnectIsolationScript,
+  createToolHookProbe,
+  definitionNamed,
+  evaluateConnectChildAttempts,
+  evaluateConnectIsolationProof,
+  type IsolationHostTools,
+  installProbeAgent,
+  plantConnectExternalCheckout,
+  plantConnectGitRepo,
+  plantConnectIsolationFixture,
+  probeSystemMarker,
+  readConnectSideEffects,
+  readProbeDefinition,
+  startFetchCounter,
+  type ToolHookEvent,
+  withoutDenyEntries,
+} from '../helpers/connect-delegated-proof.js'
+import {
   assertDelegatedSearchProof,
   type ChatRequest,
   createDelegatedSearchScript,
@@ -31,6 +54,7 @@ import {
   messageText as proofMessageText,
   roleOf as proofRoleOf,
   researcherSystemMarker,
+  toolNamesOf,
 } from '../helpers/delegated-search-proof.js'
 import {
   buildIsolatedOpencodeEnv,
@@ -244,7 +268,7 @@ function startToolModelServer(): ToolScriptedModel {
  * The script decides each turn from the request, so the server keeps no state.
  */
 function startDelegatedSearchModel(
-  script: DelegatedSearchScript,
+  script: Pick<DelegatedSearchScript, 'respond'>,
 ): ScriptedModelServer {
   const server = Bun.serve({
     port: 0,
@@ -946,6 +970,512 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         }
         // The child was reached, so the failure is the missing allow entry.
         expect(script.observation().childRequests.length).toBeGreaterThan(0)
+      },
+      TIMEOUT_MS,
+    )
+
+    // The researcher's shell, write and web access is denied by its definition.
+    // A scripted child tries each denied tool and then reads a planted note;
+    // the proof reads the tool results, the disk and the fetch server. A
+    // control without the deny entries must fail by name. The scripted model
+    // makes every call, so this shows what the host enforces, not what a live
+    // model would choose.
+    const V2_ISOLATION_TOOLS: IsolationHostTools = {
+      shell: 'shell',
+      write: 'write',
+      edit: 'edit',
+      webfetch: 'webfetch',
+      execute: 'execute',
+      websearch: 'websearch',
+      read: 'read',
+    }
+
+    // A user's own permissive session: shell, edit, web fetch, Code Mode and
+    // the host-native tools allowed. Web search stays out because an allowed
+    // search with no integration waits a minute for its own cancel.
+    const SESSION_ALLOW_RULES = [
+      { action: 'shell', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'webfetch', resource: '*', effect: 'allow' },
+      { action: 'execute', resource: '*', effect: 'allow' },
+      { action: 'opencode_*', resource: '*', effect: 'allow' },
+    ] as const
+
+    /** The agent name the read-only guard is keyed on. */
+    const GUARDED_AGENT = 'connections-researcher'
+
+    /** The probe definition installed under the guarded agent's name. */
+    function guardedDefinition(definition: string): string {
+      return definitionNamed(definition, GUARDED_AGENT)
+    }
+
+    // Code Mode scripts: calls through the host-native `opencode` namespace,
+    // which a permission rule on the definition cannot name.
+    const NESTED_HOST_TOOLS_CODE =
+      "const out = {}; for (const [k, fn] of [['models', () => tools.opencode.models({})], ['wtList', () => tools.opencode.worktree_list({})], ['wtCreate', () => tools.opencode.worktree_create({name: 'probe-wt'})]]) { try { out[k] = JSON.stringify(await fn()).slice(0, 80) } catch (e) { out[k + 'Err'] = String(e).slice(0, 200) } } return JSON.stringify(out)"
+    const NESTED_HOST_TOOLS_CODE_WITH_FETCH = (fetchUrl: string) =>
+      `const response = await fetch(${JSON.stringify(fetchUrl)}); const fetched = await response.text(); ${NESTED_HOST_TOOLS_CODE}`
+
+    /** The `executeCode` option for the script, or nothing when the run supplies none. */
+    function resolveExecuteCode(
+      code: string | ((fetchUrl: string) => string) | undefined,
+      fetchUrl: string,
+    ): { executeCode?: string } {
+      if (code === undefined) return {}
+      return { executeCode: typeof code === 'function' ? code(fetchUrl) : code }
+    }
+
+    /** The text of each tool result the child received, in order. */
+    function childToolResults(script: ConnectIsolationScript): string[] {
+      const last = script.observation().childRequests.at(-1)
+      return (last?.messages ?? [])
+        .filter((message) => proofRoleOf(message) === 'tool')
+        .map((message) => proofMessageText(message))
+    }
+
+    /**
+     * Runs the isolation script against a v2 server. `delegated` dispatches the
+     * probe from a parent session; `direct` runs a session as the probe itself,
+     * which is where a session-level rule meets the agent's own rules.
+     */
+    async function runConnectIsolation(options: {
+      definition: string
+      mode: 'delegated' | 'direct'
+      /** The agent name to install and dispatch. Defaults to the probe's own. */
+      agentName?: string
+      /** Make the project a committed git repository, so a worktree call has a target. */
+      gitProject?: boolean
+      /** Load a plugin that records the tool hook, and optionally blocks nested calls. */
+      hookProbe?: { blockPrefixes: readonly string[] }
+      executeCode?: string | ((fetchUrl: string) => string)
+      sessionPermissions?: readonly {
+        action: string
+        resource: string
+        effect: 'allow' | 'deny' | 'ask'
+      }[]
+    }): Promise<{
+      script: ConnectIsolationScript
+      marker: string
+      finalAnswer: string | undefined
+      sideEffects: ReturnType<typeof readConnectSideEffects>
+      hookEvents: ToolHookEvent[]
+    }> {
+      const { packageDir, pluginSpec } = extractPackagedPlugin(fixture, HOST)
+      const agentName = options.agentName ?? CONNECT_PROBE_AGENT
+      installProbeAgent(packageDir, options.definition, agentName)
+      const layout = connectIsolationLayout(fixture.projectDir)
+      plantConnectIsolationFixture(layout)
+      if (options.gitProject) plantConnectGitRepo(fixture.projectDir)
+      const hookProbe =
+        options.hookProbe &&
+        createToolHookProbe(fixture.tempRoot, options.hookProbe)
+      const fetchCounter = startFetchCounter()
+      const marker = probeSystemMarker(options.definition)
+      const script = createConnectIsolationScript({
+        layout,
+        hostTools: V2_ISOLATION_TOOLS,
+        readPathKey: 'path',
+        fetchUrl: fetchCounter.url,
+        ...resolveExecuteCode(options.executeCode, fetchCounter.url),
+        dispatch: {
+          tool: 'subagent',
+          arguments: {
+            agent: agentName,
+            description: 'Read the probe note',
+            prompt: `${CHILD_PROMPT_MARK} Read the probe note and report its marker.`,
+          },
+        },
+        isChildRequest: (request) => {
+          if (options.mode === 'direct') return true
+          const user = lastUserTextOf(request)
+          return (
+            user.includes(CHILD_PROMPT_MARK) && !user.includes(PARENT_DIRECTIVE)
+          )
+        },
+      })
+      const model = startDelegatedSearchModel(script)
+      const host = await startAgentHost(
+        pluginSpec,
+        model,
+        hookProbe === undefined
+          ? {}
+          : { plugins: [pluginSpec, hookProbe.spec] },
+      )
+      let finalAnswer: string | undefined
+      try {
+        const session = await host.client.session.create({
+          location: { directory: fixture.projectDir },
+          agent: options.mode === 'direct' ? agentName : 'build',
+          model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+          ...(options.sessionPermissions !== undefined && {
+            permissions: [...options.sessionPermissions],
+          }),
+        })
+        await host.client.session.prompt({
+          sessionID: session.id,
+          text:
+            options.mode === 'direct'
+              ? `${CHILD_PROMPT_MARK} Read the probe note and report its marker.`
+              : `${PARENT_DIRECTIVE} Dispatch the researcher to read the probe note.`,
+        })
+        await host.client.session.wait({ sessionID: session.id })
+        finalAnswer = lastAssistantText(
+          await host.client.session.context({ sessionID: session.id }),
+        )
+      } finally {
+        model.stop()
+        fetchCounter.stop()
+        await host.server.stop()
+      }
+      return {
+        script,
+        marker,
+        finalAnswer,
+        sideEffects: readConnectSideEffects(layout, fetchCounter.hits()),
+        hookEvents: hookProbe?.events() ?? [],
+      }
+    }
+
+    /**
+     * Runs the probe through `opencode run --standalone`, the headless path,
+     * with the scripted parent dispatching it. The note it reads sits in a git
+     * checkout outside the project directory.
+     */
+    async function runHeadlessExternalRead(): Promise<{
+      result: Awaited<ReturnType<typeof spawnOpencodeChild>>
+      script: ConnectIsolationScript
+      sideEffects: ReturnType<typeof readConnectSideEffects>
+    }> {
+      const { packageDir, pluginSpec } = extractPackagedPlugin(fixture, HOST)
+      const definition = readProbeDefinition()
+      installProbeAgent(packageDir, definition)
+      const projectLayout = connectIsolationLayout(
+        fs.realpathSync(fixture.projectDir),
+      )
+      plantConnectIsolationFixture(projectLayout)
+      const layout = plantConnectExternalCheckout(
+        projectLayout,
+        path.join(fs.realpathSync(fixture.tempRoot), 'external-checkout'),
+      )
+      const fetchCounter = startFetchCounter()
+      const script = createConnectIsolationScript({
+        layout,
+        hostTools: V2_ISOLATION_TOOLS,
+        readPathKey: 'path',
+        fetchUrl: fetchCounter.url,
+        dispatch: {
+          tool: 'subagent',
+          arguments: {
+            agent: CONNECT_PROBE_AGENT,
+            description: 'Read the external note',
+            prompt: `${CHILD_PROMPT_MARK} Read the external note and report its marker.`,
+          },
+        },
+        isChildRequest: (request) => {
+          const user = lastUserTextOf(request)
+          return (
+            user.includes(CHILD_PROMPT_MARK) && !user.includes(PARENT_DIRECTIVE)
+          )
+        },
+      })
+      const model = startDelegatedSearchModel(script)
+      try {
+        const configContent = withScriptedProvider(
+          JSON.stringify({ plugins: [pluginSpec] }),
+          model.url,
+          HOST,
+        )
+        writeHostProjectConfig(fixture, configContent, HOST)
+        const result = await spawnOpencodeChild(
+          buildOpencodeRunArgv(
+            HOST,
+            `${PARENT_DIRECTIVE} Dispatch the researcher to read the external note.`,
+          ),
+          {
+            cwd: fixture.projectDir,
+            env: buildIsolatedOpencodeEnv(
+              fixture,
+              configContent,
+              undefined,
+              HOST,
+            ),
+            timeoutMs: TIMEOUT_MS,
+          },
+        )
+        return {
+          result,
+          script,
+          sideEffects: readConnectSideEffects(layout, fetchCounter.hits()),
+        }
+      } finally {
+        model.stop()
+        fetchCounter.stop()
+      }
+    }
+
+    // Reading another project's checkout is the researcher's whole job. A
+    // headless run must complete the read without a permission request that
+    // nobody can answer.
+    test(
+      'a headless run reads a git checkout outside the project without a permission prompt or a hang',
+      async () => {
+        const run = await runHeadlessExternalRead()
+
+        expect(run.result.exitCode).toBe(0)
+        expect(run.result.stderr).not.toMatch(/permission requested/i)
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(
+            run.script,
+            run.sideEffects,
+            run.result.stdout.trim(),
+          ),
+        )
+        expect(verdict).toEqual({ ok: true })
+      },
+      TIMEOUT_MS,
+    )
+
+    // The tool hook the read-only guard relies on. A plugin that only watches
+    // it shows what the host hands the hook, and one that throws shows what a
+    // throw does, without any Systematic guard in play (the probe agent's name
+    // is not a guarded one).
+    test(
+      'the execute.before hook sees each call with the session agent, including Code Mode calls, and a throw fails that call alone',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: readProbeDefinition(),
+          mode: 'delegated',
+          gitProject: true,
+          hookProbe: { blockPrefixes: ['opencode_'] },
+          executeCode: NESTED_HOST_TOOLS_CODE,
+        })
+
+        const seen = (tool: string) =>
+          run.hookEvents.filter((event) => event.tool === tool)
+        // Direct calls arrive with the child's agent name, also for tools the
+        // agent was never offered, and the parent's own call with its own.
+        expect(seen('subagent').map((event) => event.agent)).toEqual(['build'])
+        for (const tool of ['shell', 'write', 'edit', 'webfetch', 'read']) {
+          expect(seen(tool).map((event) => event.agent)).toEqual([
+            CONNECT_PROBE_AGENT,
+          ])
+        }
+        // Calls made from inside Code Mode reach the hook too, under the
+        // host-native names and with the same agent and session.
+        const outer = seen('execute')[0]
+        expect(outer?.agent).toBe(CONNECT_PROBE_AGENT)
+        for (const tool of [
+          'opencode_models',
+          'opencode_worktree_list',
+          'opencode_worktree_create',
+        ]) {
+          expect(seen(tool).map((event) => event.agent)).toEqual([
+            CONNECT_PROBE_AGENT,
+          ])
+          expect(seen(tool)[0]?.sessionID).toBe(outer?.sessionID)
+        }
+        // A throw reached each nested call: the script inside `execute` got an
+        // error it could catch, the host went on, no worktree was added, and
+        // the later read still returned the marker to the parent.
+        const nestedResult = childToolResults(run.script)[4] ?? ''
+        expect(nestedResult).toContain(
+          'blocked by the tool hook probe: opencode_worktree_create',
+        )
+        expect(run.sideEffects.extraWorktrees).toBe(0)
+        expect(run.finalAnswer).toContain(CONNECT_PROBE_MARKER)
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a dispatched researcher with denied shell, write and web tools is refused each one and its read reaches the parent',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: readProbeDefinition(),
+          mode: 'delegated',
+        })
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toEqual({ ok: true })
+        expect(run.sideEffects).toEqual({
+          writtenPaths: [],
+          editTargetChanged: false,
+          fetchHits: 0,
+          extraWorktrees: 0,
+        })
+        // The child that ran is the probe, not some other agent.
+        for (const child of run.script.observation().childRequests) {
+          expect(hasResearcherSystemMarker(child, run.marker)).toBe(true)
+        }
+        // The refusals are real denials: the parent is offered each tool the
+        // child lacks, so none of the names is a typo.
+        const parentOffered = toolNamesOf(
+          run.script.observation().parentRequests[0] ?? {},
+        )
+        const childOffered = toolNamesOf(
+          run.script.observation().childRequests[0] ?? {},
+        )
+        for (const denied of [
+          'shell',
+          'write',
+          'edit',
+          'webfetch',
+          'websearch',
+          'subagent',
+        ]) {
+          expect(parentOffered, `parent is offered ${denied}`).toContain(denied)
+          expect(childOffered, `child is offered ${denied}`).not.toContain(
+            denied,
+          )
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'with the deny entries removed the same script writes a file and the proof names an isolation breach',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: withoutDenyEntries(readProbeDefinition()),
+          mode: 'delegated',
+        })
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toMatchObject({ ok: false, code: 'isolation-breach' })
+        // The child was reached, so the failure is the missing deny entries and
+        // not a dispatch that never happened.
+        expect(run.script.observation().childRequests.length).toBeGreaterThan(0)
+        expect(run.sideEffects.writtenPaths.length).toBeGreaterThan(0)
+      },
+      TIMEOUT_MS,
+    )
+
+    // On the pinned v2 host a session-level allow rule is evaluated after the agent's own
+    // rules, so under last-match-wins it lifts the agent's deny: with the same
+    // definition and rules, an agent the guard does not name writes the shell
+    // marker, reaches the fetch server and adds a git worktree. This control is
+    // the "guard off" case for the proofs below.
+    test(
+      'without the guard a session-level allow lifts the definition denies and the breach reproduces',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: readProbeDefinition(),
+          mode: 'delegated',
+          gitProject: true,
+          sessionPermissions: SESSION_ALLOW_RULES,
+          executeCode: NESTED_HOST_TOOLS_CODE_WITH_FETCH,
+        })
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toMatchObject({ ok: false, code: 'isolation-breach' })
+        expect(run.sideEffects.writtenPaths).toContain(
+          connectIsolationLayout(fixture.projectDir).shellMarker,
+        )
+        expect(run.sideEffects.fetchHits).toBeGreaterThan(0)
+        expect(run.sideEffects.extraWorktrees).toBeGreaterThan(0)
+        // The child was reached, so the failure is the lifted denies.
+        expect(run.script.observation().childRequests.length).toBeGreaterThan(0)
+      },
+      TIMEOUT_MS,
+    )
+
+    // The read-only guard (installToolGuard) names this agent, so it applies.
+    test(
+      'a session-level allow does not lift the guarded researcher when it runs directly',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: guardedDefinition(readProbeDefinition()),
+          mode: 'direct',
+          agentName: GUARDED_AGENT,
+          sessionPermissions: SESSION_ALLOW_RULES,
+        })
+
+        const verdict = evaluateConnectChildAttempts({
+          ...run.script.observation(),
+          sideEffects: run.sideEffects,
+        })
+        expect(verdict).toEqual({ ok: true })
+        expect(run.sideEffects.writtenPaths).toEqual([])
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: guardedDefinition(readProbeDefinition()),
+          mode: 'delegated',
+          agentName: GUARDED_AGENT,
+          sessionPermissions: SESSION_ALLOW_RULES,
+        })
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toEqual({ ok: true })
+      },
+      TIMEOUT_MS,
+    )
+
+    // The guard alone: the definition carries no deny entry, the session allows
+    // shell, edit, web fetch, Code Mode and the host-native tools, and every
+    // tool is offered. Each call outside the allowlist is refused with the
+    // guard's own message, nothing reaches disk, the fetch server or git, and
+    // the read still returns the marker to the parent.
+    test(
+      'the guard alone refuses every call outside the allowlist, Code Mode and host-native tools included, and the read still succeeds',
+      async () => {
+        const run = await runConnectIsolation({
+          definition: guardedDefinition(
+            withoutDenyEntries(readProbeDefinition()),
+          ),
+          mode: 'delegated',
+          agentName: GUARDED_AGENT,
+          gitProject: true,
+          sessionPermissions: SESSION_ALLOW_RULES,
+          executeCode: NESTED_HOST_TOOLS_CODE_WITH_FETCH,
+        })
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toEqual({ ok: true })
+        expect(run.sideEffects).toEqual({
+          writtenPaths: [],
+          editTargetChanged: false,
+          fetchHits: 0,
+          extraWorktrees: 0,
+        })
+        // Every refused call carries the guard's message, so the guard and not
+        // an absent tool is what stopped it.
+        const results = childToolResults(run.script)
+        const refused = results.slice(0, -1)
+        expect(refused).toHaveLength(6)
+        for (const result of refused) {
+          expect(result).toContain('read-only connections-researcher agent')
+        }
+        // The tools really were on offer to the child.
+        const offered = toolNamesOf(
+          run.script.observation().childRequests[0] ?? {},
+        )
+        for (const tool of [
+          'shell',
+          'write',
+          'edit',
+          'webfetch',
+          'websearch',
+          'execute',
+        ]) {
+          expect(offered, `child is offered ${tool}`).toContain(tool)
+        }
+        expect(results.at(-1)).toContain(CONNECT_PROBE_MARKER)
       },
       TIMEOUT_MS,
     )

@@ -233,6 +233,7 @@ describe('setupOpenCodeV2 search slot', () => {
           })
           transformOrder.push(...names)
         },
+        async hook() {},
       },
     } as unknown as Plugin.Context
 

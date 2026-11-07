@@ -273,8 +273,8 @@ The origin's success criteria map as follows. The probe criterion was met on 202
 
   | Host | Mechanism | Support evidence |
   |------|-----------|------------------|
-  | OpenCode v1 1.19.5 | `permission:` mapping (`bash`, `edit`, `webfetch` deny); a string `tools:` is dropped by the converter, so it is not relied on | Scripted delegated proof with a negative control. Other v1 versions, including the old 1.18.29 floor, are not listed and are refused |
-  | OpenCode v2 2.2.5 | Frontmatter `bash: deny`, `edit: deny`, `webfetch: deny`, which the translation turns into `shell`, `edit` and `webfetch` deny rules | Scripted delegated proof with a negative control; a test asserts the translated rules contain `shell` deny |
+  | OpenCode v1 1.19.5 | `permission:` mapping: `bash`, `edit`, `webfetch`, `websearch` and `task` deny, plus `external_directory: allow` so that headless runs can read allowed projects outside the working directory. A string `tools:` is dropped by the converter, so it is not relied on. A blanket allow in the user's host config does not lift the agent's deny | Scripted delegated proof with a negative control, in `tests/integration/opencode-v1-isolation.test.ts` on the `v1-current` profile only. Other v1 versions, including the old 1.18.29 floor, are not listed and are refused |
+  | OpenCode v2 2.2.5 | The same frontmatter denies, plus Systematic's own `execute.before` tool guard (`src/lib/opencode-v2-tool-guard.ts`). The frontmatter denies alone are not enough on v2, for two reasons: a session-level allow rule overrides an agent's deny, and Code Mode `execute` reaches host-native `opencode_*` tools that can write. The guard refuses every call from `connections-researcher` outside a fixed allowlist (read, grep, glob, skill, `systematic_search`, `systematic_skill`), whether the call is direct or comes from inside Code Mode | Scripted delegated proof with session-level allows present, a negative control with the guard off, and a test asserting the translated rules contain `shell` deny. The shipped agent's `name:` is pinned to the guard's key |
   | Pi | String `tools: Read, Grep, Glob` (capitalized; any other spelling fails the whole catalog), resolved by `systematic_delegate` to read, grep and find. The agent stays out of the curated pi-subagents personas, which emit only a description and so get every tool. The Pi delegate catalog can dispatch the researcher, and that is intended | The real session builder is run with a fake runtime and the test asserts the `tools` that reach `createAgentSession`, not the mock. A Pi fixture run must complete at least one family within 20 turns, or Pi headless is unsupported |
   | Claude Code | Leads with the positive `tools: Read, Grep, Glob` allowlist; `disallowedTools` is a second layer, not the guarantee | Unsupported until Marcus runs the manual kit and Bash, Edit and Write are shown denied live. `claude plugin validate` runs in the definition test, because unparseable frontmatter fails open |
 
@@ -437,7 +437,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 
 ### Phase A: Gate and trust
 
-- [ ] U1. Host proofs and spikes
+- [x] U1. Host proofs and spikes
 
 **Goal:** Find out, per host and version, whether the researcher's shell, write and web tools can actually be denied, by observing a deny on a real host. The result gates every support claim.
 

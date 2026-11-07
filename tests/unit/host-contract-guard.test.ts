@@ -147,6 +147,14 @@ describe('PROFILE_SUITE_FILES', () => {
     )
   })
 
+  test('the researcher isolation proof runs on the current v1 pin only', () => {
+    const file = 'tests/integration/opencode-v1-isolation.test.ts'
+
+    expect(PROFILE_SUITE_FILES['v1-current']).toContain(file)
+    expect(PROFILE_SUITE_FILES['v1-floor']).not.toContain(file)
+    expect(PROFILE_SUITE_FILES.v2).not.toContain(file)
+  })
+
   test('each profile lists the files that carry its host contract', () => {
     const anchors: Record<HostContractProfile, readonly string[]> = {
       v2: [
@@ -180,12 +188,13 @@ describe('PROFILE_SUITE_FILES', () => {
     )
   })
 
-  test('the two v1 profiles run the same smoke set, and the current pin adds only the eval runner', () => {
+  test('the two v1 profiles run the same smoke set, and the current pin adds only the eval runner and the researcher isolation proof', () => {
     const floor = PROFILE_SUITE_FILES['v1-floor']
     const current = PROFILE_SUITE_FILES['v1-current']
 
     expect(current.filter((file) => !floor.includes(file))).toEqual([
       'tests/integration/eval-runner.test.ts',
+      'tests/integration/opencode-v1-isolation.test.ts',
     ])
     expect(floor.every((file) => current.includes(file))).toBe(true)
   })

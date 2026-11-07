@@ -38,12 +38,16 @@ The registered set is authoritative in `REGISTERED_PLUGIN_HOOKS` in `src/lib/ope
 A v2 host calls `setup(ctx)`. A v1 host also calls `setup` on an object default, with a reduced bridge
 that has no `ctx.location` or `ctx.session`; `setup` returns at once there. On a real v2 context,
 `setupOpenCodeV2` (`src/lib/opencode-v2.ts`) loads config once for `ctx.location.directory`, builds one
-frozen snapshot (the asset plan plus the composed bootstrap), and runs four installers in order. Each
+frozen snapshot (the asset plan plus the composed bootstrap), and runs the installers in order. Each
 installer lives in its own module and registers through a native v2 domain, not a mutable config object:
 
 - **agents** (`opencode-v2.ts`) — one `ctx.agent.transform` creates the planned agents. Permissions go
   through `opencode-v2-permissions.ts`, which turns the plan's ordered triples into v2
   `{action, resource, effect}` rules and appends them to the host defaults.
+- **toolGuard** (`opencode-v2-tool-guard.ts`) — one `ctx.tool.hook('execute.before')` refuses every tool call
+  from a read-only agent (today `connections-researcher`) that is not on a fixed allowlist: read, grep,
+  glob, skill, `systematic_search` and `systematic_skill`. The hook runs for direct calls and for calls
+  made from inside Code Mode, and a session-level allow rule does not reach it. Other agents are left alone.
 - **skills** (`opencode-v2-skills.ts`) — `ctx.skill.transform` registers the enabled bundled skills so the
   host's own `skill` tool lists and loads them. `systematic_skill` is ported through `ctx.tool.transform`
   because the host tool takes only an id and cannot pass `$ARGUMENTS`. The host cuts tool output at 2000
@@ -129,6 +133,7 @@ OpenCode v1 adapter
 
 OpenCode v2 adapter
   src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the per-domain installer slots through createSafeGuard; installAgents registers the planned agents through one ctx.agent.transform; invalid config rejects
+  src/lib/opencode-v2-tool-guard.ts — installToolGuard: one execute.before hook that refuses any tool call from a read-only agent outside a fixed allowlist, direct or from Code Mode, whatever the session's permission rules say
   src/lib/opencode-v2-skills.ts — installSkills: registers the enabled bundled skills via ctx.skill.transform, ports systematic_skill through ctx.tool.transform, and restores the host-truncated skill output in the context hook
   src/lib/opencode-v2-commands.ts — installCommands: registers the planned commands through ctx.command.transform; expands arguments and submits one prompt on the invoking session; refuses a command that declares agent, model or subtask, which v2 plugin commands cannot route; never runs !-backtick blocks
   src/lib/opencode-v2-bootstrap.ts — installBootstrap: puts the composed bootstrap as one keyed instruction entry per session from the prompt hook; OPENCODE_V2_USAGE_TEMPLATE names only tools registered on v2; an entry over 256 KiB is skipped with a diagnostic
@@ -203,6 +208,7 @@ Key symbols:
 | `systematicPlugin` | `src/index.ts` | The default export: a plain object with `id`, `setup` (v2 entry) and `server` (v1 entry) |
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
 | `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots behind a never-throw guard |
+| `installToolGuard` | `src/lib/opencode-v2-tool-guard.ts` | OpenCode v2 read-only tool guard: an allowlist enforced in the `execute.before` hook for named agents |
 | `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration |
 | `installCommands` | `src/lib/opencode-v2-commands.ts` | OpenCode v2 commands: argument expansion, one prompt per invocation, refusal of routing fields |
 | `installBootstrap` | `src/lib/opencode-v2-bootstrap.ts` | OpenCode v2 bootstrap: one instruction entry per session, put from the prompt hook |
@@ -326,6 +332,7 @@ OpenCode v2 loads plugin
             ├─ loadConfigWithSources(ctx.location.directory)  — once; invalid config rejects here
             ├─ buildAssetPlan + composeBootstrapContent       — one frozen snapshot
             ├─ installAgents     → ctx.agent.transform   (+ opencode-v2-permissions.ts)
+            ├─ installToolGuard  → ctx.tool.hook('execute.before')
             ├─ installSkills     → ctx.skill.transform, ctx.tool.transform, session.hook('context')
             ├─ installCommands   → ctx.command.transform
             └─ installBootstrap  → session.hook('prompt') → instructions.entry.put

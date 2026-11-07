@@ -85,6 +85,7 @@ function createSkillsContext(
       async transform(callback: (editor: FakeToolEditor) => void) {
         toolTransforms.push(callback)
       },
+      async hook() {},
     },
     permission: {
       async assert(call: AssertCall) {

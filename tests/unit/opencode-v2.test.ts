@@ -62,7 +62,7 @@ function createFakeContext(directory: string | undefined): FakeContext {
       },
       async transform() {},
     },
-    tool: { async transform() {} },
+    tool: { async transform() {}, async hook() {} },
     agent: {
       transform(callback: (editor: FakeEditor) => unknown) {
         transforms.push(callback)

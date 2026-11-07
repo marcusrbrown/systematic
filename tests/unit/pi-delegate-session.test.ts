@@ -14,7 +14,10 @@ import {
   createDelegateSessionWith,
   type PiDelegateSessionRuntime,
 } from '../../src/lib/pi-delegate-session.js'
-import { DELEGATE_TOOL_NAME } from '../../src/lib/pi-delegate-tool.js'
+import {
+  createPiDelegateTool,
+  DELEGATE_TOOL_NAME,
+} from '../../src/lib/pi-delegate-tool.js'
 import { SEARCH_TOOL_NAME } from '../../src/lib/search-core.js'
 import { createPiSearchTool } from '../../src/lib/search-tool.js'
 
@@ -525,5 +528,121 @@ describe('systematic_delegate child-session boundary: noExtensions + re-entry gu
     expect(() => buildAgentCatalog(dir)).toThrow(
       /Unknown declared tool "systematic_delegate"/,
     )
+  })
+})
+
+/**
+ * The researcher's tools on the Pi path, observed where they leave Systematic:
+ * the `tools` handed to `createAgentSession`. The run goes through the real
+ * catalog builder, the real delegate tool and the real session builder; only
+ * the Pi runtime underneath is a fake that records what it was asked for.
+ */
+describe('researcher definition on the Pi delegate path', () => {
+  const PROBE_DEFINITION = fs.readFileSync(
+    path.join(
+      import.meta.dirname,
+      '../fixtures/connect-isolation/researcher-probe.md',
+    ),
+    'utf8',
+  )
+
+  function createRecordingRuntime(): {
+    runtime: PiDelegateSessionRuntime
+    sessionOptions: CreateAgentSessionOptions[]
+  } {
+    const sessionOptions: CreateAgentSessionOptions[] = []
+    const { runtime } = createFakeRuntime()
+    return {
+      sessionOptions,
+      runtime: {
+        ...runtime,
+        createAgentSession: async (options) => {
+          sessionOptions.push(options)
+          const session = {
+            subscribe: () => () => {},
+            prompt: async () => {},
+            abort: async () => {},
+            dispose: () => {},
+            getLastAssistantText: () => 'found it',
+          }
+          return {
+            session,
+            extensionsResult: { extensions: [], errors: [] },
+          } as unknown as CreateAgentSessionResult
+        },
+      },
+    }
+  }
+
+  async function dispatchProbe(agentsDir: string) {
+    const { runtime, sessionOptions } = createRecordingRuntime()
+    const tool = createPiDelegateTool({
+      catalog: buildAgentCatalog(agentsDir),
+      createDelegateSession: createDelegateSessionWith(runtime),
+    })
+    await tool.execute(
+      'call-1',
+      { agent: 'researcher-probe', task: 'Read the probe note.' } as never,
+      undefined,
+      undefined,
+      {
+        cwd: '/fake/cwd',
+        model: createModelFixture(),
+        modelRegistry: { find: () => undefined },
+        tools: [],
+      } as never,
+    )
+    return sessionOptions
+  }
+
+  test('a delegated probe reaches createAgentSession with read, grep and find and none of bash, write or edit', async () => {
+    const agentsDir = makeTempAgentsDir({
+      'research/researcher-probe.md': PROBE_DEFINITION,
+    })
+
+    const sessionOptions = await dispatchProbe(agentsDir)
+
+    expect(sessionOptions).toHaveLength(1)
+    const tools = sessionOptions[0]?.tools
+    expect(tools).toEqual(['read', 'grep', 'find'])
+    for (const denied of ['bash', 'write', 'edit', DELEGATE_TOOL_NAME]) {
+      expect(tools).not.toContain(denied)
+    }
+  })
+
+  test('lowercase tool names fail the whole catalog build, which pins the capitalization', () => {
+    const lowercase = PROBE_DEFINITION.replace(
+      'tools: Read, Grep, Glob',
+      'tools: read, grep, glob',
+    )
+    expect(lowercase).not.toBe(PROBE_DEFINITION)
+    const agentsDir = makeTempAgentsDir({
+      'research/researcher-probe.md': lowercase,
+    })
+
+    expect(() => buildAgentCatalog(agentsDir)).toThrow(
+      /Unknown declared tool "read"/,
+    )
+  })
+
+  test('a definition that declares no tools gets the read-only default, which is wider than the probe asks for', async () => {
+    const undeclared = PROBE_DEFINITION.replace(/^tools: .*\n/m, '')
+    expect(undeclared).not.toBe(PROBE_DEFINITION)
+    const agentsDir = makeTempAgentsDir({
+      'research/researcher-probe.md': undeclared,
+    })
+
+    const sessionOptions = await dispatchProbe(agentsDir)
+
+    // Pi's default allowlist adds `ls` and `systematic_search`. A researcher
+    // that omits `tools:` therefore asks for more than the probe does, so the
+    // shipped definition must declare its tools.
+    expect(sessionOptions[0]?.tools).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'systematic_search',
+    ])
   })
 })

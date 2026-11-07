@@ -19,6 +19,7 @@ import {
   type V2PermissionRule,
 } from './opencode-v2-permissions.js'
 import { installSkills } from './opencode-v2-skills.js'
+import { installToolGuard } from './opencode-v2-tool-guard.js'
 import { installSearch } from './search-tool.js'
 
 /**
@@ -121,6 +122,7 @@ export type V2Installer = (input: V2InstallInput) => Promise<void> | void
 
 export interface V2Installers {
   agents: V2Installer
+  toolGuard: V2Installer
   skills: V2Installer
   search: V2Installer
   commands: V2Installer
@@ -273,6 +275,7 @@ export const installAgents: V2Installer = async ({ ctx, snapshot, guard }) => {
 /** One installer per domain. Tests replace single entries through `deps.installers`. */
 const DEFAULT_INSTALLERS: V2Installers = {
   agents: installAgents,
+  toolGuard: installToolGuard,
   skills: installSkills,
   search: installSearch,
   commands: installCommands,
@@ -282,6 +285,7 @@ const DEFAULT_INSTALLERS: V2Installers = {
 /** Installers run in this order. */
 const INSTALLER_ORDER = [
   'agents',
+  'toolGuard',
   'skills',
   'search',
   'commands',

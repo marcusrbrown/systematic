@@ -218,6 +218,23 @@ describe('normalizePermission', () => {
       }),
     ).toEqual({ edit: 'ask' })
   })
+
+  test('carries a websearch setting through, so an agent can deny web search', () => {
+    expect(normalizePermission({ websearch: 'deny' })).toEqual({
+      websearch: 'deny',
+    })
+    expect(
+      normalizePermission({
+        bash: 'deny',
+        webfetch: 'deny',
+        websearch: 'deny',
+      }),
+    ).toEqual({ bash: 'deny', webfetch: 'deny', websearch: 'deny' })
+  })
+
+  test('returns undefined when websearch has a malformed value', () => {
+    expect(normalizePermission({ websearch: 'nope' })).toBeUndefined()
+  })
 })
 
 // ---------------------------------------------------------------------------
