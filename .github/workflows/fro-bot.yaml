@@ -832,7 +832,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run Fro Bot
-        uses: fro-bot/agent@3cbb000feac0a06e65872d4440718e687459f49a # v0.136.1
+        uses: fro-bot/agent@d2663b6ca67a2bcb7cd39fc3cd7d6ef376a0bd2f # v0.136.2
         env:
           OPENCODE_PROMPT_ARTIFACT: "true"
           # PROMPT routing precedence — ORDER MATTERS.
