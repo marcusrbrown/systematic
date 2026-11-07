@@ -531,7 +531,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 - Regenerate with `bun run surfaces:affected --run` (schema and config-reference surfaces), then `bun run surfaces:drift`.
 - `bun scripts/content-integrity.ts` passes (codemap and module table).
 
-- [ ] U3. Evidence boundary: inventory, git, citations and bounded reads
+- [x] U3. Evidence boundary: inventory, git, citations and bounded reads
 
 **Goal:** Provide the deterministic read boundary: a bounded, hashed inventory of tracked files with hardened git, containment, and a citation checker with an explicit (path, span, symbol) API.
 
