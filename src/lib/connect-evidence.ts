@@ -487,7 +487,7 @@ function isIdentifierCode(code: number): boolean {
  * character directly before or after the match. A dotted chain is matched as
  * one name. `alphaBeta` is not found in `alphaBetaAsync` or `myalphaBeta`.
  */
-function containsIdentifier(text: string, identifier: string): boolean {
+export function containsIdentifier(text: string, identifier: string): boolean {
   let at = text.indexOf(identifier)
   while (at !== -1) {
     const end = at + identifier.length

@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
+import { CE_CONNECT_HELPER_RELATIVE_PATH } from '../../scripts/generate-ce-connect-helper.js'
 import { CE_REVIEW_VALIDATOR_RELATIVE_PATH } from '../../scripts/generate-ce-review-validator.js'
 import { BUNDLED_NAMES_RELATIVE_PATH } from '../../scripts/generate-config-schema.js'
 import {
@@ -80,13 +81,14 @@ const names = (surfaces: readonly GeneratedSurface[]) =>
 // ── The real list ───────────────────────────────────────────────────────────
 
 describe('GENERATED_SURFACES', () => {
-  test('holds the seven surfaces in regeneration order', () => {
+  test('holds the eight surfaces in regeneration order', () => {
     expect(names(GENERATED_SURFACES)).toEqual([
       'agent-browser',
       'schema',
       'config-reference',
       'review-schemas',
       'validator',
+      'connect-helper',
       'registry',
       'pi-personas',
     ])
@@ -133,6 +135,9 @@ describe('GENERATED_SURFACES', () => {
       ].sort(),
     )
     expect(outputsOf('validator')).toEqual([CE_REVIEW_VALIDATOR_RELATIVE_PATH])
+    expect(outputsOf('connect-helper')).toEqual([
+      CE_CONNECT_HELPER_RELATIVE_PATH,
+    ])
     expect(outputsOf('schema')).toContain(BUNDLED_NAMES_RELATIVE_PATH)
   })
 
@@ -261,11 +266,11 @@ function r17Diff(rootDir: string, surfaces: readonly GeneratedSurface[]) {
 }
 
 describe('R17 generators with a check mode', () => {
-  test('the real repo: both directions agree, and there are seven', () => {
+  test('the real repo: both directions agree, and there are eight', () => {
     const diff = r17Diff(ROOT_DIR, GENERATED_SURFACES)
     expect(diff.unregistered).toEqual([])
     expect(diff.noLiteral).toEqual([])
-    expect(diff.withLiteral).toHaveLength(7)
+    expect(diff.withLiteral).toHaveLength(8)
   })
 
   function tempProject(files: Record<string, string>, scripts: object) {
@@ -353,6 +358,7 @@ describe('closure edges', () => {
       'schema->config-reference',
       'review-schemas->registry',
       'validator->registry',
+      'connect-helper->registry',
     ]) {
       expect(asText).toContain(expected)
     }

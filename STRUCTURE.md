@@ -110,6 +110,10 @@ subdirectory of core modules.
   `deriveFinalizeContext`, `buildInputLedger`, `buildReviewCoverage`, and
   `projectSynthesizedFindings` with `runReviewPipeline`); bundled to
   `skills/ce-review/scripts/validate-review.mjs`
+- `src/ce-connect-helper.ts` — entry of the `ce:connect` helper: `begin`, `validate`, `publish`, `decide` and
+  `ledger show|clear|unlock`, each one JSON request on stdin and one JSON line out; the rule index,
+  candidate checks and digest live in `src/lib/connect-helper-core.ts`; bundled to
+  `skills/ce-connect/scripts/connect.mjs`
 
 ### `skills/`
 
@@ -182,6 +186,9 @@ checks behind `bun run surfaces:drift`.
 - `scripts/generate-ce-review-validator.ts` — bundles `src/ce-review-validator.ts` into the
   committed `skills/ce-review/scripts/validate-review.mjs`; pass `--check` for drift detection
   (`bun run ce-review-validator:drift`)
+- `scripts/generate-ce-connect-helper.ts` — bundles `src/ce-connect-helper.ts` into the committed
+  `skills/ce-connect/scripts/connect.mjs`; pass `--check` for drift detection
+  (`bun run ce-connect-helper:drift`)
 - `scripts/build-claude-code-plugin.ts` — generates the self-contained Claude Code plugin bundle
   (`claude-code/`, gitignored staging) from `skills/` and `agents/`; CI publishes the output to the
   orphan `claude-code-plugin` branch, never committed to `main`
@@ -194,7 +201,7 @@ checks behind `bun run surfaces:drift`.
 - `scripts/generated-surfaces.ts` — CLI behind `bun run surfaces:regen`, `surfaces:drift` and
   `surfaces:affected` (`--run` regenerates the matched surfaces, then checks them); CI runs
   `surfaces:drift` as its one drift step
-- `scripts/lib/generated-surfaces.ts` — the ordered list of the seven committed generated surfaces
+- `scripts/lib/generated-surfaces.ts` — the ordered list of the eight committed generated surfaces
   (outputs, triggers, regenerate and check scripts) plus the closure, glob and git change-set logic
 - `scripts/lib/`, `scripts/eval-cases/` — shared helpers and eval case definitions consumed by
   `run-evals.ts`

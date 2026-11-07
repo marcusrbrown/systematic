@@ -620,7 +620,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 - Directory and file modes are asserted in tests, and no test leaves a lock behind.
 - `bun scripts/content-integrity.ts` passes for the registrations.
 
-- [ ] U5. Helper core, bundle and generator
+- [x] U5. Helper core, bundle and generator
 
 **Goal:** Ship the generated Node helper that owns everything from lock to release: `begin`, `validate`, `publish`, `decide` and `ledger`.
 
