@@ -1681,7 +1681,11 @@ function commitRun(
     degradeReasons,
     candidates: state.accepted.length,
     recorded: state.recorded.length,
-    summary: renderSummary(model, digestPath),
+    summary: renderSummary(
+      model,
+      digestPath,
+      path.join(published.runDir, 'run.json'),
+    ),
   })
 }
 

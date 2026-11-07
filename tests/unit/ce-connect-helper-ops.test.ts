@@ -807,6 +807,28 @@ describe('validate and publish', () => {
     expect(ledger.entries[0]?.status).toBe('candidate')
   })
 
+  it('prints, in the summary, a candidate token pair that names the run record and the id the record holds', () => {
+    const world = buildWorld()
+    const { published } = fullRun(world, [lessonCandidate(world)])
+
+    const record = readRunRecord(published)
+    const block = record.candidateBlock as { candidates: Array<Json> }
+    const id = block.candidates[0]?.id
+    expect(typeof id).toBe('string')
+    const summary = String(published.summary)
+    const tokenLine = summary
+      .split('\n')
+      .find((line) => line.startsWith('candidate:'))
+    expect(tokenLine).toBe(
+      `candidate:${String(published.runRecordPath)} candidate-id:${String(id)}`,
+    )
+    // The path in the token is the record the id lives in.
+    const pasted = (tokenLine ?? '').split(' ')[0]?.slice('candidate:'.length)
+    expect(JSON.parse(fs.readFileSync(pasted ?? '', 'utf8')).runId).toBe(
+      record.runId,
+    )
+  })
+
   it('releases the lock and removes the work directory after publishing', () => {
     const world = buildWorld()
     const { run } = fullRun(world, [])

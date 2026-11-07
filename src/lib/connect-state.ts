@@ -1177,6 +1177,8 @@ export interface PublishOptions {
   /** Milliseconds since the epoch, for ledger timestamps. Defaults to `Date.now`. */
   readonly now?: () => number
   readonly hooks?: {
+    /** Runs once the run is staged and before the rename commits it. A test seam for a crash. */
+    readonly beforeCommit?: () => void
     /** Runs after the rename committed the run and before the ledger is rewritten. A test seam for a crash. */
     readonly afterCommit?: () => void
   }
@@ -1275,6 +1277,7 @@ export function publishRun(
 
   const staged = stageRun(staging, input.files)
   if (staged !== undefined) return { status: 'failed', reason: staged }
+  options.hooks?.beforeCommit?.()
   try {
     fs.renameSync(staging, finalDir)
   } catch {

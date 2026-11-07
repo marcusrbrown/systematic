@@ -25,7 +25,15 @@ Headless mode asks no question and offers nothing after the digest. It does not 
 
 ## Host permissions for unattended runs
 
-A run reads and writes its work files under the state directory, and the researcher reads the allowed projects. All of that is outside the project the session runs in. OpenCode asks before it touches a path outside the project, and a run with nobody to answer is refused: in a headless run on OpenCode 1.19.5 a read of a path outside the project was auto-rejected as an `external_directory` request. The state directory is in that position, so for a headless run, allow the state directory in the host's own permission config before the first run. The researcher's own definition already allows reading outside the project. If a work file cannot be read or written, stop with `Connect failed` and say which path the host refused; the lock is released by `publish` with `"abort": true`.
+A run reads and writes its work files under the state directory, and the researcher reads the allowed projects. All of that is outside the project the session runs in. OpenCode asks before it touches a path outside the project, and a run with nobody to answer is refused. On OpenCode 1.19.5 a headless run that read a work file in the state directory was refused as an `external_directory` request, and the refusal ended the whole session: no final line was printed, the lock stayed held, nothing was published, and the next run reclaimed the lock because its holder process was gone.
+
+For a headless run, allow the state directory in the host's own permission config (OpenCode's `opencode.json`, not Systematic's config) before the first run. The state directory is `$XDG_STATE_HOME/systematic/connect`, or `<home>/.local/state/systematic/connect` when `XDG_STATE_HOME` is not set. Use its absolute path:
+
+```json
+{ "permission": { "external_directory": { "<state directory>/*": "allow" } } }
+```
+
+With that line, a headless run on OpenCode 1.19.5 ran the whole pipeline and ended `Connect complete`. The researcher's own definition already allows reading outside the project, so the allowed projects need no entry. Systematic never writes this line for the user. If a work file cannot be read or written in a session that is still running, stop with `Connect failed` and say which path the host refused; the lock is released by `publish` with `"abort": true`.
 
 ## Outcomes
 

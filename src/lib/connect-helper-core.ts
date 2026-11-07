@@ -1466,11 +1466,23 @@ export function renderDigest(model: DigestModel): string {
 
 const MAX_SUMMARY_TITLES = 10
 
+/** A run record path that can be pasted as one `candidate:` token: no whitespace, no control character. */
+function isPasteablePath(file: string): boolean {
+  return !/\s/.test(file) && sanitizeText(file) === file
+}
+
 /**
  * The short chat summary of a run. Candidate titles are untrusted text, so they
  * are quoted, one per line, and nothing in the summary reads as an instruction.
+ * Under each title the helper prints the promotion tokens for that candidate:
+ * `candidate:<run record path>` and `candidate-id:<id>` on one line, built from
+ * values the helper made and never from candidate text.
  */
-export function renderSummary(model: DigestModel, digestPath: string): string {
+export function renderSummary(
+  model: DigestModel,
+  digestPath: string,
+  runRecordPath: string,
+): string {
   const droppedTotal = Object.values(model.dropped).reduce((a, b) => a + b, 0)
   const out = [
     `Connect run ${sanitizeText(model.runId)}: ${model.outcome}.`,
@@ -1487,9 +1499,24 @@ export function renderSummary(model: DigestModel, digestPath: string): string {
   out.push(`Digest: ${sanitizeText(digestPath).replaceAll('\n', ' ')}`)
   const titles = model.candidates.slice(0, MAX_SUMMARY_TITLES)
   if (titles.length > 0) {
+    const pasteable = isPasteablePath(runRecordPath)
     out.push('Candidates (untrusted text, quoted):')
     for (const item of titles) {
       out.push(quote(`${item.candidate.kind}: ${item.candidate.title}`))
+      out.push(
+        pasteable
+          ? `candidate:${runRecordPath} candidate-id:${item.id}`
+          : `candidate-id:${item.id}`,
+      )
+    }
+    if (!pasteable) {
+      out.push(
+        `The run record path cannot be pasted as one word: ${sanitizeText(runRecordPath).replaceAll('\n', ' ')}`,
+      )
+    }
+    const left = model.candidates.length - titles.length
+    if (left > 0) {
+      out.push(`${left} more candidates are in the digest.`)
     }
   }
   return out.join('\n')

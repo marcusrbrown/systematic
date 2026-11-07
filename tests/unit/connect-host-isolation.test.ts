@@ -1,8 +1,8 @@
 /**
- * Regression pins for the read-only researcher definition on each host.
+ * Regression pins for the shipped connections-researcher definition on each host.
  *
  * These tests read the definition and the loaders; they never run a host. They
- * pin the shape that the real-host proofs in the integration files exercised,
+ * pin the shape that the real-host proofs in the integration files exercise,
  * so a change that would silently drop a deny entry fails here first. They are
  * not evidence that a host enforces the entries: only an observed deny on a
  * real host is.
@@ -22,7 +22,7 @@ import {
 } from '../../src/lib/opencode-v2-permissions.js'
 import {
   parseDenyBlock,
-  readProbeDefinition,
+  readShippedDefinition,
 } from '../helpers/connect-delegated-proof.js'
 
 const tempDirs: string[] = []
@@ -37,7 +37,7 @@ function makeTempDir(): string {
   return dir
 }
 
-const definition = readProbeDefinition()
+const definition = readShippedDefinition()
 
 describe('OpenCode loaders', () => {
   const parsed = extractAgentFrontmatter(definition)
@@ -120,13 +120,15 @@ describe('Claude Code definition', () => {
     const root = makeTempDir()
     fs.mkdirSync(path.join(root, 'agents/research'), { recursive: true })
     fs.writeFileSync(
-      path.join(root, 'agents/research/researcher-probe.md'),
+      path.join(root, 'agents/research/connections-researcher.md'),
       definition,
     )
 
     const flattened = flattenAgents(root)
 
-    expect(flattened.map((agent) => agent.stem)).toEqual(['researcher-probe'])
+    expect(flattened.map((agent) => agent.stem)).toEqual([
+      'connections-researcher',
+    ])
     expect(flattened[0]?.content.toString('utf8')).toBe(definition)
   })
 
@@ -146,79 +148,16 @@ describe('Claude Code definition', () => {
       // `agents`; any other name is read as a plugin root.
       const good = path.join(makeTempDir(), 'agents')
       fs.mkdirSync(good)
-      fs.writeFileSync(path.join(good, 'researcher-probe.md'), definition)
+      fs.writeFileSync(path.join(good, 'connections-researcher.md'), definition)
       const bad = path.join(makeTempDir(), 'agents')
       fs.mkdirSync(bad)
       fs.writeFileSync(
-        path.join(bad, 'researcher-probe.md'),
+        path.join(bad, 'connections-researcher.md'),
         '---\nname: [broken\n  : : :\n---\nbody\n',
       )
 
       expect(run(good).status).toBe(0)
       expect(run(bad).status).not.toBe(0)
-    },
-    60_000,
-  )
-})
-
-// The shipped agent carries the shape the proofs above ran against. These pins
-// keep it from drifting away from the definition the host proofs observed.
-describe('shipped connections-researcher', () => {
-  const shippedPath = path.resolve(
-    import.meta.dirname,
-    '../../agents/research/connections-researcher.md',
-  )
-  const shipped = fs.readFileSync(shippedPath, 'utf8')
-
-  test('maps to the same OpenCode permission entries as the probed definition', () => {
-    expect(extractAgentFrontmatter(shipped).permission).toEqual(
-      extractAgentFrontmatter(definition).permission,
-    )
-    expect(parseDenyBlock(shipped).sort()).toEqual(
-      parseDenyBlock(definition).sort(),
-    )
-  })
-
-  test('translates to the same OpenCode v2 rules, shell deny included', () => {
-    const rules = translatePermissionRules(
-      permissionMapToTriples(extractAgentFrontmatter(shipped).permission),
-    )
-
-    expect(rules).toContainEqual({
-      action: 'shell',
-      resource: '*',
-      effect: 'deny',
-    })
-    expect(rules).toEqual(
-      translatePermissionRules(
-        permissionMapToTriples(extractAgentFrontmatter(definition).permission),
-      ),
-    )
-  })
-
-  test('declares the same positive tool allowlist and second layer for Pi and Claude Code', () => {
-    const { data } = parseFrontmatter<Record<string, unknown>>(shipped)
-    const probed = parseFrontmatter<Record<string, unknown>>(definition).data
-
-    expect(data.tools).toBe(probed.tools)
-    expect(data.disallowedTools).toBe(probed.disallowedTools)
-  })
-
-  const claude = Bun.which('claude')
-  test.skipIf(claude === null)(
-    'claude plugin validate accepts the shipped definition',
-    () => {
-      const dir = path.join(makeTempDir(), 'agents')
-      fs.mkdirSync(dir)
-      fs.writeFileSync(path.join(dir, 'connections-researcher.md'), shipped)
-
-      const run = spawnSync(
-        claude ?? 'claude',
-        ['plugin', 'validate', dir, '--json', '--strict'],
-        { encoding: 'utf8' },
-      )
-
-      expect(run.status).toBe(0)
     },
     60_000,
   )

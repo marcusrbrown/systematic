@@ -565,10 +565,33 @@ export interface HostSupportRow {
 
 /**
  * The supported combinations. A row is added only for a host and version where
- * a real-host deny was observed against the shipped agent. There are none yet,
- * so every host is unsupported.
+ * a real-host deny was observed against the shipped agent, and it names the
+ * test that observed it as `<file> > <test title>`. There is no row for Claude
+ * Code until its denies are shown live.
+ *
+ * The OpenCode and Pi rows are exact: the version is the one the proof runs
+ * against, and any other version, older or newer, is unlisted.
  */
-export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = []
+export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
+  {
+    host: 'opencode-v1',
+    version: '1.19.5',
+    observedBy:
+      'tests/integration/opencode-v1-isolation.test.ts > the shipped researcher, dispatched from the packed plugin, is refused shell, write, edit and web fetch and its read reaches the parent',
+  },
+  {
+    host: 'opencode-v2',
+    version: '2.2.5',
+    observedBy:
+      'tests/integration/opencode-v2.test.ts > a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it',
+  },
+  {
+    host: 'pi',
+    version: '1.5.0',
+    observedBy:
+      'tests/unit/pi-delegate-session.test.ts > the shipped researcher reaches createAgentSession with read, grep and find and none of bash, write, edit or systematic_delegate',
+  },
+]
 
 export type HostSupportVerdict =
   | { readonly supported: true; readonly row: HostSupportRow }
@@ -578,11 +601,18 @@ export type HostSupportVerdict =
       readonly reason: 'unobserved' | 'unlisted'
     }
 
-/** A version as the skill reports it: trimmed, one leading `v` dropped. `undefined` when there is none. */
+/**
+ * A version as the skill reports it: trimmed, one leading `v` dropped, and
+ * SemVer build metadata (everything from the first `+`) cut off, because build
+ * metadata does not change which release a build is. A prerelease tag stays,
+ * so `1.19.5-rc.1` is not `1.19.5`. `undefined` when no version is left.
+ */
 function normalizeVersion(version: unknown): string | undefined {
   if (typeof version !== 'string') return undefined
-  const trimmed = version.trim().replace(/^v/i, '').trim()
-  return trimmed === '' ? undefined : trimmed
+  const withoutV = version.trim().replace(/^v/i, '')
+  const plus = withoutV.indexOf('+')
+  const core = (plus === -1 ? withoutV : withoutV.slice(0, plus)).trim()
+  return core === '' ? undefined : core
 }
 
 /**

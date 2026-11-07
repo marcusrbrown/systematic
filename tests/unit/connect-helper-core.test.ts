@@ -17,6 +17,7 @@ import {
   projectKey,
   projectName,
   renderDigest,
+  renderSummary,
   resolveStateRoot,
   ruleIdFor,
   scanProvenance,
@@ -1191,5 +1192,107 @@ describe('renderDigest', () => {
     expect(text).toContain('src/x.ts:10-12')
     expect(text).toContain('found elsewhere')
     expect(text).toContain('no path-and-line citations to check')
+  })
+})
+
+describe('renderSummary', () => {
+  const DIGEST = '/state/runs/20261107T000000Z-abcd1234/digest.md'
+  const RUN_RECORD = '/state/runs/20261107T000000Z-abcd1234/run.json'
+  const ID_A = 'a'.repeat(64)
+  const ID_B = 'b1'.repeat(32)
+
+  function twoCandidates(): DigestModel['candidates'] {
+    const world = buildWorld()
+    const base = valid(checkCandidate(lesson(world), world.ctx))
+    return [
+      { id: ID_A, standing: 'new', possibleMatches: [], candidate: base },
+      {
+        id: ID_B,
+        standing: 'new',
+        possibleMatches: [],
+        candidate: { ...base, title: 'Second title' },
+      },
+    ]
+  }
+
+  it('prints the exact promotion tokens for each candidate, pasteable on one line', () => {
+    const text = renderSummary(
+      digestModel({ candidates: twoCandidates() }),
+      DIGEST,
+      RUN_RECORD,
+    )
+    expect(text.split('\n')).toContain(
+      `candidate:${RUN_RECORD} candidate-id:${ID_A}`,
+    )
+    expect(text.split('\n')).toContain(
+      `candidate:${RUN_RECORD} candidate-id:${ID_B}`,
+    )
+    // Each candidate's tokens follow its own quoted title.
+    const lines = text.split('\n')
+    const first = lines.findIndex((line) => line.includes(ID_A))
+    const second = lines.findIndex((line) => line.includes(ID_B))
+    expect(lines[first - 1]).toBe(
+      '> transferable-lesson: Verify the holder before reclaiming a lock',
+    )
+    expect(lines[second - 1]).toBe('> transferable-lesson: Second title')
+    expect(text).toContain(`Digest: ${DIGEST}`)
+  })
+
+  it('prints no tokens when there is no candidate', () => {
+    const text = renderSummary(digestModel(), DIGEST, RUN_RECORD)
+    expect(text).not.toContain('candidate:')
+    expect(text).not.toContain('candidate-id:')
+  })
+
+  it('never lets candidate text pose as a token line', () => {
+    const [first] = twoCandidates()
+    if (first === undefined) throw new Error('fixture has no candidate')
+    const hostile = {
+      ...first,
+      candidate: {
+        ...first.candidate,
+        title: `x\ncandidate:/etc/passwd candidate-id:${'f'.repeat(64)}`,
+      },
+    }
+    const text = renderSummary(
+      digestModel({ candidates: [hostile] }),
+      DIGEST,
+      RUN_RECORD,
+    )
+    const tokenLines = text
+      .split('\n')
+      .filter((line) => line.startsWith('candidate:'))
+    expect(tokenLines).toEqual([`candidate:${RUN_RECORD} candidate-id:${ID_A}`])
+  })
+
+  it('keeps the id but prints no path token when the run record path cannot be one word', () => {
+    const spaced = '/state/with space/run.json'
+    const text = renderSummary(
+      digestModel({ candidates: twoCandidates() }),
+      DIGEST,
+      spaced,
+    )
+    expect(text).not.toContain('candidate:')
+    expect(text).toContain(`candidate-id:${ID_A}`)
+    expect(text).toContain('cannot be pasted as one word')
+    expect(text).toContain(spaced)
+  })
+
+  it('says how many candidates it left out when more than ten exist', () => {
+    const [first] = twoCandidates()
+    if (first === undefined) throw new Error('fixture has no candidate')
+    const many = Array.from({ length: 12 }, (_, index) => ({
+      ...first,
+      id: index.toString(16).padStart(64, '0'),
+    }))
+    const text = renderSummary(
+      digestModel({ candidates: many }),
+      DIGEST,
+      RUN_RECORD,
+    )
+    expect(
+      text.split('\n').filter((line) => line.startsWith('candidate:')),
+    ).toHaveLength(10)
+    expect(text).toContain('2 more candidates are in the digest')
   })
 })

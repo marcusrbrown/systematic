@@ -103,7 +103,13 @@ describe('decideToolCall', () => {
   })
 
   test('leaves every other agent alone', () => {
-    for (const agent of ['build', 'plan', 'general', 'researcher-probe', '']) {
+    for (const agent of [
+      'build',
+      'plan',
+      'general',
+      'unguarded-researcher',
+      '',
+    ]) {
       expect(decideToolCall(agent, 'shell')).toEqual({ allowed: true })
       expect(decideToolCall(agent, 'execute')).toEqual({ allowed: true })
     }

@@ -642,20 +642,23 @@ export function createConnectIsolationScript(
 
 // ── The researcher definition on a host ──────────────────────────────────────
 
-/** The probe agent's name; the host dispatches it by this name. */
-export const CONNECT_PROBE_AGENT = 'researcher-probe'
+/** The shipped researcher's name; the host dispatches it, and the v2 guard keys on it, by this name. */
+export const CONNECT_AGENT = 'connections-researcher'
 
-const PROBE_DEFINITION_FILE = path.resolve(
+/** A copy of the shipped definition under a name the v2 guard does not know. */
+export const UNGUARDED_AGENT = 'unguarded-researcher'
+
+const SHIPPED_DEFINITION_FILE = path.resolve(
   import.meta.dirname,
-  '../fixtures/connect-isolation/researcher-probe.md',
+  '../../agents/research/connections-researcher.md',
 )
 
-/** The probe agent definition as committed. */
-export function readProbeDefinition(): string {
-  return fs.readFileSync(PROBE_DEFINITION_FILE, 'utf8')
+/** The shipped researcher definition as committed. */
+export function readShippedDefinition(): string {
+  return fs.readFileSync(SHIPPED_DEFINITION_FILE, 'utf8')
 }
 
-/** The definition under another agent name, for a run that must match a name-keyed guard. */
+/** The definition under another agent name, for a run that must match or miss a name-keyed guard. */
 export function definitionNamed(definition: string, name: string): string {
   const renamed = definition.replace(/^name: .*$/m, `name: ${name}`)
   if (renamed === definition && !definition.includes(`name: ${name}`)) {
@@ -665,27 +668,54 @@ export function definitionNamed(definition: string, name: string): string {
 }
 
 /**
- * Installs a definition as a bundled agent of an extracted package, so the
- * host loads it through the same plugin path as a shipped agent.
+ * Installs a definition as a bundled agent of an extracted package, replacing
+ * the one the package shipped, so a control can run a changed copy through the
+ * same plugin path. A run of the shipped agent itself installs nothing.
  */
-export function installProbeAgent(
+export function installAgentDefinition(
   packageDir: string,
   definition: string,
-  name: string = CONNECT_PROBE_AGENT,
+  name: string = CONNECT_AGENT,
 ): void {
   const target = path.join(packageDir, 'agents/research', `${name}.md`)
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.writeFileSync(target, definition)
 }
 
+/** The shipped agent as the extracted package carries it, or undefined when the package has none. */
+export function readPackagedDefinition(packageDir: string): string | undefined {
+  const file = path.join(packageDir, 'agents/research', `${CONNECT_AGENT}.md`)
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined
+}
+
+/**
+ * Settles which researcher definition a run uses. Without `override` it is the
+ * one the extracted package ships; with one, that text replaces it under
+ * `name`. Returns the text the run uses and the package's own text, so a test
+ * can assert the shipped agent is the committed file.
+ */
+export function resolveRunDefinition(
+  packageDir: string,
+  override: string | undefined,
+  name: string = CONNECT_AGENT,
+): { definition: string; packaged: string | undefined } {
+  const packaged = readPackagedDefinition(packageDir)
+  const definition = override ?? packaged
+  if (definition === undefined) {
+    throw new Error('the packed plugin ships no connections-researcher')
+  }
+  if (override !== undefined) installAgentDefinition(packageDir, override, name)
+  return { definition, packaged }
+}
+
 /**
  * The definition's first body line, cut to 80 characters. Every host puts the
  * agent body into the child's system prompt, and the parent's never holds it.
  */
-export function probeSystemMarker(definition: string): string {
+export function agentSystemMarker(definition: string): string {
   const body = definition.replace(/^---\n[\s\S]*?\n---\n/, '')
   const line = body.split('\n').find((candidate) => candidate.trim() !== '')
-  if (line === undefined) throw new Error('probe definition has no body')
+  if (line === undefined) throw new Error('agent definition has no body')
   return line.slice(0, 80)
 }
 

@@ -777,7 +777,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 
 ### Phase C: Proof and evaluation
 
-- [ ] U8. Shipped-agent proofs and controls
+- [x] U8. Shipped-agent proofs and controls
 
 **Goal:** Turn the U1 proofs into support evidence against the shipped agent, fill the support table, and cover the crash path and the Claude Code manual run.
 

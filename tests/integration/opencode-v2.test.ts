@@ -16,7 +16,8 @@ import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SEARCH_ERRORS } from '../../src/lib/search-core.js'
 import { createSkillToolDescriptor } from '../../src/lib/skill-tool.js'
 import {
-  CONNECT_PROBE_AGENT,
+  agentSystemMarker,
+  CONNECT_AGENT,
   CONNECT_PROBE_MARKER,
   type ConnectIsolationScript,
   connectIsolationLayout,
@@ -27,15 +28,16 @@ import {
   evaluateConnectChildAttempts,
   evaluateConnectIsolationProof,
   type IsolationHostTools,
-  installProbeAgent,
   plantConnectExternalCheckout,
   plantConnectGitRepo,
   plantConnectIsolationFixture,
-  probeSystemMarker,
   readConnectSideEffects,
-  readProbeDefinition,
+  readPackagedDefinition,
+  readShippedDefinition,
+  resolveRunDefinition,
   startFetchCounter,
   type ToolHookEvent,
+  UNGUARDED_AGENT,
   withoutDenyEntries,
 } from '../helpers/connect-delegated-proof.js'
 import {
@@ -974,12 +976,18 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       TIMEOUT_MS,
     )
 
-    // The researcher's shell, write and web access is denied by its definition.
-    // A scripted child tries each denied tool and then reads a planted note;
-    // the proof reads the tool results, the disk and the fetch server. A
-    // control without the deny entries must fail by name. The scripted model
-    // makes every call, so this shows what the host enforces, not what a live
-    // model would choose.
+    // The shipped researcher's shell, write and web access is denied by its
+    // definition and, on this host, by Systematic's own tool guard. A scripted
+    // child tries each denied tool and then reads a planted note; the proof
+    // reads the tool results, the disk and the fetch server. Controls run a
+    // copy of the shipped definition under a name the guard does not know: one
+    // without the deny entries and one under session-level allows must fail by
+    // name.
+    //
+    // What these do not show: a live model's choices, path scoping of the read
+    // tools (the researcher can open any file the user can), or the tools of
+    // MCP servers in the session. The scripted model makes every call, so the
+    // proofs show what the host enforces.
     const V2_ISOLATION_TOOLS: IsolationHostTools = {
       shell: 'shell',
       write: 'write',
@@ -1001,12 +1009,9 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       { action: 'opencode_*', resource: '*', effect: 'allow' },
     ] as const
 
-    /** The agent name the read-only guard is keyed on. */
-    const GUARDED_AGENT = 'connections-researcher'
-
-    /** The probe definition installed under the guarded agent's name. */
-    function guardedDefinition(definition: string): string {
-      return definitionNamed(definition, GUARDED_AGENT)
+    /** The shipped definition under a name the read-only guard does not know. */
+    function unguardedDefinition(definition: string): string {
+      return definitionNamed(definition, UNGUARDED_AGENT)
     }
 
     // Code Mode scripts: calls through the host-native `opencode` namespace,
@@ -1039,9 +1044,10 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
      * which is where a session-level rule meets the agent's own rules.
      */
     async function runConnectIsolation(options: {
-      definition: string
+      /** Replaces the agent the packed plugin ships. Without it the shipped agent runs untouched. */
+      definition?: string
       mode: 'delegated' | 'direct'
-      /** The agent name to install and dispatch. Defaults to the probe's own. */
+      /** The agent name to install and dispatch. Defaults to the shipped agent's own. */
       agentName?: string
       /** Make the project a committed git repository, so a worktree call has a target. */
       gitProject?: boolean
@@ -1057,12 +1063,18 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       script: ConnectIsolationScript
       marker: string
       finalAnswer: string | undefined
+      /** The shipped definition as the extracted package carried it. */
+      packaged: string | undefined
       sideEffects: ReturnType<typeof readConnectSideEffects>
       hookEvents: ToolHookEvent[]
     }> {
       const { packageDir, pluginSpec } = extractPackagedPlugin(fixture, HOST)
-      const agentName = options.agentName ?? CONNECT_PROBE_AGENT
-      installProbeAgent(packageDir, options.definition, agentName)
+      const agentName = options.agentName ?? CONNECT_AGENT
+      const { definition, packaged } = resolveRunDefinition(
+        packageDir,
+        options.definition,
+        agentName,
+      )
       const layout = connectIsolationLayout(fixture.projectDir)
       plantConnectIsolationFixture(layout)
       if (options.gitProject) plantConnectGitRepo(fixture.projectDir)
@@ -1070,7 +1082,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         options.hookProbe &&
         createToolHookProbe(fixture.tempRoot, options.hookProbe)
       const fetchCounter = startFetchCounter()
-      const marker = probeSystemMarker(options.definition)
+      const marker = agentSystemMarker(definition)
       const script = createConnectIsolationScript({
         layout,
         hostTools: V2_ISOLATION_TOOLS,
@@ -1130,6 +1142,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       return {
         script,
         marker,
+        packaged,
         finalAnswer,
         sideEffects: readConnectSideEffects(layout, fetchCounter.hits()),
         hookEvents: hookProbe?.events() ?? [],
@@ -1147,8 +1160,10 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       sideEffects: ReturnType<typeof readConnectSideEffects>
     }> {
       const { packageDir, pluginSpec } = extractPackagedPlugin(fixture, HOST)
-      const definition = readProbeDefinition()
-      installProbeAgent(packageDir, definition)
+      // The agent is the one the packed plugin ships, untouched.
+      if (readPackagedDefinition(packageDir) !== readShippedDefinition()) {
+        throw new Error('the packed plugin does not ship the committed agent')
+      }
       const projectLayout = connectIsolationLayout(
         fs.realpathSync(fixture.projectDir),
       )
@@ -1166,7 +1181,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         dispatch: {
           tool: 'subagent',
           arguments: {
-            agent: CONNECT_PROBE_AGENT,
+            agent: CONNECT_AGENT,
             description: 'Read the external note',
             prompt: `${CHILD_PROMPT_MARK} Read the external note and report its marker.`,
           },
@@ -1237,13 +1252,14 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
 
     // The tool hook the read-only guard relies on. A plugin that only watches
     // it shows what the host hands the hook, and one that throws shows what a
-    // throw does, without any Systematic guard in play (the probe agent's name
-    // is not a guarded one).
+    // throw does, without any Systematic guard in play (the copy runs under a
+    // name the guard does not know).
     test(
       'the execute.before hook sees each call with the session agent, including Code Mode calls, and a throw fails that call alone',
       async () => {
         const run = await runConnectIsolation({
-          definition: readProbeDefinition(),
+          definition: unguardedDefinition(readShippedDefinition()),
+          agentName: UNGUARDED_AGENT,
           mode: 'delegated',
           gitProject: true,
           hookProbe: { blockPrefixes: ['opencode_'] },
@@ -1257,20 +1273,20 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         expect(seen('subagent').map((event) => event.agent)).toEqual(['build'])
         for (const tool of ['shell', 'write', 'edit', 'webfetch', 'read']) {
           expect(seen(tool).map((event) => event.agent)).toEqual([
-            CONNECT_PROBE_AGENT,
+            UNGUARDED_AGENT,
           ])
         }
         // Calls made from inside Code Mode reach the hook too, under the
         // host-native names and with the same agent and session.
         const outer = seen('execute')[0]
-        expect(outer?.agent).toBe(CONNECT_PROBE_AGENT)
+        expect(outer?.agent).toBe(UNGUARDED_AGENT)
         for (const tool of [
           'opencode_models',
           'opencode_worktree_list',
           'opencode_worktree_create',
         ]) {
           expect(seen(tool).map((event) => event.agent)).toEqual([
-            CONNECT_PROBE_AGENT,
+            UNGUARDED_AGENT,
           ])
           expect(seen(tool)[0]?.sessionID).toBe(outer?.sessionID)
         }
@@ -1288,10 +1304,58 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
-      'a dispatched researcher with denied shell, write and web tools is refused each one and its read reaches the parent',
+      'the shipped researcher, dispatched from the packed plugin, is refused shell, write, edit and web fetch and its read reaches the parent',
+      async () => {
+        const run = await runConnectIsolation({ mode: 'delegated' })
+
+        // The agent that ran is the committed file, not a fixture.
+        expect(run.packaged).toBe(readShippedDefinition())
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toEqual({ ok: true })
+        expect(run.sideEffects).toEqual({
+          writtenPaths: [],
+          editTargetChanged: false,
+          fetchHits: 0,
+          extraWorktrees: 0,
+        })
+        // The child that ran is the researcher, not some other agent.
+        for (const child of run.script.observation().childRequests) {
+          expect(hasResearcherSystemMarker(child, run.marker)).toBe(true)
+        }
+        // The refusals are real denials: the parent is offered each tool the
+        // child lacks, so none of the names is a typo.
+        const parentOffered = toolNamesOf(
+          run.script.observation().parentRequests[0] ?? {},
+        )
+        const childOffered = toolNamesOf(
+          run.script.observation().childRequests[0] ?? {},
+        )
+        for (const denied of [
+          'shell',
+          'write',
+          'edit',
+          'webfetch',
+          'websearch',
+          'subagent',
+        ]) {
+          expect(parentOffered, `parent is offered ${denied}`).toContain(denied)
+          expect(childOffered, `child is offered ${denied}`).not.toContain(
+            denied,
+          )
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'the shipped definition alone, under a name the guard does not know, is refused each denied tool and its read reaches the parent',
       async () => {
         const run = await runConnectIsolation({
-          definition: readProbeDefinition(),
+          definition: unguardedDefinition(readShippedDefinition()),
+          agentName: UNGUARDED_AGENT,
           mode: 'delegated',
         })
 
@@ -1305,7 +1369,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           fetchHits: 0,
           extraWorktrees: 0,
         })
-        // The child that ran is the probe, not some other agent.
+        // The child that ran is the researcher, not some other agent.
         for (const child of run.script.observation().childRequests) {
           expect(hasResearcherSystemMarker(child, run.marker)).toBe(true)
         }
@@ -1338,7 +1402,10 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'with the deny entries removed the same script writes a file and the proof names an isolation breach',
       async () => {
         const run = await runConnectIsolation({
-          definition: withoutDenyEntries(readProbeDefinition()),
+          definition: unguardedDefinition(
+            withoutDenyEntries(readShippedDefinition()),
+          ),
+          agentName: UNGUARDED_AGENT,
           mode: 'delegated',
         })
 
@@ -1363,7 +1430,8 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'without the guard a session-level allow lifts the definition denies and the breach reproduces',
       async () => {
         const run = await runConnectIsolation({
-          definition: readProbeDefinition(),
+          definition: unguardedDefinition(readShippedDefinition()),
+          agentName: UNGUARDED_AGENT,
           mode: 'delegated',
           gitProject: true,
           sessionPermissions: SESSION_ALLOW_RULES,
@@ -1390,9 +1458,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'a session-level allow does not lift the guarded researcher when it runs directly',
       async () => {
         const run = await runConnectIsolation({
-          definition: guardedDefinition(readProbeDefinition()),
           mode: 'direct',
-          agentName: GUARDED_AGENT,
           sessionPermissions: SESSION_ALLOW_RULES,
         })
 
@@ -1410,16 +1476,22 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it',
       async () => {
         const run = await runConnectIsolation({
-          definition: guardedDefinition(readProbeDefinition()),
           mode: 'delegated',
-          agentName: GUARDED_AGENT,
           sessionPermissions: SESSION_ALLOW_RULES,
         })
 
+        // The agent that ran is the committed file, not a fixture.
+        expect(run.packaged).toBe(readShippedDefinition())
         const verdict = evaluateConnectIsolationProof(
           connectObservation(run.script, run.sideEffects, run.finalAnswer),
         )
         expect(verdict).toEqual({ ok: true })
+        expect(run.sideEffects).toEqual({
+          writtenPaths: [],
+          editTargetChanged: false,
+          fetchHits: 0,
+          extraWorktrees: 0,
+        })
       },
       TIMEOUT_MS,
     )
@@ -1433,11 +1505,8 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'the guard alone refuses every call outside the allowlist, Code Mode and host-native tools included, and the read still succeeds',
       async () => {
         const run = await runConnectIsolation({
-          definition: guardedDefinition(
-            withoutDenyEntries(readProbeDefinition()),
-          ),
+          definition: withoutDenyEntries(readShippedDefinition()),
           mode: 'delegated',
-          agentName: GUARDED_AGENT,
           gitProject: true,
           sessionPermissions: SESSION_ALLOW_RULES,
           executeCode: NESTED_HOST_TOOLS_CODE_WITH_FETCH,

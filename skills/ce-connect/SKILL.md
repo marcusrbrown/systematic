@@ -62,7 +62,7 @@ Observe the host and its version. The helper holds the list of host and version 
 | Pi | `pi` | `pi --version` |
 | The `claude` command line tool | `claude-code` | `claude --version` |
 
-Send `version` as the first token that starts with a digit (after an optional `v`). If you cannot tell which host this is, or the command fails or prints no version, leave `version` out or use the host id `unknown`. Never guess a host or a version: a pair the helper cannot check counts as unsupported.
+Send `version` as the first token the command prints that starts with a digit (after an optional `v`), exactly as printed. Keep any `-` prerelease tag or `+` build suffix: the helper ignores build suffixes and keeps prerelease tags, so you decide neither. Never trim, round or strip any part of it. If you cannot tell which host this is, or the command fails or prints no version, leave `version` out or use the host id `unknown`. Never guess a host or a version: a pair the helper cannot check counts as unsupported.
 
 Report what you observed, in one line, so the user can see it.
 
@@ -165,7 +165,7 @@ JSON
 
 To stop a run that has begun but cannot go on (the user declines, the host fails), send the same request with `"abort": true` added. It releases the lock and discards the work files, and answers `Connect failed` as its `finalLine`.
 
-`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Then print, each on a line of its own:
+`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Under each candidate title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Print those lines unchanged. Never retype, shorten or build one yourself. Then print, each on a line of its own:
 
 - the reason, when the outcome is `degraded` or `failed`: the `degradeReasons`, in words;
 - the artifact path: `digestPath`;

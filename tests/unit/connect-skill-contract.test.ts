@@ -30,10 +30,6 @@ import { SKILL_FRONTMATTER_FIELDS } from '../../src/lib/skills.js'
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const SKILL_DIR = path.join(ROOT, 'skills/ce-connect')
 const AGENT_FILE = path.join(ROOT, 'agents/research/connections-researcher.md')
-const PROBE_FILE = path.join(
-  ROOT,
-  'tests/fixtures/connect-isolation/researcher-probe.md',
-)
 
 const skillText = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8')
 const contractText = fs.readFileSync(
@@ -48,9 +44,6 @@ const agentText = fs.readFileSync(AGENT_FILE, 'utf8')
 
 const skill = parseFrontmatter<Record<string, unknown>>(skillText)
 const agent = parseFrontmatter<Record<string, unknown>>(agentText)
-const probe = parseFrontmatter<Record<string, unknown>>(
-  fs.readFileSync(PROBE_FILE, 'utf8'),
-)
 
 const TERMINAL_LINES = [
   'Connect complete',
@@ -139,6 +132,13 @@ describe('ce:connect run protocol', () => {
     expect(skillText).toMatch(/never guess/i)
   })
 
+  test('passes the version string exactly as printed, leaving build and prerelease suffixes to the helper', () => {
+    expect(skillText).toMatch(/exactly as (it is )?printed/i)
+    expect(skillText).toMatch(/Never trim, round or strip/i)
+    expect(skillText).toContain('`+`')
+    expect(skillText).toContain('`-`')
+  })
+
   test('carries the lock back to validate and publish and releases it on every early stop', () => {
     expect(skillText).toMatch(/"abort": true/)
     expect(skillText).toMatch(/lock/)
@@ -213,6 +213,26 @@ describe('ce:connect run protocol', () => {
     expect(skillText).toMatch(/Never repair a batch/)
   })
 
+  test('has the user paste the helper-printed promotion tokens, in the names ce:compound reads', () => {
+    const consumer = fs.readFileSync(
+      path.join(ROOT, 'skills/ce-compound/references/candidate-input.md'),
+      'utf8',
+    )
+    for (const token of ['candidate:', 'candidate-id:']) {
+      expect(consumer).toContain(`\`${token}`)
+      expect(skillText).toContain(`\`${token}<`)
+    }
+    expect(skillText).toMatch(/Print those lines unchanged/)
+    expect(skillText).toMatch(/Never retype, shorten or build one yourself/)
+  })
+
+  test('gives the host permission line an unattended run needs, naming the state directory and leaving the write to the user', () => {
+    expect(outcomesText).toContain('"external_directory"')
+    expect(outcomesText).toContain('<state directory>/*')
+    expect(outcomesText).toContain('$XDG_STATE_HOME/systematic/connect')
+    expect(outcomesText).toMatch(/never writes this line for the user/i)
+  })
+
   test('links the two references it ships', () => {
     expect(skillText).toContain('references/candidate-contract.md')
     expect(skillText).toContain('references/headless-and-outcomes.md')
@@ -284,10 +304,19 @@ describe('connections-researcher agent', () => {
     expect(isValidAgentColor(String(agent.data.color))).toBe(true)
   })
 
-  test('carries the same tool limits as the definition the host proofs ran against', () => {
-    expect(agent.data.tools).toBe(probe.data.tools)
-    expect(agent.data.disallowedTools).toBe(probe.data.disallowedTools)
-    expect(agent.data.permission).toEqual(probe.data.permission)
+  test('carries the tool limits the host proofs observe: positive allowlist, second layer, and one allow for reading other checkouts', () => {
+    expect(agent.data.tools).toBe('Read, Grep, Glob')
+    expect(agent.data.disallowedTools).toBe(
+      'Bash, Edit, Write, WebFetch, WebSearch, NotebookEdit',
+    )
+    expect(agent.data.permission).toEqual({
+      bash: 'deny',
+      edit: 'deny',
+      webfetch: 'deny',
+      websearch: 'deny',
+      task: 'deny',
+      external_directory: 'allow',
+    })
   })
 
   test('declares a positive allowlist, because an agent with none gets every default tool on Pi', () => {

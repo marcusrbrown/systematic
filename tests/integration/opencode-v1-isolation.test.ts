@@ -1,9 +1,13 @@
-// Tool isolation for a read-only researcher on the current OpenCode v1 pin.
+// Tool isolation for the shipped connections-researcher on the current
+// OpenCode v1 pin. The agent under test is the file the packed plugin ships.
 // A scripted child tries shell, write, edit and web fetch and then reads a
 // planted note; the proof reads the tool results, the disk and a fetch server.
-// A control without the deny entries must fail by name. The scripted model
-// makes every call, so this shows what the host enforces, not what a live
-// model would choose.
+// A control on a copy without the deny entries must fail by name.
+//
+// What this does not show: a live model's choices, path scoping of the read
+// tools (the researcher can open any file the user can), or the tools of MCP
+// servers in the session. The scripted model makes every call, so the proof
+// shows what the host enforces.
 //
 // This file runs on the current v1 pin only. The v1 floor is not a host this
 // behavior is claimed for, so the floor profile does not list it.
@@ -22,19 +26,19 @@ import path from 'node:path'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
-  CONNECT_PROBE_AGENT,
+  agentSystemMarker,
+  CONNECT_AGENT,
   type ConnectIsolationScript,
   connectIsolationLayout,
   connectObservation,
   createConnectIsolationScript,
   evaluateConnectIsolationProof,
   type IsolationHostTools,
-  installProbeAgent,
   plantConnectExternalCheckout,
   plantConnectIsolationFixture,
-  probeSystemMarker,
   readConnectSideEffects,
-  readProbeDefinition,
+  readShippedDefinition,
+  resolveRunDefinition,
   startFetchCounter,
   withoutDenyEntries,
   withoutExternalDirectoryAllow,
@@ -138,11 +142,13 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
 
     /**
      * Runs the parent through `opencode run`, with the scripted parent
-     * dispatching the probe by `task`. `hostPermission` is the user's own
+     * dispatching the researcher by `task`. Without `definition` the agent is
+     * the one the packed plugin ships; with one, that text replaces it, which
+     * is how a control runs a changed copy. `hostPermission` is the user's own
      * top-level permission block, which is where a blanket allow lives on v1.
      */
     async function runConnectIsolation(options: {
-      definition: string
+      definition?: string
       hostPermission?: Record<string, string>
       /** Read a note in a git checkout outside the project instead of one inside it. */
       external?: boolean
@@ -150,10 +156,15 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       result: OpencodeResult
       script: ConnectIsolationScript
       marker: string
+      /** The agent definition as the extracted package carried it before any replacement. */
+      packaged: string | undefined
       sideEffects: ReturnType<typeof readConnectSideEffects>
     }> {
       const { packageDir, pluginUrl } = extractPackagedPlugin(fixture, HOST)
-      installProbeAgent(packageDir, options.definition)
+      const { definition, packaged } = resolveRunDefinition(
+        packageDir,
+        options.definition,
+      )
       // The host resolves its working directory to a real path, and a path under
       // a symlinked temp directory would read as outside the project.
       const projectLayout = connectIsolationLayout(
@@ -167,7 +178,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           )
         : projectLayout
       const fetchCounter = startFetchCounter()
-      const marker = probeSystemMarker(options.definition)
+      const marker = agentSystemMarker(definition)
       const script = createConnectIsolationScript({
         layout,
         hostTools: V1_ISOLATION_TOOLS,
@@ -177,7 +188,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           arguments: {
             description: 'Read the probe note',
             prompt: 'Read the probe note and report its marker.',
-            subagent_type: CONNECT_PROBE_AGENT,
+            subagent_type: CONNECT_AGENT,
           },
         },
         isChildRequest: (request) => hasResearcherSystemMarker(request, marker),
@@ -215,6 +226,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           result,
           script,
           marker,
+          packaged,
           sideEffects: readConnectSideEffects(layout, fetchCounter.hits()),
         }
       } finally {
@@ -224,12 +236,12 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     }
 
     test(
-      'a dispatched researcher with denied shell, write and web tools is refused each one and its read reaches the parent',
+      'the shipped researcher, dispatched from the packed plugin, is refused shell, write, edit and web fetch and its read reaches the parent',
       async () => {
-        const run = await runConnectIsolation({
-          definition: readProbeDefinition(),
-        })
+        const run = await runConnectIsolation({})
 
+        // The agent that ran is the committed file, not a fixture.
+        expect(run.packaged).toBe(readShippedDefinition())
         expect(run.result.exitCode).toBe(0)
         // `opencode run` prints the parent's final message and nothing else on
         // stdout, so stdout is that one message.
@@ -247,7 +259,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           fetchHits: 0,
           extraWorktrees: 0,
         })
-        // The child that ran is the probe, not some other agent.
+        // The child that ran is the researcher, not some other agent.
         for (const child of run.script.observation().childRequests) {
           expect(hasResearcherSystemMarker(child, run.marker)).toBe(true)
         }
@@ -273,7 +285,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'with the deny entries removed the same script writes a file and the proof names an isolation breach',
       async () => {
         const run = await runConnectIsolation({
-          definition: withoutDenyEntries(readProbeDefinition()),
+          definition: withoutDenyEntries(readShippedDefinition()),
         })
 
         expect(run.result.exitCode).toBe(0)
@@ -294,10 +306,9 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     )
 
     test(
-      "a blanket allow in the host's own permission block does not lift the probe agent deny",
+      "a blanket allow in the host's own permission block does not lift the shipped researcher's deny",
       async () => {
         const run = await runConnectIsolation({
-          definition: readProbeDefinition(),
           hostPermission: {
             '*': 'allow',
             bash: 'allow',
@@ -329,10 +340,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     test(
       'a headless run reads a git checkout outside the project and the marker reaches the parent, with every denied tool still refused',
       async () => {
-        const run = await runConnectIsolation({
-          definition: readProbeDefinition(),
-          external: true,
-        })
+        const run = await runConnectIsolation({ external: true })
 
         expect(run.result.exitCode).toBe(0)
         expect(run.result.stderr).not.toMatch(/permission requested/)
@@ -367,7 +375,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'without external_directory: allow the same read is auto-rejected, which pins what the entry does',
       async () => {
         const run = await runConnectIsolation({
-          definition: withoutExternalDirectoryAllow(readProbeDefinition()),
+          definition: withoutExternalDirectoryAllow(readShippedDefinition()),
           external: true,
         })
 

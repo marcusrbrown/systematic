@@ -532,16 +532,18 @@ describe('systematic_delegate child-session boundary: noExtensions + re-entry gu
 })
 
 /**
- * The researcher's tools on the Pi path, observed where they leave Systematic:
- * the `tools` handed to `createAgentSession`. The run goes through the real
- * catalog builder, the real delegate tool and the real session builder; only
- * the Pi runtime underneath is a fake that records what it was asked for.
+ * The shipped connections-researcher's tools on the Pi path, observed where
+ * they leave Systematic: the `tools` handed to `createAgentSession`. The run
+ * goes through the real catalog builder, the real delegate tool and the real
+ * session builder; only the Pi runtime underneath is a fake that records what
+ * it was asked for. This shows the tool list Pi is asked for, not that Pi
+ * enforces it against a live model, and the read tools are not path scoped.
  */
-describe('researcher definition on the Pi delegate path', () => {
-  const PROBE_DEFINITION = fs.readFileSync(
+describe('shipped researcher definition on the Pi delegate path', () => {
+  const SHIPPED_DEFINITION = fs.readFileSync(
     path.join(
       import.meta.dirname,
-      '../fixtures/connect-isolation/researcher-probe.md',
+      '../../agents/research/connections-researcher.md',
     ),
     'utf8',
   )
@@ -574,7 +576,7 @@ describe('researcher definition on the Pi delegate path', () => {
     }
   }
 
-  async function dispatchProbe(agentsDir: string) {
+  async function dispatchResearcher(agentsDir: string) {
     const { runtime, sessionOptions } = createRecordingRuntime()
     const tool = createPiDelegateTool({
       catalog: buildAgentCatalog(agentsDir),
@@ -582,7 +584,10 @@ describe('researcher definition on the Pi delegate path', () => {
     })
     await tool.execute(
       'call-1',
-      { agent: 'researcher-probe', task: 'Read the probe note.' } as never,
+      {
+        agent: 'connections-researcher',
+        task: 'Read the probe note.',
+      } as never,
       undefined,
       undefined,
       {
@@ -595,12 +600,12 @@ describe('researcher definition on the Pi delegate path', () => {
     return sessionOptions
   }
 
-  test('a delegated probe reaches createAgentSession with read, grep and find and none of bash, write or edit', async () => {
+  test('the shipped researcher reaches createAgentSession with read, grep and find and none of bash, write, edit or systematic_delegate', async () => {
     const agentsDir = makeTempAgentsDir({
-      'research/researcher-probe.md': PROBE_DEFINITION,
+      'research/connections-researcher.md': SHIPPED_DEFINITION,
     })
 
-    const sessionOptions = await dispatchProbe(agentsDir)
+    const sessionOptions = await dispatchResearcher(agentsDir)
 
     expect(sessionOptions).toHaveLength(1)
     const tools = sessionOptions[0]?.tools
@@ -610,14 +615,37 @@ describe('researcher definition on the Pi delegate path', () => {
     }
   })
 
+  test('the committed agents directory builds a catalog that dispatches the researcher with the same three tools', async () => {
+    const agentsDir = path.join(import.meta.dirname, '../../agents')
+
+    const sessionOptions = await dispatchResearcher(agentsDir)
+
+    expect(sessionOptions[0]?.tools).toEqual(['read', 'grep', 'find'])
+  })
+
+  test('a definition that adds Bash to its tools puts bash in the session, so the assertion above can fail', async () => {
+    const widened = SHIPPED_DEFINITION.replace(
+      'tools: Read, Grep, Glob',
+      'tools: Read, Grep, Glob, Bash',
+    )
+    expect(widened).not.toBe(SHIPPED_DEFINITION)
+    const agentsDir = makeTempAgentsDir({
+      'research/connections-researcher.md': widened,
+    })
+
+    const sessionOptions = await dispatchResearcher(agentsDir)
+
+    expect(sessionOptions[0]?.tools).toContain('bash')
+  })
+
   test('lowercase tool names fail the whole catalog build, which pins the capitalization', () => {
-    const lowercase = PROBE_DEFINITION.replace(
+    const lowercase = SHIPPED_DEFINITION.replace(
       'tools: Read, Grep, Glob',
       'tools: read, grep, glob',
     )
-    expect(lowercase).not.toBe(PROBE_DEFINITION)
+    expect(lowercase).not.toBe(SHIPPED_DEFINITION)
     const agentsDir = makeTempAgentsDir({
-      'research/researcher-probe.md': lowercase,
+      'research/connections-researcher.md': lowercase,
     })
 
     expect(() => buildAgentCatalog(agentsDir)).toThrow(
@@ -625,17 +653,17 @@ describe('researcher definition on the Pi delegate path', () => {
     )
   })
 
-  test('a definition that declares no tools gets the read-only default, which is wider than the probe asks for', async () => {
-    const undeclared = PROBE_DEFINITION.replace(/^tools: .*\n/m, '')
-    expect(undeclared).not.toBe(PROBE_DEFINITION)
+  test('a definition that declares no tools gets the read-only default, which is wider than the shipped researcher asks for', async () => {
+    const undeclared = SHIPPED_DEFINITION.replace(/^tools: .*\n/m, '')
+    expect(undeclared).not.toBe(SHIPPED_DEFINITION)
     const agentsDir = makeTempAgentsDir({
-      'research/researcher-probe.md': undeclared,
+      'research/connections-researcher.md': undeclared,
     })
 
-    const sessionOptions = await dispatchProbe(agentsDir)
+    const sessionOptions = await dispatchResearcher(agentsDir)
 
     // Pi's default allowlist adds `ls` and `systematic_search`. A researcher
-    // that omits `tools:` therefore asks for more than the probe does, so the
+    // that omits `tools:` therefore asks for more than the shipped agent does, so the
     // shipped definition must declare its tools.
     expect(sessionOptions[0]?.tools).toEqual([
       'read',
