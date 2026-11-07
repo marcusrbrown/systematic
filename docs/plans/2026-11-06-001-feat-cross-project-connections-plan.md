@@ -486,7 +486,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 - v1 and v2 each have a passing proof with a negative control, Pi has a passing builder test, or the unit ends in a recorded stop-and-ask.
 - The timings file and job timeout reflect the added v1 time.
 
-- [ ] U2. Config block, allow-list reader, per-entry identity and host-support table
+- [x] U2. Config block, allow-list reader, per-entry identity and host-support table
 
 **Goal:** Add the user-only `connect` config block, a reader that fails closed, a per-entry resolver that says why an entry did not match, and the host-support table.
 

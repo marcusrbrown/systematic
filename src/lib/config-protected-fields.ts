@@ -23,6 +23,7 @@ export const CONFIG_PROTECTED_FIELD_PATHS = [
   'allow_project_profiles',
   'search.enabled',
   'search.allow_project_sources',
+  'connect',
   'agents.*.model',
   'agents.*.permission',
   'agents.*.skills',

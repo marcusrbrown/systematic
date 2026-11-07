@@ -1,0 +1,610 @@
+/**
+ * The `connect` config block: the allow list of projects that `ce:connect`
+ * may read, a reader that fails closed, a per-entry resolver that says why an
+ * entry did not match, and the table of hosts where the researcher's tool
+ * denies have been observed.
+ *
+ * Import rule: this module may import only `jsonc-parser`, node builtins,
+ * `search-bounded-read.ts` and `search-project-identity.ts` (both node
+ * builtins only). It must never import zod, `config.ts`, `config-schema.ts` or
+ * `search-user-config.ts`: the `ce:connect` helper bundles it, and any of those
+ * would drag the config loader and zod into that bundle. `config-schema.ts`
+ * imports the limits from here and tags the same block `trust:
+ * 'project-or-higher'`; the dependency runs one way.
+ *
+ * Trust: `connect` is user-only. User config, `OPENCODE_CONFIG_DIR` config and
+ * the `systematic.local` file beside each may set it. `config.ts` strips it
+ * from project config with a warning, and this reader never opens a project
+ * file at all, so a repository cannot widen the list on any surface.
+ *
+ * Fail closed: the block is validated whole. An unknown key, a wrong type or
+ * a list over its limit makes that layer's block unreadable, and an
+ * unreadable block contributes no entries. A missing, unparseable, oversize
+ * or non-regular file contributes none either. No failure can add an entry
+ * the user did not write. The four layers merge by union, so a layer that
+ * fails drops only its own entries.
+ *
+ * Warnings name config files and reasons, never an allow-list entry: an entry
+ * is a project the user chose to expose, and a warning can reach logs and
+ * replies that the project is not allowed to see.
+ */
+
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import {
+  type ParseError,
+  parse as parseJsonc,
+  printParseErrorCode,
+} from 'jsonc-parser'
+import { readBytesBounded } from './search-bounded-read.js'
+import { resolveProjectIdentity } from './search-project-identity.js'
+
+// ── Limits ──────────────────────────────────────────────────────────────────
+
+/** The allow list holds at most this many entries. */
+export const MAX_ALLOW_PROJECTS = 64
+
+/** One allow-list entry is at most this many characters. */
+export const MAX_ALLOW_PROJECT_LENGTH = 4096
+
+/** Largest config file the reader accepts. A larger file is unreadable. */
+export const MAX_CONNECT_CONFIG_BYTES = 1024 * 1024
+
+/** Longest file path or reason echoed into a warning. */
+const MAX_DIAGNOSTIC_LENGTH = 200
+
+/** The sole key the `connect` block accepts. */
+const ALLOW_PROJECTS_KEY = 'allow_projects'
+
+// ── The block ───────────────────────────────────────────────────────────────
+
+export interface ConnectSettings {
+  allow_projects: string[]
+}
+
+export type ConnectBlockValidation =
+  | { readonly ok: true; readonly allowProjects: string[] }
+  | { readonly ok: false }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Validate a `connect` block with plain guards. The block is valid when it is
+ * an object whose only key, if any, is `allow_projects`, holding at most
+ * `MAX_ALLOW_PROJECTS` non-empty strings of at most `MAX_ALLOW_PROJECT_LENGTH`
+ * characters. The zod schema in `config-schema.ts` accepts and rejects the
+ * same values; a test pins the two together.
+ */
+export function validateConnectBlock(value: unknown): ConnectBlockValidation {
+  if (!isRecord(value)) return { ok: false }
+  if (Object.keys(value).some((key) => key !== ALLOW_PROJECTS_KEY)) {
+    return { ok: false }
+  }
+  const list = Object.hasOwn(value, ALLOW_PROJECTS_KEY)
+    ? value[ALLOW_PROJECTS_KEY]
+    : []
+  if (!Array.isArray(list) || list.length > MAX_ALLOW_PROJECTS) {
+    return { ok: false }
+  }
+  const allowProjects: string[] = []
+  for (const entry of list as unknown[]) {
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > MAX_ALLOW_PROJECT_LENGTH
+    ) {
+      return { ok: false }
+    }
+    allowProjects.push(entry)
+  }
+  return { ok: true, allowProjects }
+}
+
+// ── Layer discovery ─────────────────────────────────────────────────────────
+//
+// The same four layers, in the same order, as the search reader
+// (`selectUserLevelConfigFiles`). The functions are repeated here because that
+// module imports zod; a parity test pins the two together.
+
+export interface ConnectConfigOptions {
+  readonly homeDir?: string
+  readonly userConfigDir?: string
+  /** `null` or a blank string means no custom directory. Leave the key out to read `OPENCODE_CONFIG_DIR`. */
+  readonly customConfigDir?: string | null
+}
+
+export interface ConnectConfigDirs {
+  readonly homeDir: string
+  readonly userConfigDir: string
+  readonly customConfigDir: string | undefined
+}
+
+export type ConnectConfigLayer =
+  | 'user'
+  | 'user.local'
+  | 'custom'
+  | 'custom.local'
+
+export interface ConnectConfigFile {
+  readonly layer: ConnectConfigLayer
+  readonly path: string
+}
+
+export interface ConnectConfigSelection {
+  readonly files: readonly ConnectConfigFile[]
+  /** The custom directory is the user directory, spelled the same way or reached through a symlink. */
+  readonly aliased: boolean
+}
+
+function errorCode(error: unknown): unknown {
+  return error instanceof Error && 'code' in error ? error.code : undefined
+}
+
+/** Whether a directory entry exists at `target`, a dangling link included. */
+function entryExists(target: string): boolean {
+  try {
+    fs.lstatSync(target)
+    return true
+  } catch (error) {
+    const code = errorCode(error)
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+}
+
+function selectConfigFile(dir: string, basename: string): string {
+  const jsoncPath = path.join(dir, `${basename}.jsonc`)
+  return entryExists(jsoncPath) ? jsoncPath : path.join(dir, `${basename}.json`)
+}
+
+function realpathOrResolved(dir: string): string {
+  const resolved = path.resolve(dir)
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+export function resolveConnectConfigDirs(
+  options?: ConnectConfigOptions,
+): ConnectConfigDirs {
+  const homeDir = options?.homeDir ?? os.homedir()
+  const userConfigDir =
+    options?.userConfigDir ?? path.join(homeDir, '.config/opencode')
+  const rawCustom =
+    options !== undefined && Object.hasOwn(options, 'customConfigDir')
+      ? options.customConfigDir?.trim()
+      : process.env.OPENCODE_CONFIG_DIR?.trim()
+  return { homeDir, userConfigDir, customConfigDir: rawCustom || undefined }
+}
+
+export function selectConnectConfigFiles(
+  dirs: ConnectConfigDirs,
+): ConnectConfigSelection {
+  const files: ConnectConfigFile[] = [
+    {
+      layer: 'user',
+      path: selectConfigFile(dirs.userConfigDir, 'systematic'),
+    },
+    {
+      layer: 'user.local',
+      path: selectConfigFile(dirs.userConfigDir, 'systematic.local'),
+    },
+  ]
+  const custom = dirs.customConfigDir
+  if (!custom) return { files, aliased: false }
+  files.push(
+    { layer: 'custom', path: selectConfigFile(custom, 'systematic') },
+    {
+      layer: 'custom.local',
+      path: selectConfigFile(custom, 'systematic.local'),
+    },
+  )
+  const aliased =
+    path.resolve(custom) === path.resolve(dirs.userConfigDir) ||
+    realpathOrResolved(custom) === realpathOrResolved(dirs.userConfigDir)
+  return { files, aliased }
+}
+
+// ── Containment ─────────────────────────────────────────────────────────────
+
+export type ContainerRefusal = 'checkout' | 'allowed-root'
+
+function isInside(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child)
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  )
+}
+
+/** Whether `dir` or any ancestor holds a `.git` entry of any kind. */
+function insideCheckout(dir: string): boolean {
+  let current = dir
+  for (;;) {
+    if (entryExists(path.join(current, '.git'))) return true
+    const parent = path.dirname(current)
+    if (parent === current) return false
+    current = parent
+  }
+}
+
+/**
+ * Why `dir` may not hold configuration or state, or `undefined` when it may.
+ * A directory is refused when it is, or sits inside, an allowed root
+ * (`allowed-root`), or when it or any ancestor holds a `.git` entry
+ * (`checkout`). A repository is untrusted input, so what it holds must not
+ * steer what the helper reads or where it writes. Both sides are compared as
+ * realpaths when they exist.
+ */
+export function containerRefusal(
+  dir: string,
+  allowedRoots: readonly string[],
+): ContainerRefusal | undefined {
+  const real = realpathOrResolved(dir)
+  for (const root of allowedRoots) {
+    if (isInside(real, realpathOrResolved(root))) return 'allowed-root'
+  }
+  return insideCheckout(real) ? 'checkout' : undefined
+}
+
+// ── The reader ──────────────────────────────────────────────────────────────
+
+export interface ConnectAllowListLoad {
+  /** The union of the readable layers' entries, in layer order, duplicates removed. */
+  readonly allowProjects: readonly string[]
+  /** Some layer's file or block could not be read and contributed nothing. */
+  readonly unreadable: boolean
+  /** One line per problem. They name files and reasons, never an allow-list entry. */
+  readonly warnings: readonly string[]
+  /** Set when the custom config directory was refused and none of its files were read. */
+  readonly customDirRefused?: ContainerRefusal
+}
+
+type BlockRead =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'failed'; readonly reason: string }
+  | { readonly kind: 'read'; readonly allowProjects: readonly string[] }
+
+/** Make `text` fit on one line of a warning: no control characters, bounded. */
+function displaySafe(text: string): string {
+  let out = ''
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0
+    out += code < 0x20 || code === 0x7f ? '?' : char
+  }
+  return out.length > MAX_DIAGNOSTIC_LENGTH
+    ? `${out.slice(0, MAX_DIAGNOSTIC_LENGTH - 1)}\u2026`
+    : out
+}
+
+function readConnectBlock(filePath: string): BlockRead {
+  const read = readBytesBounded(filePath, MAX_CONNECT_CONFIG_BYTES)
+  switch (read.kind) {
+    case 'absent':
+      // `absent` is also what a dangling link reports; selection chose it.
+      return entryExists(filePath)
+        ? { kind: 'failed', reason: 'unable to read file' }
+        : { kind: 'absent' }
+    case 'not-regular':
+      return { kind: 'failed', reason: 'not a regular file' }
+    case 'too-large':
+      return {
+        kind: 'failed',
+        reason: `file is larger than ${MAX_CONNECT_CONFIG_BYTES / (1024 * 1024)} MB`,
+      }
+    case 'failed':
+      return { kind: 'failed', reason: 'unable to read file' }
+    case 'bytes':
+      break
+  }
+  const errors: ParseError[] = []
+  const parsed: unknown = parseJsonc(read.bytes.toString('utf-8'), errors, {
+    allowTrailingComma: true,
+  })
+  const firstError = errors[0]
+  if (firstError) {
+    return {
+      kind: 'failed',
+      reason: `JSONC parse error: ${printParseErrorCode(firstError.error)}`,
+    }
+  }
+  if (!isRecord(parsed)) {
+    return { kind: 'failed', reason: 'root must be an object' }
+  }
+  if (!Object.hasOwn(parsed, 'connect')) {
+    return { kind: 'read', allowProjects: [] }
+  }
+  const validation = validateConnectBlock(parsed.connect)
+  return validation.ok
+    ? { kind: 'read', allowProjects: validation.allowProjects }
+    : { kind: 'failed', reason: 'the connect block is not valid' }
+}
+
+function expandHome(entry: string, homeDir: string): string {
+  if (entry === '~') return homeDir
+  if (entry.startsWith('~/') || entry.startsWith(`~${path.sep}`)) {
+    return path.join(homeDir, entry.slice(2))
+  }
+  return entry
+}
+
+/** The realpath of every entry that is absolute and exists. A bad entry is skipped. */
+function existingRoots(
+  entries: readonly string[],
+  homeDir: string,
+): readonly string[] {
+  const roots: string[] = []
+  for (const entry of entries) {
+    const expanded = expandHome(entry, homeDir)
+    if (!path.isAbsolute(expanded)) continue
+    try {
+      roots.push(fs.realpathSync.native(expanded))
+    } catch {
+      // A stale entry roots nothing.
+    }
+  }
+  return roots
+}
+
+/**
+ * Read the allow list from the user-level files: user, user.local, then
+ * custom and custom.local when a custom directory is set. It never reads
+ * project config and never throws.
+ *
+ * The custom directory is refused, and none of its files are opened, when it
+ * is inside an allowed root of the user layers or inside a checkout: a
+ * repository must not be able to supply the file that names the projects the
+ * helper reads. A custom directory that is the user directory is not a second
+ * source and is not refused.
+ */
+export function loadConnectAllowList(
+  options?: ConnectConfigOptions,
+): ConnectAllowListLoad {
+  const dirs = resolveConnectConfigDirs(options)
+  const selection = selectConnectConfigFiles(dirs)
+  const warnings: string[] = []
+  const entries = new Set<string>()
+  let unreadable = false
+
+  const readLayer = (file: ConnectConfigFile): void => {
+    const read = readConnectBlock(file.path)
+    if (read.kind === 'absent') return
+    if (read.kind === 'failed') {
+      unreadable = true
+      warnings.push(
+        `[systematic] connect settings in ${displaySafe(file.path)} could not be read (${read.reason}); the allow list from that file was ignored.`,
+      )
+      return
+    }
+    for (const entry of read.allowProjects) entries.add(entry)
+  }
+
+  const isUserLayer = (file: ConnectConfigFile): boolean =>
+    file.layer === 'user' || file.layer === 'user.local'
+  for (const file of selection.files.filter(isUserLayer)) readLayer(file)
+
+  const customFiles = selection.files.filter((file) => !isUserLayer(file))
+  let customDirRefused: ContainerRefusal | undefined
+  if (customFiles.length > 0 && !selection.aliased && dirs.customConfigDir) {
+    customDirRefused = containerRefusal(
+      dirs.customConfigDir,
+      existingRoots([...entries], dirs.homeDir),
+    )
+    if (customDirRefused === undefined) {
+      for (const file of customFiles) readLayer(file)
+    } else {
+      warnings.push(
+        `[systematic] OPENCODE_CONFIG_DIR is inside ${customDirRefused === 'checkout' ? 'a repository checkout' : 'an allowed project'}; its connect settings were not read.`,
+      )
+    }
+  }
+
+  return {
+    allowProjects: [...entries],
+    unreadable,
+    warnings,
+    ...(customDirRefused !== undefined && { customDirRefused }),
+  }
+}
+
+// ── The per-entry resolver ──────────────────────────────────────────────────
+
+/** Why an allow-list entry matched no project. */
+export type AllowEntryMissReason =
+  /** Not an absolute path once `~` is expanded. */
+  | 'not-absolute'
+  /** The path does not exist. */
+  | 'stale'
+  /** The path exists but is not a repository, and none encloses it. */
+  | 'not-a-repository'
+  /** The path is inside a repository, or a linked worktree: only the main root is allowed. */
+  | 'not-main-root'
+  /** The path or its repository layout could not be read or verified. */
+  | 'unreadable'
+
+export type AllowEntryResolution =
+  | {
+      readonly status: 'resolved'
+      readonly entry: string
+      /** The verified main repository root, as a realpath. */
+      readonly mainRoot: string
+    }
+  | {
+      readonly status: 'unmatched'
+      readonly entry: string
+      readonly reason: AllowEntryMissReason
+    }
+
+export interface AllowEntryOptions {
+  /** Home directory for `~` entries. Defaults to `os.homedir()`. */
+  readonly homeDir?: string
+}
+
+function unmatched(
+  entry: string,
+  reason: AllowEntryMissReason,
+): AllowEntryResolution {
+  return { status: 'unmatched', entry, reason }
+}
+
+/** Whether a proper ancestor of `dir` holds a `.git` entry. */
+function enclosedByCheckout(dir: string): boolean {
+  const parent = path.dirname(dir)
+  return parent !== dir && insideCheckout(parent)
+}
+
+/**
+ * Resolve one allow-list entry to a verified main repository root, or say why
+ * it did not match. The entry is expanded (`~`), realpathed, and its identity
+ * derived with `resolveProjectIdentity`; the main root must equal the entry's
+ * realpath exactly, so a subdirectory and a linked worktree are not accepted.
+ * Never throws.
+ */
+export function resolveAllowEntry(
+  entry: string,
+  options: AllowEntryOptions = {},
+): AllowEntryResolution {
+  const expanded = expandHome(entry, options.homeDir ?? os.homedir())
+  if (!path.isAbsolute(expanded)) return unmatched(entry, 'not-absolute')
+
+  let real: string
+  try {
+    real = fs.realpathSync.native(expanded)
+  } catch (error) {
+    const code = errorCode(error)
+    return unmatched(
+      entry,
+      code === 'ENOENT' || code === 'ENOTDIR' ? 'stale' : 'unreadable',
+    )
+  }
+  try {
+    if (!fs.statSync(real).isDirectory()) {
+      return unmatched(entry, 'not-a-repository')
+    }
+  } catch {
+    return unmatched(entry, 'unreadable')
+  }
+
+  const identity = resolveProjectIdentity(real)
+  if (identity.status === 'resolved') {
+    return identity.mainRoot === real
+      ? { status: 'resolved', entry, mainRoot: real }
+      : unmatched(entry, 'not-main-root')
+  }
+  if (identity.reason === 'not-a-checkout') {
+    return unmatched(
+      entry,
+      enclosedByCheckout(real) ? 'not-main-root' : 'not-a-repository',
+    )
+  }
+  return unmatched(entry, 'unreadable')
+}
+
+export interface ResolvedAllowList {
+  readonly resolved: ReadonlyArray<{
+    readonly entry: string
+    readonly mainRoot: string
+  }>
+  readonly unmatched: ReadonlyArray<{
+    readonly entry: string
+    readonly reason: AllowEntryMissReason
+  }>
+}
+
+/**
+ * Resolve every entry. Two entries that name one project collapse into the
+ * first; a later duplicate is neither resolved nor unmatched.
+ */
+export function resolveAllowList(
+  entries: readonly string[],
+  options: AllowEntryOptions = {},
+): ResolvedAllowList {
+  const resolved: Array<{ entry: string; mainRoot: string }> = []
+  const missed: Array<{ entry: string; reason: AllowEntryMissReason }> = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    const resolution = resolveAllowEntry(entry, options)
+    if (resolution.status === 'unmatched') {
+      missed.push({ entry, reason: resolution.reason })
+      continue
+    }
+    if (seen.has(resolution.mainRoot)) continue
+    seen.add(resolution.mainRoot)
+    resolved.push({ entry, mainRoot: resolution.mainRoot })
+  }
+  return { resolved, unmatched: missed }
+}
+
+// ── The host-support table ──────────────────────────────────────────────────
+
+export const CONNECT_HOSTS = [
+  'opencode-v1',
+  'opencode-v2',
+  'pi',
+  'claude-code',
+] as const
+
+export type ConnectHost = (typeof CONNECT_HOSTS)[number]
+
+/**
+ * One host and exact version where the researcher's shell, write and web tools
+ * were observed denied on a real host. `observedBy` names the test that
+ * observed it. A row without one never matches.
+ */
+export interface HostSupportRow {
+  readonly host: ConnectHost
+  readonly version: string
+  readonly observedBy: string
+}
+
+/**
+ * The supported combinations. A row is added only for a host and version where
+ * a real-host deny was observed against the shipped agent. There are none yet,
+ * so every host is unsupported.
+ */
+export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = []
+
+export type HostSupportVerdict =
+  | { readonly supported: true; readonly row: HostSupportRow }
+  | {
+      readonly supported: false
+      /** `unobserved`: no usable version. `unlisted`: no row names this host and version. */
+      readonly reason: 'unobserved' | 'unlisted'
+    }
+
+/** A version as the skill reports it: trimmed, one leading `v` dropped. `undefined` when there is none. */
+function normalizeVersion(version: unknown): string | undefined {
+  if (typeof version !== 'string') return undefined
+  const trimmed = version.trim().replace(/^v/i, '').trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * Check an observed host and version against the table. The match is exact:
+ * a version that is not listed is refused, whether older or newer. A pair the
+ * skill could not observe is unsupported.
+ */
+export function checkHostSupport(
+  host: unknown,
+  version: unknown,
+  table: readonly HostSupportRow[] = HOST_SUPPORT_TABLE,
+): HostSupportVerdict {
+  const observed = normalizeVersion(version)
+  if (observed === undefined) return { supported: false, reason: 'unobserved' }
+  const row = table.find(
+    (candidate) =>
+      candidate.host === host &&
+      typeof candidate.observedBy === 'string' &&
+      candidate.observedBy.trim() !== '' &&
+      normalizeVersion(candidate.version) === observed,
+  )
+  return row === undefined
+    ? { supported: false, reason: 'unlisted' }
+    : { supported: true, row }
+}

@@ -56,6 +56,7 @@ const TOP_LEVEL_KEYS = [
   'skills_as_commands',
   'allow_project_profiles',
   'search',
+  'connect',
 ] as const
 
 /**
@@ -125,6 +126,9 @@ const SEARCH_SUB_FIELDS = [
   'allow_project_sources',
   'sources',
 ] as const
+
+/** `connect` sub-fields, in display order. */
+const CONNECT_SUB_FIELDS = ['allow_projects'] as const
 
 /** Fields of one `search.sources[]` entry, in display order. */
 const SEARCH_SOURCE_ENTRY_FIELDS = [
@@ -305,6 +309,20 @@ function renderSearchSubFields(searchSchema: Record<string, unknown>): string {
   return `\n\n${renderSearchSubSections(props)}`
 }
 
+/** Render the `connect` sub-field sections under `###`. */
+function renderConnectSubFields(
+  connectSchema: Record<string, unknown>,
+): string {
+  const props = connectSchema.properties as Record<string, unknown> | undefined
+  if (!props) return ''
+  return `\n\n${CONNECT_SUB_FIELDS.map((subKey) => {
+    const subSchema = props[subKey] as Record<string, unknown> | undefined
+    return subSchema ? renderFieldSection(`### ${subKey}`, subSchema) : null
+  })
+    .filter(Boolean)
+    .join('\n\n')}`
+}
+
 function renderSearchSubSections(props: Record<string, unknown>): string {
   return SEARCH_SUB_FIELDS.map((subKey) => {
     const subSchema = props[subKey] as Record<string, unknown> | undefined
@@ -406,6 +424,9 @@ function renderTopLevelSection(
   // search sub-fields (`enabled`, `allow_project_sources`, `sources`), then
   // the fields of one `sources[]` entry one heading level deeper.
   if (key === 'search') subFields = renderSearchSubFields(propSchema)
+
+  // connect sub-field (`allow_projects`).
+  if (key === 'connect') subFields = renderConnectSubFields(propSchema)
 
   // Cross-reference for agent/category overlay sections.
   // The Overlay Fields block renders before the agents/categories sections in

@@ -22,6 +22,10 @@ import {
   BUNDLED_SKILL_NAMES,
 } from './bundled-names.js'
 import {
+  MAX_ALLOW_PROJECT_LENGTH,
+  MAX_ALLOW_PROJECTS,
+} from './connect-config.js'
+import {
   REMOVED_BUNDLED_AGENT_NAMES,
   REMOVED_BUNDLED_SKILL_NAMES,
 } from './removed-names.js'
@@ -498,6 +502,35 @@ export const BootstrapSchema = z
     examples: [{ enabled: true }, { enabled: false }],
   })
 
+/**
+ * The `connect` block. Every field is user-only, so the block as a whole is
+ * tagged `project-or-higher`. `connect-config.ts` reads it with plain guards
+ * (the helper bundle cannot carry zod) and a test pins the two to the same
+ * accept and reject set.
+ */
+const ConnectSettingsSchema = trustProtected(
+  z
+    .object({
+      allow_projects: z
+        .array(z.string().min(1).max(MAX_ALLOW_PROJECT_LENGTH))
+        .max(MAX_ALLOW_PROJECTS)
+        .optional()
+        .meta({
+          description: `Main repository roots that \`ce:connect\` may read for contradictions and transferable lessons. Each entry is an absolute or \`~\`-prefixed path to the root of a repository checkout, not a subdirectory and not a linked worktree. At most ${MAX_ALLOW_PROJECTS} entries; an entry that matches no repository is reported by the run and does not widen the list. The lists in user, user.local, custom and custom.local config are merged as a union. Omitted or empty, it allows no project.`,
+          examples: [['~/src/github.com/me/app', '/srv/checkouts/shared-lib']],
+        }),
+    })
+    .strict()
+    .meta({
+      description:
+        'Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list.',
+      examples: [
+        { allow_projects: ['~/src/github.com/me/app'] },
+        { allow_projects: [] },
+      ],
+    }),
+)
+
 export interface SystematicConfigSchemaOptions {
   readonly agentNames: readonly string[]
   readonly qualifiedAgentIds: readonly string[]
@@ -604,6 +637,7 @@ export function createSystematicConfigSchema(
       // Trust is per nested field (`enabled`, `allow_project_sources`), tagged
       // inline in `SearchSettingsSchema`; a project may set `sources`.
       search: SearchSettingsSchema.optional(),
+      connect: ConnectSettingsSchema.optional(),
       disabled_skills: z
         // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
         // by the sanity check in generateBundledNamesContent. Removed names are

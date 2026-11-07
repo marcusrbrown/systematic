@@ -23,26 +23,29 @@
     "search": {
       "$ref": "#/definitions/__schema72"
     },
-    "disabled_skills": {
+    "connect": {
       "$ref": "#/definitions/__schema86"
     },
-    "disabled_agents": {
-      "$ref": "#/definitions/__schema88"
-    },
-    "disabled_commands": {
+    "disabled_skills": {
       "$ref": "#/definitions/__schema90"
     },
-    "bootstrap": {
+    "disabled_agents": {
       "$ref": "#/definitions/__schema92"
     },
+    "disabled_commands": {
+      "$ref": "#/definitions/__schema94"
+    },
+    "bootstrap": {
+      "$ref": "#/definitions/__schema96"
+    },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema98"
+      "$ref": "#/definitions/__schema102"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema100"
+      "$ref": "#/definitions/__schema104"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema111"
+      "$ref": "#/definitions/__schema115"
     }
   },
   "additionalProperties": false,
@@ -2072,16 +2075,56 @@
       }
     },
     "__schema86": {
+      "type": "object",
+      "properties": {
+        "allow_projects": {
+          "$ref": "#/definitions/__schema87"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list.",
+      "examples": [
+        {
+          "allow_projects": ["~/src/github.com/me/app"]
+        },
+        {
+          "allow_projects": []
+        }
+      ],
+      "trust": "project-or-higher"
+    },
+    "__schema87": {
+      "description": "Main repository roots that `ce:connect` may read for contradictions and transferable lessons. Each entry is an absolute or `~`-prefixed path to the root of a repository checkout, not a subdirectory and not a linked worktree. At most 64 entries; an entry that matches no repository is reported by the run and does not widen the list. The lists in user, user.local, custom and custom.local config are merged as a union. Omitted or empty, it allows no project.",
+      "examples": [["~/src/github.com/me/app", "/srv/checkouts/shared-lib"]],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema88"
+        }
+      ]
+    },
+    "__schema88": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/__schema89"
+      }
+    },
+    "__schema89": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "__schema90": {
       "default": [],
       "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
       "examples": [["ce:plan", "ce:review"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema87"
+          "$ref": "#/definitions/__schema91"
         }
       ]
     },
-    "__schema87": {
+    "__schema91": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2140,7 +2183,7 @@
         ]
       }
     },
-    "__schema88": {
+    "__schema92": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -2149,11 +2192,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema89"
+          "$ref": "#/definitions/__schema93"
         }
       ]
     },
-    "__schema89": {
+    "__schema93": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2263,23 +2306,23 @@
         ]
       }
     },
-    "__schema90": {
+    "__schema94": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema91"
+          "$ref": "#/definitions/__schema95"
         }
       ]
     },
-    "__schema91": {
+    "__schema95": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema92": {
+    "__schema96": {
       "default": {
         "enabled": true
       },
@@ -2294,18 +2337,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema93"
+          "$ref": "#/definitions/__schema97"
         }
       ]
     },
-    "__schema93": {
+    "__schema97": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema94"
+          "$ref": "#/definitions/__schema98"
         },
         "file": {
-          "$ref": "#/definitions/__schema96"
+          "$ref": "#/definitions/__schema100"
         }
       },
       "additionalProperties": false,
@@ -2319,42 +2362,42 @@
         }
       ]
     },
-    "__schema94": {
+    "__schema98": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema95"
-        }
-      ]
-    },
-    "__schema95": {
-      "type": "boolean"
-    },
-    "__schema96": {
-      "description": "Path to a custom bootstrap prompt file",
-      "examples": ["~/.config/opencode/bootstrap.md"],
-      "allOf": [
-        {
-          "$ref": "#/definitions/__schema97"
-        }
-      ]
-    },
-    "__schema97": {
-      "type": "string"
-    },
-    "__schema98": {
-      "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
-      "deprecated": true,
       "allOf": [
         {
           "$ref": "#/definitions/__schema99"
         }
       ]
     },
-    "__schema99": {},
+    "__schema99": {
+      "type": "boolean"
+    },
     "__schema100": {
+      "description": "Path to a custom bootstrap prompt file",
+      "examples": ["~/.config/opencode/bootstrap.md"],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema101"
+        }
+      ]
+    },
+    "__schema101": {
+      "type": "string"
+    },
+    "__schema102": {
+      "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
+      "deprecated": true,
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema103"
+        }
+      ]
+    },
+    "__schema103": {},
+    "__schema104": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2376,11 +2419,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema101"
+          "$ref": "#/definitions/__schema105"
         }
       ]
     },
-    "__schema101": {
+    "__schema105": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2396,7 +2439,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema102"
+              "$ref": "#/definitions/__schema106"
             }
           ]
         },
@@ -2413,14 +2456,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema110"
+              "$ref": "#/definitions/__schema114"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema102": {
+    "__schema106": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2434,12 +2477,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema109"
+            "$ref": "#/definitions/__schema113"
           }
         ]
       }
     },
-    "__schema103": {
+    "__schema107": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2447,7 +2490,7 @@
         }
       ]
     },
-    "__schema104": {
+    "__schema108": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2455,48 +2498,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema105": {
+    "__schema109": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema106": {
+    "__schema110": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema107"
+          "$ref": "#/definitions/__schema111"
         },
         {
-          "$ref": "#/definitions/__schema108"
+          "$ref": "#/definitions/__schema112"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema107": {
+    "__schema111": {
       "type": "boolean",
       "const": true
     },
-    "__schema108": {
+    "__schema112": {
       "type": "string",
       "minLength": 1
     },
-    "__schema109": {
+    "__schema113": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema103"
+          "$ref": "#/definitions/__schema107"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema104"
+          "$ref": "#/definitions/__schema108"
         },
         "tools": {
-          "$ref": "#/definitions/__schema105"
+          "$ref": "#/definitions/__schema109"
         },
         "skills": {
-          "$ref": "#/definitions/__schema106"
+          "$ref": "#/definitions/__schema110"
         }
       },
       "additionalProperties": false,
@@ -2508,26 +2551,26 @@
         }
       ]
     },
-    "__schema110": {
+    "__schema114": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema109"
+        "$ref": "#/definitions/__schema113"
       }
     },
-    "__schema111": {
+    "__schema115": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema112"
+          "$ref": "#/definitions/__schema116"
         }
       ]
     },
-    "__schema112": {
+    "__schema116": {
       "type": "boolean"
     }
   }

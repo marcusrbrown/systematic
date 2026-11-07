@@ -113,6 +113,7 @@ Config loading
   src/lib/config.ts          — loadConfig: JSONC loading, layered merge (user < user.local < project < custom < custom.local); the project file is read from the repository root
   src/lib/config-schema.ts   — SystematicConfigSchema (Zod), validateConfig, SECURITY_OVERLAY_FIELDS
   src/lib/config-protected-fields.ts — CONFIG_PROTECTED_FIELD_PATHS: dependency-free (imports nothing), shared verbatim by config.ts and capability-snapshot.ts so the two never drift
+  src/lib/connect-config.ts  — the user-only `connect` block for `ce:connect`: `loadConnectAllowList` reads the four user-level layers with plain guards (no zod; the helper bundle inlines `jsonc-parser`), fails closed so a bad block contributes nothing, and refuses a custom config directory inside a checkout or an allowed root; `resolveAllowEntry` says why an entry matched no project (`stale`, `not-a-repository`, `not-main-root`, `not-absolute`, `unreadable`); `HOST_SUPPORT_TABLE` lists hosts and exact versions where a real-host deny was observed (no rows yet). Imports only `jsonc-parser`, node builtins, `search-bounded-read.ts` and `search-project-identity.ts`; project config is never read
 
 Asset discovery
   src/lib/walk-dir.ts        — walkDir: recursive directory walker (foundation for all discovery)

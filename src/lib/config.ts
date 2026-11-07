@@ -21,6 +21,7 @@ import {
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
+import type { ConnectSettings } from './connect-config.js'
 import {
   REMOVED_BUNDLED_AGENT_CATEGORIES,
   REMOVED_CONFIG_KEYS,
@@ -279,6 +280,15 @@ export interface SystematicConfig {
    * `config unreadable` note. Absent otherwise.
    */
   searchUnreadable?: boolean
+  /**
+   * Merged `connect` settings from user and custom config only: the
+   * `allow_projects` lists of every layer that sets one, as a union. Absent
+   * when no layer sets the block, which allows no project. A project
+   * config's `connect` is stripped at load with a warning and never appears
+   * here. The `ce:connect` helper reads the same files itself
+   * (`loadConnectAllowList`) and never consults this value.
+   */
+  connect?: ConnectSettings
 }
 
 export const DEFAULT_CONFIG: SystematicConfig = {
@@ -450,7 +460,10 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
 // `stripProjectProtectedFields`/`collectProjectProtectedFields`). A project can
 // never grant itself that opt-in, since `allow_project_profiles` itself is
 // always stripped regardless of its value.
-const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set(['allow_project_profiles'])
+const PROJECT_ALWAYS_PROTECTED_FIELDS = new Set([
+  'allow_project_profiles',
+  'connect',
+])
 
 /** The `search` fields only user and custom config may set. */
 const PROJECT_PROTECTED_SEARCH_FIELDS = [
@@ -1282,6 +1295,15 @@ function collectProjectProtectedFields(
       ? [
           {
             fieldPath: 'allow_project_profiles' as const,
+            outcome: 'blocked' as const,
+            sourceKind: 'project' as const,
+          },
+        ]
+      : []),
+    ...(Object.hasOwn(rawConfig, 'connect')
+      ? [
+          {
+            fieldPath: 'connect' as const,
             outcome: 'blocked' as const,
             sourceKind: 'project' as const,
           },
@@ -2188,6 +2210,27 @@ function unionDisabledList(
   )
 }
 
+/**
+ * The `connect` allow lists of the chain as one union, or nothing when no
+ * file sets the block. The project's block was stripped before this point.
+ */
+function mergeConnect(
+  sources: readonly FileConfigSource[],
+): { connect: ConnectSettings } | Record<string, never> {
+  const blocks = sources.flatMap((source) =>
+    source.config.connect === undefined ? [] : [source.config.connect],
+  )
+  if (blocks.length === 0) return {}
+  return {
+    connect: {
+      allow_projects: blocks.reduce<string[]>(
+        (merged, block) => mergeArraysUnique(merged, block.allow_projects),
+        [],
+      ),
+    },
+  }
+}
+
 /** `bootstrap` fields spread in chain order, each file's fields over the ones before it. */
 function mergeBootstrap(sources: readonly FileConfigSource[]): BootstrapConfig {
   const merged: BootstrapConfig = { ...DEFAULT_CONFIG.bootstrap }
@@ -2371,6 +2414,15 @@ function loadConfigLayers(
     boundedProjectStrip.sink,
   )
 
+  // The warning names the project config file and the field, never the
+  // value: a project that is not allowed has no say in what a message names.
+  emitTopLevelProtectedFieldWarning(
+    projectSource,
+    'connect',
+    `\`connect\` in project config (%PATH%) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+    boundedProjectStrip.sink,
+  )
+
   emitProjectSearchProtectedWarnings(projectSource, boundedProjectStrip.sink)
 
   const suppressedStripCount = boundedProjectStrip.suppressedCount()
@@ -2499,6 +2551,7 @@ function loadConfigLayers(
     allow_project_profiles: allowProjectProfiles,
     ...(mergedSearch.settings && { search: mergedSearch.settings }),
     ...(mergedSearch.unreadable && { searchUnreadable: true }),
+    ...mergeConnect(sources),
   }
 
   // Drop removed names from the effective config and warn about each one.
