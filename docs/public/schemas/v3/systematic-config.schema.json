@@ -170,6 +170,13 @@
             }
           ]
         },
+        "connections-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema4"
+            }
+          ]
+        },
         "correctness-reviewer": {
           "allOf": [
             {
@@ -416,6 +423,13 @@
           ]
         },
         "research/best-practices-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema4"
+            }
+          ]
+        },
+        "research/connections-researcher": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -1317,6 +1331,13 @@
             }
           ]
         },
+        "connections-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
         "correctness-reviewer": {
           "allOf": [
             {
@@ -1563,6 +1584,13 @@
           ]
         },
         "research/best-practices-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/connections-researcher": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema60"
@@ -2135,6 +2163,7 @@
           "ce:brainstorm",
           "ce:compound",
           "ce:compound-refresh",
+          "ce:connect",
           "ce:ideate",
           "ce:plan",
           "ce:review",
@@ -2211,6 +2240,7 @@
           "cli-readiness-reviewer",
           "code-simplicity-reviewer",
           "coherence-reviewer",
+          "connections-researcher",
           "correctness-reviewer",
           "data-migrations-reviewer",
           "deployment-verification-agent",
@@ -2247,6 +2277,7 @@
           "document-review/scope-guardian-reviewer",
           "document-review/security-lens-reviewer",
           "research/best-practices-researcher",
+          "research/connections-researcher",
           "research/framework-docs-researcher",
           "research/git-history-analyzer",
           "research/issue-intelligence-analyst",

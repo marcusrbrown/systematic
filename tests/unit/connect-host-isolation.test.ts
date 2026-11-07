@@ -160,3 +160,66 @@ describe('Claude Code definition', () => {
     60_000,
   )
 })
+
+// The shipped agent carries the shape the proofs above ran against. These pins
+// keep it from drifting away from the definition the host proofs observed.
+describe('shipped connections-researcher', () => {
+  const shippedPath = path.resolve(
+    import.meta.dirname,
+    '../../agents/research/connections-researcher.md',
+  )
+  const shipped = fs.readFileSync(shippedPath, 'utf8')
+
+  test('maps to the same OpenCode permission entries as the probed definition', () => {
+    expect(extractAgentFrontmatter(shipped).permission).toEqual(
+      extractAgentFrontmatter(definition).permission,
+    )
+    expect(parseDenyBlock(shipped).sort()).toEqual(
+      parseDenyBlock(definition).sort(),
+    )
+  })
+
+  test('translates to the same OpenCode v2 rules, shell deny included', () => {
+    const rules = translatePermissionRules(
+      permissionMapToTriples(extractAgentFrontmatter(shipped).permission),
+    )
+
+    expect(rules).toContainEqual({
+      action: 'shell',
+      resource: '*',
+      effect: 'deny',
+    })
+    expect(rules).toEqual(
+      translatePermissionRules(
+        permissionMapToTriples(extractAgentFrontmatter(definition).permission),
+      ),
+    )
+  })
+
+  test('declares the same positive tool allowlist and second layer for Pi and Claude Code', () => {
+    const { data } = parseFrontmatter<Record<string, unknown>>(shipped)
+    const probed = parseFrontmatter<Record<string, unknown>>(definition).data
+
+    expect(data.tools).toBe(probed.tools)
+    expect(data.disallowedTools).toBe(probed.disallowedTools)
+  })
+
+  const claude = Bun.which('claude')
+  test.skipIf(claude === null)(
+    'claude plugin validate accepts the shipped definition',
+    () => {
+      const dir = path.join(makeTempDir(), 'agents')
+      fs.mkdirSync(dir)
+      fs.writeFileSync(path.join(dir, 'connections-researcher.md'), shipped)
+
+      const run = spawnSync(
+        claude ?? 'claude',
+        ['plugin', 'validate', dir, '--json', '--strict'],
+        { encoding: 'utf8' },
+      )
+
+      expect(run.status).toBe(0)
+    },
+    60_000,
+  )
+})

@@ -8,6 +8,7 @@ import {
   runHelperOp,
 } from '../../src/ce-connect-helper.js'
 import type { HostSupportRow } from '../../src/lib/connect-config.js'
+import { CONNECT_BOUNDS } from '../../src/lib/connect-evidence.js'
 import {
   formatProvenanceCitation,
   projectName,
@@ -103,7 +104,7 @@ const LOCK_SOURCE = [
 
 const SUPPORTED: HostSupportRow = {
   host: 'opencode-v2',
-  version: '2.2.5',
+  version: '9999.0.0',
   observedBy: 'tests/unit/ce-connect-helper-ops.test.ts',
 }
 
@@ -169,7 +170,7 @@ type Json = Record<string, unknown>
 function begin(world: World, over: Json = {}): HelperResult {
   return runHelperOp(
     'begin',
-    { host: 'opencode-v2', version: '2.2.5', mode: 'headless', ...over },
+    { host: 'opencode-v2', version: '9999.0.0', mode: 'headless', ...over },
     world.deps,
   )
 }
@@ -353,6 +354,137 @@ function fakeProcesses(initial: Record<number, string> = {}): {
     },
   }
 }
+
+// ── begin: the files the researcher reads ──────────────────────────────────
+
+// The researcher has Read, Grep and Glob only. The host's read tool cuts a line
+// at about 2000 characters, so a work file written as one JSON line would be
+// unreadable. These files are line-oriented on purpose.
+describe('begin work files', () => {
+  const READ_LINE_LIMIT = 2100
+
+  it('writes the rule index with short lines that still parse as one JSON document', () => {
+    const world = buildWorld({
+      targetFiles: {
+        'docs/solutions/long.md': [
+          '---',
+          'title: Long guidance',
+          'applies_when: a long section is cut',
+          '---',
+          '',
+          '## Guidance',
+          '',
+          `${'Keep going. '.repeat(120)}`,
+          '',
+        ].join('\n'),
+      },
+    })
+    const run = start(world)
+    const text = fs.readFileSync(run.body.rulesFile as string, 'utf8')
+
+    expect(() => JSON.parse(text)).not.toThrow()
+    const lines = text.split('\n')
+    expect(lines.length).toBeGreaterThan(20)
+    expect(Math.max(...lines.map((line) => line.length))).toBeLessThan(
+      READ_LINE_LIMIT,
+    )
+  })
+
+  it('writes a fingerprint index with one line per inventoried file', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const file = run.body.filesIndex as string
+
+    expect(file).toBe(path.join(run.workDir, 'files.tsv'))
+    expect(mode(file)).toBe(0o600)
+    const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n')
+    expect(lines).toContain(
+      [world.codeSha, 'code', world.target, 'src/lock.ts'].join('\t'),
+    )
+    expect(lines).toContain(
+      [
+        world.lessonSha,
+        'learning',
+        world.source,
+        'docs/solutions/lock-reclaim.md',
+      ].join('\t'),
+    )
+    for (const line of lines) {
+      const [sha, role, root, rel, ...rest] = line.split('\t')
+      expect(sha).toMatch(/^[0-9a-f]{64}$/)
+      expect(role).toBeTruthy()
+      expect(path.isAbsolute(root ?? '')).toBe(true)
+      expect(rel).toBeTruthy()
+      expect(rest).toEqual([])
+    }
+  })
+
+  it('writes a one-line-per-rule overview the skill can page through', () => {
+    const world = buildWorld({
+      targetFiles: {
+        'docs/solutions/tabbed.md': [
+          '---',
+          'title: "Tabbed\ttitle"',
+          'applies_when:',
+          '  - "first\tcondition"',
+          '  - second condition',
+          '---',
+          '',
+          '## Guidance',
+          '',
+          'Keep going.',
+          '',
+        ].join('\n'),
+      },
+    })
+    const run = start(world)
+    const file = run.body.rulesOverview as string
+
+    expect(file).toBe(path.join(run.workDir, 'rules.tsv'))
+    expect(mode(file)).toBe(0o600)
+    const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n')
+    expect(lines).toHaveLength(run.body.ruleCount as number)
+    for (const line of lines) {
+      expect(line.split('\t')).toHaveLength(5)
+    }
+    const mine = lines.find((line) => line.startsWith(`${world.ruleId}\t`))
+    expect(mine?.split('\t')).toEqual([
+      world.ruleId,
+      projectName(world.source),
+      'docs/solutions/lock-reclaim.md',
+      'Reclaim stale locks only on verified identity',
+      'A lock file can outlive the process that took it',
+    ])
+    const tabbed = lines.find((line) =>
+      line.includes('docs/solutions/tabbed.md'),
+    )
+    expect(tabbed?.split('\t')[3]).toBe('Tabbed title')
+    expect(tabbed?.split('\t')[4]).toBe('first condition | second condition')
+  })
+
+  it('leaves a path with a tab or a line break out of the fingerprint index', () => {
+    const world = buildWorld({
+      targetFiles: { 'src/odd\tname.ts': 'export const odd = 1\n' },
+    })
+    const run = start(world)
+    const text = fs.readFileSync(run.body.filesIndex as string, 'utf8')
+
+    expect(text).not.toContain('odd\tname')
+    expect(text).toContain('src/lock.ts')
+  })
+
+  it.each(['files.tsv', 'rules.tsv'])(
+    'does not accept %s as a batch file',
+    (name) => {
+      const world = buildWorld()
+      const run = start(world)
+
+      const body = failed(validate(world, run, [name]))
+
+      expect(body.reason).toBe('batch-outside-work-dir')
+    },
+  )
+})
 
 // ── begin ──────────────────────────────────────────────────────────────────
 
@@ -893,7 +1025,9 @@ describe('validate and publish', () => {
     const world = buildWorld()
     const many = Array.from({ length: 12 }, () => lessonCandidate(world))
     const { validated } = fullRun(world, many)
-    expect(validated.dropped).toMatchObject({ 'over-batch-cap': 4 })
+    expect(validated.dropped).toMatchObject({
+      'over-batch-cap': 12 - CONNECT_BOUNDS.maxCandidatesPerBatch,
+    })
     expect(validated.degradeReasons).toContain('candidate-bound')
   })
 

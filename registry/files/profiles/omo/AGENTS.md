@@ -8,7 +8,7 @@ Best for engineers who want both raw agent power AND enforced process discipline
 
 ## What's Included
 
-### Systematic (11 skills, 24 agents, 9 commands)
+### Systematic (11 skills, 25 agents, 9 commands)
 - **Structured Workflows** — Brainstorm, plan, review, execute systematically
 - **Specialized Agents** — Architecture, security, performance, design, data integrity experts
 - **Zero Configuration** — Works immediately; inject into your system prompt
@@ -170,6 +170,7 @@ task(category='ultrabrain')  # Deep reasoning (GPT-6.1 Sol)
 
 ### Systematic Research Agents
 - `best-practices-researcher` — External research
+- `connections-researcher` — Read-only cross-project search for contradictions and lessons
 - `framework-docs-researcher` — Framework documentation
 - `git-history-analyzer` — Git archaeology
 - `learnings-researcher` — Institutional knowledge

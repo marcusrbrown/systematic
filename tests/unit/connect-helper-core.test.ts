@@ -1033,7 +1033,7 @@ function digestModel(over: Partial<DigestModel> = {}): DigestModel {
     outcome: 'complete',
     generatedAt: '2026-11-07T00:00:00.000Z',
     mode: 'interactive',
-    hostSupport: { supported: true, host: 'opencode-v2', version: '2.2.5' },
+    hostSupport: { supported: true, host: 'opencode-v2', version: '9999.0.0' },
     degradeReasons: [],
     projects: [
       {

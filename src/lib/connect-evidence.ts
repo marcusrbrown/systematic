@@ -39,8 +39,14 @@ import {
 // ── Bounds ──────────────────────────────────────────────────────────────────
 
 /**
- * Provisional bounds. A run that reaches one is degraded and says so. The
- * values are tuned against a pilot under the Pi 20-turn cap, then frozen.
+ * The bounds of a run. A run that reaches one is degraded and says so.
+ *
+ * `maxRulesPerFamily` follows from the Pi delegate's 20-turn cap: a researcher
+ * that makes one call per turn needs about three turns to orient and answer,
+ * and at most two (a search and a read) per rule, so eight rules fit. A model
+ * that batches its calls uses far fewer turns. `maxCandidatesPerBatch` keeps
+ * one answer short enough to copy exactly, and `maxFamiliesPerRun` keeps the
+ * skill's own context bounded. A test pins every value.
  */
 export const CONNECT_BOUNDS = Object.freeze({
   /** Eligible files kept per project, corpus files first. */
@@ -54,9 +60,9 @@ export const CONNECT_BOUNDS = Object.freeze({
   /** Path-and-line citations checked per project. */
   maxCitationsPerProject: 500,
   /** Rules a single rule family may hold. */
-  maxRulesPerFamily: 12,
+  maxRulesPerFamily: 8,
   /** Candidates accepted in one family batch. */
-  maxCandidatesPerBatch: 8,
+  maxCandidatesPerBatch: 5,
   /** Rule families examined in one run. */
   maxFamiliesPerRun: 6,
 })

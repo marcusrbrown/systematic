@@ -119,6 +119,37 @@ describe('ce:review validator shim invocation', () => {
   })
 })
 
+describe('ce:connect helper invocation', () => {
+  const PINNED = 'node "$SKILL_DIR/scripts/connect.mjs"'
+  const hits = linesMatching(/connect\.mjs/).filter((hit) =>
+    hit.startsWith('ce-connect/'),
+  )
+
+  // The helper lives beside ce-connect/SKILL.md, and its requests are JSON on
+  // stdin. A bare path, another runtime or a harness variable would resolve
+  // against the consumer's project or expand to nothing.
+  test('every helper reference in its own skill is a node call through a SKILL_DIR anchor', () => {
+    expect(hits.filter((hit) => !hit.includes(PINNED))).toEqual([])
+  })
+
+  test('the skill does call the helper, so the guard above is not vacuous', () => {
+    expect(hits.length).toBeGreaterThan(0)
+  })
+
+  // The agent cannot reach this skill's directory, so it must never be told a
+  // script path.
+  test('the researcher agent names no helper script', () => {
+    const agent = fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        '../../agents/research/connections-researcher.md',
+      ),
+      'utf8',
+    )
+    expect(agent).not.toMatch(/connect\.mjs|SKILL_DIR/)
+  })
+})
+
 describe('pr-attachments helper invocation', () => {
   const PINNED = 'node "$SKILL_DIR/scripts/pr-attachments.mjs"'
   const hits = linesMatching(/pr-attachments\.mjs/).filter((hit) =>

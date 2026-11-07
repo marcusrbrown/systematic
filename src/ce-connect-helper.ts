@@ -329,8 +329,53 @@ const MAX_STATE_BYTES = 16 * 1024 * 1024
 const RESERVED_WORK_FILES = new Set([
   'begin.json',
   'rules.json',
+  'files.tsv',
+  'rules.tsv',
   'validated.json',
 ])
+
+const CONTROL_IN_PATH = /\p{Cc}|\p{Cf}/u
+const CONTROL_RUN = /[\p{Cc}\p{Cf}]+/gu
+
+function oneCell(text: string): string {
+  return text.replace(CONTROL_RUN, ' ').trim()
+}
+
+/**
+ * One tab-separated line per rule: id, project name, path, title and the
+ * `applies_when` items. The skill groups rules into families from this, so it
+ * never has to read every rule's sections.
+ */
+function rulesOverview(rules: readonly RuleEntry[]): string {
+  const lines = rules.map((rule) =>
+    [
+      rule.id,
+      projectName(rule.project),
+      rule.path,
+      oneCell(rule.title ?? ''),
+      oneCell(rule.appliesWhen.map(oneCell).join(' | ')),
+    ].join('\t'),
+  )
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`
+}
+
+/**
+ * One tab-separated line per inventoried file: fingerprint, role, project root,
+ * path. The researcher has read and search tools only, and a read tool cuts a
+ * line at about 2000 characters, so it looks a fingerprint up here instead of
+ * in the one-line snapshot. A path with a control character cannot be cited,
+ * so it has no line (and cannot break the format).
+ */
+function fingerprintIndex(projects: readonly SnapshotProject[]): string {
+  const lines: string[] = []
+  for (const project of projects) {
+    for (const file of project.inventory) {
+      if (CONTROL_IN_PATH.test(file.path)) continue
+      lines.push([file.sha256, file.role, project.root, file.path].join('\t'))
+    }
+  }
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`
+}
 
 function parseLock(value: unknown): { nonce: string; pid: number } | undefined {
   if (!isRecord(value)) return undefined
@@ -848,6 +893,8 @@ function beginResponse(
     stateRoot: setup.root,
     workDir,
     rulesFile: path.join(workDir, 'rules.json'),
+    filesIndex: path.join(workDir, 'files.tsv'),
+    rulesOverview: path.join(workDir, 'rules.tsv'),
     lock: snapshot.lock,
     holder: setup.holder,
     ...(setup.reclaimed === undefined ? {} : { reclaimed: setup.reclaimed }),
@@ -936,8 +983,10 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
     writeWorkFile(
       workDir,
       'rules.json',
-      JSON.stringify({ version: 1, runId, rules }),
+      JSON.stringify({ version: 1, runId, rules }, null, 1),
     )
+    writeWorkFile(workDir, 'files.tsv', fingerprintIndex(snapshot.projects))
+    writeWorkFile(workDir, 'rules.tsv', rulesOverview(rules))
     return beginResponse(setup, snapshot, scans, workDir, limits)
   } catch {
     return releaseAndFail('begin', lock, root, runId, 'internal-error')

@@ -678,7 +678,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 
 ### Phase B: Researcher, skill and promotion
 
-- [ ] U6. `connections-researcher` agent and the `ce:connect` skill
+- [x] U6. `connections-researcher` agent and the `ce:connect` skill
 
 **Goal:** Ship the read-only researcher and the skill that orchestrates a run: per-family batches with coverage reports, headless token parsing (including on Pi from instruction text), terminal lines, consent for an unsupported host in interactive mode, and turn-cap handling.
 

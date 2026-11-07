@@ -16,6 +16,7 @@ import {
   reportProjectCitations,
   runGit,
 } from '../../src/lib/connect-evidence.js'
+import { MAX_DELEGATE_TURNS } from '../../src/lib/pi-delegate-tool.js'
 import { cleanupTempDirs, git, makeDir } from './git-worktree-fixtures'
 
 afterEach(cleanupTempDirs)
@@ -68,7 +69,33 @@ function snapshotTree(dir: string): Record<string, string> {
 }
 
 describe('bounds', () => {
-  it('names every provisional bound as a positive integer', () => {
+  it('pins the frozen values, so a change is a deliberate edit of this list', () => {
+    expect({ ...CONNECT_BOUNDS }).toEqual({
+      maxFilesPerProject: 4000,
+      maxFileBytes: 256 * 1024,
+      maxHashedBytesPerProject: 32 * 1024 * 1024,
+      maxListingBytes: 16 * 1024 * 1024,
+      maxCitationsPerProject: 500,
+      maxRulesPerFamily: 8,
+      maxCandidatesPerBatch: 5,
+      maxFamiliesPerRun: 6,
+    })
+  })
+
+  it('sizes a family so that serial tool use still fits the Pi delegate turn cap', () => {
+    // Three turns to orient and one to answer, then at most one search turn and
+    // one read turn per rule when the model makes one call per turn.
+    const fixedTurns = 3
+    const turnsPerRule = 2
+    expect(
+      fixedTurns + turnsPerRule * CONNECT_BOUNDS.maxRulesPerFamily,
+    ).toBeLessThanOrEqual(MAX_DELEGATE_TURNS)
+    expect(
+      fixedTurns + turnsPerRule * (CONNECT_BOUNDS.maxRulesPerFamily + 1),
+    ).toBeGreaterThan(MAX_DELEGATE_TURNS - 1)
+  })
+
+  it('names every bound as a positive integer', () => {
     for (const key of [
       'maxFilesPerProject',
       'maxFileBytes',

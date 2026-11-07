@@ -5,7 +5,7 @@ This profile provides **Systematic's compound-engineering loops** — brainstorm
 ## What's Included
 
 - **11 bundled skills** — Pre-built workflows for systematic engineering
-- **24 specialized agents** — Architecture, security, performance, and design specialists
+- **25 specialized agents** — Architecture, security, performance, and design specialists
 - **9 commands** — Workflow shortcuts and automation tools
 - **Zero configuration** — Works immediately after enabling the profile
 
@@ -97,6 +97,7 @@ Full workflow from plan to execution:
 
 ### Research Agents
 - `best-practices-researcher` — External research for any technology
+- `connections-researcher` — Read-only cross-project search for contradictions and transferable lessons, used by `ce:connect`
 - `framework-docs-researcher` — Framework documentation and examples
 - `git-history-analyzer` — Git archaeology and pattern discovery
 - `learnings-researcher` — Institutional knowledge from past solutions

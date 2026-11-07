@@ -54,6 +54,7 @@ export interface ManifestEntry {
  *   - agents/research/slack-researcher.md — CRITICAL: requires Slack MCP environment.
  *   - agents/research/learnings-researcher.md — not curated: it reads the host project's docs/solutions/ layout, so curating it is a separate decision.
  *   - agents/workflow/pr-comment-resolver.md — WARNING: "Spawned by the resolve-pr-feedback skill".
+ *   - agents/research/connections-researcher.md — not curated, on purpose: a curated persona is exported with a description only, so a host that reads it gets every tool. This agent is safe only with a tool allowlist, and the pi-subagents persona format has none. Revisit only with a per-persona tool allowlist.
  */
 export interface CuratedPersonaEntry {
   relPath: string

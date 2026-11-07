@@ -394,6 +394,17 @@ describe('real bundled agents catalog', () => {
     }
   })
 
+  test('the read-only connections researcher resolves to read, grep and find and nothing else', () => {
+    const agentsDir = path.resolve(import.meta.dirname, '../../agents')
+    const catalog = buildAgentCatalog(agentsDir)
+    const entry = resolveAgent(catalog, 'connections-researcher')
+
+    expect(entry?.id).toBe('research/connections-researcher')
+    expect(resolveToolAllowlist(entry?.toolsSource)).toEqual({
+      tools: ['read', 'grep', 'find'],
+    })
+  })
+
   test('real write personas resolve Edit/Write-capable allowlists and undeclared personas stay read-only', () => {
     const agentsDir = path.resolve(import.meta.dirname, '../../agents')
     const catalog = buildAgentCatalog(agentsDir)
