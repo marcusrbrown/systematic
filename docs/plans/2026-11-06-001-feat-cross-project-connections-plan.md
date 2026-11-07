@@ -576,7 +576,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 - Every verdict appears in at least one passing test, and no test shows a git call that can write.
 - `bun scripts/content-integrity.ts` passes for the registrations.
 
-- [ ] U4. Run state: runs, lock and ledger
+- [x] U4. Run state: runs, lock and ledger
 
 **Goal:** Implement the state directory, the lock with identity-verified reclaim, publishing by rename, the minimal ledger and the 30-day prune.
 
