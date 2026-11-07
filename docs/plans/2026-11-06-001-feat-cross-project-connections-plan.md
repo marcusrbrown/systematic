@@ -731,7 +731,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 - `bun scripts/content-integrity.ts` passes; the README and profile counts match the shipped skill and agent totals.
 - The baseline-then-skill record is kept with the PR for review; the Pi pilot result is recorded.
 
-- [ ] U7. Promotion: refresh path scope and the compound candidate input
+- [x] U7. Promotion: refresh path scope and the compound candidate input
 
 **Goal:** Let `ce:compound-refresh` take an exact multi-path scope and let `ce:compound` take a versioned candidate input, producing a learning in the target project's own words with provenance in its body.
 

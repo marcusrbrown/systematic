@@ -297,6 +297,7 @@
       "files": [
         "skills/ce-compound/SKILL.md",
         "skills/ce-compound/assets/resolution-template.md",
+        "skills/ce-compound/references/candidate-input.md",
         "skills/ce-compound/references/schema.yaml",
         "skills/ce-compound/references/yaml-schema.md"
       ]
