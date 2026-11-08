@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "thresholds": {
+    "precisionMin": 0.7,
+    "seededFoundRuns": 3,
+    "repetitions": 3,
+    "regressionRecall": { "found": 4, "of": 4 }
+  },
+  "regression": [
+    { "id": "r-01", "label": "worth-promoting" },
+    { "id": "r-02", "label": "worth-promoting" },
+    { "id": "r-03", "label": "worth-promoting" },
+    { "id": "r-04", "label": "worth-promoting" }
+  ],
+  "seeded": [
+    { "id": "s-01", "label": "must-find" },
+    { "id": "s-02", "label": "must-find" },
+    { "id": "s-03", "label": "must-find" }
+  ],
+  "controls": [
+    { "id": "c-01", "label": "must-not-report" },
+    { "id": "c-02", "label": "must-not-report" },
+    { "id": "c-03", "label": "must-not-report" }
+  ],
+  "fresh": {
+    "status": "awaiting-labeler",
+    "labels": []
+  }
+}

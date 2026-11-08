@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "root": "docs/solutions",
+  "seeds": [
+    {
+      "id": "s-01",
+      "docs": [
+        "best-practices/report-cache-flush-on-tenant-setting-change-2026-03-04.md",
+        "best-practices/report-cache-evict-only-affected-tenant-2026-05-19.md"
+      ]
+    },
+    {
+      "id": "s-02",
+      "docs": [
+        "best-practices/export-job-retry-on-timeout-2026-02-11.md",
+        "best-practices/export-job-never-retry-timeout-2026-06-02.md"
+      ]
+    },
+    {
+      "id": "s-03",
+      "docs": [
+        "best-practices/audit-event-timestamps-local-time-with-offset-2026-01-23.md",
+        "best-practices/audit-event-timestamps-utc-only-2026-04-08.md"
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "id": "c-01",
+      "docs": [
+        "best-practices/production-log-level-info-2026-02-27.md",
+        "best-practices/local-harness-log-level-debug-2026-05-06.md"
+      ]
+    },
+    {
+      "id": "c-02",
+      "docs": [
+        "best-practices/ci-pin-runtime-exactly-2026-03-30.md",
+        "best-practices/dev-container-track-runtime-patch-2026-06-14.md"
+      ]
+    },
+    {
+      "id": "c-03",
+      "docs": [
+        "best-practices/verify-webhook-signatures-2026-01-30.md",
+        "best-practices/webhook-signature-hmac-details-2026-04-22.md"
+      ]
+    }
+  ]
+}
