@@ -4,6 +4,12 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.32.0](https://github.com/marcusrbrown/systematic/compare/v3.31.6...v3.32.0) (2026-11-08)
+
+### Features
+
+* find cross-project connections between learnings with ce:connect ([#1336](https://github.com/marcusrbrown/systematic/issues/1336)) ([28e72b0](https://github.com/marcusrbrown/systematic/commit/28e72b02f0b99cd68a338e45c0556d5e9f633ff9))
+
 ## [3.31.6](https://github.com/marcusrbrown/systematic/compare/v3.31.5...v3.31.6) (2026-11-08)
 
 ### Bug Fixes
