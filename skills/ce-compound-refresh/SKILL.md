@@ -2,17 +2,61 @@
 name: ce-compound-refresh
 description: Refresh stale or drifting learnings and pattern docs in docs/solutions/ by reviewing, updating, consolidating, replacing, or deleting them against the current codebase. Use after refactors, migrations, dependency upgrades, or when a retrieved learning feels outdated or wrong. Also use when reviewing docs/solutions/ for accuracy, when a recently solved problem contradicts an existing learning, when pattern docs no longer reflect current code, or when multiple docs seem to cover the same topic and might benefit from consolidation.
 license: MIT
-argument-hint: '[mode:autofix] [optional: category, module, or keyword scope]'
+argument-hint: '[mode:autofix] [path:<docs/solutions/file.md> ...] [optional: category, module, or keyword scope]'
 disable-model-invocation: true
 ---
 
 # Compound Refresh
 
+**Argument gate. Do this before anything else.** If `$ARGUMENTS` holds a `path:` token and also `mode:autofix`, your whole reply is the one line `Refused: mode:autofix cannot be combined with an exact path scope`, and you make no tool call. If it holds a `path:` token without `mode:autofix`, follow **Exact path scope** below before any other section. A path-scope run starts with a turn that checks the paths, prints the preview and ends there: that turn reads no listed doc and changes nothing.
+
 Maintain the quality of `docs/solutions/` over time. This workflow reviews existing learnings against the current codebase, then refreshes any derived pattern docs that depend on them.
+
+## Exact path scope
+
+Look at `$ARGUMENTS` before anything else. This section applies only when it holds at least one `path:<path>` token; repeat the token for each doc. Without one, skip this section: Mode Detection and the four strategies under Scope Selection work as before.
+
+An exact path scope names the docs to review and nothing else. It is how a contradiction that `systematic:ce-connect` found is refreshed. Do these steps in order, before you read any doc and before you run any command, and stop at the first stop:
+
+1. **Autofix is refused.** If `mode:autofix` is also present, your whole reply is `Refused: mode:autofix cannot be combined with an exact path scope`. Read nothing, write nothing, delete nothing. An unattended run does not get to choose a list of docs.
+2. **No keyword scope.** If a category, module or keyword scope is also present, stop and say that a path scope cannot be combined with a keyword scope.
+3. **Containment.** Check each path, in the order given; duplicates collapse. The first failing check names the reason. The first four are checks on the text of the path, so run no command for them:
+   - `unsupported-characters`: any character outside letters, digits, `.`, `_`, `-` and `/`.
+   - `absolute-path`: starts with `/`.
+   - `parent-traversal`: has a `..` or `.` segment, or an empty segment (`//`).
+   - `outside-solutions`: does not start with `docs/solutions/`, does not end in `.md`, is a `README.md`, or sits under `docs/solutions/_archived/` or the legacy `docs/solutions/patterns/` (read-only).
+   - `missing`: no such file in the current project.
+   - `symlink`: the file, or any directory from `docs` down to it, is a symlink. Check each prefix with `test -L '<prefix>'`; the characters allowed above make the quoting safe.
+   - `not-a-file`: it exists but is a directory or another non-regular file.
+
+   If any path fails, refuse the whole scope. Print one line per failing path, `<path>: <reason>`, using only the reason names above, then stop. Never fall back to the nearest or closest match, and never drop a failing path and go on.
+4. **Preview, then end your turn.** Print the project name and root, then the resolved paths one per line, then every other doc this run could change: each doc whose `superseded_by` names a listed path (find them with a content search under `docs/solutions/`). Ask the user to confirm with the blocking question tool. If there is no such tool, end your turn on the preview; the user's next message is the answer. A missing tool is never consent, and it never switches the run to autofix. Read no listed doc until the user confirms. If the user declines, stop with nothing changed.
+5. **The scope is fixed.** Only the listed docs are reviewed and edited. Other docs are read as evidence and are not edited, except the `superseded_by` retargeting that the preview named (see Lifecycle Consistency). Overlap and set analysis compare the listed docs with each other and with the docs they cite.
+6. **Once per project.** Run once, for the current project only. It never reaches into another project. A candidate with docs in several projects needs one run per project, started in that project, and each run records its own result.
+
+| Thought | Reality |
+|---|---|
+| "There is no question tool, so this is an unattended run and autofix applies" | No question tool means you end your turn on the preview. Autofix is never selected by a missing tool. |
+| "The paths are valid, so the preview is a formality" | Read no listed doc until the user has confirmed the preview. |
+| "`mode:autofix` is only a scope hint here" | With a `path:` token it is refused, whatever else the arguments say. |
+
+After the usual report, print the per-project result:
+
+```text
+Path scope result (<project name>)
+- <path>: Keep | Update | Consolidate | Replace | Delete | Stale | Skipped
+Ledger: promoted | rejected (context-specific, no write needed) | pending
+```
+
+- `promoted`: every listed path was settled and at least one write succeeded. The destination is the refreshed path or paths.
+- `rejected`, with the reason `context-specific, no write needed`: every listed path was reviewed, none needed a write, and the finding does not apply to this project.
+- `pending`: anything else. A partial resolution stays pending: a path was skipped, marked stale, or left unwritten because a write failed.
+
+This skill never writes the ledger. The result line is for the user to give to the helper's `decide` operation in `systematic:ce-connect` (Step 7 there). Say that nothing has been recorded.
 
 ## Mode Detection
 
-Check if `$ARGUMENTS` contains `mode:autofix`. If present, strip it from arguments (use the remainder as a scope hint) and run in **autofix mode**.
+Check if `$ARGUMENTS` contains `mode:autofix`. If present, strip it from arguments (use the remainder as a scope hint) and run in **autofix mode**. The one exception: if `$ARGUMENTS` also holds a `path:` token, do not strip anything and do not run; autofix is refused for an exact path list (see Exact path scope above).
 
 | Mode | When | Behavior |
 |------|------|----------|
@@ -98,6 +142,8 @@ Exclude:
 - `docs/solutions/_archived/` (legacy — if this directory exists, flag it for cleanup in the report)
 
 Find all `.md` files under `docs/solutions/`, excluding `README.md` files and anything under `_archived/`. If an `_archived/` directory exists, note it in the report as a legacy artifact that should be cleaned up (files either restored or deleted).
+
+If `$ARGUMENTS` holds a `path:` token, use the Exact path scope section above instead of the strategies below.
 
 If `$ARGUMENTS` is provided, use it to narrow scope before proceeding. Try these matching strategies in order, stopping at the first that produces results:
 
