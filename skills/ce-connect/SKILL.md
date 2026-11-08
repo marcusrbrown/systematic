@@ -62,7 +62,7 @@ Observe the host and its version. The helper holds the list of host and version 
 | Pi | `pi` | `pi --version` |
 | The `claude` command line tool | `claude-code` | `claude --version` |
 
-Send `version` as the first token the command prints that starts with a digit (after an optional `v`), exactly as printed. Keep any `-` prerelease tag or `+` build suffix: the helper ignores build suffixes and keeps prerelease tags, so you decide neither. Never trim, round or strip any part of it. If you cannot tell which host this is, or the command fails or prints no version, leave `version` out or use the host id `unknown`. Never guess a host or a version: a pair the helper cannot check counts as unsupported.
+Send `version` as the first token the command prints that starts with a digit (after an optional `v`), exactly as printed. Keep any `-` prerelease tag or `+` build suffix: the helper ignores build suffixes and keeps prerelease tags, so you decide neither. Never trim, round or strip any part of it. `claude --version` prints the version and then a name in parentheses, such as `2.1.319 (...)`: send `2.1.319`, not the whole line. If you cannot tell which host this is, or the command fails or prints no version, leave `version` out or use the host id `unknown`. Never guess a host or a version: a pair the helper cannot check counts as unsupported.
 
 Report what you observed, in one line, so the user can see it.
 

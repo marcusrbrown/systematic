@@ -555,7 +555,10 @@ export type ConnectHost = (typeof CONNECT_HOSTS)[number]
 /**
  * One host and exact version where the researcher's shell, write and web tools
  * were observed denied on a real host. `observedBy` names the test that
- * observed it. A row without one never matches.
+ * observed it, as `<file> > <test title>`. A host whose proof cannot be an
+ * automated test names a manual record instead, as `HARNESSES.md > <entry id>`;
+ * a unit test requires that entry to exist and to be marked manual evidence. A
+ * row without `observedBy` never matches.
  */
 export interface HostSupportRow {
   readonly host: ConnectHost
@@ -566,11 +569,12 @@ export interface HostSupportRow {
 /**
  * The supported combinations. A row is added only for a host and version where
  * a real-host deny was observed against the shipped agent, and it names the
- * test that observed it as `<file> > <test title>`. There is no row for Claude
- * Code until its denies are shown live.
+ * test or the recorded manual run that observed it. The `claude-code` row rests
+ * on a manual run with a live model, because that host cannot be
+ * driven by a scripted one here.
  *
- * The OpenCode and Pi rows are exact: the version is the one the proof runs
- * against, and any other version, older or newer, is unlisted.
+ * Every row is exact: the version is the one the proof ran against, and any
+ * other version, older or newer, is unlisted.
  */
 export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
   {
@@ -590,6 +594,11 @@ export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
     version: '1.5.0',
     observedBy:
       'tests/unit/pi-delegate-session.test.ts > the shipped researcher reaches createAgentSession with read, grep and find and none of bash, write, edit or systematic_delegate',
+  },
+  {
+    host: 'claude-code',
+    version: '2.1.319',
+    observedBy: 'HARNESSES.md > CN-5',
   },
 ]
 

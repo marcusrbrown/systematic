@@ -911,7 +911,7 @@ describe('the shipped host-support table', () => {
     readJson('package.json').devDependencies as Record<string, string>
   )['@earendil-works/pi-coding-agent']
 
-  it('has a row for OpenCode v1 and v2 at the current host pins and for Pi at its pinned version, and none for Claude Code', () => {
+  it('has a row for OpenCode v1 and v2 at the current host pins, for Pi at its pinned version, and for Claude Code at the one version its manual run observed', () => {
     expect(
       HOST_SUPPORT_TABLE.map(
         (entry) => `${entry.host} ${entry.version}`,
@@ -921,11 +921,27 @@ describe('the shipped host-support table', () => {
         `opencode-v1 ${pins.v1}`,
         `opencode-v2 ${pins.v2}`,
         `pi ${piPin}`,
+        'claude-code 2.1.319',
       ].sort(),
     )
-    expect(
-      HOST_SUPPORT_TABLE.some((entry) => entry.host === 'claude-code'),
-    ).toBe(false)
+  })
+
+  it('reads the version the skill sends from what `claude --version` prints', () => {
+    // The skill sends the first token that starts with a digit: `2.1.319`.
+    const printed = '2.1.319 (Claude Code)'
+    const sent = printed.split(/\s+/).find((token) => /^v?\d/.test(token))
+    expect(sent).toBe('2.1.319')
+    expect(checkHostSupport('claude-code', sent)).toMatchObject({
+      supported: true,
+      row: { host: 'claude-code', version: '2.1.319' },
+    })
+    // The whole line is not a version, and neither is a nearby release.
+    expect(checkHostSupport('claude-code', printed).supported).toBe(false)
+    expect(checkHostSupport('claude-code', '2.1.320').supported).toBe(false)
+    expect(checkHostSupport('claude-code', '2.1.319-beta').supported).toBe(
+      false,
+    )
+    expect(checkHostSupport('opencode-v1', '2.1.319').supported).toBe(false)
   })
 
   it('supports each listed pair and nothing next to it', () => {
@@ -948,18 +964,53 @@ describe('the shipped host-support table', () => {
     })
   })
 
-  it('names, for every row, a test file that exists and a test title that file still carries', () => {
+  const MANUAL_EVIDENCE_FILE = 'HARNESSES.md'
+
+  /** The body of the HARNESSES.md entry with this id, when it exists and is manual evidence. */
+  function manualEntry(id: string): string | undefined {
+    const text = fs.readFileSync(path.join(root, MANUAL_EVIDENCE_FILE), 'utf8')
+    const line = text
+      .split('\n')
+      .find((candidate) => candidate.startsWith(`- **${id}** — `))
+    return line?.includes('Manual evidence') ? line : undefined
+  }
+
+  it('names, for every row, a test file and title that still exist, or a manual-evidence entry in HARNESSES.md', () => {
     for (const entry of HOST_SUPPORT_TABLE) {
       const [file, title, ...rest] = entry.observedBy.split(' > ')
       expect(rest).toEqual([])
       expect(file?.trim()).toBeTruthy()
       expect(title?.trim()).toBeTruthy()
+      if (file === MANUAL_EVIDENCE_FILE) {
+        expect(
+          manualEntry(title ?? ''),
+          `${MANUAL_EVIDENCE_FILE} has no manual-evidence entry ${title}`,
+        ).toBeDefined()
+        continue
+      }
       const text = fs.readFileSync(path.join(root, file ?? ''), 'utf8')
       expect(
         text.includes(`'${title}'`) || text.includes(`"${title}"`),
         `${file} has no test titled ${title}`,
       ).toBe(true)
     }
+  })
+
+  it('allows a manual-evidence row only for a host whose proof cannot be an automated test, and only with a real entry', () => {
+    const manual = HOST_SUPPORT_TABLE.filter((entry) =>
+      entry.observedBy.startsWith(`${MANUAL_EVIDENCE_FILE} > `),
+    )
+    expect(manual.map((entry) => entry.host)).toEqual(['claude-code'])
+    for (const entry of manual) {
+      const id = entry.observedBy.split(' > ')[1] ?? ''
+      const body = manualEntry(id) ?? ''
+      // The entry records the exact version the row lists, and a verdict.
+      expect(body).toContain(entry.version)
+      expect(body).toContain('PASS')
+    }
+    // An entry id that does not exist, or one that is not manual evidence, is not accepted.
+    expect(manualEntry('CN-999')).toBeUndefined()
+    expect(manualEntry('CN-1')).toBeUndefined()
   })
 
   it('names a different proof test for each host', () => {
