@@ -302,6 +302,6 @@ Frozen files digest after the fourth change: sha256:9a68d9ceaea183f130b91d13614a
 
 A fifth change added Claude Code 2.1.319 to the host-support table, resting on a manual run recorded in the harness evidence file, and one line to the skill's version instruction. The skill and the generated helper bundle changed with it:
 
-Frozen files digest after the fifth change: sha256:3ad60dd95e8c56d86d09d87380c71df611702954fe31c2e4955420f1cd51f9ea
+Frozen files digest after the fifth change: sha256:425a6c55ebfc07ed9643bdfced40a469b3117d3969786a53012718d4e9370f5e
 
 Any further change to a frozen file needs its own line here.
