@@ -41,12 +41,20 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 
 | Final line | When |
 |---|---|
-| `Connect complete` | `publish` answered `complete`: every project read, every rule covered by a complete family, and the run committed. Nothing found is still `complete`, labeled "no candidate in searched scope". |
-| `Connect degraded` | `publish` answered `degraded`: something was not read or a bound was reached. The digest names what. A degraded run is never proof that nothing is there. |
+| `Connect complete` | `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason. Nothing found is still `complete`, labeled "no candidate in searched scope". |
+| `Connect degraded` | `publish` answered `degraded`: something was not read, an offered rule was not covered, or a bound was reached. The digest names what. A degraded run is never proof that nothing is there. |
 | `Connect busy` | `begin` answered `busy`: another run holds the lock, or the holder cannot be verified. Nothing was written and nothing was dispatched. |
 | `Connect failed` | Any other stop: a bad mode token, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
 
 Copy the final line from the helper's `finalLine` when `publish` answers. For every other stop, print the line from this table.
+
+## Sweep progress
+
+A run covers a slice of the rule index, not all of it. The helper offers at most `bounds.maxFamiliesPerRun` times `bounds.maxRulesPerFamily` rules. It offers first the rules never covered, or whose learning changed since they were covered, and then the least recently covered ones. Inside each group it takes the projects in turn, then paths, so a slice spans projects. The order depends only on the index and on what committed runs covered, so the runs in turn sweep the whole index and then start again with the oldest.
+
+Rules that are not offered are not a reason to degrade a run. `Connect complete` means the offered slice was fully covered and nothing failed. How much of the index has been covered is sweep progress, and the helper reports it as one line in the digest header and in the publish summary: covered X of Y rules (counting a rule only while its learning has the hash it had when it was covered), how many rules this run covered, and about N runs left in the sweep. A sweep that is finished says so and says the next run starts again with the least recently covered rules.
+
+Coverage is kept in the ledger, and only for a committed run: an aborted or crashed run records none. It holds rule ids, hashes and run ids, no text. Coverage of a rule whose learning has disappeared is dropped. `ledger clear` removes coverage with the rest of the ledger, and the sweep starts over.
 
 ## Reasons worth naming
 

@@ -245,6 +245,92 @@ describe('ce:connect run protocol', () => {
   })
 })
 
+function section(text: string, from: string, to: string): string {
+  const start = text.indexOf(from)
+  const end = text.indexOf(to, start + from.length)
+  if (start === -1 || end === -1) throw new Error(`no section ${from}`)
+  return text.slice(start, end)
+}
+
+describe('ce:connect rotation across runs', () => {
+  const step4 = section(skillText, '## Step 4', '## Step 5')
+
+  test('groups only the rules the helper offered, and every one of them', () => {
+    expect(step4).toContain('offeredCount')
+    expect(step4).toContain('offeredRuleIds')
+    expect(step4).toMatch(/Group only the offered rules/)
+    expect(step4).toMatch(/every offered rule/i)
+    expect(step4).toMatch(/exactly one family/i)
+  })
+
+  test('reads the offered rules from the head of the rule overview and leaves the later ones out', () => {
+    expect(step4).toContain('`offered`')
+    expect(step4).toContain('`later`')
+    expect(step4).toMatch(/first `offeredCount` lines/)
+    expect(step4).toMatch(/never add a rule marked `later`/i)
+  })
+
+  test('does not let the model choose which rules to cover', () => {
+    expect(step4).toMatch(/do(es)? not choose which rules/i)
+    expect(step4).not.toMatch(/prefer groups that span/i)
+    expect(step4).not.toMatch(/rules you leave out/i)
+    expect(step4).not.toMatch(/leave (a rule |rules )?out/i)
+  })
+
+  test('keeps grouping by shared subject, within the bounds the helper reports', () => {
+    expect(step4).toMatch(/shared subject/)
+    expect(step4).toContain('applies_when')
+    expect(step4).toContain('bounds.maxRulesPerFamily')
+    expect(step4).toContain('bounds.maxFamiliesPerRun')
+  })
+
+  test('tells the researcher to search every allowed project, rules from later slices included', () => {
+    const step5 = section(skillText, '## Step 5', '## Step 6')
+    expect(step5).toMatch(/every allowed project/i)
+    expect(step5).toMatch(/marked `later`/)
+    expect(step5).toMatch(/contradiction/i)
+    // The agent already does so: it searches the other allowed projects whatever their rules.
+    expect(agent.body).toMatch(/Search the other allowed projects/)
+    expect(agent.body).toMatch(/A project other than the rule's own/)
+  })
+
+  test('reports the sweep progress from the helper and keeps it in the printed summary', () => {
+    expect(skillText).toContain('`sweep`')
+    expect(skillText).toMatch(/covered X of Y rules/)
+    expect(skillText).toMatch(/Print the `summary` as the helper wrote it/)
+  })
+
+  test('defines complete as the offered slice covered, and a partly covered corpus as progress', () => {
+    const row = outcomesText
+      .split('\n')
+      .find((line) => line.startsWith('| `Connect complete`'))
+    expect(row).toMatch(/offered/i)
+    expect(row).toMatch(/nothing failed/i)
+    expect(row).toMatch(/not (a )?degrad/i)
+    expect(outcomesText).toMatch(/sweep progress/i)
+    expect(outcomesText).toMatch(/covered X of Y rules/)
+    expect(outcomesText).toMatch(/runs left/)
+    expect(outcomesText).toMatch(/least recently covered/i)
+  })
+
+  test('says the rules a run leaves for later do not degrade it', () => {
+    expect(outcomesText).toMatch(
+      /rules (that are )?not offered .*(not|never) .*degrad/i,
+    )
+  })
+
+  test('says ledger clear starts the sweep over', () => {
+    expect(outcomesText).toMatch(/ledger clear/)
+    expect(outcomesText).toMatch(/starts? (the sweep )?over/i)
+  })
+
+  test('describes the six columns of the rule overview in the contract reference', () => {
+    expect(contractText).toContain('rule overview')
+    expect(contractText).toContain('`offered`')
+    expect(contractText).toContain('`later`')
+  })
+})
+
 describe('candidate contract reference', () => {
   test('states the batch version the helper accepts', () => {
     expect(contractText).toContain(`"version": ${BATCH_VERSION}`)

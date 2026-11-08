@@ -34,9 +34,11 @@ import {
   findRecorded,
   findRenamedEntries,
   isWorkName,
+  type Offer,
   type ProjectFacts,
   type ProvenanceIndexEntry,
   parseBatch,
+  planOffer,
   prepareWorkDir,
   projectKey,
   projectName,
@@ -49,7 +51,10 @@ import {
   resolveStateRoot,
   type StaleCitation,
   type Standing,
+  type SweepProgress,
   scanProvenance,
+  sweepBefore,
+  sweepProgress,
   toCandidateRecord,
   toProjectFacts,
   type ValidationContext,
@@ -342,20 +347,30 @@ function oneCell(text: string): string {
 }
 
 /**
- * One tab-separated line per rule: id, project name, path, title and the
- * `applies_when` items. The skill groups rules into families from this, so it
- * never has to read every rule's sections.
+ * One tab-separated line per rule: id, project name, path, title, the
+ * `applies_when` items and whether this run is offered the rule (`offered`) or
+ * leaves it to a later run (`later`). The offered rules come first, in the
+ * order they were offered. The skill groups the offered rules into families
+ * from this, so it never has to read every rule's sections.
  */
-function rulesOverview(rules: readonly RuleEntry[]): string {
-  const lines = rules.map((rule) =>
-    [
-      rule.id,
-      projectName(rule.project),
-      rule.path,
-      oneCell(rule.title ?? ''),
-      oneCell(rule.appliesWhen.map(oneCell).join(' | ')),
-    ].join('\t'),
-  )
+function rulesOverview(rules: readonly RuleEntry[], offer: Offer): string {
+  const byId = new Map(rules.map((rule) => [rule.id, rule]))
+  const offered = new Set(offer.offered)
+  const lines: string[] = []
+  for (const id of offer.order) {
+    const rule = byId.get(id)
+    if (rule === undefined) continue
+    lines.push(
+      [
+        rule.id,
+        projectName(rule.project),
+        rule.path,
+        oneCell(rule.title ?? ''),
+        oneCell(rule.appliesWhen.map(oneCell).join(' | ')),
+        offered.has(id) ? 'offered' : 'later',
+      ].join('\t'),
+    )
+  }
   return lines.length === 0 ? '' : `${lines.join('\n')}\n`
 }
 
@@ -441,7 +456,15 @@ interface Snapshot {
   readonly unmatched: ReadonlyArray<{ entry: string; reason: string }>
   readonly degradeReasons: readonly string[]
   readonly unread: readonly string[]
+  /** Every indexed rule id. A candidate may cite any of them. */
   readonly ruleIds: readonly string[]
+  /** The hash of each indexed rule's learning, kept as coverage when a run commits. */
+  readonly ruleVersions: ReadonlyArray<{ id: string; sha256: string }>
+  /** What the run was offered, and where the sweep stood when it began. */
+  readonly offer: Pick<
+    Offer,
+    'offered' | 'fresh' | 'total' | 'coveredBefore' | 'sliceSize'
+  >
   readonly provenance: readonly ProvenanceIndexEntry[]
   readonly undecidedProvenance: ReadonlyArray<{
     project: string
@@ -460,6 +483,10 @@ function isSnapshot(value: unknown): value is Snapshot {
     typeof value.lock.nonce === 'string' &&
     Array.isArray(value.projects) &&
     Array.isArray(value.ruleIds) &&
+    Array.isArray(value.ruleVersions) &&
+    isRecord(value.offer) &&
+    Array.isArray(value.offer.offered) &&
+    Array.isArray(value.offer.fresh) &&
     Array.isArray(value.provenance) &&
     Array.isArray(value.degradeReasons) &&
     Array.isArray(value.unread)
@@ -492,6 +519,9 @@ interface ValidatedState {
   readonly suppressed: number
   readonly unresolved: number
   readonly coverage: Coverage
+  /** Offered rules that a complete family covered. */
+  readonly coveredRuleIds: readonly string[]
+  readonly sweep: SweepProgress
   readonly accepted: readonly AcceptedCandidate[]
   readonly recorded: readonly RecordedConnection[]
   readonly batches: readonly BatchSummary[]
@@ -504,6 +534,8 @@ function isValidated(value: unknown): value is ValidatedState {
     typeof value.runId === 'string' &&
     Array.isArray(value.accepted) &&
     Array.isArray(value.recorded) &&
+    Array.isArray(value.coveredRuleIds) &&
+    isRecord(value.sweep) &&
     Array.isArray(value.degradeReasons)
   )
 }
@@ -895,6 +927,14 @@ function beginResponse(
     rulesFile: path.join(workDir, 'rules.json'),
     filesIndex: path.join(workDir, 'files.tsv'),
     rulesOverview: path.join(workDir, 'rules.tsv'),
+    offeredRuleIds: snapshot.offer.offered,
+    offeredCount: snapshot.offer.offered.length,
+    sweep: {
+      total: snapshot.offer.total,
+      covered: snapshot.offer.coveredBefore,
+      sliceSize: snapshot.offer.sliceSize,
+      runsLeft: sweepBefore(snapshot.offer).runsLeft,
+    },
     lock: snapshot.lock,
     holder: setup.holder,
     ...(setup.reclaimed === undefined ? {} : { reclaimed: setup.reclaimed }),
@@ -954,6 +994,11 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   try {
     const rules = scans.flatMap((scan) => scan.rules)
     const provenance = scans.flatMap((scan) => scan.provenance)
+    const offer = planOffer({
+      rules,
+      coverage: ledger.ledger.coverage ?? [],
+      size: limits.maxFamiliesPerRun * limits.maxRulesPerFamily,
+    })
     const { parsed, verdict } = setup
     const snapshot: Snapshot = {
       version: 1,
@@ -975,6 +1020,14 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       degradeReasons,
       unread,
       ruleIds: rules.map((rule) => rule.id),
+      ruleVersions: rules.map((rule) => ({ id: rule.id, sha256: rule.sha256 })),
+      offer: {
+        offered: offer.offered,
+        fresh: offer.fresh,
+        total: offer.total,
+        coveredBefore: offer.coveredBefore,
+        sliceSize: offer.sliceSize,
+      },
       provenance,
       undecidedProvenance: undecidedMarkers(provenance, ledger.ledger),
       staleCitations: scans.flatMap((scan) => scan.stale),
@@ -986,7 +1039,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       JSON.stringify({ version: 1, runId, rules }, null, 1),
     )
     writeWorkFile(workDir, 'files.tsv', fingerprintIndex(snapshot.projects))
-    writeWorkFile(workDir, 'rules.tsv', rulesOverview(rules))
+    writeWorkFile(workDir, 'rules.tsv', rulesOverview(rules, offer))
     return beginResponse(setup, snapshot, scans, workDir, limits)
   } catch {
     return releaseAndFail('begin', lock, root, runId, 'internal-error')
@@ -1365,6 +1418,9 @@ function validateResponse(
     droppedTotal,
     discardedIncomplete: classified.discardedIncomplete,
     coverage: state.coverage,
+    offered:
+      state.coveredRuleIds.length + state.coverage.uncoveredRuleIds.length,
+    sweep: state.sweep,
   })
 }
 
@@ -1409,11 +1465,17 @@ function runValidation(
     { ctx: contextFrom(snapshot), snapshot, ledger },
     limits,
   )
+  // Only the rules the run was offered must be covered. The rest of the index
+  // waits for a later run and is not a reason to degrade this one.
   const coverage = checkCoverage({
-    ruleIds: snapshot.ruleIds,
+    ruleIds: snapshot.offer.offered,
     projects: snapshot.projects.map((project) => project.root),
     batches,
   })
+  const uncovered = new Set(coverage.uncoveredRuleIds)
+  const coveredRuleIds = snapshot.offer.offered.filter(
+    (id) => !uncovered.has(id),
+  )
   for (const reason of [
     ...classified.degrade,
     ...coverageReasons(coverage, classified.unresolved),
@@ -1433,6 +1495,8 @@ function runValidation(
     suppressed: classified.suppressed,
     unresolved: classified.unresolved,
     coverage,
+    coveredRuleIds,
+    sweep: sweepProgress(snapshot.offer, coveredRuleIds),
     accepted: classified.accepted,
     recorded: classified.recorded,
     batches: batches.map((batch) => ({
@@ -1533,6 +1597,7 @@ function digestModel(
     mode: snapshot.mode,
     hostSupport: snapshot.host,
     degradeReasons,
+    sweep: state.sweep,
     projects,
     unmatched: snapshot.unmatched,
     unread: state.unread,
@@ -1575,8 +1640,10 @@ function runRecord(
     })),
     unmatched: snapshot.unmatched,
     unread: state.unread,
+    sweep: state.sweep,
     counts: {
       rules: snapshot.ruleIds.length,
+      offered: snapshot.offer.offered.length,
       families: state.batches.length,
       candidates: state.accepted.length,
       recorded: state.recorded.length,
@@ -1649,6 +1716,15 @@ function commitRun(
       candidates: state.accepted.map((item) =>
         toCandidateRecord(item.candidate),
       ),
+      // The rename commits the run; coverage follows it in the same ledger write.
+      coverage: {
+        runId: snapshot.runId,
+        indexed: snapshot.ruleVersions.map((rule) => ({
+          ruleId: rule.id,
+          hash: rule.sha256,
+        })),
+        covered: state.coveredRuleIds,
+      },
     },
     { now: deps.now ?? Date.now },
   )
@@ -1803,6 +1879,7 @@ function ledgerShow(deps: HelperDeps): HelperResult {
   const entries = read.ledger.entries.slice(0, MAX_LEDGER_ENTRIES_SHOWN)
   return success('ledger-show', {
     total: read.ledger.entries.length,
+    coverage: { rules: read.ledger.coverage?.length ?? 0 },
     entries: entries.map((entry) => ({
       id: entry.id,
       kind: entry.kind,

@@ -68,6 +68,7 @@ const MAX_TARGET_EVIDENCE = 64
 const MAX_HISTORY = 10
 const MAX_POSSIBLE_MATCHES = 5
 const MAX_RUN_FILES = 16
+const MAX_COVERAGE = 20_000
 const MAX_PROCESS_PROBE_MS = 5000
 
 /** A run id or a run file name: one plain path segment. */
@@ -821,9 +822,24 @@ export interface LedgerEntry {
   readonly recordedAt: string
 }
 
+/**
+ * That a rule was covered by a committed run: the rule id, the hash of the
+ * learning as it was then, and the run. It holds no text. A rule whose current
+ * hash differs is not covered.
+ */
+export interface CoverageRecord {
+  readonly ruleId: string
+  readonly hash: string
+  readonly runId: string
+  /** ISO time of the commit. */
+  readonly at: string
+}
+
 export interface Ledger {
   readonly version: 1
   readonly entries: readonly LedgerEntry[]
+  /** Absent when no committed run has covered a rule. */
+  readonly coverage?: readonly CoverageRecord[]
 }
 
 const LEDGER_STATUSES: readonly LedgerStatus[] = [
@@ -897,6 +913,37 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
   )
 }
 
+const RULE_ID = /^rule-[0-9a-f]{16}$/
+
+function isRuleId(value: unknown): value is string {
+  return typeof value === 'string' && RULE_ID.test(value)
+}
+
+const SHA256 = /^[0-9a-f]{64}$/
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && SHA256.test(value)
+}
+
+function isCoverageRecord(value: unknown): value is CoverageRecord {
+  return (
+    isRecord(value) &&
+    isRuleId(value.ruleId) &&
+    isSha256(value.hash) &&
+    plainText(value.runId, MAX_STRING_LENGTH) &&
+    plainText(value.at, MAX_STRING_LENGTH)
+  )
+}
+
+function isCoverage(value: unknown): value is CoverageRecord[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_COVERAGE &&
+    value.every(isCoverageRecord) &&
+    new Set(value.map((item) => item.ruleId)).size === value.length
+  )
+}
+
 function parseLedger(text: string): Ledger | undefined {
   let value: unknown
   try {
@@ -905,9 +952,13 @@ function parseLedger(text: string): Ledger | undefined {
     return undefined
   }
   if (!isRecord(value) || value.version !== 1) return undefined
-  const { entries } = value
+  const { entries, coverage } = value
   if (!Array.isArray(entries) || !entries.every(isLedgerEntry)) return undefined
-  return { version: 1, entries }
+  if (coverage === undefined) return { version: 1, entries }
+  if (!isCoverage(coverage)) return undefined
+  return coverage.length === 0
+    ? { version: 1, entries }
+    : { version: 1, entries, coverage }
 }
 
 export type LedgerRead =
@@ -1166,11 +1217,29 @@ function applyCandidates(
 
 // ── Publishing ──────────────────────────────────────────────────────────────
 
+/**
+ * What a committed run covered. The ledger keeps coverage for the rules in
+ * `indexed` only, so a rule whose learning is gone is dropped, and records
+ * `covered` rules at the hash `indexed` gives them.
+ */
+export interface CoverageUpdate {
+  readonly runId: string
+  /** Every rule the run indexed, with the hash of its learning. */
+  readonly indexed: ReadonlyArray<{
+    readonly ruleId: string
+    readonly hash: string
+  }>
+  /** Rule ids, each in `indexed`, that a complete family covered. */
+  readonly covered: readonly string[]
+}
+
 export interface PublishInput {
   readonly runId: string
   /** File name to content. Names are single path segments. */
   readonly files: Readonly<Record<string, string>>
   readonly candidates: readonly CandidateRecord[]
+  /** Left out, the ledger's coverage is kept as it is. */
+  readonly coverage?: CoverageUpdate
 }
 
 export interface PublishOptions {
@@ -1189,6 +1258,7 @@ export type PublishFailure =
   | 'invalid-run-id'
   | 'invalid-file-name'
   | 'invalid-candidate'
+  | 'invalid-coverage'
   | 'run-exists'
   | 'ledger-unreadable'
   | 'write-failed'
@@ -1211,9 +1281,72 @@ function validPublishInput(input: PublishInput): PublishFailure | undefined {
   if (names.length > MAX_RUN_FILES || !names.every((n) => SAFE_NAME.test(n))) {
     return 'invalid-file-name'
   }
-  return input.candidates.every(validCandidate)
-    ? undefined
-    : 'invalid-candidate'
+  if (!input.candidates.every(validCandidate)) return 'invalid-candidate'
+  if (input.coverage !== undefined && !validCoverageUpdate(input.coverage)) {
+    return 'invalid-coverage'
+  }
+  return undefined
+}
+
+function validCoverageUpdate(update: CoverageUpdate): boolean {
+  if (!isRunId(update.runId) || update.indexed.length > MAX_COVERAGE) {
+    return false
+  }
+  const hashes = new Map<string, string>()
+  for (const item of update.indexed) {
+    if (!isRuleId(item.ruleId) || !isSha256(item.hash)) return false
+    hashes.set(item.ruleId, item.hash)
+  }
+  return update.covered.every((id) => hashes.has(id))
+}
+
+/**
+ * Fold a run's coverage into the ledger's: drop every record whose rule the
+ * run did not index, then record the covered rules at their current hash.
+ */
+function applyCoverage(
+  prior: readonly CoverageRecord[],
+  update: CoverageUpdate,
+  at: string,
+): CoverageRecord[] {
+  const hashes = new Map(update.indexed.map((item) => [item.ruleId, item.hash]))
+  const kept = new Map(
+    prior
+      .filter((record) => hashes.has(record.ruleId))
+      .map((record) => [record.ruleId, record]),
+  )
+  for (const ruleId of update.covered) {
+    const hash = hashes.get(ruleId)
+    if (hash !== undefined) {
+      kept.set(ruleId, { ruleId, hash, runId: update.runId, at })
+    }
+  }
+  return [...kept.values()].sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+}
+
+/** The ledger after a committed run: its candidates folded in and its coverage updated. */
+function foldRun(
+  prior: Ledger,
+  input: PublishInput,
+  recordedAt: string,
+): { ledger: Ledger; outcomes: CandidateStanding[] } {
+  const applied = applyCandidates(prior, input.candidates, recordedAt)
+  const coverage =
+    input.coverage === undefined
+      ? prior.coverage
+      : applyCoverage(prior.coverage ?? [], input.coverage, recordedAt)
+  const ledger: Ledger =
+    coverage === undefined || coverage.length === 0
+      ? applied.ledger
+      : { ...applied.ledger, coverage }
+  return { ledger, outcomes: applied.outcomes }
+}
+
+/** The ledger with its entries replaced and its coverage carried over. */
+function withEntries(ledger: Ledger, entries: readonly LedgerEntry[]): Ledger {
+  return ledger.coverage === undefined
+    ? { version: 1, entries }
+    : { version: 1, entries, coverage: ledger.coverage }
 }
 
 /** Build `runs/<id>.tmp/`, returning the failure if it could not be built. */
@@ -1288,7 +1421,7 @@ export function publishRun(
   options.hooks?.afterCommit?.()
 
   const recordedAt = new Date((options.now ?? Date.now)()).toISOString()
-  const applied = applyCandidates(prior.ledger, input.candidates, recordedAt)
+  const applied = foldRun(prior.ledger, input, recordedAt)
   try {
     writeLedger(root, applied.ledger)
     return {
@@ -1451,12 +1584,15 @@ export function decideLedgerEntry(
       recordedAt: new Date((options.now ?? Date.now)()).toISOString(),
     }
     try {
-      writeLedger(root, {
-        version: 1,
-        entries: read.ledger.entries.map((entry) =>
-          entry.id === prior.id ? decided : entry,
+      writeLedger(
+        root,
+        withEntries(
+          read.ledger,
+          read.ledger.entries.map((entry) =>
+            entry.id === prior.id ? decided : entry,
+          ),
         ),
-      })
+      )
     } catch {
       return { status: 'failed', reason: 'write-failed' }
     }

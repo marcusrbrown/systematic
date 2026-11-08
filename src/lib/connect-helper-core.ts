@@ -30,7 +30,11 @@ import {
   type InventoryRole,
   readContainedFile,
 } from './connect-evidence.js'
-import type { CandidateRecord, Ledger } from './connect-state.js'
+import type {
+  CandidateRecord,
+  CoverageRecord,
+  Ledger,
+} from './connect-state.js'
 import { parseFrontmatter } from './frontmatter.js'
 
 // ── State root ──────────────────────────────────────────────────────────────
@@ -455,6 +459,163 @@ export function checkCoverage(input: CoverageInput): Coverage {
     untouchedProjects: input.projects.filter((root) => !touched.has(root)),
     incompleteFamilies,
   }
+}
+
+// ── Rotation ────────────────────────────────────────────────────────────────
+
+function compareText(a: string, b: string): number {
+  if (a < b) return -1
+  return a > b ? 1 : 0
+}
+
+/**
+ * Rules from several projects, one project's rules per round: the first rule
+ * of every project, then the second of every project, and so on. Projects are
+ * in root order and rules in path order, so the result never depends on the
+ * order the index was built in.
+ */
+function roundRobin(rules: readonly RuleEntry[]): RuleEntry[] {
+  const byProject = new Map<string, RuleEntry[]>()
+  for (const rule of rules) {
+    const list = byProject.get(rule.project)
+    if (list === undefined) byProject.set(rule.project, [rule])
+    else list.push(rule)
+  }
+  const lists = [...byProject.entries()]
+    .sort(([a], [b]) => compareText(a, b))
+    .map(([, list]) => list.sort((a, b) => compareText(a.path, b.path)))
+  const out: RuleEntry[] = []
+  for (let round = 0; out.length < rules.length; round++) {
+    for (const list of lists) {
+      const rule = list[round]
+      if (rule !== undefined) out.push(rule)
+    }
+  }
+  return out
+}
+
+export interface OfferInput {
+  readonly rules: readonly RuleEntry[]
+  readonly coverage: readonly CoverageRecord[]
+  /** Rules one run is offered: families per run times rules per family. */
+  readonly size: number
+}
+
+/** How a run was offered the index, and where the sweep stood when it began. */
+export interface Offer {
+  /** Every indexed rule id, in the order they are offered. */
+  readonly order: readonly string[]
+  /** The head of `order`: the rules this run covers. */
+  readonly offered: readonly string[]
+  /** Offered rules that were never covered, or changed since they were. */
+  readonly fresh: readonly string[]
+  readonly total: number
+  /** Indexed rules covered at their current hash when the run began. */
+  readonly coveredBefore: number
+  readonly sliceSize: number
+}
+
+/**
+ * Choose the rules a run covers. Every indexed rule is put in one order:
+ * first the rules never covered or changed since they were covered, then the
+ * covered rules from the least recently covered run to the most recent. Inside
+ * each of those groups the order is round-robin across projects, then by path,
+ * so a slice spans projects. The order depends on the index and the coverage
+ * records only, never on the model, so repeated runs sweep the whole index
+ * and then start over at the oldest.
+ */
+export function planOffer(input: OfferInput): Offer {
+  const size = Math.max(1, Math.floor(input.size))
+  const covered = new Map(input.coverage.map((item) => [item.ruleId, item]))
+  const groups = new Map<string, RuleEntry[]>()
+  let coveredBefore = 0
+  for (const rule of input.rules) {
+    const found = covered.get(rule.id)
+    const record = found?.hash === rule.sha256 ? found : undefined
+    if (record !== undefined) coveredBefore++
+    // The empty key sorts before every time, so uncovered rules lead.
+    const key = record === undefined ? '' : `${record.at}\u0000${record.runId}`
+    const group = groups.get(key)
+    if (group === undefined) groups.set(key, [rule])
+    else group.push(rule)
+  }
+  const ordered = [...groups.entries()]
+    .sort(([a], [b]) => compareText(a, b))
+    .flatMap(([, rules]) => roundRobin(rules))
+  const order = ordered.map((rule) => rule.id)
+  const offered = order.slice(0, size)
+  const never = new Set((groups.get('') ?? []).map((rule) => rule.id))
+  return {
+    order,
+    offered,
+    fresh: offered.filter((id) => never.has(id)),
+    total: input.rules.length,
+    coveredBefore,
+    sliceSize: size,
+  }
+}
+
+/** Where the sweep over the index stands. */
+export interface SweepProgress {
+  readonly total: number
+  /** Rules covered at their current hash. */
+  readonly covered: number
+  readonly coveredThisRun: number
+  /** Runs of the slice size still needed to cover every rule, about. */
+  readonly runsLeft: number
+}
+
+function runsToCover(remaining: number, sliceSize: number): number {
+  return Math.ceil(remaining / Math.max(1, sliceSize))
+}
+
+/** The sweep before a run covers anything. */
+export function sweepBefore(
+  offer: Pick<Offer, 'total' | 'coveredBefore' | 'sliceSize'>,
+): SweepProgress {
+  return {
+    total: offer.total,
+    covered: offer.coveredBefore,
+    coveredThisRun: 0,
+    runsLeft: runsToCover(offer.total - offer.coveredBefore, offer.sliceSize),
+  }
+}
+
+/**
+ * The sweep after a committed run. A covered rule that was already covered at
+ * its current hash is covered this run but adds nothing to the total; an id
+ * the run was not offered counts for neither.
+ */
+export function sweepProgress(
+  offer: Pick<
+    Offer,
+    'offered' | 'fresh' | 'total' | 'coveredBefore' | 'sliceSize'
+  >,
+  coveredRuleIds: readonly string[],
+): SweepProgress {
+  const offered = new Set(offer.offered)
+  const fresh = new Set(offer.fresh)
+  const now = new Set(coveredRuleIds.filter((id) => offered.has(id)))
+  let added = 0
+  for (const id of now) if (fresh.has(id)) added++
+  const covered = offer.coveredBefore + added
+  return {
+    total: offer.total,
+    covered,
+    coveredThisRun: now.size,
+    runsLeft: runsToCover(offer.total - covered, offer.sliceSize),
+  }
+}
+
+/** The one-line progress report of the digest header and the publish summary. */
+export function renderSweepLine(progress: SweepProgress): string {
+  if (progress.total === 0) return ''
+  const head = `Sweep: covered ${progress.covered} of ${progress.total} rules (current hashes); this run covered ${progress.coveredThisRun};`
+  if (progress.runsLeft === 0) {
+    return `${head} the sweep is complete, and the next run starts again with the least recently covered rules.`
+  }
+  const runs = progress.runsLeft === 1 ? 'run' : 'runs'
+  return `${head} about ${progress.runsLeft} ${runs} left in the sweep.`
 }
 
 // ── Candidates ──────────────────────────────────────────────────────────────
@@ -1183,6 +1344,8 @@ export interface DigestModel {
     readonly consented?: boolean
   }
   readonly degradeReasons: readonly string[]
+  /** Where the sweep over the rule index stands after this run. */
+  readonly sweep?: SweepProgress
   readonly projects: readonly DigestProject[]
   readonly unmatched: ReadonlyArray<{
     readonly entry: string
@@ -1370,6 +1533,8 @@ function renderHeader(model: DigestModel): string[] {
     `Generated: ${model.generatedAt}`,
     hostLine(model),
   ]
+  const sweep = model.sweep === undefined ? '' : renderSweepLine(model.sweep)
+  if (sweep !== '') out.push(sweep)
   if (model.outcome === 'degraded') {
     out.push(
       `Degraded because: ${model.degradeReasons.join(', ')}. A degraded run is not proof of absence.`,
@@ -1488,6 +1653,8 @@ export function renderSummary(
     `Connect run ${sanitizeText(model.runId)}: ${model.outcome}.`,
     `Candidates: ${model.candidates.length}. Already recorded: ${model.recorded.length}. Dropped: ${droppedTotal}.`,
   ]
+  const sweep = model.sweep === undefined ? '' : renderSweepLine(model.sweep)
+  if (sweep !== '') out.push(sweep)
   if (model.outcome === 'degraded') {
     out.push(
       `Degraded because: ${model.degradeReasons.join(', ')}. This is not proof of absence.`,

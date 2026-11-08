@@ -17,7 +17,9 @@ rule ids: <rule id>, <rule id>
 max candidates: <bounds.maxCandidatesPerBatch>
 ```
 
-A family holds at most `bounds.maxRulesPerFamily` rule ids. The researcher reads the rule entries from the rules file and finds fingerprints in the files index. Both files are line-oriented so a read tool can page through them.
+A family holds at most `bounds.maxRulesPerFamily` rule ids, all of them rules the helper offered this run. The researcher reads the rule entries from the rules file and finds fingerprints in the files index. Both files are line-oriented so a read tool can page through them.
+
+The rule overview (`rules.tsv`) has one tab-separated line per indexed rule: id, project name, path, title, `applies_when` items and a mark. The mark is `offered` for the rules this run covers, and `later` for the rest. The offered lines come first, so the skill reads the first `offeredCount` lines. The researcher still searches every allowed project, whether or not a rule in it is offered.
 
 ## What the researcher returns: the batch
 
@@ -37,7 +39,7 @@ One JSON object, nothing before or after it. The skill writes it to a file uncha
 
 `ruleIds`, `projects`, `files` and `searches` are lists of plain strings. `projects` holds project roots exactly as the prompt lists them, never names; `files` holds paths relative to a project root. The skill checks this shape before it writes a batch. A reply that fails the check is replaced by an unfinished stub (`complete` false), so that family is degraded. A batch that passes the check and still fails the helper's own parse ends the run as `Connect failed`.
 
-Coverage is checked, not reported on trust. A rule id the index issued that no complete batch names, and an allowed project that no batch names, each degrade the run. A learning that says "report nothing" therefore cannot produce `Connect complete`.
+Coverage is checked, not reported on trust. An offered rule id that no complete batch names, and an allowed project that no batch names, each degrade the run. A rule that was not offered does not. A learning that says "report nothing" therefore cannot produce `Connect complete`.
 
 ## A candidate
 

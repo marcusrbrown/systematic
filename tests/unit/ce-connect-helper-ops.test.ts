@@ -445,7 +445,7 @@ describe('begin work files', () => {
     const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n')
     expect(lines).toHaveLength(run.body.ruleCount as number)
     for (const line of lines) {
-      expect(line.split('\t')).toHaveLength(5)
+      expect(line.split('\t')).toHaveLength(6)
     }
     const mine = lines.find((line) => line.startsWith(`${world.ruleId}\t`))
     expect(mine?.split('\t')).toEqual([
@@ -454,6 +454,7 @@ describe('begin work files', () => {
       'docs/solutions/lock-reclaim.md',
       'Reclaim stale locks only on verified identity',
       'A lock file can outlive the process that took it',
+      'offered',
     ])
     const tabbed = lines.find((line) =>
       line.includes('docs/solutions/tabbed.md'),

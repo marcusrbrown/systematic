@@ -78,7 +78,7 @@ JSON
 
 The helper answers one line of JSON. Read `outcome` or `status`:
 
-- `begun`: the lock is held. Note `runId`, `lock`, `workDir`, `rulesFile`, `rulesOverview`, `filesIndex`, `projects`, `unmatched`, `ruleCount`, `bounds`, `degradeReasons` and `unread`. Go on.
+- `begun`: the lock is held. Note `runId`, `lock`, `workDir`, `rulesFile`, `rulesOverview`, `filesIndex`, `projects`, `unmatched`, `ruleCount`, `offeredRuleIds`, `offeredCount`, `sweep`, `bounds`, `degradeReasons` and `unread`. Go on.
 - `consent-required` (interactive mode): the host and version have no observed deny. Show the helper's `warning` as it is and ask the user whether to run anyway. Wait for the answer. On a clear yes, run `begin` again with `"consent": true` added. On anything else, print `consent-declined` as the reason, then `Connect failed`. No lock was taken.
 - `unsupported-host` (headless mode, a `failed` outcome): print it with the helper's `hostSupport`, then `Connect failed`. Headless mode never asks for consent.
 - `busy`: print the helper's `reason` and `hint`, then `Connect busy`. Nothing was written. Never run `ledger unlock` yourself. In interactive mode you may tell the user that it exists (see `references/headless-and-outcomes.md`).
@@ -99,9 +99,11 @@ If `undecidedProvenance` is not empty, say that some learnings carry a provenanc
 
 ## Step 4: Group rules into families
 
-`ruleCount` rules were indexed. Read `rulesOverview` in pages with the read tool, about 200 lines at a time. Each line is: rule id, project name, path, title, `applies_when` items, separated by tabs. Do not read `rulesFile` whole: it holds every section of every rule.
+`ruleCount` rules were indexed, and the helper offers this run `offeredCount` of them: the ones `offeredRuleIds` lists. It chose them: rules never covered or changed since they were covered come first, then the least recently covered, spread across the projects. A run covers a slice of the index, and runs in turn sweep all of it. `sweep` says where the sweep stands.
 
-Group the rules into families by shared subject, using their `applies_when` and title vocabulary. Prefer groups that span two or more projects, because that is where a connection is. A family holds at most `bounds.maxRulesPerFamily` rules, and a run holds at most `bounds.maxFamiliesPerRun` families. Rules you leave out are reported as not covered and the run is `degraded`; say which projects they belong to.
+Read the first `offeredCount` lines of `rulesOverview` with the read tool. Each line is: rule id, project name, path, title, `applies_when` items and a mark, separated by tabs. The mark is `offered` for the rules of this run. The lines after them are marked `later`: a later run covers them. Do not read `rulesFile` whole: it holds every section of every rule.
+
+Group only the offered rules into families by shared subject, using their `applies_when` and title vocabulary. Put every offered rule in exactly one family, and never add a rule marked `later`. A family holds at most `bounds.maxRulesPerFamily` rules, and a run holds at most `bounds.maxFamiliesPerRun` families. The helper offers no more rules than those two bounds hold, so split a subject that is larger than one family, and join small subjects. You do not choose which rules to cover: the helper has chosen, and an offered rule that no complete family names makes the run `degraded`.
 
 Name each family in three to five plain words of your own. If `ruleCount` is 0, skip to Step 6 with no batches.
 
@@ -120,7 +122,9 @@ rule ids: <rule id>, <rule id>
 max candidates: <bounds.maxCandidatesPerBatch>
 ```
 
-List every allowed project under `projects:`, each as its absolute root from the `begin` answer. Put at most `bounds.maxRulesPerFamily` ids on the `rule ids:` line.
+List every allowed project under `projects:`, each as its absolute root from the `begin` answer. Put at most `bounds.maxRulesPerFamily` ids on the `rule ids:` line, all of them offered.
+
+The researcher covers only the rule ids it is given, but it searches the learnings and code of every allowed project for evidence, rules marked `later` included. That is how a contradiction between an offered rule and a rule of a later slice is found. Do not narrow the project list to the projects of the offered rules.
 
 Wait for the reply. Then write the batch to `<workDir>/family-<n>.json` with the file-writing tool, where `<n>` counts the families from 1:
 
@@ -148,7 +152,7 @@ JSON
 
 Copy `runId` and `lock` from the `begin` answer. List every batch file, in order; `"batches": []` when there were none.
 
-- `validated`: read `pendingOutcome`, `degradeReasons`, `accepted`, `recorded`, `suppressed`, `dropped`, `droppedTotal` and `coverage`. Go on to Step 7.
+- `validated`: read `pendingOutcome`, `degradeReasons`, `accepted`, `recorded`, `suppressed`, `dropped`, `droppedTotal`, `coverage` and `sweep`. Go on to Step 7.
 - Any `failed` outcome, such as `malformed-batch` or `batch-version`: the helper has already released the lock and removed the work files. Print the `reason`, then `Connect failed`. Do not publish.
 
 A dropped candidate never changes the outcome: it is counted by reason in the digest.
@@ -165,7 +169,7 @@ JSON
 
 To stop a run that has begun but cannot go on (the user declines, the host fails), send the same request with `"abort": true` added. It releases the lock and discards the work files, and answers `Connect failed` as its `finalLine`.
 
-`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Under each candidate title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Print those lines unchanged. Never retype, shorten or build one yourself. Then print, each on a line of its own:
+`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Its `Sweep:` line says how much of the index the sweep has covered (covered X of Y rules, what this run covered, and about how many runs are left). Keep it: a `complete` run covers its offered slice, not necessarily the whole index. Under each candidate title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Print those lines unchanged. Never retype, shorten or build one yourself. Then print, each on a line of its own:
 
 - the reason, when the outcome is `degraded` or `failed`: the `degradeReasons`, in words;
 - the artifact path: `digestPath`;
