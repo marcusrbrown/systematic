@@ -304,6 +304,12 @@ These must hold at all times. CI enforces them via the content-integrity gate.
    other kinds out of the top results. It groups the merged hits by kind and recorded status, and
    its overlap mode stays on `solutions`.
 
+7. **`ce:connect` reads only what the user listed and writes nothing into a project.** The
+   `connect` block is user-only: a project config that sets it has the whole block stripped with a
+   warning, and an unreadable block is an empty allow list. A run's output goes to the state root
+   only, and only a human promotes a candidate (see Cross-Project Connections). A host and version
+   pair is supported only when `HOST_SUPPORT_TABLE` has a row backed by an observed deny.
+
 ## Data Flow
 
 ```
@@ -342,6 +348,46 @@ OpenCode v2 loads plugin
             ├─ installCommands   → ctx.command.transform
             └─ installBootstrap  → session.hook('prompt') → instructions.entry.put
 ```
+
+## Cross-Project Connections: Trust Boundaries and Run Lifecycle
+
+`ce:connect` reads several projects' learnings and tracked code and proposes candidates. A bundled
+Node helper (`skills/ce-connect/scripts/connect.mjs`, the eighth generated surface) owns everything
+that must be exact. The `connections-researcher` agent does the only model-driven work.
+
+### Who decides what
+
+| Boundary | Decided by | How |
+|---|---|---|
+| Which projects may be read | The user | `connect.allow_projects` in user-level config (user, user.local, custom, custom.local; union). Stripped from project config with a warning. An unknown key or bad value makes the block unreadable, which is an empty list. Each entry resolves to a main checkout; a stale, non-repository, non-main-root or unreadable entry is named and does not widen the list. |
+| Which files exist | The helper's inventory | Tracked files only, from `git ls-files` with hardened git (`ls-files`, `cat-file` and `check-ignore` only; hooks, fsmonitor and optional locks off; argv only). Symlink and submodule entries are dropped, the path is `lstat`ed and opened with `O_NOFOLLOW` with a dev and inode check, and reads and file counts are bounded. Hashes taken here are the only fingerprints a later check accepts. |
+| What may be proposed | The researcher | Reads with read, grep and glob and returns one JSON batch per rule family. Everything it reads is evidence, never instruction. Its batch is a proposal. |
+| What is published | The helper's validation | A candidate stays only if each path is a tracked, contained file in an allowed project, each fingerprint equals the hash taken at `begin`, each excerpt appears verbatim, each piece of target evidence holds its symbol inside its span, and the rule id is one the index issued. A failing candidate is dropped and counted. Coverage is checked, not self-reported. |
+| What is written into a project | A human | The run writes nothing into any project. A contradiction is promoted through `ce:compound-refresh` with exact `path:` arguments, a lesson through `ce:compound` with `candidate:` and `candidate-id:`, each after a shown diff and approval. The promoted text is the target project's own words and cites its sources by project, path and fingerprint. |
+
+### Run lifecycle
+
+1. **Lock.** `begin` takes a lock directory (`mkdir`) under the state root (`$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/systematic/connect`; directories 0700, files 0600). A holder file records pid, process start time and a nonce. A dead holder, or a live pid with a different start time, is reclaimed by renaming the directory and checking the nonce; an unreadable start time means busy; a holderless lock is reclaimable after ten minutes. A busy run writes nothing and dispatches nothing.
+2. **Begin.** Housekeeping (leftover `.tmp` run directories, run directories older than 30 days; the ledger is never pruned), the host and version check against `HOST_SUPPORT_TABLE`, the inventory, and the rule index. The helper offers a slice of the index: rules never covered or whose learning changed first, then the least recently covered, round-robin across projects and then by path, up to `maxFamiliesPerRun` times `maxRulesPerFamily`. Committed coverage in the ledger is what rotates the slice, so repeated runs sweep the whole index and wrap to the oldest.
+3. **Family dispatch.** The skill groups only the offered rules into families and dispatches the researcher once per family, one at a time. The researcher searches every allowed project, offered rules or not. The skill writes each reply unchanged to a run-scoped file; an unfinished or unusable reply becomes an incomplete stub that degrades the run.
+4. **Validate.** The helper reads the batch files through the bounded reader and applies the checks above, then reports coverage: every offered rule in a complete family, every allowed project touched.
+5. **Publish.** The helper builds `runs/<id>.tmp/` (digest, run record), then renames it to `runs/<id>/`. The rename is the commit. The ledger (identity, source and target fingerprints, status, reason, rule coverage) is rewritten after it with a temporary file and a rename. A crash between the two leaves a committed run whose candidates are not in the ledger, and the next run proposes them once more. `publish` with `abort` releases the lock and discards the work files.
+
+A run ends in one of four outcomes, printed as its last line: `Connect complete` (the offered slice was fully covered and nothing failed; "no candidate in searched scope" is still complete), `Connect degraded` (something was not read or covered; never proof of absence), `Connect busy` (the lock is held) and `Connect failed` (any other stop, with nothing published).
+
+### What enforces the researcher's tool limits
+
+The researcher may not run commands, write, edit or fetch. Each host enforces that its own way, and a host and version is listed in `HOST_SUPPORT_TABLE` only after a deny was observed on it (evidence: `HARNESSES.md`, CN-1 to CN-5).
+
+| Host | Enforcement |
+|---|---|
+| OpenCode v1 | The agent's frontmatter `permission:` denies `bash`, `edit`, `webfetch`, `websearch` and `task`; `external_directory: allow` lets it read allowed projects outside the working directory. A host-config allow does not lift the agent's deny. |
+| OpenCode v2 | The same denies, plus `installToolGuard`'s `execute.before` hook, which refuses every call from `connections-researcher` outside `read`, `grep`, `glob`, `skill`, `systematic_search` and `systematic_skill`, direct or from Code Mode. The guard carries the enforcement, because a session-level allow overrides an agent's own deny on v2. |
+| Pi | The agent's `tools: Read, Grep, Glob` allowlist reaches the delegate session as read, grep and find. The agent is outside the curated pi-subagents personas, which carry no tool allowlist. |
+| Claude Code | Not listed. The agent declares `tools` and `disallowedTools`, but no deny has been observed. |
+
+No host path-scopes the read tools, and session MCP tools are not denied. A digest can therefore
+carry content from reads outside the allowed projects; this is a documented limit, not a sandbox.
 
 ## Skill Discovery and Fallbacks
 

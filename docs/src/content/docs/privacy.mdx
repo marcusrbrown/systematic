@@ -53,6 +53,10 @@ On OpenCode v2, the plugin hands its bootstrap text to OpenCode, which stores it
 
 The optional external sources for search (`kind: external`) read only local files on your machine: Markdown folders and Deciduous sync folders that you or an allowed project listed. They open no network connection, run no command and write nothing, and they send nothing anywhere. The text of a search hit is returned to the agent that asked for it, so it reaches your model provider like any other tool result. Nothing is redacted from it. The [search guide](/systematic/guides/search/#external-sources) explains how to set sources up and which limits apply.
 
+### Connecting your projects
+
+The `ce:connect` skill reads the learnings and tracked code of projects you list in the `connect.allow_projects` config field. It opens no network connection of its own and sends nothing anywhere. Its digest, run record and ledger are written only to a state directory on your machine (`$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/systematic/connect`), with owner-only permissions. Run directories are deleted after 30 days, and `ledger clear` deletes the ledger. What the researcher reads reaches your model provider like any other tool result, and nothing is redacted from it. Read tools are not limited to the listed projects, and the digest can carry content from those reads. The [connect guide](/systematic/guides/cross-project-connections/#limits) explains the limits.
+
 ## Contact
 
 If you have questions about privacy on this site, open an issue on [GitHub](https://github.com/marcusrbrown/systematic/issues).

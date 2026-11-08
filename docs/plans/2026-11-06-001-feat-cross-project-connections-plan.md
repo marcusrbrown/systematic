@@ -861,7 +861,7 @@ Each unit lands as an atomic commit. A unit that adds a `src/lib` module also ow
 
 ### Phase D: Documentation and registration
 
-- [ ] U10. Documentation and registration
+- [x] U10. Documentation and registration
 
 **Goal:** Document the capability and its limits, and close every registration obligation that no single unit owned.
 
