@@ -58,6 +58,8 @@ Coverage is checked, not reported on trust. An offered rule id that no complete 
 
 A `contradiction` has at least two sources, one of them in the target and at least one in another project, and its next step is `refresh-learning` or `investigate`. A `transferable-lesson` has sources outside the target, at least one `targetEvidence` item, and a next step of `compound-learning` or `investigate`.
 
+The next step also decides the handoff the summary prints. A `compound-learning` lesson gets the `candidate:` and `candidate-id:` tokens for `ce:compound`. A `refresh-learning` contradiction gets the exact-path scope `/ce:compound-refresh path:<docs/solutions/...>` of the target's own learning, because `ce:compound` refuses a contradiction. An `investigate` candidate gets neither.
+
 ## What the helper checks
 
 Each candidate, in order. The first failure drops that candidate and counts it by reason; the outcome does not change.

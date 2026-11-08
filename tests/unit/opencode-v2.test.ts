@@ -689,6 +689,109 @@ describe('setupOpenCodeV2', () => {
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
+  describe('the read-only tool guard is a prerequisite for the researcher', () => {
+    const RESEARCHER = 'connections-researcher'
+
+    /** Replays the registered agent transform and returns the agents it created. */
+    function installedAgents(fake: ReturnType<typeof createFakeContext>) {
+      const created: string[] = []
+      const editor = {
+        get: () => undefined,
+        update(name: string, apply: (agent: unknown) => void) {
+          created.push(name)
+          apply({ request: { body: {} }, permissions: [] })
+        },
+      }
+      for (const transform of fake.transforms) {
+        ;(transform as unknown as (e: typeof editor) => unknown)(editor)
+      }
+      return created
+    }
+
+    test('installs the researcher when the guard registers', async () => {
+      const fake = createFakeContext(projectDir)
+
+      await setupOpenCodeV2(fake.ctx, deps())
+
+      expect(installedAgents(fake)).toContain(RESEARCHER)
+      expect(errorSpy).not.toHaveBeenCalled()
+    })
+
+    test('does not install the researcher when the guard cannot register, and says so once', async () => {
+      const fake = createFakeContext(projectDir)
+      ;(fake.ctx as unknown as { tool: { hook: unknown } }).tool.hook =
+        async () => {
+          throw new Error('hook registry unavailable')
+        }
+
+      await setupOpenCodeV2(fake.ctx, deps())
+
+      const created = installedAgents(fake)
+      expect(created).not.toContain(RESEARCHER)
+      // Only the agents the guard protects are held back.
+      expect(created.length).toBeGreaterThan(0)
+      const messages = errorMessages().filter((m) => m.includes(RESEARCHER))
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toContain('tool guard')
+      expect(messages[0]).toContain('hook registry unavailable')
+    })
+
+    test('does not install the researcher when the host has no hook registry at all', async () => {
+      const fake = createFakeContext(projectDir)
+      ;(fake.ctx as unknown as { tool: Record<string, unknown> }).tool = {
+        async transform() {},
+      }
+
+      await setupOpenCodeV2(fake.ctx, deps())
+
+      expect(installedAgents(fake)).not.toContain(RESEARCHER)
+    })
+
+    test('registers the guard before the agents, so no agent is exposed first', async () => {
+      const order: string[] = []
+      const fake = createFakeContext(projectDir)
+
+      await setupOpenCodeV2(
+        fake.ctx,
+        deps({
+          installers: {
+            toolGuard: () => {
+              order.push('toolGuard')
+            },
+            agents: () => {
+              order.push('agents')
+            },
+          },
+        }),
+      )
+
+      expect(order).toEqual(['toolGuard', 'agents'])
+    })
+
+    test('a guard installer that throws holds the researcher back from the agents installer', async () => {
+      const seen: string[][] = []
+      const fake = createFakeContext(projectDir)
+
+      await setupOpenCodeV2(
+        fake.ctx,
+        deps({
+          installers: {
+            toolGuard: () => {
+              throw new Error('refused')
+            },
+            agents: ({ snapshot }) => {
+              seen.push(Object.keys(snapshot.plan.agents))
+            },
+          },
+        }),
+      )
+
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).not.toContain(RESEARCHER)
+      expect(seen[0]?.length).toBeGreaterThan(0)
+    })
+  })
+
   test('never reads the process working directory for project config', async () => {
     // The bundled working directory has its own `.opencode`; the context's
     // directory is the only project source.

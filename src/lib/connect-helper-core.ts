@@ -1668,24 +1668,14 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
   const out = ['Candidates (untrusted text, quoted):']
   for (const item of titles) {
     out.push(quote(`${item.candidate.kind}: ${item.candidate.title}`))
-    // A lesson to investigate has nothing to promote yet, so no token: a
-    // token would invite a promotion the candidate's own next step rules out.
-    if (item.candidate.nextStep === 'investigate') {
-      out.push(
-        'Investigate first: there is no promotion token for this candidate. See the digest for what to check.',
-      )
-    } else {
-      out.push(
-        pasteable
-          ? `candidate:${runRecordPath} candidate-id:${item.id}`
-          : `candidate-id:${item.id}`,
-      )
-    }
+    out.push(handoffLine(item, runRecordPath, pasteable))
   }
-  const promotable = titles.some(
-    (item) => item.candidate.nextStep !== 'investigate',
+  const promotesLesson = titles.some(
+    (item) =>
+      item.candidate.kind === 'transferable-lesson' &&
+      item.candidate.nextStep !== 'investigate',
   )
-  if (!pasteable && promotable) {
+  if (!pasteable && promotesLesson) {
     out.push(
       `The run record path cannot be pasted as one word: ${sanitizeText(runRecordPath).replaceAll('\n', ' ')}`,
     )
@@ -1695,13 +1685,53 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
   return out
 }
 
+/** What `ce:compound-refresh` accepts as an exact path: a solutions document, plain characters only. */
+const REFRESH_PATH = /^docs\/solutions\/[A-Za-z0-9._/-]+\.md$/
+
+/**
+ * The next step for one candidate, built from values the helper made and never
+ * from candidate text. A lesson is promoted by `ce:compound` from its tokens. A
+ * contradiction is promoted by `ce:compound-refresh` with the exact path of the
+ * target's own learning, which `ce:compound` refuses. A candidate to
+ * investigate has nothing to promote yet.
+ */
+function handoffLine(
+  item: DigestModel['candidates'][number],
+  runRecordPath: string,
+  pasteable: boolean,
+): string {
+  const { candidate } = item
+  if (candidate.nextStep === 'investigate') {
+    // A token would invite a promotion the candidate's own next step rules out.
+    return 'Investigate first: there is no promotion token for this candidate. See the digest for what to check.'
+  }
+  if (candidate.kind === 'contradiction') {
+    const paths = [
+      ...new Set(
+        candidate.sources
+          .filter((source) => source.project === candidate.target)
+          .map((source) => source.path),
+      ),
+    ]
+    if (paths.length === 0 || !paths.every((p) => REFRESH_PATH.test(p))) {
+      return 'Review by hand: the target learning has a path that a refresh scope cannot take. See the digest.'
+    }
+    const scope = paths.map((p) => `path:${p}`).join(' ')
+    return `Review in ${inline(candidate.targetName)}: /ce:compound-refresh ${scope}`
+  }
+  return pasteable
+    ? `candidate:${runRecordPath} candidate-id:${item.id}`
+    : `candidate-id:${item.id}`
+}
+
 /**
  * The short chat summary of a run. Candidate titles are untrusted text, so they
  * are quoted, one per line, and nothing in the summary reads as an instruction.
  * Under each title the helper prints the promotion tokens for that candidate:
  * `candidate:<run record path>` and `candidate-id:<id>` on one line, built from
- * values the helper made and never from candidate text. A candidate whose next
- * step is `investigate` gets a plain note instead.
+ * values the helper made and never from candidate text. A contradiction gets
+ * the `ce:compound-refresh` path scope of the target's learning instead, and a
+ * candidate whose next step is `investigate` gets a plain note.
  */
 export function renderSummary(
   model: DigestModel,

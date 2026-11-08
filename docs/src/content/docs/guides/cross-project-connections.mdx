@@ -133,7 +133,7 @@ The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/
 
 ## Promote a candidate
 
-Only a person promotes a candidate. `ce:connect` never writes a learning. Every candidate in the summary that can be promoted comes with a line of two tokens. A lesson whose next step is `investigate` has none: the summary says to investigate it first, and there is nothing to paste yet.
+Only a person promotes a candidate. `ce:connect` never writes a learning. Every candidate in the summary that can be promoted comes with a line to paste. A lesson gets a line of two tokens for `ce:compound`, shown below. A contradiction gets a `Review in <project>: /ce:compound-refresh path:<path>` line that names the target project's own learning, because `ce:compound` refuses contradictions. A candidate whose next step is `investigate` has neither: the summary says to investigate it first, and there is nothing to paste yet.
 
 ```text
 candidate:<run record path> candidate-id:<id>
@@ -143,7 +143,7 @@ Copy that line unchanged.
 
 ### A contradiction
 
-Run `ce:compound-refresh` from the project that should change, with the exact path of the learning to review:
+Run `ce:compound-refresh` from the project that should change, with the exact path of the learning to review. The summary prints this line for you:
 
 ```text
 /ce:compound-refresh path:docs/solutions/best-practices/export-job-retry-on-timeout-2026-02-11.md
@@ -194,7 +194,7 @@ A host and version counts as supported only after a deny has been observed on a 
 
 Any other version, including other OpenCode v1 versions, is unsupported until it has a recorded deny. In interactive mode an unsupported pair gets a warning that the no-write guarantee cannot be given, and the run goes on only if you agree. In headless mode it is refused with `unsupported-host`. A host whose version the skill cannot read counts as unsupported.
 
-**On OpenCode v2, Systematic's tool guard does the enforcing.** A session-level allow rule overrides an agent's own deny on v2, and Code Mode reaches host tools that no frontmatter key can name. So Systematic registers an `execute.before` hook that refuses every call from `connections-researcher` outside a fixed list: `read`, `grep`, `glob`, `skill`, `systematic_search` and `systematic_skill`. It refuses a call made directly and a call made from inside Code Mode, and the rest of the session keeps running.
+**On OpenCode v2, Systematic's tool guard does the enforcing.** A session-level allow rule overrides an agent's own deny on v2, and Code Mode reaches host tools that no frontmatter key can name. So Systematic registers an `execute.before` hook that refuses every call from `connections-researcher` outside a fixed list: `read`, `grep`, `glob`, `skill`, `systematic_search` and `systematic_skill`. It refuses a call made directly and a call made from inside Code Mode, and the rest of the session keeps running. The hook is registered before any agent is installed. If it cannot be registered, Systematic logs one warning and does not install `connections-researcher` at all, so the agent is never callable without its allowlist.
 
 Pi caps a delegate at 20 turns. A family that does not finish inside the cap is marked unfinished and degrades the run. It never silently contributes nothing.
 

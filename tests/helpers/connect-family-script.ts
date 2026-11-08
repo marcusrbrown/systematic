@@ -2,9 +2,9 @@
  * A scripted model for one `ce:connect` rule family on a real Pi runtime.
  *
  * The parent delegates to `connections-researcher`. The researcher child then
- * runs the method the agent describes, in a fixed number of turns: it finds its
- * rule entries and the fingerprints of the files it will cite, reads them,
- * and answers with one batch. Every fingerprint and excerpt in the batch is
+ * runs the method the agent describes, in a fixed number of turns: it reads its
+ * rule entries and the fingerprints of the files it will cite, reads those
+ * files, and answers with one batch. Every fingerprint and excerpt in the batch is
  * taken from a tool result the host actually returned to the child, so a read
  * that did not reach the child fails the script instead of being papered over.
  *
@@ -183,10 +183,6 @@ export interface FamilyScriptOptions {
   readonly neverAnswers?: boolean
 }
 
-function escapeForPattern(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 /** A responder for the parent and the child, told apart by the child's system prompt. */
 export function createFamilyScript(options: FamilyScriptOptions): FamilyScript {
   const { fixture, marker } = options
@@ -207,46 +203,31 @@ export function createFamilyScript(options: FamilyScriptOptions): FamilyScript {
         ],
       }
     }
+    // The Pi `grep` and `find` tools need `rg` and `fd` on the host, and the
+    // run is offline, so a runner without them would return an error here
+    // instead of a result. The script reads files, which needs no host binary.
+    // The child is still offered `grep` and `find`; the test asserts that.
     if (turn === 0) {
-      // One turn: find the rule entries and the fingerprint lines together.
-      const ids = fixture.ruleIds
-        .map((id) => `"id": "${escapeForPattern(id)}"`)
-        .join('|')
+      // One turn: the rule entries and the fingerprint lines.
       return {
         toolCalls: [
           {
             id: 'call_rules',
-            name: 'grep',
-            arguments: { pattern: ids, path: fixture.rulesFile },
+            name: 'read',
+            arguments: { path: fixture.rulesFile, offset: 1, limit: 120 },
           },
           {
-            id: 'call_fp_source',
-            name: 'grep',
-            arguments: {
-              pattern: escapeForPattern(fixture.source.path),
-              path: fixture.filesIndex,
-            },
-          },
-          {
-            id: 'call_fp_target',
-            name: 'grep',
-            arguments: {
-              pattern: escapeForPattern(fixture.target.path),
-              path: fixture.filesIndex,
-            },
+            id: 'call_fingerprints',
+            name: 'read',
+            arguments: { path: fixture.filesIndex },
           },
         ],
       }
     }
     if (turn === 1) {
-      // One turn: read the rule entries, and search the target for the failure shape.
+      // One turn: the two learnings.
       return {
         toolCalls: [
-          {
-            id: 'call_read_rules',
-            name: 'read',
-            arguments: { path: fixture.rulesFile, offset: 1, limit: 120 },
-          },
           {
             id: 'call_read_source',
             name: 'read',
@@ -259,14 +240,6 @@ export function createFamilyScript(options: FamilyScriptOptions): FamilyScript {
             name: 'read',
             arguments: {
               path: path.join(fixture.target.root, fixture.target.path),
-            },
-          },
-          {
-            id: 'call_search_target',
-            name: 'grep',
-            arguments: {
-              pattern: 'retry',
-              path: path.join(fixture.target.root, 'docs/solutions'),
             },
           },
         ],

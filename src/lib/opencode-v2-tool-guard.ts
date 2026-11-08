@@ -21,6 +21,10 @@ import type { V2Installer } from './opencode-v2.js'
  *
  * The throw is deliberate and is not routed through the adapter's never-throw
  * guard, which would swallow it and let the call run.
+ *
+ * Registration fails closed. A failed `hook` call is not swallowed here: it
+ * rejects, and `setupOpenCodeV2` then leaves the agents this guard protects out
+ * of the plan, because a read-only agent without its allowlist is not read-only.
  */
 
 /** Agents that may use only the read-only tools. Matched by exact name. */
@@ -70,8 +74,6 @@ function refuseOutsideAllowlist(event: ToolCallEvent): void {
   if (!verdict.allowed) throw new Error(verdict.message)
 }
 
-export const installToolGuard: V2Installer = async ({ ctx, guard }) => {
-  await guard.async('tool guard registration', () =>
-    ctx.tool.hook('execute.before', refuseOutsideAllowlist),
-  )()
+export const installToolGuard: V2Installer = async ({ ctx }) => {
+  await ctx.tool.hook('execute.before', refuseOutsideAllowlist)
 }

@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import type { Plugin } from '@opencode/plugin'
 
 import { createSafeGuard, type V2Snapshot } from '../../src/lib/opencode-v2.js'
@@ -172,17 +172,9 @@ describe('installToolGuard', () => {
     })
   })
 
-  test('a hook registration that fails is reported and never thrown into the host', async () => {
+  test('a hook registration that fails rejects, so setup can keep the guarded agents out', async () => {
     const { ctx } = createFakeContext({ hookRejects: true })
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      await expect(install(ctx)).resolves.toBeUndefined()
 
-      expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
-        'tool guard registration failed',
-      )
-    } finally {
-      errorSpy.mockRestore()
-    }
+    await expect(install(ctx)).rejects.toThrow('hook registry unavailable')
   })
 })

@@ -1360,23 +1360,69 @@ describe('renderSummary', () => {
     expect(lines[title + 1]).toMatch(/^Investigate first/)
   })
 
-  it('still prints tokens for a contradiction that is refreshed', () => {
-    const world = buildWorld()
-    const base = valid(checkCandidate(contradiction(world), world.ctx))
-    expect(base.nextStep).toBe('refresh-learning')
-    const text = renderSummary(
-      digestModel({
-        candidates: [
-          { id: ID_A, standing: 'new', possibleMatches: [], candidate: base },
-        ],
-      }),
-      DIGEST,
-      RUN_RECORD,
-    )
-    expect(text.split('\n')).toContain(
-      `candidate:${RUN_RECORD} candidate-id:${ID_A}`,
-    )
-    expect(text).not.toContain('Investigate first')
+  describe('a contradiction is handed to ce:compound-refresh', () => {
+    function summaryOf(candidate: DigestModel['candidates'][number]): string {
+      return renderSummary(
+        digestModel({ candidates: [candidate] }),
+        DIGEST,
+        RUN_RECORD,
+      )
+    }
+
+    it('prints the exact-path scope of the target learning, not compound tokens', () => {
+      const world = buildWorld()
+      const base = valid(checkCandidate(contradiction(world), world.ctx))
+      expect(base.nextStep).toBe('refresh-learning')
+      const text = summaryOf({
+        id: ID_A,
+        standing: 'new',
+        possibleMatches: [],
+        candidate: base,
+      })
+      const lines = text.split('\n')
+      expect(lines).toContain(
+        `Review in \`${base.targetName}\`: /ce:compound-refresh path:docs/solutions/lock-now.md`,
+      )
+      expect(text).not.toContain('candidate:')
+      expect(text).not.toContain('candidate-id:')
+      // The line follows the quoted title, and names only the target's own learning.
+      const title = lines.findIndex((line) =>
+        line.startsWith('> contradiction:'),
+      )
+      expect(lines[title + 1]).toMatch(/^Review in /)
+      expect(text).not.toContain('lock-reclaim.md')
+    })
+
+    it('says to review by hand when a path is not one the refresh scope accepts', () => {
+      const world = buildWorld()
+      const base = valid(checkCandidate(contradiction(world), world.ctx))
+      const odd = {
+        ...base,
+        sources: base.sources.map((source) =>
+          source.project === base.target
+            ? { ...source, path: 'docs/solutions/two words.md' }
+            : source,
+        ),
+      }
+      const text = summaryOf({
+        id: ID_A,
+        standing: 'new',
+        possibleMatches: [],
+        candidate: odd,
+      })
+      expect(text).not.toContain('/ce:compound-refresh')
+      expect(text).toContain('Review by hand')
+    })
+
+    it('still gives a lesson its compound tokens', () => {
+      const [first] = twoCandidates()
+      if (first === undefined) throw new Error('fixture has no candidate')
+      const text = summaryOf(first)
+      expect(text.split('\n')).toContain(
+        `candidate:${RUN_RECORD} candidate-id:${ID_A}`,
+      )
+      expect(text).not.toContain('/ce:compound-refresh')
+    })
   })
 
   it('prints no tokens when there is no candidate', () => {

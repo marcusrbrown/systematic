@@ -296,4 +296,8 @@ A third review changed the helper once more, on the same reading. A ledger that 
 
 Frozen files digest after the third change: sha256:e4cb6d0fc1d08071bbef7351251d5f99071b6b3a5fd3c3bd203495a73b384413
 
+A fourth change followed review of the pull request. The summary now hands a contradiction to `ce:compound-refresh` with the exact path of the target's own learning, instead of tokens that `ce:compound` refuses. The skill, its candidate reference and the generated helper bundle changed with it:
+
+Frozen files digest after the fourth change: sha256:9a68d9ceaea183f130b91d13614a3478210a89b882594e45c1db8e5b7c4cfd14
+
 Any further change to a frozen file needs its own line here.

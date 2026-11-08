@@ -19,7 +19,10 @@ import {
   type V2PermissionRule,
 } from './opencode-v2-permissions.js'
 import { installSkills } from './opencode-v2-skills.js'
-import { installToolGuard } from './opencode-v2-tool-guard.js'
+import {
+  installToolGuard,
+  READ_ONLY_AGENT_NAMES,
+} from './opencode-v2-tool-guard.js'
 import { installSearch } from './search-tool.js'
 
 /**
@@ -282,10 +285,13 @@ const DEFAULT_INSTALLERS: V2Installers = {
   bootstrap: installBootstrap,
 }
 
-/** Installers run in this order. */
+/**
+ * Installers run in this order. The tool guard comes first: the agents it
+ * protects are exposed only after it has registered.
+ */
 const INSTALLER_ORDER = [
-  'agents',
   'toolGuard',
+  'agents',
   'skills',
   'search',
   'commands',
@@ -418,20 +424,65 @@ function buildSnapshot(
 /**
  * Runs the v2 `setup` for one location: one config load, one snapshot, then
  * each installer in turn. Rejects on invalid config. An installer failure is
- * reported and never stops the next installer.
+ * reported and never stops the next installer. A tool guard that does not
+ * register is reported, and the agents it protects are not installed.
  */
 export async function setupOpenCodeV2(
   ctx: Plugin.Context,
   deps: OpenCodeV2Deps,
 ): Promise<void> {
-  const snapshot = buildSnapshot(ctx, deps)
-  if (snapshot === undefined) return
+  const built = buildSnapshot(ctx, deps)
+  if (built === undefined) return
   const guard = createSafeGuard()
   const report = reportDiagnostic
   const installers: V2Installers = { ...DEFAULT_INSTALLERS, ...deps.installers }
 
+  let snapshot = built
   for (const slot of INSTALLER_ORDER) {
+    if (slot === 'toolGuard') {
+      // Not run through the never-throw guard: whether it registered decides
+      // what the rest of setup may expose.
+      if (!(await installGuardOrReport(installers.toolGuard, ctx, snapshot))) {
+        snapshot = withoutGuardedAgents(snapshot)
+      }
+      continue
+    }
     const install = guard.async(`${slot} installer`, installers[slot])
     await install({ ctx, snapshot, guard, report })
   }
+}
+
+/** True when the tool guard registered. A failure is reported once and is not rethrown. */
+async function installGuardOrReport(
+  install: V2Installer,
+  ctx: Plugin.Context,
+  snapshot: V2Snapshot,
+): Promise<boolean> {
+  try {
+    await install({
+      ctx,
+      snapshot,
+      guard: createSafeGuard(),
+      report: reportDiagnostic,
+    })
+    return true
+  } catch (error) {
+    reportDiagnostic(
+      `tool guard registration failed: ${messageOf(error)}; the read-only agents (${READ_ONLY_AGENT_NAMES.join(', ')}) are not installed`,
+    )
+    return false
+  }
+}
+
+/** The snapshot with the agents the tool guard protects taken out of the plan. */
+function withoutGuardedAgents(snapshot: V2Snapshot): V2Snapshot {
+  const agents = Object.fromEntries(
+    Object.entries(snapshot.plan.agents).filter(
+      ([name]) => !READ_ONLY_AGENT_NAMES.includes(name),
+    ),
+  )
+  return Object.freeze({
+    ...snapshot,
+    plan: { ...snapshot.plan, agents },
+  })
 }
