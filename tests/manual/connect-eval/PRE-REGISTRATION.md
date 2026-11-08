@@ -195,6 +195,12 @@ These do not change the registration, and are logged in the results with the rea
 
 Everything else is a change to the registration (see the stop rule).
 
+Logged deviations:
+
+1. Transport fix, made before the first model call. The scratch clone script failed while cloning the fresh project, because that project's local checkout is a partial clone (file contents filtered out) and cannot serve a full clone. The scripts now clone from the checkout's origin URL when the source is a partial clone, and from the local checkout otherwise. They also check, after each clone, that the pinned revision is a commit in it, and stop if it is not. The source checkouts are only read. The pins, the frozen files, the prompt, the models, the fixtures and every rule above are unchanged.
+   - Kit digest before the fix: sha256:e5845796174133999883333fea2a95477e94e04ca4ae9ea64a23d58a5413559d
+   - Kit digest after the fix: sha256:ab8a362dc66dd86a6332ca0c70c3c73a1f762adbb73fc7befe43cd93313f69f0
+
 ## Real-use window
 
 The evaluation above does not replace use. After merge, the first 5 real runs are recorded with the template below. Nothing is tuned between them on the strength of one run.

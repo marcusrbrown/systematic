@@ -347,6 +347,23 @@ describe('pre-registration', () => {
     expect(text).not.toMatch(/(?<![\d.])8\.5 hours/)
   })
 
+  test('logs the transport fix made before the first model call, with the old and new kit digests', () => {
+    const deviations = text.slice(
+      text.indexOf('## Deviations'),
+      text.indexOf('## Real-use window'),
+    )
+    expect(deviations).toContain('before the first model call')
+    const registered = /^Scratch kit digest: sha256:([0-9a-f]{64})$/m.exec(
+      text,
+    )?.[1]
+    const logged = [...deviations.matchAll(/sha256:([0-9a-f]{64})/g)].map(
+      (m) => m[1],
+    )
+    expect(logged.length).toBeGreaterThanOrEqual(2)
+    expect(logged[0]).toBe(registered)
+    expect(new Set(logged).size).toBe(logged.length)
+  })
+
   test('records a full revision and says what degraded means after rotation', () => {
     expect(
       /^- Revision the registration was prepared on: `[0-9a-f]{40}`/m.test(
