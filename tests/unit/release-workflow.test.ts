@@ -375,6 +375,14 @@ describe('publish job', () => {
     })
   })
 
+  // Intentionally unscoped: the hold recheck reads a repository variable and
+  // installation tokens cannot be scoped to Variables, so any permission-*
+  // input would make that read fail and block every release. Changing this
+  // means changing the hold recheck too.
+  test('leaves the App token unscoped by permission, for this repository only', () => {
+    expect(appTokenScope('publish')).toEqual({})
+  })
+
   test('runs semantic-release with the credentials only on that step', () => {
     const step = findStep('publish', 'Publish with semantic-release')
     expect(runOf(step).trim()).toBe('npx --no-install semantic-release --ci')
@@ -546,6 +554,21 @@ describe('publish job', () => {
     }
   })
 })
+
+/** The `permission-*` inputs of a job's App token mint, as a plain object. */
+function appTokenScope(jobId: string): Record<string, unknown> {
+  const withBlock = asRecord(
+    findStep(jobId, 'Create release App token').with,
+    'with',
+  )
+  // No `owner` or `repositories`: the action then limits the token to the
+  // current repository instead of every repository in the installation.
+  expect(withBlock).not.toHaveProperty('owner')
+  expect(withBlock).not.toHaveProperty('repositories')
+  return Object.fromEntries(
+    Object.entries(withBlock).filter(([key]) => key.startsWith('permission-')),
+  )
+}
 
 describe('secrets and environments', () => {
   test('only the credentialed act jobs use environment: release', () => {
@@ -950,6 +973,13 @@ describe('refresh job', () => {
     expect(indexOfStep('refresh', 'Create release App token')).toBeLessThan(
       indexOfStep('refresh', REFRESH_STEP),
     )
+  })
+
+  test('scopes the App token to contents:write and pull-requests:write, for this repository only', () => {
+    expect(appTokenScope('refresh')).toEqual({
+      'permission-contents': 'write',
+      'permission-pull-requests': 'write',
+    })
   })
 
   test('passes the App token and render outputs as step env', () => {
