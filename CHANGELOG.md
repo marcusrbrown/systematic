@@ -4,6 +4,22 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.31.6](https://github.com/marcusrbrown/systematic/compare/v3.31.5...v3.31.6) (2026-11-08)
+
+### Bug Fixes
+
+* **security:** patch tar member-selection recursion in tooling ([#1333](https://github.com/marcusrbrown/systematic/issues/1333)) ([3a8bc4a](https://github.com/marcusrbrown/systematic/commit/3a8bc4a1525879751401fb05b21054af4b15f89d))
+* **security:** reject ambiguous IPv4 literals in tooling ([#1326](https://github.com/marcusrbrown/systematic/issues/1326)) ([86d204b](https://github.com/marcusrbrown/systematic/commit/86d204b008777d560141d0e2446fa6a61527fd29))
+
+### Miscellaneous Chores
+
+* **deps:** update dependency @biomejs/biome to v2.6.5 ([#1331](https://github.com/marcusrbrown/systematic/issues/1331)) ([7854c5f](https://github.com/marcusrbrown/systematic/commit/7854c5f602802a0886b8ac08915a9895225264fb))
+* **deps:** update fro-bot/agent to v0.136.0 ([#1323](https://github.com/marcusrbrown/systematic/issues/1323)) ([57ebe34](https://github.com/marcusrbrown/systematic/commit/57ebe348e9a0e3872505eb90e67c1f4f516604f6))
+* **deps:** update fro-bot/agent to v0.136.1 ([#1330](https://github.com/marcusrbrown/systematic/issues/1330)) ([17bb5b6](https://github.com/marcusrbrown/systematic/commit/17bb5b63f9c3c04355d06f9faab5e8553c4ff4ac))
+* **deps:** update fro-bot/agent to v0.136.2 ([#1332](https://github.com/marcusrbrown/systematic/issues/1332)) ([185d3f9](https://github.com/marcusrbrown/systematic/commit/185d3f966810385b694a50bba3e6f0687fc3ecbf))
+* **dev:** update dependency rimraf to v6.1.4 ([#1325](https://github.com/marcusrbrown/systematic/issues/1325)) ([150200d](https://github.com/marcusrbrown/systematic/commit/150200d0f6d71fbf0523d55a5dfcd8988a6b5f2a))
+* stop loading the plugin from source in this repository ([#1324](https://github.com/marcusrbrown/systematic/issues/1324)) ([020ed87](https://github.com/marcusrbrown/systematic/commit/020ed87b005385c78123acd85d089ede8c016157))
+
 ## [3.31.5](https://github.com/marcusrbrown/systematic/compare/v3.31.4...v3.31.5) (2026-11-06)
 
 ### Bug Fixes
