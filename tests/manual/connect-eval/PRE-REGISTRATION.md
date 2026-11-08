@@ -229,4 +229,53 @@ Stop rule for the window: if none of the first 5 real runs yields a candidate th
 
 ## Results
 
-Not recorded yet. Results are appended here after the runs, as they happened, with the date, the repetition outcomes, every figure above and the verdict. Nothing is removed.
+Recorded 2026-11-07 (US Mountain time; the runs went from about 01:35 to 04:03 UTC on 2026-11-08). Aggregate figures only. The candidates, their text and their sources come from other people's projects, and some describe unfixed gaps, so none of it is committed. Nothing is removed from this section later.
+
+Small sample, OpenCode only, one fresh project, one invoking model. Not a benchmark.
+
+### Verdict
+
+Both pre-registered thresholds were met: precision at least 0.7 on the main sweep, and every seed found in 3 of 3 seed-check repetitions with no control reported.
+
+### Precision (threshold: at least 0.7)
+
+- Distinct judged candidates: 35, from 36 raw candidates. One pair was grouped as equivalent before any figure was computed.
+- Judged real: 35. Worth promoting: 35. False: 0.
+- Kinds among the 35: 4 contradictions and 31 transferable lessons.
+- "Already recorded" entries: 0. Reported controls, main sweep and seed check: 0.
+- Denominator: 35. Precision: 1.00. The stricter figure (worth promoting only) is 1.00, and so is the figure without "already recorded" entries.
+
+### Seed check (threshold: every seed in 3 of 3 repetitions, no control reported)
+
+- 3 repetitions. Each was one complete run that covered 48 of 48 rules, with the projects unchanged.
+- Every seeded contradiction was found in 3 of 3 repetitions.
+- No control was reported.
+
+### Main sweep
+
+- One full sweep: 9 runs (expected 8, cap 10), 376 of 376 rules covered, projects unchanged before and after.
+- Every run ended `degraded` with the reason `citations-truncated`. Two of them also ended with `uncovered-rules` and `incomplete-batch`; the rotation offered those rules again in a later run, and the sweep still ended with every rule covered.
+- No run ended `complete`, `busy` or `failed`. No run, in either part, timed out.
+
+### Reported only (no threshold)
+
+- Regression check on the earlier probe lessons: 1 of 4 found.
+- Recall on the fresh labels: 0 of 1 labeled connections found by the main sweep.
+- Seeds found in the main sweep: 3 of 3.
+
+### What the figures do and do not say
+
+What was proposed held up: every distinct candidate was judged real, and the planted contradictions were found every time with no control reported. Recall on known lessons is low, though. The sweep found 1 of 4 earlier probe lessons and 0 of 1 fresh-set labels, so a run that proposes little is not evidence that nothing is there. The precision figure measures what a run reports. It says nothing about what a run leaves out. The seeds are synthetic pairs inside one project and one slice, so finding them says less than finding a cross-project connection would.
+
+The judging was done by the project owner after seeing the candidates, not blind, and the sample is one fresh project plus three corpora from the earlier probe. Read 1.00 as "no false candidate in 35", not as a rate.
+
+The nine `degraded` outcomes of the main sweep came from a bound, not from a failure. The helper caps the citations it checks and reported a run that reached the cap as degraded, and real projects reach it on every run. The outcome line therefore did not separate runs with a problem from runs without one. That is recorded here as it happened; the evaluated files were not changed to improve it.
+
+### Deviations
+
+Both logged transport fixes (see Deviations above) were made before the first `ce:connect` model call, and neither changed a frozen file, the prompt, the models, the fixtures or the pins.
+
+1. The scratch clone script now clones from the checkout's origin URL when the source is a partial clone, and checks after every clone that the pinned revision is present.
+2. The scripts now ignore, and delete, Finder `.DS_Store` files in their clean-checkout checks and before-and-after comparisons, and ignore nothing else.
+
+No attempt was run again to improve a result.
