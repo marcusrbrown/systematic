@@ -831,12 +831,17 @@ describe('checkHostSupport', () => {
     )
 
     it('matches the installed fork build of the pinned release against the shipped v1 row', () => {
-      expect(
-        checkHostSupport('opencode-v1', '1.19.5+harness.bf7f7dfe').supported,
-      ).toBe(true)
-      expect(checkHostSupport('opencode-v1', '1.19.5-rc.1').supported).toBe(
-        false,
+      const v1 = HOST_SUPPORT_TABLE.find(
+        (entry) => entry.host === 'opencode-v1',
       )
+      if (v1 === undefined) throw new Error('no shipped v1 row')
+      expect(
+        checkHostSupport('opencode-v1', `${v1.version}+harness.bf7f7dfe`)
+          .supported,
+      ).toBe(true)
+      expect(
+        checkHostSupport('opencode-v1', `${v1.version}-rc.1`).supported,
+      ).toBe(false)
     })
   })
 
