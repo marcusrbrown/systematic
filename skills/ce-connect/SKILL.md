@@ -81,7 +81,7 @@ The helper answers one line of JSON. Read `outcome` or `status`:
 - `begun`: the lock is held. Note `runId`, `lock`, `workDir`, `rulesFile`, `rulesOverview`, `filesIndex`, `projects`, `unmatched`, `ruleCount`, `offeredRuleIds`, `offeredCount`, `sweep`, `bounds`, `degradeReasons` and `unread`. Go on.
 - `consent-required` (interactive mode): the host and version have no observed deny. Show the helper's `warning` as it is and ask the user whether to run anyway. Wait for the answer. On a clear yes, run `begin` again with `"consent": true` added. On anything else, print `consent-declined` as the reason, then `Connect failed`. No lock was taken.
 - `unsupported-host` (headless mode, a `failed` outcome): print it with the helper's `hostSupport`, then `Connect failed`. Headless mode never asks for consent.
-- `busy`: print the helper's `reason` and `hint`, then `Connect busy`. Nothing was written. Never run `ledger unlock` yourself. In interactive mode you may tell the user that it exists (see `references/headless-and-outcomes.md`).
+- `busy`: print the helper's `reason` and `hint`, then `Connect busy`. Nothing was written. Never run `ledger unlock` yourself on a `busy` answer. In interactive mode you may tell the user that it exists (see `references/headless-and-outcomes.md`).
 - Any other `failed` outcome, including `no-allowed-projects` and `state-root-refused`: print the `reason`, add each `unmatched` entry with its reason when there are any, then `Connect failed`.
 - No JSON at all, or the command could not start: `helper-unavailable`.
 
@@ -153,7 +153,7 @@ JSON
 Copy `runId` and `lock` from the `begin` answer. List every batch file, in order; `"batches": []` when there were none.
 
 - `validated`: read `pendingOutcome`, `degradeReasons`, `accepted`, `recorded`, `suppressed`, `dropped`, `droppedTotal`, `coverage` and `sweep`. Go on to Step 7.
-- Any `failed` outcome, such as `malformed-batch` or `batch-version`: the helper has already released the lock and removed the work files. Print the `reason`, then `Connect failed`. Do not publish.
+- Any `failed` outcome, such as `malformed-batch`, `batch-version` or `invalid-request`: every failed `validate` reply has a `lockReleased` field. When it is `true`, the helper has released the lock and removed the work files. When it is not `true` (the reply says the lock was not released, or has no such field), run `ledger unlock` for this run before you stop, the way `references/headless-and-outcomes.md` shows; the lock is the one you took in Step 2, and this is the only case where the skill runs `ledger unlock` itself. Print the `reason`, then `Connect failed`. Do not publish.
 
 A dropped candidate never changes the outcome: it is counted by reason in the digest.
 
@@ -169,7 +169,7 @@ JSON
 
 To stop a run that has begun but cannot go on (the user declines, the host fails), send the same request with `"abort": true` added. It releases the lock and discards the work files, and answers `Connect failed` as its `finalLine`.
 
-`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Its `Sweep:` line says how much of the index the sweep has covered (covered X of Y rules, what this run covered, and about how many runs are left). Keep it: a `complete` run covers its offered slice, not necessarily the whole index. Under each candidate title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Print those lines unchanged. Never retype, shorten or build one yourself. Then print, each on a line of its own:
+`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Its `Sweep:` line says how much of the index the sweep has covered (covered X of Y rules, what this run covered, and about how many runs are left). Keep it: a `complete` run covers its offered slice, not necessarily the whole index. Under each candidate title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Print those lines unchanged. Never retype, shorten or build one yourself. A candidate whose next step is `investigate` has no tokens: under its title the summary says to investigate first. Print that line unchanged and do not offer to promote the candidate. Then print, each on a line of its own:
 
 - the reason, when the outcome is `degraded` or `failed`: the `degradeReasons`, in words;
 - the artifact path: `digestPath`;

@@ -79,7 +79,7 @@ SKILL_DIR="<skill directory stated when this skill loads>";
 node "$SKILL_DIR/scripts/connect.mjs" ledger unlock
 ```
 
-Offer this only in interactive mode, only after the user says no other run is active. Never run `ledger unlock` on your own, and never in headless mode. A lock whose holder process has died is reclaimed by the next run without it.
+Offer this only in interactive mode, only after the user says no other run is active. Never run `ledger unlock` on your own for a `busy` answer, and never in headless mode. The one exception is a failed `validate` whose reply does not say `lockReleased: true`: the lock is then the one this run took, no other run can hold it, and the skill runs `ledger unlock` before it stops, in either mode. A lock whose holder process has died is reclaimed by the next run without it.
 
 ## Stopping after `begin`
 

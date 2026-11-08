@@ -833,6 +833,12 @@ export interface CoverageRecord {
   readonly runId: string
   /** ISO time of the commit. */
   readonly at: string
+  /**
+   * The key of the project the rule belongs to. A rule id is a hash of the
+   * project root and the path, so this is the only way to tell later whose
+   * rule a record is. Absent on a record written before it was kept.
+   */
+  readonly project?: string
 }
 
 export interface Ledger {
@@ -920,6 +926,11 @@ function isRuleId(value: unknown): value is string {
 }
 
 const SHA256 = /^[0-9a-f]{64}$/
+const PROJECT_KEY = /^[0-9a-f]{12}$/
+
+function isProjectKey(value: unknown): value is string {
+  return typeof value === 'string' && PROJECT_KEY.test(value)
+}
 
 function isSha256(value: unknown): value is string {
   return typeof value === 'string' && SHA256.test(value)
@@ -931,7 +942,8 @@ function isCoverageRecord(value: unknown): value is CoverageRecord {
     isRuleId(value.ruleId) &&
     isSha256(value.hash) &&
     plainText(value.runId, MAX_STRING_LENGTH) &&
-    plainText(value.at, MAX_STRING_LENGTH)
+    plainText(value.at, MAX_STRING_LENGTH) &&
+    (value.project === undefined || isProjectKey(value.project))
   )
 }
 
@@ -992,11 +1004,17 @@ export function readLedger(root: string): LedgerRead {
     : { status: 'ok', ledger }
 }
 
+/**
+ * Replace the ledger. A ledger over the size `readLedger` accepts is refused
+ * before anything is written, so the file on disk stays the one that can be
+ * read back.
+ */
 function writeLedger(root: string, ledger: Ledger): void {
-  writeFileAtomic(
-    path.join(root, LEDGER_FILE),
-    `${JSON.stringify(ledger, null, 2)}\n`,
-  )
+  const text = `${JSON.stringify(ledger, null, 2)}\n`
+  if (Buffer.byteLength(text) > MAX_LEDGER_BYTES) {
+    throw new Error('the ledger would be larger than the size limit')
+  }
+  writeFileAtomic(path.join(root, LEDGER_FILE), text)
 }
 
 // ── Suppression ─────────────────────────────────────────────────────────────
@@ -1224,13 +1242,28 @@ function applyCandidates(
  */
 export interface CoverageUpdate {
   readonly runId: string
-  /** Every rule the run indexed, with the hash of its learning. */
+  /** Every rule the run indexed, with the hash of its learning and its project's key. */
   readonly indexed: ReadonlyArray<{
     readonly ruleId: string
     readonly hash: string
+    readonly project?: string
   }>
   /** Rule ids, each in `indexed`, that a complete family covered. */
   readonly covered: readonly string[]
+  /**
+   * What the run could not see. A record is dropped only when its rule is
+   * absent from a project the run inventoried in full:
+   *
+   * - `prunable`: keys of the projects that were. Records of any other project
+   *   stay. Left out, every project counts as read in full.
+   * - `retain`: rules whose file was skipped or changed, kept as they are.
+   * - `pruneUnattributed`: whether a record with no project key may be dropped.
+   *   It may not when some project was not read in full, because the record
+   *   could be that project's. Defaults to true.
+   */
+  readonly prunable?: readonly string[]
+  readonly retain?: readonly string[]
+  readonly pruneUnattributed?: boolean
 }
 
 export interface PublishInput {
@@ -1295,14 +1328,21 @@ function validCoverageUpdate(update: CoverageUpdate): boolean {
   const hashes = new Map<string, string>()
   for (const item of update.indexed) {
     if (!isRuleId(item.ruleId) || !isSha256(item.hash)) return false
+    if (item.project !== undefined && !isProjectKey(item.project)) return false
     hashes.set(item.ruleId, item.hash)
   }
+  if (!(update.prunable ?? []).every(isProjectKey)) return false
+  if (!(update.retain ?? []).every(isRuleId)) return false
   return update.covered.every((id) => hashes.has(id))
 }
 
 /**
- * Fold a run's coverage into the ledger's: drop every record whose rule the
- * run did not index, then record the covered rules at their current hash.
+ * Fold a run's coverage into the ledger's. A record survives when the run
+ * indexed its rule, kept it on purpose (`retain`), or could not see its project
+ * in full. Everything else is a rule that is gone from a project that was read
+ * in full, and is dropped. Then the covered rules are recorded at their
+ * current hash. The records of rules the run did not index are the first to go
+ * if the ledger would hold more than it accepts.
  */
 function applyCoverage(
   prior: readonly CoverageRecord[],
@@ -1310,18 +1350,52 @@ function applyCoverage(
   at: string,
 ): CoverageRecord[] {
   const hashes = new Map(update.indexed.map((item) => [item.ruleId, item.hash]))
+  const projects = new Map(
+    update.indexed.map((item) => [item.ruleId, item.project]),
+  )
+  const prunable =
+    update.prunable === undefined ? undefined : new Set(update.prunable)
+  const retain = new Set(update.retain ?? [])
+  const mayDrop = (record: CoverageRecord): boolean => {
+    if (record.project === undefined) return update.pruneUnattributed !== false
+    return prunable === undefined || prunable.has(record.project)
+  }
   const kept = new Map(
     prior
-      .filter((record) => hashes.has(record.ruleId))
+      .filter(
+        (record) =>
+          hashes.has(record.ruleId) ||
+          retain.has(record.ruleId) ||
+          !mayDrop(record),
+      )
       .map((record) => [record.ruleId, record]),
   )
   for (const ruleId of update.covered) {
     const hash = hashes.get(ruleId)
     if (hash !== undefined) {
-      kept.set(ruleId, { ruleId, hash, runId: update.runId, at })
+      const project = projects.get(ruleId)
+      kept.set(ruleId, {
+        ruleId,
+        hash,
+        runId: update.runId,
+        at,
+        ...(project === undefined ? {} : { project }),
+      })
     }
   }
-  return [...kept.values()].sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+  const records = [...kept.values()]
+  const overflow = records.length - MAX_COVERAGE
+  if (overflow > 0) {
+    const stale = records
+      .filter((record) => !hashes.has(record.ruleId))
+      .sort((a, b) => codepointOrder(a.at, b.at))
+      .slice(0, overflow)
+    const gone = new Set(stale.map((record) => record.ruleId))
+    return records
+      .filter((record) => !gone.has(record.ruleId))
+      .sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+  }
+  return records.sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
 }
 
 /** The ledger after a committed run: its candidates folded in and its coverage updated. */
@@ -1440,6 +1514,43 @@ export function publishRun(
         error: error instanceof Error ? error.message : String(error),
       },
     }
+  }
+}
+
+export type RewriteResult = 'rewritten' | 'failed'
+
+/**
+ * Replace files of a run that is already committed, each by a temporary file
+ * and a rename inside the run directory, owner-only. For a run whose outcome
+ * changed after the commit. The lock must be held. A name that is not in the
+ * run already, or is not a plain file name, is refused.
+ */
+export function rewriteRunFiles(
+  root: string,
+  lock: LockHandle,
+  runId: string,
+  files: Readonly<Record<string, string>>,
+): RewriteResult {
+  if (!holdsLock(lock) || !isRunId(runId)) return 'failed'
+  const names = Object.keys(files)
+  if (names.length > MAX_RUN_FILES || !names.every((n) => SAFE_NAME.test(n))) {
+    return 'failed'
+  }
+  const dir = path.join(root, RUNS_DIR, runId)
+  try {
+    const stat = lstatMaybe(dir)
+    if (stat === undefined || !stat.isDirectory()) return 'failed'
+    for (const name of names) {
+      const target = path.join(dir, name)
+      const existing = lstatMaybe(target)
+      if (existing === undefined || !existing.isFile()) return 'failed'
+    }
+    for (const [name, content] of Object.entries(files)) {
+      writeFileAtomic(path.join(dir, name), content)
+    }
+    return 'rewritten'
+  } catch {
+    return 'failed'
   }
 }
 

@@ -29,6 +29,7 @@ import {
   type InventoryFile,
   type InventoryRole,
   readContainedFile,
+  UNSAFE_PATH_CHARACTER,
 } from './connect-evidence.js'
 import type {
   CandidateRecord,
@@ -731,6 +732,7 @@ export type DropReason =
   | 'path-escape'
   | 'symlink-path'
   | 'untracked-path'
+  | 'unsafe-path-character'
   | 'fingerprint-mismatch'
   | 'changed-since-begin'
   | 'excerpt-too-short'
@@ -841,6 +843,7 @@ function pathProblem(rel: unknown): DropReason | undefined {
     return 'absolute-path'
   }
   if (rel.includes('\\')) return 'path-escape'
+  if (UNSAFE_PATH_CHARACTER.test(rel)) return 'unsafe-path-character'
   const segments = rel.split('/')
   return segments.some((part) => part === '' || part === '.' || part === '..')
     ? 'path-escape'
@@ -1657,12 +1660,48 @@ function isPasteablePath(file: string): boolean {
   return !/\s/.test(file) && sanitizeText(file) === file
 }
 
+/** The quoted titles of a summary, each with its promotion tokens or a note when there is nothing to promote. */
+function candidateLines(model: DigestModel, runRecordPath: string): string[] {
+  const titles = model.candidates.slice(0, MAX_SUMMARY_TITLES)
+  if (titles.length === 0) return []
+  const pasteable = isPasteablePath(runRecordPath)
+  const out = ['Candidates (untrusted text, quoted):']
+  for (const item of titles) {
+    out.push(quote(`${item.candidate.kind}: ${item.candidate.title}`))
+    // A lesson to investigate has nothing to promote yet, so no token: a
+    // token would invite a promotion the candidate's own next step rules out.
+    if (item.candidate.nextStep === 'investigate') {
+      out.push(
+        'Investigate first: there is no promotion token for this candidate. See the digest for what to check.',
+      )
+    } else {
+      out.push(
+        pasteable
+          ? `candidate:${runRecordPath} candidate-id:${item.id}`
+          : `candidate-id:${item.id}`,
+      )
+    }
+  }
+  const promotable = titles.some(
+    (item) => item.candidate.nextStep !== 'investigate',
+  )
+  if (!pasteable && promotable) {
+    out.push(
+      `The run record path cannot be pasted as one word: ${sanitizeText(runRecordPath).replaceAll('\n', ' ')}`,
+    )
+  }
+  const left = model.candidates.length - titles.length
+  if (left > 0) out.push(`${left} more candidates are in the digest.`)
+  return out
+}
+
 /**
  * The short chat summary of a run. Candidate titles are untrusted text, so they
  * are quoted, one per line, and nothing in the summary reads as an instruction.
  * Under each title the helper prints the promotion tokens for that candidate:
  * `candidate:<run record path>` and `candidate-id:<id>` on one line, built from
- * values the helper made and never from candidate text.
+ * values the helper made and never from candidate text. A candidate whose next
+ * step is `investigate` gets a plain note instead.
  */
 export function renderSummary(
   model: DigestModel,
@@ -1685,28 +1724,7 @@ export function renderSummary(
     out.push('No candidate in searched scope.')
   }
   out.push(`Digest: ${sanitizeText(digestPath).replaceAll('\n', ' ')}`)
-  const titles = model.candidates.slice(0, MAX_SUMMARY_TITLES)
-  if (titles.length > 0) {
-    const pasteable = isPasteablePath(runRecordPath)
-    out.push('Candidates (untrusted text, quoted):')
-    for (const item of titles) {
-      out.push(quote(`${item.candidate.kind}: ${item.candidate.title}`))
-      out.push(
-        pasteable
-          ? `candidate:${runRecordPath} candidate-id:${item.id}`
-          : `candidate-id:${item.id}`,
-      )
-    }
-    if (!pasteable) {
-      out.push(
-        `The run record path cannot be pasted as one word: ${sanitizeText(runRecordPath).replaceAll('\n', ' ')}`,
-      )
-    }
-    const left = model.candidates.length - titles.length
-    if (left > 0) {
-      out.push(`${left} more candidates are in the digest.`)
-    }
-  }
+  out.push(...candidateLines(model, runRecordPath))
   return out.join('\n')
 }
 

@@ -25,6 +25,7 @@ import {
   RUN_RETENTION_MS,
   readLedger,
   releaseLock,
+  rewriteRunFiles,
 } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, makeDir } from './git-worktree-fixtures'
 
@@ -1461,5 +1462,170 @@ describe('pruneRuns', () => {
       reason: 'lock-lost',
     })
     expect(fs.existsSync(old)).toBe(true)
+  })
+})
+
+// ── Coverage pruning and rewriting a committed run ──────────────────────────
+
+describe('publishRun coverage', () => {
+  const RULE = (n: number): string => `rule-${n.toString(16).padStart(16, '0')}`
+  const HASH = 'a'.repeat(64)
+  const KEY_A = 'aaaaaaaaaaaa'
+  const KEY_B = 'bbbbbbbbbbbb'
+
+  function publishCoverage(
+    s: ReturnType<typeof session>,
+    runId: string,
+    coverage: NonNullable<Parameters<typeof publishRun>[2]['coverage']>,
+  ) {
+    const lock = expectAcquired(
+      acquireLock(s.root, { pid: 7001, processes: s.procs.table }),
+    )
+    try {
+      return publishRun(
+        s.root,
+        lock,
+        { runId, files: { 'digest.md': 'x' }, candidates: [], coverage },
+        { now: () => s.clock.now },
+      )
+    } finally {
+      releaseLock(lock)
+    }
+  }
+
+  function covered(s: ReturnType<typeof session>): string[] {
+    const ledger = readLedger(s.root)
+    if (ledger.status !== 'ok') throw new Error('ledger unreadable')
+    return (ledger.ledger.coverage ?? []).map((record) => record.ruleId).sort()
+  }
+
+  function firstRun(s: ReturnType<typeof session>): void {
+    publishCoverage(s, 'run-1', {
+      runId: 'run-1',
+      indexed: [
+        { ruleId: RULE(1), hash: HASH, project: KEY_A },
+        { ruleId: RULE(2), hash: HASH, project: KEY_B },
+      ],
+      covered: [RULE(1), RULE(2)],
+    })
+  }
+
+  it('drops a rule that is gone from a project the run read in full', () => {
+    const s = session()
+    firstRun(s)
+    publishCoverage(s, 'run-2', {
+      runId: 'run-2',
+      indexed: [{ ruleId: RULE(1), hash: HASH, project: KEY_A }],
+      covered: [RULE(1)],
+      prunable: [KEY_A, KEY_B],
+    })
+    expect(covered(s)).toEqual([RULE(1)])
+  })
+
+  it('keeps the records of a project the run did not read in full', () => {
+    const s = session()
+    firstRun(s)
+    publishCoverage(s, 'run-2', {
+      runId: 'run-2',
+      indexed: [{ ruleId: RULE(1), hash: HASH, project: KEY_A }],
+      covered: [RULE(1)],
+      prunable: [KEY_A],
+    })
+    expect(covered(s)).toEqual([RULE(1), RULE(2)])
+  })
+
+  it('keeps a rule the run asked to retain even in a project read in full', () => {
+    const s = session()
+    firstRun(s)
+    publishCoverage(s, 'run-2', {
+      runId: 'run-2',
+      indexed: [{ ruleId: RULE(1), hash: HASH, project: KEY_A }],
+      covered: [RULE(1)],
+      prunable: [KEY_A, KEY_B],
+      retain: [RULE(2)],
+    })
+    expect(covered(s)).toEqual([RULE(1), RULE(2)])
+  })
+
+  it('drops a record with no project key only when the run says it may', () => {
+    const s = session()
+    publishCoverage(s, 'run-1', {
+      runId: 'run-1',
+      indexed: [{ ruleId: RULE(3), hash: HASH }],
+      covered: [RULE(3)],
+    })
+    publishCoverage(s, 'run-2', {
+      runId: 'run-2',
+      indexed: [{ ruleId: RULE(1), hash: HASH, project: KEY_A }],
+      covered: [RULE(1)],
+      prunable: [KEY_A],
+      pruneUnattributed: false,
+    })
+    expect(covered(s)).toEqual([RULE(1), RULE(3)])
+    publishCoverage(s, 'run-3', {
+      runId: 'run-3',
+      indexed: [{ ruleId: RULE(1), hash: HASH, project: KEY_A }],
+      covered: [RULE(1)],
+      prunable: [KEY_A],
+    })
+    expect(covered(s)).toEqual([RULE(1)])
+  })
+
+  it('refuses a malformed project key or retained rule id', () => {
+    const s = session()
+    const bad = publishCoverage(s, 'run-1', {
+      runId: 'run-1',
+      indexed: [{ ruleId: RULE(1), hash: HASH, project: 'not-a-key' }],
+      covered: [],
+    })
+    expect(bad).toEqual({ status: 'failed', reason: 'invalid-coverage' })
+    const badRetain = publishCoverage(s, 'run-2', {
+      runId: 'run-2',
+      indexed: [],
+      covered: [],
+      retain: ['nope'],
+    })
+    expect(badRetain).toEqual({ status: 'failed', reason: 'invalid-coverage' })
+  })
+})
+
+describe('rewriteRunFiles', () => {
+  function committed() {
+    const s = session()
+    s.publish('run-1', [])
+    const lock = expectAcquired(
+      acquireLock(s.root, { pid: 7001, processes: s.procs.table }),
+    )
+    return { s, lock }
+  }
+
+  it('replaces files of a committed run, owner-only, leaving no temporary file', () => {
+    const { s, lock } = committed()
+    const result = rewriteRunFiles(s.root, lock, 'run-1', {
+      'digest.md': 'new\n',
+    })
+    releaseLock(lock)
+    expect(result).toBe('rewritten')
+    const dir = path.join(s.root, 'runs', 'run-1')
+    expect(fs.readFileSync(path.join(dir, 'digest.md'), 'utf8')).toBe('new\n')
+    expect(fs.statSync(path.join(dir, 'digest.md')).mode & 0o777).toBe(0o600)
+    expect(fs.readdirSync(dir).sort()).toEqual(['digest.md', 'run.json'])
+  })
+
+  it('refuses a file the run does not have, a bad name, a missing run and a lost lock', () => {
+    const { s, lock } = committed()
+    expect(rewriteRunFiles(s.root, lock, 'run-1', { 'other.md': 'x' })).toBe(
+      'failed',
+    )
+    expect(rewriteRunFiles(s.root, lock, 'run-1', { '../x': 'x' })).toBe(
+      'failed',
+    )
+    expect(rewriteRunFiles(s.root, lock, 'run-9', { 'digest.md': 'x' })).toBe(
+      'failed',
+    )
+    releaseLock(lock)
+    expect(rewriteRunFiles(s.root, lock, 'run-1', { 'digest.md': 'x' })).toBe(
+      'failed',
+    )
   })
 })

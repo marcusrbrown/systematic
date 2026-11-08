@@ -599,6 +599,26 @@ describe('inventoryProject: caps', () => {
     expect(result.truncated.files).toBe(true)
   })
 
+  it.each([
+    ['a single quote', "docs/solutions/it's.md"],
+    ['a dollar sign', 'docs/solutions/cost$.md'],
+    ['a backtick', 'docs/solutions/tick`.md'],
+  ])('skips a path with %s and names the reason', (_label, rel) => {
+    const work = createProject({
+      'docs/solutions/fine.md': '# fine\n',
+      [rel]: '# odd\n',
+    })
+    const result = inventoryProject(work)
+    if (result.status !== 'ok') throw new Error(result.status)
+    expect(result.files.map((file) => file.path)).toEqual([
+      'docs/solutions/fine.md',
+    ])
+    expect(result.skipped).toEqual([
+      { path: rel, reason: 'unsafe-path-character' },
+    ])
+    expect(result.skippedCount).toBe(1)
+  })
+
   it('does not change the repository: git state and working tree are the same after', () => {
     const work = createProject({
       'docs/solutions/x.md': '# x\n',

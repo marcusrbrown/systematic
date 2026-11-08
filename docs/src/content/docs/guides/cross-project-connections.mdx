@@ -108,13 +108,13 @@ The digest header and the summary carry one progress line:
 Sweep: covered 48 of 61 rules (current hashes); this run covered 48; about 1 run left in the sweep.
 ```
 
-A rule counts as covered only while its learning still has the hash it had when it was covered. When the sweep is finished, the line says so and says the next run starts again with the least recently covered rules. Rules outside the slice are not a reason to degrade a run.
+A rule counts as covered only while its learning still has the hash it had when it was covered. A run that could not read a project in full does not forget what earlier runs covered there: the coverage records of that project stay until it is read in full again, and a rule whose file could not be read stays as it was. Only a learning that is gone from a project the run read in full is forgotten. When the sweep is finished, the line says so and says the next run starts again with the least recently covered rules. Rules outside the slice are not a reason to degrade a run.
 
 Coverage is recorded only for a run that committed. An aborted or crashed run records none.
 
 ## Where the output goes
 
-The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/systematic/connect` when `XDG_STATE_HOME` is not set. Directories are mode 0700 and files are 0600. The helper refuses a state directory that sits inside a git checkout, is a symlink, or is inside an allowed project.
+The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/systematic/connect` when `XDG_STATE_HOME` is not set. Directories are mode 0700 and files are 0600. The helper refuses a state directory that sits inside a git checkout, is a symlink, or is inside an allowed project. Keep the path free of whitespace: when `XDG_STATE_HOME` contains whitespace, the summary prints only the candidate id, and the run record path cannot be passed to `ce:compound` as one word.
 
 ```text
 <state directory>/
@@ -129,11 +129,11 @@ The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/
 - **The run record** (`run.json`) holds the candidate block that `ce:compound` reads when you promote a lesson.
 - **Stale citations** are a deterministic check of which `path:line` citations in your learnings still hold. A citation is `passed`, `not-in-span` (the symbol is not in the cited lines, with a flag when it is elsewhere in the file) or `unchecked` (with a reason). It reports which citations still hold. It does not promise that code has not moved. The check stops at a cap per project (500 citations). A project that reaches it is named under "Not read or not covered" in the digest and the run record keeps the counts, but the run is not marked `degraded` for that alone.
 - **Retention.** Run directories older than 30 days are pruned at the start of a run. The ledger is never pruned.
-- **Publishing is one rename.** A run is built in `runs/<run id>.tmp/` and renamed to `runs/<run id>/`. The ledger is updated after the rename. If a crash falls between the two, the digest exists but its candidates are not in the ledger, and the next run proposes them once more. The next run also removes leftover `.tmp` directories.
+- **Publishing is one rename.** A run is built in `runs/<run id>.tmp/` and renamed to `runs/<run id>/`. The ledger is updated after the rename. If a crash falls between the two, the digest exists but its candidates are not in the ledger, and the next run proposes them once more. If the ledger cannot be written after the rename, or the new ledger would pass its 16 MB limit, the old ledger stays as it was, and the run is `degraded` with the reason `ledger-write-failed`. The committed digest and run record are rewritten to say so. The next run also removes leftover `.tmp` directories.
 
 ## Promote a candidate
 
-Only a person promotes a candidate. `ce:connect` never writes a learning. Every candidate in the summary comes with a line of two tokens:
+Only a person promotes a candidate. `ce:connect` never writes a learning. Every candidate in the summary that can be promoted comes with a line of two tokens. A lesson whose next step is `investigate` has none: the summary says to investigate it first, and there is nothing to paste yet.
 
 ```text
 candidate:<run record path> candidate-id:<id>
@@ -175,11 +175,11 @@ The ledger holds identities, source paths, fingerprints, statuses, reasons and r
 
 | Operation | What it does |
 |---|---|
-| `ledger show` | Lists every entry, including open candidates whose digest was pruned. |
+| `ledger show` | Lists entries, including open candidates whose digest was pruned, 500 at a time. The answer has `total` and `nextOffset`; pass `{ "offset": <n> }`, or `ledger show --offset <n>` on the command line, to read on until `nextOffset` is `null`. |
 | `ledger clear` | Removes the ledger and its coverage. The next run proposes everything again and the sweep starts over. |
 | `ledger unlock` | Removes a lock that no run holds. Use it only when you know no other run is active. |
 
-A lock held by a process that has died is reclaimed by the next run without any help. `ledger unlock` is for a run that ended without releasing its lock while its host process is still alive. The skill never runs `ledger unlock` by itself, and never in headless mode.
+A lock held by a process that has died is reclaimed by the next run without any help. `ledger unlock` is for a run that ended without releasing its lock while its host process is still alive. The skill never runs `ledger unlock` for a busy lock, and never in headless mode. The one exception is a failed `validate` whose reply does not confirm that the lock was released: the skill then unlocks the lock its own run took before it stops.
 
 ## Supported hosts
 
@@ -206,6 +206,9 @@ Read these before you add a project.
 - **Session MCP tools are not denied.** Tools from MCP servers connected to your session stay available to the researcher. Check what is connected before a run.
 - **A digest can carry content from those reads.** A validated excerpt must come from a tracked file in an allowed project. The digest's other free text is written by the researcher after unscoped reads, and nothing screens it for secrets. Treat a digest like the learnings it quotes, keep the state directory private, and read it before you share it.
 - **Everything read is evidence.** Candidates are checked against the files, but a candidate is a proposal, and a wrong one is possible. A run that found nothing, or that is `degraded`, does not show that nothing is there.
+- **The title and the summary are not checked against evidence.** The researcher writes them. The helper checks excerpts, fingerprints and paths, but not these two fields. Reads are not scoped to a path, so text from outside the allowed projects can reach the chat reply and the run records through them. Read every candidate before you promote it.
+- **Coverage is self-reported.** The helper records a rule as covered from the researcher's own report of what it searched. A run steered by a hostile learning can mark rules covered without searching them. `ledger clear` resets coverage.
+- **Some paths cannot be cited.** A file whose path contains a single quote, a dollar sign or a backtick is skipped, and so is a project whose root has one. The digest names the reason under "Not read or not covered".
 - **Promoted learnings never copy another project's text.** They are written in the target project's own words and cite their sources by project, path and fingerprint.
 - **Only a human promotes.** Nothing in `ce:connect` writes a learning, edits a project, or records a decision without you.
 

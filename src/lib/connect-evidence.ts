@@ -890,8 +890,14 @@ export interface InventoryFile {
 
 export interface SkippedFile {
   readonly path: string
-  readonly reason: ReadFailure
+  readonly reason: ReadFailure | 'unsafe-path-character'
 }
+
+/**
+ * A single quote, a dollar sign or a backtick. The promotion step puts a path
+ * in a single-quoted shell word, so a file with one in its name cannot be cited.
+ */
+export const UNSAFE_PATH_CHARACTER = /['$`]/
 
 export type InventoryResult =
   | {
@@ -1089,6 +1095,13 @@ function hashFiles(
   let skippedCount = 0
   let hashedBytes = 0
   for (const file of files) {
+    if (UNSAFE_PATH_CHARACTER.test(file.path)) {
+      skippedCount++
+      if (skipped.length < MAX_LISTED_SKIPS) {
+        skipped.push({ path: file.path, reason: 'unsafe-path-character' })
+      }
+      continue
+    }
     const read = readContainedFile(mainRoot, file.path, {
       maxBytes: bounds.maxFileBytes,
     })

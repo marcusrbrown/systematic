@@ -631,6 +631,44 @@ describe('checkCandidate', () => {
           }),
         'absolute-path',
       ],
+      ...(
+        [
+          ["it's", 'a single quote'],
+          ['cost$', 'a dollar sign'],
+          ['tick`', 'a backtick'],
+        ] as const
+      ).map(([name, label]): [string, (w: World) => Json, string] => [
+        `a source path with ${label}`,
+        (w) =>
+          lesson(w, {
+            sources: [
+              {
+                project: w.source,
+                path: `docs/solutions/${name}.md`,
+                fingerprint: w.sourceSha,
+                excerpt: 'Never reclaim a lock without verifying',
+              },
+            ],
+          }),
+        'unsafe-path-character',
+      ]),
+      [
+        'a target evidence path with a dollar sign',
+        (w) =>
+          lesson(w, {
+            targetEvidence: [
+              {
+                path: 'src/lock$.ts',
+                start: 1,
+                end: 3,
+                symbol: 'reclaimLock',
+                fingerprint: w.codeSha,
+                excerpt: 'export function reclaimLock(path: string): boolean {',
+              },
+            ],
+          }),
+        'unsafe-path-character',
+      ],
       [
         'a path no file inventory knows',
         (w) =>
@@ -1294,6 +1332,51 @@ describe('renderSummary', () => {
     )
     expect(lines[second - 1]).toBe('> transferable-lesson: Second title')
     expect(text).toContain(`Digest: ${DIGEST}`)
+  })
+
+  it('prints no promotion tokens for an investigate candidate, only a plain note', () => {
+    const [first, second] = twoCandidates()
+    if (first === undefined || second === undefined) {
+      throw new Error('fixture has no candidate')
+    }
+    const investigate = {
+      ...first,
+      candidate: { ...first.candidate, nextStep: 'investigate' as const },
+    }
+    const text = renderSummary(
+      digestModel({ candidates: [investigate, second] }),
+      DIGEST,
+      RUN_RECORD,
+    )
+    expect(text).not.toContain(`candidate-id:${ID_A}`)
+    expect(text.split('\n')).toContain(
+      `candidate:${RUN_RECORD} candidate-id:${ID_B}`,
+    )
+    expect(text).toContain('Investigate first')
+    const lines = text.split('\n')
+    const title = lines.findIndex((line) =>
+      line.startsWith('> transferable-lesson: Verify'),
+    )
+    expect(lines[title + 1]).toMatch(/^Investigate first/)
+  })
+
+  it('still prints tokens for a contradiction that is refreshed', () => {
+    const world = buildWorld()
+    const base = valid(checkCandidate(contradiction(world), world.ctx))
+    expect(base.nextStep).toBe('refresh-learning')
+    const text = renderSummary(
+      digestModel({
+        candidates: [
+          { id: ID_A, standing: 'new', possibleMatches: [], candidate: base },
+        ],
+      }),
+      DIGEST,
+      RUN_RECORD,
+    )
+    expect(text.split('\n')).toContain(
+      `candidate:${RUN_RECORD} candidate-id:${ID_A}`,
+    )
+    expect(text).not.toContain('Investigate first')
   })
 
   it('prints no tokens when there is no candidate', () => {

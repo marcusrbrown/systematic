@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   type HelperDeps,
   type HelperResult,
+  runConnectHelper,
   runHelperOp,
 } from '../../src/ce-connect-helper.js'
 import type { HostSupportRow } from '../../src/lib/connect-config.js'
@@ -1670,5 +1671,427 @@ describe('requests', () => {
     expect(failed(runHelperOp('bogus', {}, world.deps)).reason).toBe(
       'unknown-op',
     )
+  })
+})
+
+// ── The ledger write after a committed run ──────────────────────────────────
+
+/** `MAX_LEDGER_BYTES` of the state module. */
+const LEDGER_LIMIT = 16 * 1024 * 1024
+
+/**
+ * Write a valid, pretty-printed ledger that is exactly `slack` bytes under the
+ * limit. Any entry or longer reason added to it goes over.
+ */
+function writeLedgerNearLimit(stateRoot: string, slack: number): string {
+  const entry = (n: number, destination = 'd'): Json => ({
+    id: `entry-${String(n).padStart(7, '0')}`,
+    kind: 'transferable-lesson',
+    target: '/elsewhere',
+    ruleId: 'rule-0123456789abcdef',
+    sources: [],
+    targetEvidence: [],
+    status: 'rejected',
+    reason: 'r'.repeat(400),
+    destination,
+    history: [],
+    recordedAt: '2026-01-01T00:00:00.000Z',
+  })
+  const render = (entries: Json[]): string =>
+    `${JSON.stringify({ version: 1, entries }, null, 2)}\n`
+  const target = LEDGER_LIMIT - slack
+  const perEntry =
+    render([entry(0), entry(1)]).length - render([entry(0)]).length
+  const count = Math.floor((target - render([]).length) / perEntry) - 1
+  const entries = Array.from({ length: count }, (_, n) => entry(n))
+  // Less than two entries of room is left; spread it over the destinations.
+  let room = target - render(entries).length
+  for (const item of entries) {
+    if (room === 0) break
+    const add = Math.min(room, 4095)
+    item.destination = 'd'.repeat(add + 1)
+    room -= add
+  }
+  fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
+  const file = path.join(stateRoot, 'ledger.json')
+  fs.writeFileSync(file, render(entries), { mode: 0o600 })
+  expect(fs.statSync(file).size).toBe(target)
+  return file
+}
+
+describe('a ledger write that fails after the run committed', () => {
+  function worldWithBrokenLedger(): World {
+    const holder: { world?: World } = {}
+    const world = buildWorld({
+      deps: {
+        publishHooks: {
+          // A directory where the ledger file goes: the rename over it fails.
+          afterCommit: () => {
+            const blocker = path.join(
+              holder.world?.stateRoot ?? '',
+              'ledger.json',
+            )
+            fs.mkdirSync(path.join(blocker, 'x'), { recursive: true })
+          },
+        },
+      },
+    })
+    holder.world = world
+    return world
+  }
+
+  it('leaves the committed digest and run record showing the final outcome', () => {
+    const world = worldWithBrokenLedger()
+    const { validated, published } = fullRun(world, [])
+    expect(validated.pendingOutcome).toBe('complete')
+    expect(published.outcome).toBe('degraded')
+    expect(published.finalLine).toBe('Connect degraded')
+    expect(published.degradeReasons).toContain('ledger-write-failed')
+
+    const digest = readDigest(published)
+    expect(digest).toContain('Outcome: degraded')
+    expect(digest).toContain('ledger-write-failed')
+    const record = readRunRecord(published)
+    expect(record.outcome).toBe('degraded')
+    expect(record.degradeReasons).toContain('ledger-write-failed')
+    expect(String(published.summary)).toContain(': degraded.')
+    expect(String(published.summary)).toContain('ledger-write-failed')
+  })
+
+  it('rewrites both files in place, owner-only, with no temporary file left', () => {
+    const world = worldWithBrokenLedger()
+    const { published } = fullRun(world, [])
+    const runDir = published.runDir as string
+    expect(fs.readdirSync(runDir).sort()).toEqual(['digest.md', 'run.json'])
+    expect(mode(path.join(runDir, 'digest.md'))).toBe(0o600)
+    expect(mode(path.join(runDir, 'run.json'))).toBe(0o600)
+  })
+})
+
+describe('the ledger size limit', () => {
+  it('refuses a publish that would grow the ledger past the limit and keeps the old file', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const file = writeLedgerNearLimit(world.stateRoot, 10)
+    const before = fs.readFileSync(file)
+    const batch = writeBatch(
+      run.workDir,
+      'batch-1.json',
+      batchJson(world, run.runId, { candidates: [lessonCandidate(world)] }),
+    )
+    ok(validate(world, run, [batch]))
+    const published = ok(publish(world, run))
+    expect((published.ledger as Json).written).toBe(false)
+    expect(published.outcome).toBe('degraded')
+    expect(published.degradeReasons).toContain('ledger-write-failed')
+    expect(fs.readFileSync(file).equals(before)).toBe(true)
+    expect(readRunRecord(published).outcome).toBe('degraded')
+  })
+
+  it('refuses a decision that would grow the ledger past the limit and keeps the old file', () => {
+    const world = buildWorld()
+    start(world)
+    const file = writeLedgerNearLimit(world.stateRoot, 10)
+    ok(runHelperOp('ledger-unlock', {}, world.deps))
+    const before = fs.readFileSync(file)
+    // The last entry has no long destination, which a decision would drop.
+    const last = (
+      JSON.parse(before.toString('utf8')) as { entries: Array<{ id: string }> }
+    ).entries.at(-1)?.id
+    const body = failed(
+      runHelperOp(
+        'decide',
+        { id: last, status: 'rejected', reason: 'q'.repeat(500) },
+        world.deps,
+      ),
+    )
+    expect(body.reason).toBe('write-failed')
+    expect(fs.readFileSync(file).equals(before)).toBe(true)
+  })
+
+  it('still accepts a decision that fits', () => {
+    const world = buildWorld()
+    start(world)
+    writeLedgerNearLimit(world.stateRoot, 2000)
+    ok(runHelperOp('ledger-unlock', {}, world.deps))
+    const body = ok(
+      runHelperOp(
+        'decide',
+        { id: 'entry-0000000', status: 'rejected', reason: 'q'.repeat(50) },
+        world.deps,
+      ),
+    )
+    expect(body.status).toBe('decided')
+  })
+})
+
+// ── Coverage and projects that could not be read ────────────────────────────
+
+describe('coverage kept across runs that could not read everything', () => {
+  function coveredRuleIds(world: World): string[] {
+    const ledger = JSON.parse(
+      fs.readFileSync(path.join(world.stateRoot, 'ledger.json'), 'utf8'),
+    ) as { coverage?: Array<{ ruleId: string }> }
+    return (ledger.coverage ?? []).map((item) => item.ruleId).sort()
+  }
+
+  const bothRules = (world: World): string[] => [...allRuleIds(world)].sort()
+
+  it('keeps the coverage of a project that failed to inventory, until it recovers', () => {
+    const world = buildWorld()
+    fullRun(world, [])
+    expect(coveredRuleIds(world)).toEqual(bothRules(world))
+
+    fs.renameSync(
+      path.join(world.source, '.git'),
+      path.join(world.source, '.git-away'),
+    )
+    const during = fullRun(world, [], {
+      batch: {
+        ruleIds: [ruleIdFor(world.target, 'docs/solutions/lock-now.md')],
+        projects: [world.target],
+      },
+    })
+    expect(during.published.outcome).toBe('degraded')
+    expect(coveredRuleIds(world)).toEqual(bothRules(world))
+
+    fs.renameSync(
+      path.join(world.source, '.git-away'),
+      path.join(world.source, '.git'),
+    )
+    fullRun(world, [])
+    expect(coveredRuleIds(world)).toEqual(bothRules(world))
+  })
+
+  it('still drops the coverage of a learning that was removed from a healthy project', () => {
+    const world = buildWorld()
+    fullRun(world, [])
+    git(world.target, ['rm', '-q', '--', 'docs/solutions/lock-now.md'])
+    git(world.target, ['commit', '-q', '-m', 'drop', '--no-verify'])
+    fullRun(world, [], { batch: { ruleIds: [world.ruleId] } })
+    expect(coveredRuleIds(world)).toEqual([world.ruleId])
+  })
+
+  it.skipIf(IS_ROOT)(
+    'keeps the coverage of a learning whose file could not be read',
+    () => {
+      const world = buildWorld()
+      fullRun(world, [])
+      const file = path.join(world.target, 'docs/solutions/lock-now.md')
+      fs.chmodSync(file, 0o000)
+      try {
+        const run = fullRun(world, [], { batch: { ruleIds: [world.ruleId] } })
+        expect(run.published.outcome).toBe('degraded')
+      } finally {
+        fs.chmodSync(file, 0o644)
+      }
+      expect(coveredRuleIds(world)).toEqual(bothRules(world))
+    },
+  )
+})
+
+// ── Path characters ─────────────────────────────────────────────────────────
+
+describe('paths the promotion step cannot take', () => {
+  it('skips a code file whose path has a quote, names the reason, and does not degrade', () => {
+    const world = buildWorld({
+      targetFiles: { "src/it's.ts": 'export const x = 1\n' },
+    })
+    const body = start(world).body
+    expect(body.degradeReasons).toEqual([])
+    expect((body.unread as string[]).join('\n')).toContain(
+      'path with a quote, a dollar sign or a backtick',
+    )
+  })
+
+  it('skips a learning whose path has a dollar sign and degrades through the skipped-file rule', () => {
+    const world = buildWorld({
+      targetFiles: { 'docs/solutions/cost$.md': NOW_LEARNING },
+    })
+    const body = start(world).body
+    expect(body.degradeReasons).toContain('corpus-files-skipped')
+    expect((body.unread as string[]).join('\n')).toContain(
+      'path with a quote, a dollar sign or a backtick',
+    )
+  })
+
+  it('reports an allowed project whose root has such a character as not readable', () => {
+    const parent = realTemp('connect-ops-odd-root-')
+    const odd = path.join(parent, 'dollar$dir')
+    fs.mkdirSync(odd)
+    git(odd, ['init', '-q', '-b', 'main'])
+    fs.mkdirSync(path.join(odd, 'docs/solutions'), { recursive: true })
+    fs.writeFileSync(path.join(odd, 'docs/solutions/a.md'), NOW_LEARNING)
+    git(odd, ['add', '-f', '--', 'docs/solutions/a.md'])
+    git(odd, ['commit', '-q', '-m', 'base', '--no-verify'])
+    const world = buildWorld({
+      allow: (source, target) => [source, target, odd],
+    })
+    const body = start(world).body
+    expect(body.degradeReasons).toContain('project-unreadable')
+    expect((body.unread as string[]).join('\n')).toContain(
+      'unsafe-path-character',
+    )
+    expect((body.projects as Json[]).length).toBe(2)
+  })
+})
+
+// ── ledger show paging ──────────────────────────────────────────────────────
+
+describe('ledger show paging', () => {
+  function seedLedger(world: World, count: number): void {
+    fs.mkdirSync(world.stateRoot, { recursive: true, mode: 0o700 })
+    const entries = Array.from({ length: count }, (_, n) => ({
+      id: `entry-${String(n).padStart(4, '0')}`,
+      kind: 'transferable-lesson',
+      target: '/elsewhere',
+      ruleId: 'rule-0123456789abcdef',
+      sources: [],
+      targetEvidence: [],
+      status: 'rejected',
+      reason: 'seeded',
+      history: [],
+      recordedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    fs.writeFileSync(
+      path.join(world.stateRoot, 'ledger.json'),
+      JSON.stringify({ version: 1, entries }),
+      { mode: 0o600 },
+    )
+  }
+
+  const ids = (body: Json): string[] =>
+    (body.entries as Json[]).map((e) => e.id as string)
+
+  it('returns the first 500 from offset 0, with the total and where to go on', () => {
+    const world = buildWorld()
+    seedLedger(world, 1200)
+    const page = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect(page.total).toBe(1200)
+    expect(ids(page)).toHaveLength(500)
+    expect(ids(page)[0]).toBe('entry-0000')
+    expect(page.nextOffset).toBe(500)
+  })
+
+  it('returns a middle page from the offset', () => {
+    const world = buildWorld()
+    seedLedger(world, 1200)
+    const page = ok(runHelperOp('ledger-show', { offset: 500 }, world.deps))
+    expect(ids(page)).toHaveLength(500)
+    expect(ids(page)[0]).toBe('entry-0500')
+    expect(page.nextOffset).toBe(1000)
+  })
+
+  it('ends with a null nextOffset on the last page', () => {
+    const world = buildWorld()
+    seedLedger(world, 1200)
+    const page = ok(runHelperOp('ledger-show', { offset: 1000 }, world.deps))
+    expect(ids(page)).toHaveLength(200)
+    expect(page.nextOffset).toBeNull()
+    const past = ok(runHelperOp('ledger-show', { offset: 5000 }, world.deps))
+    expect(ids(past)).toEqual([])
+    expect(past.nextOffset).toBeNull()
+    expect(past.total).toBe(1200)
+  })
+
+  it('has a null nextOffset when everything fits on the first page', () => {
+    const world = buildWorld()
+    seedLedger(world, 3)
+    const page = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect(ids(page)).toHaveLength(3)
+    expect(page.nextOffset).toBeNull()
+  })
+
+  it.each([
+    { offset: -1 },
+    { offset: 1.5 },
+    { offset: '5' },
+    { offset: null },
+    { offset: Number.MAX_SAFE_INTEGER + 2 },
+  ])('refuses the offset %j', (request) => {
+    const world = buildWorld()
+    expect(failed(runHelperOp('ledger-show', request, world.deps)).reason).toBe(
+      'invalid-request',
+    )
+  })
+
+  it('takes the offset from the command line', () => {
+    const world = buildWorld()
+    seedLedger(world, 600)
+    const lines: string[] = []
+    const code = runConnectHelper({
+      argv: ['ledger', 'show', '--offset', '500'],
+      deps: world.deps,
+      outputSink: (line) => lines.push(line),
+    })
+    expect(code).toBe(0)
+    const body = JSON.parse(lines[0] ?? '{}') as Json
+    expect(ids(body)).toHaveLength(100)
+    expect(body.nextOffset).toBeNull()
+  })
+})
+
+// ── A validate request that cannot be used ──────────────────────────────────
+
+describe('a validate request that cannot be used', () => {
+  it('releases the lock when the request is invalid but names a valid handle', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const body = failed(
+      runHelperOp(
+        'validate',
+        { runId: run.runId, lock: run.lock, batches: 'not-a-list' },
+        world.deps,
+      ),
+    )
+    expect(body.reason).toBe('invalid-request')
+    expect(body.lockReleased).toBe(true)
+    expect(start(world).body.status).toBe('begun')
+  })
+
+  it('says the lock was not released when the handle cannot be read, and the next begin is busy until unlock', () => {
+    const world = buildWorld()
+    start(world)
+    const lines: string[] = []
+    const code = runConnectHelper({
+      argv: ['validate'],
+      deps: world.deps,
+      readRequest: () => '{ not json',
+      outputSink: (line) => lines.push(line),
+    })
+    expect(code).toBe(2)
+    const body = JSON.parse(lines[0] ?? '{}') as Json
+    expect(body.reason).toBe('request-not-json')
+    expect(body.lockReleased).toBe(false)
+    expect(failed(begin(world)).outcome).toBe('busy')
+    ok(runHelperOp('ledger-unlock', {}, world.deps))
+    expect(start(world).body.status).toBe('begun')
+  })
+
+  it('says the lock was not released when the run is unknown or the nonce is not the holder', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const wrongRun = failed(
+      runHelperOp(
+        'validate',
+        { runId: '20200101T000000Z-deadbeef', lock: run.lock, batches: [] },
+        world.deps,
+      ),
+    )
+    expect(wrongRun.reason).toBe('unknown-run')
+    expect(wrongRun.lockReleased).toBe(false)
+    const wrongNonce = failed(
+      runHelperOp(
+        'validate',
+        {
+          runId: run.runId,
+          lock: { nonce: 'ffffffff-ffff', pid: run.lock.pid },
+          batches: [],
+        },
+        world.deps,
+      ),
+    )
+    expect(wrongNonce.reason).toBe('lock-mismatch')
+    expect(wrongNonce.lockReleased).toBe(false)
   })
 })

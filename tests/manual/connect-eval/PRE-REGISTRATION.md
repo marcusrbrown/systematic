@@ -292,4 +292,8 @@ A later review changed the helper again, with the same reading: none of the figu
 
 Frozen files digest after the second change: sha256:26aa20289082b9d473f78a5643ee57763a30a76cb5df166fbf37732cbb8b6e93
 
+A third review changed the helper once more, on the same reading. A ledger that cannot be written, or would pass its size limit, now leaves the committed digest and run record saying `degraded`. Coverage of a project that could not be read in full is kept. A lesson to investigate gets no promotion token. A file or a project root with a quote, a dollar sign or a backtick in its path is skipped and named. A failed `validate` releases its lock when the request names one. The skill, its references and the generated helper bundle changed with it:
+
+Frozen files digest after the third change: sha256:e4cb6d0fc1d08071bbef7351251d5f99071b6b3a5fd3c3bd203495a73b384413
+
 Any further change to a frozen file needs its own line here.

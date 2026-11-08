@@ -19,6 +19,7 @@ import {
   inventoryProject,
   readContainedFile,
   reportProjectCitations,
+  UNSAFE_PATH_CHARACTER,
 } from './lib/connect-evidence.js'
 import {
   BATCH_VERSION,
@@ -49,6 +50,7 @@ import {
   renderDigest,
   renderSummary,
   resolveStateRoot,
+  ruleIdFor,
   type StaleCitation,
   type Standing,
   type SweepProgress,
@@ -77,11 +79,13 @@ import {
   type LockReclaim,
   newRunId,
   type ProcessTable,
+  type PublishOptions,
   prepareStateRoot,
   pruneRuns,
   publishRun,
   readLedger,
   releaseLock,
+  rewriteRunFiles,
 } from './lib/connect-state.js'
 import { isMainModule } from './lib/main-module.js'
 
@@ -103,7 +107,7 @@ import { isMainModule } from './lib/main-module.js'
  */
 
 export const CE_CONNECT_USAGE =
-  'Usage: node connect.mjs <begin|validate|publish|decide|ledger show|ledger clear|ledger unlock>'
+  'Usage: node connect.mjs <begin|validate|publish|decide|ledger show [--offset N]|ledger clear|ledger unlock>'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -121,6 +125,8 @@ export interface HelperDeps {
   readonly gitBinary?: string
   readonly bounds?: Partial<ConnectBounds>
   readonly inspector?: ProcessInspector
+  /** Seams in the middle of a publish, for tests of a crash or a failed write. */
+  readonly publishHooks?: NonNullable<PublishOptions['hooks']>
 }
 
 export interface HelperResult {
@@ -442,6 +448,16 @@ interface HostRecord {
   readonly consented?: boolean
 }
 
+/** Which projects a run read in full, and the rules it left alone on purpose. */
+interface CoverageScope {
+  /** Keys of the projects whose inventory was read in full. */
+  readonly prunable: readonly string[]
+  /** Rules whose file was skipped or changed during the scan. */
+  readonly retain: readonly string[]
+  /** False when any project was not read in full. */
+  readonly pruneUnattributed: boolean
+}
+
 interface Snapshot {
   readonly version: 1
   readonly runId: string
@@ -463,7 +479,14 @@ interface Snapshot {
   /** Every indexed rule id. A candidate may cite any of them. */
   readonly ruleIds: readonly string[]
   /** The hash of each indexed rule's learning, kept as coverage when a run commits. */
-  readonly ruleVersions: ReadonlyArray<{ id: string; sha256: string }>
+  readonly ruleVersions: ReadonlyArray<{
+    id: string
+    sha256: string
+    /** The key of the rule's project. */
+    project?: string
+  }>
+  /** What the run could not see in full, so its coverage is not pruned there. */
+  readonly coverageScope?: CoverageScope
   /** What the run was offered, and where the sweep stood when it began. */
   readonly offer: Pick<
     Offer,
@@ -596,6 +619,10 @@ const CORPUS_PREFIXES = ['docs/solutions/', 'docs/plans/', 'docs/brainstorms/']
 const MAX_STALE_RECORDED = 200
 
 interface ScannedProject {
+  /** Whether every file of the project was either read or named as skipped, so a rule absent from it is gone. */
+  readonly prunable: boolean
+  /** Rules of learnings that were skipped or changed during the scan. */
+  readonly retain: string[]
   readonly digest: SnapshotProject
   readonly rules: RuleEntry[]
   readonly provenance: ProvenanceIndexEntry[]
@@ -615,6 +642,8 @@ interface Corpus {
   readonly provenance: ProvenanceIndexEntry[]
   /** Documents that could not be read, or changed since they were hashed. */
   readonly changed: number
+  /** Their paths. */
+  readonly heldPaths: string[]
 }
 
 function isCorpusRole(role: InventoryRole): boolean {
@@ -628,6 +657,7 @@ function readCorpus(inventory: InventoryOk, limits: ConnectBounds): Corpus {
     rules: [],
     provenance: [],
     changed: 0,
+    heldPaths: [],
   }
   let changed = 0
   for (const file of inventory.files.filter((f) => isCorpusRole(f.role))) {
@@ -636,6 +666,7 @@ function readCorpus(inventory: InventoryOk, limits: ConnectBounds): Corpus {
     })
     if (read.kind === 'refused' || read.sha256 !== file.sha256) {
       changed++
+      corpus.heldPaths.push(file.path)
       continue
     }
     const text = read.bytes.toString('utf8')
@@ -689,6 +720,14 @@ function staleCitationsOf(
   return stale
 }
 
+function hasCorpusSkips(inventory: InventoryOk): boolean {
+  return (
+    inventory.skipped.some((file) =>
+      CORPUS_PREFIXES.some((prefix) => file.path.startsWith(prefix)),
+    ) || inventory.skippedCount > inventory.skipped.length
+  )
+}
+
 /** Which bounds and gaps make this project's scan incomplete. */
 function scanGaps(
   name: string,
@@ -712,10 +751,15 @@ function scanGaps(
       `${name}: the citation check reached its cap (${report.citations.length} checked, the rest not)`,
     )
   }
-  const corpusSkipped =
-    inventory.skipped.some((file) =>
-      CORPUS_PREFIXES.some((prefix) => file.path.startsWith(prefix)),
-    ) || inventory.skippedCount > inventory.skipped.length
+  const unsafe = inventory.skipped.filter(
+    (file) => file.reason === 'unsafe-path-character',
+  ).length
+  if (unsafe > 0) {
+    unread.push(
+      `${name}: ${unsafe} file(s) skipped: a path with a quote, a dollar sign or a backtick cannot be cited`,
+    )
+  }
+  const corpusSkipped = hasCorpusSkips(inventory)
   if (corpusSkipped || changed > 0) {
     degrade.push('corpus-files-skipped')
     unread.push(
@@ -731,6 +775,10 @@ function scanProject(
   deps: HelperDeps,
   limits: ConnectBounds,
 ): ScannedProject | { readonly failed: string } {
+  // The promotion step quotes a project root in a shell word, so a root with
+  // such a character cannot be cited from.
+  if (UNSAFE_PATH_CHARACTER.test(root))
+    return { failed: 'unsafe-path-character' }
   const inventory = inventoryProject(root, {
     bounds: limits,
     ...(deps.gitBinary === undefined ? {} : { gitBinary: deps.gitBinary }),
@@ -750,8 +798,18 @@ function scanProject(
     maxBytes: limits.maxFileBytes,
   })
   const gaps = scanGaps(name, inventory, report, corpus.changed)
+  const held = [
+    ...inventory.skipped.map((file) => file.path),
+    ...corpus.heldPaths,
+  ].filter((rel) => CORPUS_PREFIXES.some((prefix) => rel.startsWith(prefix)))
 
   return {
+    // A truncated inventory, or skipped files that are not all named, leave
+    // rules unseen that the run cannot account for. Then nothing is pruned.
+    prunable:
+      !(inventory.truncated.files || inventory.truncated.hashCap) &&
+      inventory.skippedCount <= inventory.skipped.length,
+    retain: held.map((rel) => ruleIdFor(inventory.mainRoot, rel)),
     digest: {
       name,
       root: inventory.mainRoot,
@@ -869,6 +927,7 @@ interface Scans {
   readonly scans: ScannedProject[]
   readonly degradeReasons: string[]
   readonly unread: string[]
+  readonly coverageScope: CoverageScope
 }
 
 /** Scan every matched project. One that cannot be read degrades the run. */
@@ -886,9 +945,11 @@ function scanAll(
     unread.push('some allow-list files could not be read and were ignored')
   }
   const scans: ScannedProject[] = []
+  let allRead = unmatched.length === 0 && !environment.configUnreadable
   for (const item of environment.resolved.resolved) {
     const scanned = scanProject(item.entry, item.mainRoot, deps, limits)
     if ('failed' in scanned) {
+      allRead = false
       addUnique(degradeReasons, 'project-unreadable')
       unread.push(`${projectName(item.mainRoot)}: not read (${scanned.failed})`)
       continue
@@ -897,7 +958,14 @@ function scanAll(
     unread.push(...scanned.unread)
     scans.push(scanned)
   }
-  return { scans, degradeReasons, unread }
+  const coverageScope: CoverageScope = {
+    prunable: scans
+      .filter((scan) => scan.prunable)
+      .map((scan) => scan.digest.key),
+    retain: scans.flatMap((scan) => scan.retain),
+    pruneUnattributed: allRead && scans.every((scan) => scan.prunable),
+  }
+  return { scans, degradeReasons, unread, coverageScope }
 }
 
 interface RunSetup {
@@ -990,7 +1058,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   cleanWorkRoot(root)
 
   const limits = bounds(deps)
-  const { scans, degradeReasons, unread } = scanAll(
+  const { scans, degradeReasons, unread, coverageScope } = scanAll(
     setup.environment,
     deps,
     limits,
@@ -1034,7 +1102,12 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       degradeReasons,
       unread,
       ruleIds: rules.map((rule) => rule.id),
-      ruleVersions: rules.map((rule) => ({ id: rule.id, sha256: rule.sha256 })),
+      ruleVersions: rules.map((rule) => ({
+        id: rule.id,
+        sha256: rule.sha256,
+        project: projectKey(rule.project),
+      })),
+      coverageScope,
       offer: {
         offered: offer.offered,
         fresh: offer.fresh,
@@ -1571,16 +1644,49 @@ function runValidation(
   return validateResponse(snapshot.runId, state, classified)
 }
 
+/**
+ * A validate request that cannot be used. The caller took the lock at `begin`
+ * and no later call may come for this run, so when the request still names a
+ * lock handle the lock is released here. The reply says whether it was.
+ */
+function refuseValidate(request: unknown, deps: HelperDeps): HelperResult {
+  const lock = isRecord(request) ? parseLock(request.lock) : undefined
+  if (lock === undefined) {
+    return failure('validate', 'invalid-request', { lockReleased: false })
+  }
+  const root = resolveStateRoot(
+    deps.env ?? process.env,
+    deps.homeDir ?? os.homedir(),
+  )
+  const runId =
+    isRecord(request) &&
+    typeof request.runId === 'string' &&
+    RUN_ID.test(request.runId) &&
+    !request.runId.endsWith('.tmp')
+      ? request.runId
+      : undefined
+  return releaseAndFail(
+    'validate',
+    { root, nonce: lock.nonce, pid: lock.pid },
+    root,
+    runId,
+    'invalid-request',
+  )
+}
+
 function validate(request: unknown, deps: HelperDeps): HelperResult {
   const parsed = parseValidateRequest(request)
-  if (parsed === undefined) return failure('validate', 'invalid-request')
+  if (parsed === undefined) return refuseValidate(request, deps)
   const root = resolveStateRoot(
     deps.env ?? process.env,
     deps.homeDir ?? os.homedir(),
   )
   const workDir = workDirPath(root, parsed.runId)
   const snapshot = loadRun('validate', workDir, parsed.runId, parsed.lock.nonce)
-  if (!isSnapshotValue(snapshot)) return snapshot
+  if (!isSnapshotValue(snapshot)) {
+    // The run or the lock is not this caller's, so nothing was released.
+    return { ok: false, body: { ...snapshot.body, lockReleased: false } }
+  }
   const handle: LockHandle = {
     root,
     nonce: parsed.lock.nonce,
@@ -1755,6 +1861,25 @@ function abortRun(
   })
 }
 
+function runFiles(
+  snapshot: Snapshot,
+  state: ValidatedState,
+  outcome: 'complete' | 'degraded',
+  degradeReasons: readonly string[],
+): { model: DigestModel; files: Record<string, string> } {
+  const model = digestModel(snapshot, state, outcome, degradeReasons)
+  return {
+    model,
+    files: {
+      'digest.md': renderDigest(model),
+      'run.json': `${JSON.stringify(runRecord(snapshot, state, outcome, degradeReasons), null, 2)}\n`,
+    },
+  }
+}
+
+const LEDGER_NOT_WRITTEN =
+  'the ledger could not be written; the candidates of this run may be proposed again'
+
 /** Write the run and the ledger, then release the lock. */
 function commitRun(
   snapshot: Snapshot,
@@ -1765,16 +1890,14 @@ function commitRun(
 ): HelperResult {
   const degradeReasons = [...state.degradeReasons]
   const outcome = degradeReasons.length > 0 ? 'degraded' : 'complete'
-  const model = digestModel(snapshot, state, outcome, degradeReasons)
+  const first = runFiles(snapshot, state, outcome, degradeReasons)
+  const scope = snapshot.coverageScope
   const published = publishRun(
     root,
     handle,
     {
       runId: snapshot.runId,
-      files: {
-        'digest.md': renderDigest(model),
-        'run.json': `${JSON.stringify(runRecord(snapshot, state, outcome, degradeReasons), null, 2)}\n`,
-      },
+      files: first.files,
       candidates: state.accepted.map((item) =>
         toCandidateRecord(item.candidate),
       ),
@@ -1784,11 +1907,22 @@ function commitRun(
         indexed: snapshot.ruleVersions.map((rule) => ({
           ruleId: rule.id,
           hash: rule.sha256,
+          ...(rule.project === undefined ? {} : { project: rule.project }),
         })),
         covered: state.coveredRuleIds,
+        ...(scope === undefined
+          ? {}
+          : {
+              prunable: scope.prunable,
+              retain: scope.retain,
+              pruneUnattributed: scope.pruneUnattributed,
+            }),
       },
     },
-    { now: deps.now ?? Date.now },
+    {
+      now: deps.now ?? Date.now,
+      ...(deps.publishHooks === undefined ? {} : { hooks: deps.publishHooks }),
+    },
   )
   if (published.status === 'failed') {
     return releaseAndFail(
@@ -1799,12 +1933,26 @@ function commitRun(
       `publish-${published.reason}`,
     )
   }
+  // The run is committed. A ledger that could not be written means its
+  // candidates are proposed again next time, so the outcome is degraded, and
+  // the committed digest and run record are rewritten to say so before the
+  // lock is released.
+  const ledgerWritten = published.ledger.written
+  let final = first
+  let recordsCurrent = true
+  if (!ledgerWritten) {
+    addUnique(degradeReasons, 'ledger-write-failed')
+    final = runFiles(
+      snapshot,
+      { ...state, unread: [...state.unread, LEDGER_NOT_WRITTEN] },
+      'degraded',
+      degradeReasons,
+    )
+    recordsCurrent =
+      rewriteRunFiles(root, handle, snapshot.runId, final.files) === 'rewritten'
+  }
   const released = releaseLock(handle)
   removeWorkDir(root, snapshot.runId)
-  // The run is committed; a ledger that could not be written means its
-  // candidates are proposed again next time, so the outcome is degraded.
-  const ledgerWritten = published.ledger.written
-  if (!ledgerWritten) addUnique(degradeReasons, 'ledger-write-failed')
   const finalOutcome = ledgerWritten ? outcome : 'degraded'
   const digestPath = path.join(published.runDir, 'digest.md')
   return success('publish', {
@@ -1815,12 +1963,13 @@ function commitRun(
     digestPath,
     runRecordPath: path.join(published.runDir, 'run.json'),
     ledger: published.ledger,
+    ...(recordsCurrent ? {} : { runRecordCurrent: false }),
     lockReleased: released === 'released',
     degradeReasons,
     candidates: state.accepted.length,
     recorded: state.recorded.length,
     summary: renderSummary(
-      model,
+      final.model,
       digestPath,
       path.join(published.runDir, 'run.json'),
     ),
@@ -1931,16 +2080,37 @@ function decide(request: unknown, deps: HelperDeps): HelperResult {
 
 const MAX_LEDGER_ENTRIES_SHOWN = 500
 
-function ledgerShow(deps: HelperDeps): HelperResult {
+/** `{ offset }` with a non-negative integer, or nothing. Anything else is not a request. */
+function parseShowRequest(request: unknown): { offset: number } | undefined {
+  if (!isRecord(request)) return undefined
+  const { offset } = request
+  if (offset === undefined) return { offset: 0 }
+  if (
+    typeof offset !== 'number' ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0
+  ) {
+    return undefined
+  }
+  return { offset }
+}
+
+function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
+  const page = parseShowRequest(request)
+  if (page === undefined) return failure('ledger-show', 'invalid-request')
   const prepared = prepare('ledger-show', deps)
   if (!prepared.ok) return prepared.result
   const read = readLedger(prepared.root)
   if (read.status !== 'ok') {
     return failure('ledger-show', 'ledger-unreadable', { detail: read.reason })
   }
-  const entries = read.ledger.entries.slice(0, MAX_LEDGER_ENTRIES_SHOWN)
+  const total = read.ledger.entries.length
+  const end = page.offset + MAX_LEDGER_ENTRIES_SHOWN
+  const entries = read.ledger.entries.slice(page.offset, end)
   return success('ledger-show', {
-    total: read.ledger.entries.length,
+    total,
+    offset: page.offset,
+    nextOffset: end < total ? end : null,
     coverage: { rules: read.ledger.coverage?.length ?? 0 },
     entries: entries.map((entry) => ({
       id: entry.id,
@@ -2024,7 +2194,7 @@ export function runHelperOp(
       case 'decide':
         return decide(request, deps)
       case 'ledger-show':
-        return ledgerShow(deps)
+        return ledgerShow(request, deps)
       case 'ledger-clear':
         return ledgerClear(deps)
       case 'ledger-unlock':
@@ -2098,6 +2268,17 @@ function resolveCliOp(argv: readonly string[]): Op | undefined {
     : undefined
 }
 
+/** `ledger show [--offset N]`: the paging request, with nothing read from stdin. */
+function showRequestFromArgv(argv: readonly string[]): unknown {
+  const rest = argv.slice(2)
+  if (rest.length === 0) return {}
+  const [flag, value] = rest
+  if (rest.length !== 2 || flag !== '--offset') return { offset: null }
+  return /^\d+$/.test(value ?? '')
+    ? { offset: Number(value) }
+    : { offset: value }
+}
+
 type CliRequest =
   | { readonly ok: true; readonly request: unknown }
   | { readonly ok: false; readonly exitCode: 2 }
@@ -2118,7 +2299,16 @@ function readCliRequest(
   }
   const text = (options.readRequest ?? readStdinBounded)()
   const refuse = (reason: string): CliRequest => {
-    out(JSON.stringify({ ok: false, op, outcome: 'failed', reason }))
+    out(
+      JSON.stringify({
+        ok: false,
+        op,
+        outcome: 'failed',
+        reason,
+        // The request is the only place the lock handle is, and it was not read.
+        ...(op === 'validate' ? { lockReleased: false } : {}),
+      }),
+    )
     return { ok: false, exitCode: 2 }
   }
   if (text === 'too-large' || text === 'unreadable') {
@@ -2144,7 +2334,9 @@ export function runConnectHelper(options: CliOptions): number {
   }
   const read = readCliRequest(op, options, out, err)
   if (!read.ok) return read.exitCode
-  const result = runHelperOp(op, read.request, options.deps ?? {})
+  const request =
+    op === 'ledger-show' ? showRequestFromArgv(options.argv) : read.request
+  const result = runHelperOp(op, request, options.deps ?? {})
   out(JSON.stringify(result.body))
   return result.ok ? 0 : 1
 }
