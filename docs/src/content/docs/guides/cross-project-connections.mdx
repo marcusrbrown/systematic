@@ -78,7 +78,7 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 | Final line | Meaning |
 |---|---|
 | `Connect complete` | The slice of rules offered to this run was fully covered, every allowed project was read and nothing failed. A run that found nothing is still `complete`; its digest says "no candidate in searched scope". |
-| `Connect degraded` | Something was not read: a project was missing, a bound was reached, a family did not finish, or an offered rule was not covered. The digest names what. A degraded run is never proof that nothing is there. |
+| `Connect degraded` | Something was not read: a project was missing, a bound on the file inventory or on a batch was reached, a family did not finish, or an offered rule was not covered. The digest names what. A degraded run is never proof that nothing is there. |
 | `Connect busy` | Another run holds the lock, or its holder cannot be verified. Nothing was written and nothing was dispatched. |
 | `Connect failed` | Any other stop: a bad mode token, the helper missing, a host without a recorded deny in headless mode, consent declined, no allowed projects, a malformed batch or a helper error. Nothing was published. |
 
@@ -127,7 +127,7 @@ The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/
 
 - **The digest** has three sections: candidates, connections already recorded (the target already has a learning citing the same source), and stale citations. Each candidate shows its sources with paths, fingerprints and excerpts, any counterevidence, an overlap check, and a next step. Free text is shown as quoted, untrusted evidence.
 - **The run record** (`run.json`) holds the candidate block that `ce:compound` reads when you promote a lesson.
-- **Stale citations** are a deterministic check of which `path:line` citations in your learnings still hold. A citation is `passed`, `not-in-span` (the symbol is not in the cited lines, with a flag when it is elsewhere in the file) or `unchecked` (with a reason). It reports which citations still hold. It does not promise that code has not moved.
+- **Stale citations** are a deterministic check of which `path:line` citations in your learnings still hold. A citation is `passed`, `not-in-span` (the symbol is not in the cited lines, with a flag when it is elsewhere in the file) or `unchecked` (with a reason). It reports which citations still hold. It does not promise that code has not moved. The check stops at a cap per project (500 citations). A project that reaches it is named under "Not read or not covered" in the digest and the run record keeps the counts, but the run is not marked `degraded` for that alone.
 - **Retention.** Run directories older than 30 days are pruned at the start of a run. The ledger is never pruned.
 - **Publishing is one rename.** A run is built in `runs/<run id>.tmp/` and renamed to `runs/<run id>/`. The ledger is updated after the rename. If a crash falls between the two, the digest exists but its candidates are not in the ledger, and the next run proposes them once more. The next run also removes leftover `.tmp` directories.
 

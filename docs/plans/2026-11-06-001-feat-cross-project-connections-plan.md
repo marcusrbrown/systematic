@@ -1,12 +1,14 @@
 ---
 title: "feat: Search allowed projects for contradictions and transferable lessons"
 type: feat
-status: active
+status: completed
 date: 2026-11-06
 origin: docs/brainstorms/2026-11-06-cross-project-connections-requirements.md
 ---
 
 # feat: Search allowed projects for contradictions and transferable lessons
+
+> **Status: completed.** The pre-registered evaluation met both thresholds: precision 1.00 over 35 distinct judged candidates, and every seeded contradiction found in 3 of 3 repetitions with no control reported. Recall on known lessons was low (1 of 4 earlier probe lessons, 0 of 1 fresh labels), so the figures speak to what a run reports and not to what it misses. The full figures are in `tests/manual/connect-eval/PRE-REGISTRATION.md`. After the evaluation, a run that only reaches the citation cap stopped being classed `degraded`; the cap is still reported. The five-run real-use window follows merge.
 
 ## Overview
 

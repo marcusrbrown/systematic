@@ -41,8 +41,8 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 
 | Final line | When |
 |---|---|
-| `Connect complete` | `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason. Nothing found is still `complete`, labeled "no candidate in searched scope". |
-| `Connect degraded` | `publish` answered `degraded`: something was not read, an offered rule was not covered, or a bound was reached. The digest names what. A degraded run is never proof that nothing is there. |
+| `Connect complete` | `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason, and neither is the stale-citation check reaching its cap: the digest notes it under "Not read or not covered" and the run record keeps the counts, and the outcome is unchanged. Nothing found is still `complete`, labeled "no candidate in searched scope". |
+| `Connect degraded` | `publish` answered `degraded`: something was not read, an offered rule was not covered, or a bound on the file inventory, a family or a batch was reached. The digest names what. A degraded run is never proof that nothing is there. |
 | `Connect busy` | `begin` answered `busy`: another run holds the lock, or the holder cannot be verified. Nothing was written and nothing was dispatched. |
 | `Connect failed` | Any other stop: a bad mode token, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
 

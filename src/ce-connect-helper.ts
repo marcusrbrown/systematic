@@ -424,6 +424,10 @@ function parseRunRequest(request: unknown):
 interface SnapshotProject extends DigestProject {
   readonly key: string
   readonly entry: string
+  /** Citations the check examined. */
+  readonly citationsChecked: number
+  /** The citation cap stopped the check. Reported, and not a reason to degrade. */
+  readonly citationsTruncated: boolean
   readonly inventory: ReadonlyArray<{
     readonly path: string
     readonly role: InventoryRole
@@ -698,9 +702,13 @@ function scanGaps(
       `${name}: the file inventory reached a bound; files past it were not read`,
     )
   }
+  // Reported, not degrading: the cap only limits the stale-citation check, so
+  // it leaves no rule unread. A project with more citations than the cap
+  // reaches it on every run, and a degraded outcome there says nothing.
   if (report.truncated) {
-    degrade.push('citations-truncated')
-    unread.push(`${name}: the citation check reached its cap`)
+    unread.push(
+      `${name}: the citation check reached its cap (${report.citations.length} checked, the rest not)`,
+    )
   }
   const corpusSkipped =
     inventory.skipped.some((file) =>
@@ -749,6 +757,8 @@ function scanProject(
       entry,
       files: inventory.files.length,
       citationsUnsupported: report.unsupported,
+      citationsChecked: report.citations.length,
+      citationsTruncated: report.truncated,
       truncated: inventory.truncated.files || inventory.truncated.hashCap,
       inventory: inventory.files.map((file: InventoryFile) => ({
         path: file.path,
@@ -947,6 +957,8 @@ function beginResponse(
       files: scan.digest.files,
       rules: scan.rules.length,
       citationsUnsupported: scan.digest.citationsUnsupported,
+      citationsChecked: scan.digest.citationsChecked,
+      citationsTruncated: scan.digest.citationsTruncated,
       truncated: scan.digest.truncated,
     })),
     unmatched: setup.unmatched,
@@ -1636,6 +1648,8 @@ function runRecord(
       key: project.key,
       files: project.files,
       citationsUnsupported: project.citationsUnsupported,
+      citationsChecked: project.citationsChecked,
+      citationsTruncated: project.citationsTruncated,
       truncated: project.truncated,
     })),
     unmatched: snapshot.unmatched,

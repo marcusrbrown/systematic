@@ -860,6 +860,67 @@ describe('validate and publish', () => {
     ).toEqual([])
   })
 
+  describe('when the citation check reaches its cap', () => {
+    const CITED = `${NOW_LEARNING}\n${Array.from(
+      { length: 3 },
+      () => 'Held in `reclaimLock`, src/lock.ts:1.',
+    ).join('\n')}\n`
+
+    function cappedWorld(allow?: WorldOptions['allow']): World {
+      return buildWorld({
+        ...(allow === undefined ? {} : { allow }),
+        deps: { bounds: { maxCitationsPerProject: 1 } },
+        targetFiles: { 'docs/solutions/lock-now.md': CITED },
+      })
+    }
+
+    it('reports the truncation and still ends complete when it is the only gap', () => {
+      const world = cappedWorld()
+      const { validated, published } = fullRun(world, [])
+      expect(validated.pendingOutcome).toBe('complete')
+      expect(published.outcome).toBe('complete')
+      expect(published.finalLine).toBe('Connect complete')
+      const record = readRunRecord(published)
+      expect(record.degradeReasons).toEqual([])
+      const capped = (record.projects as Json[]).filter(
+        (project) => project.citationsTruncated === true,
+      )
+      expect(capped).toHaveLength(1)
+      expect(capped[0]).toMatchObject({ citationsChecked: 1 })
+      expect(
+        (record.projects as Json[]).filter(
+          (project) => project.citationsTruncated === false,
+        ),
+      ).toHaveLength(1)
+      expect((record.unread as string[]).join('\n')).toContain(
+        'the citation check reached its cap',
+      )
+      const digest = readDigest(published)
+      expect(digest).toContain('Outcome: complete')
+      expect(digest).toContain('the citation check reached its cap')
+    })
+
+    it('still degrades, and still reports the truncation, when another gap exists', () => {
+      const world = cappedWorld((source, target) => [
+        source,
+        target,
+        '/nonexistent/gone',
+      ])
+      const { published } = fullRun(world, [])
+      expect(published.outcome).toBe('degraded')
+      const record = readRunRecord(published)
+      expect(record.degradeReasons).toEqual(['unmatched-entry'])
+      expect(
+        (record.projects as Json[]).some(
+          (project) => project.citationsTruncated === true,
+        ),
+      ).toBe(true)
+      expect(readDigest(published)).toContain(
+        'the citation check reached its cap',
+      )
+    })
+  })
+
   it('lists a connection the target already records, and proposes no candidate', () => {
     const world = buildWorld()
     // The target already cites the source learning by project, path and fingerprint.

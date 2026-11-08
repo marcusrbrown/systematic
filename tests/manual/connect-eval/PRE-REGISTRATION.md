@@ -279,3 +279,13 @@ Both logged transport fixes (see Deviations above) were made before the first `c
 2. The scripts now ignore, and delete, Finder `.DS_Store` files in their clean-checkout checks and before-and-after comparisons, and ignore nothing else.
 
 No attempt was run again to improve a result.
+
+### Change after the evaluation
+
+After the results above were recorded, the helper changed so that a run whose only gap is the citation cap ends `complete`. The cap, its value, the rule index, the coverage rules and every other degrade reason are unchanged. The cap is still reported: the digest names the project under "Not read or not covered", and the run record keeps, per project, whether the cap was reached and how many citations were checked.
+
+This changes how a run is classified, not what it finds, so none of the figures above is re-measured and none is claimed for the new files. They describe the files of the digest registered above. A skill reference and the generated helper bundle changed with it, so the digest of the frozen files changed too:
+
+Frozen files digest after the change: sha256:42f50007fb558d5529bea76e63973e9ec0ceb13b00d8157d277675bd4200d658
+
+Any further change to a frozen file needs its own line here.

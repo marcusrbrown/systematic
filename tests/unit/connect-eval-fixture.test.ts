@@ -42,6 +42,10 @@ const REGISTERED = {
   regressionRecall: { found: 4, of: 4 },
 } as const
 
+/** The digest the evaluation ran on. It never changes; later changes append a line under the results. */
+const REGISTERED_FROZEN_DIGEST =
+  'a189dd1e24cb892cf1adae455467434d557c7776a5c41532613d9bd40b2791a4'
+
 function readJson(file: string): Json {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as Json
 }
@@ -408,10 +412,26 @@ describe('pre-registration', () => {
     expect(text).toContain('a fresh project chosen by Marcus')
   })
 
-  test('the frozen digest matches the skill, helper and agent files', () => {
-    const match = /^Frozen files digest: sha256:([0-9a-f]{64})$/m.exec(text)
-    expect(match).not.toBeNull()
-    expect(match?.[1]).toBe(frozenDigest(ROOT, FROZEN_PATHS))
+  test('the registered frozen digest is the one the evaluation ran on and stays above the results', () => {
+    const registered = /^Frozen files digest: sha256:([0-9a-f]{64})$/m.exec(
+      text,
+    )
+    expect(registered?.[1]).toBe(REGISTERED_FROZEN_DIGEST)
+    expect(registered?.index).toBeLessThan(text.indexOf('\n## Results'))
+  })
+
+  test('the frozen digest in force matches the skill, helper and agent files', () => {
+    // The last digest line wins. Lines after the results heading record a
+    // change made after the evaluation, each with the digest it produced.
+    const lines = [
+      ...text.matchAll(/^Frozen files digest[^:\n]*: sha256:([0-9a-f]{64})$/gm),
+    ]
+    expect(lines.length).toBeGreaterThan(0)
+    const resultsAt = text.indexOf('\n## Results')
+    for (const line of lines.slice(1)) {
+      expect(line.index).toBeGreaterThan(resultsAt)
+    }
+    expect(lines.at(-1)?.[1]).toBe(frozenDigest(ROOT, FROZEN_PATHS))
   })
 
   test('the run-record template carries the fields every real run records', () => {
