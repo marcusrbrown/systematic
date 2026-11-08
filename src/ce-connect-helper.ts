@@ -525,6 +525,8 @@ interface ValidatedState {
   readonly coverage: Coverage
   /** Offered rules that a complete family covered. */
   readonly coveredRuleIds: readonly string[]
+  /** Offered rules a complete family named but whose evidence changed or vanished during the run. */
+  readonly heldBackRuleIds: readonly string[]
   readonly sweep: SweepProgress
   readonly accepted: readonly AcceptedCandidate[]
   readonly recorded: readonly RecordedConnection[]
@@ -1220,6 +1222,8 @@ interface Classified {
   unresolved: number
   discardedIncomplete: number
   readonly degrade: string[]
+  /** Rules whose candidate was lost to evidence that changed or vanished during the run. */
+  readonly heldBackRuleIds: Set<string>
 }
 
 function count(table: Record<string, number>, key: string, by = 1): void {
@@ -1286,6 +1290,26 @@ interface ClassifyInput {
   readonly ledger: Ledger
 }
 
+function reopensForChangedSources(
+  record: CandidateRecord,
+  input: ClassifyInput,
+): boolean {
+  const outcome = classifyCandidate(input.ledger, record)
+  return outcome.standing === 'reopened' && outcome.reason === 'sources changed'
+}
+
+/** Keep the rule of a candidate that could not be checked out of the covered set. */
+function holdBack(
+  raw: unknown,
+  input: ClassifyInput,
+  result: Classified,
+): void {
+  const ruleId = isRecord(raw) ? raw.ruleId : undefined
+  if (typeof ruleId === 'string' && input.ctx.ruleIds.has(ruleId)) {
+    result.heldBackRuleIds.add(ruleId)
+  }
+}
+
 function classifyOne(
   raw: unknown,
   input: ClassifyInput,
@@ -1295,10 +1319,17 @@ function classifyOne(
   const check = checkCandidate(raw, input.ctx)
   if (check.status === 'dropped') {
     count(result.dropped, check.reason)
+    // Unlike a plain rejection, this says nothing about the candidate: the
+    // evidence moved under the run, so the rule was not really examined.
+    if (check.reason === 'changed-since-begin') {
+      addUnique(result.degrade, 'evidence-changed')
+      holdBack(raw, input, result)
+    }
     return
   }
   if (check.status === 'unresolved') {
     result.unresolved++
+    holdBack(raw, input, result)
     return
   }
   const record = toCandidateRecord(check.candidate)
@@ -1308,8 +1339,11 @@ function classifyOne(
     return
   }
   seen.add(identity)
+  // A promoted learning cites its source by project and path, so it still
+  // matches after the source changed. A changed source reopens the connection
+  // for refresh (with the pointer to the promoted learning) and is not recorded.
   const recorded = findRecorded(check.candidate, input.snapshot.provenance)
-  if (recorded !== undefined) {
+  if (recorded !== undefined && !reopensForChangedSources(record, input)) {
     result.recorded.push({
       pointer: recorded.pointer,
       candidate: check.candidate,
@@ -1332,6 +1366,7 @@ function classifyBatches(
     unresolved: 0,
     discardedIncomplete: 0,
     degrade: [],
+    heldBackRuleIds: new Set(),
   }
   const seen = new Set<string>()
   for (const batch of batches) {
@@ -1431,7 +1466,9 @@ function validateResponse(
     discardedIncomplete: classified.discardedIncomplete,
     coverage: state.coverage,
     offered:
-      state.coveredRuleIds.length + state.coverage.uncoveredRuleIds.length,
+      state.coveredRuleIds.length +
+      state.heldBackRuleIds.length +
+      state.coverage.uncoveredRuleIds.length,
     sweep: state.sweep,
   })
 }
@@ -1484,9 +1521,15 @@ function runValidation(
     projects: snapshot.projects.map((project) => project.root),
     batches,
   })
+  // A rule whose candidate was lost to changed evidence is not covered, even
+  // when a complete family named it: nothing was learned about it this run.
   const uncovered = new Set(coverage.uncoveredRuleIds)
+  const heldBackRuleIds = snapshot.offer.offered.filter(
+    (id) => !uncovered.has(id) && classified.heldBackRuleIds.has(id),
+  )
+  const heldBack = new Set(heldBackRuleIds)
   const coveredRuleIds = snapshot.offer.offered.filter(
-    (id) => !uncovered.has(id),
+    (id) => !uncovered.has(id) && !heldBack.has(id),
   )
   for (const reason of [
     ...classified.degrade,
@@ -1501,6 +1544,10 @@ function runValidation(
     unread: [
       ...snapshot.unread,
       ...coverageLines(coverage, snapshot, classified),
+      ...heldBackRuleIds.map(
+        (id) =>
+          `rule ${id} is not counted as covered because evidence for a candidate about it changed during the run`,
+      ),
     ],
     dropped: classified.dropped,
     discardedIncomplete: classified.discardedIncomplete,
@@ -1508,6 +1555,7 @@ function runValidation(
     unresolved: classified.unresolved,
     coverage,
     coveredRuleIds,
+    heldBackRuleIds,
     sweep: sweepProgress(snapshot.offer, coveredRuleIds),
     accepted: classified.accepted,
     recorded: classified.recorded,

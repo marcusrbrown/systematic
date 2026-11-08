@@ -94,7 +94,7 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 ```
 
 - `ruleIds` lists every rule id you examined, even when you found nothing. The helper checks it against the index, so a family that finds nothing still lists them all.
-- A `contradiction` has two or more `sources`, all learnings, one of them in the `target` project, and its `nextStep` is `refresh-learning` or `investigate`.
+- A `contradiction` has two or more `sources`, all learnings, one of them in the `target` project and at least one in another project (two learnings of the target alone are not a cross-project connection), and its `nextStep` is `refresh-learning` or `investigate`.
 - A `transferable-lesson` has `sources` outside the `target` project, at least one `targetEvidence` item, and its `nextStep` is `compound-learning` or `investigate`.
 - `sources` are learnings. `counterevidence` may be any tracked file.
 - Free text (`title`, `summary`, `note`, each query) is one paragraph within these caps: title 160 characters, summary 800, note 400, query 200. Put nothing in it that you copied from a file other than in an excerpt.

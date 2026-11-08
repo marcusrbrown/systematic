@@ -13,6 +13,7 @@
  * negative control so a grader that passes everything cannot hide a regression.
  */
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
@@ -232,6 +233,30 @@ function repeatedSentences(source: string, learning: string): string[] {
     if (hit) repeated.push(sentence.trim())
   }
   return repeated
+}
+
+/**
+ * The sentences of the cross-project source document that a promoted learning
+ * repeats. The whole document counts, not only the excerpt the candidate cited,
+ * because a writer who read the file can copy any part of it.
+ */
+function copiedFromSource(
+  fixture: RecordedRuns['fixture'],
+  learning: string,
+): string[] {
+  return repeatedSentences(sourceDocument(fixture), learning)
+}
+
+function sourceDocument(fixture: RecordedRuns['fixture']): string {
+  const text = fs.readFileSync(
+    path.join(FIXTURES, 'source-document.md'),
+    'utf8',
+  )
+  const fingerprint = createHash('sha256').update(text).digest('hex')
+  if (fingerprint !== fixture.fingerprint) {
+    throw new Error('the fixture source document no longer has its fingerprint')
+  }
+  return text
 }
 
 function learningFiles(run: RecordedRun): Array<[string, string]> {
@@ -626,6 +651,22 @@ describe('behavior graders', () => {
     ).toHaveLength(1)
   })
 
+  test('the source-copy grader flags a sentence from outside the cited excerpt', () => {
+    const { fixture } = loadRuns('green-runs.json')
+    const outside =
+      'Reject any producer code path that retries a send without a stable idempotency key.'
+    expect(fixture.excerpt).not.toContain(outside)
+    expect(
+      copiedFromSource(fixture, `Notes.\n\n## Prevention\n\n${outside}\n`),
+    ).toEqual([outside])
+  })
+
+  test('the source-copy grader reads the fixture source document, which still has the recorded fingerprint', () => {
+    const { fixture } = loadRuns('green-runs.json')
+    const text = sourceDocument(fixture)
+    expect(text).toContain(fixture.excerpt)
+  })
+
   test('the sentence-overlap grader passes a restatement in other words', () => {
     expect(
       repeatedSentences(
@@ -719,7 +760,7 @@ describe('recorded sessions: the baseline shows what the unmodified skills did',
     const learning = learningFiles(run)[0]
     expect(learning).toBeDefined()
     expect(
-      repeatedSentences(fixture.excerpt, learning?.[1] ?? '').length,
+      copiedFromSource(fixture, learning?.[1] ?? '').length,
     ).toBeGreaterThan(0)
   })
 
@@ -789,7 +830,7 @@ describe('recorded sessions: the current skills', () => {
       expect(files).toHaveLength(1)
       const [file, text] = files[0] ?? ['', '']
       expect(file).toMatch(/^docs\/solutions\/[a-z-]+\/[a-z0-9-]+\.md$/)
-      expect(repeatedSentences(fixture.excerpt, text)).toEqual([])
+      expect(copiedFromSource(fixture, text)).toEqual([])
       const parsed = parseFrontmatter<Record<string, unknown>>(text)
       expect(parsed.body).toContain(cite)
       expect(parsed.body).toMatch(/^##+ Provenance/m)

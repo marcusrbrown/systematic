@@ -288,4 +288,8 @@ This changes how a run is classified, not what it finds, so none of the figures 
 
 Frozen files digest after the change: sha256:42f50007fb558d5529bea76e63973e9ec0ceb13b00d8157d277675bd4200d658
 
+A later review changed the helper again, with the same reading: none of the figures above is re-measured for it. A contradiction must now span projects, a candidate lost to a file that changed or vanished during the run degrades the run and its rule is not counted as covered, and a promoted connection whose source changed reopens for refresh instead of being listed as already recorded. The skill reference, the researcher agent text and the generated helper bundle changed with it:
+
+Frozen files digest after the second change: sha256:26aa20289082b9d473f78a5643ee57763a30a76cb5df166fbf37732cbb8b6e93
+
 Any further change to a frozen file needs its own line here.

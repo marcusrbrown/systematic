@@ -742,6 +742,7 @@ export type DropReason =
   | 'text-too-long'
   | 'invalid-text'
   | 'invalid-structure'
+  | 'same-project-contradiction'
   | 'duplicate-candidate'
   | 'over-batch-cap'
 
@@ -1042,6 +1043,24 @@ function toValidSource(
   }
 }
 
+/**
+ * A contradiction pairs the target's learning with another project's. Two
+ * learnings of the target alone are that project's own business, not a
+ * cross-project connection.
+ */
+function contradictionProblem(
+  nextStep: NextStep,
+  target: string,
+  sourceCount: number,
+  sourceProjects: ReadonlySet<string>,
+): DropReason | undefined {
+  if (sourceCount < 2 || !sourceProjects.has(target)) return 'invalid-structure'
+  if (![...sourceProjects].some((project) => project !== target)) {
+    return 'same-project-contradiction'
+  }
+  return nextStep === 'compound-learning' ? 'invalid-structure' : undefined
+}
+
 /** The shape rules that need no file: counts, project relations and the next step. */
 function shapeProblem(
   kind: CandidateKind,
@@ -1061,10 +1080,12 @@ function shapeProblem(
     sourceProjects.add(String(source.project))
   }
   if (kind === 'contradiction') {
-    if (sources.length < 2 || !sourceProjects.has(target)) {
-      return 'invalid-structure'
-    }
-    return nextStep === 'compound-learning' ? 'invalid-structure' : undefined
+    return contradictionProblem(
+      nextStep,
+      target,
+      sources.length,
+      sourceProjects,
+    )
   }
   if (sourceProjects.has(target) || targetEvidenceCount < 1) {
     return 'invalid-structure'

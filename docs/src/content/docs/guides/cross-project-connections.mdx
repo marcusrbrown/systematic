@@ -7,7 +7,7 @@ sidebar:
 
 If you work in several repositories, each one holds its own `docs/solutions/`, and nothing reads them against each other. One project records "always retry the export job on timeout". A sibling records "never retry it". A third project hit a failure that the first one already solved and wrote down. `ce:connect` reads the projects you name and proposes two kinds of candidate:
 
-- **Contradiction.** Two learnings that give opposite guidance for the same situation, where at least one of them is in the project that should change.
+- **Contradiction.** Two learnings that give opposite guidance for the same situation, where at least one of them is in the project that should change and at least one is in another project.
 - **Transferable lesson.** A lesson one project recorded, where another project's tracked code, workflows or config show the failure and its own learnings do not record the lesson.
 
 A run proposes. A person decides. `ce:connect` writes nothing into any project, any remote or any global config. Its only output is a digest and a run record in a state directory outside your repositories.
@@ -78,7 +78,7 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 | Final line | Meaning |
 |---|---|
 | `Connect complete` | The slice of rules offered to this run was fully covered, every allowed project was read and nothing failed. A run that found nothing is still `complete`; its digest says "no candidate in searched scope". |
-| `Connect degraded` | Something was not read: a project was missing, a bound on the file inventory or on a batch was reached, a family did not finish, or an offered rule was not covered. The digest names what. A degraded run is never proof that nothing is there. |
+| `Connect degraded` | Something was not read: a project was missing, a bound on the file inventory or on a batch was reached, a family did not finish, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`), or an offered rule was not covered. The digest names what. A degraded run is never proof that nothing is there. |
 | `Connect busy` | Another run holds the lock, or its holder cannot be verified. Nothing was written and nothing was dispatched. |
 | `Connect failed` | Any other stop: a bad mode token, the helper missing, a host without a recorded deny in headless mode, consent declined, no allowed projects, a malformed batch or a helper error. Nothing was published. |
 

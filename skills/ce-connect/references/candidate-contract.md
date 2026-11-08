@@ -56,7 +56,7 @@ Coverage is checked, not reported on trust. An offered rule id that no complete 
 | `targetEvidence` | Tracked files in the target: `path`, `start`, `end`, `symbol`, `fingerprint`, `excerpt`. |
 | `counterevidence` | Any tracked file, shaped like a source. |
 
-A `contradiction` has at least two sources, one of them in the target, and its next step is `refresh-learning` or `investigate`. A `transferable-lesson` has sources outside the target, at least one `targetEvidence` item, and a next step of `compound-learning` or `investigate`.
+A `contradiction` has at least two sources, one of them in the target and at least one in another project, and its next step is `refresh-learning` or `investigate`. A `transferable-lesson` has sources outside the target, at least one `targetEvidence` item, and a next step of `compound-learning` or `investigate`.
 
 ## What the helper checks
 

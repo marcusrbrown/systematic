@@ -1132,8 +1132,11 @@ describe('validate and publish', () => {
     expect(published.outcome).toBe('degraded')
     const ledger = JSON.parse(
       fs.readFileSync(path.join(world.stateRoot, 'ledger.json'), 'utf8'),
-    ) as { entries: unknown[] }
+    ) as { entries: unknown[]; coverage?: Array<{ ruleId: string }> }
     expect(ledger.entries).toEqual([])
+    expect((ledger.coverage ?? []).map((item) => item.ruleId)).toEqual([
+      ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+    ])
   })
 
   it('proposes nothing for unchanged sources and returns an edited source as "sources changed"', () => {
@@ -1169,6 +1172,127 @@ describe('validate and publish', () => {
     expect(accepted).toHaveLength(1)
     expect(accepted[0]?.standing).toBe('sources changed')
     expect(readDigest(third.published)).toContain('sources changed')
+  })
+
+  it('reopens a promoted connection when its source changed, and does not list it as already recorded', () => {
+    const world = buildWorld()
+    const first = fullRun(world, [lessonCandidate(world)])
+    const id = (first.validated.accepted as Json[])[0]?.id as string
+    ok(
+      runHelperOp(
+        'decide',
+        {
+          id,
+          status: 'promoted',
+          reason: 'Written into the target as a learning.',
+          destination: 'docs/solutions/adopted.md',
+        },
+        world.deps,
+      ),
+    )
+    // The promoted learning cites the source at the fingerprint it had then.
+    const cite = formatProvenanceCitation(
+      projectName(world.source),
+      'docs/solutions/lock-reclaim.md',
+      world.lessonSha,
+    )
+    fs.writeFileSync(
+      path.join(world.target, 'docs/solutions/adopted.md'),
+      `---\ntitle: Adopted\n---\n\n## Guidance\n\nVerify the holder. Source: \`${cite}\`.\n`,
+    )
+    git(world.target, ['add', '-f', '--', 'docs/solutions/adopted.md'])
+    git(world.target, ['commit', '-q', '-m', 'adopt', '--no-verify'])
+    const edited = `${LOCK_LEARNING}\nA new line about reclaiming.\n`
+    fs.writeFileSync(
+      path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+      edited,
+    )
+
+    const again = fullRun(
+      world,
+      [
+        lessonCandidate(world, {
+          sources: [
+            {
+              project: world.source,
+              path: 'docs/solutions/lock-reclaim.md',
+              fingerprint: sha256(edited),
+              excerpt:
+                'Never reclaim a lock without verifying the holder identity',
+            },
+          ],
+        }),
+      ],
+      {
+        batch: {
+          ruleIds: [
+            ...allRuleIds(world),
+            ruleIdFor(world.target, 'docs/solutions/adopted.md'),
+          ],
+        },
+      },
+    )
+    expect(again.validated.recorded).toEqual([])
+    const accepted = again.validated.accepted as Json[]
+    expect(accepted).toHaveLength(1)
+    expect(accepted[0]).toMatchObject({
+      id,
+      standing: 'sources changed',
+      refreshPointer: 'docs/solutions/adopted.md',
+    })
+  })
+
+  describe('a candidate whose evidence changed during the run', () => {
+    function coveredRules(world: World): string[] {
+      const ledger = JSON.parse(
+        fs.readFileSync(path.join(world.stateRoot, 'ledger.json'), 'utf8'),
+      ) as { coverage?: Array<{ ruleId: string }> }
+      return (ledger.coverage ?? []).map((item) => item.ruleId)
+    }
+
+    function changedRun(world: World): { validated: Json; published: Json } {
+      const run = start(world)
+      // The source is edited after begin took its hash.
+      fs.appendFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        '\nA late edit.\n',
+      )
+      const file = writeBatch(
+        run.workDir,
+        'batch-1.json',
+        batchJson(world, run.runId, { candidates: [lessonCandidate(world)] }),
+      )
+      const validated = ok(validate(world, run, [file]))
+      return { validated, published: ok(publish(world, run)) }
+    }
+
+    it('degrades the run with a named reason', () => {
+      const world = buildWorld()
+      const { validated, published } = changedRun(world)
+      expect(validated.dropped).toEqual({ 'changed-since-begin': 1 })
+      expect(validated.pendingOutcome).toBe('degraded')
+      expect(validated.degradeReasons).toContain('evidence-changed')
+      expect(published.outcome).toBe('degraded')
+      expect(readDigest(published)).toContain('evidence-changed')
+    })
+
+    it('does not record its rule as covered, and still records the others', () => {
+      const world = buildWorld()
+      changedRun(world)
+      expect(coveredRules(world)).toEqual([
+        ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+      ])
+    })
+
+    it('leaves a plain validation rejection non-degrading and the rule covered', () => {
+      const world = buildWorld()
+      const { validated } = fullRun(world, [
+        lessonCandidate(world, { title: 'x'.repeat(500) }),
+      ])
+      expect(validated.dropped).toEqual({ 'text-too-long': 1 })
+      expect(validated.pendingOutcome).toBe('complete')
+      expect(coveredRules(world).sort()).toEqual([...allRuleIds(world)].sort())
+    })
   })
 
   it('surfaces possible matches for a renamed source and never matches them itself', () => {

@@ -825,6 +825,64 @@ describe('checkCandidate', () => {
     }
   })
 
+  describe('a contradiction must span projects', () => {
+    const SECOND_LEARNING = [
+      '---',
+      'title: Reclaim stale locks after a grace period',
+      'applies_when: A lock file can outlive the process that took it',
+      '---',
+      '',
+      '## Guidance',
+      '',
+      'Wait for the grace period before reclaiming a stale lock.',
+      '',
+    ].join('\n')
+
+    function targetOnly(world: World): Json {
+      const secondFacts = world.ctx.projects
+        .get(world.target)
+        ?.files.get('docs/solutions/lock-second.md')
+      return contradiction(world, {
+        ruleId: ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+        sources: [
+          {
+            project: world.target,
+            path: 'docs/solutions/lock-now.md',
+            fingerprint: world.otherSha,
+            excerpt:
+              'Always reclaim a stale lock immediately after the timeout',
+          },
+          {
+            project: world.target,
+            path: 'docs/solutions/lock-second.md',
+            fingerprint: secondFacts?.sha256 ?? '',
+            excerpt: 'Wait for the grace period before reclaiming a stale lock',
+          },
+        ],
+      })
+    }
+
+    it('drops two distinct paths that are both in the target project', () => {
+      const world = buildWorld(
+        {},
+        { 'docs/solutions/lock-second.md': SECOND_LEARNING },
+      )
+      expect(dropped(checkCandidate(targetOnly(world), world.ctx))).toBe(
+        'same-project-contradiction',
+      )
+    })
+
+    it('accepts a contradiction between the target and another project', () => {
+      const world = buildWorld(
+        {},
+        { 'docs/solutions/lock-second.md': SECOND_LEARNING },
+      )
+      expect(checkCandidate(contradiction(world), world.ctx).status).toBe(
+        'valid',
+      )
+    })
+  })
+
   it('drops a tracked symlink as a symlinked path', () => {
     const world = buildWorld()
     fs.symlinkSync(
