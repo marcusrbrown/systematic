@@ -200,6 +200,9 @@ Logged deviations:
 1. Transport fix, made before the first model call. The scratch clone script failed while cloning the fresh project, because that project's local checkout is a partial clone (file contents filtered out) and cannot serve a full clone. The scripts now clone from the checkout's origin URL when the source is a partial clone, and from the local checkout otherwise. They also check, after each clone, that the pinned revision is a commit in it, and stop if it is not. The source checkouts are only read. The pins, the frozen files, the prompt, the models, the fixtures and every rule above are unchanged.
    - Kit digest before the fix: sha256:e5845796174133999883333fea2a95477e94e04ca4ae9ea64a23d58a5413559d
    - Kit digest after the fix: sha256:ab8a362dc66dd86a6332ca0c70c3c73a1f762adbb73fc7befe43cd93313f69f0
+2. Second transport fix, made before the first `ce:connect` model call. macOS Finder keeps writing `.DS_Store` files into the scratch tree, and they come back after they are deleted. The scripts' "is this checkout clean" check and their before-and-after comparison of the allowed checkouts counted them as changes, and the first main-sweep start stopped on one. Every such check and comparison now ignores an entry whose final path component is exactly `.DS_Store`, and ignores nothing else. The scripts also delete existing `.DS_Store` files under the scratch clone, seeded-copy and fixture trees before each clone check. The pins, the frozen files, the prompt, the models, the fixtures and every rule above are unchanged.
+   - Kit digest before the fix: sha256:ab8a362dc66dd86a6332ca0c70c3c73a1f762adbb73fc7befe43cd93313f69f0
+   - Kit digest after the fix: sha256:f333df22cd6b18c6be2dd00abec1880aebf592c7f53a48585dca40a794124bad
 
 ## Real-use window
 

@@ -347,7 +347,7 @@ describe('pre-registration', () => {
     expect(text).not.toMatch(/(?<![\d.])8\.5 hours/)
   })
 
-  test('logs the transport fix made before the first model call, with the old and new kit digests', () => {
+  test('logs each transport fix with the kit digest before and after, chained from the registered digest', () => {
     const deviations = text.slice(
       text.indexOf('## Deviations'),
       text.indexOf('## Real-use window'),
@@ -356,12 +356,30 @@ describe('pre-registration', () => {
     const registered = /^Scratch kit digest: sha256:([0-9a-f]{64})$/m.exec(
       text,
     )?.[1]
-    const logged = [...deviations.matchAll(/sha256:([0-9a-f]{64})/g)].map(
-      (m) => m[1],
-    )
-    expect(logged.length).toBeGreaterThanOrEqual(2)
-    expect(logged[0]).toBe(registered)
-    expect(new Set(logged).size).toBe(logged.length)
+    const before = [
+      ...deviations.matchAll(
+        /Kit digest before the fix: sha256:([0-9a-f]{64})/g,
+      ),
+    ].map((m) => m[1])
+    const after = [
+      ...deviations.matchAll(
+        /Kit digest after the fix: sha256:([0-9a-f]{64})/g,
+      ),
+    ].map((m) => m[1])
+    expect(before.length).toBeGreaterThanOrEqual(2)
+    expect(after).toHaveLength(before.length)
+    expect(before[0]).toBe(registered)
+    for (let i = 0; i < before.length; i++) {
+      expect(after[i]).not.toBe(before[i])
+      if (i > 0) expect(before[i]).toBe(after[i - 1])
+    }
+    expect(new Set(after).size).toBe(after.length)
+  })
+
+  test('logs the second transport fix, for Finder .DS_Store files, before the first ce:connect model call', () => {
+    expect(text.toLowerCase()).toContain('second transport fix')
+    expect(text).toContain('.DS_Store')
+    expect(text).toContain('before the first `ce:connect` model call')
   })
 
   test('records a full revision and says what degraded means after rotation', () => {
