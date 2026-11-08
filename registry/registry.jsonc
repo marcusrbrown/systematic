@@ -80,6 +80,12 @@
       "files": ["agents/document-review/coherence-reviewer.md"]
     },
     {
+      "name": "agent-connections-researcher",
+      "type": "agent",
+      "description": "Reads the learnings of several allowed projects, one rule family at a time, and proposes contradictions between learnings and lessons one project recorded that a sibling still needs. Read-only. Use only through the ce:connect skill.",
+      "files": ["agents/research/connections-researcher.md"]
+    },
+    {
       "name": "agent-correctness-reviewer",
       "type": "agent",
       "description": "Always-on code-review persona. Reviews code for logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches.",
@@ -291,6 +297,7 @@
       "files": [
         "skills/ce-compound/SKILL.md",
         "skills/ce-compound/assets/resolution-template.md",
+        "skills/ce-compound/references/candidate-input.md",
         "skills/ce-compound/references/schema.yaml",
         "skills/ce-compound/references/yaml-schema.md"
       ]
@@ -304,6 +311,17 @@
         "skills/ce-compound-refresh/assets/resolution-template.md",
         "skills/ce-compound-refresh/references/schema.yaml",
         "skills/ce-compound-refresh/references/yaml-schema.md"
+      ]
+    },
+    {
+      "name": "ce-connect",
+      "type": "skill",
+      "description": "Use when searching the projects the user has allowed for contradictions between their learnings, or for a lesson that one project recorded and a sibling project still needs. Also use when the user asks what their other projects have learned about a failure.",
+      "files": [
+        "skills/ce-connect/SKILL.md",
+        "skills/ce-connect/references/candidate-contract.md",
+        "skills/ce-connect/references/headless-and-outcomes.md",
+        "skills/ce-connect/scripts/connect.mjs"
       ]
     },
     {
@@ -562,6 +580,7 @@
         "ce-brainstorm",
         "ce-compound",
         "ce-compound-refresh",
+        "ce-connect",
         "ce-ideate",
         "ce-plan",
         "ce-review",
@@ -607,6 +626,7 @@
         "agent-cli-readiness-reviewer",
         "agent-code-simplicity-reviewer",
         "agent-coherence-reviewer",
+        "agent-connections-researcher",
         "agent-correctness-reviewer",
         "agent-data-migrations-reviewer",
         "agent-deployment-verification-agent",

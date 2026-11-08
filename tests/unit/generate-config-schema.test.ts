@@ -396,6 +396,31 @@ describe('generateSchemaContent', () => {
     expect(resolve(fields.sources)?.examples).toBeDefined()
   })
 
+  test('the connect field lists allow_projects, carries the trust tag and has examples', () => {
+    const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
+    const definitions = parsed.definitions as Record<
+      string,
+      Record<string, unknown>
+    >
+    const resolve = (node: Record<string, unknown> | undefined) => {
+      const ref = node?.$ref
+      if (typeof ref !== 'string') return node
+      return definitions[ref.replace('#/definitions/', '')]
+    }
+    const props = parsed.properties as Record<string, Record<string, unknown>>
+    const connect = resolve(props.connect)
+    expect(connect?.trust).toBe('project-or-higher')
+    expect(connect?.examples).toBeDefined()
+    const fields = connect?.properties as Record<
+      string,
+      Record<string, unknown>
+    >
+    expect(resolve(fields.allow_projects)?.examples).toBeDefined()
+    // The limits reach the schema, through however many shared definitions.
+    expect(JSON.stringify(definitions)).toContain('"maxItems":64')
+    expect(JSON.stringify(definitions)).toContain('"maxLength":4096')
+  })
+
   test('the removed workflow_guard key stays a property, marked deprecated, with a description and no suggested value', () => {
     const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
     const props = parsed.properties as Record<string, Record<string, unknown>>

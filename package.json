@@ -63,6 +63,8 @@
     "review-schema:drift": "bun scripts/generate-review-artifact-schema.ts --check",
     "ce-review-validator:build": "bun scripts/generate-ce-review-validator.ts",
     "ce-review-validator:drift": "bun scripts/generate-ce-review-validator.ts --check",
+    "ce-connect-helper:build": "bun scripts/generate-ce-connect-helper.ts",
+    "ce-connect-helper:drift": "bun scripts/generate-ce-connect-helper.ts --check",
     "agent-browser:build": "bun scripts/generate-agent-browser-skill.ts",
     "agent-browser:drift": "bun scripts/generate-agent-browser-skill.ts --check",
     "pi-personas:generate": "bun scripts/generate-pi-subagents-personas.ts",

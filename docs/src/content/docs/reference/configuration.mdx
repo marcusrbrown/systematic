@@ -1185,6 +1185,44 @@ Patterns for files and folders to skip under each root. A pattern with no `/` ma
 ```
 
 
+## connect
+
+Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list.
+
+**Type:** `object`
+**Examples:**
+
+```json
+{
+  "allow_projects": [
+    "~/src/github.com/me/app"
+  ]
+}
+```
+
+```json
+{
+  "allow_projects": []
+}
+```
+
+
+### allow_projects
+
+Main repository roots that `ce:connect` may read for contradictions and transferable lessons. Each entry is an absolute or `~`-prefixed path to the root of a repository checkout, not a subdirectory and not a linked worktree. At most 64 entries; an entry that matches no repository is reported by the run and does not widen the list. The lists in user, user.local, custom and custom.local config are merged as a union. Omitted or empty, it allows no project.
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "~/src/github.com/me/app",
+  "/srv/checkouts/shared-lib"
+]
+```
+
+
 ## Profile Bundle Overlay Fields
 
 Each named bundle under `profiles` may set `agents.<name>` and `categories.<name>` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): `model`, `variant`, `temperature`, `top_p`, and the harness routing blocks `opencode`/`pi`. Non-routing fields (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are rejected.

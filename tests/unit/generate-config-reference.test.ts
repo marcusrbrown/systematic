@@ -161,6 +161,20 @@ describe('generateConfigReference', () => {
     )
   })
 
+  test('the connect section documents allow_projects with an example and the user-only rule', () => {
+    const content = generateFn('2.11.0')
+    const start = content.indexOf('## connect')
+    expect(start).toBeGreaterThan(-1)
+    const rest = content.slice(start + 1)
+    const nextH2 = rest.search(/\n## /)
+    const section = nextH2 === -1 ? rest : rest.slice(0, nextH2)
+    expect(section).toContain('### allow_projects')
+    expect(section).toContain('User-owned only')
+    expect(section.match(/\*\*Examples:\*\*/g)?.length).toBeGreaterThanOrEqual(
+      2,
+    )
+  })
+
   test('every described field has a non-empty description', () => {
     const content = generateFn('2.11.0')
     expect(checkAllSectionsHaveDescriptions(content)).toBe(true)

@@ -24,6 +24,8 @@ import {
   resetSkippedProjectConfigNotices,
   warnDroppedNames,
 } from '../../src/lib/config.js'
+import { CONFIG_PROTECTED_FIELD_PATHS } from '../../src/lib/config-protected-fields.js'
+import { loadConnectAllowList } from '../../src/lib/connect-config.js'
 import {
   REMOVED_BUNDLED_AGENT_CATEGORIES,
   REMOVED_BUNDLED_AGENT_NAMES,
@@ -6527,6 +6529,151 @@ describe('isAgentDisabled', () => {
   test('a persona without a category is matched by its bare key only', () => {
     expect(isAgentDisabled(new Set(['loose']), {}, '', 'loose')).toBe(true)
     expect(isAgentDisabled(new Set(['/loose']), {}, '', 'loose')).toBe(false)
+  })
+})
+
+describe('connect config field', () => {
+  const tracker = createTempDirTracker()
+  afterEach(() => {
+    tracker.cleanup()
+  })
+
+  function setup() {
+    const root = tracker.track(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-connect-config-')),
+    )
+    const homeDir = path.join(root, 'home')
+    const projectDir = path.join(root, 'project')
+    const customDir = path.join(root, 'custom')
+    const userDir = path.join(homeDir, '.config/opencode')
+    for (const dir of [
+      userDir,
+      customDir,
+      path.join(projectDir, '.opencode'),
+    ]) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    const write = (file: string, config: unknown) =>
+      fs.writeFileSync(file, JSON.stringify(config))
+    const warnings: string[] = []
+    return {
+      warnings,
+      user: (config: unknown) =>
+        write(path.join(userDir, 'systematic.json'), config),
+      userLocal: (config: unknown) =>
+        write(path.join(userDir, 'systematic.local.json'), config),
+      project: (config: unknown) =>
+        write(path.join(projectDir, '.opencode/systematic.json'), config),
+      custom: (config: unknown) =>
+        write(path.join(customDir, 'systematic.json'), config),
+      load: (withCustom = false) =>
+        loadConfigWithSources(projectDir, {
+          homeDir,
+          customConfigDir: withCustom ? customDir : null,
+          warningSink: (message) => warnings.push(message),
+        }),
+      paths: { homeDir, projectDir, customDir, userDir },
+    }
+  }
+
+  test('with no connect anywhere there is no connect key and no warning', () => {
+    const t = setup()
+    t.user({ disabled_skills: [] })
+    const { config } = t.load()
+    expect(config).not.toHaveProperty('connect')
+    expect(t.warnings).toEqual([])
+  })
+
+  test('the allow lists of user, user.local and custom merge as a union', () => {
+    const t = setup()
+    t.user({ connect: { allow_projects: ['/work/a', '/work/b'] } })
+    t.userLocal({ connect: { allow_projects: ['/work/b', '/work/c'] } })
+    t.custom({ connect: { allow_projects: ['/work/d'] } })
+    expect(t.load(true).config.connect).toEqual({
+      allow_projects: ['/work/a', '/work/b', '/work/c', '/work/d'],
+    })
+    expect(t.warnings).toEqual([])
+  })
+
+  test('an empty connect block loads as an empty allow list', () => {
+    const t = setup()
+    t.user({ connect: {} })
+    expect(t.load().config.connect).toEqual({ allow_projects: [] })
+  })
+
+  test('the full loader and the helper reader agree on the allow list', () => {
+    const t = setup()
+    t.user({ connect: { allow_projects: ['/work/a'] } })
+    t.custom({ connect: { allow_projects: ['/work/b', '/work/a'] } })
+    const loaded = t.load(true).config.connect?.allow_projects
+    const read = loadConnectAllowList({
+      homeDir: t.paths.homeDir,
+      userConfigDir: t.paths.userDir,
+      customConfigDir: t.paths.customDir,
+    }).allowProjects
+    expect(loaded).toEqual([...read])
+  })
+
+  test('CONFIG_PROTECTED_FIELD_PATHS lists connect', () => {
+    expect(CONFIG_PROTECTED_FIELD_PATHS).toContain('connect')
+  })
+
+  describe('project config can never set connect', () => {
+    test('a project connect is stripped with one named warning, the user list is used, and the metadata records it', () => {
+      const t = setup()
+      t.user({ connect: { allow_projects: ['/work/app'] } })
+      t.project({ connect: { allow_projects: ['/work/evil'] } })
+      const { config, metadata } = t.load()
+      expect(config.connect).toEqual({ allow_projects: ['/work/app'] })
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('`connect`')
+      expect(t.warnings[0]).toContain('project config')
+      expect(metadata.protectedFields).toContainEqual({
+        fieldPath: 'connect',
+        outcome: 'blocked',
+        sourceKind: 'project',
+      })
+    })
+
+    test('a project connect allows nothing when the user sets none', () => {
+      const t = setup()
+      t.project({ connect: { allow_projects: ['/work/evil'] } })
+      const { config } = t.load()
+      expect(config).not.toHaveProperty('connect')
+      expect(JSON.stringify(config)).not.toContain('/work/evil')
+    })
+
+    test('the warning never names a project entry or a value', () => {
+      const t = setup()
+      t.project({ connect: { allow_projects: ['/work/secret-client'] } })
+      t.load()
+      expect(t.warnings.join('\n')).not.toContain('secret-client')
+    })
+
+    test('a malformed project connect block is stripped before validation and cannot fail the load', () => {
+      const t = setup()
+      t.project({ connect: { allow_projects: 7, bogus: true } })
+      expect(() => t.load()).not.toThrow()
+      expect(t.load().config).not.toHaveProperty('connect')
+    })
+
+    test('the helper reader ignores the same project file', () => {
+      const t = setup()
+      t.user({ connect: { allow_projects: ['/work/app'] } })
+      t.project({ connect: { allow_projects: ['/work/evil'] } })
+      const previous = process.cwd()
+      process.chdir(t.paths.projectDir)
+      try {
+        const read = loadConnectAllowList({
+          homeDir: t.paths.homeDir,
+          userConfigDir: t.paths.userDir,
+          customConfigDir: null,
+        })
+        expect(read.allowProjects).toEqual(['/work/app'])
+      } finally {
+        process.chdir(previous)
+      }
+    })
   })
 })
 

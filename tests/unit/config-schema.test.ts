@@ -264,6 +264,59 @@ describe('SystematicConfigSchema', () => {
     })
   })
 
+  describe('connect', () => {
+    test('is optional with no default: an omitted block leaves no connect key', () => {
+      const result = SystematicConfigSchema.safeParse({})
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data).not.toHaveProperty('connect')
+    })
+
+    test('an empty block is valid and names no project', () => {
+      const result = SystematicConfigSchema.safeParse({ connect: {} })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.connect?.allow_projects).toBeUndefined()
+      }
+    })
+
+    test('accepts an allow list', () => {
+      const result = SystematicConfigSchema.safeParse({
+        connect: { allow_projects: ['~/src/app', '/srv/lib'] },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.connect?.allow_projects).toEqual([
+          '~/src/app',
+          '/srv/lib',
+        ])
+      }
+    })
+
+    test('rejects an unknown key inside the block, at the connect path', () => {
+      const result = SystematicConfigSchema.safeParse({
+        connect: { allow_projects: [], allow_all: true },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(firstIssue(result.error.issues).path[0]).toBe('connect')
+      }
+    })
+
+    test('rejects a non-string entry', () => {
+      const result = SystematicConfigSchema.safeParse({
+        connect: { allow_projects: [1] },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    test('the whole block is tagged project-or-higher', () => {
+      const connectSchema = unwrapForMeta(SystematicConfigSchema.shape.connect)
+      expect(z.globalRegistry.get(connectSchema)?.trust).toBe(
+        'project-or-higher',
+      )
+    })
+  })
+
   describe('allow_project_profiles', () => {
     test('defaults to false when omitted', () => {
       const result = SystematicConfigSchema.safeParse({})

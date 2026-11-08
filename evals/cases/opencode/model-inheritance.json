@@ -18,6 +18,7 @@
     "document-review/scope-guardian-reviewer",
     "document-review/security-lens-reviewer",
     "research/best-practices-researcher",
+    "research/connections-researcher",
     "research/framework-docs-researcher",
     "research/git-history-analyzer",
     "research/issue-intelligence-analyst",

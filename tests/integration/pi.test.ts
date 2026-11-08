@@ -61,7 +61,17 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { type HelperDeps, runHelperOp } from '../../src/ce-connect-helper.js'
+import { projectName, ruleIdFor } from '../../src/lib/connect-helper-core.js'
+import { MAX_DELEGATE_TURNS } from '../../src/lib/pi-delegate-tool.js'
 import { exportPersonas } from '../../src/lib/pi-subagents-export.js'
+import {
+  connectResearcherMarker,
+  createFamilyScript,
+  dispatchBlock,
+  type FamilyFixture,
+  type FamilyScript,
+} from '../helpers/connect-family-script.js'
 import {
   assertDelegatedSearchProof,
   type ChatRequest,
@@ -1151,6 +1161,295 @@ describe('Pi subprocess integration', () => {
     },
     TIMEOUT_MS,
   )
+
+  // ce:connect: one rule family on the real Pi runtime. The model is scripted,
+  // so this shows that the delegate's 20-turn cap leaves room for a family and
+  // that the child's tools are read, search and find only. It does not show how
+  // many turns a live model takes, or that a live model follows the method.
+  describe('ce:connect researcher family', () => {
+    const worldDirs: string[] = []
+
+    afterEach(() => {
+      for (const dir of worldDirs.splice(0)) {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    const SOURCE_SENTENCE =
+      'Always retry failed queue writes up to five times with exponential backoff.'
+    const TARGET_SENTENCE =
+      'Never retry failed queue writes. The queue API is not idempotent, and a retry duplicates the message.'
+
+    function temp(prefix: string): string {
+      const dir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), prefix)),
+      )
+      worldDirs.push(dir)
+      return dir
+    }
+
+    function gitRepo(files: Record<string, string>): string {
+      const dir = temp('systematic-connect-pi-repo-')
+      const git = (...args: string[]): void => {
+        const run = Bun.spawnSync(['git', ...args], { cwd: dir })
+        if (run.exitCode !== 0) {
+          throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`)
+        }
+      }
+      git('init', '-q', '-b', 'main')
+      git('config', 'user.email', 'test@example.com')
+      git('config', 'user.name', 'Test')
+      for (const [rel, content] of Object.entries(files)) {
+        const file = path.join(dir, rel)
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.writeFileSync(file, content)
+      }
+      git('add', '-A')
+      git('commit', '-q', '-m', 'base', '--no-verify')
+      return dir
+    }
+
+    function learning(title: string, guidance: string): string {
+      return [
+        '---',
+        `title: ${title}`,
+        'applies_when:',
+        '  - a client writes to a queue API',
+        '---',
+        '',
+        '## Guidance',
+        '',
+        guidance,
+        '',
+      ].join('\n')
+    }
+
+    const SOURCE_PATH = 'docs/solutions/retry-writes.md'
+    const TARGET_PATH = 'docs/solutions/no-retry-writes.md'
+
+    function beginRun(): {
+      fixture: FamilyFixture
+      names: Record<string, string>
+      deps: HelperDeps
+      lock: { nonce: string; pid: number }
+      workDir: string
+      runId: string
+    } {
+      const source = gitRepo({
+        [SOURCE_PATH]: learning(
+          'Retry queue writes',
+          `${SOURCE_SENTENCE} A write that fails once usually succeeds on retry.`,
+        ),
+      })
+      const target = gitRepo({
+        [TARGET_PATH]: learning(
+          'Never retry queue writes',
+          `${TARGET_SENTENCE} Fail the job and alert instead.`,
+        ),
+      })
+      const home = temp('systematic-connect-pi-home-')
+      const userConfigDir = path.join(home, '.config', 'opencode')
+      fs.mkdirSync(userConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(userConfigDir, 'systematic.json'),
+        JSON.stringify({ connect: { allow_projects: [source, target] } }),
+      )
+      const deps: HelperDeps = {
+        env: {
+          XDG_STATE_HOME: path.join(
+            temp('systematic-connect-pi-state-'),
+            'xdg',
+          ),
+        },
+        homeDir: home,
+        config: { homeDir: home, userConfigDir, customConfigDir: null },
+        holderPid: process.pid,
+      }
+      const begun = runHelperOp(
+        'begin',
+        { host: 'pi', version: '1.4.0', mode: 'interactive', consent: true },
+        deps,
+      )
+      if (!begun.ok) throw new Error(JSON.stringify(begun.body))
+      const runId = begun.body.runId as string
+      return {
+        fixture: {
+          runId,
+          family: 'Queue write retries',
+          rulesFile: begun.body.rulesFile as string,
+          filesIndex: begun.body.filesIndex as string,
+          ruleIds: [
+            ruleIdFor(source, SOURCE_PATH),
+            ruleIdFor(target, TARGET_PATH),
+          ],
+          source: { root: source, path: SOURCE_PATH },
+          target: { root: target, path: TARGET_PATH },
+          sourceSentence: SOURCE_SENTENCE,
+          targetSentence: TARGET_SENTENCE,
+        },
+        names: { [source]: projectName(source), [target]: projectName(target) },
+        deps,
+        lock: begun.body.lock as { nonce: string; pid: number },
+        workDir: begun.body.workDir as string,
+        runId,
+      }
+    }
+
+    async function runFamily(
+      script: FamilyScript,
+      message: string,
+    ): Promise<{
+      isError: boolean
+      text: string
+      details?: Record<string, unknown>
+    }> {
+      mockModel.push((request) => script.respond(request))
+      client = spawnPiRpc({ fixture })
+      await client.send({
+        type: 'set_model',
+        provider: MOCK_PROVIDER_ID,
+        modelId: MOCK_MODEL_ID,
+      })
+      const promptResponse = await client.send({ type: 'prompt', message })
+      expect(promptResponse.success).toBe(true)
+      const toolEnd = (await client.waitFor(
+        (msg) =>
+          msg.type === 'tool_execution_end' &&
+          (msg as { toolName?: string }).toolName === 'systematic_delegate',
+        TIMEOUT_MS,
+      )) as {
+        isError?: boolean
+        result?: {
+          content?: Array<{ text?: string }>
+          details?: Record<string, unknown>
+        }
+      }
+      return {
+        isError: toolEnd.isError === true,
+        text: (toolEnd.result?.content ?? [])
+          .map((c) => c.text ?? '')
+          .join('\n'),
+        details: toolEnd.result?.details,
+      }
+    }
+
+    function objectIn(text: string): string {
+      const start = text.indexOf('{')
+      const end = text.lastIndexOf('}')
+      if (start < 0 || end < start)
+        throw new Error(`no JSON object in: ${text}`)
+      return text.slice(start, end + 1)
+    }
+
+    test(
+      'a family completes inside the delegate turn cap with read, search and find tools only, and its batch validates',
+      async () => {
+        const run = beginRun()
+        const script = createFamilyScript({
+          fixture: run.fixture,
+          dispatch: dispatchBlock(run.fixture, run.names),
+          marker: connectResearcherMarker(REPO_ROOT),
+        })
+
+        const delegated = await runFamily(
+          script,
+          'Delegate one rule family to connections-researcher.',
+        )
+
+        expect(delegated.isError).toBe(false)
+        expect(delegated.details?.persona).toBe('connections-researcher')
+        expect(delegated.details?.outcome).toBe('completed')
+        const turns = delegated.details?.turnCount as number
+        expect(turns).toBe(3)
+        expect(turns).toBeLessThanOrEqual(MAX_DELEGATE_TURNS)
+
+        // The child was offered read, search and find, and no shell or write.
+        const offered = script.observation().childToolNames
+        for (const name of ['read', 'grep', 'find']) {
+          expect(offered).toContain(name)
+        }
+        for (const name of ['bash', 'write', 'edit', 'systematic_delegate']) {
+          expect(offered).not.toContain(name)
+        }
+
+        // The skill writes the child's object to a file; the helper accepts it.
+        const file = path.join(run.workDir, 'family-1.json')
+        fs.writeFileSync(file, objectIn(delegated.text))
+        const validated = runHelperOp(
+          'validate',
+          { runId: run.runId, lock: run.lock, batches: ['family-1.json'] },
+          run.deps,
+        )
+        expect(validated.ok).toBe(true)
+        expect((validated.body.accepted as unknown[]).length).toBe(1)
+        expect(validated.body.droppedTotal).toBe(0)
+        const published = runHelperOp(
+          'publish',
+          { runId: run.runId, lock: run.lock },
+          run.deps,
+        )
+        expect(published.body.finalLine).toBe('Connect complete')
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a child that never answers stops at the turn cap and the family is degraded, not empty',
+      async () => {
+        const run = beginRun()
+        const script = createFamilyScript({
+          fixture: run.fixture,
+          dispatch: dispatchBlock(run.fixture, run.names),
+          marker: connectResearcherMarker(REPO_ROOT),
+          neverAnswers: true,
+        })
+
+        const delegated = await runFamily(
+          script,
+          'Delegate one rule family to connections-researcher.',
+        )
+
+        expect(delegated.isError).toBe(true)
+        expect(delegated.text).toContain(`${MAX_DELEGATE_TURNS}-turn limit`)
+
+        // The skill writes the unfinished stub. The helper degrades the run and
+        // names the family; no candidate comes from it.
+        const stub = {
+          version: 1,
+          runId: run.runId,
+          family: run.fixture.family,
+          ruleIds: [],
+          projects: [],
+          files: [],
+          searches: [],
+          complete: false,
+          candidates: [],
+        }
+        fs.writeFileSync(
+          path.join(run.workDir, 'family-1.json'),
+          JSON.stringify(stub),
+        )
+        const validated = runHelperOp(
+          'validate',
+          { runId: run.runId, lock: run.lock, batches: ['family-1.json'] },
+          run.deps,
+        )
+        expect(validated.ok).toBe(true)
+        expect(validated.body.pendingOutcome).toBe('degraded')
+        expect((validated.body.accepted as unknown[]).length).toBe(0)
+        const published = runHelperOp(
+          'publish',
+          { runId: run.runId, lock: run.lock },
+          run.deps,
+        )
+        expect(published.body.finalLine).toBe('Connect degraded')
+        expect(
+          fs.readFileSync(published.body.digestPath as string, 'utf8'),
+        ).toContain(`family ${run.fixture.family} did not finish`)
+      },
+      TIMEOUT_MS,
+    )
+  })
 })
 
 /**
