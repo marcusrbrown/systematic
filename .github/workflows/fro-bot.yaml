@@ -669,6 +669,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # Read by the approval-backstop job, which runs on a separate runner.
+    outputs:
+      allowed: ${{ steps.approval-rule.outputs.allowed }}
     if: >-
       (
         github.event.pull_request == null ||
@@ -887,19 +890,32 @@ jobs:
           prompt: ${{ env.PROMPT }}
           timeout: 0
 
-      # Deterministic backstop for R23: whatever the agent did, a fro-bot APPROVED
-      # review on a PR where approval is not allowed gets dismissed. Comment-triggered
-      # runs get no prompt rule (their PROMPT is empty), so this is their only guard
-      # besides the main ruleset's last-push approval rule.
+  # Deterministic backstop for R23: whatever the agent did, a fro-bot APPROVED
+  # review on a PR where approval is not allowed gets dismissed. Comment-triggered
+  # runs get no prompt rule (their PROMPT is empty), so this is their only guard
+  # besides the main ruleset's last-push approval rule.
+  #
+  # It runs as its own job on a fresh runner, with no checkout, so nothing the
+  # agent job leaves behind (gh config, GITHUB_ENV, GITHUB_PATH, the workspace)
+  # reaches the step that holds the bot PAT. It is skipped when the agent job was
+  # skipped (forks, bot authors), as the in-job step was.
+  approval-backstop:
+    name: Fro Bot approval backstop
+    needs: fro-bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    if: >-
+      always() &&
+      needs.fro-bot.result != 'skipped' &&
+      needs.fro-bot.outputs.allowed != 'true' &&
+      (
+        github.event_name == 'pull_request' ||
+        github.event_name == 'pull_request_review_comment' ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+      )
+    steps:
       - name: Dismiss disallowed Fro Bot approvals
-        if: >-
-          always() &&
-          steps.approval-rule.outputs.allowed != 'true' &&
-          (
-            github.event_name == 'pull_request' ||
-            github.event_name == 'pull_request_review_comment' ||
-            (github.event_name == 'issue_comment' && github.event.issue.pull_request)
-          )
         env:
           GH_TOKEN: ${{ secrets.FRO_BOT_PAT }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}

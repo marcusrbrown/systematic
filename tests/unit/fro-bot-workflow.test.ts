@@ -429,6 +429,24 @@ function froBotSteps(): readonly unknown[] {
   return asArray(froBot.steps, 'fro-bot steps')
 }
 
+function backstopJob(): RecordValue {
+  const { workflow } = readWorkflow()
+  const jobs = asRecord(workflow.jobs, 'jobs')
+  return asRecord(jobs['approval-backstop'], 'approval-backstop job')
+}
+
+function backstopSteps(): readonly unknown[] {
+  return asArray(backstopJob().steps, 'approval-backstop steps')
+}
+
+/** The backstop runs in its own job; every other step here is in the agent job. */
+function stepNamed(name: string): RecordValue {
+  return findStep(
+    name === BACKSTOP_STEP ? backstopSteps() : froBotSteps(),
+    name,
+  )
+}
+
 function stepIndex(steps: readonly unknown[], name: string): number {
   return steps.findIndex(
     (candidate) => isRecord(candidate) && candidate.name === name,
@@ -491,7 +509,7 @@ esac
     box: Sandbox,
     extraEnv: Record<string, string> = {},
   ): { exitCode: number; stdout: string; outputs: Map<string, string> } {
-    const step = findStep(froBotSteps(), name)
+    const step = stepNamed(name)
     const script = asString(step.run, `${name} run`)
     // Mirror the runner: an explicit `shell: bash` adds pipefail, the default does not.
     const shellFlags = step.shell === 'bash' ? '-eo' : '-e'
@@ -659,8 +677,11 @@ esac
     })
 
     test('runs under pipefail', () => {
-      for (const name of [APPROVAL_RULE_STEP, BACKSTOP_STEP]) {
-        const step = findStep(froBotSteps(), name)
+      for (const [steps, name] of [
+        [froBotSteps(), APPROVAL_RULE_STEP],
+        [backstopSteps(), BACKSTOP_STEP],
+      ] as const) {
+        const step = findStep(steps, name)
         expect(
           step.shell === 'bash' || /set -\w*o pipefail/.test(String(step.run)),
         ).toBe(true)
@@ -723,31 +744,61 @@ esac
     })
   })
 
-  describe('approval backstop step', () => {
+  describe('approval backstop job', () => {
     const review = (id: number, user: string, state: string) => ({
       id,
       user: { login: user },
       state,
     })
 
-    test('runs after "Run Fro Bot", always(), only when approval is not allowed', () => {
-      const steps = froBotSteps()
-      const backstop = findStep(steps, BACKSTOP_STEP)
-      const condition = asString(backstop.if, 'backstop if')
-      const env = asRecord(backstop.env, 'backstop env')
+    test('is its own job that needs the agent job, not a step of it', () => {
+      const job = backstopJob()
 
-      expect(stepIndex(steps, BACKSTOP_STEP)).toBeGreaterThan(
-        stepIndex(steps, 'Run Fro Bot'),
-      )
+      expect(job.needs).toBe('fro-bot')
+      expect(job.name).not.toBe('Fro Bot')
+      expect(stepIndex(froBotSteps(), BACKSTOP_STEP)).toBe(-1)
+      expect(stepIndex(backstopSteps(), BACKSTOP_STEP)).toBe(0)
+      expect(backstopSteps()).toHaveLength(1)
+    })
+
+    test('has no checkout or actions and holds no workflow token permissions', () => {
+      const job = backstopJob()
+
+      for (const step of backstopSteps()) {
+        expect(asRecord(step, 'backstop step').uses).toBeUndefined()
+      }
+      expect(job.permissions).toEqual({})
+    })
+
+    test('runs always(), when the agent job ran and approval is not allowed', () => {
+      const condition = asString(backstopJob().if, 'backstop if')
+
       expect(condition).toContain('always()')
-      expect(condition).toContain(
-        "steps.approval-rule.outputs.allowed != 'true'",
-      )
+      expect(condition).toContain("needs.fro-bot.result != 'skipped'")
+      expect(condition).toContain("needs.fro-bot.outputs.allowed != 'true'")
+      expect(condition).not.toContain('steps.')
       expect(condition).toContain("github.event_name == 'pull_request'")
       expect(condition).toContain('github.event.issue.pull_request')
       for (const other of ['schedule', 'workflow_dispatch', 'workflow_call']) {
         expect(condition).not.toContain(other)
       }
+    })
+
+    test('the agent job exposes the approval decision as the job output it reads', () => {
+      const { workflow } = readWorkflow()
+      const jobs = asRecord(workflow.jobs, 'jobs')
+      const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+      const outputs = asRecord(froBot.outputs, 'fro-bot outputs')
+
+      expect(outputs.allowed).toBe(
+        `${EXPRESSION_PREFIX}{{ steps.approval-rule.outputs.allowed }}`,
+      )
+    })
+
+    test('uses the bot token only in the backstop step', () => {
+      const step = findStep(backstopSteps(), BACKSTOP_STEP)
+      const env = asRecord(step.env, 'backstop env')
+
       expect(env.GH_TOKEN).toBe(`${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_PAT }}`)
     })
 
