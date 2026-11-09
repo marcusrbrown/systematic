@@ -843,7 +843,7 @@ esac
       expect(calls(box).some((c) => c.includes('dismissals'))).toBe(false)
     })
 
-    test('a failing dismissal warns and keeps going, exiting 0', () => {
+    test('a failed dismissal fails the job but still tries the remaining approvals', () => {
       const box = sandbox({
         reviews: [
           review(1, 'fro-bot', 'APPROVED'),
@@ -851,12 +851,39 @@ esac
         ],
       })
       const result = runStep(BACKSTOP_STEP, box, { GH_FAIL_DISMISS_ID: '1' })
-      expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('::warning::')
-      expect(result.stdout).toContain('1')
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('::error::')
+      expect(result.stdout).toMatch(/review ids: 1$/m)
+      expect(result.stdout).not.toContain('::warning::')
       const dismissals = calls(box).filter((c) => c.includes('dismissals'))
       expect(dismissals).toHaveLength(2)
       expect(dismissals[1]).toContain('/reviews/2/dismissals')
+    })
+
+    test('a failed dismissal after a successful one still fails the job', () => {
+      const box = sandbox({
+        reviews: [
+          review(1, 'fro-bot', 'APPROVED'),
+          review(2, 'fro-bot', 'APPROVED'),
+        ],
+      })
+      const result = runStep(BACKSTOP_STEP, box, { GH_FAIL_DISMISS_ID: '2' })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('Dismissed Fro Bot approval 1')
+      expect(result.stdout).toMatch(/review ids: 2$/m)
+    })
+
+    test('names every approval that could not be dismissed', () => {
+      const box = sandbox({
+        reviews: [
+          review(1, 'fro-bot', 'APPROVED'),
+          review(2, 'fro-bot', 'APPROVED'),
+        ],
+      })
+      const result = runStep(BACKSTOP_STEP, box, { GH_FAIL_AT: 'dismissals' })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toMatch(/review ids: 1 2$/m)
+      expect(calls(box).filter((c) => c.includes('dismissals'))).toHaveLength(2)
     })
 
     test('fails loudly when only the reviews call fails inside its pipeline', () => {

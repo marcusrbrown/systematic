@@ -304,4 +304,8 @@ A fifth change added Claude Code 2.1.319 to the host-support table, resting on a
 
 Frozen files digest after the fifth change: sha256:425a6c55ebfc07ed9643bdfced40a469b3117d3969786a53012718d4e9370f5e
 
+A sixth change reworded comments in a bundled source, the host-support table's doc comments, so that they state what evidence a row requires. Only comments changed, so no behavior differs and no figure is re-measured. The generated helper bundle changed with it:
+
+Frozen files digest after the sixth change: sha256:033b2421b025300868d7f47a3c44abe038b651f82ce90669b977022e42ca5a85
+
 Any further change to a frozen file needs its own line here.

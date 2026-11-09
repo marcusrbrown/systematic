@@ -928,11 +928,17 @@ jobs:
             exit 1
           fi
 
+          failed=""
           for id in $ids; do
             if gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews/${id}/dismissals" \
               -f message="Fro Bot may not approve this pull request." -f event=DISMISS > /dev/null; then
               echo "Dismissed Fro Bot approval ${id} on PR #${PR}."
             else
-              echo "::warning::Could not dismiss Fro Bot approval ${id} on PR #${PR}."
+              failed="${failed:+${failed} }${id}"
             fi
           done
+
+          if [ -n "$failed" ]; then
+            echo "::error::A disallowed Fro Bot approval remains on PR #${PR}; dismissal failed for review ids: ${failed}"
+            exit 1
+          fi

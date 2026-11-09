@@ -2,7 +2,7 @@
  * The `connect` config block: the allow list of projects that `ce:connect`
  * may read, a reader that fails closed, a per-entry resolver that says why an
  * entry did not match, and the table of hosts where the researcher's tool
- * denies have been observed.
+ * limits have host-specific evidence.
  *
  * Import rule: this module may import only `jsonc-parser`, node builtins,
  * `search-bounded-read.ts` and `search-project-identity.ts` (both node
@@ -553,12 +553,13 @@ export const CONNECT_HOSTS = [
 export type ConnectHost = (typeof CONNECT_HOSTS)[number]
 
 /**
- * One host and exact version where the researcher's shell, write and web tools
- * were observed denied on a real host. `observedBy` names the test that
- * observed it, as `<file> > <test title>`. A host whose proof cannot be an
- * automated test names a manual record instead, as `HARNESSES.md > <entry id>`;
- * a unit test requires that entry to exist and to be marked manual evidence. A
- * row without `observedBy` never matches.
+ * One host and exact version with host-specific evidence that the researcher's
+ * tool limits hold. The evidence is a real-host refusal test, a test showing the
+ * allowlist reaching the delegate session, or a recorded manual observation.
+ * `observedBy` names it. A test is named as `<file> > <test title>`. A manual
+ * observation is named as `HARNESSES.md > <entry id>`; a unit test requires that
+ * entry to exist and to be marked manual evidence. A row without `observedBy`
+ * never matches.
  */
 export interface HostSupportRow {
   readonly host: ConnectHost
@@ -567,11 +568,12 @@ export interface HostSupportRow {
 }
 
 /**
- * The supported combinations. A row is added only for a host and version where
- * a real-host deny was observed against the shipped agent, and it names the
- * test or the recorded manual run that observed it. The `claude-code` row rests
- * on a manual run with a live model, because that host cannot be
- * driven by a scripted one here.
+ * The supported combinations. A row is added only for a host and version with
+ * host-specific evidence that the shipped agent's tool limits hold there: a
+ * real-host refusal test, an allowlist reaching the delegate session, or a
+ * recorded manual observation marked as manual evidence. The `claude-code` row
+ * rests on a recorded manual tool-list observation, not a tested refusal,
+ * because that host cannot be driven by a scripted model here.
  *
  * Every row is exact: the version is the one the proof ran against, and any
  * other version, older or newer, is unlisted.
