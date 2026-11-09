@@ -17,6 +17,9 @@ const WORKFLOW_PATH = path.resolve(
   '.github/workflows/release-notes.yaml',
 )
 const RELEASERC_PATH = path.resolve(process.cwd(), '.releaserc.yaml')
+// Each executed-step case spawns bash and a freshly written stub executable.
+// On a loaded macOS machine one case can exceed the default 5 s test timeout.
+const TEST_TIMEOUT_MS = 30_000
 
 type RecordValue = Record<string, unknown>
 
@@ -292,21 +295,29 @@ exit 0
     }
   }
 
-  test('narrating v1.0.0 while v2.0.0 is Latest dispatches docs for v2.0.0', () => {
-    const r = runTrigger({ value: 'v2.0.0' })
+  test(
+    'narrating v1.0.0 while v2.0.0 is Latest dispatches docs for v2.0.0',
+    () => {
+      const r = runTrigger({ value: 'v2.0.0' })
 
-    expect(r.status).toBe(0)
-    expect(r.dispatches).toEqual([
-      'gh workflow run docs.yaml --ref main -f tag=v2.0.0',
-    ])
-  })
+      expect(r.status).toBe(0)
+      expect(r.dispatches).toEqual([
+        'gh workflow run docs.yaml --ref main -f tag=v2.0.0',
+      ])
+    },
+    TEST_TIMEOUT_MS,
+  )
 
-  test('a failed latest lookup dispatches nothing and fails', () => {
-    const r = runTrigger({ fail: true })
+  test(
+    'a failed latest lookup dispatches nothing and fails',
+    () => {
+      const r = runTrigger({ fail: true })
 
-    expect(r.status).not.toBe(0)
-    expect(r.dispatches).toEqual([])
-  })
+      expect(r.status).not.toBe(0)
+      expect(r.dispatches).toEqual([])
+    },
+    TEST_TIMEOUT_MS,
+  )
 
   test.each(['latest', '', 'v2.0', 'v2.0.0-rc.1', 'v2.0.0 --ref evil'])(
     'a malformed latest value (%j) dispatches nothing and fails',
@@ -317,6 +328,7 @@ exit 0
       expect(r.output).toContain('::error::')
       expect(r.dispatches).toEqual([])
     },
+    TEST_TIMEOUT_MS,
   )
 })
 
