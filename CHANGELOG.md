@@ -9,6 +9,7 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 ### Bug Fixes
 
 * fail the approval backstop on a failed dismissal and check promotion copies against the whole source ([#1344](https://github.com/marcusrbrown/systematic/issues/1344)) ([6f42d56](https://github.com/marcusrbrown/systematic/commit/6f42d56482d6998164f906ac039691c0edfb7ec4))
+* **security:** patch vulnerable Undici tooling consumers ([#1346](https://github.com/marcusrbrown/systematic/issues/1346)) ([6abf822](https://github.com/marcusrbrown/systematic/commit/6abf8229bc1f09de9978b115fa807f3bf78636fd))
 
 ### Documentation
 
@@ -21,6 +22,7 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 ### Miscellaneous Chores
 
 * **deps:** update fro-bot/agent to v0.136.3 ([#1335](https://github.com/marcusrbrown/systematic/issues/1335)) ([1d163c4](https://github.com/marcusrbrown/systematic/commit/1d163c45a3405fa08faafae72af698a052bdad13))
+* **release:** v3.32.1 ([ff6b92e](https://github.com/marcusrbrown/systematic/commit/ff6b92efc08cd0124f596358795a1af6b99ad37e))
 
 ## [3.32.0](https://github.com/marcusrbrown/systematic/compare/v3.31.6...v3.32.0) (2026-11-08)
 
