@@ -233,8 +233,8 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
   `Host Contract` check, turns those skips into failures against a real, pinned OpenCode host).
   The contract runs as three profiles listed in `scripts/host-contract-guard.ts`: the full contract
   on OpenCode v2 (four shards; `opencode-v2.test.ts` is its host test), and a v1 smoke subset at the
-  v1 floor and at the current v1 pin. `scripts/opencode-host-pins.json` holds the three CLI
-  versions, and `SYSTEMATIC_OPENCODE_HOST` selects the host line for a local run.
+  v1 floor and at the current v1 pin. `scripts/opencode-host-pins.json` holds the four CLI
+  versions (the v2 and v1 pins and each line's floor), and `SYSTEMATIC_OPENCODE_HOST` selects the host line for a local run.
   `host-contract-timings.json` holds the per-file durations that balance the v2 shards
 
 **Pattern:** Tests use `bun:test` with `describe`/`it`. Filesystem tests use real temp directories;

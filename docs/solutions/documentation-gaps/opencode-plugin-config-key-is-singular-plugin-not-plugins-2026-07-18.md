@@ -21,7 +21,7 @@ tags:
 
 # OpenCode plugin config key is `plugin` on v1 and `plugins` on v2
 
-> **OpenCode v2 reads a different key.** The incident below is OpenCode v1. A v2 host (2.2.0 and later) reads a plural `plugins` array, and Systematic supports both hosts from one package. The key is a property of the host line, so check which line a doc or config targets before choosing it. See [OpenCode v2](#opencode-v2).
+> **OpenCode v2 reads a different key.** The incident below is OpenCode v1. A v2 host (2.2.5 and later) reads a plural `plugins` array, and Systematic supports both hosts from one package. The key is a property of the host line, so check which line a doc or config targets before choosing it. See [OpenCode v2](#opencode-v2).
 
 ## Context
 
@@ -48,7 +48,7 @@ The repo's own `opencode.json` and the integration tests already used the singul
 
 ### OpenCode v2
 
-On OpenCode v2 (2.2.0 and later), the key is the plural `plugins`:
+On OpenCode v2 (2.2.5 and later), the key is the plural `plugins`:
 
 ```json
 { "plugins": ["@fro.bot/systematic@latest"] }

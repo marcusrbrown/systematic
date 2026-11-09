@@ -72,7 +72,7 @@ This hook allows Systematic to inject a "bootstrap" instruction into the AI's sy
 
 ## OpenCode v2
 
-The same npm package runs on OpenCode v2 (2.2.0 and later). v2 has no `config` hook and no string-keyed hooks. Instead, the plugin's `setup` function loads your configuration once and registers four things through v2's own APIs:
+The same npm package runs on OpenCode v2 (2.2.5 and later). v2 has no `config` hook and no string-keyed hooks. Instead, the plugin's `setup` function loads your configuration once and registers four things through v2's own APIs:
 
 - **Agents.** The bundled agents are created with the same names, descriptions, prompts and modes as on v1. Systematic's permission rules are added after OpenCode's default rules for the agent, so a tool the rules do not mention keeps the host default. A skill list that limits an agent to certain skills still refuses every other skill, including inside subagents.
 - **Skills and the `systematic_skill` tool.** Each enabled bundled skill is added to OpenCode, so the native `skill` tool lists and loads it. `systematic_skill` is still registered, because the native tool cannot pass arguments. OpenCode cuts tool output at 2,000 lines or 50 KB after the plugin returns it, so Systematic keeps the full text and puts it back in the request. Three bundled skills (`ce:review`, `ce:plan` and `ce:compound-refresh`) are over that limit.

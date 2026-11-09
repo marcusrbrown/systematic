@@ -91,14 +91,21 @@ function writePinFile(dir: string, contents: unknown): string {
 function sentinelPins(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { v2: '9999.2.0', v1: '9999.1.1', v1Floor: '9999.1.0', ...overrides }
+  return {
+    v2: '9999.2.1',
+    v2Floor: '9999.2.0',
+    v1: '9999.1.1',
+    v1Floor: '9999.1.0',
+    ...overrides,
+  }
 }
 
 describe('readOpencodeHostPins', () => {
-  test('returns the three exact versions from the real pin file', () => {
+  test('returns the four exact versions from the real pin file', () => {
     const pins = readOpencodeHostPins()
     const exact = /^\d+\.\d+\.\d+$/
     expect(pins.v2).toMatch(exact)
+    expect(pins.v2Floor).toMatch(exact)
     expect(pins.v1).toMatch(exact)
     expect(pins.v1Floor).toMatch(exact)
   })
@@ -107,7 +114,8 @@ describe('readOpencodeHostPins', () => {
     const pinFile = writePinFile(makeTempDir(), sentinelPins())
 
     expect(readOpencodeHostPins(pinFile)).toEqual({
-      v2: '9999.2.0',
+      v2: '9999.2.1',
+      v2Floor: '9999.2.0',
       v1: '9999.1.1',
       v1Floor: '9999.1.0',
     })
@@ -116,7 +124,7 @@ describe('readOpencodeHostPins', () => {
   test('readOpencodeHostPin returns the current pin for each host line, never the floor', () => {
     const pinFile = writePinFile(makeTempDir(), sentinelPins())
 
-    expect(readOpencodeHostPin('v2', pinFile)).toBe('9999.2.0')
+    expect(readOpencodeHostPin('v2', pinFile)).toBe('9999.2.1')
     expect(readOpencodeHostPin('v1', pinFile)).toBe('9999.1.1')
     expect(readOpencodeSdkPin(pinFile)).toBe('9999.1.1')
   })
@@ -127,6 +135,26 @@ describe('readOpencodeHostPins', () => {
 
     expect(() => readOpencodeHostPins(pinFile)).toThrow(
       /"v1Floor" is missing from/,
+    )
+  })
+
+  test('throws naming the v2 floor when it is missing', () => {
+    const { v2Floor: _omitted, ...withoutFloor } = sentinelPins()
+    const pinFile = writePinFile(makeTempDir(), withoutFloor)
+
+    expect(() => readOpencodeHostPins(pinFile)).toThrow(
+      /"v2Floor" is missing from/,
+    )
+  })
+
+  test('throws "must be an exact version" when the v2 floor is a range', () => {
+    const pinFile = writePinFile(
+      makeTempDir(),
+      sentinelPins({ v2Floor: '>=9999.2.0' }),
+    )
+
+    expect(() => readOpencodeHostPins(pinFile)).toThrow(
+      /"v2Floor".*must be an exact version/,
     )
   })
 
@@ -149,6 +177,17 @@ describe('readOpencodeHostPins', () => {
 
     expect(() => readOpencodeHostPins(pinFile)).toThrow(
       /"v1Floor".*newer than "v1"/,
+    )
+  })
+
+  test('throws when the v2 floor is newer than the current v2 pin', () => {
+    const pinFile = writePinFile(
+      makeTempDir(),
+      sentinelPins({ v2Floor: '9999.2.2' }),
+    )
+
+    expect(() => readOpencodeHostPins(pinFile)).toThrow(
+      /"v2Floor".*newer than "v2"/,
     )
   })
 
@@ -248,9 +287,9 @@ describe('lockstep: each CLI pin equals the dev dependencies that move with it',
   const LOCKSTEP_PACKAGES = {
     '@opencode-ai/sdk': '9999.1.1',
     '@opencode-ai/plugin': '9999.1.1',
-    '@opencode/sdk': '9999.2.0',
-    '@opencode/plugin': '9999.2.0',
-    '@opencode/client': '9999.2.0',
+    '@opencode/sdk': '9999.2.1',
+    '@opencode/plugin': '9999.2.1',
+    '@opencode/client': '9999.2.1',
   }
 
   function lockstepFixture(devDependencies: Record<string, unknown>): {
@@ -366,7 +405,7 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
     })
   }
 
-  test('no pinned version (v2, v1 current, or the v1 floor) appears under scripts/ or tests/', () => {
+  test('no pinned version (a current pin or a floor) appears under scripts/ or tests/', () => {
     const pins = readOpencodeHostPins()
     const files = [
       ...collectTsFiles(path.join(REPO_ROOT, 'scripts')),
@@ -387,7 +426,7 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
       throw new Error(
         `Found a hardcoded OpenCode pin in: ${offenderList}. ` +
           'The pin file scripts/opencode-host-pins.json is the only allowed ' +
-          'home for all three. If this code genuinely needs a real pin, read ' +
+          'home for all four. If this code genuinely needs a real pin, read ' +
           'it via readOpencodeHostPins() / readOpencodeSdkPin() from ' +
           'scripts/lib/opencode-pin.ts instead of hardcoding it. If this is ' +
           'an arbitrary fixture value that never needed to be the real pin (e.g. ' +
@@ -400,7 +439,7 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
     expect(offenders).toEqual([])
   })
 
-  test('the pin file is the one place all three versions are written', () => {
+  test('the pin file is the one place all four versions are written', () => {
     const pins = readOpencodeHostPins()
     const raw = fs.readFileSync(
       path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
@@ -412,13 +451,15 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
       { ...pins },
     )
 
+    // v2 and v2Floor hold the same version today, so each name is reported.
     expect(homes.map(({ name }) => name).sort()).toEqual(
-      ['v1', 'v1Floor', 'v2'].sort(),
+      ['v1', 'v1Floor', 'v2', 'v2Floor'].sort(),
     )
   })
 
   test.each([
-    ['v2', '9999.2.0'],
+    ['v2', '9999.2.1'],
+    ['v2Floor', '9999.2.0'],
     ['v1', '9999.1.1'],
     ['v1Floor', '9999.1.0'],
   ])('a planted %s literal in a script or a test is reported', (name, pin) => {

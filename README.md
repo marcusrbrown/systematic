@@ -41,7 +41,7 @@ The workflow runs on three harnesses from one source: [OpenCode](https://opencod
 { "plugin": ["@fro.bot/systematic@latest"] }
 ```
 
-OpenCode v2 (2.2.0 or later) reads the `plugins` key:
+OpenCode v2 (2.2.5 or later) reads the `plugins` key:
 
 ```json
 { "plugins": ["@fro.bot/systematic@latest"] }

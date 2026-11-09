@@ -14,7 +14,7 @@ Systematic ships as an npm package with two distinct parts:
 
 At runtime, OpenCode loads the plugin via its default export (`src/index.ts`): a plain object with a
 string `id` and `setup` and `server` functions. One npm package serves both hosts: OpenCode v1
-(1.18.29 and later) reads the `plugin` config key and calls `server`; OpenCode v2 (2.2.0 and later)
+(1.18.29 and later) reads the `plugin` config key and calls `server`; OpenCode v2 (2.2.5 and later)
 reads the `plugins` key and calls `setup`. A shared core (config loading, `buildAssetPlan`,
 bootstrap composition, the skill resolver) feeds both adapters, and neither adapter imports the other.
 
@@ -85,7 +85,7 @@ Systematic is delivered to three harnesses from this same source tree, with diff
 harness:
 
 - **OpenCode** — the npm package itself is the OpenCode plugin, loaded directly via its default export.
-  On v1 (1.18.29 and later) it goes in the `plugin` array; on v2 (2.2.0 and later) it goes in the
+  On v1 (1.18.29 and later) it goes in the `plugin` array; on v2 (2.2.5 and later) it goes in the
   `plugins` array. Older v1 and v2 versions are unsupported and get no shim. `setup --harness opencode`
   writes only the v1 key; OCX installs also write v1 config.
 - **Pi** — the same npm package, loaded as a Pi extension via `setup --harness pi`, which writes an

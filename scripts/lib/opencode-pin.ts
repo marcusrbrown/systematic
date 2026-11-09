@@ -2,11 +2,11 @@
  * Single source of truth for the pinned OpenCode host versions: the committed
  * pin file `scripts/opencode-host-pins.json`.
  *
- * The pin file holds three exact CLI versions: the v2 CLI (`@opencode/cli`),
- * the current v1 CLI (`opencode-ai`) and the v1 floor, the oldest v1 release
- * the package still supports. It lives under `scripts/` because Renovate
- * ignores `tests/**`. A Renovate regex manager bumps the two moving pins (v2
- * and v1 current) and never the floor.
+ * The pin file holds four exact CLI versions: the v2 CLI (`@opencode/cli`)
+ * and its floor, the current v1 CLI (`opencode-ai`) and its floor. Each floor
+ * is the oldest release of that line the package still supports. It lives
+ * under `scripts/` because Renovate ignores `tests/**`. A Renovate regex
+ * manager bumps the two moving pins (v2 and v1 current) and never a floor.
  *
  * Each CLI pin is tied to the dev dependencies that must move with it:
  * `@opencode-ai/sdk` and `@opencode-ai/plugin` for v1, and `@opencode/sdk`,
@@ -61,6 +61,8 @@ export function parseOpencodeHost(value: string): OpencodeHost {
 export interface OpencodeHostPins {
   /** The v2 CLI (`@opencode/cli`) version. */
   v2: string
+  /** The oldest supported v2 CLI version. */
+  v2Floor: string
   /** The current v1 CLI (`opencode-ai`) version. */
   v1: string
   /** The oldest supported v1 CLI version. */
@@ -156,9 +158,9 @@ function extractExactPin(
 }
 
 /**
- * Returns the three CLI pins from the pin file. Throws a clear error naming
- * the field when one is missing or not an exact version, and when the floor is
- * newer than the current v1 pin.
+ * Returns the four CLI pins from the pin file. Throws a clear error naming
+ * the field when one is missing or not an exact version, and when a floor is
+ * newer than the current pin of its line.
  *
  * @param pinFilePath - Optional override, primarily for tests that point at a
  *   temporary pin file. Defaults to `scripts/opencode-host-pins.json`,
@@ -169,8 +171,14 @@ export function readOpencodeHostPins(pinFilePath?: string): OpencodeHostPins {
   const file = readJsonObject(resolvedPath)
   const pins: OpencodeHostPins = {
     v2: extractExactPin(file, 'v2', resolvedPath),
+    v2Floor: extractExactPin(file, 'v2Floor', resolvedPath),
     v1: extractExactPin(file, 'v1', resolvedPath),
     v1Floor: extractExactPin(file, 'v1Floor', resolvedPath),
+  }
+  if (Bun.semver.order(pins.v2Floor, pins.v2) > 0) {
+    throw new Error(
+      `"v2Floor" (${pins.v2Floor}) in ${resolvedPath} is newer than "v2" (${pins.v2}). The floor is the oldest supported v2 release.`,
+    )
   }
   if (Bun.semver.order(pins.v1Floor, pins.v1) > 0) {
     throw new Error(
@@ -248,7 +256,7 @@ export interface FindOpencodePinMismatchesOptions {
  * returns one message per disagreement; an empty list means the pins are in
  * lockstep. The v1 CLI pin must equal `@opencode-ai/sdk` and
  * `@opencode-ai/plugin`. The v2 CLI pin must equal `@opencode/sdk`,
- * `@opencode/plugin` and `@opencode/client`. The floor has no dev dependency.
+ * `@opencode/plugin` and `@opencode/client`. The floors have no dev dependency.
  */
 export function findOpencodePinMismatches(
   options: FindOpencodePinMismatchesOptions = {},
