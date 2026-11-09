@@ -1004,11 +1004,13 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Asserting the prompt does NOT contain the literal GitHub workflow-expression syntax `${{ github.repository }}`, which is the failure mode being guarded against.
       expect(capturedPrompt).not.toContain('${{ github.repository }}')
 
-      // Must contain the correlation token as a first-line reference
-      // and an instruction telling Fro Bot to echo it.
+      // Must contain the correlation token as a first-line reference, and
+      // say the run is identified by its title, so no echo is required.
       expect(capturedPrompt).toMatch(/^correlation=[a-zA-Z0-9-]+/m)
       expect(capturedPrompt).toContain(`correlation=${knownCorrelationId}`)
-      expect(capturedPrompt).toMatch(/echo.*correlation/i)
+      expect(capturedPrompt).toMatch(/identifies this run by its title/)
+      expect(capturedPrompt).toMatch(/no specific echo is required/)
+      expect(capturedPrompt).not.toMatch(/by timestamp|for audit only/)
 
       // The correlation-id MUST be forwarded as a separate `-f correlation-id=<value>`
       // argument, not just embedded in the prompt body. Without this assertion,
