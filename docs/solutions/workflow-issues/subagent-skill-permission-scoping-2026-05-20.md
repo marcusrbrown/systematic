@@ -1,7 +1,7 @@
 ---
 title: Subagent skill tool permissions require explicit per-agent configuration
 date: 2026-05-20
-last_updated: 2026-10-29
+last_updated: 2026-11-09
 category: workflow-issues
 module: plugin-permissions
 problem_type: workflow_issue
@@ -88,12 +88,13 @@ grep -A 10 '"designer"' ~/.config/opencode/oh-my-opencode-slim.jsonc
 
 ## OpenCode v2
 
-On v2, Systematic translates permissions per agent (HARNESSES.md OC2-PERM), and the host's skill tool enforces them per agent, including in subagents (OC2-SKILL; local probe, OpenCode 2.2.0). A subagent still needs its own allow per skill.
+On v2, Systematic translates permissions per agent (HARNESSES.md OC2-PERM), and the host's skill tool enforces them per agent, including in subagents (OC2-SKILL; local probe, OpenCode 2.2.0). A subagent still needs its own allow per skill. That holds for skills only: for tool denies, a session-level allow overrides an agent's own deny on v2, so do not read this as "the host enforces an agent's `permission:` denies" (see [the v2 session-allow override](../integration-issues/opencode-v2-session-allow-overrides-agent-deny-2026-11-09.md)).
 
 - **Not probed.** Whether a third-party layer such as OMO Slim manages permissions on a v2 host was not checked. Treat the OMO Slim steps above as v1 guidance until it is.
 
 ## Related
 
 - `docs/solutions/logic-errors/v1-skill-permission-names-need-provenance-tracked-mirroring-2026-10-29.md` — why one skill has two permission names on v1 and how managed lists cover both.
+- `docs/solutions/integration-issues/opencode-v2-session-allow-overrides-agent-deny-2026-11-09.md` — tool denies on v2 are not a boundary; a plugin guard enforces them.
 - Oracle troubleshooting session on PR #418 — root cause analysis
 - OMO Slim documentation for agent permission configuration
