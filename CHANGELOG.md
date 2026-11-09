@@ -4,6 +4,24 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.32.1](https://github.com/marcusrbrown/systematic/compare/v3.32.0...v3.32.1) (2026-11-09)
+
+### Bug Fixes
+
+* fail the approval backstop on a failed dismissal and check promotion copies against the whole source ([#1344](https://github.com/marcusrbrown/systematic/issues/1344)) ([6f42d56](https://github.com/marcusrbrown/systematic/commit/6f42d56482d6998164f906ac039691c0edfb7ec4))
+
+### Documentation
+
+* **solutions:** record the lessons from building and shipping ce:connect ([#1343](https://github.com/marcusrbrown/systematic/issues/1343)) ([2aa1e56](https://github.com/marcusrbrown/systematic/commit/2aa1e56f031277cc4e9467ff66a161387b521d6b))
+
+### Continuous Integration
+
+* narrow release credentials and isolate the Fro Bot approval backstop ([#1342](https://github.com/marcusrbrown/systematic/issues/1342)) ([3429e81](https://github.com/marcusrbrown/systematic/commit/3429e81e2ec8f5713d5b940b1f0223db9ba2faba))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.136.3 ([#1335](https://github.com/marcusrbrown/systematic/issues/1335)) ([1d163c4](https://github.com/marcusrbrown/systematic/commit/1d163c45a3405fa08faafae72af698a052bdad13))
+
 ## [3.32.0](https://github.com/marcusrbrown/systematic/compare/v3.31.6...v3.32.0) (2026-11-08)
 
 ### Features
