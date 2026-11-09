@@ -6,7 +6,7 @@
 # Terminal rule: exits 0 ONLY when the re-read release body starts with
 # "## What's new" (already narrated, or successfully rewritten). Every other
 # non-security outcome logs `narrative-not-applied` plus a reason and exits 2.
-# Security-relevant outcomes (off-target edits, auth failures, ...) exit 1.
+# Security-relevant outcomes (auth failures, unexpected watch errors, ...) exit 1.
 # See docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md
 # for the full design.
 
@@ -62,10 +62,11 @@ if [[ "$BODY_BEFORE" == "$NARRATIVE_MARKER"* ]]; then
 fi
 
 # Generate a UUID to uniquely identify this dispatch. The token is passed as a
-# workflow input field (correlation-id, declared on fro-bot.yaml) and remains
-# visible in the dispatched run's inputs metadata for auditing. fro-bot.yaml's
-# `run-name` embeds it in the run title, and the polling loop below matches on it
-# (plus DISPATCH_EPOCH) so concurrent narrations never pick up each other's runs.
+# workflow input field (correlation-id, declared on fro-bot.yaml). The run object
+# has no `inputs` field, so the input itself is not how the run is found:
+# fro-bot.yaml's `run-name` (`Fro Bot narrative <correlation-id>`) embeds it in the
+# run title, and the polling loop below matches the `displayTitle` on it (plus
+# DISPATCH_EPOCH) so concurrent narrations never pick up each other's runs.
 # Test escape hatch: integration tests set RELEASE_NOTES_TEST_CORRELATION_ID to
 # a known UUID so mock-gh fixtures can assert it is forwarded verbatim through
 # the -f correlation-id=... argument to gh workflow run.
@@ -87,8 +88,8 @@ PROMPT=$(cat <<PROMPT_EOF
 correlation=$CORRELATION_ID
 
 You are running the release-notes-narrative skill against a just-published GitHub release.
-The dispatching workflow identifies this run by timestamp via gh run list, so no
-specific echo is required of you — the correlation value above is for audit only.
+The dispatching workflow identifies this run by its title, which carries the
+correlation value above, so no specific echo is required of you.
 
 Target release tag: $RELEASE_VERSION
 Target repository: $GITHUB_REPOSITORY
@@ -197,19 +198,14 @@ WATCH_EXIT=$?
 set -e
 
 # Fetch conclusion and full log (ANSI codes stripped) for classification. This runs
-# whatever WATCH_EXIT is, so the security scans below also cover a timed-out run.
+# whatever WATCH_EXIT is, so the auth-keyword scan below also covers a timed-out run.
 CONCLUSION="$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo 'unknown')"
 RAW_LOG=""
 if ! RAW_LOG="$(gh run view "$RUN_ID" --log 2>/dev/null)"; then
   RAW_LOG=""
-  echo "::warning::Run log unavailable (run=$RUN_ID); the text-based security scan (off-target edits, auth failures) was skipped. The release body re-read decides the outcome."
+  echo "::warning::Run log unavailable (run=$RUN_ID); the text-based auth-failure scan was skipped. The release body re-read decides the outcome."
 fi
 LOG="$(printf '%s\n' "$RAW_LOG" | sed 's/\x1b\[[0-9;]*m//g')"
-
-# Check for off-target release edits: any 'release edit vX.Y.Z' line that is NOT
-# our target tag is a security signal (Fro Bot edited the wrong release).
-OFF_TARGET="$(echo "$LOG" | grep -E 'release edit v[0-9]+\.[0-9]+\.[0-9]+' \
-  | grep -v "release edit $RELEASE_VERSION" || true)"
 
 # Check for auth/permission failure keywords in the log.
 AUTH_FAIL=0
@@ -228,10 +224,7 @@ fi
 # any future gh run watch exit codes we haven't anticipated. Without this branch,
 # an unexpected WATCH_EXIT falls through to CONCLUSION classification which may
 # report "unknown" and silently exit 0.
-if [ -n "$OFF_TARGET" ]; then
-  echo "::error::Off-target release edit detected (run=$RUN_ID): $OFF_TARGET"
-  exit 1
-elif [ "$AUTH_FAIL" -eq 1 ]; then
+if [ "$AUTH_FAIL" -eq 1 ]; then
   echo "::error::Auth failure in dispatched run (run=$RUN_ID, correlation=$CORRELATION_ID). Check FRO_BOT_PAT scope."
   exit 1
 elif [ "$WATCH_EXIT" -eq 124 ]; then

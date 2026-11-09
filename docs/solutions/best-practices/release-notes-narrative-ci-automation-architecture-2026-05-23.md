@@ -1,7 +1,7 @@
 ---
 title: Release notes narrative CI automation architecture
 date: 2026-05-23
-last_updated: 2026-10-11
+last_updated: 2026-11-08
 category: best-practices
 module: release-pipeline
 problem_type: best_practice
@@ -110,7 +110,7 @@ The pre-merge gate for the v2 PR requires explicit evidence of PAT scope (either
 
 The `release-notes.yaml` workflow itself references no secrets: it uses `github.token` with `contents: read` and `actions: write` only, to dispatch `fro-bot.yaml` and `docs.yaml` and read their runs. `fro-bot.yaml`'s `workflow_dispatch` path has no actor restriction, so `GITHUB_TOKEN` can dispatch it.
 
-### Timestamp-based polling with correlation as audit anchor
+### Timestamp-based polling with a run-name title match
 
 **Supersedes the original "Correlation-token-based polling" design.** The first draft of v2 polled `gh run view --log` on each candidate run for a correlation token Fro Bot was instructed to echo as its first log line. This was production-tested in v2.23.3 and proven structurally unworkable: Fro Bot's OpenCode agent has a multi-minute bootstrap sequence (runner spin-up → full checkout → `bun install --frozen-lockfile` → model/auth setup → MCP server startup → OpenCode CLI launch) before any prompt-derived content reaches the run's logs. A 90-second log-scan budget (the budget at the time) completes long before the token ever appears in the logs. Mock-based integration tests with `mock-gh.sh` returned canned log content instantly, so the failure mode was invisible to the test suite — production caught what mocks could not.
 
@@ -118,13 +118,13 @@ The replacement design (landed in PR #434, verified on v2.23.4):
 
 1. Capture `DISPATCH_EPOCH=$(date +%s)` IMMEDIATELY before `gh workflow run`.
 2. Dispatch the workflow with the correlation UUID as a structured `-f correlation-id=$UUID` field (and embedded in the prompt as a secondary audit anchor).
-3. Poll `gh run list --workflow=fro-bot.yaml --branch=main --event=workflow_dispatch --json databaseId,createdAt`.
-4. Filter candidates with jq: `[.[] | . + {epoch: (.createdAt | fromdateiso8601)}] | map(select(.epoch > $cutoff)) | sort_by(.epoch) | reverse | .[0].databaseId // empty`.
+3. Poll `gh run list --workflow=fro-bot.yaml --branch=main --event=workflow_dispatch --json databaseId,createdAt,displayTitle`.
+4. Filter candidates with jq: `[.[] | . + {epoch: (.createdAt | fromdateiso8601)}] | map(select(.epoch > $cutoff and ((.displayTitle // "") | contains($cid)))) | sort_by(.epoch) | reverse | .[0].databaseId // empty`.
 5. The first match is the dispatched run. `gh run list` reflects run-CREATION time, not first-log time, so the run is visible to the API as soon as registered — typically within 1–5 seconds.
 
-The correlation-id field is preserved as a secondary audit anchor. It's still passed to `gh workflow run`, still declared on `fro-bot.yaml` as an optional input on both `workflow_dispatch:` and `workflow_call:` blocks (PR #433 added that declaration; without it, the API rejects the dispatch with `HTTP 422: Unexpected inputs provided: ["correlation-id"]` — the called workflow's input schema is validated at dispatch time regardless of whether the workflow body uses the value). The token remains visible in the dispatched run's `inputs` metadata for any future debugging session, but it is no longer the primary identification mechanism.
+The correlation id is what identifies the run. `fro-bot.yaml` sets `run-name` to `Fro Bot narrative <correlation-id>`, and the poll above matches the run's `displayTitle` on the id. The id is also still passed to `gh workflow run`, still declared on `fro-bot.yaml` as an optional input on both `workflow_dispatch:` and `workflow_call:` blocks (PR #433 added that declaration; without it, the API rejects the dispatch with `HTTP 422: Unexpected inputs provided: ["correlation-id"]` — the called workflow's input schema is validated at dispatch time regardless of whether the workflow body uses the value). The run object returned by the API has no `inputs` field, so the id cannot be read back from run inputs; the run title is the only place it appears.
 
-This eliminates the bootstrap-time race entirely. Production runs see the dispatched run identified within 1–5 seconds of `gh workflow run` returning; the 180-second poll budget (raised from 90s) exists for GitHub backend hiccups, not for agent boot time. Same-second collisions in this repo's single-dispatcher topology are not a concern — `release-notes.yaml` is the only caller. If multiple dispatchers were to share `fro-bot.yaml`, the correlation token would need to upgrade from audit-only to primary-key status, with polling validating it against the dispatched run's `inputs.correlation-id` via `gh api`.
+This eliminates the bootstrap-time race entirely. Production runs see the dispatched run identified within 1–5 seconds of `gh workflow run` returning; the 180-second poll budget (raised from 90s) exists for GitHub backend hiccups, not for agent boot time. Same-second collisions in this repo's single-dispatcher topology are not a concern — `release-notes.yaml` is the only caller. If more dispatchers were to share `fro-bot.yaml`, the title match plus the epoch cutoff is the mechanism to harden.
 
 ### Lodash template, then bash
 
@@ -167,7 +167,6 @@ The script classifies all observable outcomes from `gh run watch` + `gh run view
 | `neutral` + body starts with `## What's new` | 0 | none | Idempotent short-circuit |
 | `success`/`neutral` + body unchanged or lacking the marker | 2 | `::error::narrative-not-applied` | Narrative not applied (the v3.21.7 case) |
 | `failure` + auth keyword in log | 1 | `::error::` | Auth failure |
-| `failure` + off-target tag in log | 1 | `::error::` | Scope abuse |
 | `failure` + no security signals | 2 | `::error::narrative-not-applied` | Generic narrative failure |
 | `cancelled` | 2 | `::error::narrative-not-applied` | Narrative failure (transient) |
 | `timeout` (WATCH_EXIT=124) | 2 | `::error::narrative-not-applied` | Narrative failure (slow Fro Bot) |
@@ -178,7 +177,16 @@ The script classifies all observable outcomes from `gh run watch` + `gh run view
 | `gh workflow run` fails | 2 | `::error::narrative-not-applied` | Dispatch failure |
 | Dispatched run not found within 180s | 2 | `::error::narrative-not-applied` | Dispatch rejected/never started |
 
-The auth-keyword check looks for any of: `HTTP 401`, `HTTP 403`, `Bad credentials`, `Resource not accessible`, `requires authentication`, `permission denied`. The off-target check strips ANSI escape codes from the log first (`sed 's/\x1b\[[0-9;]*m//g'`) and then greps for `release edit v<semver>` lines that don't match the target tag. The post-write check re-reads `gh release view <tag> --json body --jq '.body'` after Fro Bot reports `success` or `neutral` and requires the body to start with `## What's new`.
+The auth-keyword check looks for any of: `HTTP 401`, `HTTP 403`, `Bad credentials`, `Resource not accessible`, `requires authentication`, `permission denied`. The scan runs on the log with ANSI escape codes stripped (`sed 's/\x1b\[[0-9;]*m//g'`). The post-write check re-reads `gh release view <tag> --json body --jq '.body'` after Fro Bot reports `success` or `neutral` and requires the body to start with `## What's new`.
+
+### What bounds the dispatched run
+
+Two things bound what the dispatched agent can do to releases:
+
+- `FRO_BOT_PAT`, the token the dispatched run uses. Its scope is repository-wide and cannot be narrowed to one release, so it can edit any release in the repository.
+- The post-write re-read of the target release body. It confirms the target release was written. It does not detect an edit to another release, so an edit to a different release remains a residual risk.
+
+The prompt tells the agent to edit only the target tag, but prompt wording is not an authorization boundary. A run log is not a record of the agent's commands: the commands the agent runs do not appear in it, so log text cannot detect what the agent did. For that reason the script does not scan the log for edits to other releases; an earlier off-target log grep only ever matched prompt or prose text and was removed.
 
 The forward-compat default for unknown conclusions emits `::error::narrative-not-applied` and exits 2. New GitHub Actions conclusion values added in future API versions would fall into this bucket — the log message captures the actual conclusion string so the gap is visible in CI history, and a future iteration can tighten the classifier when needed.
 

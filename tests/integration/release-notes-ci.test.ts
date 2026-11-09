@@ -25,7 +25,7 @@
  *  9.  Error — HTTP 401 auth denial
  * 10.  Error — HTTP 403 + permission denied
  * 11.  Error — "Resource not accessible" auth keyword
- * 12.  Error — off-target tag edit (ANSI-stripped)
+ * 12.  Edge case — log text mentioning an edit of another release does not change the outcome
  * 13.  Error — success conclusion but body unchanged (long, no marker; the v3.21.7 case)
  * 13b. Error — success conclusion, body changed but lacking the marker
  * 14.  Error — action_required conclusion
@@ -175,8 +175,7 @@ function runSuccessCmd(
   const defaultCorrelationId =
     env.RELEASE_NOTES_TEST_CORRELATION_ID ?? DEFAULT_CORRELATION_ID
 
-  // Default log provides a realistic success-path output for off-target detection
-  // and auth-failure scanning. Run identification is now timestamp-based, so the
+  // Default log provides a realistic success-path output for auth-failure scanning. Run identification is now timestamp-based, so the
   // log is NOT scanned for the correlation token during polling.
   const effectiveLog =
     env.MOCK_GH_RUN_VIEW_LOG ??
@@ -497,26 +496,8 @@ describe('release-notes-ci dispatch script smoke tests', () => {
   }
 
   // -------------------------------------------------------------------------
-  // 5d. Security checks run (and win) even when the watch timed out
+  // 5d. The auth-keyword scan runs (and wins) even when the watch timed out
   // -------------------------------------------------------------------------
-  it(
-    'exits 1 with the off-target error, not narrative-not-applied, when the watch times out and the log shows an off-target edit',
-    () => {
-      const result = run({
-        RELEASE_VERSION: 'v2.23.0',
-        MOCK_GH_RUN_WATCH_EXIT: '124',
-        MOCK_GH_RUN_VIEW_CONCLUSION: 'failure',
-        MOCK_GH_RUN_VIEW_LOG: 'gh release edit v9.9.9\nsome other output',
-      })
-
-      expect(result.exitCode).toBe(1)
-      const combined = result.stdout + result.stderr
-      expect(combined).toContain('::error::')
-      expect(combined).toMatch(/[Oo]ff-target/i)
-      expect(combined).not.toContain('narrative-not-applied')
-    },
-    SCENARIO_TIMEOUT_MS,
-  )
 
   it(
     'exits 1 with the auth error, not narrative-not-applied, when the watch times out and the log shows an auth failure',
@@ -798,24 +779,45 @@ describe('release-notes-ci dispatch script smoke tests', () => {
   )
 
   // -------------------------------------------------------------------------
-  // 12. Error — off-target tag edit (ANSI-stripped)
+  // 12. A run log is not evidence of what the agent executed: text that looks
+  //     like an edit of another release does not change the outcome
   // -------------------------------------------------------------------------
   it(
-    'exits 1 with ::error:: Off-target when log contains ANSI-colored edit of a different tag',
+    'ignores log text mentioning an edit of a different release: the body re-read still decides (exit 0)',
     () => {
-      // ANSI-colored log line: `gh release edit v9.9.9` in red
-      const ansiLog = '\x1b[31mgh release edit v9.9.9\x1b[0m\nsome other output'
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
-        MOCK_GH_RUN_VIEW_CONCLUSION: 'failure',
-        MOCK_GH_RUN_VIEW_LOG: ansiLog,
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
+        MOCK_GH_RELEASE_VIEW_BODY_BEFORE: RAW_BODY,
+        MOCK_GH_RELEASE_VIEW_BODY_AFTER: NARRATIVE_BODY,
+        MOCK_GH_RUN_VIEW_LOG:
+          '\x1b[31mgh release edit v9.9.9\x1b[0m\nrelease edit v9.9.9 --notes-file x\nsome other output',
       })
 
-      expect(result.exitCode).toBe(1)
+      expect(result.exitCode).toBe(0)
       const combined = result.stdout + result.stderr
-      expect(combined).toContain('::error::')
-      expect(combined).toMatch(/[Oo]ff-target/i)
-      expect(combined).not.toContain('narrative-not-applied')
+      expect(combined).not.toContain('::error::')
+      expect(combined).not.toMatch(/off-target/i)
+      expect(combined).toMatch(/narrative applied/i)
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  it(
+    'ignores log text mentioning an edit of a different release when the body is unchanged (exit 2, not exit 1)',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
+        MOCK_GH_RELEASE_VIEW_BODY_BEFORE: RAW_BODY,
+        MOCK_GH_RELEASE_VIEW_BODY_AFTER: RAW_BODY,
+        MOCK_GH_RUN_VIEW_LOG: 'release edit v9.9.9\nsome other output',
+      })
+
+      expect(result.exitCode).toBe(NARRATIVE_NOT_APPLIED_EXIT)
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('narrative-not-applied')
+      expect(combined).not.toMatch(/off-target/i)
     },
     SCENARIO_TIMEOUT_MS,
   )
@@ -931,7 +933,7 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
         MOCK_GH_RUN_VIEW_CONCLUSION: 'failure',
-        // Log has no auth keywords, no off-target edits
+        // Log has no auth keywords
         MOCK_GH_RUN_VIEW_LOG:
           'OpenCode agent error: model timeout\nsome output',
       })
@@ -1002,11 +1004,13 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Asserting the prompt does NOT contain the literal GitHub workflow-expression syntax `${{ github.repository }}`, which is the failure mode being guarded against.
       expect(capturedPrompt).not.toContain('${{ github.repository }}')
 
-      // Must contain the correlation token as a first-line reference
-      // and an instruction telling Fro Bot to echo it.
+      // Must contain the correlation token as a first-line reference, and
+      // say the run is identified by its title, so no echo is required.
       expect(capturedPrompt).toMatch(/^correlation=[a-zA-Z0-9-]+/m)
       expect(capturedPrompt).toContain(`correlation=${knownCorrelationId}`)
-      expect(capturedPrompt).toMatch(/echo.*correlation/i)
+      expect(capturedPrompt).toMatch(/identifies this run by its title/)
+      expect(capturedPrompt).toMatch(/no specific echo is required/)
+      expect(capturedPrompt).not.toMatch(/by timestamp|for audit only/)
 
       // The correlation-id MUST be forwarded as a separate `-f correlation-id=<value>`
       // argument, not just embedded in the prompt body. Without this assertion,
