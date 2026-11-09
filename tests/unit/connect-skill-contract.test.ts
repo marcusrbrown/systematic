@@ -478,6 +478,37 @@ describe('connections-researcher agent', () => {
     expect(agent.body).toMatch(/"complete": false/)
   })
 
+  describe('truncated search results', () => {
+    const method = agent.body.slice(
+      agent.body.indexOf('## Method'),
+      agent.body.indexOf('## What you return'),
+    )
+
+    test('narrows the search and goes on, and never stops for it', () => {
+      expect(method).toMatch(
+        /truncated or very long[^.]*reason to narrow the search[^.]*never a reason to stop/i,
+      )
+      expect(method).toMatch(/more specific pattern/i)
+      expect(method).toMatch(/one project or directory at a time/i)
+      expect(method).toMatch(/files index to pick paths/i)
+    })
+
+    test('reads the most relevant file a search pointed to before it finds no candidate', () => {
+      expect(method).toMatch(
+        /before you conclude that a rule has no candidate, read at least the most relevant file a search pointed to/i,
+      )
+      expect(method).toMatch(/not from search output alone/i)
+    })
+
+    test('allows "complete": false only for running short of turns', () => {
+      expect(method).toMatch(/only case for `"complete": false`/)
+      expect(method).toMatch(
+        /nothing holds up, set `"complete": true` with no candidates/,
+      )
+      expect(method).toMatch(/at most 20 turns in total/)
+    })
+  })
+
   test('has no SKILL_DIR or script path, because it cannot reach the skill directory', () => {
     expect(agentText).not.toMatch(/SKILL_DIR|connect\.mjs/)
   })
