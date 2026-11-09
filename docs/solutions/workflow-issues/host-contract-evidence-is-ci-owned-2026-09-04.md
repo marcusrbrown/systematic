@@ -57,7 +57,7 @@ reports the pin, and hands the absolute path to the suite as
 `SYSTEMATIC_OPENCODE_V2_BIN` (`.github/workflows/main.yaml:257-284`). A v2 run
 with no binary configured throws (`opencodeLauncherArgv`).
 `probeOpencodeAvailability()`
-(`scripts/lib/opencode-availability.ts:244-324`) runs the launcher with
+(`scripts/lib/opencode-availability.ts:275-355`) runs the launcher with
 `--version` under a caller-built, isolated env and classifies the result as
 `available`, `mismatch`, or `unavailable` — it never throws and never
 memoizes. Every fixture-consuming suite wraps it in a memoizing
@@ -133,7 +133,7 @@ consequence differs by design:
   `SYSTEMATIC_REQUIRE_OPENCODE_V1=1` by the two v1 jobs. (The unsuffixed
   `SYSTEMATIC_REQUIRE_OPENCODE=1` requires whichever host the run targets.)
   Every fixture-consuming suite calls `requireOpencodeAvailable()`
-  (`scripts/lib/opencode-availability.ts:345-354`) at module scope right after
+  (`scripts/lib/opencode-availability.ts:376-385`) at module scope right after
   `isOpencodeAvailable()`. When the classification is not `available`, that
   call throws — a module-scope throw fails the file to load, Bun reports it as
   a suite error, that job goes red, the aggregator goes red with it, and the

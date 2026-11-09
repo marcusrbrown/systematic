@@ -14,10 +14,11 @@
  * want a computed-once gate (the fixture module, an integration test module)
  * memoize the result of {@link probeOpencodeAvailability} themselves.
  */
-import { spawnSync } from 'node:child_process'
+import { type SpawnSyncReturns, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   OPENCODE_CLI_PACKAGES,
@@ -25,6 +26,7 @@ import {
   parseOpencodeHost,
   readOpencodeHostPins,
 } from './opencode-pin.js'
+import { SUPERVISOR_TIMEOUT_EXIT_CODE } from './probe-supervisor.js'
 
 /** Classification returned by {@link probeOpencodeAvailability}. */
 export type OpencodeAvailabilityStatus =
@@ -145,6 +147,21 @@ export interface ProbeOpencodeAvailabilityOptions {
 
 const DEFAULT_PROBE_TIMEOUT_MS = 300_000
 
+/**
+ * The launcher runs under this supervisor, which owns its process group and
+ * enforces the timeout (see `probe-supervisor.ts`).
+ */
+const PROBE_SUPERVISOR_PATH = fileURLToPath(
+  new URL('./probe-supervisor.ts', import.meta.url),
+)
+
+/**
+ * Slack on top of the probe timeout for the outer `spawnSync`: the time to
+ * start the supervisor and for it to stop the launcher's group. It only fires
+ * if the supervisor itself wedges.
+ */
+const SUPERVISOR_BACKSTOP_MS = 15_000
+
 const EXACT_SEMVER_LINE_PATTERN = /^\d+\.\d+\.\d+(?:[-+].+)?$/
 
 /** What a v2 CLI prints for `--version`, for example `opencode v<semver>`. */
@@ -225,6 +242,20 @@ function unavailable(
   return { status: 'unavailable', host, expectedVersion: pin, reason }
 }
 
+function describeFailedRun(
+  result: SpawnSyncReturns<string>,
+  timeoutMs: number,
+): string {
+  const stderrExcerpt = truncateStderr(result.stderr ?? '')
+  if (result.status === SUPERVISOR_TIMEOUT_EXIT_CODE) {
+    return `timed out after ${timeoutMs}ms and its process group was stopped stderr=${stderrExcerpt}`
+  }
+  return (
+    `status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} ` +
+    `error=${result.error?.message ?? 'none'} stderr=${stderrExcerpt}`
+  )
+}
+
 function missingBinaryReason(host: OpencodeHost, pin: string): string {
   return (
     `no ${host} binary configured: set ${opencodeBinaryEnvName(host)} to the absolute path of an installed ` +
@@ -262,34 +293,34 @@ export function probeOpencodeAvailability(
     console.warn(`[opencode-availability] probing ${launcher.label}`)
   }
 
-  // spawnSync's own timeout sends SIGTERM (then SIGKILL) to the direct child
-  // only, not its process group; this function is deliberately synchronous
-  // (every caller computes availability once, inline, before deciding
-  // whether to proceed), and `stopProcessGroup` from process-group.js needs
-  // an async ChildProcess to await the exit event on, which spawnSync does
-  // not produce. A timed-out `bunx` cold-install could therefore in
-  // principle leave a grandchild `bun install` writing into the shared
-  // BUN_INSTALL_CACHE_DIR after this function returns `unavailable`, risking
-  // a partially-populated shared cache for the next caller. Mitigating that
-  // fully would mean switching this probe to async spawn + group reaping
-  // everywhere it's called (the fixture, eval-runner.test.ts, and
-  // verifyExactOpencodeRuntime's per-case path); left as a documented risk
-  // rather than expanding this change's surface.
-  const result = spawnSync(launcher.command, [...launcher.args], {
-    cwd: options.cwd,
-    env: options.env,
-    encoding: 'utf8',
-    timeout: options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
-  })
+  // This function stays synchronous (every caller computes availability
+  // once, inline, before deciding whether to proceed), but a bare `spawnSync`
+  // timeout signals only the direct child. A timed-out `bunx` cold install
+  // could then leave a descendant `bun install` writing into the shared
+  // BUN_INSTALL_CACHE_DIR. So the launcher runs under a supervisor that puts
+  // it in its own process group and stops that whole group on expiry.
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
+  const result = spawnSync(
+    process.execPath,
+    [
+      PROBE_SUPERVISOR_PATH,
+      String(timeoutMs),
+      launcher.command,
+      ...launcher.args,
+    ],
+    {
+      cwd: options.cwd,
+      env: options.env,
+      encoding: 'utf8',
+      timeout: timeoutMs + SUPERVISOR_BACKSTOP_MS,
+    },
+  )
 
   if (result.error || result.status !== 0) {
-    const stderrExcerpt = truncateStderr(result.stderr ?? '')
     return unavailable(
       host,
       options.pin,
-      `${launcher.label} failed: ` +
-        `status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} ` +
-        `error=${result.error?.message ?? 'none'} stderr=${stderrExcerpt}`,
+      `${launcher.label} failed: ${describeFailedRun(result, timeoutMs)}`,
     )
   }
 

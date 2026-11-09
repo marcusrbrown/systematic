@@ -210,6 +210,162 @@ describe('probeOpencodeAvailability', () => {
   })
 })
 
+describe('probeOpencodeAvailability timeout reaping', () => {
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function waitUntilGone(pid: number, budgetMs = 3_000): boolean {
+    const deadline = Date.now() + budgetMs
+    while (isAlive(pid) && Date.now() < deadline) Bun.sleepSync(25)
+    return !isAlive(pid)
+  }
+
+  /**
+   * Runs a probe against a launcher that forks a descendant (written to a pid
+   * file) and then hangs past the timeout. Returns the classification and the
+   * descendant's pid. The descendant is killed afterwards if the probe left it.
+   */
+  function probeWithDescendant(descendantCommand: string): {
+    classification: OpencodeAvailabilityClassification
+    descendantPid: number
+    elapsedMs: number
+  } {
+    const dir = tempDir()
+    const pidFile = path.join(dir, 'descendant.pid')
+    try {
+      const launcher = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\n${descendantCommand} &\necho $! > ${JSON.stringify(pidFile)}\nwait\n`,
+      )
+      const started = Date.now()
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        env: { PATH: process.env.PATH ?? '' },
+        command: launcher,
+        args: [],
+        timeoutMs: 500,
+      })
+      const elapsedMs = Date.now() - started
+      const descendantPid = Number(fs.readFileSync(pidFile, 'utf8'))
+      expect(Number.isInteger(descendantPid)).toBe(true)
+      const gone = waitUntilGone(descendantPid)
+      if (!gone) process.kill(descendantPid, 'SIGKILL')
+      return {
+        classification,
+        descendantPid: gone ? descendantPid : -descendantPid,
+        elapsedMs,
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test('a timed-out probe reports a timeout and leaves no descendant of the launcher alive', () => {
+    const { classification, descendantPid, elapsedMs } =
+      probeWithDescendant('sleep 30')
+
+    expect(classification.status).toBe('unavailable')
+    expect(classification.reason).toContain('timed out')
+    // A negative pid means the descendant outlived the probe.
+    expect(descendantPid).toBeGreaterThan(0)
+    expect(elapsedMs).toBeLessThan(15_000)
+  })
+
+  test('a descendant that ignores SIGTERM is still reaped', () => {
+    const { classification, descendantPid } = probeWithDescendant(
+      '( trap "" TERM; exec sleep 30 )',
+    )
+
+    expect(classification.status).toBe('unavailable')
+    expect(descendantPid).toBeGreaterThan(0)
+  })
+
+  test('a launcher that succeeds but leaves a background descendant has it reaped', () => {
+    const dir = tempDir()
+    const pidFile = path.join(dir, 'descendant.pid')
+    try {
+      // The descendant's stdio is detached so it cannot hold the probe's pipes
+      // open: the probe returns as soon as the launcher exits, and only the
+      // supervisor's cleanup of the launcher's group can stop the sleeper.
+      const launcher = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\nsleep 30 >/dev/null 2>&1 &\necho $! > ${JSON.stringify(pidFile)}\necho "${SENTINEL_PIN}"\nexit 0\n`,
+      )
+      const started = Date.now()
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        env: { PATH: process.env.PATH ?? '' },
+        command: launcher,
+        args: [],
+        timeoutMs: 60_000,
+      })
+      const elapsedMs = Date.now() - started
+      const descendantPid = Number(fs.readFileSync(pidFile, 'utf8'))
+
+      try {
+        expect(classification.status).toBe('available')
+        expect(classification.reportedVersion).toBe(SENTINEL_PIN)
+        expect(elapsedMs).toBeLessThan(10_000)
+        expect(Number.isInteger(descendantPid)).toBe(true)
+        expect(waitUntilGone(descendantPid)).toBe(true)
+      } finally {
+        if (isAlive(descendantPid)) process.kill(descendantPid, 'SIGKILL')
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a launcher killed by a signal keeps its signal in the reason', () => {
+    const dir = tempDir()
+    try {
+      const launcher = writeFakeLauncher(
+        dir,
+        '#!/usr/bin/env bash\nkill -KILL $$\n',
+      )
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        env: { PATH: process.env.PATH ?? '' },
+        command: launcher,
+        args: [],
+      })
+      expect(classification.status).toBe('unavailable')
+      expect(classification.reason).toContain('signal=SIGKILL')
+      expect(classification.reason).not.toContain('timed out')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a launcher that succeeds quickly is not delayed by the supervision', () => {
+    const dir = tempDir()
+    try {
+      const launcher = writeFakeLauncher(
+        dir,
+        `#!/usr/bin/env bash\necho "${SENTINEL_PIN}"\n`,
+      )
+      const started = Date.now()
+      const classification = probeOpencodeAvailability({
+        pin: SENTINEL_PIN,
+        env: { PATH: process.env.PATH ?? '' },
+        command: launcher,
+        args: [],
+        timeoutMs: 60_000,
+      })
+      expect(classification.status).toBe('available')
+      expect(Date.now() - started).toBeLessThan(10_000)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('probeOpencodeAvailability diagnostic logging', () => {
   test('logs a diagnostic before the real bunx probe unless quiet is set', () => {
     // Every other case in this suite passes a `command` override, which

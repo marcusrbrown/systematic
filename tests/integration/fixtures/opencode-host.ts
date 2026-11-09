@@ -1245,14 +1245,73 @@ export function parseServerAnnouncement(
   return password === undefined ? undefined : { url, password }
 }
 
-async function startOpencodeProcess(
+// The first request each host line's own tests make against a running server:
+// a v1 client asks `/global/health`, a v2 client's `server.info()` asks
+// `/api/info`. A server that answers it can serve the requests tests make next.
+const SERVER_READINESS_PATH = {
+  v1: '/global/health',
+  v2: '/api/info',
+} as const satisfies Record<OpencodeHost, string>
+
+/**
+ * Resolves once the announced server answers one real request, and rejects with
+ * a startup error that carries the server's captured output when it does not.
+ * The request is bounded by `budgetMs`, the part of the startup budget left
+ * after the announcement, so a stall after the banner fails here and not as a
+ * late, generic test timeout. `fetchImpl` is a seam for unit tests.
+ */
+export async function awaitServerReady(options: {
+  announcement: ServerAnnouncement
+  host: OpencodeHost
+  budgetMs: number
+  output: () => string
+  fetchImpl?: typeof fetch
+}): Promise<void> {
+  const { announcement, host, budgetMs, output, fetchImpl = fetch } = options
+  const fail = (reason: string): Error => {
+    let tail = redactSensitive(output().slice(-500))
+    if (announcement.password !== undefined) {
+      tail = tail.replaceAll(announcement.password, '[REDACTED]')
+    }
+    return new Error(
+      `OpenCode server did not become ready: ${reason}\n--- output (tail) ---\n${tail}`,
+    )
+  }
+
+  if (budgetMs <= 0) {
+    throw fail('the startup budget ended before the readiness request')
+  }
+  const signal = AbortSignal.timeout(budgetMs)
+  let response: Response
+  try {
+    response = await fetchImpl(
+      `${announcement.url}${SERVER_READINESS_PATH[host]}`,
+      { headers: opencodeServerAuthHeaders(announcement), signal },
+    )
+  } catch (error) {
+    throw fail(
+      signal.aborted
+        ? `no response to the readiness request within ${budgetMs}ms`
+        : `the readiness request failed: ${String(error)}`,
+    )
+  }
+  await response.body?.cancel()
+  if (!response.ok) {
+    throw fail(`the readiness request returned status ${response.status}`)
+  }
+}
+
+export async function startOpencodeProcess(
   fixture: IsolatedFixture,
   command: string,
   args: readonly string[],
   env: Record<string, string>,
-  options: { awaitPassword?: boolean; timeoutMs?: number } = {},
+  options: { host?: OpencodeHost; timeoutMs?: number } = {},
 ): Promise<OpencodeServer> {
-  const { awaitPassword = false, timeoutMs = TIMEOUT_MS } = options
+  const { host: hostLine = TARGET_OPENCODE_HOST, timeoutMs = TIMEOUT_MS } =
+    options
+  const awaitPassword = hostLine === 'v2'
+  const startedAt = Date.now()
   const server = spawn(
     command,
     [...args],
@@ -1296,6 +1355,21 @@ async function startOpencodeProcess(
       })
     },
   )
+
+  // The banner only proves the process printed a URL. The startup budget runs
+  // until the server answers a request, and a server that does not is reaped
+  // as a whole process group, like one that never announced.
+  try {
+    await awaitServerReady({
+      announcement,
+      host: hostLine,
+      budgetMs: timeoutMs - (Date.now() - startedAt),
+      output: () => buffer,
+    })
+  } catch (error) {
+    await stopOpencodeProcess(server)
+    throw error
+  }
 
   let stopped = false
   const host: OpencodeServer = {
@@ -1344,7 +1418,7 @@ export async function startOpencodeServer(
     command,
     args,
     buildIsolatedOpencodeEnv(fixture, configContent, extraEnv, host),
-    { awaitPassword: host === 'v2' },
+    { host },
   )
 }
 
@@ -1362,9 +1436,9 @@ export interface OpencodeServer {
  * The request headers a v2 server needs: Basic auth as user `opencode` with the
  * password the server printed at startup. Empty for a server without one.
  */
-export function opencodeServerAuthHeaders(
-  server: OpencodeServer,
-): Record<string, string> {
+export function opencodeServerAuthHeaders(server: {
+  password?: string | undefined
+}): Record<string, string> {
   if (server.password === undefined) return {}
   const token = Buffer.from(`opencode:${server.password}`).toString('base64')
   return { authorization: `Basic ${token}` }
@@ -1527,6 +1601,10 @@ function installTerminalSignalHandlers(): void {
 
 async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
   await stopProcessGroup(server, 10_000)
+  // `stopProcessGroup` resolves once the launcher exits after SIGTERM, which
+  // cancels its own escalation. A descendant that ignores SIGTERM would then
+  // survive, so finish the group off with SIGKILL.
+  if (server.pid !== undefined) killProcessGroupSync(server.pid)
 }
 
 export async function stopAllOpencodeHosts(): Promise<void> {
