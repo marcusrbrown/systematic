@@ -69,7 +69,7 @@ The record is versioned (`schemaVersion` must be 1) and every field is data, nev
 
 The learning must not repeat another project's sentences: no sentence of five words or more and no run of eight consecutive words. The first grader in the promotion contract test compared a learning only with the cited excerpt, so a sentence copied from elsewhere in the source document passed. `copiedFromSource` (`tests/unit/connect-promotion-contract.test.ts:243-248`) now compares against the whole fixture document, whose fingerprint `sourceDocument` (`tests/unit/connect-promotion-contract.test.ts:250-260`) verifies first. A negative control copies a sentence from outside the excerpt and must be flagged (`tests/unit/connect-promotion-contract.test.ts:654-662`). A writer who read the file can copy any part of it, so a check scoped to the excerpt measures less than the rule.
 
-One gap remains in this repository: the instruction to the model in `skills/ce-compound/SKILL.md:56` says to compare the draft with every excerpt, which is narrower than what the test grades. Aligning the instruction with the grader is open follow-up work.
+The instruction to the model matches the grader: step 5 of the candidate run has the model read each source learning in full and compare the draft with the whole file, not only the excerpts (`skills/ce-compound/SKILL.md:56`). An instruction narrower than the grader would leave the model checking less than the rule, so keep the two in step when either changes.
 
 ## Why This Matters
 

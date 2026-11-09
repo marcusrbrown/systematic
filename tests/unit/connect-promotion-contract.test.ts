@@ -506,6 +506,23 @@ describe('ce:compound candidate input: rules that do not bend', () => {
     expect(rules).toMatch(/sentence/i)
   })
 
+  test('compares the draft with each whole source learning, not only its excerpt', () => {
+    const draftStep =
+      candidateSection
+        .split('\n')
+        .find((line) => /^5\. \*\*Draft/.test(line)) ?? ''
+    expect(draftStep).toMatch(/read each source learning in full/i)
+    expect(draftStep).toMatch(/read tool/i)
+    expect(draftStep).toMatch(/compare the draft with the whole file/i)
+    expect(draftStep).toMatch(/five words or more/i)
+    expect(draftStep).toMatch(/eight consecutive words/i)
+    expect(draftStep).not.toMatch(/with every excerpt/i)
+    expect(candidateInputText).toMatch(
+      /compare the draft with the whole file, not only the excerpt/i,
+    )
+    expect(candidateInputText).toMatch(/covers the whole source document/i)
+  })
+
   test('cites other projects in a provenance section of the body', () => {
     expect(rules).toContain('## Provenance')
     expect(candidateInputText).toContain('## Provenance')
