@@ -44,9 +44,10 @@
       skipArtifactsUpdate: true,
     },
     {
-      description: 'Only allow LTS versions of @types/node (even major versions)',
+      description:
+        'Keep @types/node on the Node major that CI and the release job run. Bump it together with node-version in the workflows.',
       matchPackageNames: ['@types/node'],
-      allowedVersions: '/^v?([0-9]*[02468])\\./',
+      allowedVersions: '<25',
     },
     {
       description: 'Only allow LTS versions of Node.js in GitHub Actions',

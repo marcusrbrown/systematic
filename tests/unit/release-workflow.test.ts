@@ -1411,3 +1411,22 @@ describe('refresh job', () => {
     })
   })
 })
+
+describe('runtime pins', () => {
+  test('@types/node major matches the Node major the release job runs', () => {
+    const nodeVersion = asRecord(
+      findStep('publish', 'Setup Node.js').with,
+      'with',
+    )['node-version']
+    const pkg = asRecord(
+      JSON.parse(
+        fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8'),
+      ),
+      'package.json',
+    )
+    const typesNode = asRecord(pkg.devDependencies, 'devDependencies')[
+      '@types/node'
+    ]
+    expect(String(typesNode).split('.')[0]).toBe(String(nodeVersion))
+  })
+})
