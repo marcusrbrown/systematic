@@ -1,6 +1,7 @@
 ---
 title: Prove a dispatched subagent reached a plugin tool on a real host
 date: 2026-10-31
+last_updated: 2026-11-09
 category: best-practices
 module: integration-test-harness
 problem_type: best_practice
@@ -69,3 +70,4 @@ expect(script.observation().childRequests.length).toBeGreaterThan(0)
 - [Test packaged harness extensions against the real Pi runtime](pi-real-runtime-integration-harness-2026-07-16.md)
 - [Testing host prune from a plugin](testing-host-prune-from-a-plugin-2026-10-20.md): the in-run negative control this one extends.
 - `docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`: the CI jobs that run these suites.
+- [Support a host only after an observed deny](support-a-host-only-after-an-observed-deny-2026-11-09.md): the same proof shape for a deny, with the shipped-agent target, the support-table `observedBy` rule and manual evidence.

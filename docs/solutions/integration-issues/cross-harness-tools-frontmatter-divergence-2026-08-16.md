@@ -1,6 +1,7 @@
 ---
 title: The same tools frontmatter is permissive on OpenCode and restrictive on Pi
 date: 2026-08-16
+last_updated: 2026-11-09
 category: integration-issues
 module: agent-resolution
 problem_type: integration_issue
@@ -86,4 +87,6 @@ It also sidesteps the divergence rather than depending on it. Any design that re
 - [`docs/solutions/best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md`](../best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md) — earlier evidence of `tools:` being silently dropped, in the converter path rather than the resolver.
 - [`docs/solutions/best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md`](../best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md) — why shared-core tests do not prove adapter parity.
 - [`docs/solutions/workflow-issues/subagent-skill-permission-scoping-2026-05-20.md`](../workflow-issues/subagent-skill-permission-scoping-2026-05-20.md) — related but distinct: per-agent *skill* permissions, not `tools:` parsing.
+- [`docs/solutions/best-practices/support-a-host-only-after-an-observed-deny-2026-11-09.md`](../best-practices/support-a-host-only-after-an-observed-deny-2026-11-09.md) — what does restrict an agent on each host: the `permission:` map on OpenCode v1, the case-sensitive allowlist on Pi, the positive `tools` allowlist on Claude Code.
+- [`docs/solutions/integration-issues/opencode-v2-session-allow-overrides-agent-deny-2026-11-09.md`](opencode-v2-session-allow-overrides-agent-deny-2026-11-09.md) — on OpenCode v2 the `permission:` denies are not a boundary, so a read-only agent needs a plugin tool guard.
 - Issue #784 — persona agents dispatched as generic sub-agents, losing per-agent model tiering.

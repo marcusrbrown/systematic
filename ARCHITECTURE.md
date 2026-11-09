@@ -384,7 +384,7 @@ The researcher may not run commands, write, edit or fetch. Each host enforces th
 | OpenCode v1 | The agent's frontmatter `permission:` denies `bash`, `edit`, `webfetch`, `websearch` and `task`; `external_directory: allow` lets it read allowed projects outside the working directory. A host-config allow does not lift the agent's deny. |
 | OpenCode v2 | The same denies, plus `installToolGuard`'s `execute.before` hook, which refuses every call from `connections-researcher` outside `read`, `grep`, `glob`, `skill`, `systematic_search` and `systematic_skill`, direct or from Code Mode. The guard carries the enforcement, because a session-level allow overrides an agent's own deny on v2. |
 | Pi | The agent's `tools: Read, Grep, Glob` allowlist reaches the delegate session as read, grep and find. The agent is outside the curated pi-subagents personas, which carry no tool allowlist. |
-| Claude Code | Not listed. The agent declares `tools` and `disallowedTools`, but no deny has been observed. |
+| Claude Code | Listed at 2.1.319 on a recorded manual tool-list observation (`HARNESSES.md`, CN-5), not a tested refusal. The positive `tools: Read, Grep, Glob` allowlist leads; `disallowedTools` is a second layer. A version whose normalized value differs (build metadata and a leading `v` are dropped, so a same-numbered fork build matches) is unlisted. |
 
 No host path-scopes the read tools, and session MCP tools are not denied. A digest can therefore
 carry content from reads outside the allowed projects; this is a documented limit, not a sandbox.
