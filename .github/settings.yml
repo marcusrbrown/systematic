@@ -57,6 +57,7 @@ rulesets:
             - { context: Build, integration_id: 15368 }
             - { context: Docs Build, integration_id: 15368 }
             - { context: Fro Bot, integration_id: 15368 }
+            - { context: Fro Bot approval backstop, integration_id: 15368 }
             - { context: Typecheck, integration_id: 15368 }
             - { context: Lint, integration_id: 15368 }
             - { context: Test, integration_id: 15368 }
@@ -107,6 +108,7 @@ branches:
             Build,
             Docs Build,
             Fro Bot,
+            Fro Bot approval backstop,
             Typecheck,
             Lint,
             Test,

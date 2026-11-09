@@ -179,6 +179,11 @@ jobs:
       - name: Stage release inputs
         run: mkdir -p .release && cp "$RUNNER_TEMP/decision/notes.md" .release/notes.md && rm -f .releaserc.yaml && cp "$RUNNER_TEMP/decision/releaserc.json" .releaserc.json
 
+      # Limited to this repository (no `owner` or `repositories`) but deliberately
+      # not limited by permission: the hold recheck below reads a repository
+      # variable, and installation tokens cannot be scoped to Variables, so any
+      # `permission-*` input would make that read fail and block every release.
+      # The job is environment-gated and runs on main only.
       - name: Create release App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -335,12 +340,16 @@ jobs:
           name: release-render
           path: ${{ runner.temp }}/render
 
+      # Scoped to this repository and to the Git Data API writes (contents) plus
+      # the release PR create, edit, close and auto-merge calls (pull requests).
       - name: Create release App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Refresh release PR
         env:
