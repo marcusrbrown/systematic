@@ -307,6 +307,43 @@ describe.skipIf(process.platform === 'win32')(
       expect(await waitUntilGone(descendantPid)).toBe(true)
     })
 
+    test('a failed start also kills a descendant that ignores SIGTERM', async () => {
+      const fixture = makeFixture()
+      const url = startServer(() => new Response('broken', { status: 500 }))
+      const pidFile = path.join(fixture.tempRoot, 'stubborn.pid')
+      const scriptPath = path.join(fixture.tempRoot, 'stubborn-launcher.sh')
+      // The launcher itself exits on SIGTERM; its descendant ignores it and has
+      // its stdio detached, so it holds none of the launcher's pipes open.
+      fs.writeFileSync(
+        scriptPath,
+        [
+          '#!/bin/sh',
+          "( trap '' TERM; exec sleep 300 ) >/dev/null 2>&1 &",
+          `echo $! > ${JSON.stringify(pidFile)}`,
+          `printf '%s\\n' ${JSON.stringify(`opencode server listening on ${url}`)}`,
+          'wait',
+          '',
+        ].join('\n'),
+      )
+
+      const failure = startOpencodeProcess(
+        fixture,
+        '/bin/sh',
+        [scriptPath],
+        buildChildEnv({}),
+        { host: 'v1', timeoutMs: 10_000 },
+      )
+
+      await expect(failure).rejects.toThrow(/500/)
+      const descendantPid = Number(fs.readFileSync(pidFile, 'utf8'))
+      try {
+        expect(Number.isInteger(descendantPid)).toBe(true)
+        expect(await waitUntilGone(descendantPid)).toBe(true)
+      } finally {
+        if (isAlive(descendantPid)) process.kill(descendantPid, 'SIGKILL')
+      }
+    })
+
     test('a v2 start sends the announced password with its request', async () => {
       const fixture = makeFixture()
       const expected = `Basic ${Buffer.from('opencode:pw-123').toString('base64')}`

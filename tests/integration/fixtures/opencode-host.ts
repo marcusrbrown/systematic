@@ -1601,6 +1601,10 @@ function installTerminalSignalHandlers(): void {
 
 async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
   await stopProcessGroup(server, 10_000)
+  // `stopProcessGroup` resolves once the launcher exits after SIGTERM, which
+  // cancels its own escalation. A descendant that ignores SIGTERM would then
+  // survive, so finish the group off with SIGKILL.
+  if (server.pid !== undefined) killProcessGroupSync(server.pid)
 }
 
 export async function stopAllOpencodeHosts(): Promise<void> {
