@@ -15,9 +15,10 @@
     {
       // scripts/opencode-host-pins.json is the single home of the CLI pins the
       // host contract tests run against. Renovate ignores tests/**, so the pins
-      // live under scripts/. Each manager tracks one moving pin. The v1 floor
-      // ("v1Floor") is the oldest supported release, not a version to bump, and
-      // neither pattern can match it: each anchors on its own quoted key.
+      // live under scripts/. Each manager tracks one moving pin. The floors
+      // ("v1Floor" and "v2Floor") are the oldest supported release of each line,
+      // not versions to bump, and neither pattern can match them: each anchors
+      // on its own quoted key.
       description: ['Track the current v1 CLI pin (opencode-ai) in the host pin file'],
       customType: 'regex',
       managerFilePatterns: ['/^scripts/opencode-host-pins\\.json$/'],

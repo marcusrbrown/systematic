@@ -38,7 +38,7 @@ describe('renovate workflow push filter', () => {
 /**
  * The host pins live in `scripts/opencode-host-pins.json`. Renovate bumps the
  * two moving pins (v2 and v1 current) through regex managers, each in its own
- * package group, and never bumps the v1 floor.
+ * package group, and never bumps either floor.
  */
 const RENOVATE_CONFIG_PATH = path.resolve(
   process.cwd(),
@@ -71,9 +71,9 @@ function readRenovateConfig(): RenovateConfig {
   ) as RenovateConfig
 }
 
-/** A pin file whose three versions differ, so a match can be traced to its key. */
+/** A pin file whose four versions differ, so a match can be traced to its key. */
 const SAMPLE_PIN_FILE = JSON.stringify(
-  { v2: '9999.2.0', v1: '9999.1.1', v1Floor: '9999.1.0' },
+  { v2: '9999.2.1', v2Floor: '9999.2.0', v1: '9999.1.1', v1Floor: '9999.1.0' },
   null,
   2,
 )
@@ -107,10 +107,10 @@ function groupFor(config: RenovateConfig, depName: string): string | undefined {
 describe('renovate host pin tracking', () => {
   const config = readRenovateConfig()
 
-  test('the regex managers match the v2 and v1 current entries and never the floor', () => {
+  test('the regex managers match the v2 and v1 current entries and never a floor', () => {
     expect(extractDependencies(config, SAMPLE_PIN_FILE)).toEqual([
       { depName: 'opencode-ai', currentValue: '9999.1.1' },
-      { depName: '@opencode/cli', currentValue: '9999.2.0' },
+      { depName: '@opencode/cli', currentValue: '9999.2.1' },
     ])
   })
 

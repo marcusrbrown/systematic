@@ -115,7 +115,7 @@ ocx profile add omo-sys --source systematic/omo --global
 
 ## OpenCode versions
 
-The OCX profiles (`standalone` and `omo`) write OpenCode v1 configuration: the v1 `plugin` key, and for `omo` the v1 agent settings. They do not write v2 configuration. On OpenCode v2 (2.2.0 or later), install the `@fro.bot/systematic` package through the `plugins` key instead (see the [installation guide](/systematic/getting-started/installation/)); the plugin then registers the bundled agents itself. The model routing the `omo` profile sets up is v1 configuration, so do not expect it to apply on v2.
+The OCX profiles (`standalone` and `omo`) write OpenCode v1 configuration: the v1 `plugin` key, and for `omo` the v1 agent settings. They do not write v2 configuration. On OpenCode v2 (2.2.5 or later), install the `@fro.bot/systematic` package through the `plugins` key instead (see the [installation guide](/systematic/getting-started/installation/)); the plugin then registers the bundled agents itself. The model routing the `omo` profile sets up is v1 configuration, so do not expect it to apply on v2.
 
 ## Dual Installation
 
@@ -196,4 +196,4 @@ If `ocx diff` shows differences but `ocx update` says you are up to date, the re
 ## Technical Details
 
 - **Registry URL:** `https://fro.bot/systematic`
-- **Compatibility:** Systematic components are compatible with OpenCode 0.12.0 and later. The npm plugin itself supports OpenCode v1 from 1.18.29 and OpenCode v2 from 2.2.0; OCX installs write v1 configuration.
+- **Compatibility:** Systematic components are compatible with OpenCode 0.12.0 and later. The npm plugin itself supports OpenCode v1 from 1.18.29 and OpenCode v2 from 2.2.5; OCX installs write v1 configuration.

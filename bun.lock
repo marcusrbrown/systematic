@@ -36,7 +36,7 @@
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "^1.0.0",
         "@opencode-ai/plugin": ">=1.18.29",
-        "@opencode/plugin": ">=2.2.0",
+        "@opencode/plugin": ">=2.2.5",
         "typebox": "^1.1.38",
       },
       "optionalPeers": [

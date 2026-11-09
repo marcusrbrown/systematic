@@ -165,13 +165,13 @@ describe('package.json Pi manifest', () => {
   test('declares both OpenCode plugin packages as optional peers from their floors', () => {
     const pkg = readPackageJson()
     const pins = readOpencodeHostPins()
-    // The v1 range starts exactly at the floor. The v2 range may start below
-    // the pinned CLI, but the pin must satisfy it.
+    // Each range starts exactly at its line's floor, and the current pin of
+    // each line must satisfy it.
     expect(pkg.peerDependencies?.['@opencode-ai/plugin']).toBe(
       `>=${pins.v1Floor}`,
     )
     const v2Range = pkg.peerDependencies?.['@opencode/plugin']
-    expect(v2Range).toMatch(/^>=\d+\.\d+\.\d+$/)
+    expect(v2Range).toBe(`>=${pins.v2Floor}`)
     expect(Bun.semver.satisfies(pins.v2, v2Range ?? '')).toBe(true)
     expect(pkg.peerDependenciesMeta?.['@opencode-ai/plugin']?.optional).toBe(
       true,

@@ -37,15 +37,16 @@ required CI job across four PRs: #916, #928, #930, #931 (plus three real-host
 fixes the job itself caught: #932, #933, #936).
 
 The pins live in exactly one file, `scripts/opencode-host-pins.json`: `v2` (the
-`@opencode/cli` release), `v1` (the current `opencode-ai` release) and `v1Floor`
-(the oldest v1 release the package supports). `readOpencodeHostPins()` reads
+`@opencode/cli` release), `v2Floor` (the oldest v2 release the package
+supports), `v1` (the current `opencode-ai` release) and `v1Floor` (the oldest v1
+release the package supports). `readOpencodeHostPins()` reads
 them and rejects anything that is not an exact version
-(`scripts/lib/opencode-pin.ts:167-181`). Each CLI pin is tied to the SDK and
+(`scripts/lib/opencode-pin.ts:169-189`). Each CLI pin is tied to the SDK and
 plugin devDependencies in `package.json` that move with it, and
 `tests/unit/opencode-pin.test.ts` fails when the two sides differ. A Renovate
-regex manager bumps `v2` and `v1` and never the floor
+regex manager bumps `v2` and `v1` and never a floor
 (`.github/renovate.json5`). `readOpencodeSdkPin()` returns the v1
-current pin (`scripts/lib/opencode-pin.ts:196-198`). `EXACT_OPENCODE_VERSION` is resolved
+current pin (`scripts/lib/opencode-pin.ts:204-206`). `EXACT_OPENCODE_VERSION` is resolved
 from the pin file for the host line the run targets
 (`tests/integration/fixtures/opencode-host.ts:31-32`), not hand-edited (#916).
 
