@@ -60,9 +60,9 @@ The first failure stops the run. Say which check failed and for which path, writ
 
 ## Writing the learning
 
-The learning is the target project's own text. The excerpts exist so you can check the lesson, not so you can reuse them.
+The learning is the target project's own text. The excerpts exist so you can check the lesson, not so you can reuse them, and the source learning as a whole is no more reusable than its excerpts.
 
-- Restate the lesson in your own words, about the target's code. No verbatim text from another project: never copy a sentence of an excerpt, and do not quote part of one. The check on the written file is mechanical: no sentence of five words or more from a source excerpt, and no run of eight consecutive words from one, may appear in it. Quote the target's own code from `targetEvidence` when it helps; that text belongs to the target.
+- Restate the lesson in your own words, about the target's code. No verbatim text from another project: never copy a sentence of a source learning, and do not quote part of one. Before you show the draft, read each source learning in full with the read tool and compare the draft with the whole file, not only the excerpt. The check on the written file is mechanical and covers the whole source document: no sentence of five words or more from a source learning, and no run of eight consecutive words from one, may appear in it. Quote the target's own code from `targetEvidence` when it helps; that text belongs to the target.
 - Classify and lay the file out as `systematic:ce-compound` always does, from `references/schema.yaml`, `references/yaml-schema.md` and `assets/resolution-template.md`. This adds no frontmatter field and changes none of the three schema files. A lesson is knowledge track.
 - End the body with a provenance section. It holds one line per source, and nothing quoted:
 
