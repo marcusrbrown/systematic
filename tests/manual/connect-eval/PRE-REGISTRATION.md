@@ -308,4 +308,8 @@ A sixth change reworded comments in a bundled source, the host-support table's d
 
 Frozen files digest after the sixth change: sha256:033b2421b025300868d7f47a3c44abe038b651f82ce90669b977022e42ca5a85
 
+A seventh change added to the researcher agent's method: a truncated search result means narrowing the search and going on, the researcher reads the most relevant file before concluding a rule has no candidate, and running short of turns is the only case for an incomplete batch. The agent file changed with it. The evaluation figures above were measured before this change and are not re-measured:
+
+Frozen files digest after the seventh change: sha256:8b4f5ff2101a00059ced4e59cc88050d1bc55c2bdd3b626d2ac2267f92e3d914
+
 Any further change to a frozen file needs its own line here.

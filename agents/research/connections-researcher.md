@@ -52,7 +52,9 @@ Work in the fewest turns you can. Make independent searches and reads in one tur
 6. Take every fingerprint from the files index or the rules file. Search the files index for the path and use its `sha256` and `project root` as they are. Never compute, invent or guess a fingerprint or a path.
 7. Copy every excerpt from a read of that file, character for character, 20 to 1500 characters. A target-evidence excerpt must lie inside the line span you cite and contain the symbol you name. Never paraphrase inside an excerpt.
 
-If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish.
+A search result that is truncated or very long is a reason to narrow the search, never a reason to stop. Search again with a more specific pattern, in one project or directory at a time, or use the files index to pick paths, and go on. Before you conclude that a rule has no candidate, read at least the most relevant file a search pointed to. Judge from what you read, not from search output alone.
+
+If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish. That is the only case for `"complete": false`. When the searches are done and nothing holds up, set `"complete": true` with no candidates.
 
 ## What you return
 
