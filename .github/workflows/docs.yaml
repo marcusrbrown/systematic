@@ -190,7 +190,10 @@ jobs:
         with:
           app-id: ${{ secrets.FRO_BOT_APPLICATION_ID }}
           private-key: ${{ secrets.FRO_BOT_APPLICATION_PRIVATE_KEY }}
+          # Only the gh-pages push needs the token; the bot-user lookup is public.
           owner: fro-bot
+          repositories: systematic
+          permission-contents: write
 
       - name: Deploy to fro-bot/systematic
         if: github.repository == 'marcusrbrown/systematic'

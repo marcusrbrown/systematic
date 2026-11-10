@@ -154,6 +154,23 @@ describe('docs workflow privilege separation', () => {
     expect(getJob('deploy').permissions).toEqual({ contents: 'read' })
   })
 
+  test('the deploy App token is scoped to fro-bot/systematic with contents: write only', () => {
+    const withBlock = asRecord(
+      findStep(getSteps('deploy'), 'Create GitHub App token').with,
+      'with',
+    )
+    // Without `repositories` and `permission-*` inputs the token would carry
+    // every permission of the installation on every fro-bot repository.
+    expect(withBlock.owner).toBe('fro-bot')
+    expect(withBlock.repositories).toBe('systematic')
+    const permissions = Object.fromEntries(
+      Object.entries(withBlock).filter(([key]) =>
+        key.startsWith('permission-'),
+      ),
+    )
+    expect(permissions).toEqual({ 'permission-contents': 'write' })
+  })
+
   test('deploy runs no bun install, bun run, npm, or repo scripts', () => {
     const forbidden = /\b(bun|bunx|npm|npx|pnpm|yarn)\b/
     const repoScripts = /(^|[\s"'/])scripts\//m
