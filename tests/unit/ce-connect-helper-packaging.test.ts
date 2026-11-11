@@ -6,10 +6,10 @@
 // real command line under real Node, against throwaway repositories, a throwaway
 // home and a throwaway state directory.
 //
-// The skill has no `SKILL.md` yet in some checkouts. The OCX and Claude Code
-// layouts are built from a temporary copy of the tree in which a stub `SKILL.md`
-// stands in until the real one exists, because both layouts ship only
-// directories that hold one.
+// The OCX and Claude Code layouts use a temporary copy of the real tree.
+// Both layouts ship only directories holding a `SKILL.md`, so fixture setup
+// must fail if the real skill is missing rather than inventing one and
+// hiding a broken distribution.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
@@ -419,7 +419,7 @@ function assertRunsUnderRealNode(scriptPath: string, label: string): void {
 
 let layoutRoot: string
 
-function prepareLayoutRoot(): string {
+function prepareLayoutRoot(sourceRoot = REPO_ROOT): string {
   const root = makeTempDir('connect-pack-layout-')
   for (const rel of [
     'package.json',
@@ -428,23 +428,38 @@ function prepareLayoutRoot(): string {
     'registry',
     'biome.json',
   ]) {
-    fs.cpSync(path.join(REPO_ROOT, rel), path.join(root, rel), {
+    fs.cpSync(path.join(sourceRoot, rel), path.join(root, rel), {
       recursive: true,
     })
   }
   const skillFile = path.join(root, 'skills/ce-connect/SKILL.md')
-  if (!fs.existsSync(skillFile)) {
-    fs.writeFileSync(
-      skillFile,
-      '---\nname: ce-connect\ndescription: Stand-in so the layouts ship the skill directory.\n---\n\nStand-in.\n',
-    )
-  }
+  fs.readFileSync(skillFile)
   return root
 }
 
 beforeAll(() => {
   layoutRoot = prepareLayoutRoot()
 }, 60_000)
+
+describe('packaging layout preconditions', () => {
+  test('copies the real skill without changing its bytes', () => {
+    const relativePath = 'skills/ce-connect/SKILL.md'
+    expect(
+      fs
+        .readFileSync(path.join(layoutRoot, relativePath))
+        .equals(fs.readFileSync(path.join(REPO_ROOT, relativePath))),
+    ).toBe(true)
+  })
+
+  test('rejects a source tree missing the real skill instead of synthesizing it', () => {
+    const sourceRoot = prepareLayoutRoot()
+    const skillFile = path.join(sourceRoot, 'skills/ce-connect/SKILL.md')
+    fs.unlinkSync(skillFile)
+
+    expect(() => prepareLayoutRoot(sourceRoot)).toThrow(/ENOENT/)
+    expect(fs.existsSync(skillFile)).toBe(false)
+  })
+})
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Committed artifact precondition
