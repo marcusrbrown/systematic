@@ -316,4 +316,8 @@ An eighth change made the digest and the run record name each dropped candidate 
 
 Frozen files digest after the eighth change: sha256:82a4ad975a2aeab9b3cd5dd023c904515f25b1531939ee5440e55b857980a13f
 
+A ninth change made the researcher prompt state each free-text cap at its field, check the lengths before answering, and return one candidate for each rule and target. The agent file changed with it. No evaluation figure is re-measured:
+
+Frozen files digest after the ninth change: sha256:f94cd6f2ec1f929283afad4a794962eaba383070c1f4a819039f0336a30e97c0
+
 Any further change to a frozen file needs its own line here.

@@ -83,10 +83,10 @@ The types matter, because the helper rejects the whole answer on a wrong one:
       "kind": "contradiction | transferable-lesson",
       "ruleId": "<a rule id from your family that one source belongs to>",
       "target": "<main root of the project that should change>",
-      "title": "<one line>",
-      "summary": "<one paragraph: what the excerpts together show>",
+      "title": "<one line, at most 160 characters; aim for under about 120>",
+      "summary": "<one paragraph, at most 800 characters; aim for about 4 short sentences, about 600 characters: what the excerpts together show>",
       "nextStep": "refresh-learning | compound-learning | investigate",
-      "overlapCheck": { "queries": ["<what you searched in the target>"], "result": "none-found | found", "note": "<optional one paragraph>" },
+      "overlapCheck": { "queries": ["<what you searched in the target, at most 200 characters each>"], "result": "none-found | found", "note": "<optional one paragraph, at most 400 characters>" },
       "sources": [{ "project": "<root>", "path": "<learning path>", "fingerprint": "<sha256>", "excerpt": "<verbatim>" }],
       "targetEvidence": [{ "path": "<tracked path in the target>", "start": 1, "end": 1, "symbol": "<identifier in the span>", "fingerprint": "<sha256>", "excerpt": "<verbatim, inside the span, contains the symbol>" }],
       "counterevidence": [{ "project": "<root>", "path": "<path>", "fingerprint": "<sha256>", "excerpt": "<verbatim>" }]
@@ -100,4 +100,6 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 - A `transferable-lesson` has `sources` outside the `target` project, at least one `targetEvidence` item, and its `nextStep` is `compound-learning` or `investigate`.
 - `sources` are learnings. `counterevidence` may be any tracked file.
 - Free text (`title`, `summary`, `note`, each query) is one paragraph within these caps: title 160 characters, summary 800, note 400, query 200. Put nothing in it that you copied from a file other than in an excerpt.
+- Send at most one candidate for each rule and target. When one rule shows several gaps in the same target, put them in that one candidate, each gap as its own `targetEvidence` entry, and keep the summary within its cap: the helper drops a second candidate for the same rule, sources and target as a duplicate, and the finding is lost.
 - Propose only the two kinds above. Send at most `max candidates`. An empty `candidates` list with `complete` true is the right answer when nothing holds up.
+- Last check, before you answer: measure each title, summary and note you wrote. If one is over its cap, cut it, and drop detail that is already in the excerpts. Never answer with an over-length field: the helper drops the whole candidate for it, and the finding is lost.
