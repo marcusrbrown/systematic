@@ -52,7 +52,9 @@ Work in the fewest turns you can. Make independent searches and reads in one tur
 6. Take every fingerprint from the files index or the rules file. Search the files index for the path and use its `sha256` and `project root` as they are. Never compute, invent or guess a fingerprint or a path.
 7. Copy every excerpt from a read of that file, character for character, 20 to 1500 characters. A target-evidence excerpt must lie inside the line span you cite and contain the symbol you name. Never paraphrase inside an excerpt.
 
-If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish.
+A search result that is truncated or very long is a reason to narrow the search, never a reason to stop. Search again with a more specific pattern, in one project or directory at a time, or use the files index to pick paths, and go on. Before you conclude that a rule has no candidate, read at least the most relevant file a search pointed to. Judge from what you read, not from search output alone.
+
+If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish. That is the only case for `"complete": false`. When the searches are done and nothing holds up, set `"complete": true` with no candidates.
 
 ## What you return
 
@@ -81,10 +83,10 @@ The types matter, because the helper rejects the whole answer on a wrong one:
       "kind": "contradiction | transferable-lesson",
       "ruleId": "<a rule id from your family that one source belongs to>",
       "target": "<main root of the project that should change>",
-      "title": "<one line>",
-      "summary": "<one paragraph: what the excerpts together show>",
+      "title": "<one line, at most 160 characters; aim for under about 120>",
+      "summary": "<one paragraph, at most 800 characters; aim for about 4 short sentences, about 600 characters: what the excerpts together show>",
       "nextStep": "refresh-learning | compound-learning | investigate",
-      "overlapCheck": { "queries": ["<what you searched in the target>"], "result": "none-found | found", "note": "<optional one paragraph>" },
+      "overlapCheck": { "queries": ["<what you searched in the target, at most 200 characters each>"], "result": "none-found | found", "note": "<optional one paragraph, at most 400 characters>" },
       "sources": [{ "project": "<root>", "path": "<learning path>", "fingerprint": "<sha256>", "excerpt": "<verbatim>" }],
       "targetEvidence": [{ "path": "<tracked path in the target>", "start": 1, "end": 1, "symbol": "<identifier in the span>", "fingerprint": "<sha256>", "excerpt": "<verbatim, inside the span, contains the symbol>" }],
       "counterevidence": [{ "project": "<root>", "path": "<path>", "fingerprint": "<sha256>", "excerpt": "<verbatim>" }]
@@ -98,4 +100,6 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 - A `transferable-lesson` has `sources` outside the `target` project, at least one `targetEvidence` item, and its `nextStep` is `compound-learning` or `investigate`.
 - `sources` are learnings. `counterevidence` may be any tracked file.
 - Free text (`title`, `summary`, `note`, each query) is one paragraph within these caps: title 160 characters, summary 800, note 400, query 200. Put nothing in it that you copied from a file other than in an excerpt.
+- Send at most one candidate for each rule and target. When one rule shows several gaps in the same target, put them in that one candidate, each gap as its own `targetEvidence` entry, and keep the summary within its cap: the helper drops a second candidate for the same rule, sources and target as a duplicate, and the finding is lost.
 - Propose only the two kinds above. Send at most `max candidates`. An empty `candidates` list with `complete` true is the right answer when nothing holds up.
+- Last check, before you answer: measure each title, summary and note you wrote. If one is over its cap, cut it, and drop detail that is already in the excerpts. Never answer with an over-length field: the helper drops the whole candidate for it, and the finding is lost.

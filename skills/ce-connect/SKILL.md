@@ -152,10 +152,10 @@ JSON
 
 Copy `runId` and `lock` from the `begin` answer. List every batch file, in order; `"batches": []` when there were none.
 
-- `validated`: read `pendingOutcome`, `degradeReasons`, `accepted`, `recorded`, `suppressed`, `dropped`, `droppedTotal`, `coverage` and `sweep`. Go on to Step 7.
+- `validated`: read `pendingOutcome`, `degradeReasons`, `accepted`, `recorded`, `suppressed`, `dropped`, `droppedTotal`, `droppedCandidates`, `coverage` and `sweep`. Go on to Step 7.
 - Any `failed` outcome, such as `malformed-batch`, `batch-version` or `invalid-request`: every failed `validate` reply has a `lockReleased` field. When it is `true`, the helper has released the lock and removed the work files. When it is not `true` (the reply says the lock was not released, or has no such field), run `ledger unlock` for this run before you stop, the way `references/headless-and-outcomes.md` shows; the lock is the one you took in Step 2, and this is the only case where the skill runs `ledger unlock` itself. Print the `reason`, then `Connect failed`. Do not publish.
 
-A dropped candidate never changes the outcome: it is counted by reason in the digest.
+A dropped candidate never changes the outcome: it is counted by reason in the digest, which also names it by family, kind, reason and title.
 
 ## Step 7: Publish
 
