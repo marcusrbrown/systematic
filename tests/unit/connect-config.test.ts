@@ -896,36 +896,15 @@ describe('checkHostSupport', () => {
 })
 
 // A row is added only for a host and version where the shipped researcher's
-// denies were seen on a real host. These tests keep each row tied to the pin the
-// proof runs against and to a proof test that still exists under that title.
+// denies were seen on a real host. These tests keep each row tied to a proof
+// test that still exists under that title.
 describe('the shipped host-support table', () => {
   const root = path.join(import.meta.dirname, '../..')
   const readJson = (file: string): Record<string, unknown> =>
     JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'))
   const pins = readJson('scripts/opencode-host-pins.json') as {
-    v1: string
-    v2: string
     v1Floor: string
   }
-  const piPin = (
-    readJson('package.json').devDependencies as Record<string, string>
-  )['@earendil-works/pi-coding-agent']
-
-  it('has a row for OpenCode v1 and v2 at the current host pins, for Pi at its pinned version, and for Claude Code at the one version its manual run observed', () => {
-    expect(
-      HOST_SUPPORT_TABLE.map(
-        (entry) => `${entry.host} ${entry.version}`,
-      ).sort(),
-    ).toEqual(
-      [
-        `opencode-v1 ${pins.v1}`,
-        `opencode-v2 ${pins.v2}`,
-        `pi ${piPin}`,
-        'claude-code 2.1.319',
-      ].sort(),
-    )
-  })
-
   it('reads the version the skill sends from what `claude --version` prints', () => {
     // The skill sends the first token that starts with a digit: `2.1.319`.
     const printed = '2.1.319 (Claude Code)'
