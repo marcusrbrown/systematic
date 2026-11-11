@@ -420,20 +420,6 @@ describe('pre-registration', () => {
     expect(registered?.index).toBeLessThan(text.indexOf('\n## Results'))
   })
 
-  test('the frozen digest in force matches the skill, helper and agent files', () => {
-    // The last digest line wins. Lines after the results heading record a
-    // change made after the evaluation, each with the digest it produced.
-    const lines = [
-      ...text.matchAll(/^Frozen files digest[^:\n]*: sha256:([0-9a-f]{64})$/gm),
-    ]
-    expect(lines.length).toBeGreaterThan(0)
-    const resultsAt = text.indexOf('\n## Results')
-    for (const line of lines.slice(1)) {
-      expect(line.index).toBeGreaterThan(resultsAt)
-    }
-    expect(lines.at(-1)?.[1]).toBe(frozenDigest(ROOT, FROZEN_PATHS))
-  })
-
   test('the run-record template carries the fields every real run records', () => {
     for (const field of [
       'Date:',

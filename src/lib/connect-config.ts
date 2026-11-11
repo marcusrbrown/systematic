@@ -581,18 +581,21 @@ export interface HostSupportRow {
 export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
   {
     host: 'opencode-v1',
+    // renovate: datasource=npm depName=opencode-ai
     version: '1.19.5',
     observedBy:
       'tests/integration/opencode-v1-isolation.test.ts > the shipped researcher, dispatched from the packed plugin, is refused shell, write, edit and web fetch and its read reaches the parent',
   },
   {
     host: 'opencode-v2',
+    // renovate: datasource=npm depName=@opencode/cli
     version: '2.2.5',
     observedBy:
       'tests/integration/opencode-v2.test.ts > a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it',
   },
   {
     host: 'pi',
+    // renovate: datasource=npm depName=@earendil-works/pi-coding-agent
     version: '1.5.0',
     observedBy:
       'tests/unit/pi-delegate-session.test.ts > the shipped researcher reaches createAgentSession with read, grep and find and none of bash, write, edit or systematic_delegate',
