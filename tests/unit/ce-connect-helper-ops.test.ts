@@ -11,6 +11,7 @@ import {
 import type { HostSupportRow } from '../../src/lib/connect-config.js'
 import { CONNECT_BOUNDS } from '../../src/lib/connect-evidence.js'
 import {
+  CANDIDATE_LIMITS,
   formatProvenanceCitation,
   projectName,
   ruleIdFor,
@@ -986,6 +987,143 @@ describe('validate and publish', () => {
     expect(published.outcome).toBe('complete')
     expect(readDigest(published)).toContain('Dropped: 1')
     expect(readDigest(published)).toContain('excerpt-missing: 1')
+  })
+
+  describe('dropped candidates', () => {
+    it('names each dropped candidate in the reply, the digest and the run record, beside the counts', () => {
+      const world = buildWorld()
+      const tooLong = lessonCandidate(world, {
+        title: 'Summary runs far too long',
+        summary: 'y'.repeat(900),
+      })
+      const noNextStep = {
+        ...contradictionCandidate(world),
+        title: 'Lacks a next step',
+        nextStep: undefined,
+      }
+      const { validated, published } = fullRun(world, [
+        tooLong,
+        noNextStep,
+        contradictionCandidate(world),
+      ])
+      expect(validated.dropped).toEqual({
+        'text-too-long': 1,
+        'malformed-candidate': 1,
+      })
+      expect(validated.droppedTotal).toBe(2)
+      const named = [
+        {
+          family: 'locking',
+          kind: 'transferable-lesson',
+          title: 'Summary runs far too long',
+          reason: 'text-too-long',
+        },
+        {
+          family: 'locking',
+          kind: 'contradiction',
+          title: 'Lacks a next step',
+          reason: 'malformed-candidate',
+        },
+      ]
+      expect(validated.droppedCandidates).toEqual(named)
+      expect(readRunRecord(published).droppedCandidates).toEqual(named)
+      const digest = readDigest(published)
+      expect(digest).toContain('## Dropped candidates')
+      expect(digest).toContain('text-too-long')
+      expect(digest).toContain('> Summary runs far too long')
+      expect(digest).toContain('> Lacks a next step')
+      expect(digest).toContain('Dropped: 2')
+      const summary = published.summary as string
+      expect(summary).toContain('Dropped: 2.')
+      expect(summary).not.toContain('Lacks a next step')
+    })
+
+    it('sanitizes and caps a hostile title and carries no other candidate text', () => {
+      const world = buildWorld()
+      const hostile = lessonCandidate(world, {
+        kind: 'not-a-kind',
+        title: `Evil\u0007\u202e\n# Heading ${'z'.repeat(400)}`,
+        summary: 'SECRET-SUMMARY-TEXT',
+      })
+      const { validated, published } = fullRun(world, [hostile])
+      const [entry] = validated.droppedCandidates as Array<Json>
+      expect(entry?.kind).toBe('unknown')
+      expect(entry?.reason).toBe('unknown-kind')
+      const title = entry?.title as string
+      expect(title.length).toBeLessThanOrEqual(CANDIDATE_LIMITS.title)
+      expect(title.startsWith('Evil # Heading zzz')).toBe(true)
+      expect(title).not.toMatch(/[\p{Cc}\p{Cf}]/u)
+      expect(Object.keys(entry ?? {}).sort()).toEqual([
+        'family',
+        'kind',
+        'reason',
+        'title',
+      ])
+      const digest = readDigest(published)
+      expect(digest).toContain(`> ${title}`)
+      expect(digest).not.toContain('SECRET-SUMMARY-TEXT')
+      expect(digest).not.toMatch(/^# Heading/m)
+    })
+
+    it('uses a placeholder when the title is missing or not a string, and for a non-object candidate', () => {
+      const world = buildWorld()
+      const { title: _title, ...noTitle } = lessonCandidate(world)
+      const { validated } = fullRun(world, [
+        noTitle,
+        lessonCandidate(world, { title: 42 }),
+        'not an object',
+      ] as Json[])
+      expect(validated.droppedCandidates).toEqual([
+        {
+          family: 'locking',
+          kind: 'transferable-lesson',
+          title: '(no title)',
+          reason: 'malformed-candidate',
+        },
+        {
+          family: 'locking',
+          kind: 'transferable-lesson',
+          title: '(no title)',
+          reason: 'malformed-candidate',
+        },
+        {
+          family: 'locking',
+          kind: 'unknown',
+          title: '(no title)',
+          reason: 'malformed-candidate',
+        },
+      ])
+    })
+
+    it('names candidates dropped as duplicates or over the batch cap', () => {
+      const world = buildWorld()
+      const many = Array.from({ length: 12 }, () => lessonCandidate(world))
+      const { validated } = fullRun(world, many)
+      const reasons = (validated.droppedCandidates as Array<Json>).map(
+        (item) => item.reason,
+      )
+      expect(reasons.filter((r) => r === 'over-batch-cap')).toHaveLength(
+        12 - CONNECT_BOUNDS.maxCandidatesPerBatch,
+      )
+      expect(reasons).toHaveLength(validated.droppedTotal as number)
+    })
+
+    it('bounds the list, keeps the full counts and says how many are not listed', () => {
+      const world = buildWorld()
+      const bound =
+        CONNECT_BOUNDS.maxFamiliesPerRun * CONNECT_BOUNDS.maxCandidatesPerBatch
+      const total = bound + 20
+      const bad = Array.from({ length: total }, (_, i) =>
+        lessonCandidate(world, { title: `Bad candidate ${i}`, summary: 7 }),
+      )
+      const { validated, published } = fullRun(world, bad)
+      expect(validated.droppedTotal).toBe(total)
+      expect(validated.droppedCandidates as unknown[]).toHaveLength(bound)
+      expect(readRunRecord(published).droppedCandidates).toHaveLength(bound)
+      expect(readDigest(published)).toContain(
+        `${total - bound} more dropped candidates are counted above but not listed`,
+      )
+    })
   })
 
   it('treats instruction-like candidate text as data', () => {

@@ -1144,6 +1144,7 @@ function digestModel(over: Partial<DigestModel> = {}): DigestModel {
     unmatched: [],
     unread: [],
     dropped: {},
+    droppedCandidates: [],
     discardedIncomplete: 0,
     candidates: [],
     recorded: [],
@@ -1181,6 +1182,28 @@ describe('renderDigest', () => {
     expect(text).toContain('Dropped: 3')
     expect(text).toContain('excerpt-missing: 2')
     expect(text).toContain('not proof of absence')
+  })
+
+  it('lists each dropped candidate as a quoted title under its reason, and nothing when none', () => {
+    expect(renderDigest(digestModel())).not.toContain('Dropped candidates')
+    const text = renderDigest(
+      digestModel({
+        dropped: { 'text-too-long': 1 },
+        droppedCandidates: [
+          {
+            family: 'locking',
+            kind: 'contradiction',
+            title: '# Not a heading\u0007',
+            reason: 'text-too-long',
+          },
+        ],
+      }),
+    )
+    expect(text).toContain('## Dropped candidates')
+    expect(text).toContain('text-too-long')
+    expect(text).toContain('> # Not a heading')
+    expect(text).not.toContain('\u0007')
+    expect(text).not.toContain('more dropped candidates')
   })
 
   it('renders free text as quoted lines and excerpts in a fence longer than any inside', () => {

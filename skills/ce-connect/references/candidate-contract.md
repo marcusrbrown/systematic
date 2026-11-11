@@ -62,7 +62,7 @@ The next step also decides the handoff the summary prints. A `compound-learning`
 
 ## What the helper checks
 
-Each candidate, in order. The first failure drops that candidate and counts it by reason; the outcome does not change.
+Each candidate, in order. The first failure drops that candidate and counts it by reason; the outcome does not change. The reply, the digest and the run record also name each dropped candidate by family, kind, reason and its title (sanitized, capped at the title limit, `(no title)` when it has none), so a person can see whether a real finding was lost. The list holds no other candidate text and is bounded by the run's candidate maximum.
 
 - Every path is a tracked, contained file in an allowed project: not absolute, no `..`, not a symlink, not untracked.
 - Every fingerprint equals the hash the helper took at `begin`, and the file still has it.
