@@ -512,4 +512,92 @@ describe('connections-researcher agent', () => {
   test('has no SKILL_DIR or script path, because it cannot reach the skill directory', () => {
     expect(agentText).not.toMatch(/SKILL_DIR|connect\.mjs/)
   })
+
+  describe('free-text caps', () => {
+    const lineWith = (needle: string): string =>
+      agent.body.split('\n').find((line) => line.includes(needle)) ?? ''
+    const titleLine = lineWith('"title": "<')
+    const summaryLine = lineWith('"summary": "<')
+    const overlapLine = lineWith('"overlapCheck": {')
+    const afterTemplate = agent.body.slice(
+      agent.body.indexOf('- `ruleIds` lists'),
+    )
+
+    test('states the cap next to each free-text field in the output template', () => {
+      expect(titleLine).toMatch(
+        new RegExp(`at most ${CANDIDATE_LIMITS.title} characters`),
+      )
+      expect(summaryLine).toMatch(
+        new RegExp(`at most ${CANDIDATE_LIMITS.summary} characters`),
+      )
+      expect(overlapLine).toMatch(
+        new RegExp(`at most ${CANDIDATE_LIMITS.query} characters`),
+      )
+      expect(overlapLine).toMatch(
+        new RegExp(`at most ${CANDIDATE_LIMITS.note} characters`),
+      )
+    })
+
+    test('gives a target below the cap so a draft lands inside it', () => {
+      expect(titleLine).toMatch(/under about 120/)
+      expect(summaryLine).toMatch(/about 4 short sentences/)
+      expect(summaryLine).toMatch(/about 600 characters/)
+    })
+
+    test('measures each title, summary and note before answering and cuts one that is over', () => {
+      expect(afterTemplate).toMatch(
+        /before you answer[^.]*(measure|count)[^.]*title[^.]*summary[^.]*note/i,
+      )
+      expect(afterTemplate).toMatch(
+        /over its cap[^.]*cut it[^.]*already in (the|an) excerpt/i,
+      )
+      expect(afterTemplate).toMatch(/never answer with an over-length field/i)
+    })
+
+    test('gives the reason: the helper drops the whole candidate and the finding is lost', () => {
+      expect(afterTemplate).toMatch(
+        /helper drops the whole candidate[^.]*finding is lost/i,
+      )
+    })
+
+    test('returns at most one candidate per rule and target, folding several gaps into its target evidence', () => {
+      expect(afterTemplate).toMatch(
+        /at most one candidate (for|per) (each|every) rule and target/i,
+      )
+      expect(afterTemplate).toMatch(
+        /several gaps in the same target[^.]*that one candidate[^.]*own `targetEvidence` entry/i,
+      )
+      expect(afterTemplate).toMatch(
+        /summary within its cap[^.]*duplicate[^.]*finding is lost/i,
+      )
+    })
+
+    test('every cap number in the prompt equals CANDIDATE_LIMITS, so the two cannot drift', () => {
+      const capSentence = lineWith('Free text (`title`')
+      const stated = {
+        title: /title (\d+) characters/,
+        summary: /summary (\d+)/,
+        note: /note (\d+)/,
+        query: /query (\d+)/,
+      } as const
+      for (const [name, pattern] of Object.entries(stated)) {
+        const match = capSentence.match(pattern)
+        expect(match?.[1]).toBe(
+          String(CANDIDATE_LIMITS[name as keyof typeof stated]),
+        )
+      }
+      const template = [titleLine, summaryLine, overlapLine].join('\n')
+      const templateCaps = [...template.matchAll(/at most (\d+) characters/g)]
+        .map((match) => Number(match[1]))
+        .sort((a, b) => a - b)
+      expect(templateCaps).toEqual(
+        [
+          CANDIDATE_LIMITS.title,
+          CANDIDATE_LIMITS.summary,
+          CANDIDATE_LIMITS.note,
+          CANDIDATE_LIMITS.query,
+        ].sort((a, b) => a - b),
+      )
+    })
+  })
 })
