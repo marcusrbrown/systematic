@@ -314,6 +314,6 @@ Frozen files digest after the seventh change: sha256:8b4f5ff2101a00059ced4e59cc8
 
 An eighth change made the digest and the run record name each dropped candidate by family, kind, reason and sanitized title, beside the existing counts. The skill, its references and the generated helper bundle changed with it. No evaluation figure is re-measured:
 
-Frozen files digest after the eighth change: sha256:36da7ab4a0eed7648f0a60a39140eb007829097c10ac5c78670b61275f2cf966
+Frozen files digest after the eighth change: sha256:82a4ad975a2aeab9b3cd5dd023c904515f25b1531939ee5440e55b857980a13f
 
 Any further change to a frozen file needs its own line here.

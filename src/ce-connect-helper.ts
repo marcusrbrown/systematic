@@ -1473,6 +1473,7 @@ function classifyBatches(
     heldBackRuleIds: new Set(),
   }
   const seen = new Set<string>()
+  const overflow: Array<{ family: string; raw: unknown }> = []
   for (const batch of batches) {
     if (batch.ruleIds.length > limits.maxRulesPerFamily) {
       addUnique(result.degrade, 'family-bound')
@@ -1490,10 +1491,14 @@ function classifyBatches(
     for (const raw of considered) {
       classifyOne(raw, batch.family, input, seen, result)
     }
-    // Named last, so a long overflow cannot crowd out the candidates that were checked.
     for (const raw of batch.candidates.slice(considered.length)) {
-      noteDropped(result, batch.family, raw, 'over-batch-cap')
+      overflow.push({ family: batch.family, raw })
     }
+  }
+  // Named after every batch's checked candidates, so the overflow of one
+  // oversized batch cannot crowd out a rejection that was actually checked.
+  for (const item of overflow) {
+    noteDropped(result, item.family, item.raw, 'over-batch-cap')
   }
   return result
 }

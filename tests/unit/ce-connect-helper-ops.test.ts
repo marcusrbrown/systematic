@@ -1126,6 +1126,70 @@ describe('validate and publish', () => {
     })
   })
 
+  it('names checked rejections from a later family before the overflow of an oversized earlier batch', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const [first, second] = allRuleIds(world)
+    const bound =
+      CONNECT_BOUNDS.maxFamiliesPerRun * CONNECT_BOUNDS.maxCandidatesPerBatch
+    // Enough overflow in the first batch to fill the whole list on its own.
+    const firstTotal = bound + 1
+    const overflow = firstTotal - CONNECT_BOUNDS.maxCandidatesPerBatch
+    const bad = (title: string): Json =>
+      lessonCandidate(world, { title, summary: 7 })
+    const a = writeBatch(
+      run.workDir,
+      'batch-a.json',
+      batchJson(world, run.runId, {
+        family: 'early',
+        ruleIds: [first],
+        projects: [world.source],
+        candidates: Array.from({ length: firstTotal }, (_, i) =>
+          bad(`Early ${i}`),
+        ),
+      }),
+    )
+    const b = writeBatch(
+      run.workDir,
+      'batch-b.json',
+      batchJson(world, run.runId, {
+        family: 'late',
+        ruleIds: [second],
+        projects: [world.target],
+        candidates: [bad('Late checked rejection')],
+      }),
+    )
+    const validated = ok(validate(world, run, [a, b]))
+    const published = ok(publish(world, run))
+    const total = firstTotal + 1
+    expect(validated.droppedTotal).toBe(total)
+    expect(validated.dropped).toEqual({
+      'malformed-candidate': CONNECT_BOUNDS.maxCandidatesPerBatch + 1,
+      'over-batch-cap': overflow,
+    })
+    const listed = validated.droppedCandidates as Array<Json>
+    expect(listed).toHaveLength(bound)
+    const late = listed.filter((item) => item.family === 'late')
+    expect(late).toEqual([
+      {
+        family: 'late',
+        kind: 'transferable-lesson',
+        title: 'Late checked rejection',
+        reason: 'malformed-candidate',
+      },
+    ])
+    // The overflow fills only what the checked candidates left.
+    expect(
+      listed.filter((item) => item.reason === 'over-batch-cap'),
+    ).toHaveLength(bound - CONNECT_BOUNDS.maxCandidatesPerBatch - 1)
+    expect(readRunRecord(published).droppedCandidates).toEqual(listed)
+    const digest = readDigest(published)
+    expect(digest).toContain('> Late checked rejection')
+    expect(digest).toContain(
+      `${total - bound} more dropped candidates are counted above but not listed`,
+    )
+  })
+
   it('treats instruction-like candidate text as data', () => {
     const world = buildWorld()
     const hostile = lessonCandidate(world, {
