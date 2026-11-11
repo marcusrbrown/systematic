@@ -3100,6 +3100,109 @@ Discovered body for hidden.`,
       }
     })
 
+    describe('routing on a rerun over the same config object', () => {
+      const ROUTED = { model: 'provider/old', variant: 'low' }
+
+      function writeResearcherOverlay(overlay: Record<string, unknown>): void {
+        writeCustomSystematicConfig({ agents: { [RESEARCHER]: overlay } })
+      }
+
+      test('an overlay model change applies on a rerun when no other entry exists', async () => {
+        createResearcherFixture()
+        const handler = makeHandler()
+        const config: Config = {}
+        writeResearcherOverlay({ model: 'provider/old' })
+        await handler(config)
+        expect(config.agent?.[RESEARCHER]?.model).toBe('provider/old')
+
+        writeResearcherOverlay({ model: 'provider/new' })
+        await handler(config)
+        expect(config.agent?.[RESEARCHER]?.model).toBe('provider/new')
+      })
+
+      test('an overlay model: null applies on a rerun when no other entry exists', async () => {
+        createResearcherFixture()
+        const handler = makeHandler()
+        const config: Config = {}
+        writeResearcherOverlay({ model: 'provider/old' })
+        await handler(config)
+
+        writeResearcherOverlay({ model: null })
+        await handler(config)
+        expect(config.agent?.[RESEARCHER]?.model).toBeUndefined()
+      })
+
+      test('an overlay variant change and a nulled model apply on a rerun when no other entry exists', async () => {
+        createResearcherFixture()
+        const handler = makeHandler()
+        const config: Config = {}
+        writeResearcherOverlay(ROUTED)
+        await handler(config)
+        expect(config.agent?.[RESEARCHER]?.variant).toBe('low')
+
+        writeResearcherOverlay({ ...ROUTED, variant: 'high' })
+        await handler(config)
+        expect(config.agent?.[RESEARCHER]?.variant).toBe('high')
+
+        // A variant belongs to its model, so nulling the model drops both.
+        writeResearcherOverlay({ model: null })
+        await handler(config)
+        expect(config.agent?.[RESEARCHER]?.model).toBeUndefined()
+        expect(config.agent?.[RESEARCHER]?.variant).toBeUndefined()
+      })
+
+      test("another entry's model and variant survive a rerun on the same config, with one warning", async () => {
+        createResearcherFixture()
+        const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          const handler = makeHandler()
+          const config: Config = {
+            agent: {
+              [RESEARCHER]: {
+                prompt: FOREIGN_PROMPT,
+                model: 'openai/foreign',
+                variant: 'max',
+              },
+            },
+          }
+          await handler(config)
+          expect(config.agent?.[RESEARCHER]?.model).toBe('openai/foreign')
+          expect(config.agent?.[RESEARCHER]?.variant).toBe('max')
+
+          await handler(config)
+          await handler(config)
+          expect(config.agent?.[RESEARCHER]?.model).toBe('openai/foreign')
+          expect(config.agent?.[RESEARCHER]?.variant).toBe('max')
+          expect(config.agent?.[RESEARCHER]?.prompt).toBe(FIXTURE_PROMPT)
+          expect(warnSpy).toHaveBeenCalledTimes(1)
+        } finally {
+          warnSpy.mockRestore()
+        }
+      })
+
+      test("another entry's model wins over an overlay model, on the first run and after an overlay change", async () => {
+        createResearcherFixture()
+        const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          const handler = makeHandler()
+          const config: Config = {
+            agent: {
+              [RESEARCHER]: { prompt: FOREIGN_PROMPT, model: 'openai/foreign' },
+            },
+          }
+          writeResearcherOverlay({ model: 'provider/old' })
+          await handler(config)
+          expect(config.agent?.[RESEARCHER]?.model).toBe('openai/foreign')
+
+          writeResearcherOverlay({ model: 'provider/new' })
+          await handler(config)
+          expect(config.agent?.[RESEARCHER]?.model).toBe('openai/foreign')
+        } finally {
+          warnSpy.mockRestore()
+        }
+      })
+    })
+
     test('an ordinary bundled agent keeps the other entry exactly as it was', async () => {
       createResearcherFixture()
       createAgent(path.join(bundledDir, 'agents'), 'ordinary-agent', {

@@ -43,9 +43,24 @@ function isSystematicAgentConfig(agent: AgentConfig | undefined): boolean {
  */
 const reportedSecuritySensitiveAgents = new Set<string>()
 
-/** Clear the once-per-process notice record. For tests. */
+/** The routing another config entry supplied for a security-sensitive agent. */
+interface ForeignRouting {
+  readonly model?: string
+  readonly variant?: string
+}
+
+/**
+ * Routing taken from another entry, by host config object and agent name. The
+ * hook replaces `config.agent` on every run, so after the first run the entry
+ * in place is this hook's own output and no longer shows what the other entry
+ * set. The config object is the one thing that stays the same across reruns.
+ */
+let foreignRoutingByConfig = new WeakMap<object, Map<string, ForeignRouting>>()
+
+/** Clear the once-per-process notice record and captured routing. For tests. */
 export function resetSecuritySensitiveAgentNotices(): void {
   reportedSecuritySensitiveAgents.clear()
+  foreignRoutingByConfig = new WeakMap()
 }
 
 function isSystematicCommandConfig(
@@ -100,38 +115,61 @@ function isSecuritySensitiveAgent(name: string): boolean {
   return READ_ONLY_AGENT_NAMES.includes(name)
 }
 
+/** The string `model` and `variant` of another entry, nothing else. */
+function readForeignRouting(entry: AgentConfig | undefined): ForeignRouting {
+  if (!isRecord(entry)) return {}
+  const { model, variant } = entry
+  return {
+    ...(typeof model === 'string' ? { model } : {}),
+    ...(typeof variant === 'string' ? { variant } : {}),
+  }
+}
+
+/** One warning per process and agent. It never prints the other entry. */
+function reportForeignDefinition(name: string): void {
+  if (reportedSecuritySensitiveAgents.has(name)) return
+  reportedSecuritySensitiveAgents.add(name)
+  console.warn(
+    `[systematic] agent "${name}" is also defined by another config entry; applied Systematic's read-only definition and kept only that entry's model and variant.`,
+  )
+}
+
 /**
  * The entry for a security-sensitive agent another config entry also defines.
  * Systematic's definition wins whole; only `model` and `variant` come from the
  * other entry, because a model choice cannot widen what the agent may do. The
  * other entry's `permission` and `tools` are not merged: a merge could only
- * add to the agent's reach.
+ * add to the agent's reach. The other entry's routing wins over a Systematic
+ * overlay's, on the first run and on every rerun.
  *
- * An entry carrying the Systematic marker is this hook's own earlier output, so
- * it keeps its model without a warning and a repeat run changes nothing. The
- * warning never prints the other entry's contents.
+ * An entry carrying the Systematic marker is this hook's own earlier output. It
+ * contributes nothing, so an overlay change or `model: null` applies on a
+ * rerun; routing from a genuinely other entry is reapplied from the copy taken
+ * on first sight. The warning never prints the other entry's contents.
  */
 function enforceSecuritySensitiveAgent(
+  config: object,
   name: string,
   present: AgentConfig | undefined,
   emitted: AgentConfig,
 ): AgentConfig {
   if (!isSecuritySensitiveAgent(name)) return present ?? emitted
 
+  const captured = foreignRoutingByConfig.get(config) ?? new Map()
+  foreignRoutingByConfig.set(config, captured)
+
+  let foreign: ForeignRouting | undefined
+  if (isSystematicAgentConfig(present)) {
+    foreign = captured.get(name)
+  } else {
+    foreign = readForeignRouting(present)
+    captured.set(name, foreign)
+    reportForeignDefinition(name)
+  }
+
   const result: AgentConfig = { ...emitted }
-  if (isRecord(present)) {
-    if (typeof present.model === 'string') result.model = present.model
-    if (typeof present.variant === 'string') result.variant = present.variant
-  }
-  if (
-    !isSystematicAgentConfig(present) &&
-    !reportedSecuritySensitiveAgents.has(name)
-  ) {
-    reportedSecuritySensitiveAgents.add(name)
-    console.warn(
-      `[systematic] agent "${name}" is also defined by another config entry; applied Systematic's read-only definition and kept only that entry's model and variant.`,
-    )
-  }
+  if (foreign?.model !== undefined) result.model = foreign.model
+  if (foreign?.variant !== undefined) result.variant = foreign.variant
   return result
 }
 
@@ -443,7 +481,8 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
         bundledAgentKeys.has(key) &&
         isSystematicAgentConfig(agent) &&
         !isSecuritySensitiveAgent(key),
-      enforceSecuritySensitiveAgent,
+      (key, present, emitted) =>
+        enforceSecuritySensitiveAgent(config, key, present, emitted),
     )
 
     // Bundled commands/skills carry the `(Systematic) ` marker and are
