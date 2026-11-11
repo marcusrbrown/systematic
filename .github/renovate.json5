@@ -34,6 +34,19 @@
       depNameTemplate: '@opencode/cli',
       datasourceTemplate: 'npm',
     },
+    {
+      // The host-support rows in src/lib/connect-config.ts name the hosts the
+      // read-only researcher was proven on. The Host Contract jobs re-prove each
+      // pin, so a row follows its pin and bumps in the same group PR. Renovate
+      // reads the annotation above each row's version. The Claude Code row has
+      // no package to bump and carries no annotation.
+      description: ['Track the host versions in the ce:connect host-support rows'],
+      customType: 'regex',
+      managerFilePatterns: ['/^src/lib/connect-config\\.ts$/'],
+      matchStrings: [
+        '//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*version:\\s*\'(?<currentValue>\\d+\\.\\d+\\.\\d+)\'',
+      ],
+    },
   ],
   packageRules: [
     {
