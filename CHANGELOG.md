@@ -4,6 +4,33 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.32.2](https://github.com/marcusrbrown/systematic/compare/v3.32.1...v3.32.2) (2026-11-11)
+
+### Bug Fixes
+
+* keep the connections researcher searching when results are truncated ([#1358](https://github.com/marcusrbrown/systematic/issues/1358)) ([178c32b](https://github.com/marcusrbrown/systematic/commit/178c32b00f6ae084beaa0c04f75b4ca0b0c0f9b1))
+* keep the connections researcher's free text within the helper's caps ([#1367](https://github.com/marcusrbrown/systematic/issues/1367)) ([67a6006](https://github.com/marcusrbrown/systematic/commit/67a6006bafb303254c8eaaf0dce0a033183362ff))
+* name each dropped candidate in the ce:connect digest and run record ([#1364](https://github.com/marcusrbrown/systematic/issues/1364)) ([ba42442](https://github.com/marcusrbrown/systematic/commit/ba424429b89e78d8a20c1754572a423aa7e63f4e))
+* require OpenCode v2 2.2.5, the version CI verifies ([#1356](https://github.com/marcusrbrown/systematic/issues/1356)) ([3941246](https://github.com/marcusrbrown/systematic/commit/39412460bdb9140b1687f8631718491e602ab154))
+* **security:** restore patched Undici for node-gyp ([#1360](https://github.com/marcusrbrown/systematic/issues/1360)) ([37f56ca](https://github.com/marcusrbrown/systematic/commit/37f56cae0ab76f17795d52c0d92d54d2550c39d9))
+* type against the Node major CI runs and pin the OpenCode source clone to the build base ([#1349](https://github.com/marcusrbrown/systematic/issues/1349)) ([6954172](https://github.com/marcusrbrown/systematic/commit/695417269fca289b20304bfd916436a15a9d12d1))
+
+### Tests
+
+* give the executed release-notes step cases a 30 s timeout ([#1354](https://github.com/marcusrbrown/systematic/issues/1354)) ([28078aa](https://github.com/marcusrbrown/systematic/commit/28078aa21e61bfa1f5ef0aa0c99bc563b486c619))
+* **packaging:** reject missing ce-connect skill fixtures ([#1365](https://github.com/marcusrbrown/systematic/issues/1365)) ([0d96619](https://github.com/marcusrbrown/systematic/commit/0d966198748fdc8dc79069b141696a18bae17626))
+* wait for a working OpenCode server and reap timed-out availability probes ([#1351](https://github.com/marcusrbrown/systematic/issues/1351)) ([cf91478](https://github.com/marcusrbrown/systematic/commit/cf9147832a8e5023f0475bcef59bebb67a3943c8))
+
+### Continuous Integration
+
+* **docs:** scope the docs deploy App token to the gh-pages push ([#1362](https://github.com/marcusrbrown/systematic/issues/1362)) ([5ed301e](https://github.com/marcusrbrown/systematic/commit/5ed301e5e0544fa8c4b03aab208b262d79e93514))
+* **release-notes:** drop the off-target log grep and correct how runs are identified ([#1352](https://github.com/marcusrbrown/systematic/issues/1352)) ([09c2c9b](https://github.com/marcusrbrown/systematic/commit/09c2c9b0960def0debed5a33a971b78b6c3d771c))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.137.0 ([#1357](https://github.com/marcusrbrown/systematic/issues/1357)) ([039d984](https://github.com/marcusrbrown/systematic/commit/039d984ff32a8b144918096c301ce45a9fd1ac1c))
+* **dev:** update dependency playwright to v1.65.0 ([#1338](https://github.com/marcusrbrown/systematic/issues/1338)) ([3127c9e](https://github.com/marcusrbrown/systematic/commit/3127c9ed0b4ace97e6a56063555559ad51769dff))
+
 ## [3.32.1](https://github.com/marcusrbrown/systematic/compare/v3.32.0...v3.32.1) (2026-11-09)
 
 ### Bug Fixes
