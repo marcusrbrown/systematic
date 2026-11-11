@@ -31,10 +31,12 @@ import {
   type DigestCandidate,
   type DigestModel,
   type DigestProject,
+  type DroppedCandidate,
   extractRule,
   findRecorded,
   findRenamedEntries,
   isWorkName,
+  nameDropped,
   type Offer,
   type ProjectFacts,
   type ProvenanceIndexEntry,
@@ -542,6 +544,7 @@ interface ValidatedState {
   readonly degradeReasons: readonly string[]
   readonly unread: readonly string[]
   readonly dropped: Readonly<Record<string, number>>
+  readonly droppedCandidates: readonly DroppedCandidate[]
   readonly discardedIncomplete: number
   readonly suppressed: number
   readonly unresolved: number
@@ -563,6 +566,7 @@ function isValidated(value: unknown): value is ValidatedState {
     typeof value.runId === 'string' &&
     Array.isArray(value.accepted) &&
     Array.isArray(value.recorded) &&
+    Array.isArray(value.droppedCandidates) &&
     Array.isArray(value.coveredRuleIds) &&
     isRecord(value.sweep) &&
     Array.isArray(value.degradeReasons)
@@ -1291,6 +1295,9 @@ interface Classified {
   readonly accepted: AcceptedCandidate[]
   readonly recorded: RecordedConnection[]
   readonly dropped: Record<string, number>
+  /** Each dropped candidate by name, up to `droppedListLimit`; `dropped` holds the full counts. */
+  readonly droppedCandidates: DroppedCandidate[]
+  readonly droppedListLimit: number
   suppressed: number
   unresolved: number
   discardedIncomplete: number
@@ -1301,6 +1308,27 @@ interface Classified {
 
 function count(table: Record<string, number>, key: string, by = 1): void {
   table[key] = (table[key] ?? 0) + by
+}
+
+/** Count a dropped candidate by reason and name it, while the list has room. */
+function recordDrop(
+  result: Classified,
+  family: string,
+  raw: unknown,
+  reason: string,
+): void {
+  count(result.dropped, reason)
+  noteDropped(result, family, raw, reason)
+}
+
+function noteDropped(
+  result: Classified,
+  family: string,
+  raw: unknown,
+  reason: string,
+): void {
+  if (result.droppedCandidates.length >= result.droppedListLimit) return
+  result.droppedCandidates.push(nameDropped(family, raw, reason))
 }
 
 function standingOf(
@@ -1385,13 +1413,14 @@ function holdBack(
 
 function classifyOne(
   raw: unknown,
+  family: string,
   input: ClassifyInput,
   seen: Set<string>,
   result: Classified,
 ): void {
   const check = checkCandidate(raw, input.ctx)
   if (check.status === 'dropped') {
-    count(result.dropped, check.reason)
+    recordDrop(result, family, raw, check.reason)
     // Unlike a plain rejection, this says nothing about the candidate: the
     // evidence moved under the run, so the rule was not really examined.
     if (check.reason === 'changed-since-begin') {
@@ -1408,7 +1437,7 @@ function classifyOne(
   const record = toCandidateRecord(check.candidate)
   const identity = candidateIdentity(record)
   if (seen.has(identity)) {
-    count(result.dropped, 'duplicate-candidate')
+    recordDrop(result, family, raw, 'duplicate-candidate')
     return
   }
   seen.add(identity)
@@ -1435,6 +1464,8 @@ function classifyBatches(
     accepted: [],
     recorded: [],
     dropped: {},
+    droppedCandidates: [],
+    droppedListLimit: limits.maxFamiliesPerRun * limits.maxCandidatesPerBatch,
     suppressed: 0,
     unresolved: 0,
     discardedIncomplete: 0,
@@ -1442,6 +1473,7 @@ function classifyBatches(
     heldBackRuleIds: new Set(),
   }
   const seen = new Set<string>()
+  const overflow: Array<{ family: string; raw: unknown }> = []
   for (const batch of batches) {
     if (batch.ruleIds.length > limits.maxRulesPerFamily) {
       addUnique(result.degrade, 'family-bound')
@@ -1456,7 +1488,17 @@ function classifyBatches(
       count(result.dropped, 'over-batch-cap', over)
       addUnique(result.degrade, 'candidate-bound')
     }
-    for (const raw of considered) classifyOne(raw, input, seen, result)
+    for (const raw of considered) {
+      classifyOne(raw, batch.family, input, seen, result)
+    }
+    for (const raw of batch.candidates.slice(considered.length)) {
+      overflow.push({ family: batch.family, raw })
+    }
+  }
+  // Named after every batch's checked candidates, so the overflow of one
+  // oversized batch cannot crowd out a rejection that was actually checked.
+  for (const item of overflow) {
+    noteDropped(result, item.family, item.raw, 'over-batch-cap')
   }
   return result
 }
@@ -1536,6 +1578,7 @@ function validateResponse(
     unresolved: classified.unresolved,
     dropped: classified.dropped,
     droppedTotal,
+    droppedCandidates: classified.droppedCandidates,
     discardedIncomplete: classified.discardedIncomplete,
     coverage: state.coverage,
     offered:
@@ -1623,6 +1666,7 @@ function runValidation(
       ),
     ],
     dropped: classified.dropped,
+    droppedCandidates: classified.droppedCandidates,
     discardedIncomplete: classified.discardedIncomplete,
     suppressed: classified.suppressed,
     unresolved: classified.unresolved,
@@ -1768,6 +1812,7 @@ function digestModel(
     unmatched: snapshot.unmatched,
     unread: state.unread,
     dropped: state.dropped,
+    droppedCandidates: state.droppedCandidates,
     discardedIncomplete: state.discardedIncomplete,
     candidates: digestCandidates,
     recorded: state.recorded,
@@ -1821,6 +1866,7 @@ function runRecord(
       droppedTotal,
       discardedIncomplete: state.discardedIncomplete,
     },
+    droppedCandidates: state.droppedCandidates,
     coverage: state.coverage,
     batches: state.batches,
     candidateBlock: buildCandidateBlock(state.accepted),

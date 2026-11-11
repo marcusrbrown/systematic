@@ -312,4 +312,8 @@ A seventh change added to the researcher agent's method: a truncated search resu
 
 Frozen files digest after the seventh change: sha256:8b4f5ff2101a00059ced4e59cc88050d1bc55c2bdd3b626d2ac2267f92e3d914
 
+An eighth change made the digest and the run record name each dropped candidate by family, kind, reason and sanitized title, beside the existing counts. The skill, its references and the generated helper bundle changed with it. No evaluation figure is re-measured:
+
+Frozen files digest after the eighth change: sha256:82a4ad975a2aeab9b3cd5dd023c904515f25b1531939ee5440e55b857980a13f
+
 Any further change to a frozen file needs its own line here.

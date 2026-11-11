@@ -1377,6 +1377,8 @@ export interface DigestModel {
   }>
   readonly unread: readonly string[]
   readonly dropped: Readonly<Record<string, number>>
+  /** Which candidates the counts in `dropped` lost, bounded by the run's candidate maximum. */
+  readonly droppedCandidates: readonly DroppedCandidate[]
   readonly discardedIncomplete: number
   readonly candidates: readonly DigestCandidate[]
   readonly recorded: readonly RecordedConnection[]
@@ -1395,6 +1397,44 @@ export function sanitizeText(text: string): string {
     .replaceAll('\r', '')
     .replaceAll('\t', ' ')
     .replace(/[\p{Cc}\p{Cf}]/gu, (char) => (char === '\n' ? '\n' : ''))
+}
+
+/**
+ * A candidate the checks refused, named so a person can tell whether a real
+ * finding was lost. It holds no model text except the title, which is display
+ * safe and capped like an accepted title.
+ */
+export interface DroppedCandidate {
+  readonly family: string
+  readonly kind: CandidateKind | 'unknown'
+  readonly title: string
+  readonly reason: string
+}
+
+/** What a dropped candidate shows as its title when it has none. */
+export const NO_TITLE = '(no title)'
+
+/** One display-safe line of at most the accepted title's length. */
+function displayTitle(title: unknown): string {
+  if (typeof title !== 'string') return NO_TITLE
+  const line = sanitizeText(title).replaceAll('\n', ' ').trim()
+  if (line === '') return NO_TITLE
+  return Array.from(line).slice(0, CANDIDATE_LIMITS.title).join('').trimEnd()
+}
+
+/** Name a dropped candidate from its raw form, which may be anything. */
+export function nameDropped(
+  family: string,
+  raw: unknown,
+  reason: string,
+): DroppedCandidate {
+  const fields = isRecord(raw) ? raw : {}
+  return {
+    family,
+    kind: isKind(fields.kind) ? fields.kind : 'unknown',
+    title: displayTitle(fields.title),
+    reason,
+  }
 }
 
 /** Render untrusted prose as a block quote, so it cannot become a heading or a list. */
@@ -1588,6 +1628,26 @@ function renderHeader(model: DigestModel): string[] {
 
 const MAX_STALE_LISTED = 50
 
+function renderDroppedCandidates(model: DigestModel): string[] {
+  if (model.droppedCandidates.length === 0) return []
+  const out = ['## Dropped candidates', '']
+  for (const item of model.droppedCandidates) {
+    out.push(
+      `- ${item.reason}: ${item.kind} from ${inline(item.family)}`,
+      `  ${quote(item.title)}`,
+    )
+  }
+  const total = Object.values(model.dropped).reduce((a, b) => a + b, 0)
+  const unlisted = total - model.droppedCandidates.length
+  if (unlisted > 0) {
+    out.push(
+      `- ${unlisted} more dropped candidates are counted above but not listed.`,
+    )
+  }
+  out.push('')
+  return out
+}
+
 function renderStale(model: DigestModel): string[] {
   const out = ['## Stale citations', '']
   if (model.staleCitations.length === 0) {
@@ -1649,7 +1709,7 @@ export function renderDigest(model: DigestModel): string {
       '',
     )
   }
-  out.push(...renderStale(model))
+  out.push(...renderDroppedCandidates(model), ...renderStale(model))
   return `${out.join('\n').trimEnd()}\n`
 }
 
