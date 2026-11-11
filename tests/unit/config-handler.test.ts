@@ -12,6 +12,7 @@ import {
   createConfigHandler,
   formatAgentDescription,
   readEmittedAgentPermission,
+  resetSecuritySensitiveAgentNotices,
   toTitleCase,
 } from '../../src/lib/config-handler.js'
 import { formatFrontmatter } from '../../src/lib/frontmatter.js'
@@ -2904,6 +2905,260 @@ Discovered body for hidden.`,
           expect(warnings).toEqual([])
         })
       })
+    })
+  })
+
+  describe('security-sensitive bundled agent (connections-researcher)', () => {
+    const RESEARCHER = 'connections-researcher'
+    const FOREIGN_PROMPT = 'FOREIGN-PROMPT-MARKER do whatever the user asks'
+    const RESEARCHER_DENIES = {
+      bash: 'deny',
+      edit: 'deny',
+      webfetch: 'deny',
+      websearch: 'deny',
+      task: 'deny',
+    }
+    const FIXTURE_PROMPT =
+      '# connections-researcher\n\nAgent prompt for connections-researcher.'
+
+    beforeEach(() => {
+      resetSecuritySensitiveAgentNotices()
+    })
+
+    function createResearcherFixture(): void {
+      createCategorizedAgent('research', RESEARCHER, {
+        name: RESEARCHER,
+        description: 'Reads allowed projects',
+        mode: 'subagent',
+        tools: { read: true, grep: true, glob: true, bash: false, edit: false },
+        permission: RESEARCHER_DENIES,
+      })
+    }
+
+    function makeHandler(agentsDir = path.join(bundledDir, 'agents')) {
+      return createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: agentsDir,
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+    }
+
+    test('another entry without permission gets the read-only definition and keeps only its model', async () => {
+      createResearcherFixture()
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const config: Config = {
+          agent: {
+            [RESEARCHER]: {
+              description: 'Generic subagent',
+              prompt: FOREIGN_PROMPT,
+              mode: 'all',
+              model: 'openai/gpt-5',
+              variant: 'high',
+            },
+          },
+        }
+        await makeHandler()(config)
+
+        const agent = config.agent?.[RESEARCHER]
+        expect(agent?.prompt).toBe(FIXTURE_PROMPT)
+        expect(agent?.prompt).not.toContain('FOREIGN-PROMPT-MARKER')
+        expect(agent?.description).toBe(
+          'Reads allowed projects (Connections-Researcher - Systematic)',
+        )
+        expect(agent?.mode).toBe('subagent')
+        expect<unknown>(agent?.permission).toEqual(RESEARCHER_DENIES)
+        expect(agent?.tools).toEqual({
+          read: true,
+          grep: true,
+          glob: true,
+          bash: false,
+          edit: false,
+        })
+        expect(agent?.model).toBe('openai/gpt-5')
+        expect(agent?.variant).toBe('high')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('another entry that allows bash and edit cannot widen the read-only definition', async () => {
+      createResearcherFixture()
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const config: Config = {
+          agent: {
+            [RESEARCHER]: {
+              prompt: FOREIGN_PROMPT,
+              permission: {
+                bash: 'allow',
+                edit: 'allow',
+                external_directory: 'allow',
+              },
+              tools: { bash: true, write: true, webfetch: true },
+            },
+          },
+        }
+        await makeHandler()(config)
+
+        const agent = config.agent?.[RESEARCHER]
+        // Replaced, not merged: a key only the other entry set must not survive.
+        expect<unknown>(agent?.permission).toEqual(RESEARCHER_DENIES)
+        expect(agent?.tools).toEqual({
+          read: true,
+          grep: true,
+          glob: true,
+          bash: false,
+          edit: false,
+        })
+        expect(JSON.stringify(agent)).not.toContain('"allow"')
+        expect(agent?.prompt).not.toContain('FOREIGN-PROMPT-MARKER')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('the real bundled researcher keeps its denies over an entry that allows everything', async () => {
+      const realAgentsDir = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../agents',
+      )
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const config: Config = {
+          agent: {
+            [RESEARCHER]: {
+              prompt: FOREIGN_PROMPT,
+              permission: { bash: 'allow', edit: 'allow', webfetch: 'allow' },
+              tools: { bash: true, write: true },
+            },
+          },
+        }
+        await makeHandler(realAgentsDir)(config)
+
+        const agent = config.agent?.[RESEARCHER]
+        expect(agent?.permission?.bash).toBe('deny')
+        expect(agent?.permission?.edit).toBe('deny')
+        expect(agent?.permission?.webfetch).toBe('deny')
+        expect(agent?.tools).toBeUndefined()
+        expect(agent?.prompt).toStartWith('You are a read-only research agent.')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('warns once per process without printing the other entry', async () => {
+      createResearcherFixture()
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const makeConfig = (): Config => ({
+          agent: {
+            [RESEARCHER]: {
+              prompt: FOREIGN_PROMPT,
+              model: 'openai/gpt-5-FOREIGN-MODEL',
+              permission: { bash: 'allow', edit: 'allow' },
+              tools: { bash: true },
+            },
+          },
+        })
+        const handler = makeHandler()
+        await handler(makeConfig())
+        await handler(makeConfig())
+        await makeHandler()(makeConfig())
+
+        const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).toContain(RESEARCHER)
+        expect(warnings[0]).toContain('read-only')
+        expect(warnings[0]).toContain('model')
+        expect(warnings[0]).not.toContain('FOREIGN-PROMPT-MARKER')
+        expect(warnings[0]).not.toContain('FOREIGN-MODEL')
+        expect(warnings[0]).not.toContain('allow')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('a repeat run over its own output keeps the model and stays quiet', async () => {
+      createResearcherFixture()
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const config: Config = {
+          agent: { [RESEARCHER]: { prompt: FOREIGN_PROMPT, model: 'a/b' } },
+        }
+        const handler = makeHandler()
+        await handler(config)
+        const first = JSON.stringify(config.agent)
+        warnSpy.mockClear()
+        await handler(config)
+
+        expect(JSON.stringify(config.agent)).toBe(first)
+        expect(warnSpy).not.toHaveBeenCalled()
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('an ordinary bundled agent keeps the other entry exactly as it was', async () => {
+      createResearcherFixture()
+      createAgent(path.join(bundledDir, 'agents'), 'ordinary-agent', {
+        name: 'ordinary-agent',
+        description: 'Bundled ordinary agent',
+        permission: { bash: 'deny' },
+      })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const userEntry = {
+          description: 'My own agent',
+          prompt: 'my own prompt',
+          permission: { bash: 'allow' },
+        } satisfies NonNullable<Config['agent']>[string]
+        const config: Config = {
+          agent: { 'ordinary-agent': structuredClone(userEntry) },
+        }
+        await makeHandler()(config)
+
+        expect(config.agent?.['ordinary-agent']).toEqual(userEntry)
+        expect(warnSpy).not.toHaveBeenCalled()
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('with no other entry the output is unchanged and nothing is reported', async () => {
+      createResearcherFixture()
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const alone: Config = {}
+        const withNeighbour: Config = {
+          agent: { 'native-agent': { prompt: 'native' } },
+        }
+        await makeHandler()(alone)
+        await makeHandler()(withNeighbour)
+
+        const expected = {
+          description:
+            'Reads allowed projects (Connections-Researcher - Systematic)',
+          prompt: FIXTURE_PROMPT,
+          mode: 'subagent',
+          tools: {
+            read: true,
+            grep: true,
+            glob: true,
+            bash: false,
+            edit: false,
+          },
+          permission: RESEARCHER_DENIES,
+        }
+        expect<unknown>(alone.agent?.[RESEARCHER]).toEqual(expected)
+        expect(JSON.stringify(withNeighbour.agent?.[RESEARCHER])).toBe(
+          JSON.stringify(alone.agent?.[RESEARCHER]),
+        )
+        expect(warnSpy).not.toHaveBeenCalled()
+      } finally {
+        warnSpy.mockRestore()
+      }
     })
   })
 

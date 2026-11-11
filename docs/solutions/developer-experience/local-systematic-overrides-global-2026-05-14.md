@@ -119,6 +119,11 @@ agent-observable config surface.
 
 ## Caveats
 
+- A security-sensitive bundled agent (today `connections-researcher`) is the
+  exception to preserving a native entry: the v1 config hook applies Systematic's
+  definition over any entry of the same name and keeps only that entry's `model`
+  and `variant`, because the agent is safe only through its own `permission`
+  denies and prompt.
 - Systematic-origin detection is currently heuristic. Tighten it when changing
   these predicates so user-authored entries that merely look Systematic-branded
   are not discarded by accident.
