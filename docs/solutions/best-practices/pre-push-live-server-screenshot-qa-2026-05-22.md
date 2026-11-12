@@ -1,7 +1,7 @@
 ---
 title: Pre-push live-server screenshot QA catches production bugs static gates miss
 date: 2026-05-22
-last_updated: 2026-06-04
+last_updated: 2026-11-11
 module: development workflow
 problem_type: best_practice
 component: development_workflow
@@ -48,9 +48,16 @@ For any branch that changes one of:
 add a live-server smoke step before the push command runs:
 
 ```bash
-# 1. Start the dev server in the background
+# 1. Start the dev server in its own process group (job control gives the
+#    background job a group whose ID equals its PID; works on macOS and Linux)
+PORT=4321
+if [ -n "$(lsof -ti tcp:$PORT)" ]; then
+  echo "port $PORT is busy: a stale server would be screenshotted" >&2
+  exit 1
+fi
+set -m
 bun run docs:dev &
-DEV_PID=$!
+PGID=$!
 
 # 2. Wait for it to come up
 sleep 8
@@ -65,9 +72,14 @@ agent-browser open http://localhost:4321<base>/<changed-page>/
 agent-browser wait 2500
 agent-browser screenshot --full <changed-page>.png
 
-# 5. Tear down
-kill $DEV_PID
+# 5. Tear down: kill the whole group, then confirm the port is free
+kill -- -$PGID
+sleep 1
+ORPHAN=$(lsof -ti tcp:$PORT)
+[ -z "$ORPHAN" ] || kill $ORPHAN
 ```
+
+Killing only the background PID stops the wrapper (`bun`, a shell, or a package manager) and can leave the real server holding the port.
 
 When using `agent-browser batch` with `--json`, chain all navigation+screenshot commands into a single call so the dev server doesn't get torn down between subprocess boundaries.
 
