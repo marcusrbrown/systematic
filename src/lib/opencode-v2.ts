@@ -24,6 +24,7 @@ import {
   READ_ONLY_AGENT_NAMES,
 } from './opencode-v2-tool-guard.js'
 import { installSearch } from './search-tool.js'
+import { isRecord } from './validation.js'
 
 /**
  * OpenCode v2 adapter.
@@ -151,6 +152,7 @@ export interface V2AgentRecord {
 export interface V2AgentEditor {
   get(id: string): unknown
   update(id: string, update: (agent: V2AgentRecord) => void): void
+  remove(id: string): void
 }
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
@@ -232,10 +234,53 @@ function writeAgentFields(
 }
 
 /**
+ * The model another definition of a read-only agent set, and nothing else of
+ * it. Only a `model` made of string parts survives; a variant that is not a
+ * string is dropped from it.
+ */
+function readForeignModel(entry: unknown): V2AgentRecord['model'] {
+  if (!isRecord(entry) || !isRecord(entry.model)) return undefined
+  const { providerID, id, variant } = entry.model
+  if (typeof providerID !== 'string' || typeof id !== 'string') return undefined
+  return typeof variant === 'string'
+    ? { providerID, id, variant }
+    : { providerID, id }
+}
+
+/**
+ * Replace another definition of a read-only agent with Systematic's. The
+ * prompt and the denies are the agent's safety, so the other entry is removed
+ * whole and the agent is created again from the plan. Only its model survives.
+ * Its permissions are never merged: a merge could only add to the agent's
+ * reach. The diagnostic never prints the other entry.
+ */
+function replaceReadOnlyAgent(
+  editor: V2AgentEditor,
+  planned: PlannedAgent,
+  existing: unknown,
+  reported: Set<string>,
+): void {
+  const foreignModel = readForeignModel(existing)
+  const key = `replaced:${planned.name}`
+  if (!reported.has(key)) {
+    reported.add(key)
+    console.error(
+      `${DIAGNOSTIC_PREFIX} agent "${planned.name}" is also defined by the host or another plugin; applied Systematic's read-only definition and kept only that entry's model`,
+    )
+  }
+  editor.remove(planned.name)
+  editor.update(planned.name, (agent) => {
+    writeAgentFields(agent, planned, reported)
+    if (foreignModel !== undefined) agent.model = foreignModel
+  })
+}
+
+/**
  * Create one planned agent on a transform editor. An id that already exists
- * belongs to the host or another plugin and is left alone. A same-named user
- * agent needs no check: user config applies after every plugin transform and
- * overlays what is created here.
+ * belongs to the host or another plugin and is left alone, except for an agent
+ * in `READ_ONLY_AGENT_NAMES`: that definition is replaced by ours. A same-named
+ * user agent needs no check for an ordinary agent: user config applies after
+ * every plugin transform and overlays what is created here.
  */
 export function applyPlannedAgent(
   editor: V2AgentEditor,
@@ -243,7 +288,12 @@ export function applyPlannedAgent(
   reported: Set<string> = new Set(),
 ): void {
   if (planned.config.disable === true) return
-  if (editor.get(planned.name) !== undefined) {
+  const existing = editor.get(planned.name)
+  if (existing !== undefined) {
+    if (READ_ONLY_AGENT_NAMES.includes(planned.name)) {
+      replaceReadOnlyAgent(editor, planned, existing, reported)
+      return
+    }
     const key = `clash:${planned.name}`
     if (reported.has(key)) return
     reported.add(key)

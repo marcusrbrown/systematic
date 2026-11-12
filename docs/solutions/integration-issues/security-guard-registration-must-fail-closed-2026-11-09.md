@@ -30,7 +30,7 @@ The OpenCode v2 adapter runs every installer through `createSafeGuard`, a wrappe
 
 Predicted, not observed. With the installer run through `guard.async`:
 
-- A rejected `ctx.tool.hook('execute.before', ...)` call would produce one `systematic: toolGuard installer failed: <message>` line and nothing else. The line format is `reportFailure` (`src/lib/opencode-v2.ts:72-76`) and the label is `${slot} installer`, built in `setupOpenCodeV2`. The plugin would keep working and the agent would stay available.
+- A rejected `ctx.tool.hook('execute.before', ...)` call would produce one `systematic: toolGuard installer failed: <message>` line and nothing else. The line format is `reportFailure` (`src/lib/opencode-v2.ts:73-77`) and the label is `${slot} installer`, built in `setupOpenCodeV2`. The plugin would keep working and the agent would stay available.
 - If `agents` ran ahead of the guard in the installer order, the agent would be exposed first.
 
 ## What Didn't Work
@@ -45,9 +45,9 @@ These are traps read off the code, not recorded attempts.
 
 Make the guard a prerequisite of the agents it protects, and take it out of the never-throw path.
 
-1. **Install the guard first.** `INSTALLER_ORDER` starts with `toolGuard`, with a comment saying the protected agents are exposed only after it has registered (`src/lib/opencode-v2.ts:288-299`).
-2. **Run it outside `guard.async`.** In `setupOpenCodeV2` the `toolGuard` slot is handled by `installGuardOrReport`, not by the wrapper (`src/lib/opencode-v2.ts:430-453`).
-3. **On failure, log once and remove the protected agents from the plan.** `installGuardOrReport` catches the rejection, reports `tool guard registration failed: <message>; the read-only agents (connections-researcher) are not installed`, and returns `false` (`src/lib/opencode-v2.ts:455-475`). `withoutGuardedAgents` then returns a snapshot whose plan has no agent in `READ_ONLY_AGENT_NAMES`, and the later `agents` installer never sees it (`src/lib/opencode-v2.ts:477-488`).
+1. **Install the guard first.** `INSTALLER_ORDER` starts with `toolGuard`, with a comment saying the protected agents are exposed only after it has registered (`src/lib/opencode-v2.ts:338-349`).
+2. **Run it outside `guard.async`.** In `setupOpenCodeV2` the `toolGuard` slot is handled by `installGuardOrReport`, not by the wrapper (`src/lib/opencode-v2.ts:480-503`).
+3. **On failure, log once and remove the protected agents from the plan.** `installGuardOrReport` catches the rejection, reports `tool guard registration failed: <message>; the read-only agents (connections-researcher) are not installed`, and returns `false` (`src/lib/opencode-v2.ts:505-525`). `withoutGuardedAgents` then returns a snapshot whose plan has no agent in `READ_ONLY_AGENT_NAMES`, and the later `agents` installer never sees it (`src/lib/opencode-v2.ts:527-538`).
 4. **Let registration reject.** `installToolGuard` does not catch the failed `hook` call; it awaits it and lets the rejection out (`src/lib/opencode-v2-tool-guard.ts:77-79`). Only the registration is allowed to fail loudly; every other agent still installs.
 
 ## Why This Works
@@ -58,7 +58,7 @@ Whether the guard registered decides what the rest of setup may expose, so that 
 
 - A protective hook that gates a feature is not a normal installer. Install it before whatever it protects, run it outside any blanket never-throw wrapper, and on failure log once and withhold the protected thing.
 - The guard's own refusal hook must throw too, and it must not be wrapped for the same reason (`src/lib/opencode-v2-tool-guard.ts:72-75`).
-- Pin each branch with a unit test, not only the happy path. The `describe` block `the read-only tool guard is a prerequisite for the researcher` in `tests/unit/opencode-v2.test.ts:692-793` covers: the agent is installed when the guard registers; it is not installed when the hook call rejects, and the message is logged exactly once and names the cause; it is not installed when the host has no hook registry at all; the guard installer runs before the agents installer; and a guard installer that throws holds the agent back from the agents installer while other agents remain.
+- Pin each branch with a unit test, not only the happy path. The `describe` block `the read-only tool guard is a prerequisite for the researcher` in `tests/unit/opencode-v2.test.ts:693-794` covers: the agent is installed when the guard registers; it is not installed when the hook call rejects, and the message is logged exactly once and names the cause; it is not installed when the host has no hook registry at all; the guard installer runs before the agents installer; and a guard installer that throws holds the agent back from the agents installer while other agents remain.
 - When reviewing a "never throw" wrapper, list what it wraps and ask of each: if this fails silently, is the system more open than before? If yes, it does not belong inside.
 
 ## Related Issues
