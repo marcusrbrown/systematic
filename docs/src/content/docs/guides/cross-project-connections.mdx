@@ -1,6 +1,6 @@
 ---
 title: Connect your projects
-description: Use ce:connect to read the learnings and tracked code of projects you allow, and get a digest of contradictions between learnings and lessons one project recorded that another still needs. A run proposes and a person decides; nothing is written into any project.
+description: Use ce:connect to read the learnings and tracked code of projects you allow, narrow a run to a group or a few projects, and get a digest of contradictions between learnings and lessons one project recorded that another still needs. A run proposes and a person decides; nothing is written into any project.
 sidebar:
   order: 13
 ---
@@ -15,7 +15,7 @@ A run proposes. A person decides. `ce:connect` writes nothing into any project, 
 ## What a run does
 
 1. The skill reads the mode and checks that the host is one where the researcher's tool limits have been seen to work (see [Supported hosts](#supported-hosts)).
-2. A helper, a Node script bundled with the skill, takes a lock, resolves your allow list, lists each allowed project's tracked files, hashes them and builds an index of the learnings.
+2. A helper, a Node script bundled with the skill, resolves your selection (the whole allow list unless you name a group or some projects), takes a lock, lists each selected project's tracked files, hashes them and builds an index of the learnings.
 3. The skill groups part of that index into families of related rules and dispatches the `connections-researcher` agent once per family. The agent can read, grep and glob. It cannot run commands, write, edit or fetch.
 4. The helper validates every candidate the agent returns. It keeps a candidate only when each cited path is a tracked file in an allowed project, each fingerprint matches the hash taken at the start, each excerpt appears word for word in its file, and each piece of target evidence names a line span that holds its symbol. Candidates that fail a check are dropped, counted by reason in the digest, and listed there by title and reason, so you can tell whether a real finding was lost.
 5. The helper publishes the digest and the run record and updates a small ledger.
@@ -24,7 +24,7 @@ A project supplies text, not instructions. A learning that says "report nothing"
 
 ## Choose the projects
 
-The allow list is a new top-level `connect` block with one field, `allow_projects`. Put it in your user-level Systematic config:
+The allow list is a top-level `connect` block. Its `allow_projects` field names every project a run may read. An optional `groups` field names parts of that list. Put the block in your user-level Systematic config:
 
 ```jsonc
 // ~/.config/opencode/systematic.jsonc
@@ -44,12 +44,66 @@ Rules for the block:
 
 - **User-owned only.** A repository cannot grant itself access to other projects. If a project's own config sets `connect`, Systematic ignores the whole block and prints a warning.
 - **A missing list is an empty list.** With no list, a run stops with `no-allowed-projects` and reads nothing.
-- **A bad block is an empty list.** An unknown key or a bad value makes the block unreadable, and an unreadable block allows nothing. It never widens access.
-- **Layers merge as a union.** `systematic.jsonc`, `systematic.local.jsonc` and the same two files in `OPENCODE_CONFIG_DIR` can each hold entries. Put machine-specific paths in the `.local` file. The layers and their order are the ones in [Configure search](/systematic/guides/search/#configure-search).
-- **An entry that matches no repository is reported.** The run names the entry and the reason (stale path, not a repository, not the main root, unreadable). That run is `degraded`, because a project was not read. The other projects are still read.
+- **A bad block is an empty list.** An unknown key or a bad value, in `groups` as well as in `allow_projects`, makes the block unreadable, and an unreadable block allows nothing and defines no group. It never widens access.
+- **Layers merge as a union.** `systematic.jsonc`, `systematic.local.jsonc` and the same two files in `OPENCODE_CONFIG_DIR` can each hold entries. Put machine-specific paths in the `.local` file. The layers and their order are the ones in [Configure search](/systematic/guides/search/#configure-search). Groups merge by name instead: a later file replaces a same-named group whole.
+- **An entry that matches no repository is reported.** The run names the entry and the reason (stale path, not a repository, not the main root, unreadable). That run is `degraded`, because a project was not read. The other projects are still read. A run narrowed to a group or to some projects does not touch the entries it does not name, so an entry that matches nothing does not degrade it.
 - **Unsafe config directories are refused.** If `OPENCODE_CONFIG_DIR` points inside a checkout or inside an allowed project, the run does not read it.
 
 The field reference is in [Configuration](/systematic/reference/configuration/#connect).
+
+### Groups
+
+A group is a name for part of the allow list. Define groups beside `allow_projects`:
+
+```jsonc
+// ~/.config/opencode/systematic.jsonc
+{
+  "connect": {
+    "allow_projects": [
+      "~/src/github.com/me/app",
+      "~/src/github.com/me/shared-lib",
+      "~/src/github.com/me/docs-site"
+    ],
+    "groups": {
+      "backend": [
+        "~/src/github.com/me/app",
+        "~/src/github.com/me/shared-lib"
+      ]
+    }
+  }
+}
+```
+
+- **Name.** 1 to 64 characters of lowercase letters, digits and hyphens, starting with a letter or digit.
+- **Members.** One to 64 entries in the same form as an `allow_projects` entry. At most 32 groups per file.
+- **User-owned only,** like the rest of the block. A project's own config cannot define a group.
+- **A group never adds a project.** Each member must resolve to a project on the allow list. The config loader checks only the shape of a group. The membership check happens when a run selects the group, and a member that is not on the allow list stops that run.
+
+### Pick projects for one run
+
+For a one-off narrower run, name the projects instead of defining a group. Each entry is a project's directory name or its 12-character project key. A directory name shared by two allowed projects is refused, and the refusal lists their keys so you can name one of them.
+
+### Selection words
+
+| Words | What the run reads |
+|---|---|
+| None | The whole allow list. |
+| `group:backend` | The members of that group. |
+| `projects:app,shared-lib` | The two named projects. |
+| The same word twice or more | That word, counted once. |
+
+No word ever reads more than the allow list. A word that would is refused.
+
+A bad selection stops the run before it takes the lock, in interactive and headless mode alike. Nothing is written, and the run ends `Connect failed` with the reason on the line before it. It never falls back to the whole allow list, because you asked for a narrower run.
+
+| Reason | Cause |
+|---|---|
+| `conflicting-selection` | A `group:` word together with a `projects:` word, two different `group:` words, or two different `projects:` words. `projects:a,b` and `projects:b,a` are different words. |
+| `unknown-group` | No group of that name is in your config. |
+| `unknown-project` | No allowed project has that directory name or key. |
+| `ambiguous-project` | Two allowed projects share that directory name. The refusal lists their keys. |
+| `group-member-not-allowed` | A member of the group is not on the allow list. The refusal names the group and the member, and says why when the member did not resolve to a repository. |
+| `invalid-request` | A word is malformed: an empty value, an empty entry between commas, more than 32 words, or a word over 2,048 characters. |
 
 ## Run it
 
@@ -59,7 +113,19 @@ In an interactive session:
 /ce:connect
 ```
 
-The skill names the host it found, lists the projects it will read and any allow-list entries that did not match, and states the limits (see [Limits](#limits)). On a host without a recorded deny it warns that the tool limits are unverified and asks you before it dispatches. Each family is dispatched one at a time. At the end the skill prints a summary, the digest path and a candidate line for each candidate, and offers to record your decisions.
+The skill names the host it found, lists the projects it will read, what the run was narrowed to and any allow-list entries that did not match, and states the limits (see [Limits](#limits)). On a host without a recorded deny it warns that the tool limits are unverified and asks you before it dispatches. Each family is dispatched one at a time. At the end the skill prints a summary, the digest path and a candidate line for each candidate, and offers to record your decisions.
+
+### Run a group or a few projects
+
+```text
+/ce:connect group:backend
+/ce:connect projects:app,shared-lib
+/ce:connect group:backend mode:headless
+```
+
+Selection words go anywhere in the arguments. Like `mode:`, they are read from the skill arguments, or from the text that started the run on a host that passes no arguments. They are never read from a file in a project. The skill passes the words to the helper unchanged, and the helper resolves them, removes identical repeats and decides conflicts, so the result is the same on every host.
+
+The researcher is given only the selected projects, so a contradiction with a project outside the selection is not found by that run. A selection is a narrower read, not a sandbox: the researcher's read tools are still not path-scoped (see [Limits](#limits)).
 
 ### Headless mode
 
@@ -77,10 +143,10 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 
 | Final line | Meaning |
 |---|---|
-| `Connect complete` | The slice of rules offered to this run was fully covered, every allowed project was read and nothing failed. A run that found nothing is still `complete`; its digest says "no candidate in searched scope". |
-| `Connect degraded` | Something was not read: a project was missing, a bound on the file inventory or on a batch was reached, a family did not finish, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`), or an offered rule was not covered. The digest names what. A degraded run is never proof that nothing is there. |
+| `Connect complete` | The slice of rules offered to this run was fully covered, every selected project was read and nothing failed. A run that found nothing is still `complete`; its digest says "no candidate in searched scope". A `fetch:` whose candidates were all checked and none refused is `complete` too. |
+| `Connect degraded` | Something was not read: a project was missing, a bound on the file inventory or on a batch was reached, a family did not finish, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`), or an offered rule was not covered. The digest names what. A degraded run is never proof that nothing is there. A `fetch:` that refused at least one candidate is `degraded`. |
 | `Connect busy` | Another run holds the lock, or its holder cannot be verified. Nothing was written and nothing was dispatched. |
-| `Connect failed` | Any other stop: a bad mode token, the helper missing, a host without a recorded deny in headless mode, consent declined, no allowed projects, a malformed batch or a helper error. Nothing was published. |
+| `Connect failed` | Any other stop: a bad mode token, a refused selection, a bad or unusable `fetch:`, the helper missing, a host without a recorded deny in headless mode, consent declined, no allowed projects, a malformed batch or a helper error. Nothing was published. |
 
 A scheduler that reads the last line of the output can branch on these four.
 
@@ -100,7 +166,7 @@ With that line, a headless run on OpenCode 1.19.5 ran the whole pipeline and end
 
 A run covers a slice of your learnings, not all of them. The helper offers at most 6 families of 8 rules each. It offers first the rules that were never covered, or whose learning changed since they were covered, and then the least recently covered ones. Inside each group it takes the projects in turn, so a slice spans projects. The order depends only on the index and on what committed runs covered, so running `ce:connect` again sweeps the whole index and then starts over with the oldest.
 
-The researcher still searches every allowed project for evidence. A rule that is not in this run's slice can be the other half of a contradiction with one that is.
+The researcher still searches every project the run reads for evidence. A rule that is not in this run's slice can be the other half of a contradiction with one that is.
 
 The digest header and the summary carry one progress line:
 
@@ -111,6 +177,17 @@ Sweep: covered 48 of 61 rules (current hashes); this run covered 48; about 1 run
 A rule counts as covered only while its learning still has the hash it had when it was covered. A run that could not read a project in full does not forget what earlier runs covered there: the coverage records of that project stay until it is read in full again, and a rule whose file could not be read stays as it was. Only a learning that is gone from a project the run read in full is forgotten. When the sweep is finished, the line says so and says the next run starts again with the least recently covered rules. Rules outside the slice are not a reason to degrade a run.
 
 Coverage is recorded only for a run that committed. An aborted or crashed run records none.
+
+### Each selection has its own progress
+
+A run over a group or some projects indexes only the selected projects, and its progress line counts only those rules. Coverage is kept apart for each selection:
+
+- **A run with no selection** keeps the coverage it always had. A group run never counts toward it, so a group run that covered a rule does not stop a later whole-list run from offering that rule.
+- **A group or a pick** is identified by the set of projects it selects. The group's name is not part of the identity: two groups with the same members share one sweep, and a group that gains or loses a member starts a fresh sweep.
+- **A selection of the whole list** is still a selection. It does not count as coverage for a run with no selection.
+- **A narrowed run never forgets what it did not read.** The coverage of unselected projects, and of other selections, stays as it was.
+
+The ledger holds one shared cap of 20,000 coverage records across all selections. When it is full, the oldest records that the current run did not index go first, whichever selection they belong to.
 
 ## Where the output goes
 
@@ -125,8 +202,8 @@ The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/
   ledger.json            the minimal ledger
 ```
 
-- **The digest** has three sections: candidates, connections already recorded (the target already has a learning citing the same source), and stale citations. Each candidate shows its sources with paths, fingerprints and excerpts, any counterevidence, an overlap check, and a next step. Free text is shown as quoted, untrusted evidence.
-- **The run record** (`run.json`) holds the candidate block that `ce:compound` reads when you promote a lesson.
+- **The digest** has three sections: candidates, connections already recorded (the target already has a learning citing the same source), and stale citations. Each candidate shows its sources with paths, fingerprints and excerpts, any counterevidence, an overlap check, and a next step. Free text is shown as quoted, untrusted evidence. Its header carries a `Selection:` line that names the whole allow list, the group, or the picked projects, with the selection's id.
+- **The run record** (`run.json`) holds the candidate block that `ce:compound` reads when you promote a lesson. It names the selection too, and records each project's `repo` (the lowercase `owner/repo` of its `origin` remote) and the commit its HEAD names, so the record can be matched to a checkout on another machine. The helper reads both from `.git` files, runs no git command for them and opens no connection. Only GitHub remotes count, credentials in a URL are dropped, and a project with no GitHub `origin` records neither.
 - **Stale citations** are a deterministic check of which `path:line` citations in your learnings still hold. A citation is `passed`, `not-in-span` (the symbol is not in the cited lines, with a flag when it is elsewhere in the file) or `unchecked` (with a reason). It reports which citations still hold. It does not promise that code has not moved. The check stops at a cap per project (500 citations). A project that reaches it is named under "Not read or not covered" in the digest and the run record keeps the counts, but the run is not marked `degraded` for that alone.
 - **Retention.** Run directories older than 30 days are pruned at the start of a run. The ledger is never pruned.
 - **Publishing is one rename.** A run is built in `runs/<run id>.tmp/` and renamed to `runs/<run id>/`. The ledger is updated after the rename. If a crash falls between the two, the digest exists but its candidates are not in the ledger, and the next run proposes them once more. If the ledger cannot be written after the rename, or the new ledger would pass its 16 MB limit, the old ledger stays as it was, and the run is `degraded` with the reason `ledger-write-failed`. The committed digest and run record are rewritten to say so. The next run also removes leftover `.tmp` directories.
@@ -163,6 +240,55 @@ Run `ce:compound` from the target project, with the candidate line:
 
 A promoted learning never copies another project's text. It cites each source as `<project>:<path>@<fingerprint>` in a `## Provenance` section in the body.
 
+### Bring a scheduled run's candidates here
+
+A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:<run>` brings the candidates of a run of Systematic's `ce:connect` workflow to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. This release does not include that workflow.
+
+```text
+/ce:connect fetch:<run>
+```
+
+`<run>` is the GitHub run id, digits only. A `fetch:` word stands alone: combined with `group:` or `projects:` it stops with `conflicting-selection`, and it takes no `mode:`, because a fetch dispatches no researcher, asks nothing and observes no host.
+
+The fetch needs the GitHub CLI (`gh`), logged in with a token that can read the Actions runs and artifacts of `marcusrbrown/systematic`. The skill runs `gh` with your own credentials, as explicit commands. The helper never touches the network. In order:
+
+1. **Check the run before downloading anything.** Its workflow must be `.github/workflows/connect.yaml` and its event must be `schedule` or `workflow_dispatch`. A run of another workflow, or one started by a pull request, is refused whatever its artifacts hold.
+2. **Pick the artifact** named `connect-run-<run>-<attempt>` with the highest attempt, and download it into a fresh temporary directory that is removed afterwards.
+3. **Import.** The helper reads only `run.json` from that directory (a plain file of at most 2 MiB; never a symlink), as untrusted input.
+
+The import maps each project in the record to exactly one allowed local checkout by its `origin` remote (`owner/repo`). It then recomputes every candidate id and rule id from your local roots, never trusting a recorded one, and re-verifies each cited file's fingerprint and each excerpt against your files. It inserts the accepted candidates into your local ledger as a local run, so the usual promotion lines come out unchanged, and prints them. It never changes coverage, and it writes no learning.
+
+A candidate is refused, and named, when its evidence does not hold on your machine. The fixed reasons include:
+
+| Reason | Meaning |
+|---|---|
+| `file-changed` | A cited file differs from the file the run read. The refusal names the file. |
+| `repo-not-allowed` | No allowed checkout has the recorded repository as its `origin`. |
+| `repo-ambiguous` | Two allowed checkouts do. The refusal lists their keys. |
+| `project-without-repo` | The run recorded no GitHub remote for a project of the candidate. |
+| `file-not-tracked`, `file-symlink`, `file-vanished` | A cited file is not tracked locally, is a symlink, or is gone. |
+| `path-rejected` | A cited path is absolute, climbs out of its project, or is not under `docs/solutions`, `docs/plans` or `docs/brainstorms`. |
+| `candidate-id-mismatch`, `rule-id-mismatch` | The record was changed after it was written. |
+| `check-failed` | A local check failed, such as an excerpt that is not in its file. |
+
+A refused candidate is not proof the lesson is wrong. A later scheduled run proposes it again while its evidence holds.
+
+Your checkout may be at a different commit than the one the run read. That is accepted when every check passes, and the summary shows both commits for each project. A candidate you already decided locally is skipped and named. A rerun of the same fetch writes nothing new and prints the lines of the candidates that are still open.
+
+If the fetch stops before the import, the skill prints one of these reasons: `not-a-connect-run`, `unsupported-run-event`, `run-not-found`, `gh-not-authenticated`, `artifact-not-found`, `artifact-expired` or `download-failed`. An artifact is kept for a limited time. When it has expired, tick Rejected on the candidate in the run's report, or wait for a later run to propose it again.
+
+### Settle a candidate on a report
+
+A scheduled run's report lists every candidate that is still open, oldest first, each with a `fetch` line for the run that found it and two boxes: **Promoted** and **Rejected**. Tick Promoted after you promoted the candidate locally, or Rejected to dismiss it.
+
+The next run reads the ticks back with the helper's `apply-ticks` operation and records each as a decision with the reason `settled in report #<n>`, where `<n>` is the report's issue number. A settled candidate leaves the list. Only the generated lines count:
+
+- **Only the boxes the report generated.** The operation parses one delimited section of the body, outside any code fence, and each box carries the candidate id in a marker. A `- [x]` that appears inside a candidate's quoted text records nothing.
+- **Only candidates the report listed.** Each body names the list of ids it rendered. A tick for an id outside that list, or for one the ledger no longer knows, is reported as unresolved. It is never fatal.
+- **One decision per candidate.** Ticking both boxes is a conflict and is skipped. A tick already recorded with the same status and reason is skipped, so reading the same body twice changes nothing.
+
+The ledger a scheduled run keeps is separate from your local ledger, and nothing flows between them. Promoting locally through `fetch` does not settle the candidate on the report; tick Promoted for that. The helper carries `apply-ticks` and `render-report`, which writes the report body, so that a workflow can post and read these reports. This release does not include that workflow, and a local run never calls either operation.
+
 ### Record the decision
 
 After you promote or turn down a candidate, tell the ledger. In an interactive run the skill offers to do this for you. A candidate is `candidate`, `promoted` or `rejected`, and `promoted` and `rejected` carry a reason. "Context-specific, no write needed" is `rejected` with that reason. If a learning was written but the ledger update failed, `ce:compound` prints the candidate id and destination so you can record the decision. A later run also reports learnings that carry a provenance marker with no recorded decision.
@@ -175,9 +301,11 @@ The ledger holds identities, source paths, fingerprints, statuses, reasons and r
 
 | Operation | What it does |
 |---|---|
-| `ledger show` | Lists entries, including open candidates whose digest was pruned, 500 at a time. The answer has `total` and `nextOffset`; pass `{ "offset": <n> }`, or `ledger show --offset <n>` on the command line, to read on until `nextOffset` is `null`. |
-| `ledger clear` | Removes the ledger and its coverage. The next run proposes everything again and the sweep starts over. |
+| `ledger show` | Lists entries, including open candidates whose digest was pruned, 500 at a time. The answer has `total` and `nextOffset`; pass `{ "offset": <n> }`, or `ledger show --offset <n>` on the command line, to read on until `nextOffset` is `null`. The answer also has a `coverage` block with the number of covered rules for the whole-list sweep and for each selection, labelled `group:<name>` or `projects:<a>,<b>` while the run that last covered it is kept. |
+| `ledger clear` | Removes the ledger and its coverage, for every selection. The next run proposes everything again and every sweep starts over. |
 | `ledger unlock` | Removes a lock that no run holds. Use it only when you know no other run is active. |
+
+The ledger file is at version 2. A version 1 ledger is converted by the first run that writes it: its coverage becomes the whole-list sweep, and its entries are unchanged. A ledger with any other version cannot be read and is never replaced. A helper that predates version 2 reads a version 2 ledger as unreadable and overwrites nothing, so update the skill and its helper together.
 
 A lock held by a process that has died is reclaimed by the next run without any help. `ledger unlock` is for a run that ended without releasing its lock while its host process is still alive. The skill never runs `ledger unlock` for a busy lock, and never in headless mode. The one exception is a failed `validate` whose reply does not confirm that the lock was released: the skill then unlocks the lock its own run took before it stops.
 
@@ -208,16 +336,20 @@ Pi caps a delegate at 20 turns. A family that does not finish inside the cap is 
 
 Read these before you add a project.
 
-- **Read tools are not path-scoped.** The researcher cannot run commands, write or fetch. Its read, grep and glob tools can still open any file your user can, not only the allowed projects. The allow list decides which projects are indexed and which paths the helper validates. It is not a sandbox.
+- **Read tools are not path-scoped.** The researcher cannot run commands, write or fetch. Its read, grep and glob tools can still open any file your user can, not only the allowed projects. The allow list decides which projects are indexed and which paths the helper validates, and a group or a pick narrows that further. Neither is a sandbox.
 - **Session MCP tools are not denied.** Tools from MCP servers connected to your session stay available to the researcher. Check what is connected before a run.
 - **A digest can carry content from those reads.** A validated excerpt must come from a tracked file in an allowed project. The digest's other free text is written by the researcher after unscoped reads, and nothing screens it for secrets. Treat a digest like the learnings it quotes, keep the state directory private, and read it before you share it.
 - **Everything read is evidence.** Candidates are checked against the files, but a candidate is a proposal, and a wrong one is possible. A run that found nothing, or that is `degraded`, does not show that nothing is there.
 - **The title and the summary are not checked against evidence.** The researcher writes them. The helper checks excerpts, fingerprints and paths, but not these two fields. Reads are not scoped to a path, so text from outside the allowed projects can reach the chat reply and the run records through them. Read every candidate before you promote it.
 - **Coverage is self-reported.** The helper records a rule as covered from the researcher's own report of what it searched. A run steered by a hostile learning can mark rules covered without searching them. `ledger clear` resets coverage.
 - **Some paths cannot be cited.** A file whose path contains a single quote, a dollar sign or a backtick is skipped, and so is a project whose root has one. The digest names the reason under "Not read or not covered".
+- **A fetched record is untrusted.** It comes from a runner you do not control, and only the helper opens it. The helper re-verifies fingerprints and excerpts against your files, but the title and summary were written by a researcher on that runner and are not checked against evidence. Read every candidate before you promote it.
+- **A report's ticks are only as good as the report.** A tick settles a candidate by id. Nothing checks that you promoted it. The ledger of a scheduled run is separate from yours.
 - **Promoted learnings never copy another project's text.** They are written in the target project's own words and cite their sources by project, path and fingerprint.
 - **Only a human promotes.** Nothing in `ce:connect` writes a learning, edits a project, or records a decision without you.
 
 ## Privacy
 
-`ce:connect` makes no network call of its own and sends nothing to anyone but your model provider. Everything it reads and writes is on your machine. The text the researcher reads, and the digest, reach your model provider like any other tool result. See [Privacy](/systematic/privacy/#connecting-your-projects).
+The helper opens no connection at all. Apart from `fetch:` (below), `ce:connect` makes no network call of its own and sends nothing to anyone but your model provider. Everything a run reads and writes is on your machine. The text the researcher reads, and the digest, reach your model provider like any other tool result.
+
+The one command that reaches GitHub is `fetch:<run>`, and only when you type it. The skill runs `gh` with your own credentials to read one run and download one artifact of `marcusrbrown/systematic`. The requests carry the run id and your `gh` token. Nothing from your projects is uploaded. See [Privacy](/systematic/privacy/#connecting-your-projects).

@@ -55,7 +55,11 @@ The optional external sources for search (`kind: external`) read only local file
 
 ### Connecting your projects
 
-The `ce:connect` skill reads the learnings and tracked code of projects you list in the `connect.allow_projects` config field. It opens no network connection of its own and sends nothing anywhere. Its digest, run record and ledger are written only to a state directory on your machine (`$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/systematic/connect`), with owner-only permissions. Run directories are deleted after 30 days, and `ledger clear` deletes the ledger. What the researcher reads reaches your model provider like any other tool result, and nothing is redacted from it. Read tools are not limited to the listed projects, and the digest can carry content from those reads. The [connect guide](/systematic/guides/cross-project-connections/#limits) explains the limits.
+The `ce:connect` skill reads the learnings and tracked code of projects you list in the `connect.allow_projects` config field, or of the part of that list you name with a `connect.groups` group or a `projects:` pick. Its helper opens no network connection and sends nothing anywhere. Its digest, run record and ledger are written only to a state directory on your machine (`$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/systematic/connect`), with owner-only permissions. Run directories are deleted after 30 days, and `ledger clear` deletes the ledger. What the researcher reads reaches your model provider like any other tool result, and nothing is redacted from it. Read tools are not limited to the listed projects, and the digest can carry content from those reads.
+
+The one command that reaches GitHub is `fetch:<run>`, and it runs only when you type it. The skill then runs `gh api` and `gh run download` with your own `gh` login, against the run and artifact of one run of the Systematic repository. The requests carry the run id and your `gh` token to GitHub, and nothing from your projects. The downloaded record goes to a temporary directory that is removed afterwards, and the candidates that pass the local checks are written to the same state directory as any other run. The helper still opens no connection.
+
+The [connect guide](/systematic/guides/cross-project-connections/#limits) explains the limits.
 
 ## Contact
 
