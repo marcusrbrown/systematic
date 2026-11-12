@@ -2,7 +2,7 @@
 title: "Host-contract evidence is CI-owned: nobody re-runs the suite by hand"
 module: ".github/workflows/main.yaml host-contract jobs + scripts/host-contract-guard.ts + scripts/lib/opencode-pin.ts"
 date: 2026-09-04
-last_updated: 2026-10-31
+last_updated: 2026-11-12
 problem_type: workflow_issue
 component: testing_framework
 severity: medium
@@ -45,7 +45,11 @@ them and rejects anything that is not an exact version
 plugin devDependencies in `package.json` that move with it, and
 `tests/unit/opencode-pin.test.ts` fails when the two sides differ. A Renovate
 regex manager bumps `v2` and `v1` and never a floor
-(`.github/renovate.json5`). `readOpencodeSdkPin()` returns the v1
+(`.github/renovate.json5`). The ce:connect host-support rows in
+`src/lib/connect-config.ts` restate the v1, v2 and Pi versions; each carries a
+`// renovate:` annotation that a second regex manager reads, so the rows bump in
+the same group PR as the pins. No test compares a restated version with a pin:
+the host jobs on that PR are the proof at the new version. `readOpencodeSdkPin()` returns the v1
 current pin (`scripts/lib/opencode-pin.ts:204-206`). `EXACT_OPENCODE_VERSION` is resolved
 from the pin file for the host line the run targets
 (`tests/integration/fixtures/opencode-host.ts:31-32`), not hand-edited (#916).
