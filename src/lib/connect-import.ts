@@ -508,33 +508,32 @@ interface Landing {
   readonly facts: ProjectFacts
 }
 
-class Landings {
-  private readonly byRecorded = new Map<string, ProjectMapping>()
-  private readonly cache = new Map<string, ProjectFacts | undefined>()
+interface Landings {
+  readonly projects: readonly ImportProject[]
+  mappingOf(root: string): ProjectMapping | undefined
+  projectOf(root: string): ImportProject | undefined
+  /** The facts of a local checkout, read once per checkout. */
+  factsOf(local: LocalCheckout): ProjectFacts | undefined
+}
 
-  constructor(
-    readonly projects: readonly ImportProject[],
-    readonly locals: readonly LocalCheckout[],
-    private readonly factsFor: (root: string) => ProjectFacts | undefined,
-  ) {
-    for (const project of projects) {
-      this.byRecorded.set(project.root, mapProject(project, locals))
-    }
+function createLandings(
+  projects: readonly ImportProject[],
+  locals: readonly LocalCheckout[],
+  factsFor: (root: string) => ProjectFacts | undefined,
+): Landings {
+  const byRecorded = new Map<string, ProjectMapping>()
+  for (const project of projects) {
+    byRecorded.set(project.root, mapProject(project, locals))
   }
-
-  mappingOf(root: string): ProjectMapping | undefined {
-    return this.byRecorded.get(root)
-  }
-
-  projectOf(root: string): ImportProject | undefined {
-    return this.projects.find((project) => project.root === root)
-  }
-
-  factsOf(local: LocalCheckout): ProjectFacts | undefined {
-    if (!this.cache.has(local.root)) {
-      this.cache.set(local.root, this.factsFor(local.root))
-    }
-    return this.cache.get(local.root)
+  const cache = new Map<string, ProjectFacts | undefined>()
+  return {
+    projects,
+    mappingOf: (root) => byRecorded.get(root),
+    projectOf: (root) => projects.find((project) => project.root === root),
+    factsOf(local) {
+      if (!cache.has(local.root)) cache.set(local.root, factsFor(local.root))
+      return cache.get(local.root)
+    },
   }
 }
 
@@ -565,10 +564,11 @@ function land(shape: Shape, landings: Landings): Check<Map<string, Landing>> {
   return out
 }
 
+/** Sources must be learnings in the corpus; counterevidence and target evidence may be any tracked file. */
 function checkPaths(shape: Shape): ImportRefusalBody | undefined {
   const groups: Array<[ReadonlyArray<{ readonly path: string }>, boolean]> = [
     [shape.sources, true],
-    [shape.counterevidence, true],
+    [shape.counterevidence, false],
     [shape.targetEvidence.map((item) => ({ path: String(item.path) })), false],
   ]
   for (const [items, corpusOnly] of groups) {
@@ -781,7 +781,7 @@ function named(
  * refusal never stops the others.
  */
 export function verifyRecord(input: VerifyInput): Verification {
-  const landings = new Landings(
+  const landings = createLandings(
     input.record.projects,
     input.locals,
     input.factsFor,

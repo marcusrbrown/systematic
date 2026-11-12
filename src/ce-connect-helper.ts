@@ -2780,22 +2780,44 @@ const NO_PLACEMENT: Placement = {
   order: [],
 }
 
-/** The ids each kept import run holds, newest run first. */
+/**
+ * What a candidate stands on: its target, sources, target evidence and
+ * counterevidence. A kept record is the same candidate only when this matches,
+ * because the id is the same across changed fingerprints.
+ */
+function evidenceOf(candidate: {
+  readonly target?: unknown
+  readonly sources?: unknown
+  readonly targetEvidence?: unknown
+  readonly counterevidence?: unknown
+}): string {
+  return JSON.stringify([
+    candidate.target,
+    candidate.sources,
+    candidate.targetEvidence,
+    candidate.counterevidence,
+  ])
+}
+
+/** The evidence of each candidate a kept import run holds, by id, newest run first. */
 function keptImportRuns(
   root: string,
   runs: readonly string[],
-): Array<{ runId: string; ids: ReadonlySet<string> }> {
-  const out: Array<{ runId: string; ids: ReadonlySet<string> }> = []
+): Array<{ runId: string; evidence: ReadonlyMap<string, string> }> {
+  const out: Array<{ runId: string; evidence: ReadonlyMap<string, string> }> =
+    []
   for (const runId of runs) {
     const record = readRunRecord(root, runId)
     if (!isRecord(record) || record.kind !== 'import') continue
     const block = record.candidateBlock
     if (!isRecord(block) || !Array.isArray(block.candidates)) continue
-    const ids = new Set<string>()
+    const evidence = new Map<string, string>()
     for (const item of block.candidates as unknown[]) {
-      if (isRecord(item) && typeof item.id === 'string') ids.add(item.id)
+      if (isRecord(item) && typeof item.id === 'string') {
+        evidence.set(item.id, evidenceOf(item))
+      }
     }
-    out.push({ runId, ids })
+    out.push({ runId, evidence })
   }
   return out
 }
@@ -2848,7 +2870,7 @@ type Placed =
 function placeOne(
   item: ImportAccepted,
   ledger: Ledger,
-  heldIn: (id: string) => string | undefined,
+  heldIn: (item: ImportAccepted) => string | undefined,
 ): Placed {
   const outcome = classifyCandidate(ledger, item.record)
   if (outcome.standing === 'new') {
@@ -2879,7 +2901,7 @@ function placeOne(
     ledger.entries.find((known) => known.id === item.id),
   )
   if (skipped !== undefined) return { skipped }
-  const held = heldIn(item.id)
+  const held = heldIn(item)
   return {
     placed:
       held === undefined
@@ -2891,8 +2913,9 @@ function placeOne(
 /**
  * Sort the accepted candidates by what the ledger says about each. A new or
  * reopened one is written. One decided here is skipped and named. One already
- * open is listed again with the import run that holds it; when that run is no
- * longer kept it is written again, and its ledger entry stays as it is.
+ * open is listed again with the import run that holds it; when no kept run
+ * holds it with the evidence just verified it is written again, and its ledger
+ * entry stays as it is.
  */
 function placeCandidates(
   accepted: readonly ImportAccepted[],
@@ -2901,9 +2924,10 @@ function placeCandidates(
   runs: readonly string[],
 ): Placement {
   let kept: ReturnType<typeof keptImportRuns> | undefined
-  const heldIn = (id: string): string | undefined => {
+  const heldIn = (item: ImportAccepted): string | undefined => {
     kept ??= keptImportRuns(root, runs)
-    const holder = kept.find((run) => run.ids.has(id))
+    const current = evidenceOf(item.candidate)
+    const holder = kept.find((run) => run.evidence.get(item.id) === current)
     return holder === undefined
       ? undefined
       : path.join(root, 'runs', holder.runId, 'run.json')

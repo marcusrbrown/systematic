@@ -222,6 +222,82 @@ function refusedBy(body: Json): Record<string, string[]> {
   return out
 }
 
+/**
+ * A local run that records the lesson candidate against `code`, the current
+ * content of the target's lock file, and `lesson`, the current content of the
+ * source learning.
+ */
+function publishLocalLesson(
+  world: World,
+  code: string,
+  lesson: string = fixtureFiles('source')['docs/solutions/lock-reclaim.md'] ??
+    '',
+): void {
+  const begun = ok(
+    runHelperOp(
+      'begin',
+      { host: 'opencode-v2', version: '9999.0.0', mode: 'headless' },
+      world.deps,
+    ),
+  )
+  const runId = begun.runId as string
+  const lock = begun.lock as { nonce: string; pid: number }
+  const ruleId = ruleIdFor(world.source, 'docs/solutions/lock-reclaim.md')
+  fs.writeFileSync(
+    path.join(begun.workDir as string, 'batch-1.json'),
+    JSON.stringify({
+      version: 1,
+      runId,
+      family: 'locking',
+      ruleIds: [ruleId, ruleIdFor(world.target, 'docs/solutions/lock-now.md')],
+      projects: [world.source, world.target],
+      files: ['docs/solutions/lock-reclaim.md'],
+      searches: ['reclaim lock'],
+      complete: true,
+      candidates: [
+        {
+          kind: 'transferable-lesson',
+          ruleId,
+          target: world.target,
+          title: 'Verify the holder before reclaiming a lock',
+          summary:
+            'The source recorded the rule; the target reclaims without it.',
+          nextStep: 'compound-learning',
+          overlapCheck: { queries: ['reclaim lock'], result: 'none-found' },
+          sources: [
+            {
+              project: world.source,
+              path: 'docs/solutions/lock-reclaim.md',
+              fingerprint: sha256(lesson),
+              excerpt:
+                'Never reclaim a lock without verifying the holder identity',
+            },
+          ],
+          targetEvidence: [
+            {
+              path: 'src/lock.ts',
+              start: 3,
+              end: 5,
+              symbol: 'reclaimLock',
+              fingerprint: sha256(code),
+              excerpt: 'export function reclaimLock(path: string): boolean {',
+            },
+          ],
+          counterevidence: [],
+        },
+      ],
+    }),
+  )
+  ok(
+    runHelperOp(
+      'validate',
+      { runId, lock, batches: ['batch-1.json'] },
+      world.deps,
+    ),
+  )
+  ok(runHelperOp('publish', { runId, lock }, world.deps))
+}
+
 // ── The good record ─────────────────────────────────────────────────────────
 
 describe('import: a record from a CI run, checked against local clones', () => {
@@ -396,6 +472,61 @@ describe('import: a record from a CI run, checked against local clones', () => {
       id: lesson?.id,
       reason: 'promoted-locally',
       refreshPointer: 'docs/solutions/best-practices/lock-identity.md',
+    })
+  })
+
+  it('accepts counterevidence that cites tracked code outside the corpus', () => {
+    const world = buildWorld()
+    const record = fixtureRecord('good')
+    const lesson = list((record.candidateBlock as Json).candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    ) as Json
+    const targetProject = list(record.projects).find(
+      (p) => p.repo === 'acme/target',
+    )
+    lesson.counterevidence = [
+      {
+        project: targetProject?.root,
+        path: 'src/lock.ts',
+        fingerprint: sha256(fixtureFiles('target')['src/lock.ts'] ?? ''),
+        excerpt: 'export function reclaimLock(path: string): boolean {',
+      },
+    ]
+    const body = ok(importOp(world, downloaded(record)))
+    expect(list(body.refused)).toHaveLength(0)
+    expect(body.imported).toBe(2)
+    const stored = JSON.parse(
+      fs.readFileSync(String(body.runRecordPath), 'utf8'),
+    ) as Json
+    const imported = list((stored.candidateBlock as Json).candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    )
+    expect(list(imported?.counterevidence)[0]?.path).toBe('src/lock.ts')
+  })
+
+  it('still refuses counterevidence whose path leaves the checkout', () => {
+    const world = buildWorld()
+    const record = fixtureRecord('good')
+    const lesson = list((record.candidateBlock as Json).candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    ) as Json
+    const targetProject = list(record.projects).find(
+      (p) => p.repo === 'acme/target',
+    )
+    lesson.counterevidence = [
+      {
+        project: targetProject?.root,
+        path: '../outside.ts',
+        fingerprint: sha256('x'),
+        excerpt: 'x',
+      },
+    ]
+    const body = ok(importOp(world, downloaded(record)))
+    expect(body.imported).toBe(1)
+    expect(list(body.refused)).toHaveLength(1)
+    expect(list(body.refused)[0]).toMatchObject({
+      reason: 'path-rejected',
+      detail: 'path-escape',
     })
   })
 
@@ -894,6 +1025,112 @@ describe('import: the ledger and the lock', () => {
     const entry = ledgerEntries(world).find((e) => e.id === settled?.id)
     expect(entry?.status).toBe('candidate')
     expect(entry?.reopened).toBe('target changed')
+  })
+
+  it('writes a fresh import record when a local run reopened the candidate with newer target evidence', () => {
+    const world = buildWorld()
+    const first = ok(importOp(world, downloaded(fixtureRecord('good'))))
+    const lesson = list(first.candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    )
+    const changed =
+      'declare function removeDirectoryNow(path: string): boolean\n\nexport function reclaimLock(path: string): boolean {\n  return removeDirectoryNow(path)\n}\n'
+    fs.writeFileSync(path.join(world.target, 'src/lock.ts'), changed)
+    git(world.target, ['add', 'src/lock.ts'])
+    git(world.target, ['commit', '-q', '-m', 'edit', '--no-verify'])
+    publishLocalLesson(world, changed)
+    expect(
+      ledgerEntries(world).find((e) => e.id === lesson?.id)?.reopened,
+    ).toBe('target changed')
+
+    const record = fixtureRecord('good')
+    const recorded = list((record.candidateBlock as Json).candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    ) as Json
+    recorded.targetEvidence = list(recorded.targetEvidence).map((item) => ({
+      ...item,
+      fingerprint: sha256(changed),
+    }))
+    const again = ok(importOp(world, downloaded(record)))
+
+    expect(again.outcome).toBe('complete')
+    expect(again.imported).toBe(1)
+    expect(again.alreadyImported).toBe(1)
+    const placed = list(again.candidates).find((c) => c.id === lesson?.id)
+    expect(placed?.runRecordPath).not.toBe(first.runRecordPath)
+    const written = JSON.parse(
+      fs.readFileSync(String(placed?.runRecordPath), 'utf8'),
+    ) as Json
+    const stored = list((written.candidateBlock as Json).candidates).find(
+      (c) => c.id === lesson?.id,
+    )
+    expect(list(stored?.targetEvidence)[0]?.fingerprint).toBe(sha256(changed))
+    expect(String(again.summary)).toContain(
+      `candidate:${String(placed?.runRecordPath)} candidate-id:${String(lesson?.id)}`,
+    )
+    expect(String(again.summary)).not.toContain(
+      `candidate:${String(first.runRecordPath)} candidate-id:${String(lesson?.id)}`,
+    )
+    // The ledger already held the newer evidence; the import does not touch it.
+    expect(ledgerEntries(world)).toHaveLength(2)
+
+    const rerun = ok(importOp(world, downloaded(record)))
+    expect(rerun.imported).toBe(0)
+    expect(rerun.alreadyImported).toBe(2)
+    expect(
+      list(rerun.candidates).find((c) => c.id === lesson?.id)?.runRecordPath,
+    ).toBe(placed?.runRecordPath)
+  })
+
+  it('writes a fresh import record when a local run reopened the candidate with a newer source learning', () => {
+    const world = buildWorld()
+    const first = ok(importOp(world, downloaded(fixtureRecord('good'))))
+    const lesson = list(first.candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    )
+    const edited = `${fixtureFiles('source')['docs/solutions/lock-reclaim.md'] ?? ''}\nCheck the holder start time as well.\n`
+    fs.writeFileSync(
+      path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+      edited,
+    )
+    git(world.source, ['add', 'docs/solutions/lock-reclaim.md'])
+    git(world.source, ['commit', '-q', '-m', 'edit', '--no-verify'])
+    publishLocalLesson(
+      world,
+      fixtureFiles('target')['src/lock.ts'] ?? '',
+      edited,
+    )
+    expect(
+      ledgerEntries(world).find((e) => e.id === lesson?.id)?.reopened,
+    ).toBe('sources changed')
+
+    const record = fixtureRecord('good')
+    const block = record.candidateBlock as Json
+    block.candidates = list(block.candidates).filter(
+      (c) => c.kind === 'transferable-lesson',
+    )
+    const recorded = list(block.candidates)[0] as Json
+    recorded.sources = list(recorded.sources).map((item) => ({
+      ...item,
+      fingerprint: sha256(edited),
+    }))
+    const again = ok(importOp(world, downloaded(record)))
+
+    expect(again.outcome).toBe('complete')
+    expect(again.imported).toBe(1)
+    expect(again.alreadyImported).toBe(0)
+    const placed = list(again.candidates).find((c) => c.id === lesson?.id)
+    expect(placed?.runRecordPath).not.toBe(first.runRecordPath)
+    const written = JSON.parse(
+      fs.readFileSync(String(placed?.runRecordPath), 'utf8'),
+    ) as Json
+    const stored = list((written.candidateBlock as Json).candidates).find(
+      (c) => c.id === lesson?.id,
+    )
+    expect(list(stored?.sources)[0]?.fingerprint).toBe(sha256(edited))
+    expect(String(again.summary)).not.toContain(
+      `candidate:${String(first.runRecordPath)} candidate-id:${String(lesson?.id)}`,
+    )
   })
 
   it('never changes what a sweep has covered', () => {
