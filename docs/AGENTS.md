@@ -15,7 +15,7 @@ bun run docs:preview    # Preview production build
 
 ## Stack
 
-- **Framework:** Starlight (`@astrojs/starlight`) on Astro 6
+- **Framework:** Starlight (`@astrojs/starlight`) on Astro; the version is in `docs/package.json`
 - **Deploy:** GitHub Actions → GitHub Pages (`docs.yaml` workflow)
 - **Site:** `https://fro.bot/systematic` (trailing slashes enabled)
 
@@ -42,7 +42,7 @@ docs/
 
 ## Content Generation
 
-`docs:generate` runs two generators in sequence:
+`docs:generate` (defined in the root `package.json`) runs the reference generators in sequence. The two that write the skills, agents and configuration pages are:
 
 ### 1. `scripts/transform-content.ts` — skills/agents pages
 

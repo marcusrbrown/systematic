@@ -38,21 +38,24 @@ The registered set is authoritative in `REGISTERED_PLUGIN_HOOKS` in `src/lib/ope
 A v2 host calls `setup(ctx)`. A v1 host also calls `setup` on an object default, with a reduced bridge
 that has no `ctx.location` or `ctx.session`; `setup` returns at once there. On a real v2 context,
 `setupOpenCodeV2` (`src/lib/opencode-v2.ts`) loads config once for `ctx.location.directory`, builds one
-frozen snapshot (the asset plan plus the composed bootstrap), and runs the installers in order. Each
+frozen snapshot (the asset plan plus the composed bootstrap), and runs the installers in order: tool
+guard, agents, skills, search, commands, bootstrap. The order is `INSTALLER_ORDER` in that file. Each
 installer lives in its own module and registers through a native v2 domain, not a mutable config object:
 
-- **agents** (`opencode-v2.ts`) — one `ctx.agent.transform` creates the planned agents. Permissions go
-  through `opencode-v2-permissions.ts`, which turns the plan's ordered triples into v2
-  `{action, resource, effect}` rules and appends them to the host defaults.
-- **toolGuard** (`opencode-v2-tool-guard.ts`) — one `ctx.tool.hook('execute.before')` refuses every tool call
+- **toolGuard** (`opencode-v2-tool-guard.ts`) — runs first. One `ctx.tool.hook('execute.before')` refuses every tool call
   from a read-only agent (today `connections-researcher`) that is not on a fixed allowlist: read, grep,
   glob, skill, `systematic_search` and `systematic_skill`. The hook runs for direct calls and for calls
   made from inside Code Mode, and a session-level allow rule does not reach it. Other agents are left alone.
+- **agents** (`opencode-v2.ts`) — one `ctx.agent.transform` creates the planned agents. Permissions go
+  through `opencode-v2-permissions.ts`, which turns the plan's ordered triples into v2
+  `{action, resource, effect}` rules and appends them to the host defaults.
 - **skills** (`opencode-v2-skills.ts`) — `ctx.skill.transform` registers the enabled bundled skills so the
   host's own `skill` tool lists and loads them. `systematic_skill` is ported through `ctx.tool.transform`
   because the host tool takes only an id and cannot pass `$ARGUMENTS`. The host cuts tool output at 2000
   lines or 50 KiB after the plugin returns it, so the full text is kept by call id and put back in the
   `context` hook.
+- **search** (`search-tool.ts`) — `ctx.tool.transform` registers `systematic_search` with
+  `codemode:false`, unless `search.enabled` is false or another plugin already holds the name.
 - **commands** (`opencode-v2-commands.ts`) — `ctx.command.transform` registers the planned commands. A v2
   command receives only the typed text, so the module expands `$ARGUMENTS` and positionals itself and
   submits one prompt on the invoking session. It never runs `!`-backtick blocks. A v2 plugin command cannot
@@ -66,9 +69,11 @@ Two rules hold across the v2 adapter. An invalid user-level `systematic.json` (u
 custom, custom.local) rejects `setup` with the same `Invalid Systematic config in <path>` message v1
 throws, and the host then logs that the plugin failed to load and carries on without it. An invalid
 project file never does: the loader skips it with one warning. Everything else is guarded: a throwing transform disables the whole
-plugin and a throwing hook breaks the turn it runs in, so every installer and every registered
-callback runs through `createSafeGuard`, which reports to `console.error` with a `systematic:` prefix and
-never throws.
+plugin and a throwing hook breaks the turn it runs in, so every ordinary installer and every callback it
+registers runs through `createSafeGuard`, which reports to `console.error` with a `systematic:` prefix and
+never throws. The tool guard is the one exception and fails closed: it installs first and outside that
+wrapper, and if its registration fails, setup reports one line and leaves the read-only agents out of the
+plan, so they are never callable without their allowlist.
 
 The plugin builds no workflow guard: it registers no workflow tools and no guard hooks, and takes no
 repository snapshot. A `workflow_guard` key in config is still accepted and has no effect, and each file
@@ -113,7 +118,7 @@ Config loading
   src/lib/config.ts          — loadConfig: JSONC loading, layered merge (user < user.local < project < custom < custom.local); the project file is read from the repository root
   src/lib/config-schema.ts   — SystematicConfigSchema (Zod), validateConfig, SECURITY_OVERLAY_FIELDS
   src/lib/config-protected-fields.ts — CONFIG_PROTECTED_FIELD_PATHS: dependency-free (imports nothing), shared verbatim by config.ts and capability-snapshot.ts so the two never drift
-  src/lib/connect-config.ts  — the user-only `connect` block for `ce:connect`: `loadConnectAllowList` reads the four user-level layers with plain guards (no zod; the helper bundle inlines `jsonc-parser`), fails closed so a bad block contributes nothing, and refuses a custom config directory inside a checkout or an allowed root; `resolveAllowEntry` says why an entry matched no project (`stale`, `not-a-repository`, `not-main-root`, `not-absolute`, `unreadable`); `HOST_SUPPORT_TABLE` lists hosts and exact versions where a real-host deny was observed against the shipped agent (OpenCode v1 1.19.5, OpenCode v2 2.2.5 and Pi 1.5.0; none for Claude Code until its denies are shown live), each row naming its proof test. Imports only `jsonc-parser`, node builtins, `search-bounded-read.ts` and `search-project-identity.ts`; project config is never read
+  src/lib/connect-config.ts  — the user-only `connect` block for `ce:connect`: `loadConnectAllowList` reads the four user-level layers with plain guards (no zod; the helper bundle inlines `jsonc-parser`), fails closed so a bad block contributes nothing, and refuses a custom config directory inside a checkout or an allowed root; `resolveAllowEntry` says why an entry matched no project (`stale`, `not-a-repository`, `not-main-root`, `not-absolute`, `unreadable`); `HOST_SUPPORT_TABLE` lists hosts and exact versions with evidence that the shipped agent's tool limits hold, each row naming its proof (the table is the one place the versions live): a real-host deny test for OpenCode v1 and v2, a test of the allowlist reaching the delegate session for Pi, and a recorded manual observation for Claude Code. Imports only `jsonc-parser`, node builtins, `search-bounded-read.ts` and `search-project-identity.ts`; project config is never read
   src/lib/connect-evidence.ts — the evidence boundary for `ce:connect`: `inventoryProject` resolves an allow entry to a main checkout, lists the index with hardened `git ls-files`, drops symlinks (120000) and submodules (160000), keeps eligible corpus, workflow, config and code files up to provisional `CONNECT_BOUNDS` caps, filters ignored paths with `check-ignore`, and hashes each file within a cap; `runGit` runs only `ls-files`, `cat-file` and `check-ignore` with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.untrackedCache=false`, a scrubbed environment and `GIT_OPTIONAL_LOCKS=0`; `readContainedFile` lstats every ancestor and the final component, opens with `O_NOFOLLOW` and compares dev/inode; `checkCitation` returns `passed`, `not-in-span` (with `foundElsewhere`) or `unchecked` for an explicit (path, span, symbol), and `reportProjectCitations` flags a project with no path-and-line citations `unsupported`. Imports only node builtins and `connect-config.ts`
   src/lib/connect-state.ts    — run state for `ce:connect` under a state root (directories 0700, files 0600; refused when it is a symlink, sits in a checkout or sits in an allowed project): the lock is a directory made with `mkdir` whose holder file (pid, process start time, `crypto.randomUUID` nonce) is renamed into place, reclaimed only when the holder is dead or its pid was reused, by renaming the stale directory aside and checking the moved nonce (a start time that cannot be read means busy; a holderless lock is reclaimable after ten minutes; `forceUnlock` is the manual escape); `publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/` as the commit, then rewrites `ledger.json` with temp-and-rename; `pruneRuns` removes runs older than 30 days and leftover staging directories and never the ledger; the ledger keeps candidate identity (kind, target, source role and path, rule id), source and target-evidence fingerprints, status and reason, no excerpt text, plus rule coverage (rule id, learning hash, run id and time; written in the same ledger rewrite as the commit, kept only for rules the run indexed, removed with `clearLedger`), and `classifyCandidate` turns that into new, suppressed, reopened ("sources changed" or "target changed") or unresolved. Imports only node builtins, `connect-config.ts` and `connect-evidence.ts`
   src/lib/connect-helper-core.ts — the deterministic core of the `ce:connect` helper: `extractRule` indexes a learning's title, `applies_when`, Guidance and Prevention sections (line bounds, truncation flags, missing sections and frontmatter parse errors reported); a rule id depends on project and path only, so an edited learning keeps its id; `parseBatch` reads one rule family's report; `checkCandidate` publishes a candidate only when every path is a tracked, contained file of an allowed project, every fingerprint equals the hash taken when the run began, every excerpt is verbatim in its file, every code citation still holds and the rule id is one the index issued (a vanished source is `unresolved`, not dropped); `planOffer` orders every indexed rule (never covered or changed first, then least recently covered; round-robin across projects, then path) and offers the head of that order as the run's slice, `checkCoverage` requires every offered rule in a complete batch and every project touched (a rule not offered is not a degrade reason), `sweepProgress` and `renderSweepLine` report how much of the index is covered; `findRecorded` is the deterministic "already recorded" test (a target learning that cites the same source or names the rule id); `renderDigest` renders all free text as block quotes and excerpts in fences longer than any inside, control characters stripped; the work-directory helpers keep a run's snapshot and the researcher's batch files at 0700/0600. Imports only node builtins, `frontmatter.ts` (js-yaml), `connect-evidence.ts` and `connect-state.ts`; never zod, `config.ts` or `config-schema.ts`
@@ -137,7 +142,7 @@ OpenCode v1 adapter
   src/lib/opencode-v1.ts     — createOpenCodeV1Hooks: the five v1 hooks and the REGISTERED_PLUGIN_HOOKS inventory; takes the package root from the entry point
 
 OpenCode v2 adapter
-  src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the per-domain installer slots through createSafeGuard; installAgents registers the planned agents through one ctx.agent.transform; invalid config rejects
+  src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the per-domain installer slots in order, tool guard first; every installer except the tool guard runs through createSafeGuard; installAgents registers the planned agents through one ctx.agent.transform; invalid config rejects
   src/lib/opencode-v2-tool-guard.ts — installToolGuard: one execute.before hook that refuses any tool call from a read-only agent outside a fixed allowlist, direct or from Code Mode, whatever the session's permission rules say
   src/lib/opencode-v2-skills.ts — installSkills: registers the enabled bundled skills via ctx.skill.transform, ports systematic_skill through ctx.tool.transform, and restores the host-truncated skill output in the context hook
   src/lib/opencode-v2-commands.ts — installCommands: registers the planned commands through ctx.command.transform; expands arguments and submits one prompt on the invoking session; refuses a command that declares agent, model or subtask, which v2 plugin commands cannot route; never runs !-backtick blocks
@@ -212,8 +217,8 @@ Key symbols:
 |--------|----------|------|
 | `systematicPlugin` | `src/index.ts` | The default export: a plain object with `id`, `setup` (v2 entry) and `server` (v1 entry) |
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
-| `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots behind a never-throw guard |
-| `installToolGuard` | `src/lib/opencode-v2-tool-guard.ts` | OpenCode v2 read-only tool guard: an allowlist enforced in the `execute.before` hook for named agents |
+| `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots in order, tool guard first; every installer but the tool guard runs behind a never-throw guard |
+| `installToolGuard` | `src/lib/opencode-v2-tool-guard.ts` | OpenCode v2 read-only tool guard: an allowlist enforced in the `execute.before` hook for named agents; fails closed |
 | `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration |
 | `installCommands` | `src/lib/opencode-v2-commands.ts` | OpenCode v2 commands: argument expansion, one prompt per invocation, refusal of routing fields |
 | `installBootstrap` | `src/lib/opencode-v2-bootstrap.ts` | OpenCode v2 bootstrap: one instruction entry per session, put from the prompt hook |
@@ -262,8 +267,10 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 
 5. **Nothing throws into the v2 host, except an invalid user-level config.** `setup` rejects on an
    invalid user-level `systematic.json` (mirroring v1's throw at load); a failing project file is
-   skipped, not thrown. Every other v2 callback is wrapped by
-   `createSafeGuard`. v1 output is pinned byte for byte by the v1 golden tests.
+   skipped, not thrown. Ordinary installers never throw: they and the callbacks they register are
+   wrapped by `createSafeGuard`. The tool guard is the exception and fails closed: it installs first,
+   outside that wrapper, and a failed registration withholds the read-only agents from the plan.
+   v1 output is pinned byte for byte by the v1 golden tests.
 
 6. **Search reads the disk on every call, protects its config per field, and avoids `Math.log`.**
    Search covers four kinds, each with its own directory in the `KIND_TABLE` of `search-corpus.ts`:
@@ -342,9 +349,10 @@ OpenCode v2 loads plugin
        └─ setupOpenCodeV2 (src/lib/opencode-v2.ts)
             ├─ loadConfigWithSources(ctx.location.directory)  — once; invalid config rejects here
             ├─ buildAssetPlan + composeBootstrapContent       — one frozen snapshot
+            ├─ installToolGuard  → ctx.tool.hook('execute.before')   (fails closed: on failure the read-only agents leave the plan)
             ├─ installAgents     → ctx.agent.transform   (+ opencode-v2-permissions.ts)
-            ├─ installToolGuard  → ctx.tool.hook('execute.before')
             ├─ installSkills     → ctx.skill.transform, ctx.tool.transform, session.hook('context')
+            ├─ installSearch     → ctx.tool.transform (systematic_search)
             ├─ installCommands   → ctx.command.transform
             └─ installBootstrap  → session.hook('prompt') → instructions.entry.put
 ```
@@ -384,7 +392,7 @@ The researcher may not run commands, write, edit or fetch. Each host enforces th
 | OpenCode v1 | The agent's frontmatter `permission:` denies `bash`, `edit`, `webfetch`, `websearch` and `task`; `external_directory: allow` lets it read allowed projects outside the working directory. A host-config allow does not lift the agent's deny. Another entry of the same name (user config or an earlier plugin) does not replace the definition either: the config hook applies Systematic's definition over it and keeps only that entry's `model` and `variant`. |
 | OpenCode v2 | The same denies, plus `installToolGuard`'s `execute.before` hook, which refuses every call from `connections-researcher` outside `read`, `grep`, `glob`, `skill`, `systematic_search` and `systematic_skill`, direct or from Code Mode. The guard carries the enforcement, because a session-level allow overrides an agent's own deny on v2. An earlier plugin's definition of the same name does not replace Systematic's either: the agents transform removes it and creates the agent again from the plan, keeping only that entry's `model`, with one `systematic:`-prefixed diagnostic that never prints the other entry. A definition in the user's own config applies after every plugin transform and is not replaced; the guard still limits its tools. |
 | Pi | The agent's `tools: Read, Grep, Glob` allowlist reaches the delegate session as read, grep and find. The agent is outside the curated pi-subagents personas, which carry no tool allowlist. |
-| Claude Code | Listed at 2.1.319 on a recorded manual tool-list observation (`HARNESSES.md`, CN-5), not a tested refusal. The positive `tools: Read, Grep, Glob` allowlist leads; `disallowedTools` is a second layer. A version whose normalized value differs (build metadata and a leading `v` are dropped, so a same-numbered fork build matches) is unlisted. |
+| Claude Code | Listed in `HOST_SUPPORT_TABLE` on a recorded manual tool-list observation (`HARNESSES.md`, CN-5), not a tested refusal. The positive `tools: Read, Grep, Glob` allowlist leads; `disallowedTools` is a second layer. A version whose normalized value differs (build metadata and a leading `v` are dropped, so a same-numbered fork build matches) is unlisted. |
 
 No host path-scopes the read tools, and session MCP tools are not denied. A digest can therefore
 carry content from reads outside the allowed projects; this is a documented limit, not a sandbox.
