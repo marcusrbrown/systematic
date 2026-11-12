@@ -110,7 +110,9 @@ jobs:
 
       - name: Build registry
         if: ${{ steps.target.outputs.proceed == 'true' }}
-        run: bun scripts/build-registry.ts --version "${{ steps.target.outputs.version }}"
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: bun scripts/build-registry.ts --version "$VERSION"
 
       - name: Build docs
         if: ${{ steps.target.outputs.proceed == 'true' }}

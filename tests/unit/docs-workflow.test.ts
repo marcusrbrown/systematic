@@ -86,6 +86,8 @@ const GITHUB_TOKEN_EXPR = '${{ github.token }}'
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const TAG_OUTPUT_EXPR = '${{ steps.target.outputs.tag }}'
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
+const VERSION_OUTPUT_EXPR = '${{ steps.target.outputs.version }}'
+// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const PROCEED_OUTPUT_EXPR = '${{ steps.target.outputs.proceed }}'
 // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the literal workflow expression
 const EVENT_NAME_EXPR = '${{ github.event_name }}'
@@ -284,8 +286,15 @@ describe('docs workflow build job target validation', () => {
 
   test('untrusted inputs reach the script through env, not inline interpolation', () => {
     for (const step of getSteps('build')) {
-      if (step.name === 'Build registry') continue
       expect(runOf(step)).not.toContain('${{')
+    }
+  })
+
+  test('no run body in any job interpolates step or job outputs inline', () => {
+    for (const jobName of ['build', 'deploy']) {
+      for (const step of getSteps(jobName)) {
+        expect(runOf(step)).not.toMatch(/\$\{\{\s*(steps|needs)\./)
+      }
     }
   })
 
@@ -388,7 +397,10 @@ describe('docs workflow build job target validation', () => {
   test('the registry is versioned from the validated tag, not raw event inputs', () => {
     const steps = getSteps('build')
     const registry = findStep(steps, 'Build registry')
-    expect(runOf(registry)).toContain('steps.target.outputs.version')
+    expect(asRecord(registry.env, 'registry env').VERSION).toBe(
+      VERSION_OUTPUT_EXPR,
+    )
+    expect(runOf(registry)).toContain('"$VERSION"')
     expect(JSON.stringify(steps)).not.toContain('github.event.inputs.version')
     expect(JSON.stringify(steps)).not.toContain('inputs.version')
   })
