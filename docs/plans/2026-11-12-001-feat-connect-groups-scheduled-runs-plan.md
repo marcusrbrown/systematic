@@ -534,7 +534,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 ### Phase 1: Delivery A, product
 
-- [ ] U1. Groups in user config
+- [x] U1. Groups in user config
 
 **Goal:** Add `connect.groups` as a user-only record, with the same trust and fail-closed rules as `allow_projects`, and close the trigger gap that hid `connect-config.ts` edits from two generated surfaces.
 
@@ -580,7 +580,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - A user config with groups loads through the helper's loader and the plugin's merged config with the same result.
 - `bun run surfaces:drift` reports no drift on any surface after the regeneration.
 
-- [ ] U2. Selection resolution in `begin`, token collection and naming
+- [x] U2. Selection resolution in `begin`, token collection and naming
 
 **Goal:** Let a run narrow to a group or a set of picks, refuse bad selections before the lock, and name the selection in the digest and run record.
 
@@ -630,7 +630,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - The digest and run record of a group run name the group and the selection id.
 - `bun run ce-connect-helper:drift` and `bun run surfaces:drift` pass after the final source edit.
 
-- [ ] U3. Per-selection coverage and ledger version 2
+- [x] U3. Per-selection coverage and ledger version 2
 
 **Goal:** Keep rotation, coverage and sweep progress per selection, so a narrow run never counts as coverage of the whole list, and migrate the ledger safely.
 
@@ -678,7 +678,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - The shipped helper's strict version check is the downgrade guard: a version-2 ledger read by it reports `ledger-unreadable` and is not overwritten. The test suite pins that check on the new reader for version 3.
 - Helper drift passes after the final source edit.
 
-- [ ] U4. Portable project identity and the invocation record
+- [x] U4. Portable project identity and the invocation record
 
 **Goal:** Record `owner/repo` and the HEAD commit for each project in `run.json`, so a CI record can be mapped to the operator's own checkouts. Write an `invocation.json` on every path of a CI run, so the workflow reads a run's outcome from the helper and not from run directories. Stop treating the non-repository `.git` directory that the action creates in its workspace as a checkout, so the state root can sit inside that workspace.
 
@@ -739,7 +739,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 ---
 
-- [ ] U5. The `import` op and `fetch:<run>` in the skill
+- [x] U5. The `import` op and `fetch:<run>` in the skill
 
 **Goal:** Let an operator pull a scheduled run's record, re-verify it against local checkouts, and get the usual local promotion lines.
 
@@ -796,7 +796,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - A CI lesson promotes through the unchanged `ce:compound` input after `fetch`.
 - Helper drift and the packaging test pass after the final source edit.
 
-- [ ] U6. CI helper ops: `apply-ticks` and `render-report`
+- [x] U6. CI helper ops: `apply-ticks` and `render-report`
 
 **Goal:** Ship the two deterministic ops the workflow needs, with an inert report body, a bounded payload store, a manifest per report revision and idempotent tick recording, in the same release as the code that writes the state.
 
@@ -852,7 +852,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - `apply-ticks` twice in a row changes nothing the second time.
 - Helper drift and the packaging test pass after the final source edit.
 
-- [ ] U7. Delivery A documentation and registration
+- [x] U7. Delivery A documentation and registration
 
 **Goal:** Document groups, picks and `fetch`, and register the architecture changes.
 
