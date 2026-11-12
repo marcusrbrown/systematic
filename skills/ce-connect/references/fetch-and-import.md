@@ -28,12 +28,17 @@ gh api "repos/marcusrbrown/systematic/actions/runs/<run>" --jq '[.path, .event, 
 ### 2. Choose the artifact
 
 ```bash
-gh api "repos/marcusrbrown/systematic/actions/runs/<run>/artifacts?per_page=100" --jq '.artifacts[] | [.name, .expired] | @tsv'
+gh api "repos/marcusrbrown/systematic/actions/runs/<run>/artifacts?per_page=100" --jq '[.artifacts[] | {name: .name, expired: .expired}]'
 ```
+
+It prints one JSON array of `{name, expired}` objects. Check the call before you read the array:
+
+- The command fails because `gh` is not logged in: stop with `gh-not-authenticated`.
+- The command fails for any other reason (a non-zero exit), or its output is not a JSON array: stop with `artifact-list-failed`. An empty array is an answer; a failed call is not. Never read a failed call as `artifact-not-found`.
 
 The record is in an artifact named `connect-run-<run>-<attempt>`, where `<attempt>` is digits only. Take the names that match that pattern for this run id exactly, and pick the one with the highest attempt. A run with attempts 1 and 2 downloads `connect-run-<run>-2`.
 
-- No such name: stop with `artifact-not-found`.
+- The call succeeded and no name matches: stop with `artifact-not-found`.
 - The chosen artifact is expired: stop with `artifact-expired`. The user can tick Rejected in the scheduled run's report, or wait for the candidate to be proposed again.
 
 ### 3. Download into a fresh directory
@@ -66,6 +71,8 @@ JSON
 
 `directory` is the absolute path `mktemp -d` printed. `runId` is the run id from the `fetch:` word. Leave `commit` out when step 1 gave none.
 
+If `node` is missing, the helper file is gone, or `import` prints no JSON answer, the helper is unavailable. Remove `<DEST>`, print `helper-unavailable` and its hint, then `Connect failed`. Nothing was imported.
+
 ### 5. Report
 
 The helper answers one line of JSON. Read `outcome`:
@@ -73,7 +80,7 @@ The helper answers one line of JSON. Read `outcome`:
 - `complete`: every candidate in the record was checked against a local checkout and none was refused.
 - `degraded`: at least one candidate was refused. The helper's `summary` names each, with its reason, and the file when a file is the cause. Candidates already decided here are skipped and named.
 - `busy`: another run holds the lock. Print `reason` and `hint`, then `Connect busy`. Nothing was written. Never run `ledger unlock` on a `busy` answer.
-- `failed`: print the `reason` and then `Connect failed`. Nothing was written, except after `ledger-write-failed`, where the run directory exists and the ledger does not list its candidates.
+- `failed`: print the `reason`, then each of these fields the answer carries: `detail`, `unmatched` and `configWarnings`. Print them as the helper wrote them; they say what to fix, such as which allow-list entry matched no project or which part of the configuration was ignored. Then print `Connect failed`. Nothing was written, except after `ledger-write-failed`, where the run directory exists and the ledger does not list its candidates.
 
 Print the `summary` as the helper wrote it, unchanged. It holds, under each candidate title, the same promotion lines a local run prints: `candidate:<run record path> candidate-id:<id>` for a lesson, and a `/ce:compound-refresh path:<docs/solutions/...>` line for a contradiction. They are local paths and local ids, so `ce:compound` takes them as they are, from the target project. Never retype, shorten or build one. Print `finalLine` last, with nothing after it.
 
@@ -89,12 +96,14 @@ Print the reason as it is, then the hint.
 | `unsupported-run-event` | Only `schedule` and `workflow_dispatch` runs are read. Nothing was downloaded. |
 | `run-not-found` | No run with that id in `marcusrbrown/systematic`. |
 | `gh-not-authenticated` | `gh` is not logged in, or its token cannot read this repository's runs. Run `gh auth login` and try again. |
+| `artifact-list-failed` | `gh` could not list the run's artifacts, or its answer was not a JSON array. Nothing was downloaded. Try again. |
 | `artifact-not-found` | The run has no `connect-run-<run>-<attempt>` artifact. It stopped before it made a record. |
 | `artifact-expired` | The record was kept for a limited time and is gone. Tick Rejected in the report, or wait for the candidate to be proposed again. |
 | `download-failed` | `gh run download` failed for another reason. Nothing was imported. |
 | `record-missing`, `record-symlink`, `record-not-regular`, `record-unreadable`, `directory-unreadable` | The downloaded directory does not hold a plain `run.json`. |
 | `record-too-large` | The record is over 2 MiB. |
 | `record-malformed`, `record-schema-version` | The record is not a version 1 run record. |
+| `helper-unavailable` | `node` is missing, the helper file is gone, or `import` printed no JSON answer. Nothing was imported. |
 | `invalid-request` | The skill sent a malformed request. |
 | `no-allowed-projects` | The allow list is empty or no entry matched a project. |
 | `state-root-refused` | The state directory is unsafe. The helper names why. |

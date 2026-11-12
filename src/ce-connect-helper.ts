@@ -2945,7 +2945,7 @@ function importRunRecord(
     createdAt,
     kind: 'import',
     outcome: model.outcome,
-    degradeReasons: model.refused.length > 0 ? ['candidates-refused'] : [],
+    degradeReasons: model.degradeReasons,
     provenance: model.provenance,
     source: { runId: model.sourceRunId },
     projects: verified.projects,
@@ -2986,6 +2986,7 @@ function importModel(
   return {
     runId,
     outcome: verified.refused.length > 0 ? 'degraded' : 'complete',
+    degradeReasons: verified.refused.length > 0 ? ['candidates-refused'] : [],
     provenance: parsed.provenance,
     sourceRunId,
     projects: verified.projects,
@@ -3030,7 +3031,7 @@ function importAnswer(
     refusedBy: countByReason(model.refused),
     projects: verified.projects,
     provenance: model.provenance,
-    degradeReasons: model.refused.length > 0 ? ['candidates-refused'] : [],
+    degradeReasons: model.degradeReasons,
     summary: renderImportSummary(model, digestPath),
   })
 }
@@ -3059,7 +3060,12 @@ function insertFailure(inserted: ImportInsertResult): HelperResult | undefined {
     )
   }
   if (inserted.status === 'published' && !inserted.ledger.written) {
-    return importFailure('ledger-write-failed', { runDir: inserted.runDir })
+    return importFailure('ledger-write-failed', {
+      runDir: inserted.runDir,
+      ...(inserted.runRecordCurrent === false
+        ? { runRecordCurrent: false }
+        : {}),
+    })
   }
   return undefined
 }
@@ -3096,14 +3102,23 @@ function importWrite(
         runId,
         path.join(root, 'runs', runId, 'run.json'),
       )
+      const filesOf = (shown: ImportModel): Record<string, string> => ({
+        'digest.md': renderImportDigest(shown, placement.fresh, createdAt),
+        'run.json': `${JSON.stringify(importRunRecord(shown, createdAt, verified, placement), null, 2)}\n`,
+      })
       return {
         publish: true,
         runId,
-        files: {
-          'digest.md': renderImportDigest(model, placement.fresh, createdAt),
-          'run.json': `${JSON.stringify(importRunRecord(model, createdAt, verified, placement), null, 2)}\n`,
-        },
+        files: filesOf(model),
         candidates: placement.fresh.map((item) => item.record),
+        // The run is committed before the ledger is written, so a ledger that
+        // cannot be written leaves a run that must not say it is complete.
+        onLedgerWriteFailed: () =>
+          filesOf({
+            ...model,
+            outcome: 'degraded',
+            degradeReasons: [...model.degradeReasons, 'ledger-write-failed'],
+          }),
       }
     },
     {
@@ -3273,8 +3288,9 @@ function applyTicksOp(request: unknown, deps: HelperDeps): HelperResult {
 
 /**
  * Render the report body into `report.md` in the state root. The answer holds
- * the facts about the body (counts, the manifest hash, the outcome and whether
- * the job should end red) and never the body itself.
+ * the facts about the body (counts, the manifest hash, the outcome, whether
+ * the job should end red and whether the stores were updated) and never the
+ * body itself.
  */
 function renderReportOp(request: unknown, deps: HelperDeps): HelperResult {
   const parsed = parseRenderRequest(request)
@@ -3298,6 +3314,7 @@ function renderReportOp(request: unknown, deps: HelperDeps): HelperResult {
     runs: result.runs,
     outcome: result.outcome,
     red: result.red,
+    stateUpdated: result.stateUpdated,
   })
 }
 
@@ -3427,6 +3444,19 @@ type CliRequest =
   | { readonly ok: true; readonly request: unknown }
   | { readonly ok: false; readonly exitCode: 2 }
 
+/**
+ * The answer for a `begin` whose request could not be read. A CI run still
+ * ends with a terminal `failed` record, as every other stop of `begin` does;
+ * a local run has no run file and writes nothing.
+ */
+function refusedBegin(result: HelperResult, options: CliOptions): HelperResult {
+  const deps = options.deps ?? {}
+  const marker = ciRunMarker(deps)
+  return marker === undefined
+    ? result
+    : endInvocation(marker, result, endOfFailure(result), deps)
+}
+
 /** Read the request of an operation that takes one: JSON on stdin, bounded. */
 function readCliRequest(
   op: Op,
@@ -3439,19 +3469,23 @@ function readCliRequest(
     err(
       `${op} reads one JSON request from stdin; interactive input is not supported`,
     )
+    if (op === 'begin') {
+      refusedBegin(failure(op, 'request-interactive'), options)
+    }
     return { ok: false, exitCode: 2 }
   }
   const text = (options.readRequest ?? readStdinBounded)()
   const refuse = (reason: string): CliRequest => {
+    // The request is the only place the lock handle is, and it was not read.
+    const refused = failure(
+      op,
+      reason,
+      op === 'validate' ? { lockReleased: false } : {},
+    )
     out(
-      JSON.stringify({
-        ok: false,
-        op,
-        outcome: 'failed',
-        reason,
-        // The request is the only place the lock handle is, and it was not read.
-        ...(op === 'validate' ? { lockReleased: false } : {}),
-      }),
+      JSON.stringify(
+        (op === 'begin' ? refusedBegin(refused, options) : refused).body,
+      ),
     )
     return { ok: false, exitCode: 2 }
   }

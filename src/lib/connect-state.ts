@@ -1389,8 +1389,8 @@ function validCoverageUpdate(update: CoverageUpdate): boolean {
  * Everything else is a rule that is gone from a project that was read in full,
  * and is dropped. The records of every other selection are kept as they are.
  * Then the covered rules are recorded at their current hash. The records the
- * run did not index, of any selection, are the first to go if the ledger would
- * hold more than it accepts.
+ * run did not just record, of any selection, are the first to go if the
+ * ledger would hold more than it accepts, oldest first.
  */
 function applyCoverage(
   allPrior: readonly CoverageRecord[],
@@ -1421,9 +1421,11 @@ function applyCoverage(
       )
       .map((record) => [record.ruleId, record]),
   )
+  const recorded = new Set<string>()
   for (const ruleId of update.covered) {
     const hash = hashes.get(ruleId)
     if (hash !== undefined) {
+      recorded.add(ruleId)
       const project = projects.get(ruleId)
       kept.set(ruleId, {
         ruleId,
@@ -1447,7 +1449,7 @@ function applyCoverage(
   const overflow = records.length - MAX_COVERAGE
   if (overflow > 0) {
     const stale = records
-      .filter((record) => !(own(record) && hashes.has(record.ruleId)))
+      .filter((record) => !(own(record) && recorded.has(record.ruleId)))
       .sort((a, b) => codepointOrder(a.at, b.at))
       .slice(0, overflow)
     const gone = new Set(stale.map(coverageKey))
@@ -1679,6 +1681,11 @@ export type ImportPlan =
       readonly runId: string
       readonly files: Readonly<Record<string, string>>
       readonly candidates: readonly CandidateRecord[]
+      /**
+       * The files that replace the committed ones when the ledger could not be
+       * written after the commit, so the run says what happened to it.
+       */
+      readonly onLedgerWriteFailed?: () => Readonly<Record<string, string>>
     }
 
 export type ImportInsertResult =
@@ -1695,14 +1702,32 @@ export type ImportInsertResult =
       readonly ledger:
         | { readonly written: true }
         | { readonly written: false; readonly error: string }
+      /** False when the replacement files for a failed ledger write could not be written. */
+      readonly runRecordCurrent?: false
     }
+
+/** Replace the files of a committed run with those `build` makes. False if they could not be made or written. */
+function replaced(
+  root: string,
+  lock: LockHandle,
+  runId: string,
+  build: () => Readonly<Record<string, string>>,
+): boolean {
+  try {
+    return rewriteRunFiles(root, lock, runId, build()) === 'rewritten'
+  } catch {
+    return false
+  }
+}
 
 /**
  * Insert an import run under the lock. `plan` sees the ledger and the kept
  * import runs, and returns the run to write or nothing. A plan that returns
  * nothing leaves the state root as it was. The run is published the way a
  * local run is (staged, renamed, then the ledger is rewritten), with no
- * coverage, so an import never changes what a sweep has covered. A busy lock
+ * coverage, so an import never changes what a sweep has covered. When the
+ * ledger cannot be written after the commit, the plan's replacement files are
+ * written over the committed ones before the lock is released. A busy lock
  * writes nothing, and the lock is always released.
  */
 export function insertImportRun(
@@ -1741,10 +1766,20 @@ export function insertImportRun(
     if (published.status === 'failed') {
       return { status: 'failed', reason: published.reason }
     }
+    const current =
+      published.ledger.written ||
+      decision.onLedgerWriteFailed === undefined ||
+      replaced(
+        root,
+        acquired.lock,
+        decision.runId,
+        decision.onLedgerWriteFailed,
+      )
     return {
       status: 'published',
       runDir: published.runDir,
       ledger: published.ledger,
+      ...(current ? {} : { runRecordCurrent: false as const }),
     }
   } finally {
     releaseLock(acquired.lock)
@@ -2036,6 +2071,12 @@ export interface DecideInput {
   readonly reason: string
   /** Where a promoted learning was written. Ignored for `rejected`. */
   readonly destination?: string
+  /**
+   * Apply the decision only if the entry is still a `candidate` when the lock
+   * is held. A caller that read the ledger earlier uses this so a decision
+   * made in between is not overwritten.
+   */
+  readonly onlyIfOpen?: boolean
 }
 
 export type DecideResult =
@@ -2046,6 +2087,7 @@ export type DecideResult =
       readonly reason:
         | 'invalid-input'
         | 'unknown-candidate'
+        | 'not-open'
         | 'lock-failed'
         | 'ledger-unreadable'
         | 'write-failed'
@@ -2061,7 +2103,8 @@ function validDecision(input: DecideInput): boolean {
 /**
  * Record a decision on a ledger entry. It takes the lock, so a busy lock makes
  * it fail without writing, and rewrites the ledger by temp-and-rename. Both
- * statuses need a reason.
+ * statuses need a reason. With `onlyIfOpen`, an entry that is no longer a
+ * candidate is left as it is and the answer is `not-open`.
  */
 export function decideLedgerEntry(
   root: string,
@@ -2083,6 +2126,9 @@ export function decideLedgerEntry(
     const prior = read.ledger.entries.find((entry) => entry.id === input.id)
     if (prior === undefined) {
       return { status: 'failed', reason: 'unknown-candidate' }
+    }
+    if (input.onlyIfOpen === true && prior.status !== 'candidate') {
+      return { status: 'failed', reason: 'not-open' }
     }
     const decided: LedgerEntry = {
       id: prior.id,

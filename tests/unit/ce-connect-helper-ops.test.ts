@@ -3100,6 +3100,127 @@ describe('the invocation record of a CI run', () => {
       expect(asked.outcome).toBe('consent-required')
       expect(invocation(world)).toBeUndefined()
     })
+
+    describe('a begin request the command line cannot read', () => {
+      function cli(
+        world: World,
+        argv: string[],
+        read: Pick<
+          Parameters<typeof runConnectHelper>[0],
+          'readRequest' | 'isTTY'
+        >,
+        deps: HelperDeps = world.deps,
+      ) {
+        const lines: string[] = []
+        const errors: string[] = []
+        const code = runConnectHelper({
+          argv,
+          deps,
+          ...read,
+          outputSink: (line) => lines.push(line),
+          errorSink: (line) => errors.push(line),
+        })
+        return { code, lines, errors }
+      }
+
+      const terminal = (reason: string) => ({
+        version: 1,
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'failed',
+        finalLine: 'Connect failed',
+        reason,
+      })
+
+      it.each([
+        ['malformed JSON', () => '{ not json', 'request-not-json'],
+        [
+          'an oversize request',
+          () => 'too-large' as const,
+          'request-too-large',
+        ],
+        [
+          'an unreadable stdin',
+          () => 'unreadable' as const,
+          'request-unreadable',
+        ],
+      ])(
+        'records %s as a terminal failed record and keeps the answer',
+        (_name, readRequest, reason) => {
+          const world = ciWorld()
+          const { code, lines } = cli(world, ['begin'], {
+            isTTY: false,
+            readRequest,
+          })
+
+          expect(code).toBe(2)
+          expect(JSON.parse(lines[0] ?? '{}')).toEqual({
+            ok: false,
+            op: 'begin',
+            outcome: 'failed',
+            reason,
+          })
+          expect(invocation(world)).toEqual(terminal(reason))
+          expect(otherFiles(world)).toEqual([])
+          expect(fs.existsSync(path.join(world.stateRoot, 'lock'))).toBe(false)
+        },
+      )
+
+      it('records an interactive terminal and keeps the message', () => {
+        const world = ciWorld()
+        const { code, lines, errors } = cli(world, ['begin'], { isTTY: true })
+
+        expect(code).toBe(2)
+        expect(lines).toEqual([])
+        expect(errors.join('\n')).toContain('reads one JSON request from stdin')
+        expect(invocation(world)).toEqual(terminal('request-interactive'))
+      })
+
+      it('says so when the refusal cannot be recorded', () => {
+        const world = ciWorld()
+        const { code, lines } = cli(
+          world,
+          ['begin'],
+          { isTTY: false, readRequest: () => '{ not json' },
+          {
+            ...world.deps,
+            invocationHooks: {
+              beforeWrite: () => {
+                throw new Error('disk full')
+              },
+            },
+          },
+        )
+
+        expect(code).toBe(2)
+        expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+          reason: 'request-not-json',
+          invocationRecord: 'unwritten',
+        })
+        expect(invocation(world)).toBeUndefined()
+      })
+
+      it('writes no record when the run has no CI run file', () => {
+        const world = ciWorld()
+        fs.rmSync(path.join(world.stateRoot, CI_RUN_FILE))
+        const { code, lines } = cli(world, ['begin'], {
+          isTTY: false,
+          readRequest: () => '{ not json',
+        })
+
+        expect(code).toBe(2)
+        expect(JSON.parse(lines[0] ?? '{}').reason).toBe('request-not-json')
+        expect(invocation(world)).toBeUndefined()
+      })
+
+      it('leaves the other operations without a record', () => {
+        const world = ciWorld()
+        for (const op of ['validate', 'publish', 'decide']) {
+          cli(world, [op], { isTTY: false, readRequest: () => '{ not json' })
+        }
+        expect(invocation(world)).toBeUndefined()
+      })
+    })
   })
 
   describe('when the record cannot be written', () => {
@@ -3431,6 +3552,7 @@ describe('the report operations at the helper entry', () => {
       runs: ['900'],
       outcome: 'complete',
       red: false,
+      stateUpdated: true,
     })
     expect(body).not.toHaveProperty('body')
     const text = fs.readFileSync(String(body.bodyFile), 'utf8')
@@ -3571,6 +3693,44 @@ describe('the report operations at the helper entry', () => {
       expect(busyTicks).toMatchObject({ outcome: 'busy', reason: 'held' })
       expect(snapshotTree(world.stateRoot)).toEqual(during)
       expect(Object.keys(before)).not.toContain('lock/holder.json')
+    } finally {
+      releaseLock(held.lock)
+    }
+  })
+
+  it('renders a run that ended busy while a live holder keeps the lock, and says no state was recorded', () => {
+    const world = reportWorld(2)
+    fs.writeFileSync(
+      path.join(world.stateRoot, INVOCATION_FILE),
+      JSON.stringify({
+        version: 1,
+        marker: '900-1',
+        phase: 'terminal',
+        outcome: 'busy',
+        finalLine: 'Connect busy',
+        reason: 'held',
+      }),
+    )
+    const held = acquireLock(world.stateRoot)
+    if (held.status !== 'acquired') throw new Error('lock not taken')
+    try {
+      const body = ok(render(world))
+      expect(body).toMatchObject({
+        op: 'render-report',
+        outcome: 'busy',
+        red: false,
+        shown: 2,
+        stateUpdated: false,
+      })
+      const text = fs.readFileSync(String(body.bodyFile), 'utf8')
+      expect(text).toContain('Connect busy')
+      expect(text).toContain('State not updated')
+      expect(
+        fs.existsSync(path.join(world.stateRoot, 'ci-payloads.json')),
+      ).toBe(false)
+      expect(
+        fs.existsSync(path.join(world.stateRoot, 'ci-manifests.json')),
+      ).toBe(false)
     } finally {
       releaseLock(held.lock)
     }

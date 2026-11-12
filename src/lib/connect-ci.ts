@@ -97,7 +97,7 @@ export function decisionLine(
 const MANIFEST_LINE = /^<!-- connect-manifest:([0-9a-f]{16}) -->[ \t]*$/
 const DECISION_LINE =
   /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64}) -->[ \t]*$/
-const FENCE_LINE = /^ {0,3}(`{3,})(.*)$/
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -171,20 +171,39 @@ function writeFileAtomic(target: string, data: string): void {
   }
 }
 
-/** The parsed JSON of a bounded regular file in the state root, or nothing. */
-function readJsonFile(
-  root: string,
-  name: string,
-  maxBytes: number,
-): unknown | undefined {
+/** What reading a store file found: no file, a file that cannot be used, or its parsed JSON. */
+type FileRead =
+  | { readonly status: 'missing' }
+  | { readonly status: 'unreadable' }
+  | { readonly status: 'ok'; readonly value: unknown }
+
+/**
+ * The parsed JSON of a bounded regular file in the state root. A file that is
+ * not there is `missing`; one that is there and cannot be read (a symlink, a
+ * directory, over the bound, not JSON) is `unreadable`.
+ */
+function readJsonFile(root: string, name: string, maxBytes: number): FileRead {
   const read = readContainedFile(root, name, { maxBytes })
-  if (read.kind === 'refused') return undefined
+  if (read.kind === 'refused') {
+    return read.reason === 'missing'
+      ? { status: 'missing' }
+      : { status: 'unreadable' }
+  }
   try {
-    return JSON.parse(read.bytes.toString('utf8'))
+    return { status: 'ok', value: JSON.parse(read.bytes.toString('utf8')) }
   } catch {
-    return undefined
+    return { status: 'unreadable' }
   }
 }
+
+/**
+ * A store that is missing starts empty. One that is there and cannot be used
+ * is `unreadable`, so a caller that would rewrite it stops instead of
+ * replacing what it could not read.
+ */
+type StoreRead<T> =
+  | { readonly status: 'ok'; readonly items: T }
+  | { readonly status: 'unreadable' }
 
 export interface CiOptions {
   readonly processes?: ProcessTable
@@ -247,8 +266,14 @@ export interface ParsedBody {
   readonly boxes: readonly ParsedBox[]
 }
 
+/** An open code fence: the character it was opened with and how many it used. */
+interface Fence {
+  readonly char: '`' | '~'
+  readonly length: number
+}
+
 interface Scan {
-  fence: number | undefined
+  fence: Fence | undefined
   inside: boolean
   begins: number
   ends: number
@@ -257,19 +282,30 @@ interface Scan {
   boxes: ParsedBox[]
 }
 
-/** Track a code fence the way Markdown does. Returns true when the line belongs to fence syntax or content. */
+/**
+ * Track a code fence the way Markdown does: a backtick or tilde fence closes
+ * only on a line of the same character, at least as long as the opening one,
+ * with nothing after it. A backtick fence cannot have a backtick in its info
+ * string. Returns true when the line belongs to fence syntax or content.
+ */
 function inFence(scan: Scan, line: string): boolean {
   const match = FENCE_LINE.exec(line)
   const run = match?.[1]
   const info = match?.[2] ?? ''
+  const char = run?.startsWith('~') ? '~' : '`'
   if (scan.fence !== undefined) {
-    if (run !== undefined && run.length >= scan.fence && info.trim() === '') {
+    if (
+      run !== undefined &&
+      char === scan.fence.char &&
+      run.length >= scan.fence.length &&
+      info.trim() === ''
+    ) {
       scan.fence = undefined
     }
     return true
   }
-  if (run !== undefined && !info.includes('`')) {
-    scan.fence = run.length
+  if (run !== undefined && !(char === '`' && info.includes('`'))) {
+    scan.fence = { char, length: run.length }
     return true
   }
   return false
@@ -392,9 +428,9 @@ const LIMITS = Object.freeze({
   sources: 8,
   reason: 200,
   reasons: 20,
-  payloads: 500,
 })
 
+/** The payload store is bounded by bytes, not by count: it holds one entry per open candidate. */
 const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_MANIFEST_BYTES = 1024 * 1024
 const MAX_MANIFEST_IDS = 1000
@@ -478,21 +514,24 @@ function payloadFromStore(raw: unknown): Payload | undefined {
   }
 }
 
-function readPayloadStore(root: string): Map<string, Payload> {
-  const value = readJsonFile(root, PAYLOAD_FILE, MAX_PAYLOAD_BYTES)
+function readPayloadStore(root: string): StoreRead<Map<string, Payload>> {
   const out = new Map<string, Payload>()
-  if (!isRecord(value) || value.version !== 1) return out
-  if (!Array.isArray(value.payloads)) return out
-  for (const item of (value.payloads as unknown[]).slice(0, LIMITS.payloads)) {
+  const read = readJsonFile(root, PAYLOAD_FILE, MAX_PAYLOAD_BYTES)
+  if (read.status === 'missing') return { status: 'ok', items: out }
+  const value = read.status === 'ok' ? read.value : undefined
+  if (!isRecord(value) || value.version !== 1) return { status: 'unreadable' }
+  if (!Array.isArray(value.payloads)) return { status: 'unreadable' }
+  for (const item of value.payloads as unknown[]) {
     const payload = payloadFromStore(item)
     if (payload !== undefined && !out.has(payload.id)) {
       out.set(payload.id, payload)
     }
   }
-  return out
+  return { status: 'ok', items: out }
 }
 
-function writePayloadStore(root: string, payloads: readonly Payload[]): void {
+/** The text of the payload store: one entry per payload, named fields only. */
+function payloadStoreText(payloads: readonly Payload[]): string {
   const stored = payloads.map((payload) => ({
     id: payload.id,
     title: payload.title,
@@ -508,10 +547,7 @@ function writePayloadStore(root: string, payloads: readonly Payload[]): void {
     runId: payload.runId,
     attempt: payload.attempt,
   }))
-  writeFileAtomic(
-    path.join(root, PAYLOAD_FILE),
-    `${JSON.stringify({ version: 1, payloads: stored }, null, 2)}\n`,
-  )
+  return `${JSON.stringify({ version: 1, payloads: stored }, null, 2)}\n`
 }
 
 // ── Manifests ───────────────────────────────────────────────────────────────
@@ -547,13 +583,16 @@ function manifestFrom(raw: unknown): Manifest | undefined {
   return manifestHash(list) === hash ? { hash, ids: list } : undefined
 }
 
-function readManifestStore(root: string): Manifest[] {
-  const value = readJsonFile(root, MANIFEST_FILE, MAX_MANIFEST_BYTES)
-  if (!isRecord(value) || value.version !== 1) return []
-  if (!Array.isArray(value.manifests)) return []
-  return (value.manifests as unknown[])
+function readManifestStore(root: string): StoreRead<Manifest[]> {
+  const read = readJsonFile(root, MANIFEST_FILE, MAX_MANIFEST_BYTES)
+  if (read.status === 'missing') return { status: 'ok', items: [] }
+  const value = read.status === 'ok' ? read.value : undefined
+  if (!isRecord(value) || value.version !== 1) return { status: 'unreadable' }
+  if (!Array.isArray(value.manifests)) return { status: 'unreadable' }
+  const items = (value.manifests as unknown[])
     .slice(-MANIFESTS_KEPT)
     .flatMap((item) => manifestFrom(item) ?? [])
+  return { status: 'ok', items }
 }
 
 /** Add a manifest as the newest. One with the same hash is the same ids, so it moves up instead of being copied. */
@@ -725,6 +764,8 @@ export type RenderResult =
       readonly outcome: ReportOutcome
       /** The workflow job turns red after posting. */
       readonly red: boolean
+      /** False when the report was rendered without the lock and recorded no payload or manifest. */
+      readonly stateUpdated: boolean
     }
   | { readonly status: 'busy'; readonly reason: LockBusyReason }
   | {
@@ -734,6 +775,9 @@ export type RenderResult =
         | 'lock-failed'
         | 'ledger-unreadable'
         | 'no-invocation'
+        | 'payload-store-unreadable'
+        | 'payload-store-too-large'
+        | 'manifest-store-unreadable'
         | 'write-failed'
     }
 
@@ -748,6 +792,8 @@ interface BodyInput {
   readonly outcome: ReportOutcome
   readonly facts: readonly string[]
   readonly cacheRestored: boolean
+  /** The report was rendered without the lock, so no payload or manifest was recorded. */
+  readonly stateUpdated: boolean
   readonly rows: readonly Row[]
 }
 
@@ -844,6 +890,9 @@ function fetchLines(rows: readonly Row[]): { runs: string[]; lines: string[] } {
 const RESET_NOTICE =
   '> **Ledger reset.** No cache was restored for this run, so the ledger and the sweep started fresh. Earlier decisions are not remembered, and a tick for a candidate the ledger no longer knows is reported as unresolved.'
 
+const STATE_NOT_UPDATED_NOTICE =
+  '> **State not updated.** Another run held the lock, so this report was rendered from the ledger as it stands and recorded nothing. A tick on it is read only when an earlier report listed the same candidates.'
+
 const HOW_TO_TICK =
   'Tick **Promoted** after you have promoted a candidate, or **Rejected** to dismiss it, one box per candidate. Ticking both boxes for one candidate is ignored. The next run reads the ticks, and a settled candidate leaves this list.'
 
@@ -852,6 +901,7 @@ function headOf(input: BodyInput): string[] {
   lines.push(`**Outcome:** ${OUTCOME_SENTENCE[input.outcome]}`, '')
   if (input.facts.length > 0) lines.push(fenceText(input.facts.join('\n')), '')
   if (!input.cacheRestored) lines.push(RESET_NOTICE, '')
+  if (!input.stateUpdated) lines.push(STATE_NOT_UPDATED_NOTICE, '')
   return lines
 }
 
@@ -952,7 +1002,6 @@ function mergedPayloads(
 ): Map<string, Payload> {
   const out = new Map<string, Payload>()
   for (const entry of open) {
-    if (out.size >= LIMITS.payloads) break
     const earlier = stored.get(entry.id)
     const current = fresh.get(entry.id)
     const merged =
@@ -1001,7 +1050,54 @@ function rowsOf(
   })
 }
 
-function renderLocked(root: string, request: RenderRequest): RenderResult {
+interface Stores {
+  readonly payloads: ReadonlyMap<string, Payload>
+  /** The stored manifests; absent when the render records nothing. */
+  readonly manifests: readonly Manifest[] | undefined
+}
+
+/**
+ * The stores a render reads. A render that records state stops on a store it
+ * cannot use, so it never replaces what it could not read. One that records
+ * nothing reads an unusable payload store as empty and leaves the manifest
+ * store alone.
+ */
+function loadStores(
+  root: string,
+  recordState: boolean,
+):
+  | { readonly status: 'ok'; readonly stores: Stores }
+  | {
+      readonly status: 'failed'
+      readonly reason: 'payload-store-unreadable' | 'manifest-store-unreadable'
+    } {
+  const payloads = readPayloadStore(root)
+  if (payloads.status !== 'ok' && recordState) {
+    return { status: 'failed', reason: 'payload-store-unreadable' }
+  }
+  const manifests = recordState ? readManifestStore(root) : undefined
+  if (manifests !== undefined && manifests.status !== 'ok') {
+    return { status: 'failed', reason: 'manifest-store-unreadable' }
+  }
+  return {
+    status: 'ok',
+    stores: {
+      payloads: payloads.status === 'ok' ? payloads.items : new Map(),
+      manifests: manifests?.status === 'ok' ? manifests.items : undefined,
+    },
+  }
+}
+
+/**
+ * The report for the state in `root`. With `recordState` it also records the
+ * payload and manifest stores, so the lock must be held and an unusable store
+ * stops the render. Without it nothing but the body is written.
+ */
+function renderState(
+  root: string,
+  request: RenderRequest,
+  recordState: boolean,
+): RenderResult {
   const read = readLedger(root)
   if (read.status !== 'ok')
     return { status: 'failed', reason: 'ledger-unreadable' }
@@ -1013,10 +1109,12 @@ function renderLocked(root: string, request: RenderRequest): RenderResult {
     invocation.runId === undefined
       ? undefined
       : readRunSummary(root, invocation.runId)
+  const loaded = loadStores(root, recordState)
+  if (loaded.status === 'failed') return loaded
   const open = openOldestFirst(read.ledger.entries)
   const payloads = mergedPayloads(
     open,
-    readPayloadStore(root),
+    loaded.stores.payloads,
     proposed(run, new Set(open.map((entry) => entry.id)), request),
   )
   const outcome = outcomeOf(invocation)
@@ -1024,6 +1122,7 @@ function renderLocked(root: string, request: RenderRequest): RenderResult {
     outcome,
     facts: factLines(invocation, run),
     cacheRestored: request.cacheRestored,
+    stateUpdated: recordState,
     rows: rowsOf(open, payloads, request.date),
   }
   const shown = fit(input)
@@ -1034,16 +1133,22 @@ function renderLocked(root: string, request: RenderRequest): RenderResult {
       payloads.set(id, { ...payload, firstShown: request.date })
     }
   }
+  const storeText = payloadStoreText([...payloads.values()])
+  if (recordState && Buffer.byteLength(storeText) > MAX_PAYLOAD_BYTES) {
+    return { status: 'failed', reason: 'payload-store-too-large' }
+  }
   const bodyFile = path.join(root, REPORT_FILE)
   try {
-    writePayloadStore(root, [...payloads.values()])
-    writeManifestStore(
-      root,
-      withManifest(readManifestStore(root), {
-        hash: result.hash,
-        ids: result.ids,
-      }),
-    )
+    if (loaded.stores.manifests !== undefined) {
+      writeFileAtomic(path.join(root, PAYLOAD_FILE), storeText)
+      writeManifestStore(
+        root,
+        withManifest(loaded.stores.manifests, {
+          hash: result.hash,
+          ids: result.ids,
+        }),
+      )
+    }
     writeFileAtomic(bodyFile, result.body)
   } catch {
     return { status: 'failed', reason: 'write-failed' }
@@ -1060,6 +1165,31 @@ function renderLocked(root: string, request: RenderRequest): RenderResult {
     runs: result.runs,
     outcome,
     red: isRed(outcome),
+    stateUpdated: recordState,
+  }
+}
+
+/**
+ * Render a run that ended `busy` while a live holder still has the lock. That
+ * run read nothing, so the report only has to say so and list the open
+ * candidates; it needs no state of its own. Any other run is not rendered
+ * without the lock.
+ */
+function renderBusyRun(
+  root: string,
+  request: RenderRequest,
+): RenderResult | undefined {
+  const invocation = readInvocationRecord(root)
+  if (
+    invocation?.marker !== `${request.runId}-${request.attempt}` ||
+    outcomeOf(invocation) !== 'busy'
+  ) {
+    return undefined
+  }
+  try {
+    return renderState(root, request, false)
+  } catch {
+    return { status: 'failed', reason: 'write-failed' }
   }
 }
 
@@ -1068,7 +1198,10 @@ function renderLocked(root: string, request: RenderRequest): RenderResult {
  * ledger, oldest first, as many as fit under the cap, each with its two
  * boxes. Updates the payload store and the manifest store and writes the body
  * to `report.md`. It needs this workflow run's invocation record (the marker
- * `<run>-<attempt>`); without one it writes nothing.
+ * `<run>-<attempt>`); without one it writes nothing. A run that ended `busy`
+ * is still reported when a live holder keeps the lock: the ledger is read
+ * without it, only `report.md` is written, and the body says the state was
+ * not updated.
  */
 export function renderReport(
   root: string,
@@ -1079,13 +1212,18 @@ export function renderReport(
     return { status: 'failed', reason: 'invalid-request' }
   const acquired = acquireLock(root, lockOptions(options))
   if (acquired.status === 'busy') {
-    return { status: 'busy', reason: acquired.reason }
+    return (
+      renderBusyRun(root, request) ?? {
+        status: 'busy',
+        reason: acquired.reason,
+      }
+    )
   }
   if (acquired.status === 'failed') {
     return { status: 'failed', reason: 'lock-failed' }
   }
   try {
-    return renderLocked(root, request)
+    return renderState(root, request, true)
   } catch {
     return { status: 'failed', reason: 'write-failed' }
   } finally {
@@ -1094,6 +1232,13 @@ export function renderReport(
 }
 
 // ── Applying ticks ──────────────────────────────────────────────────────────
+
+export interface TickOptions extends CiOptions {
+  readonly hooks?: {
+    /** Runs after the ticks are sorted and before the first one is recorded. */
+    readonly afterTriage?: () => void
+  }
+}
 
 export interface TickRequest {
   /** The report body as the issue holds it now. */
@@ -1266,12 +1411,14 @@ function failureOf(
  * Record the ticks of a report body. A tick counts when its box is a generated
  * line in the section of the body, its id is in the manifest the body names,
  * and the candidate is open; a decision already recorded with the same reason
- * is left as it is, so a second pass changes nothing.
+ * is left as it is, so a second pass changes nothing. Each decision is made
+ * only if the candidate is still open under the lock, so one recorded since
+ * the ledger was read is skipped as `not-open`, never overwritten.
  */
 export function applyTicks(
   root: string,
   request: TickRequest,
-  options: CiOptions = {},
+  options: TickOptions = {},
 ): TickResult {
   if (!Number.isSafeInteger(request.issue) || request.issue < 1) {
     return { status: 'failed', reason: 'invalid-request', accepted: [] }
@@ -1281,24 +1428,32 @@ export function applyTicks(
   if (parsed.section !== 'ok' || ticks.length === 0) {
     return emptyApplied(parsed.section)
   }
-  const manifest = readManifestStore(root).find(
-    (item) => item.hash === parsed.manifest,
-  )
+  const stored = readManifestStore(root)
+  const manifest =
+    stored.status === 'ok'
+      ? stored.items.find((item) => item.hash === parsed.manifest)
+      : undefined
   const read = readLedger(root)
   if (read.status !== 'ok') {
     return { status: 'failed', reason: 'ledger-unreadable', accepted: [] }
   }
   const reason = `settled in report #${request.issue}`
   const sorted = triage(ticks, manifest, read.ledger.entries, reason)
+  options.hooks?.afterTriage?.()
   const accepted: AcceptedTick[] = []
+  const skipped = [...sorted.skipped]
   for (const tick of sorted.record) {
     const decided = decideLedgerEntry(
       root,
-      { id: tick.id, status: tick.status, reason },
+      { id: tick.id, status: tick.status, reason, onlyIfOpen: true },
       lockOptions(options),
     )
     if (decided.status === 'busy') {
       return { status: 'busy', reason: decided.reason, accepted }
+    }
+    if (decided.status === 'failed' && decided.reason === 'not-open') {
+      skipped.push({ id: tick.id, status: tick.status, reason: 'not-open' })
+      continue
     }
     if (decided.status === 'failed') {
       return { status: 'failed', reason: failureOf(decided.reason), accepted }
@@ -1309,7 +1464,7 @@ export function applyTicks(
     status: 'applied',
     section: parsed.section,
     accepted,
-    skipped: sorted.skipped,
+    skipped,
     unresolved: sorted.unresolved,
   }
 }

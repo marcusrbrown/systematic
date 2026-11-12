@@ -22,6 +22,7 @@ import {
 } from '../../src/lib/connect-ci.js'
 import {
   acquireLock,
+  decideLedgerEntry,
   INVOCATION_FILE,
   type LedgerEntry,
   pruneRuns,
@@ -423,6 +424,61 @@ describe('parseReportBody', () => {
     ])
   })
 
+  it('ignores a box inside a tilde fence', () => {
+    const inner = [
+      '~~~text',
+      decisionLine(idOf(1), 'rejected', true),
+      '~~~',
+      decisionLine(idOf(2), 'rejected', true),
+    ].join('\n')
+    expect(parseReportBody(body(inner)).boxes.map((box) => box.id)).toEqual([
+      idOf(2),
+    ])
+  })
+
+  it('closes a fence only on its own character and at least its own length', () => {
+    const inner = [
+      '~~~~',
+      '```',
+      decisionLine(idOf(1), 'rejected', true),
+      '~~~',
+      decisionLine(idOf(2), 'rejected', true),
+      '~~~~~',
+      decisionLine(idOf(3), 'rejected', true),
+      '````',
+      '~~~~',
+      decisionLine(idOf(4), 'rejected', true),
+      '````',
+      decisionLine(idOf(5), 'rejected', true),
+    ].join('\n')
+    expect(parseReportBody(body(inner)).boxes.map((box) => box.id)).toEqual([
+      idOf(3),
+      idOf(5),
+    ])
+  })
+
+  it('opens a tilde fence whose info string holds a backtick', () => {
+    const inner = [
+      '~~~ a`b',
+      decisionLine(idOf(1), 'rejected', true),
+      '~~~',
+      decisionLine(idOf(2), 'rejected', true),
+    ].join('\n')
+    expect(parseReportBody(body(inner)).boxes.map((box) => box.id)).toEqual([
+      idOf(2),
+    ])
+  })
+
+  it('ignores a manifest marker inside a tilde fence', () => {
+    const text = body(decisionLine(idOf(1), 'rejected', true), [
+      '~~~',
+      manifestMarker('fedcba9876543210'),
+      '~~~',
+      manifestMarker(MARKER),
+    ])
+    expect(parseReportBody(text).manifest).toBe(MARKER)
+  })
+
   it('ignores a line whose label disagrees with its marker, or whose id is not a candidate id', () => {
     const inner = [
       `- [x] Promoted <!-- connect-decision:rejected:${idOf(1)} -->`,
@@ -641,6 +697,110 @@ describe('renderReport', () => {
     expect(payload?.title).toBe('Lesson 1, reopened')
   })
 
+  describe('the payload store', () => {
+    /** A run record lists at most 200 candidates, so 600 open ones take three runs. */
+    function openAcrossRuns(total: number): string {
+      const root = makeRoot()
+      const all = Array.from({ length: total }, (_, i) => i + 1)
+      writeLedger(
+        root,
+        all.map((n) => entryOf(n)),
+      )
+      for (let from = 0, run = 0; from < total; from += 200, run++) {
+        const runName = `run-${run}`
+        writeRunRecord(
+          root,
+          all.slice(from, from + 200).map((n) => blockCandidate(n)),
+          {},
+          runName,
+        )
+        writeInvocation(root, `${900 + run}-1`, {}, runName)
+        rendered(root, { runId: String(900 + run) })
+      }
+      return root
+    }
+
+    it('keeps a payload for every open candidate past five hundred', () => {
+      const root = openAcrossRuns(600)
+      expect(payloadsOf(root)).toHaveLength(600)
+
+      settle(
+        root,
+        Array.from({ length: 560 }, (_, i) => i + 1),
+      )
+      writeInvocation(root, '903-1', {}, null)
+      const last = rendered(root, { date: DAY_TWO, runId: '903' })
+
+      expect(last.shown).toBe(40)
+      expect(last.body).not.toContain('Details unavailable')
+      expect(last.body).toContain('Lesson 561')
+      expect(last.body).toContain('Lesson 600')
+      expect(last.runs).toEqual(['902'])
+      expect(last.body).toContain('/ce:connect fetch:902')
+    })
+
+    it('fails with a fixed reason, and writes nothing, when a payload would not fit the byte bound', () => {
+      const fat = (n: number): Json => ({
+        id: idOf(n),
+        title: 't'.repeat(160),
+        summary: 's'.repeat(800),
+        kind: 'transferable-lesson',
+        nextStep: 'compound-learning',
+        targetName: 'target',
+        repo: 'acme/target',
+        sources: Array.from({ length: 8 }, (_, i) => ({
+          projectName: 'p'.repeat(100),
+          path: `${'d/'.repeat(100)}${i}.md`,
+          excerpt: 'e'.repeat(240),
+        })),
+        firstShown: DAY_ONE,
+        runId: '800',
+        attempt: '1',
+      })
+      const text = (items: readonly Json[]): string =>
+        `${JSON.stringify({ version: 1, payloads: items }, null, 2)}\n`
+      const limit = 8 * 1024 * 1024
+      const sizeOf = (count: number): number =>
+        Buffer.byteLength(
+          text(Array.from({ length: count }, (_, i) => fat(i + 1))),
+        )
+      const each = sizeOf(2) - sizeOf(1)
+      // The most payloads that a store can hold under the bound.
+      let stored = Math.floor(limit / each)
+      while (sizeOf(stored) >= limit) stored--
+      while (sizeOf(stored + 1) <= limit) stored++
+      const items = Array.from({ length: stored }, (_, i) => fat(i + 1))
+      expect(Buffer.byteLength(text(items))).toBeLessThan(limit)
+
+      const root = makeRoot()
+      const all = Array.from({ length: stored + 1 }, (_, i) => i + 1)
+      writeLedger(
+        root,
+        all.map((n) => entryOf(n)),
+      )
+      writeRunRecord(root, [
+        blockCandidate(stored + 1, {
+          title: 't'.repeat(160),
+          summary: 's'.repeat(800),
+          sources: fat(1).sources,
+        }),
+      ])
+      writeInvocation(root, '900-1')
+      fs.writeFileSync(path.join(root, PAYLOAD_FILE), text(items))
+      const before = fs.readFileSync(path.join(root, PAYLOAD_FILE))
+
+      expect(renderReport(root, request())).toEqual({
+        status: 'failed',
+        reason: 'payload-store-too-large',
+      })
+      expect(
+        fs.readFileSync(path.join(root, PAYLOAD_FILE)).equals(before),
+      ).toBe(true)
+      expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(false)
+      expect(fs.existsSync(path.join(root, MANIFEST_FILE))).toBe(false)
+    })
+  })
+
   it('ignores a candidate in the run record that the ledger does not show open', () => {
     const root = seeded(1)
     writeRunRecord(root, [blockCandidate(1), blockCandidate(7)])
@@ -707,6 +867,111 @@ describe('renderReport', () => {
       expect(result.outcome).toBe('busy')
       expect(result.red).toBe(false)
       expect(result.body).toContain('Connect busy')
+    })
+
+    describe('a busy run while a live holder keeps the lock', () => {
+      function busyRoot(): string {
+        const root = seeded(2)
+        writeInvocation(
+          root,
+          '900-1',
+          { outcome: 'busy', finalLine: 'Connect busy', reason: 'lock-held' },
+          null,
+        )
+        return root
+      }
+
+      it('renders the report read-only, says no state was recorded, and leaves the lock with its holder', () => {
+        const root = busyRoot()
+        const held = acquireLock(root)
+        if (held.status !== 'acquired') throw new Error('lock not taken')
+        try {
+          const ledger = ledgerBytes(root)
+          const result = renderReport(root, request())
+          if (result.status !== 'rendered') {
+            throw new Error(`expected a report: ${JSON.stringify(result)}`)
+          }
+          expect(result.outcome).toBe('busy')
+          expect(result.red).toBe(false)
+          expect(result.stateUpdated).toBe(false)
+          expect(result.shown).toBe(2)
+          expect(result.body).toContain('Connect busy')
+          expect(result.body).toMatch(/State not updated/)
+          expect(parseReportBody(result.body).boxes).toHaveLength(4)
+          expect(fs.readFileSync(path.join(root, REPORT_FILE), 'utf8')).toBe(
+            result.body,
+          )
+          expect(fs.existsSync(path.join(root, PAYLOAD_FILE))).toBe(false)
+          expect(fs.existsSync(path.join(root, MANIFEST_FILE))).toBe(false)
+          expect(ledgerBytes(root)).toBe(ledger)
+          expect(acquireLock(root).status).toBe('busy')
+        } finally {
+          releaseLock(held.lock)
+        }
+      })
+
+      it('records state as usual once the lock is free', () => {
+        const root = busyRoot()
+        const result = rendered(root)
+        expect(result.stateUpdated).toBe(true)
+        expect(result.body).not.toMatch(/State not updated/)
+        expect(payloadsOf(root)).toHaveLength(0)
+        expect(manifestsOf(root)).toHaveLength(1)
+      })
+
+      it('still answers busy for a run that is not itself busy', () => {
+        const root = seeded(2)
+        const held = acquireLock(root)
+        if (held.status !== 'acquired') throw new Error('lock not taken')
+        try {
+          expect(renderReport(root, request()).status).toBe('busy')
+          expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(false)
+        } finally {
+          releaseLock(held.lock)
+        }
+      })
+
+      it('still refuses a busy answer that belongs to another workflow run', () => {
+        const root = busyRoot()
+        writeInvocation(
+          root,
+          '899-1',
+          { outcome: 'busy', finalLine: 'Connect busy' },
+          null,
+        )
+        const held = acquireLock(root)
+        if (held.status !== 'acquired') throw new Error('lock not taken')
+        try {
+          expect(renderReport(root, request()).status).toBe('busy')
+          expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(false)
+        } finally {
+          releaseLock(held.lock)
+        }
+      })
+
+      it('lists the candidates a payload store already holds when the lock is busy', () => {
+        const root = seeded(2)
+        rendered(root)
+        writeInvocation(
+          root,
+          '901-1',
+          { outcome: 'busy', finalLine: 'Connect busy' },
+          null,
+        )
+        const store = fs.readFileSync(path.join(root, PAYLOAD_FILE))
+        const held = acquireLock(root)
+        if (held.status !== 'acquired') throw new Error('lock not taken')
+        try {
+          const result = renderReport(root, request({ runId: '901' }))
+          if (result.status !== 'rendered') throw new Error('not rendered')
+          expect(result.body).toContain('Lesson 1')
+          expect(
+            fs.readFileSync(path.join(root, PAYLOAD_FILE)).equals(store),
+          ).toBe(true)
+        } finally {
+          releaseLock(held.lock)
+        }
+      })
     })
 
     it('posts a failed run as itself, with its reason, and is red', () => {
@@ -1039,12 +1304,73 @@ describe('renderReport', () => {
       })
     })
 
-    it('starts the payload store again when it is garbage', () => {
+    it('starts a payload store again when the file is missing', () => {
       const root = seeded(2)
-      fs.writeFileSync(path.join(root, PAYLOAD_FILE), '{ not json')
-      const result = rendered(root)
-      expect(result.shown).toBe(2)
+      expect(fs.existsSync(path.join(root, PAYLOAD_FILE))).toBe(false)
+      expect(rendered(root).shown).toBe(2)
       expect(payloadsOf(root)).toHaveLength(2)
+    })
+
+    describe('an unreadable payload store', () => {
+      const GARBAGE = '{ not json'
+
+      function refused(root: string, content: string | Buffer): void {
+        const file = path.join(root, PAYLOAD_FILE)
+        fs.writeFileSync(file, content)
+        const before = fs.readFileSync(file)
+        const ledger = ledgerBytes(root)
+        expect(renderReport(root, request())).toEqual({
+          status: 'failed',
+          reason: 'payload-store-unreadable',
+        })
+        expect(fs.readFileSync(file).equals(before)).toBe(true)
+        expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(false)
+        expect(fs.existsSync(path.join(root, MANIFEST_FILE))).toBe(false)
+        expect(ledgerBytes(root)).toBe(ledger)
+      }
+
+      it('is refused when it is not JSON, and left as it was', () => {
+        refused(seeded(2), GARBAGE)
+      })
+
+      it('is refused when it is over the read bound', () => {
+        refused(seeded(2), Buffer.alloc(8 * 1024 * 1024 + 1, 0x20))
+      })
+
+      it('is refused when it is not a version 1 store', () => {
+        for (const content of [
+          '[]',
+          'null',
+          JSON.stringify({ version: 2, payloads: [] }),
+          JSON.stringify({ version: 1 }),
+          JSON.stringify({ version: 1, payloads: {} }),
+        ]) {
+          refused(seeded(2), content)
+        }
+      })
+
+      it('is refused when it is a symlink, and the target is not rewritten', () => {
+        const root = seeded(2)
+        const target = path.join(path.dirname(root), 'elsewhere.json')
+        fs.writeFileSync(target, '{"version":1,"payloads":[]}')
+        fs.symlinkSync(target, path.join(root, PAYLOAD_FILE))
+        expect(renderReport(root, request())).toEqual({
+          status: 'failed',
+          reason: 'payload-store-unreadable',
+        })
+        expect(fs.readFileSync(target, 'utf8')).toBe(
+          '{"version":1,"payloads":[]}',
+        )
+      })
+
+      it('is refused when it is a directory', () => {
+        const root = seeded(2)
+        fs.mkdirSync(path.join(root, PAYLOAD_FILE))
+        expect(renderReport(root, request())).toEqual({
+          status: 'failed',
+          reason: 'payload-store-unreadable',
+        })
+      })
     })
 
     it('drops a stored payload with the wrong shape and keeps the valid ones', () => {
@@ -1144,6 +1470,64 @@ describe('renderReport', () => {
       expect(manifestsOf(root)).toHaveLength(1)
     })
 
+    describe('an unreadable manifest store', () => {
+      function refused(root: string, content: string | Buffer): void {
+        const file = path.join(root, MANIFEST_FILE)
+        fs.writeFileSync(file, content)
+        const before = fs.readFileSync(file)
+        expect(renderReport(root, request())).toEqual({
+          status: 'failed',
+          reason: 'manifest-store-unreadable',
+        })
+        expect(fs.readFileSync(file).equals(before)).toBe(true)
+        expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(false)
+        expect(fs.existsSync(path.join(root, PAYLOAD_FILE))).toBe(false)
+      }
+
+      it('is refused when it is not JSON, and the payload store is not written either', () => {
+        refused(seeded(2), '{ not json')
+      })
+
+      it('is refused when it is over the read bound', () => {
+        refused(seeded(2), Buffer.alloc(1024 * 1024 + 1, 0x20))
+      })
+
+      it('is refused when it is not a version 1 store', () => {
+        for (const content of [
+          '[]',
+          JSON.stringify({ version: 2, manifests: [] }),
+          JSON.stringify({ version: 1 }),
+        ]) {
+          refused(seeded(2), content)
+        }
+      })
+
+      it('starts a manifest store again when the file is missing', () => {
+        const root = seeded(2)
+        rendered(root)
+        fs.rmSync(path.join(root, MANIFEST_FILE))
+        rendered(root)
+        expect(manifestsOf(root)).toHaveLength(1)
+      })
+
+      it('reads no ticks against it and writes nothing', () => {
+        const root = seeded(2)
+        const { body } = rendered(root)
+        fs.writeFileSync(path.join(root, MANIFEST_FILE), '{ not json')
+        const before = ledgerBytes(root)
+        const result = applyTicks(root, {
+          body: ticked(body, [[1, 'rejected']]),
+          issue: 7,
+        })
+        expect(result).toMatchObject({
+          status: 'applied',
+          accepted: [],
+          unresolved: [{ id: idOf(1), reason: 'manifest-missing' }],
+        })
+        expect(ledgerBytes(root)).toBe(before)
+      })
+    })
+
     it('skips a stored manifest with an unknown key or a hash that does not match its ids', () => {
       const root = seeded(2)
       const first = rendered(root)
@@ -1213,6 +1597,47 @@ describe('applyTicks', () => {
     expect(next.body).not.toContain(idOf(1))
     expect(next.body).toContain(decisionLine(idOf(2), 'promoted', false))
     expect(next.body).toContain(decisionLine(idOf(2), 'rejected', false))
+  })
+
+  it('skips a candidate that another decision settled after the ticks were read', () => {
+    const { root, body } = reported(2)
+    const result = applyTicks(
+      root,
+      {
+        body: ticked(body, [
+          [1, 'rejected'],
+          [2, 'promoted'],
+        ]),
+        issue: 9,
+      },
+      {
+        hooks: {
+          afterTriage: () => {
+            const decided = decideLedgerEntry(root, {
+              id: idOf(1),
+              status: 'promoted',
+              reason: 'promoted by hand',
+              destination: 'docs/solutions/x.md',
+            })
+            expect(decided.status).toBe('decided')
+          },
+        },
+      },
+    )
+
+    expect(result).toMatchObject({
+      status: 'applied',
+      accepted: [{ id: idOf(2), status: 'promoted' }],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'not-open' }],
+    })
+    const read = readLedger(root)
+    if (read.status !== 'ok') throw new Error('ledger unreadable')
+    expect(
+      read.ledger.entries.map((entry) => [entry.status, entry.reason]),
+    ).toEqual([
+      ['promoted', 'promoted by hand'],
+      ['promoted', 'settled in report #9'],
+    ])
   })
 
   it('does nothing the second time', () => {

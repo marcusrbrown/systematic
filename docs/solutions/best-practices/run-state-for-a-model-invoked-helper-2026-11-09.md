@@ -37,7 +37,7 @@ Reclaim is a rename, not a delete. `reclaimLock` moves the lock directory to a u
 
 ### 2. Publishing is one rename; the ledger follows
 
-`publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/`, and only then rewrites the ledger (`src/lib/connect-state.ts:1448-1518`). The rename is the commit. A crash has two windows, and each leaves a state the next run can read:
+`publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/`, and only then rewrites the ledger (`src/lib/connect-state.ts:1450-1520`). The rename is the commit. A crash has two windows, and each leaves a state the next run can read:
 
 - Before the rename: nothing is committed. The next run removes the leftover `.tmp` directory (`pruneRuns`) and proposes the candidate as new.
 - After the rename and before the ledger write: the run exists, the ledger does not know its candidates, and the next run proposes them once more. After that the ledger suppresses them.

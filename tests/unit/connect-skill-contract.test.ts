@@ -257,6 +257,45 @@ describe('ce:connect fetch reference', () => {
     expect(text).toMatch(/tick Rejected in the scheduled run's report/)
   })
 
+  test('prints its own line for an artifact list that failed, and never reads it as a missing artifact', () => {
+    expect(text).toContain('`artifact-list-failed`')
+    expect(text).toMatch(/non-zero exit/)
+    expect(text).toMatch(/output is not a JSON array/)
+    expect(text).toMatch(/Never read a failed call as `artifact-not-found`/)
+    expect(text).toMatch(/The call succeeded and no name matches/)
+    expect(order('`artifact-list-failed`', '`artifact-not-found`')).toBe(true)
+    expect(text).toMatch(/\| `artifact-list-failed` \|/)
+  })
+
+  test('ends with Connect failed and helper-unavailable when node, the helper file or the answer is missing', () => {
+    expect(text).toMatch(/If `node` is missing, the helper file is gone/)
+    expect(text).toMatch(/`import` prints no JSON answer/)
+    expect(text).toMatch(
+      /print `helper-unavailable` and its hint, then `Connect failed`/,
+    )
+    expect(text).toMatch(/\| `helper-unavailable` \|/)
+    expect(order('### 4. Import', '### 5. Report')).toBe(true)
+    expect(order('`helper-unavailable` and its hint', '### 5. Report')).toBe(
+      true,
+    )
+  })
+
+  test('prints the reason and the fields that say what to fix when import is refused', () => {
+    const failedLine = text
+      .split('\n')
+      .find((line) => line.startsWith('- `failed`'))
+    expect(failedLine).toBeDefined()
+    for (const field of [
+      '`reason`',
+      '`detail`',
+      '`unmatched`',
+      '`configWarnings`',
+    ]) {
+      expect(failedLine).toContain(field)
+    }
+    expect(failedLine).toMatch(/Then print `Connect failed`/)
+  })
+
   test('names every reason the helper can answer, and every candidate refusal it can print', () => {
     for (const reason of [
       'record-missing',

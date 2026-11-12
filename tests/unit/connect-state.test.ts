@@ -1361,6 +1361,55 @@ describe('decideLedgerEntry', () => {
     ).toEqual({ status: 'failed', reason: 'unknown-candidate' })
     expect(fs.existsSync(path.join(s.root, 'lock'))).toBe(false)
   })
+
+  it('settles a candidate that is still open when asked to settle only an open one', () => {
+    const { s, id, options } = seeded()
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'not useful', onlyIfOpen: true },
+        options,
+      ),
+    ).toMatchObject({ status: 'decided', entry: { id, status: 'rejected' } })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'rejected' })
+  })
+
+  it('leaves a settled entry as it is when asked to settle only an open one', () => {
+    const { s, id, options } = seeded()
+    decideLedgerEntry(
+      s.root,
+      { id, status: 'promoted', reason: 'by hand', destination: 'x.md' },
+      options,
+    )
+    const before = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'late tick', onlyIfOpen: true },
+        options,
+      ),
+    ).toEqual({ status: 'failed', reason: 'not-open' })
+    expect(fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')).toBe(
+      before,
+    )
+    expect(fs.existsSync(path.join(s.root, 'lock'))).toBe(false)
+  })
+
+  it('still replaces a settled entry when not asked to settle only an open one', () => {
+    const { s, id, options } = seeded()
+    decideLedgerEntry(
+      s.root,
+      { id, status: 'promoted', reason: 'by hand', destination: 'x.md' },
+      options,
+    )
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'changed my mind' },
+        options,
+      ),
+    ).toMatchObject({ status: 'decided', entry: { status: 'rejected' } })
+  })
 })
 
 describe('clearLedger', () => {

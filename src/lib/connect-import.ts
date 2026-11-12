@@ -831,6 +831,8 @@ export interface SkippedCandidate {
 export interface ImportModel {
   readonly runId: string | undefined
   readonly outcome: 'complete' | 'degraded'
+  /** Why the import is degraded; empty when it is complete. */
+  readonly degradeReasons: readonly string[]
   readonly provenance: ImportProvenance
   /** The run's own id, from the record. */
   readonly sourceRunId: string
@@ -946,6 +948,9 @@ export function renderImportDigest(
     `# Connect import digest ${inline(model.runId ?? 'none')}`,
     '',
     `Outcome: ${model.outcome}`,
+    ...(model.degradeReasons.length > 0
+      ? [`Degraded because: ${model.degradeReasons.map(inline).join(', ')}`]
+      : []),
     `Generated: ${generatedAt}`,
     `Source: ${provenanceLine(model.provenance)}`,
     `Run record: ${inline(model.sourceRunId)}`,

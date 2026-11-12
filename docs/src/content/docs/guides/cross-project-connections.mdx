@@ -275,7 +275,7 @@ A refused candidate is not proof the lesson is wrong. A later scheduled run prop
 
 Your checkout may be at a different commit than the one the run read. That is accepted when every check passes, and the summary shows both commits for each project. A candidate you already decided locally is skipped and named. A rerun of the same fetch writes nothing new and prints the lines of the candidates that are still open.
 
-If the fetch stops before the import, the skill prints one of these reasons: `not-a-connect-run`, `unsupported-run-event`, `run-not-found`, `gh-not-authenticated`, `artifact-not-found`, `artifact-expired` or `download-failed`. An artifact is kept for a limited time. When it has expired, tick Rejected on the candidate in the run's report, or wait for a later run to propose it again.
+If the fetch stops before the import, the skill prints one of these reasons: `not-a-connect-run`, `unsupported-run-event`, `run-not-found`, `gh-not-authenticated`, `artifact-list-failed`, `artifact-not-found`, `artifact-expired` or `download-failed`. If `node` or the helper file is missing, or the import prints no answer, it prints `helper-unavailable`. In every case it ends with `Connect failed`. An artifact is kept for a limited time. When it has expired, tick Rejected on the candidate in the run's report, or wait for a later run to propose it again.
 
 ### Settle a candidate on a report
 

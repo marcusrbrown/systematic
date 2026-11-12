@@ -915,6 +915,129 @@ describe('import: the ledger and the lock', () => {
     expect(runDirs(world)).toEqual([])
   })
 
+  describe('a ledger write that fails after the import run committed', () => {
+    /** A directory where the ledger file goes: the rename over it fails. */
+    function withBrokenLedger(
+      world: World,
+      extra: () => void = () => {},
+    ): HelperDeps {
+      return {
+        ...world.deps,
+        publishHooks: {
+          afterCommit: () => {
+            extra()
+            fs.mkdirSync(path.join(world.stateRoot, 'ledger.json', 'x'), {
+              recursive: true,
+            })
+          },
+        },
+      }
+    }
+
+    function importRunDir(world: World): string {
+      const [name, ...rest] = runDirs(world)
+      if (name === undefined || rest.length > 0) {
+        throw new Error(`expected one run: ${runDirs(world).join(', ')}`)
+      }
+      return path.join(world.stateRoot, 'runs', name)
+    }
+
+    it('rewrites the digest and run record as degraded with the reason, and still fails the import', () => {
+      const world = buildWorld()
+      const body = failed(
+        runHelperOp(
+          'import',
+          {
+            directory: downloaded(fixtureRecord('good')),
+            provenance: PROVENANCE,
+          },
+          withBrokenLedger(world),
+        ),
+      )
+
+      expect(body.reason).toBe('ledger-write-failed')
+      expect(body.runDir).toBe(importRunDir(world))
+      expect(body).not.toHaveProperty('runRecordCurrent')
+      const digest = fs.readFileSync(
+        path.join(importRunDir(world), 'digest.md'),
+        'utf8',
+      )
+      expect(digest).toContain('Outcome: degraded')
+      expect(digest).not.toContain('Outcome: complete')
+      expect(digest).toContain('ledger-write-failed')
+      const record = JSON.parse(
+        fs.readFileSync(path.join(importRunDir(world), 'run.json'), 'utf8'),
+      ) as Json
+      expect(record.outcome).toBe('degraded')
+      expect(record.degradeReasons).toEqual(['ledger-write-failed'])
+    })
+
+    it('rewrites both files in place, owner-only, and leaves no temporary file', () => {
+      const world = buildWorld()
+      failed(
+        runHelperOp(
+          'import',
+          {
+            directory: downloaded(fixtureRecord('good')),
+            provenance: PROVENANCE,
+          },
+          withBrokenLedger(world),
+        ),
+      )
+      const dir = importRunDir(world)
+      expect(fs.readdirSync(dir).sort()).toEqual(['digest.md', 'run.json'])
+      for (const name of ['digest.md', 'run.json']) {
+        expect(fs.lstatSync(path.join(dir, name)).mode & 0o777).toBe(0o600)
+      }
+    })
+
+    it('keeps the refusals that were already a reason, and adds the new one', () => {
+      const world = buildWorld()
+      const record = fixtureRecord('good')
+      const block = record.candidateBlock as Json
+      const [first, ...rest] = list(block.candidates)
+      block.candidates = [first, { ...first, id: 'not-an-id' }, ...rest]
+      const body = failed(
+        runHelperOp(
+          'import',
+          { directory: downloaded(record), provenance: PROVENANCE },
+          withBrokenLedger(world),
+        ),
+      )
+
+      expect(body.reason).toBe('ledger-write-failed')
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(importRunDir(world), 'run.json'), 'utf8'),
+      ) as Json
+      expect(saved.degradeReasons).toEqual([
+        'candidates-refused',
+        'ledger-write-failed',
+      ])
+    })
+
+    it('says the run directory may be stale when the rewrite fails too', () => {
+      const world = buildWorld()
+      const body = failed(
+        runHelperOp(
+          'import',
+          {
+            directory: downloaded(fixtureRecord('good')),
+            provenance: PROVENANCE,
+          },
+          withBrokenLedger(world, () => {
+            const [name] = runDirs(world)
+            fs.rmSync(
+              path.join(world.stateRoot, 'runs', name ?? '', 'digest.md'),
+            )
+          }),
+        ),
+      )
+
+      expect(body.reason).toBe('ledger-write-failed')
+      expect(body.runRecordCurrent).toBe(false)
+    })
+  })
+
   it('writes the import run owner-only and leaves no staging directory', () => {
     const world = buildWorld()
     const body = ok(importOp(world, downloaded(fixtureRecord('good'))))

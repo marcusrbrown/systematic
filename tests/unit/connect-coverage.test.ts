@@ -906,6 +906,69 @@ describe('coverage per selection', () => {
     expect(kept.filter((item) => item.selection === SEL_A)).toHaveLength(3)
   })
 
+  it('drops an older indexed record of the active selection before a newer record of another selection', () => {
+    const root = newRoot()
+    const cap = 20_000
+    const at = (i: number) =>
+      new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString()
+    const seeded = [
+      {
+        ruleId: ruleId(1),
+        hash: HASH_A,
+        runId: 'seed',
+        at: at(0),
+        selection: SEL_A,
+      },
+      ...Array.from({ length: cap - 1 }, (_, i) => ({
+        ruleId: ruleId(i + 2),
+        hash: HASH_A,
+        runId: 'seed',
+        at: at(i + 1),
+        selection: SEL_B,
+      })),
+    ]
+    writeLedgerFile(root, { version: 2, entries: [], coverage: seeded })
+
+    publish(
+      root,
+      'run-new',
+      selectionUpdate('run-new', SEL_A, [1, 30_001], [30_001]),
+    )
+
+    const kept = coverageOf(root)
+    expect(kept).toHaveLength(cap)
+    const keys = new Set(kept.map((item) => `${item.ruleId}:${item.selection}`))
+    expect(keys.has(`${ruleId(1)}:${SEL_A}`)).toBe(false)
+    expect(keys.has(`${ruleId(2)}:${SEL_B}`)).toBe(true)
+    expect(keys.has(`${ruleId(30_001)}:${SEL_A}`)).toBe(true)
+  })
+
+  it('keeps the coverage a run records even when every other record is newer', () => {
+    const root = newRoot()
+    const cap = 20_000
+    const seeded = Array.from({ length: cap }, (_, i) => ({
+      ruleId: ruleId(i + 1),
+      hash: HASH_A,
+      runId: 'seed',
+      at: new Date(Date.UTC(2027, 0, 1) + i * 1000).toISOString(),
+      selection: SEL_B,
+    }))
+    writeLedgerFile(root, { version: 2, entries: [], coverage: seeded })
+
+    publish(
+      root,
+      'run-new',
+      selectionUpdate('run-new', SEL_A, [30_001, 30_002], [30_001, 30_002]),
+    )
+
+    const kept = coverageOf(root)
+    expect(kept).toHaveLength(cap)
+    expect(kept.filter((item) => item.selection === SEL_A)).toHaveLength(2)
+    const ids = new Set(kept.map((item) => item.ruleId))
+    expect(ids.has(ruleId(1))).toBe(false)
+    expect(ids.has(ruleId(2))).toBe(false)
+  })
+
   it('removes every selection with the ledger', () => {
     const root = newRoot()
     publish(root, 'run-one', update('run-one', [1], [1]))
