@@ -61,6 +61,7 @@ import {
   type Standing,
   type SweepProgress,
   scanProvenance,
+  selectionNamespace,
   sweepBefore,
   sweepProgress,
   toCandidateRecord,
@@ -74,6 +75,7 @@ import {
   acquireLock,
   type CandidateRecord,
   type CandidateStanding,
+  type CoverageRecord,
   candidateIdentity,
   classifyCandidate,
   clearLedger,
@@ -90,6 +92,7 @@ import {
   pruneRuns,
   publishRun,
   readLedger,
+  readRunRecord,
   releaseLock,
   rewriteRunFiles,
 } from './lib/connect-state.js'
@@ -958,9 +961,14 @@ interface Scans {
   readonly coverageScope: CoverageScope
 }
 
-/** Scan every selected project. One that cannot be read degrades the run. */
+/**
+ * Scan every selected project. One that cannot be read degrades the run. A run
+ * with a selection never prunes a coverage record it cannot attribute to a
+ * project, whether or not its members are the whole allow list.
+ */
 function scanAll(
   environment: Environment,
+  selection: Selection,
   projects: readonly SelectionProject[],
   deps: HelperDeps,
   limits: ConnectBounds,
@@ -992,9 +1000,18 @@ function scanAll(
       .filter((scan) => scan.prunable)
       .map((scan) => scan.digest.key),
     retain: scans.flatMap((scan) => scan.retain),
-    pruneUnattributed: allRead && scans.every((scan) => scan.prunable),
+    pruneUnattributed:
+      selection.kind === 'all' &&
+      allRead &&
+      scans.every((scan) => scan.prunable),
   }
   return { scans, degradeReasons, unread, coverageScope }
+}
+
+/** `{ selection }` for a run with a selection, so its coverage is kept apart. */
+function selectionOf(selection: Selection): { selection?: string } {
+  const id = selectionNamespace(selection)
+  return id === undefined ? {} : { selection: id }
 }
 
 interface RunSetup {
@@ -1094,6 +1111,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   const limits = bounds(deps)
   const { scans, degradeReasons, unread, coverageScope } = scanAll(
     setup.environment,
+    setup.selection,
     setup.projects,
     deps,
     limits,
@@ -1115,6 +1133,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       rules,
       coverage: ledger.ledger.coverage ?? [],
       size: limits.maxFamiliesPerRun * limits.maxRulesPerFamily,
+      ...selectionOf(setup.selection),
     })
     const { parsed, verdict } = setup
     const snapshot: Snapshot = {
@@ -2040,6 +2059,9 @@ function commitRun(
           ...(rule.project === undefined ? {} : { project: rule.project }),
         })),
         covered: state.coveredRuleIds,
+        ...(snapshot.selection === undefined
+          ? {}
+          : selectionOf(snapshot.selection)),
         ...(scope === undefined
           ? {}
           : {
@@ -2225,6 +2247,87 @@ function parseShowRequest(request: unknown): { offset: number } | undefined {
   return { offset }
 }
 
+/** Namespaces listed by `ledger show`; the rest are counted. */
+const MAX_COVERAGE_NAMESPACES_SHOWN = 50
+const MAX_LABEL_PICKS = 32
+const MAX_LABEL_TEXT = 100
+const LABEL_FORBIDDEN = /[\p{Cc}\p{Cf}]/u
+
+function labelText(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_LABEL_TEXT &&
+    !LABEL_FORBIDDEN.test(value)
+    ? value
+    : undefined
+}
+
+/** `group:<name>` or `projects:<a>,<b>` from the selection a run record names, if it names one well. */
+function selectionLabel(record: unknown): string | undefined {
+  if (!isRecord(record) || !isRecord(record.selection)) return undefined
+  const { kind, name, picks } = record.selection
+  if (kind === 'group') {
+    const text = labelText(name)
+    return text === undefined ? undefined : `group:${text}`
+  }
+  if (kind !== 'projects' || !Array.isArray(picks)) return undefined
+  if (picks.length === 0 || picks.length > MAX_LABEL_PICKS) return undefined
+  const texts = picks.map(labelText)
+  return texts.every((text) => text !== undefined)
+    ? `projects:${texts.join(',')}`
+    : undefined
+}
+
+interface NamespaceTally {
+  readonly selection: string
+  rules: number
+  newest: CoverageRecord
+}
+
+/**
+ * The coverage records counted per selection: the no-selection namespace
+ * first, then the most recently covered. A selection is labelled from the run
+ * record of its newest record when that run is still kept.
+ */
+function coverageNamespaces(
+  root: string,
+  coverage: readonly CoverageRecord[],
+): { listed: Json[]; omitted: number } {
+  const tallies = new Map<string, NamespaceTally>()
+  for (const record of coverage) {
+    const key = record.selection ?? 'all'
+    const tally = tallies.get(key)
+    if (tally === undefined) {
+      tallies.set(key, { selection: key, rules: 1, newest: record })
+      continue
+    }
+    tally.rules++
+    const newer =
+      record.at > tally.newest.at ||
+      (record.at === tally.newest.at && record.runId > tally.newest.runId)
+    if (newer) tally.newest = record
+  }
+  const ordered = [...tallies.values()].sort((a, b) => {
+    if (a.selection === 'all' || b.selection === 'all') {
+      return a.selection === 'all' ? -1 : 1
+    }
+    if (a.newest.at !== b.newest.at) return a.newest.at < b.newest.at ? 1 : -1
+    return a.selection < b.selection ? -1 : 1
+  })
+  const shown = ordered.slice(0, MAX_COVERAGE_NAMESPACES_SHOWN)
+  const listed = shown.map((tally): Json => {
+    if (tally.selection === 'all')
+      return { selection: 'all', rules: tally.rules }
+    const label = selectionLabel(readRunRecord(root, tally.newest.runId))
+    return {
+      selection: tally.selection,
+      rules: tally.rules,
+      ...(label === undefined ? {} : { label }),
+    }
+  })
+  return { listed, omitted: ordered.length - shown.length }
+}
+
 function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
   const page = parseShowRequest(request)
   if (page === undefined) return failure('ledger-show', 'invalid-request')
@@ -2237,11 +2340,19 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
   const total = read.ledger.entries.length
   const end = page.offset + MAX_LEDGER_ENTRIES_SHOWN
   const entries = read.ledger.entries.slice(page.offset, end)
+  const records = read.ledger.coverage ?? []
+  const namespaces = coverageNamespaces(prepared.root, records)
   return success('ledger-show', {
     total,
     offset: page.offset,
     nextOffset: end < total ? end : null,
-    coverage: { rules: read.ledger.coverage?.length ?? 0 },
+    coverage: {
+      rules: records.length,
+      namespaces: namespaces.listed,
+      ...(namespaces.omitted > 0
+        ? { namespacesOmitted: namespaces.omitted }
+        : {}),
+    },
     entries: entries.map((entry) => ({
       id: entry.id,
       kind: entry.kind,

@@ -497,7 +497,10 @@ function roundRobin(rules: readonly RuleEntry[]): RuleEntry[] {
 
 export interface OfferInput {
   readonly rules: readonly RuleEntry[]
+  /** The ledger's coverage, of every selection. Only the records of `selection` count. */
   readonly coverage: readonly CoverageRecord[]
+  /** The run's selection id; left out, the run has no selection. */
+  readonly selection?: string
   /** Rules one run is offered: families per run times rules per family. */
   readonly size: number
 }
@@ -523,11 +526,16 @@ export interface Offer {
  * each of those groups the order is round-robin across projects, then by path,
  * so a slice spans projects. The order depends on the index and the coverage
  * records only, never on the model, so repeated runs sweep the whole index
- * and then start over at the oldest.
+ * and then start over at the oldest. Coverage belongs to a selection: a rule
+ * that only another selection covered is not covered here.
  */
 export function planOffer(input: OfferInput): Offer {
   const size = Math.max(1, Math.floor(input.size))
-  const covered = new Map(input.coverage.map((item) => [item.ruleId, item]))
+  const covered = new Map(
+    input.coverage
+      .filter((item) => item.selection === input.selection)
+      .map((item) => [item.ruleId, item]),
+  )
   const groups = new Map<string, RuleEntry[]>()
   let coveredBefore = 0
   for (const rule of input.rules) {
@@ -2014,6 +2022,14 @@ export type SelectionResult =
   /** The words are not a well-formed request. */
   | { readonly status: 'invalid' }
   | { readonly status: 'refused'; readonly refusal: SelectionRefusal }
+
+/**
+ * The coverage namespace of a selection: its id, or nothing for a run with no
+ * selection, whose coverage carries no selection field.
+ */
+export function selectionNamespace(selection: Selection): string | undefined {
+  return selection.kind === 'all' ? undefined : selection.id
+}
 
 /** The id of a selection: a hash of the sorted project keys, so only membership counts. */
 export function selectionIdFor(keys: readonly string[]): string {

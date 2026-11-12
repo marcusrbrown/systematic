@@ -13,8 +13,12 @@
  * rewritten. The run stays, the ledger does not know the candidate, and the
  * next run proposes it once more; after that it is suppressed.
  *
- * What this does not show: a crash between other steps (inside the ledger
- * rename, say), or a host that kills the helper's process group.
+ * Window three: the run is committed, the new ledger is written to a
+ * temporary file, and the rename that would replace the old ledger has not
+ * happened. A version 1 ledger is still version 1 and still whole, and the next
+ * run migrates it.
+ *
+ * What this does not show: a host that kills the helper's process group.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
 import { spawnSync } from 'node:child_process'
@@ -53,12 +57,20 @@ const FILES = { 'digest.md': '# digest\n', 'run.json': '{}\n' }
 
 /** The child: take the lock, then publish with a hook that kills the process at the chosen window. */
 const CHILD_SOURCE = `
+import fs from 'node:fs'
 import { acquireLock, publishRun } from ${JSON.stringify(STATE_MODULE)}
 
 const [root, window, runId] = process.argv.slice(2)
 const acquired = acquireLock(root)
 if (acquired.status !== 'acquired') process.exit(3)
 const die = () => process.kill(process.pid, 'SIGKILL')
+if (window === 'ledger-rename') {
+  const rename = fs.renameSync
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith('ledger.json')) die()
+    return rename(from, to)
+  }
+}
 publishRun(
   root,
   acquired.lock,
@@ -92,7 +104,7 @@ function newRoot(): string {
 /** Run the child to its death and return how it ended. */
 function killChildAt(
   root: string,
-  window: 'before-commit' | 'after-commit',
+  window: 'before-commit' | 'after-commit' | 'ledger-rename',
   runId: string,
 ): { signal: NodeJS.Signals | null; status: number | null; pid: number } {
   const script = path.join(makeDir('connect-kill-script-'), 'child.ts')
@@ -206,5 +218,34 @@ describe('a helper killed while it publishes', () => {
       'run-2',
       'run-3',
     ])
+  })
+
+  it('keeps a version 1 ledger whole when the kill comes before its replacement is renamed, and migrates it on the next run', () => {
+    const root = newRoot()
+    const coverage = {
+      ruleId: 'rule-0000000000000001',
+      hash: 'a'.repeat(64),
+      runId: 'run-0',
+      at: '2026-10-01T00:00:00.000Z',
+    }
+    const before = `${JSON.stringify({ version: 1, entries: [], coverage: [coverage] }, null, 2)}\n`
+    fs.writeFileSync(path.join(root, 'ledger.json'), before)
+
+    const dead = killChildAt(root, 'ledger-rename', 'run-1')
+
+    expect(dead.signal).toBe('SIGKILL')
+    expect(fs.existsSync(path.join(root, 'runs', 'run-1', 'run.json'))).toBe(
+      true,
+    )
+    expect(fs.readFileSync(path.join(root, 'ledger.json'), 'utf8')).toBe(before)
+
+    const next = nextRun(root, 'run-2')
+
+    expect(standings(next.published)).toEqual(['new'])
+    const migrated = JSON.parse(
+      fs.readFileSync(path.join(root, 'ledger.json'), 'utf8'),
+    ) as { version: number; coverage: unknown[] }
+    expect(migrated.version).toBe(2)
+    expect(migrated.coverage).toEqual([coverage])
   })
 })

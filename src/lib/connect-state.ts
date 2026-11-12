@@ -839,14 +839,27 @@ export interface CoverageRecord {
    * rule a record is. Absent on a record written before it was kept.
    */
   readonly project?: string
+  /**
+   * The id of the selection (a group or picked projects) whose run covered the
+   * rule. Absent for a run with no selection, which is the namespace every
+   * version 1 record belongs to. A rule is covered once per namespace.
+   */
+  readonly selection?: string
 }
 
+/**
+ * The ledger as it is held in memory. Version 2 adds the `selection` of a
+ * coverage record. A version 1 file is read as version 2 with the same records,
+ * and is replaced by a version 2 file the next time the ledger is written.
+ */
 export interface Ledger {
-  readonly version: 1
+  readonly version: 2
   readonly entries: readonly LedgerEntry[]
   /** Absent when no committed run has covered a rule. */
   readonly coverage?: readonly CoverageRecord[]
 }
+
+const LEDGER_VERSION = 2
 
 const LEDGER_STATUSES: readonly LedgerStatus[] = [
   'candidate',
@@ -927,6 +940,11 @@ function isRuleId(value: unknown): value is string {
 
 const SHA256 = /^[0-9a-f]{64}$/
 const PROJECT_KEY = /^[0-9a-f]{12}$/
+const SELECTION_ID = /^[0-9a-f]{16}$/
+
+function isSelectionId(value: unknown): value is string {
+  return typeof value === 'string' && SELECTION_ID.test(value)
+}
 
 function isProjectKey(value: unknown): value is string {
   return typeof value === 'string' && PROJECT_KEY.test(value)
@@ -943,8 +961,14 @@ function isCoverageRecord(value: unknown): value is CoverageRecord {
     isSha256(value.hash) &&
     plainText(value.runId, MAX_STRING_LENGTH) &&
     plainText(value.at, MAX_STRING_LENGTH) &&
-    (value.project === undefined || isProjectKey(value.project))
+    (value.project === undefined || isProjectKey(value.project)) &&
+    (value.selection === undefined || isSelectionId(value.selection))
   )
+}
+
+/** A record is unique by the rule and the selection it belongs to. */
+function coverageKey(record: CoverageRecord): string {
+  return `${record.selection ?? ''}\0${record.ruleId}`
 }
 
 function isCoverage(value: unknown): value is CoverageRecord[] {
@@ -952,7 +976,7 @@ function isCoverage(value: unknown): value is CoverageRecord[] {
     Array.isArray(value) &&
     value.length <= MAX_COVERAGE &&
     value.every(isCoverageRecord) &&
-    new Set(value.map((item) => item.ruleId)).size === value.length
+    new Set(value.map(coverageKey)).size === value.length
   )
 }
 
@@ -963,14 +987,18 @@ function parseLedger(text: string): Ledger | undefined {
   } catch {
     return undefined
   }
-  if (!isRecord(value) || value.version !== 1) return undefined
+  // Version 1 has the layout of version 2 with every record in the
+  // no-selection namespace. Any other version is not this helper's to read.
+  if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
+    return undefined
+  }
   const { entries, coverage } = value
   if (!Array.isArray(entries) || !entries.every(isLedgerEntry)) return undefined
-  if (coverage === undefined) return { version: 1, entries }
+  if (coverage === undefined) return { version: LEDGER_VERSION, entries }
   if (!isCoverage(coverage)) return undefined
   return coverage.length === 0
-    ? { version: 1, entries }
-    : { version: 1, entries, coverage }
+    ? { version: LEDGER_VERSION, entries }
+    : { version: LEDGER_VERSION, entries, coverage }
 }
 
 export type LedgerRead =
@@ -991,7 +1019,7 @@ export function readLedger(root: string): LedgerRead {
   })
   if (read.kind === 'refused') {
     if (read.reason === 'missing') {
-      return { status: 'ok', ledger: { version: 1, entries: [] } }
+      return { status: 'ok', ledger: { version: LEDGER_VERSION, entries: [] } }
     }
     return {
       status: 'unreadable',
@@ -1197,7 +1225,10 @@ function applyCandidates(
   let entries = [...ledger.entries]
   const outcomes: CandidateStanding[] = []
   for (const candidate of candidates) {
-    const outcome = classifyCandidate({ version: 1, entries }, candidate)
+    const outcome = classifyCandidate(
+      { version: LEDGER_VERSION, entries },
+      candidate,
+    )
     outcomes.push(outcome)
     if (outcome.standing === 'new') {
       entries.push({
@@ -1230,7 +1261,7 @@ function applyCandidates(
       )
     }
   }
-  return { ledger: { version: 1, entries }, outcomes }
+  return { ledger: { version: LEDGER_VERSION, entries }, outcomes }
 }
 
 // ── Publishing ──────────────────────────────────────────────────────────────
@@ -1242,6 +1273,12 @@ function applyCandidates(
  */
 export interface CoverageUpdate {
   readonly runId: string
+  /**
+   * The id of the run's selection. The update reads and changes only the
+   * records of that selection; the records of every other selection stay as
+   * they are. Left out, the update is for the no-selection namespace.
+   */
+  readonly selection?: string
   /** Every rule the run indexed, with the hash of its learning and its project's key. */
   readonly indexed: ReadonlyArray<{
     readonly ruleId: string
@@ -1325,6 +1362,9 @@ function validCoverageUpdate(update: CoverageUpdate): boolean {
   if (!isRunId(update.runId) || update.indexed.length > MAX_COVERAGE) {
     return false
   }
+  if (update.selection !== undefined && !isSelectionId(update.selection)) {
+    return false
+  }
   const hashes = new Map<string, string>()
   for (const item of update.indexed) {
     if (!isRuleId(item.ruleId) || !isSha256(item.hash)) return false
@@ -1337,18 +1377,23 @@ function validCoverageUpdate(update: CoverageUpdate): boolean {
 }
 
 /**
- * Fold a run's coverage into the ledger's. A record survives when the run
- * indexed its rule, kept it on purpose (`retain`), or could not see its project
- * in full. Everything else is a rule that is gone from a project that was read
- * in full, and is dropped. Then the covered rules are recorded at their
- * current hash. The records of rules the run did not index are the first to go
- * if the ledger would hold more than it accepts.
+ * Fold a run's coverage into the ledger's. Only the records of the run's own
+ * selection are looked at: a record survives when the run indexed its rule,
+ * kept it on purpose (`retain`), or could not see its project in full.
+ * Everything else is a rule that is gone from a project that was read in full,
+ * and is dropped. The records of every other selection are kept as they are.
+ * Then the covered rules are recorded at their current hash. The records the
+ * run did not index, of any selection, are the first to go if the ledger would
+ * hold more than it accepts.
  */
 function applyCoverage(
-  prior: readonly CoverageRecord[],
+  allPrior: readonly CoverageRecord[],
   update: CoverageUpdate,
   at: string,
 ): CoverageRecord[] {
+  const own = (record: CoverageRecord): boolean =>
+    record.selection === update.selection
+  const prior = allPrior.filter(own)
   const hashes = new Map(update.indexed.map((item) => [item.ruleId, item.hash]))
   const projects = new Map(
     update.indexed.map((item) => [item.ruleId, item.project]),
@@ -1380,22 +1425,31 @@ function applyCoverage(
         runId: update.runId,
         at,
         ...(project === undefined ? {} : { project }),
+        ...(update.selection === undefined
+          ? {}
+          : { selection: update.selection }),
       })
     }
   }
-  const records = [...kept.values()]
+  const records = [
+    ...allPrior.filter((record) => !own(record)),
+    ...kept.values(),
+  ]
+  const byRule = (a: CoverageRecord, b: CoverageRecord): number =>
+    codepointOrder(a.ruleId, b.ruleId) ||
+    codepointOrder(a.selection ?? '', b.selection ?? '')
   const overflow = records.length - MAX_COVERAGE
   if (overflow > 0) {
     const stale = records
-      .filter((record) => !hashes.has(record.ruleId))
+      .filter((record) => !(own(record) && hashes.has(record.ruleId)))
       .sort((a, b) => codepointOrder(a.at, b.at))
       .slice(0, overflow)
-    const gone = new Set(stale.map((record) => record.ruleId))
+    const gone = new Set(stale.map(coverageKey))
     return records
-      .filter((record) => !gone.has(record.ruleId))
-      .sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+      .filter((record) => !gone.has(coverageKey(record)))
+      .sort(byRule)
   }
-  return records.sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+  return records.sort(byRule)
 }
 
 /** The ledger after a committed run: its candidates folded in and its coverage updated. */
@@ -1419,8 +1473,8 @@ function foldRun(
 /** The ledger with its entries replaced and its coverage carried over. */
 function withEntries(ledger: Ledger, entries: readonly LedgerEntry[]): Ledger {
   return ledger.coverage === undefined
-    ? { version: 1, entries }
-    : { version: 1, entries, coverage: ledger.coverage }
+    ? { version: LEDGER_VERSION, entries }
+    : { version: LEDGER_VERSION, entries, coverage: ledger.coverage }
 }
 
 /** Build `runs/<id>.tmp/`, returning the failure if it could not be built. */
@@ -1551,6 +1605,26 @@ export function rewriteRunFiles(
     return 'rewritten'
   } catch {
     return 'failed'
+  }
+}
+
+const MAX_RUN_RECORD_BYTES = 2 * 1024 * 1024
+
+/**
+ * The parsed `run.json` of a published run, or nothing when the run is gone,
+ * pruned, not a plain run id, or not readable as one bounded regular file. The
+ * content is whatever the file holds: a caller checks the fields it uses.
+ */
+export function readRunRecord(root: string, runId: string): unknown {
+  if (!isRunId(runId)) return undefined
+  const read = readContainedFile(root, `${RUNS_DIR}/${runId}/run.json`, {
+    maxBytes: MAX_RUN_RECORD_BYTES,
+  })
+  if (read.kind === 'refused') return undefined
+  try {
+    return JSON.parse(read.bytes.toString('utf8'))
+  } catch {
+    return undefined
   }
 }
 

@@ -1170,11 +1170,11 @@ describe('ledger', () => {
     const root = newRoot()
     expect(readLedger(root)).toMatchObject({
       status: 'ok',
-      ledger: { version: 1, entries: [] },
+      ledger: { version: 2, entries: [] },
     })
     fs.writeFileSync(
       path.join(root, 'ledger.json'),
-      '{"version":2,"entries":[]}',
+      '{"version":3,"entries":[]}',
     )
     expect(readLedger(root)).toEqual({
       status: 'unreadable',
